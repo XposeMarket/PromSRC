@@ -14450,7 +14450,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           };
         }
         const normalizedCmd = deps.normalizeWorkspacePathAliases(rawCmd, workspacePath);
-        const wantVisible = args.visible === true || args.window === true;
+        // Visible shells are an explicit escape hatch only. The old `window`
+        // alias made it too easy for a model/tool payload to open a terminal
+        // accidentally, and the `/k` launcher below left every such shell
+        // open indefinitely.
+        const wantVisible = args.visible === true;
         let commandCwd: { cwd: string; displayCwd: string };
         try {
           commandCwd = resolveRunCommandCwd(args.cwd);
@@ -14579,10 +14583,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
             }
           }
-          // Windowed mode (only when explicitly requested) — open visible cmd
+          // Windowed mode (only when explicitly requested). `/c` is deliberate:
+          // the command window closes when the command finishes, so an agent
+          // cannot leave a pile of orphaned terminals behind.
           if (deps.isWindows) {
             const escaped = normalizedCmd.replace(/"/g, '""');
-            execCmd = `start cmd /k "${escaped}"`;
+            execCmd = `start "" cmd.exe /d /s /c "${escaped}"`;
           } else {
             execCmd = normalizedCmd;
           }
@@ -14625,7 +14631,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           }
           if (deps.isWindows) {
             const escaped = normalizedCmd.replace(/"/g, '""');
-            execCmd = `start cmd /k "${escaped}"`;
+            execCmd = `start "" cmd.exe /d /s /c "${escaped}"`;
           } else {
             execCmd = normalizedCmd;
           }

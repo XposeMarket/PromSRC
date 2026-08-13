@@ -56,7 +56,6 @@ function parseGatewayPort(value) {
 const requestedGatewayPort = parseGatewayPort(
   process.env.PROMETHEUS_GATEWAY_PORT || process.env.GATEWAY_PORT,
 );
-const gatewayPortWasExplicit = requestedGatewayPort !== null;
 let gatewayPort = requestedGatewayPort || DEFAULT_GATEWAY_PORT;
 let GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
 const APP_ID       = 'com.prometheus.desktop';
@@ -69,6 +68,12 @@ const ICON_PATH    = path.join(
 const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
 const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
 const RETRY_DELAY  = 300;
+// Keep the renderer header and the native Windows/Linux caption controls on
+// the same physical row. This value is also mirrored by --window-chrome-height
+// in web-ui/src/styles/base.css.
+const ELECTRON_TITLEBAR_HEIGHT = 30;
+const DEFAULT_TITLEBAR_COLOR = '#1f1f1f';
+const DEFAULT_TITLEBAR_SYMBOL_COLOR = '#d8c9a8';
 const GATEWAY_HEALTH_INTERVAL_MS = 15_000;
 const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
 const GATEWAY_HEALTH_FAILURE_LIMIT = 2;
@@ -249,6 +254,49 @@ const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
+
+// A desktop gateway owns the user-data directory, connector sessions, and
+// runtime status snapshots. Starting a second Electron process against that
+// same directory creates two gateways that overwrite each other's heartbeat
+// files and compete for single-consumer integrations (for example Telegram),
+// which presents as a reconnecting app and can leave orphaned child shells.
+// Separate instances remain possible by setting a different
+// PROMETHEUS_ELECTRON_DATA_DIR before launching the app.
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
+function normalizeTitlebarColor(value, fallback) {
+  const color = String(value || '').trim();
+  if (!color || color.length > 96 || /[;{}'"`]/.test(color)) return fallback;
+  if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+  if (/^(?:rgba?|hsla?)\([0-9.%\s,+\-/]+\)$/i.test(color)) return color;
+  return fallback;
+}
+
+function setElectronTitlebarTheme(options = {}) {
+  if (process.platform === 'darwin' || !mainWindow || mainWindow.isDestroyed()) return false;
+  if (typeof mainWindow.setTitleBarOverlay !== 'function') return false;
+  try {
+    mainWindow.setTitleBarOverlay({
+      color: normalizeTitlebarColor(options?.color, DEFAULT_TITLEBAR_COLOR),
+      symbolColor: normalizeTitlebarColor(options?.symbolColor, DEFAULT_TITLEBAR_SYMBOL_COLOR),
+      height: ELECTRON_TITLEBAR_HEIGHT,
+    });
+    return true;
+  } catch (error) {
+    writeGatewayLog(`[main] Could not update titlebar theme: ${error && error.message ? error.message : error}\n`);
+    return false;
+  }
+}
 
 function getUpdaterState(extra = {}) {
   return {
@@ -752,9 +800,10 @@ function sleep(ms) {
 }
 
 // ─── Port selection ─────────────────────────────────────────────────────────
-// Never kill an arbitrary process just because it owns a port. Electron keeps
-// the preferred port when it is free and otherwise claims the next available
-// loopback gateway port, allowing multiple Prometheus instances to coexist.
+// A desktop process must not silently move to another port: its persistent
+// state directory is intentionally shared with the gateway it starts. Doing so
+// would create a second gateway with clashing heartbeat/lease files. Multiple
+// desktop instances should use separate PROMETHEUS_ELECTRON_DATA_DIR values.
 function isGatewayPortAvailable(port) {
   return new Promise((resolve) => {
     const probe = net.createServer();
@@ -771,40 +820,13 @@ function isGatewayPortAvailable(port) {
   });
 }
 
-function getConfiguredGatewayHttpsPort() {
-  let enabled = ['1', 'true'].includes(String(process.env.GATEWAY_HTTPS_ENABLED || '').toLowerCase());
-  let port = parseGatewayPort(process.env.GATEWAY_HTTPS_PORT) || 18790;
-  try {
-    const configPath = path.join(USER_DATA_DIR, '.prometheus', 'config.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const https = config?.gateway?.https;
-    enabled = enabled || https?.enabled === true;
-    port = parseGatewayPort(https?.port) || port;
-  } catch {}
-  return enabled ? port : null;
-}
-
 async function selectGatewayPort() {
-  if (gatewayPortWasExplicit) {
-    if (!(await isGatewayPortAvailable(gatewayPort))) {
-      assertGatewayPortAvailable(gatewayPort);
-      throw new Error(`Prometheus cannot start because port ${gatewayPort} is already in use.`);
-    }
-  } else {
-    const httpsPort = getConfiguredGatewayHttpsPort();
-    let selected = null;
-    for (let offset = 0; offset < 1000 && gatewayPort + offset <= 65535; offset += 1) {
-      const candidate = gatewayPort + offset;
-      if (httpsPort && candidate === httpsPort) continue;
-      if (await isGatewayPortAvailable(candidate)) {
-        selected = candidate;
-        break;
-      }
-    }
-    if (!selected) {
-      throw new Error(`Prometheus could not find an available gateway port starting at ${gatewayPort}.`);
-    }
-    gatewayPort = selected;
+  if (!(await isGatewayPortAvailable(gatewayPort))) {
+    assertGatewayPortAvailable(gatewayPort);
+    throw new Error(
+      `Prometheus cannot start because gateway port ${gatewayPort} is already in use. ` +
+      'Close the existing Prometheus/gateway instance or launch this instance with a separate PROMETHEUS_ELECTRON_DATA_DIR.',
+    );
   }
   GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
 }
@@ -2722,6 +2744,10 @@ handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
 
 handleTrustedMain('get-app-version', () => CURRENT_VERSION);
 
+handleTrustedMain('window:titlebar-theme', (_event, payload = {}) => (
+  setElectronTitlebarTheme(payload)
+));
+
 handleTrustedMain('external-link:open', async (_event, payload = {}) => {
   return openExternalSafely(String(payload?.url || '').trim());
 });
@@ -2847,9 +2873,9 @@ function createWindow() {
     titleBarOverlay: process.platform === 'darwin'
       ? false
       : {
-          color:       '#1f1f1f',
-          symbolColor: '#d8c9a8',
-          height:      32,
+          color:       DEFAULT_TITLEBAR_COLOR,
+          symbolColor: DEFAULT_TITLEBAR_SYMBOL_COLOR,
+          height:      ELECTRON_TITLEBAR_HEIGHT,
         },
     trafficLightPosition: process.platform === 'darwin'
       ? { x: 12, y: 8 }
@@ -3019,6 +3045,7 @@ function setupAutoUpdater() {
 
 // ─── App Lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  if (!singleInstanceLock) return;
 
   // ── Step 1: First-run / post-update dependency check ──────────────────
   if (!IS_PACKAGED_RUNTIME && (needsDependencySetup() || getMissingPackages().length > 0)) {

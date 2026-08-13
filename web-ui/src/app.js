@@ -260,6 +260,27 @@ function dispatchAppearanceChange(theme) {
     document.dispatchEvent(new CustomEvent('prom-theme-change', { detail: { id: theme.id, base: theme.base } }));
     document.dispatchEvent(new CustomEvent('prom-appearance-change', { detail: { id: theme.id, base: theme.base } }));
   } catch {}
+  syncElectronTitlebarTheme();
+}
+
+// Windows/Linux render the native caption buttons inside Electron's titlebar
+// overlay. Feed that overlay the same surface/text colors as the active UI so
+// the native controls follow named and custom Prometheus themes. macOS traffic
+// lights remain system-rendered and are intentionally left untouched.
+function syncElectronTitlebarTheme() {
+  const bridge = window.prometheusApp;
+  if (!bridge?.isElectron || typeof bridge.setTitleBarTheme !== 'function') return;
+  const root = document.documentElement;
+  const styles = getComputedStyle(root);
+  // Use the opaque panel token rather than the translucent sidebar token.
+  // Windows' native overlay compositor can turn translucent titlebar colors
+  // into a light rectangle, especially on frameless windows.
+  const color = styles.getPropertyValue('--panel').trim()
+    || styles.getPropertyValue('--bg').trim();
+  const symbolColor = styles.getPropertyValue('--text').trim()
+    || styles.getPropertyValue('--fg').trim();
+  if (!color || !symbolColor) return;
+  Promise.resolve(bridge.setTitleBarTheme({ color, symbolColor })).catch(() => {});
 }
 
 function updateThemeToggle(themeId, themeBase, themeLabel) {

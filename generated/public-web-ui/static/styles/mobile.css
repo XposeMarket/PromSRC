@@ -7877,7 +7877,7 @@ html.pm-session-context-open * {
   overscroll-behavior-x: contain;
 }
 .pm-background-spawn-dock.has-many .pm-background-spawn-lane {
-  flex: 0 0 min(78vw, 300px);
+  flex: 0 0 min(68vw, 260px);
 }
 .pm-keyboard-open .pm-background-spawn-dock {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px) + 18px);
@@ -8119,9 +8119,15 @@ html.pm-session-context-open * {
   text-align: left;
   cursor: pointer;
 }
+.pm-background-spawn-summary {
+  min-height: 42px;
+  grid-template-columns: 28px minmax(0, 1fr) auto 16px;
+  gap: 6px;
+  padding: 6px 8px;
+}
 .pm-background-spawn-avatar {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8141,7 +8147,7 @@ html.pm-session-context-open * {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
 }
 .pm-background-spawn-main em,
@@ -8150,7 +8156,7 @@ html.pm-session-context-open * {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--pm-muted);
-  font-size: 11px;
+  font-size: 10px;
   font-style: normal;
   line-height: 1.32;
 }
@@ -8159,7 +8165,7 @@ html.pm-session-context-open * {
 }
 .pm-background-spawn-status {
   color: var(--pm-muted);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 900;
   text-transform: uppercase;
 }
@@ -8178,7 +8184,7 @@ html.pm-session-context-open * {
 }
 .pm-background-spawn-chevron {
   color: var(--pm-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 950;
   text-align: center;
 }
@@ -10728,7 +10734,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   left: 0;
   right: 0;
   bottom: 0;
-  height: min(92vh, 760px);
+  height: min(92svh, 760px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -10746,6 +10752,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   box-shadow: 0 -22px 70px rgba(0,0,0,.48);
 }
 .pm-mobile-side-sheet.open .pm-mobile-side-panel { transform: translateY(0); }
+.pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel {
+  height: min(84svh, 700px);
+}
 .pm-mobile-side-handle {
   width: 46px;
   height: 5px;
@@ -10814,6 +10823,27 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   flex-direction: column;
   gap: 18px;
   scrollbar-width: thin;
+  overflow-x: hidden;
+}
+.pm-mobile-side-thread .pm-msg {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+}
+.pm-mobile-side-thread .pm-msg.from-ai .pm-bubble {
+  min-width: 0;
+  max-width: 100%;
+}
+.pm-mobile-side-thread .pm-msg .markdown-body {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.pm-mobile-side-thread .pm-bubble .markdown-body .pm-md-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .pm-mobile-side-thread .pm-msg-actions { display: none; }
 .pm-mobile-side-empty {
@@ -10834,7 +10864,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 .pm-mobile-side-composer .pm-composer-row { transform: translateY(0); }
 .pm-mobile-side-composer .pm-composer-input { min-height: 34px; }
-.pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-composer { display: none; }
+.pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-composer {
+  display: block;
+}
 
 .pm-team-chat-card {
   padding: 0;
@@ -15890,6 +15922,14 @@ button.pm-ctx-row {
 body.pm-mobile-active.pm-chat-voice-active .pm-tabbar {
   display: none !important;
 }
+body.pm-mobile-active.pm-chat-voice-active .pm-tabbar-haptic-gesture-surface {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+body.pm-mobile-active.pm-camera-open .pm-tabbar-haptic-gesture-surface {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 body.pm-mobile-active.pm-chat-voice-active .pm-body.pm-chat-body {
   padding-bottom: 0;
 }
@@ -17737,4 +17777,129 @@ body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
   .pm-gateways-intro .pm-btn,
   .pm-gateway-scan-fallback .pm-btn { width: 100%; }
   .pm-gateway-card-actions .pm-btn { flex: 1 1 calc(50% - 7px); }
+}
+
+/* Restore the pre-dial mobile reasoning control. Desktop subagent controls
+   retain the shared wheel markup; only the mobile model sheet presents it as
+   the original horizontal segmented slider. */
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-selector {
+  position: static;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 12px;
+  column-gap: 10px;
+  row-gap: 8px;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary {
+  grid-column: 1;
+  grid-row: 1;
+  justify-content: flex-start;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pm-text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary strong,
+body.pm-mobile-active .pm-msheet.is-reasoning #pm-reasoning-live-label {
+  font-weight: 600;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: stretch;
+  width: 100%;
+  min-height: 0;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  width: 100%;
+  height: 64px;
+  margin: 0;
+  padding: 7px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 999px;
+  background: rgba(92,92,92,.62);
+  box-shadow: inset 0 1px 2px rgba(255,255,255,.12), 0 8px 20px rgba(0,0,0,.22);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  touch-action: none;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-wheel-svg {
+  display: none !important;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill {
+  display: block;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment {
+  position: relative;
+  inset: auto;
+  z-index: 2;
+  display: block;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment + .pm-reasoning-segment {
+  display: block;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
+  display: block;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control.is-dragging .pm-reasoning-fill {
+  transition: none;
+}
+
+/* Imported project cards need a touch more separation than imported chat
+   rows. OpenAI retains the same white logo tile used by desktop. */
+body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-import-logo + .pm-session-title,
+body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-import-logo-fallback + .pm-session-title {
+  margin-left: 4px;
+}
+
+body.pm-mobile-active .pm-drawer .pm-session-import-logo--openai {
+  padding: 2px;
+  border-radius: 4px;
+  background: #fff;
 }

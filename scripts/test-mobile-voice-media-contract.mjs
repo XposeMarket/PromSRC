@@ -57,7 +57,7 @@ assert.match(pages, /let _pmSkillCacheReady =/);
 assert.match(pages, /if \(skillState\) \{[\s\S]{0,260}_pmEnsureSkillTriggerCacheLoaded\(\)/);
 assert.match(pages, /pm-chat-slash-loading/);
 assert.match(pages, /_pmSkillCacheReady = true/);
-assert.match(pages, /_pmEnsureSkillTriggerCacheLoaded\(\);\n  window\.addEventListener\('prometheus:markdown-ready'/);
+assert.match(pages, /_pmEnsureSkillTriggerCacheLoaded\(\);\r?\n  window\.addEventListener\('prometheus:markdown-ready'/);
 assert.match(pages, /const activeMatch = _pmMatchSlashCommandValue\(value\)/);
 assert.match(pages, /pmActiveSlashCommand = null;[\s\S]{0,260}pmSkillComposerSelectionIndex = 0/);
 assert.match(pages, /input\?\.addEventListener\('input', \(\) => \{[\s\S]{0,120}_pmHandleSlashInput\(page, input\)/);

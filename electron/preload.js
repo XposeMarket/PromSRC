@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('prometheusApp', {
   isElectron: true,
   platform: process.platform,
   getVersion: () => ipcRenderer.invoke('get-app-version'),
+  setTitleBarTheme: (theme = {}) => ipcRenderer.invoke('window:titlebar-theme', {
+    color: String(theme?.color || ''),
+    symbolColor: String(theme?.symbolColor || ''),
+  }),
 });
 
 // External links are an explicit escape hatch. Ordinary HTTP/HTTPS links are

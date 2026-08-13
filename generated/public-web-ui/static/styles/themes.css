@@ -1136,7 +1136,7 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
   color: #fff !important;
   box-shadow: 0 0 0 4px rgba(216,71,58,.16) !important;
 }
-:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.main-goal-strip, .chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging) {
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.main-goal-strip, .chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging, .chat-new-context-dock, .chat-new-context-popover) {
   color: var(--text);
   border-color: rgba(214, 183, 94, .28);
   background: rgba(12, 12, 11, .96);
@@ -2892,7 +2892,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   box-shadow: 0 8px 22px rgba(0, 0, 0, .18) !important;
 }
 
-:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area .queued-prompts-panel {
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
   background: var(--pm-pinned-chat-bg) !important;
   background-image: none !important;
   backdrop-filter: none !important;
@@ -3598,4 +3598,70 @@ body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > .chat-inpu
 body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   z-index: 12;
   box-shadow: 0 -12px 26px color-mix(in srgb, var(--pm-chat-page-bg, var(--bg)) 82%, transparent), 0 10px 24px rgba(0, 0, 0, .14) !important;
+}
+
+/* Prometheus One keeps the queue-masking shadow above the main composer, but
+   drops the decorative outer halo from both main and side-chat composers. */
+:root[data-skin="light"] body:not(.pm-mobile-active) .chat-input-area {
+  box-shadow: none !important;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area {
+  box-shadow: 0 -12px 26px color-mix(in srgb, var(--pm-chat-page-bg, var(--bg)) 82%, transparent) !important;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .background-spawn-lane {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+
+/* Every desktop skin uses one heading ornament: label, divider, spark. The
+   collapsible headings and the static Sessions heading already own a real
+   ornament node, so suppress theme-generated pseudo sparks on those rows. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) :is(.sidebar-section-toggle, .sidebar-section-static)::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-decoration::before {
+  content: "" !important;
+  display: block !important;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 58%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 16%, transparent) 84%, transparent) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-icon {
+  color: var(--pm-shell-gold, var(--brand)) !important;
+}
+
+/* The collapsed Pages row follows the same gold baseline and lets its label
+   size the first grid column, keeping the rule centered between text/chevron. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  color: var(--pm-shell-gold-muted, var(--brand)) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle::before {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 58%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 16%, transparent) 84%, transparent) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.pages-collapsed .sidebar-pages-toggle svg {
+  color: var(--pm-shell-gold, var(--brand)) !important;
+}
+
+/* Source-panel utility actions are icon affordances, not framed controls. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn),
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn):is(:hover, :focus-visible) {
+  border: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live {
+  color: var(--muted) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live:is(:hover, :focus-visible) {
+  color: var(--text) !important;
 }

@@ -35,6 +35,7 @@ import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 import {
   backgroundAgentAgeLabel,
   backgroundAgentPreview,
+  backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   persistBackgroundAgentWork,
@@ -148,6 +149,13 @@ const EMPTY_CHAT_STARTER_PROMPTS = [
 let emptyChatBrainCards = [];
 let emptyChatBrainCardsLoaded = false;
 let emptyChatBrainCardsLoading = false;
+
+const desktopNewChatContext = {
+  projectId: '',
+  projectName: '',
+};
+let desktopNewChatContextProjectsRequest = null;
+let desktopNewChatContextDismissBound = false;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -304,6 +312,7 @@ if (window._voicePendingTurns === undefined) window._voicePendingTurns = [];
 if (window.sideChatLinks === undefined) window.sideChatLinks = [];
 if (window.activeSideChatId === undefined) window.activeSideChatId = '';
 if (window.sideChatSplitOpen === undefined) window.sideChatSplitOpen = false;
+if (window.backgroundAgentDetailId === undefined) window.backgroundAgentDetailId = '';
 if (window.currentProgressThinkingActive === undefined) window.currentProgressThinkingActive = false;
 if (window.currentProgressThinkingText === undefined) window.currentProgressThinkingText = '';
 window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex) ? window.editingUserMessageIndex : -1;
@@ -439,14 +448,16 @@ function makeSideChatTitle(seed = '') {
 
 function updateSideChatChrome() {
   const links = getSideChatLinksForParent(window.activeChatSessionId);
+  const sideChatActive = window.sideChatSplitOpen && !!getActiveSideChatLink();
+  const backgroundAgentActive = !!String(window.backgroundAgentDetailId || '').trim();
   const btn = document.getElementById('side-chats-toggle-btn');
   if (btn) {
     const hasLinks = links.length > 0;
     btn.style.display = hasLinks ? 'inline-flex' : 'none';
-    btn.classList.toggle('active', window.sideChatSplitOpen && !!getActiveSideChatLink());
+    btn.classList.toggle('active', sideChatActive);
     btn.title = hasLinks ? `${links.length} linked side chat${links.length === 1 ? '' : 's'}` : 'Side chats';
   }
-  document.body?.classList?.toggle('side-chat-split-active', window.sideChatSplitOpen && !!getActiveSideChatLink());
+  document.body?.classList?.toggle('side-chat-split-active', sideChatActive || backgroundAgentActive);
 }
 
 function showSideChatSplit(sideChatId = window.activeSideChatId) {
@@ -460,6 +471,7 @@ function showSideChatSplit(sideChatId = window.activeSideChatId) {
   }
   link.closed = false;
   link.updatedAt = Date.now();
+  window.backgroundAgentDetailId = '';
   window.activeSideChatId = link.id;
   window.sideChatSplitOpen = true;
   saveSideChatLinks();
@@ -8271,16 +8283,19 @@ function newChatSession() {
     else setMode('chat');
   }
   if (typeof window.setSidebarSegTab === 'function') window.setSidebarSegTab('chats');
+  resetDesktopNewChatContext();
   setDraftChatSession(id);
+  // New regular chat always exits project mode before the empty-state render;
+  // otherwise a stale project dataset can suppress the desktop context dock
+  // for the first frame of the new-chat screen.
+  if (typeof window._maybeClearProjectState === 'function') {
+    window._maybeClearProjectState(id);
+  }
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
   renderChatMessages();
   if (chatResourcesState.open) loadChatResources({ sessionId: id });
-  // New regular chat always exits project mode
-  if (typeof window._maybeClearProjectState === 'function') {
-    window._maybeClearProjectState(id);
-  }
 }
 
 function toggleSessionsEditMode() {
@@ -8337,11 +8352,17 @@ async function openSession(id) {
     if (typeof window.setMode === 'function') window.setMode('chat');
     else setMode('chat');
   }
+  resetDesktopNewChatContext();
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
   if (sess) {
     await _loadSessionFromServer(id, { force: true });
+  }
+  // Establish project/non-project chrome before rendering the active chat so
+  // the empty composer dock reflects the session's real context immediately.
+  if (typeof window._maybeClearProjectState === 'function') {
+    window._maybeClearProjectState(id);
   }
   syncActiveChat();
   if (chatResourcesState.open) loadChatResources({ sessionId: id });
@@ -8353,10 +8374,6 @@ async function openSession(id) {
   }
   recoverDesktopMainChatSession(id, { recovery: true, fullRefresh: false }).catch(() => {});
   refreshVisibleChannelsList();
-  // Clear project state if switching to a non-project session
-  if (typeof window._maybeClearProjectState === 'function') {
-    window._maybeClearProjectState(id);
-  }
 }
 
 function markSessionUnread(sessionId) {
@@ -13024,6 +13041,262 @@ function getEmptyProjectChatWelcome() {
   return { prompt: template.replace('{project}', projectName) };
 }
 
+function isDesktopNewChatDraft() {
+  const chatView = document.getElementById('chat-view');
+  if (!chatView?.classList.contains('chat-empty')) return false;
+  if (getEmptyProjectChatWelcome()) return false;
+  if (window.sideChatSplitOpen && getActiveSideChatLink()) return false;
+  if (String(window.backgroundAgentDetailId || '').trim()) return false;
+  return true;
+}
+
+function desktopNewChatContextIcon(kind = 'chat') {
+  if (kind === 'folder') {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 3v-3.2a2 2 0 0 1-2-2v-8.8a2 2 0 0 1 2-2z"/></svg>';
+}
+
+function closeDesktopNewChatContextPopover() {
+  const popover = document.getElementById('chat-new-context-popover');
+  const trigger = document.getElementById('chat-new-context-trigger');
+  if (popover) {
+    popover.hidden = true;
+    popover.dataset.mode = '';
+    popover.innerHTML = '';
+  }
+  trigger?.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('desktop-new-context-popover-open');
+  if (desktopNewChatContextDismissBound) {
+    document.removeEventListener('pointerdown', handleDesktopNewChatContextOutside, true);
+    document.removeEventListener('keydown', handleDesktopNewChatContextKeydown, true);
+    desktopNewChatContextDismissBound = false;
+  }
+}
+
+function handleDesktopNewChatContextOutside(event) {
+  const dock = document.getElementById('chat-new-context-dock');
+  if (!dock?.contains(event.target)) closeDesktopNewChatContextPopover();
+}
+
+function handleDesktopNewChatContextKeydown(event) {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  closeDesktopNewChatContextPopover();
+}
+
+function bindDesktopNewChatContextDismiss() {
+  if (desktopNewChatContextDismissBound) return;
+  document.addEventListener('pointerdown', handleDesktopNewChatContextOutside, true);
+  document.addEventListener('keydown', handleDesktopNewChatContextKeydown, true);
+  desktopNewChatContextDismissBound = true;
+}
+
+function renderDesktopNewChatContextDock() {
+  const dock = document.getElementById('chat-new-context-dock');
+  const trigger = document.getElementById('chat-new-context-trigger');
+  const label = document.getElementById('chat-new-context-label');
+  if (!dock || !trigger || !label) return;
+  if (!isDesktopNewChatDraft()) {
+    closeDesktopNewChatContextPopover();
+    dock.hidden = true;
+    return;
+  }
+  dock.hidden = false;
+  const selectedProjectId = String(desktopNewChatContext.projectId || '').trim();
+  const icon = dock.querySelector('.chat-new-context-icon');
+  if (icon) icon.innerHTML = desktopNewChatContextIcon(selectedProjectId ? 'folder' : 'chat');
+  label.textContent = desktopNewChatContext.projectName || 'Chat';
+  trigger.setAttribute('aria-label', desktopNewChatContext.projectName
+    ? `Directed chat: ${desktopNewChatContext.projectName}`
+    : 'Directed chat: Chat');
+  trigger.setAttribute('aria-expanded', String(!document.getElementById('chat-new-context-popover')?.hidden));
+}
+
+function renderDesktopNewChatContextProjects(projects = []) {
+  const popover = document.getElementById('chat-new-context-popover');
+  if (!popover) return;
+  const options = [{ id: '', name: 'Chat' }, ...projects.filter((project) => project?.id)];
+  popover.dataset.mode = 'projects';
+  popover.innerHTML = `
+    <div class="chat-new-context-popover-title">Directed chat</div>
+    <button type="button" class="chat-new-context-option chat-new-context-new-project" data-desktop-new-project="true">
+      <span class="chat-new-context-option-icon" aria-hidden="true">+</span>
+      <span class="chat-new-context-option-copy"><strong>New project</strong></span>
+      <span class="chat-new-context-option-check" aria-hidden="true">›</span>
+    </button>
+    ${options.map((project) => {
+      const id = String(project.id || '').trim();
+      const selected = id === String(desktopNewChatContext.projectId || '').trim();
+      return `<button type="button" class="chat-new-context-option" data-desktop-project-id="${escHtml(id)}" aria-selected="${String(selected)}">
+        <span class="chat-new-context-option-icon" aria-hidden="true">${desktopNewChatContextIcon(id ? 'folder' : 'chat')}</span>
+        <span class="chat-new-context-option-copy"><strong>${escHtml(project.name || 'Chat')}</strong></span>
+        <span class="chat-new-context-option-check" aria-hidden="true">${selected ? '✓' : ''}</span>
+      </button>`;
+    }).join('')}`;
+
+  popover.querySelector('[data-desktop-new-project]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    renderDesktopNewProjectForm();
+  });
+  popover.querySelectorAll('[data-desktop-project-id]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      desktopNewChatContext.projectId = String(button.dataset.desktopProjectId || '').trim();
+      desktopNewChatContext.projectName = desktopNewChatContext.projectId
+        ? String(button.querySelector('strong')?.textContent || '').trim()
+        : '';
+      closeDesktopNewChatContextPopover();
+      renderDesktopNewChatContextDock();
+    });
+  });
+}
+
+async function loadDesktopNewChatProjects() {
+  const popover = document.getElementById('chat-new-context-popover');
+  if (!popover || popover.hidden) return;
+  popover.dataset.mode = 'projects';
+  popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Loading projects…</div>';
+  const request = api('/api/projects');
+  desktopNewChatContextProjectsRequest = request;
+  try {
+    const data = await request;
+    if (desktopNewChatContextProjectsRequest !== request || popover.hidden) return;
+    const projects = (Array.isArray(data) ? data : data?.projects || [])
+      .filter((project) => project?.id)
+      .map((project) => ({ id: String(project.id), name: String(project.name || project.id) }));
+    renderDesktopNewChatContextProjects(projects);
+  } catch (error) {
+    if (desktopNewChatContextProjectsRequest !== request || popover.hidden) return;
+    popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Projects are unavailable right now.</div>';
+    console.warn('[desktop project picker] project load failed:', error);
+  } finally {
+    if (desktopNewChatContextProjectsRequest === request) desktopNewChatContextProjectsRequest = null;
+  }
+}
+
+function renderDesktopNewProjectForm() {
+  const popover = document.getElementById('chat-new-context-popover');
+  if (!popover) return;
+  popover.dataset.mode = 'new-project';
+  popover.innerHTML = `
+    <div class="chat-new-context-popover-title">New project</div>
+    <form class="chat-new-project-form">
+      <label class="chat-new-project-label" for="chat-new-project-name">Project name</label>
+      <input id="chat-new-project-name" class="chat-new-project-input" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Mobile app" />
+      <div class="chat-new-project-error" role="alert" hidden></div>
+      <div class="chat-new-project-actions">
+        <button type="button" class="chat-new-project-button chat-new-project-cancel">Cancel</button>
+        <button type="submit" class="chat-new-project-button chat-new-project-confirm">Create</button>
+      </div>
+    </form>`;
+  const form = popover.querySelector('.chat-new-project-form');
+  const input = popover.querySelector('.chat-new-project-input');
+  const error = popover.querySelector('.chat-new-project-error');
+  const submitButton = popover.querySelector('.chat-new-project-confirm');
+  const setError = (message = '') => {
+    if (!error) return;
+    error.textContent = message;
+    error.hidden = !message;
+  };
+  popover.querySelector('.chat-new-project-cancel')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeDesktopNewChatContextPopover();
+  });
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const name = String(input?.value || '').trim();
+    if (!name) {
+      setError('Enter a project name.');
+      input?.focus();
+      return;
+    }
+    if (submitButton) submitButton.disabled = true;
+    setError('');
+    try {
+      const created = await api('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const project = created?.project || created;
+      const projectId = String(project?.id || '').trim();
+      if (!projectId) throw new Error('Prometheus did not return the new project.');
+      desktopNewChatContext.projectId = projectId;
+      desktopNewChatContext.projectName = String(project?.name || name).trim() || name;
+      closeDesktopNewChatContextPopover();
+      renderDesktopNewChatContextDock();
+      await window.loadProjects?.();
+      window.showToast?.('Project ready', `${desktopNewChatContext.projectName} will start with your first message.`, 'success', 2200);
+    } catch (errorValue) {
+      if (submitButton) submitButton.disabled = false;
+      setError(String(errorValue?.message || errorValue || 'Could not create project.'));
+    }
+  });
+  setTimeout(() => input?.focus({ preventScroll: true }), 0);
+}
+
+function toggleDesktopNewChatContextPopover(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (!isDesktopNewChatDraft()) return;
+  const popover = document.getElementById('chat-new-context-popover');
+  const trigger = document.getElementById('chat-new-context-trigger');
+  if (!popover || !trigger) return;
+  if (!popover.hidden) {
+    closeDesktopNewChatContextPopover();
+    return;
+  }
+  popover.hidden = false;
+  trigger.setAttribute('aria-expanded', 'true');
+  document.body.classList.add('desktop-new-context-popover-open');
+  bindDesktopNewChatContextDismiss();
+  void loadDesktopNewChatProjects();
+}
+
+function resetDesktopNewChatContext() {
+  desktopNewChatContext.projectId = '';
+  desktopNewChatContext.projectName = '';
+  closeDesktopNewChatContextPopover();
+}
+
+async function beginDesktopProjectChatSession() {
+  const projectId = String(desktopNewChatContext.projectId || '').trim();
+  const projectName = String(desktopNewChatContext.projectName || '').trim();
+  if (!projectId) return null;
+  const result = await api(`/api/projects/${encodeURIComponent(projectId)}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'New Chat', isOnboarding: false }),
+  });
+  const sessionId = String(result?.sessionId || result?.session?.id || '').trim();
+  if (!sessionId) throw new Error('The project did not return a chat session.');
+
+  if (typeof window.loadProjects === 'function') await window.loadProjects();
+  if (typeof window.openProjectSession === 'function') {
+    await window.openProjectSession(projectId, sessionId);
+  } else {
+    const session = getChatSessionById(sessionId) || createEmptyChatSession(sessionId);
+    if (!getChatSessionById(sessionId)) window.chatSessions.unshift(session);
+    Object.assign(session, {
+      source: 'project',
+      channel: 'web',
+      projectId,
+      projectName,
+      canvasProjectLabel: projectName || null,
+    });
+    window.activeChatSessionId = sessionId;
+    setAgentSessionId(sessionId);
+    syncActiveChat();
+  }
+  resetDesktopNewChatContext();
+  return getChatSessionById(sessionId);
+}
+
 function applyEmptyChatStarterPrompt(index) {
   const card = getEmptyChatStarterCards()[index];
   const input = document.getElementById('chat-input');
@@ -13136,7 +13409,9 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
                 ${assistantWorkTimerHtml}
                 ${assistantStatusDividerHtml}
-                ${!isUser ? (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg)) : ''}
+                ${!isUser ? (msg?._backgroundAgentLive === true
+                  ? renderLiveTurnTrace(desktopWorkflowTraceEntriesForMessage(msg), { streaming: true })
+                  : (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg))) : ''}
                 ${assistantRoleHtml}
                 ${assistantContentHtml}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
@@ -13260,8 +13535,9 @@ function renderSideChatPaneHtml() {
           <button class="chat-voice-btn" type="button" onclick="showToast('Side chat dictation is coming next.', 'Use the main composer mic for voice input right now.', 'info')" title="Dictate message" aria-label="Dictate message">
             <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
           </button>
-          <button class="chat-command-chip" type="button" style="display:none" aria-hidden="true"></button>
-          <textarea id="side-chat-input" rows="1" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"></textarea>
+          <div class="chat-composer-input-wrap">
+            <textarea id="side-chat-input" rows="1" placeholder="Send Prometheus a message" autocomplete="off" oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"></textarea>
+          </div>
           <button class="send-btn" type="button" onclick="sendSideChatMessage()" title="Send side chat">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
           </button>
@@ -13278,6 +13554,44 @@ function renderSideChatPaneHtml() {
             </button>
           </div>
         </div>
+      </div>
+    </section>`;
+}
+
+function renderBackgroundAgentSidePaneHtml(record) {
+  if (!record) return '';
+  const identity = resolveBackgroundAgentIdentity(record.id, {
+    existingName: record.agentName,
+    existingColor: record.agentColor,
+  });
+  const status = String(record.status || 'running').toLowerCase();
+  const running = ['queued', 'running', 'in_progress'].includes(status);
+  const statusLabel = status === 'in_progress' ? 'running' : status;
+  const message = {
+    ...backgroundAgentRecordToMessage({
+      ...record,
+      agentName: identity.name,
+      agentColor: identity.color,
+    }),
+    _backgroundAgentLive: running,
+    streaming: running,
+  };
+  const historyHtml = renderVisibleChatHistoryHtml([message], {
+    sessionId: `background:${record.id}`,
+    readonly: true,
+    hideSideChatBoundary: true,
+  });
+  return `
+    <section class="side-chat-pane background-agent-side-pane" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
+      <div class="side-chat-header">
+        <div class="side-chat-title-wrap">
+          <div class="side-chat-kicker">Background work · ${escHtml(statusLabel)}</div>
+          <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
+        </div>
+        <button class="side-chat-close" type="button" onclick="closeBackgroundAgentDetail()" title="Close background work" aria-label="Close background work">×</button>
+      </div>
+      <div class="side-chat-messages background-agent-side-messages" id="background-agent-side-messages">
+        ${historyHtml || '<div class="side-chat-empty">Waiting for live agent activity...</div>'}
       </div>
     </section>`;
 }
@@ -13540,9 +13854,17 @@ function renderChatMessages() {
     .filter((entry) => !isInternalChatMessage(entry.msg));
   const voicePendingHtml = renderVoicePendingTurns();
   const sideActive = window.sideChatSplitOpen && !!getActiveSideChatLink();
+  const backgroundAgentRecord = window.backgroundAgentDetailId
+    ? backgroundSpawnDetailRecord(window.backgroundAgentDetailId)
+    : null;
+  if (window.backgroundAgentDetailId && !backgroundAgentRecord) {
+    window.backgroundAgentDetailId = '';
+    updateSideChatChrome();
+  }
+  const splitActive = sideActive || !!backgroundAgentRecord;
   const projectWelcome = getEmptyProjectChatWelcome();
 
-  if (!sideActive && visibleHistory.length === 0 && !voicePendingHtml) {
+  if (!splitActive && visibleHistory.length === 0 && !voicePendingHtml) {
     if (chatView) chatView.classList.add('chat-empty');
     container.innerHTML = `
       <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
@@ -13558,13 +13880,14 @@ function renderChatMessages() {
       </div>`;
     if (!projectWelcome) loadEmptyChatBrainCards();
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
+    renderDesktopNewChatContextDock();
     renderChatMessageNavigator();
     return;
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
   const mainHtml = renderVisibleChatHistoryHtml(window.chatHistory || []) + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
-  if (sideActive) {
+  if (splitActive) {
     container.classList.add('side-chat-split-shell');
     container.innerHTML = `
       <section class="side-chat-main-pane" aria-label="Main chat">
@@ -13576,11 +13899,11 @@ function renderChatMessages() {
         </div>
         <div class="side-chat-main-messages">${mainHtml}</div>
       </section>
-      ${renderSideChatPaneHtml()}
+      ${sideActive ? renderSideChatPaneHtml() : renderBackgroundAgentSidePaneHtml(backgroundAgentRecord)}
     `;
     if (!window.chatMessagesUserScrolledUp) {
       const mainPane = container.querySelector('.side-chat-main-messages');
-      const sidePane = container.querySelector('#side-chat-messages');
+      const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
       if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
     }
@@ -13589,6 +13912,7 @@ function renderChatMessages() {
     restoreQuestionDraftState(_questionDraft);
     restoreApprovalDetailsState(_approvalDetailsState);
     restoreApprovalProcessState(_approvalProcessState);
+    renderDesktopNewChatContextDock();
     renderChatMessageNavigator();
     return;
   }
@@ -13604,6 +13928,7 @@ function renderChatMessages() {
   restoreQuestionDraftState(_questionDraft);
   restoreApprovalDetailsState(_approvalDetailsState);
   restoreApprovalProcessState(_approvalProcessState);
+  renderDesktopNewChatContextDock();
   renderChatMessageNavigator();
 }
 
@@ -15400,6 +15725,10 @@ let skillTriggerPillExpanded = false;
 let skillTriggerSelectedId = '';
 let skillTriggerLastKey = '';
 let skillTriggerCacheLoadPromise = null;
+let skillMatchCacheQuery = '';
+let skillMatchCacheResult = [];
+let skillMatchInflight = '';
+let skillMatchDebounce = null;
 let skillTriggerExcludedIds = new Set();
 let selectedComposerSkillIds = [];
 let selectedComposerSkillRefs = [];
@@ -15568,14 +15897,54 @@ function ensureSkillTriggerCacheLoaded() {
     .finally(() => { skillTriggerCacheLoadPromise = null; });
 }
 
+function fetchSkillTriggerMatches(value) {
+  const text = String(value || '').toLowerCase().trim();
+  if (!text) {
+    skillMatchCacheQuery = '';
+    skillMatchCacheResult = [];
+    skillMatchInflight = '';
+    if (skillMatchDebounce) clearTimeout(skillMatchDebounce);
+    skillMatchDebounce = null;
+    return;
+  }
+  if (text === skillMatchCacheQuery || text === skillMatchInflight) return;
+  if (skillMatchDebounce) clearTimeout(skillMatchDebounce);
+  skillMatchDebounce = setTimeout(() => {
+    skillMatchInflight = text;
+    fetch(`/api/skills/match?q=${encodeURIComponent(text)}&limit=8`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((data) => {
+        if (skillMatchInflight !== text) return;
+        skillMatchCacheQuery = text;
+        skillMatchCacheResult = Array.isArray(data?.matches) ? data.matches : [];
+        const input = document.getElementById('chat-input');
+        if (input && String(input.value || '').toLowerCase().trim() === text) renderSkillTriggerPill(input.value);
+      })
+      .catch((error) => {
+        if (skillMatchInflight !== text) return;
+        skillMatchCacheQuery = text;
+        skillMatchCacheResult = [];
+        console.warn('[skills] desktop match fetch failed:', error);
+        const input = document.getElementById('chat-input');
+        if (input && String(input.value || '').toLowerCase().trim() === text) renderSkillTriggerPill(input.value);
+      })
+      .finally(() => {
+        if (skillMatchInflight === text) skillMatchInflight = '';
+      });
+  }, 140);
+}
+
 function getComposerSkillMatches(value) {
   const text = String(value || '').toLowerCase();
   const words = text.split(/\W+/).filter((word) => word.length > 2);
   if (!text.trim()) return [];
-  return getInstalledSkillCache()
+  const cachedMatches = text.trim() === skillMatchCacheQuery ? skillMatchCacheResult : [];
+  const localMatches = getInstalledSkillCache()
     .filter((skill) => !isSkillTriggerExcluded(skill))
     .filter((skill) => getSkillTriggerCandidates(skill).some((trigger) => skillTriggerMatchesText(trigger, text, words)))
     .slice(0, 8);
+  const matches = cachedMatches.length ? cachedMatches : localMatches;
+  return matches.filter((skill) => !isSkillTriggerExcluded(skill)).slice(0, 8);
 }
 
 function renderSkillTriggerIcon() {
@@ -15626,6 +15995,7 @@ function renderSkillTriggerPill(value = '') {
     hideSkillTriggerPill();
     return;
   }
+  fetchSkillTriggerMatches(value);
   const matches = getComposerSkillMatches(value);
   if (!matches.length) {
     hideSkillTriggerPill();
@@ -16170,6 +16540,14 @@ async function sendChat(queuedMessage = null, options = {}) {
     ? normalizeSelectedSkillIds(queuedTurn.selectedSkillIds || queuedTurn.forcedSkillIds || queuedTurn.matchedSkillIds)
     : normalizeSelectedSkillIds(selectedComposerSkillIds));
   const forcedSessionId = String(options.sessionIdOverride || '').trim();
+  if (!forcedSessionId && !queuedTurn && desktopNewChatContext.projectId && isDesktopNewChatDraft()) {
+    try {
+      await beginDesktopProjectChatSession();
+    } catch (error) {
+      showToast('Could not open project', error?.message || String(error), 'error');
+      return;
+    }
+  }
   if (!forcedSessionId) ensureActiveChatSessionExists();
   const thisSessionId = forcedSessionId || window.activeChatSessionId; // capture at send time — stable through async closure
   if (forcedSessionId && !getChatSessionById(forcedSessionId)) {
@@ -18197,6 +18575,7 @@ function pushBackgroundSpawnEvent(msg = {}) {
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
   if (typeof renderSourcePanel === 'function') renderSourcePanel();
   renderBackgroundSpawnDock();
+  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
 }
 
 function completeBackgroundSpawnLane(msg = {}) {
@@ -18248,6 +18627,7 @@ function completeBackgroundSpawnLane(msg = {}) {
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
   if (typeof renderSourcePanel === 'function') renderSourcePanel();
   renderBackgroundSpawnDock();
+  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
 }
 
 function toggleBackgroundSpawnLane(id) {
@@ -18265,75 +18645,28 @@ function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId)
 }
 
 function renderBackgroundAgentDetail() {
-  const host = document.getElementById('background-agent-detail');
-  if (!host) return;
   const id = String(window.backgroundAgentDetailId || '').trim();
   const record = id ? backgroundSpawnDetailRecord(id) : null;
-  if (!record) {
-    host.hidden = true;
-    host.innerHTML = '';
-    return;
-  }
-  const previousScroll = host.querySelector('.background-agent-detail-stream')?.scrollTop || 0;
-  const status = String(record.status || 'running').toLowerCase();
-  const failed = status === 'failed';
-  const finalText = String(record.result || record.error || '').trim();
-  const events = Array.isArray(record.events) ? record.events : [];
-  const identity = resolveBackgroundAgentIdentity(record.id, {
-    existingName: record.agentName,
-    existingColor: record.agentColor,
-  });
-  const statusLabel = status === 'in_progress' ? 'running' : status;
-  const displayEvents = events.map((event) => ({
-    ...event,
-    actor: !event.actor || /background\s*(?:spawn|agent)/i.test(String(event.actor)) ? identity.name : event.actor,
-  }));
-  host.hidden = false;
-  host.innerHTML = `
-    <section class="side-chat-pane background-agent-detail-pane" aria-label="${escHtml(identity.name)} background work">
-      <header class="side-chat-header background-agent-detail-header">
-        <div class="side-chat-title-wrap">
-          <div class="side-chat-kicker">Background work · ${escHtml(statusLabel)}</div>
-          <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
-        </div>
-        <button class="side-chat-close" type="button" data-background-agent-detail-close title="Close background work" aria-label="Close background work">×</button>
-      </header>
-      <div class="side-chat-messages background-agent-detail-messages">
-        <div class="background-agent-detail-summary">
-          <span class="background-agent-detail-avatar" style="--background-agent-color:${escHtml(identity.color)}">${escHtml(identity.name.slice(0, 2).toUpperCase())}</span>
-          <div><strong style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</strong><span>${escHtml(backgroundAgentAgeLabel(record.completedAt || record.updatedAt))}</span></div>
-        </div>
-        <div class="background-agent-detail-stream">${displayEvents.length ? formatProcessLines(displayEvents) : '<div class="background-agent-detail-empty">Waiting for live events...</div>'}</div>
-        ${finalText ? `<article class="background-agent-detail-final${failed ? ' is-failed' : ''}"><div class="background-agent-detail-final-label">Final response</div><div class="markdown-body">${renderMd(finalText)}</div></article>` : ''}
-      </div>
-    </section>`;
-  host.querySelector('[data-background-agent-detail-close]')?.addEventListener('click', closeBackgroundAgentDetail);
-  const stream = host.querySelector('.background-agent-detail-stream');
-  if (stream) stream.scrollTop = previousScroll;
+  if (!id) return;
+  if (!record) window.backgroundAgentDetailId = '';
+  updateSideChatChrome();
+  renderChatMessages();
 }
 
 function openBackgroundAgentDetail(id) {
   const cleanId = String(id || '').trim();
   if (!cleanId || !backgroundSpawnDetailRecord(cleanId)) return;
-  const chatView = document.getElementById('chat-view');
-  if (!chatView) return;
-  let host = document.getElementById('background-agent-detail');
-  if (!host) {
-    host = document.createElement('div');
-    host.id = 'background-agent-detail';
-    chatView.appendChild(host);
-  }
+  window.sideChatSplitOpen = false;
   window.backgroundAgentDetailId = cleanId;
-  renderBackgroundAgentDetail();
+  updateSideChatChrome();
+  renderChatMessages();
 }
 
 function closeBackgroundAgentDetail() {
+  if (!String(window.backgroundAgentDetailId || '').trim()) return;
   window.backgroundAgentDetailId = '';
-  const host = document.getElementById('background-agent-detail');
-  if (host) {
-    host.hidden = true;
-    host.innerHTML = '';
-  }
+  updateSideChatChrome();
+  renderChatMessages();
 }
 
 function renderBackgroundSpawnDock() {
@@ -18347,7 +18680,6 @@ function renderBackgroundSpawnDock() {
   dock.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
     dock.innerHTML = '';
-    renderBackgroundAgentDetail();
     updateBackgroundSpawnDockOffset();
     return;
   }
@@ -18365,7 +18697,6 @@ function renderBackgroundSpawnDock() {
       setBackgroundSpawnDockOpen(sessionId, true);
       renderBackgroundSpawnDock();
     });
-    renderBackgroundAgentDetail();
     updateBackgroundSpawnDockOffset();
     return;
   }
@@ -18396,7 +18727,6 @@ function renderBackgroundSpawnDock() {
   dock.querySelectorAll('[data-bg-open-detail]').forEach((btn) => {
     btn.addEventListener('click', () => openBackgroundAgentDetail(btn.getAttribute('data-bg-open-detail')));
   });
-  renderBackgroundAgentDetail();
   updateBackgroundSpawnDockOffset();
 }
 
@@ -19102,7 +19432,17 @@ function sourcePanelEnvironmentRowMarkup(item, { mini = false } = {}) {
   </${tag}>`;
 }
 
+function sourcePanelHasFileActivity(data = {}) {
+  return Boolean(
+    (Array.isArray(data.workspaceFiles) && data.workspaceFiles.length)
+    || (Array.isArray(data.edits) && data.edits.length)
+    || (Array.isArray(data.inputs) && data.inputs.length)
+    || (Array.isArray(data.outputs) && data.outputs.length),
+  );
+}
+
 function renderSourcePanelEnvironment(data, { mini = false } = {}) {
+  if (!sourcePanelHasFileActivity(data)) return '';
   const rows = sourcePanelEnvironmentItems(data).map((item) => sourcePanelEnvironmentRowMarkup(item, { mini })).join('');
   return `<section class="source-panel-section source-panel-environment-section${mini ? ' source-panel-section--mini' : ''}">
     <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Environment</h3>${mini ? '<button class="source-panel-section-add" type="button" aria-label="Open environment" title="Open environment" onclick="openFullSourcePanel(); setSourcePanelTab(\'git\')">＋</button>' : ''}</div>
@@ -19146,47 +19486,37 @@ function sourcePanelProcessRowMarkup(item, { mini = false } = {}) {
 
 function renderSourcePanelProcesses(data, { mini = false } = {}) {
   const items = Array.isArray(data?.processes) ? data.processes : sourcePanelProcessItems();
+  if (!items.length) return '';
   const limit = mini && !sourcePanelState.miniProcessExpanded ? 4 : (mini ? 10 : items.length);
   const visible = items.slice(0, limit);
   const remaining = Math.max(0, items.length - visible.length);
   return `<section class="source-panel-section source-panel-process-section${mini ? ' source-panel-section--mini' : ''}">
     <h3 class="source-panel-section-title">Background processes</h3>
-    ${visible.length ? `<div class="source-panel-list source-panel-process-list">${visible.map((item) => sourcePanelProcessRowMarkup(item, { mini })).join('')}</div>${remaining ? `<button class="source-panel-link-button source-panel-process-more" type="button" onclick="toggleSourcePanelMiniProcesses()">Show ${remaining} more</button>` : ''}` : '<div class="source-panel-empty">No background processes in this scope.</div>'}
-  </section>`;
-}
-
-function sourcePanelComputerUseState() {
-  const active = Boolean(
-    window.desktopPictureInPicture?.active
-    || window.desktopSurfaceState?.active
-    || window.computerUseState?.active
-    || document.body?.classList.contains('desktop-surface-active')
-    || document.body?.classList.contains('computer-use-active'),
-  );
-  return { active, label: 'Picture in Picture', value: active ? 'Hide' : 'Show' };
-}
-
-function sourcePanelComputerUseMarkup({ mini = false } = {}) {
-  const state = sourcePanelComputerUseState();
-  const action = "window.toggleDesktopPictureInPicture?.() || window.toggleDesktopSurface?.() || window.openDesktopPictureInPicture?.()";
-  return `<section class="source-panel-section source-panel-computer-section${mini ? ' source-panel-section--mini' : ''}">
-    <h3 class="source-panel-section-title">Computer Use</h3>
-    <button type="button" class="source-panel-info-row source-panel-computer-row${mini ? ' source-panel-computer-row--mini' : ''}" onclick="${action}" title="${escHtml(state.active ? 'Hide Picture in Picture' : 'Show Picture in Picture')}">
-      <span class="source-panel-computer-glyph" aria-hidden="true">▣</span><span>${escHtml(state.label)}</span><span class="info-value">${escHtml(state.value)}</span>
-    </button>
+    <div class="source-panel-list source-panel-process-list">${visible.map((item) => sourcePanelProcessRowMarkup(item, { mini })).join('')}</div>${remaining ? `<button class="source-panel-link-button source-panel-process-more" type="button" onclick="toggleSourcePanelMiniProcesses()">Show ${remaining} more</button>` : ''}
   </section>`;
 }
 
 function sourcePanelBrowserItems() {
+  const browserState = typeof getBrowserCanvasState === 'function'
+    ? getBrowserCanvasState()
+    : (window.browserCanvasState || {});
+  const visibleSessionId = typeof getBrowserCanvasVisibleSessionId === 'function'
+    ? getBrowserCanvasVisibleSessionId()
+    : String(browserState.followSessionId || browserState.sessionId || '');
   const records = typeof getBrowserCanvasSessionTabs === 'function' ? getBrowserCanvasSessionTabs() : [];
   const visible = records.filter((record) => record?.active || record?.streamActive || record?.url || record?.title || record?.nativeTabs?.length);
-  if (!visible.length) return [{ key: 'browser:new-tab', type: 'browser', title: 'New tab', meta: '', record: null }];
+  if (!visible.length) return [{ key: 'browser:new-tab', type: 'browser', title: 'New tab', meta: '', record: null, active: browserState.active === true }];
   return visible.map((record, index) => ({
     key: `browser:${String(record.sessionId || index)}`,
     type: 'browser',
     title: String(record.title || record.url || getBrowserSessionLabel(record, index) || 'Browser').trim(),
     meta: String(record.url || record.statusLabel || '').trim(),
     record,
+    active: Boolean(
+      record.active
+      || record.streamActive
+      || (record.sessionId && String(record.sessionId) === String(visibleSessionId || '')),
+    ),
   }));
 }
 
@@ -19200,8 +19530,8 @@ function sourcePanelBrowserRowMarkup(item, { mini = false } = {}) {
   if (/^https?:\/\//i.test(meta)) {
     try { meta = new URL(meta).hostname.replace(/^www\\./i, ''); } catch {}
   }
-  return `<button type="button" class="source-panel-info-row source-panel-browser-row${mini ? ' source-panel-browser-row--mini' : ''}" onclick="${action}" title="Open Browser">
-    <span class="source-panel-browser-glyph" aria-hidden="true">◉</span><span class="source-panel-browser-title">${escHtml(item.title || 'Browser')}</span>${meta ? `<span class="info-value">${escHtml(meta)}</span>` : ''}
+  return `<button type="button" class="source-panel-info-row source-panel-browser-row${item?.active ? ' is-active' : ''}${mini ? ' source-panel-browser-row--mini' : ''}" onclick="${action}" title="Open Browser">
+    <span class="source-panel-browser-glyph" aria-hidden="true"><span class="source-panel-browser-dot"></span></span><span class="source-panel-browser-title">${escHtml(item.title || 'Browser')}</span>${meta ? `<span class="info-value">${escHtml(meta)}</span>` : ''}
   </button>`;
 }
 
@@ -19343,7 +19673,6 @@ function renderSourcePanelOverview(data) {
   </section>
   ${renderSourcePanelEnvironment(data)}
   ${renderSourcePanelProcesses(data)}
-  ${sourcePanelComputerUseMarkup()}
   ${renderSourcePanelBrowser(data)}
   <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">· View all project sources</button>' : ''}</section>`;
 }
@@ -20246,7 +20575,6 @@ function renderSourcesMinimizedPanel() {
     <div class="sources-minimized-body">
       ${renderSourcePanelEnvironment(data, { mini: true })}
       ${renderSourcePanelProcesses(data, { mini: true })}
-      ${sourcePanelComputerUseMarkup({ mini: true })}
       ${renderSourcePanelBrowser(data, { mini: true })}
       <section class="source-panel-section source-panel-sources-section source-panel-section--mini">
         <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Sources</h3><button class="source-panel-section-add" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button></div>
@@ -45932,6 +46260,8 @@ window.bgtToast = bgtToast;
 window.showConfirm = showConfirm;
 window.restoreWorkspaceCheckpointFromDiff = restoreWorkspaceCheckpointFromDiff;
 window.renderQueuedPromptsPanel = renderQueuedPromptsPanel;
+window.toggleDesktopNewChatContextPopover = toggleDesktopNewChatContextPopover;
+window.closeDesktopNewChatContextPopover = closeDesktopNewChatContextPopover;
 window.removeQueuedPrompt = removeQueuedPrompt;
 window.steerQueuedPrompt = steerQueuedPrompt;
 window.clearQueuedPrompts = clearQueuedPrompts;

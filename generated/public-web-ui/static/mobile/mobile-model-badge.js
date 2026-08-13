@@ -181,6 +181,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   let pointerId = null;
   let flippedDirection = false;
   let disposed = false;
+  let surfaceStateObserver = null;
 
   // iOS only recognizes the switch as a haptic trigger when its direction is
   // changed *before* it is moved underneath the active finger.
@@ -230,6 +231,11 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     }
   };
 
+  const cancelGesture = () => {
+    if (pointerId == null) return;
+    finish({ pointerId }, true);
+  };
+
   const onPointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (pointerId !== null) return;
@@ -264,8 +270,28 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   document.body?.appendChild(proxy);
   positionSurface({ clientX: 0, clientY: 0 }, false);
 
+  // The tabbar is hidden by changing body classes while inline voice mode is
+  // active. Its haptic sensor is a fixed sibling, so it must explicitly cancel
+  // any captured pointer and recalculate its position when the bar returns.
+  if (isTabbarGestureSurface && document.body && typeof MutationObserver === 'function') {
+    const isSurfaceInactive = () => {
+      if (!surface.isConnected) return true;
+      const rect = surface.getBoundingClientRect?.();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return true;
+      const style = window.getComputedStyle?.(surface);
+      return style?.display === 'none' || style?.visibility === 'hidden' || style?.pointerEvents === 'none';
+    };
+    surfaceStateObserver = new MutationObserver(() => {
+      if (isSurfaceInactive()) cancelGesture();
+      else if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+    });
+    surfaceStateObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }
+
   const dispose = () => {
     disposed = true;
+    surfaceStateObserver?.disconnect?.();
+    surfaceStateObserver = null;
     releaseCapture();
     proxy.remove();
     if (surface.dataset) delete surface.dataset.pmHapticGestureSurface;
@@ -678,15 +704,16 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
 
   const control = document.getElementById('pm-reasoning-control');
   if (control && options) {
+    control.setAttribute('aria-label', 'Reasoning level. Swipe left or right to adjust.');
+    control.setAttribute('aria-orientation', 'horizontal');
     let lastIndex = selectedIndex;
     let requestGestureNativeHaptic = null;
     const indexMax = Math.max(1, options.length - 1);
     const setProgress = (progress) => {
       const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
       control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
-      const wheelTravel = options.length > 1 ? ((options.length - 1) / options.length) * 360 : 0;
-      control.style.setProperty('--pm-reasoning-wheel-rotation', `${-safeProgress * wheelTravel}deg`);
-      control.style.setProperty('--pm-reasoning-color-strength', `${Math.round(safeProgress * 100)}%`);
+      const fillWidth = ((1 / options.length) + safeProgress * ((options.length - 1) / options.length)) * 100;
+      control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
     };
     const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
       const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
@@ -707,11 +734,6 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           requestGestureNativeHaptic?.();
           pmHaptic(8);
         }
-        const rollClass = safeIndex > lastIndex ? 'is-rolling-forward' : 'is-rolling-backward';
-        control.classList.remove('is-rolling-forward', 'is-rolling-backward');
-        void control.offsetWidth;
-        control.classList.add(rollClass);
-        window.setTimeout(() => control.classList.remove(rollClass), 420);
         lastIndex = safeIndex;
       }
       if (save) {
@@ -721,25 +743,10 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
       }
     };
-    let gestureStart = null;
-    let gestureAxis = null;
     const progressFromEvent = (event) => {
       const rect = control.getBoundingClientRect();
-      if (!gestureStart || !rect.width || !rect.height) return 0;
-      const dx = Number(event.clientX || 0) - gestureStart.x;
-      const dy = Number(event.clientY || 0) - gestureStart.y;
-      if (!gestureAxis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
-        gestureAxis = Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'horizontal';
-      }
-      if (gestureAxis === 'horizontal') {
-        const distance = Math.max(120, rect.width * 0.72);
-        return gestureStart.progress + (dx / distance);
-      }
-      if (gestureAxis === 'vertical') {
-        const distance = Math.max(96, rect.height * 0.72);
-        return gestureStart.progress + (dy / distance);
-      }
-      return gestureStart.progress;
+      if (!rect.width) return 0;
+      return (Number(event.clientX || 0) - rect.left) / rect.width;
     };
     const indexFromProgress = (progress) => {
       return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
@@ -760,11 +767,6 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
       onPointerDown: (event, gesture) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
-        const rect = control.getBoundingClientRect();
-        const styleProgress = Number(control.style.getPropertyValue('--pm-reasoning-progress'));
-        const currentProgress = Number.isFinite(styleProgress) ? styleProgress : (selectedIndex / indexMax);
-        gestureStart = { x: Number(event.clientX || 0), y: Number(event.clientY || 0), progress: currentProgress, rect };
-        gestureAxis = null;
         control.classList.add('is-dragging');
         updateFromPointer(event);
       },
@@ -780,8 +782,6 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           control.classList.remove('is-dragging');
           updateFromPointer(event, true);
         } finally {
-          gestureStart = null;
-          gestureAxis = null;
           requestGestureNativeHaptic = null;
         }
       },
@@ -792,8 +792,6 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           control.classList.remove('is-dragging');
           updateFromPointer(event, true);
         } finally {
-          gestureStart = null;
-          gestureAxis = null;
           requestGestureNativeHaptic = null;
         }
       },
@@ -801,12 +799,12 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     };
     attachMobileHapticGestureSurface(control, pointerHandlers);
     control.addEventListener('keydown', (event) => {
-      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const currentIndex = Number(control.getAttribute('aria-valuenow') || selectedIndex);
       if (event.key === 'Home') commitIndex(0, true);
       else if (event.key === 'End') commitIndex(options.length - 1, true);
-      else commitIndex(currentIndex + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1), true);
+      else commitIndex(currentIndex + (event.key === 'ArrowRight' ? 1 : -1), true);
     });
   }
 }

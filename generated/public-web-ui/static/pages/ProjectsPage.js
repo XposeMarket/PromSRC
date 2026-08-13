@@ -51,6 +51,12 @@ function setLocalProjectPin(projectId, pinned) {
   localStorage.setItem('prometheus_pinned_projects', JSON.stringify(ids));
 }
 
+function renderProjectStarIcon(filled) {
+  return typeof window.SKILL_STAR_ICON === 'function'
+    ? window.SKILL_STAR_ICON(Boolean(filled))
+    : (filled ? '★' : '☆');
+}
+
 // ─── Init ───────────────────────────────────────────────────────────────────
 // This page is dynamically imported by the desktop shell.  Dynamic imports can
 // resolve after DOMContentLoaded, so listening only for that event leaves the
@@ -70,6 +76,7 @@ function initialiseProjectSidebar() {
       if (target.tagName === 'BUTTON') event.stopPropagation();
       if (action === 'toggle') window.toggleProjectCard(projectId);
       else if (action === 'new-session') void window.newProjectSession(projectId);
+      else if (action === 'pin-project') void window.toggleProjectPin(projectId, event);
       else if (action === 'delete-project') void window.confirmDeleteProject(projectId, String(target.dataset.projectName || ''));
       else if (action === 'open-session' && sessionId) void window.openProjectSession(projectId, sessionId);
       else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId, String(target.dataset.sessionTitle || ''));
@@ -136,6 +143,7 @@ function renderProjectChatRow(project) {
   const pinned = projectPinned(project);
   const importedLogo = projectImportedLogo(project);
   const importedClass = importedLogo ? ' imported-project' : '';
+  const projectTimestamp = projectLastActivity(project);
   const children = (project.sessions || []).slice().sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a)).map((session) => {
     const cached = Array.isArray(window.chatSessions) ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || '')) : null;
     const nested = { ...(cached || {}), ...session, projectId: project.id, projectName: project.name };
@@ -146,9 +154,10 @@ function renderProjectChatRow(project) {
   const folder = '<span class="project-chat-folder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>';
   return `<div class="project-chat-group${isOpen ? ' open' : ''}${pinned ? ' pinned-project' : ''}" data-project-chat-group="${id}">
     <div class="job-item chat-session-item project-chat-row${importedClass}" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" onclick="window.toggleProjectChatRow && window.toggleProjectChatRow('${id}')">
-      <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" onclick="window.toggleProjectPin && window.toggleProjectPin('${id}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${typeof window.SKILL_STAR_ICON === 'function' ? window.SKILL_STAR_ICON(pinned) : '☆'}</button>
+      <span class="project-chat-top-time" title="Last activity">${timeAgo(projectTimestamp)}</span>
+      <button class="project-chat-new-btn" type="button" onclick="event.preventDefault();event.stopPropagation();window.newProjectSession && window.newProjectSession('${id}')" title="New chat in project" aria-label="New chat in project">+</button>
+      <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" onclick="window.toggleProjectPin && window.toggleProjectPin('${id}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
       <div class="job-item-head job-item-head--pinned"><div class="job-item-title-wrap"><div class="job-item-title project-chat-project-title"><span class="project-chat-icon-line">${folder}${importedLogo}</span><span class="project-chat-project-name">${escHtmlLocal(project.name)}</span></div></div></div>
-      <div class="job-item-meta"><span class="job-item-time">${timeAgo(projectLastActivity(project))}</span></div>
     </div>
     <div class="project-chat-children"${isOpen ? '' : ' hidden'}>${children || '<div class="project-empty-session">No chats yet.</div>'}</div>
   </div>`;
@@ -327,16 +336,19 @@ function renderProjectCard(p, options = {}) {
   const isActiveProject = Boolean(_currentProjectSessionId && (p.sessions || []).find(s => s.id === _currentProjectSessionId));
   const projectClass = options.sidebar ? ' project-sidebar-group' : '';
   const projectRowState = isActiveProject ? ' active' : '';
+  const projectPinnedState = projectPinned(p);
+  const projectTimestamp = projectLastActivity(p);
 
   return `
 <div class="project-card${projectClass}${isOpen ? ' open' : ''}${isActiveProject ? ' active-project' : ''}"
      id="proj-card-${p.id}">
   <div class="project-card-header${options.sidebar ? ` job-item chat-session-item project-sidebar-row${projectRowState}` : ''}" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}" title="${escHtmlLocal(p.workspacePath || p.externalImport?.sourcePath || p.name)}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">
-    <div class="project-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></div>
-    <div class="job-item-head job-item-head--pinned project-row-content"><div class="job-item-title-wrap"><div class="job-item-title">${escHtmlLocal(p.name)}</div></div></div>
-    <div class="job-item-meta project-row-meta"><span class="job-item-time">${timeAgo(projectLastActivity(p))}</span></div>
-    <button class="project-card-add-btn" title="New chat in project" data-project-action="new-session" data-project-id="${escHtmlLocal(p.id)}">+</button>
-    <button class="project-card-delete-btn" title="Delete project" data-project-action="delete-project" data-project-id="${escHtmlLocal(p.id)}" data-project-name="${escHtmlLocal(p.name)}">
+     <div class="project-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></div>
+     <div class="job-item-head job-item-head--pinned project-row-content"><div class="job-item-title-wrap"><div class="job-item-title">${escHtmlLocal(p.name)}</div></div></div>
+     <span class="project-sidebar-top-time" title="Last activity">${timeAgo(projectTimestamp)}</span>
+     <button class="project-card-add-btn" title="New chat in project" data-project-action="new-session" data-project-id="${escHtmlLocal(p.id)}">+</button>
+     <button class="project-card-pin-btn${projectPinnedState ? ' active' : ''}" title="${projectPinnedState ? 'Unpin' : 'Pin'} project" aria-label="${projectPinnedState ? 'Unpin' : 'Pin'} project" data-project-action="pin-project" data-project-id="${escHtmlLocal(p.id)}">${renderProjectStarIcon(projectPinnedState)}</button>
+     <button class="project-card-delete-btn" title="Delete project" data-project-action="delete-project" data-project-id="${escHtmlLocal(p.id)}" data-project-name="${escHtmlLocal(p.name)}">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
     </button>
   </div>

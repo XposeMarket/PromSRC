@@ -576,6 +576,12 @@ body.right-canvas-open .page-title {
 .sidebar.pages-collapsed .nav-group { display: none; }
 .sidebar.collapsed .sidebar-pages-toggle { display: none; }
 
+/* Author-level flex rules on session lists otherwise override the browser's
+   bare hidden attribute when Pinned or Projects is collapsed. */
+.sidebar :is(#pinned-chats-list, #sidebar-projects-list)[hidden] {
+  display: none !important;
+}
+
 .sidebar-top {
   display: flex;
   align-items: center;
@@ -1381,7 +1387,7 @@ body.left-collapsed .sidebar-inner {
    app header and occupies that overlay area across the full window. Browser
    and PWA surfaces keep the original center-column topbar behavior. */
 :root {
-  --window-chrome-height: 32px;
+  --window-chrome-height: 30px;
 }
 
 body.electron-shell:not(.pm-mobile-active) .app {

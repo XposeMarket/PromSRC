@@ -2201,7 +2201,10 @@
 
     <!-- SESSION SECTION (only shown in chat mode) -->
     <div class="sidebar-section" id="sidebar-sessions-section">
-      <div class="section-title">Sessions</div>
+      <div class="section-title sidebar-section-static">
+        <span>Sessions</span>
+        <span class="sidebar-section-decoration" aria-hidden="true"><span class="sidebar-section-icon">✦</span></span>
+      </div>
 
       <!-- Segmented tabs: Chats / Skills. Projects have their own section above. -->
       <div class="seg-tabs" id="segTabs">
@@ -2359,6 +2362,21 @@
     <div id="background-spawn-dock" class="background-spawn-dock" hidden></div>
     <div class="chat-input-area">
       <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
+      <div id="chat-new-context-dock" class="chat-new-context-dock" hidden>
+        <button
+          id="chat-new-context-trigger"
+          class="chat-new-context-trigger"
+          type="button"
+          onclick="toggleDesktopNewChatContextPopover(event)"
+          aria-label="Choose chat project"
+          aria-expanded="false"
+        >
+          <span class="chat-new-context-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>
+          <span class="chat-new-context-value"><strong id="chat-new-context-label">Chat</strong><small>Directed chat</small></span>
+          <span class="chat-new-context-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+        </button>
+        <div id="chat-new-context-popover" class="chat-new-context-popover" role="dialog" aria-label="Choose chat project" hidden></div>
+      </div>
       <!-- Queued prompts panel -->
 	      <div class="queued-prompts-panel" id="queued-prompts-panel">
 	        <div class="queued-prompts-list" id="queued-prompts-list"></div>
@@ -3055,8 +3073,6 @@
           <button data-creative-mode-exit="true" onclick="exitCreativeModeFromUI()" title="Exit creative mode" style="display:none;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e8e6e1;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif"><iconify-icon icon="solar:logout-2-bold-duotone" width="14" height="14"></iconify-icon>Exit</button>
         </div>
         <div id="canvas-browser-mode-rail" style="display:none;align-items:center;gap:4px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)">
-           <button data-browser-mode-btn="agent" onclick="setBrowserInteractionMode('agent')" title="Agent mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Agent</button>
-           <button data-browser-mode-btn="copilot" onclick="setBrowserInteractionMode('copilot')" title="Co-pilot mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Co-pilot</button>
            <button data-browser-mode-btn="teach" onclick="setBrowserInteractionMode('teach')" title="Teach mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Teach</button>
         </div>
         <div id="canvas-publish-controls" style="display:none;align-items:center;gap:6px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)"></div>
@@ -3400,7 +3416,6 @@
       </button>
       <button id="canvas-toggle-btn" class="source-panel-icon-btn source-panel-canvas-btn" type="button" aria-label="Open Canvas" aria-pressed="false" title="Open Canvas" onclick="toggleCanvas()">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M12 6v12"/></svg>
-        <span>Canvas</span>
         <span id="canvas-notify-dot" aria-hidden="true"></span>
       </button>
       <button id="source-panel-close" class="source-panel-close-btn" type="button" aria-label="Close sources" title="Close sources" onclick="toggleRightPanel()">×</button>
@@ -3940,10 +3955,10 @@
 	      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
 	        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
 	          <div class="right-section-title" style="margin-bottom:8px">Main Agent Heartbeat</div>
-	          <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px">
-	            <input type="checkbox" id="settings-hb-enabled" />
-	            Enable periodic heartbeat runs
-	          </label>
+	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:12px">
+	            <span style="flex:1">Enable periodic heartbeat runs</span>
+	            <button id="settings-hb-enabled" class="appearance-switch is-on" type="button" role="switch" aria-checked="true" aria-label="Enable periodic heartbeat runs" onclick="toggleHeartbeatSetting('settings-hb-enabled')"><span class="appearance-switch-thumb"></span></button>
+	          </div>
 	          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
 	            <div>
 	              <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Interval (minutes)</label>
@@ -3954,10 +3969,10 @@
 	              <input id="settings-hb-model" type="text" placeholder="blank = default" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
 	            </div>
 	          </div>
-	          <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
-	            <input type="checkbox" id="settings-hb-review-teams" />
-	            Review all teams after each heartbeat run
-	          </label>
+	          <div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
+	            <span style="flex:1">Review all teams after each heartbeat run</span>
+	            <button id="settings-hb-review-teams" class="appearance-switch" type="button" role="switch" aria-checked="false" aria-label="Review all teams after each heartbeat run" onclick="toggleHeartbeatSetting('settings-hb-review-teams')"><span class="appearance-switch-thumb"></span></button>
+	          </div>
 	          <div id="settings-hb-path" style="font-size:11px;color:var(--muted);padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;word-break:break-all">HEARTBEAT.md path: -</div>
 	          <div style="display:flex;gap:8px;margin-top:12px">
 	            <button class="btn btn-sm" onclick="saveHeartbeatSettings()">Save Heartbeat</button>
@@ -5927,20 +5942,21 @@ function _renderChannelDrill(channelKey) {
       (window._sessionThinking && window._sessionThinking[s.id])
       || s.activeRun === true
     );
+    const channelTimestamp = getSessionLastMessageAt(s) || s.createdAt;
     return `
 <div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${escHtml(s.title || 'Untitled')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openSession('${s.id}')">
-  ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
+   <span class="chat-session-top-time" title="Last activity">${timeAgo(channelTimestamp)}</span>
+   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${renderImportedSourceLogo(s)}
       <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
-  <div class="job-item-meta">
-    ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-    ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.createdAt)}
-  </div>
+   <div class="job-item-meta">
+     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
+     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
+   </div>
 </div>`;
   }).join('');
 
@@ -5951,13 +5967,15 @@ function _renderChannelDrill(channelKey) {
       (window._sessionThinking && window._sessionThinking[s.id])
       || s.activeRun === true
     );
+    const serverTimestamp = getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt;
   const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     const roster = Array.isArray(s.voiceRoom?.participants)
       ? s.voiceRoom.participants.map((participant) => participant.label).filter(Boolean).join(' · ')
       : '';
     return `
 <div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
-  ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
+   <span class="chat-session-top-time" title="Last activity">${timeAgo(serverTimestamp)}</span>
+   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       ${renderImportedSourceLogo(s)}
@@ -5965,11 +5983,10 @@ function _renderChannelDrill(channelKey) {
       ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
     </div>
   </div>
-  <div class="job-item-meta">
-    ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-    ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}
-  </div>
+   <div class="job-item-meta">
+     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
+     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
+   </div>
 </div>`;
   }).join('');
 
@@ -6687,12 +6704,19 @@ function renderChatSessionCard(s, options = {}) {
     (window._sessionThinking && window._sessionThinking[s.id])
     || s.activeRun === true
   );
+  const sessionTimestamp = getSessionLastMessageAt(s) || s.createdAt;
+  const sessionMeta = [
+    s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : '',
+    sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : '',
+    isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : ''),
+  ].filter(Boolean).join('');
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
   const projectDeleteAction = projectId && options.projectDelete
     ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtml(s.title || 'New chat')}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
   return `
     <div class="job-item chat-session-item${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+      <span class="chat-session-top-time" title="Last activity">${timeAgo(sessionTimestamp)}</span>
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}
       <div class="job-item-head job-item-head--pinned">
@@ -6701,12 +6725,7 @@ function renderChatSessionCard(s, options = {}) {
           <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
-      <div class="job-item-meta">
-        ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
-        ${sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : ''}
-        ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-        ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.createdAt)}
-      </div>
+      ${sessionMeta ? `<div class="job-item-meta">${sessionMeta}</div>` : ''}
       ${searchPreview}
     </div>
   `;

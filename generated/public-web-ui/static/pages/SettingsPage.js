@@ -20,6 +20,16 @@ import { renderProviderUsageCard } from './HubPage.js';
 import { effortOptions, validEffort, supportsFastSpeed } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
 
+// SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
+// does not fall through to the legacy global in Safari. Keep the existing
+// callers safe when the process pane is not mounted yet (and when this page is
+// used on mobile).
+function addProcessEntry(...args) {
+  const recorder = typeof window !== 'undefined' ? window.addProcessEntry : null;
+  if (typeof recorder === 'function') return recorder(...args);
+  return undefined;
+}
+
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
   key: '<circle cx="7.5" cy="15.5" r="4.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 2 2"></path><path d="m18 5 2 2"></path>',
@@ -626,6 +636,26 @@ function ensureHeartbeatEditor() {
   setTimeout(() => { if (window.heartbeatEditor) window.heartbeatEditor.refresh(); }, 200);
 }
 
+function setHeartbeatToggleState(el, enabled) {
+  if (!el) return;
+  const on = !!enabled;
+  el.classList.toggle('is-on', on);
+  el.setAttribute('aria-checked', String(on));
+  el.dataset.enabled = String(on);
+}
+
+function readHeartbeatToggleState(el) {
+  if (!el) return false;
+  if (el.getAttribute('role') === 'switch') return el.getAttribute('aria-checked') === 'true';
+  return !!el.checked;
+}
+
+function toggleHeartbeatSetting(id) {
+  const el = document.getElementById(String(id || ''));
+  if (!el) return;
+  setHeartbeatToggleState(el, !readHeartbeatToggleState(el));
+}
+
 function applyHeartbeatSettingsToForm(heartbeat) {
   const hb = heartbeat || {};
   const enabledEl = document.getElementById('settings-hb-enabled');
@@ -634,10 +664,10 @@ function applyHeartbeatSettingsToForm(heartbeat) {
   const reviewEl = document.getElementById('settings-hb-review-teams');
   const pathEl = document.getElementById('settings-hb-path');
 
-  if (enabledEl) enabledEl.checked = hb.enabled !== false;
+  setHeartbeatToggleState(enabledEl, hb.enabled !== false);
   if (intervalEl) intervalEl.value = String(Math.max(1, Math.min(1440, Number(hb.interval_minutes) || 30)));
   if (modelEl) modelEl.value = String(hb.model || '');
-  if (reviewEl) reviewEl.checked = hb.review_teams_after_run === true;
+  setHeartbeatToggleState(reviewEl, hb.review_teams_after_run === true);
   if (pathEl) pathEl.textContent = `HEARTBEAT.md path: ${String(hb.path || '-')}`;
   ensureHeartbeatEditor();
   if (window.heartbeatEditor) window.heartbeatEditor.setValue(String(hb.instructions || ''));
@@ -687,10 +717,10 @@ async function saveHeartbeatSettings() {
   ensureHeartbeatEditor();
 
   const payload = {
-    enabled: !!enabledEl?.checked,
+    enabled: readHeartbeatToggleState(enabledEl),
     interval_minutes: Math.max(1, Math.min(1440, Number(intervalEl?.value) || 30)),
     model: String(modelEl?.value || '').trim(),
-    review_teams_after_run: !!reviewEl?.checked,
+    review_teams_after_run: readHeartbeatToggleState(reviewEl),
     instructions: window.heartbeatEditor ? window.heartbeatEditor.getValue() : '',
   };
 
@@ -6927,6 +6957,7 @@ window.previewExternalImportJob = previewExternalImportJob;
 window.previewDiscoveredExternalImport = previewDiscoveredExternalImport;
 window.previewDiscoveredExternalImportBatches = previewDiscoveredExternalImportBatches;
 window.toggleExternalImportConversation = toggleExternalImportConversation;
+window.toggleHeartbeatSetting = toggleHeartbeatSetting;
 window.setExternalImportConversationSelection = setExternalImportConversationSelection;
 window.confirmExternalImportJob = confirmExternalImportJob;
 window.confirmExternalImportBatchJob = confirmExternalImportBatchJob;

@@ -961,6 +961,18 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     requestGestureNativeHaptic = null;
   };
 
+  const cancel = () => {
+    if (pointerId === null) return;
+    try { tabbar.releasePointerCapture(pointerId); } catch {}
+    tabbar.classList.remove('pm-tabbar-dragging', 'pm-tabbar-pressing');
+    pointerId = null;
+    dragging = false;
+    velocity = 0;
+    pendingTab = null;
+    requestGestureNativeHaptic = null;
+    settle(tabbar.querySelector('.pm-tab.active'));
+  };
+
   attachMobileHapticGestureSurface(tabbar, {
     onPointerDown: (e, gesture) => {
       const t = tabAtX(e.clientX);
@@ -1010,7 +1022,7 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
       followDrag(e.clientX);
     },
     onPointerUp: finish,
-    onPointerCancel: finish,
+    onPointerCancel: cancel,
     nativeHapticsOnMove: false,
   });
 }
