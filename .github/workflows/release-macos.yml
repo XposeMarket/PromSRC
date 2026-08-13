@@ -54,11 +54,18 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Set up Python for native module builds
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install dependencies and architecture-native Chromium
         run: |
           npm ci
           npx playwright install chromium
       - name: Build, sign, notarize, and verify
+        env:
+          npm_config_python: ${{ steps.setup-python.outputs.python-path }}
         run: npm run build:public:mac:${{ matrix.arch }}
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
