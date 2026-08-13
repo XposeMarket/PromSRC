@@ -304,8 +304,12 @@ export function bindMobileSessionTarget(sessionId, gatewayId, { path = '', start
   const all = _readJson(SESSION_TARGETS_KEY, {});
   const existing = all[sid];
   if (existing?.gatewayId && existing.gatewayId !== gid) return false;
+  const gateway = getGateway(gid);
   all[sid] = {
     gatewayId: gid,
+    // Keep the origin alongside the immutable id so a refreshed catalog can
+    // recover an already-open chat even when the gateway id was regenerated.
+    origin: normalizeGatewayOrigin(gateway?.origin || existing?.origin || ''),
     path: String(path || existing?.path || '').trim().slice(0, 500),
     project: String(project || existing?.project || '').trim().slice(0, 160),
     workspace: String(workspace || existing?.workspace || '').trim().slice(0, 160),
@@ -324,9 +328,26 @@ export function getMobileSessionTarget(sessionId) {
   return all[sid] && typeof all[sid] === 'object' ? { ...all[sid], sessionId: sid } : null;
 }
 
-export function resolveMobileSessionGateway(sessionId, { pendingGatewayId = '' } = {}) {
+export function resolveMobileSessionGateway(sessionId, { pendingGatewayId = '', fallbackToCurrentGateway = false } = {}) {
   const bound = getMobileSessionTarget(sessionId);
-  if (bound?.gatewayId) return getGateway(bound.gatewayId) || null;
+  if (bound?.gatewayId) {
+    const exact = getGateway(bound.gatewayId);
+    if (exact) return exact;
+
+    const boundOrigin = normalizeGatewayOrigin(bound.origin);
+    if (boundOrigin) {
+      const byOrigin = loadGatewayCatalog().find((entry) => normalizeGatewayOrigin(entry.origin) === boundOrigin);
+      if (byOrigin) return byOrigin;
+    }
+
+    // Only legacy local sessions may recover to the current PWA gateway. A
+    // namespaced remote target must never silently route to another gateway.
+    if (fallbackToCurrentGateway && !boundOrigin) {
+      const currentEntries = loadGatewayCatalog().filter((entry) => isCurrentGateway(entry));
+      if (currentEntries.length === 1) return currentEntries[0];
+    }
+    return null;
+  }
   const pending = getGateway(pendingGatewayId);
   if (pending) return pending;
   return getGateway(getActiveGatewayId()) || loadGatewayCatalog()[0] || null;

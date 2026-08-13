@@ -829,7 +829,7 @@ let _projectsPagePromise = null;
 function ensureProjectsPage() {
   if (typeof window.loadProjects === 'function') return Promise.resolve();
   if (!_projectsPagePromise) {
-    _projectsPagePromise = import('./pages/ProjectsPage.js').catch((error) => {
+    _projectsPagePromise = import('./pages/ProjectsPage.js?v=desktop-project-actions-v1').catch((error) => {
       _projectsPagePromise = null;
       throw error;
     });
@@ -903,7 +903,7 @@ const PAGE_TITLES = {
 };
 
 const PAGE_MODULES = {
-  chat: './pages/ChatPage.js?v=desktop-chat-thinking-orb-v5',
+  chat: './pages/ChatPage.js?v=desktop-composer-sidebar-fix-v1',
   bgtasks: './pages/TasksPage.js',
   schedule: './pages/SchedulePage.js',
   teams: './pages/TeamsPage.js',

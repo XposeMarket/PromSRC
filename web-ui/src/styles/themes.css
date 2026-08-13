@@ -3446,6 +3446,33 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
     0 0 14px color-mix(in srgb, var(--pm-orange), transparent 70%) !important;
 }
 
+/* Pinned chats, projects, and ordinary sessions share the exact same usable
+   row width. Older theme blocks inset only #jobs-list on the right, which made
+   the three neighboring sections visibly disagree. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) {
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#pinned-chats-list, #sidebar-projects-list, #jobs-list) > :is(.chat-session-item, .project-chat-group) {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Reserve the full timestamp footprint inside the title line. The row already
+   owns the old action-button inset; constraining the title wrapper makes its
+   ellipsis resolve before the idle time instead of underneath it. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item:not(.project-chat-row) .job-item-title-wrap {
+  box-sizing: border-box;
+  padding-right: 42px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.is-editing {
+  padding-right: 82px;
+}
+
 /* The source drawer header is the same size and surface as the main topbar. */
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
   height: 56px;

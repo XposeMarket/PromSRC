@@ -10596,9 +10596,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const routedTarget = parseTargetNamespacedId(routedSession);
   let requestedSession = String(routedTarget?.targetId || routedSession).trim() || MOBILE_CHAT_SESSION_ID;
   const boundTarget = getMobileSessionTarget(requestedSession);
-  const currentGateway = requestedSession === MOBILE_CHAT_SESSION_ID
-    ? loadGatewayCatalog().find((entry) => isCurrentGateway(entry))
-    : null;
+  const currentGateway = loadGatewayCatalog().find((entry) => isCurrentGateway(entry));
   const gatewayTarget = resolveMobileSessionGateway(requestedSession, {
     // A fresh chat belongs to this PWA's gateway. Remembered context is still
     // used for an existing session, but it must never redirect a new draft to
@@ -10608,6 +10606,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       || (currentGateway?.gatewayId || '')
       || rememberedChatContext.gatewayId
       || getActiveGatewayId(),
+    fallbackToCurrentGateway: requestedSession !== MOBILE_CHAT_SESSION_ID && !routedTarget?.gatewayId,
   });
   if (routedTarget?.gatewayId && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     bindMobileSessionTarget(requestedSession, routedTarget.gatewayId, { started: true });
@@ -11028,7 +11027,10 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
 
   function currentChatGateway() {
     const bound = getMobileSessionTarget(requestedSession);
-    return resolveMobileSessionGateway(requestedSession, { pendingGatewayId: bound?.gatewayId || pendingGatewayId });
+    return resolveMobileSessionGateway(requestedSession, {
+      pendingGatewayId: bound?.gatewayId || pendingGatewayId,
+      fallbackToCurrentGateway: requestedSession !== MOBILE_CHAT_SESSION_ID && !routedTarget?.gatewayId,
+    });
   }
 
   function renderChatTargetChip() {
@@ -15752,7 +15754,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!msg && files.length === 0) return;
     let selectedGateway = currentChatGateway();
     if (!selectedGateway) {
-      pmToast('No known gateway target. Pair or select a gateway before sending.', 'error');
+      pmToast(
+        requestedSession === MOBILE_CHAT_SESSION_ID
+          ? 'No paired gateway target. Pair a gateway before starting a new chat.'
+          : 'This chat’s gateway is unavailable. Reconnect it to continue this chat.',
+        'error',
+      );
       return;
     }
     // The catalog dot is only a cache. Verify the selected target immediately

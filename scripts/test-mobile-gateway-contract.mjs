@@ -42,7 +42,7 @@ function loadCatalogForTest() {
     unescape,
     console,
   };
-  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson,\n  hasAnyGatewayCredential, filterOnlineGatewayEntries, loadMobileGatewaySessionPage,\n  searchMobileGatewaySessions\n};`, context, { filename: 'mobile-gateway-catalog.js' });
+  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  saveGatewayCatalog, setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  resolveMobileSessionGateway, getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson,\n  hasAnyGatewayCredential, filterOnlineGatewayEntries, loadMobileGatewaySessionPage,\n  searchMobileGatewaySessions\n};`, context, { filename: 'mobile-gateway-catalog.js' });
   context.__setDeviceToken = (value) => { deviceToken = String(value || ''); };
   return context;
 }
@@ -151,7 +151,27 @@ async function run() {
   assert.equal(c.bindMobileSessionTarget('session-1', mac.gatewayId, { started: true, path: '/project/mac' }), true);
   assert.equal(c.bindMobileSessionTarget('session-1', desktop.gatewayId, { started: true }), false, 'started session cannot be retargeted');
   assert.equal(c.getMobileSessionTarget('session-1').gatewayId, mac.gatewayId);
+  assert.equal(c.getMobileSessionTarget('session-1').origin, mac.origin, 'session bindings retain the gateway origin for recovery');
   assert.equal(c.bindMobileSessionTarget('mobile_default', desktop.gatewayId, { started: true }), false, 'draft slot is never persisted as a real target binding');
+
+  // Existing chats must survive a descriptor/catalog refresh even when the
+  // gateway id changes, while legacy local chats may recover to this PWA only.
+  const repairedMac = c.upsertGateway({ gatewayId: 'gw-mac-repaired', name: 'MacBook Prometheus', platform: 'darwin', version: '1.0.10', origin: mac.origin }, { token: 'mac-repaired-token', deviceId: 'dev-mac-repaired' });
+  c.saveGatewayCatalog([repairedMac, desktop]);
+  c.updateGatewayStatus(repairedMac.gatewayId, { status: 'online' });
+  assert.equal(c.resolveMobileSessionGateway('session-1').gatewayId, repairedMac.gatewayId, 'bound chats recover a replacement descriptor by origin');
+
+  const current = c.upsertGateway({ gatewayId: 'gw-current', name: 'This Prometheus', platform: 'win32', version: '1.0.16', origin: 'https://phone.example' }, { token: 'current-token', deviceId: 'dev-current' });
+  c.updateGatewayStatus(current.gatewayId, { status: 'online' });
+  ctx.window.localStorage.setItem('pm_mobile_session_targets_v1', JSON.stringify({
+    'legacy-session': { gatewayId: 'gw-old-local', immutable: true },
+    'remote-session': { gatewayId: 'gw-old-remote', origin: 'https://remote.example', immutable: true },
+  }));
+  c.saveGatewayCatalog([current]);
+  assert.equal(c.resolveMobileSessionGateway('legacy-session', { fallbackToCurrentGateway: true }).gatewayId, current.gatewayId, 'legacy local bindings recover the sole current gateway');
+  assert.equal(c.resolveMobileSessionGateway('remote-session', { fallbackToCurrentGateway: true }), null, 'stale remote bindings do not route to the current gateway');
+  c.saveGatewayCatalog([mac, desktop]);
+  c.updateGatewayStatus(mac.gatewayId, { status: 'online' });
 
   const payload = c.encodePairingPayload({ gatewayId: desktop.gatewayId, origin: desktop.origin, challenge: 'one-time-challenge', expiresAt: Date.now() + 30_000, name: desktop.name, platform: desktop.platform, version: desktop.version });
   const decoded = c.getPairingPayload(payload);
