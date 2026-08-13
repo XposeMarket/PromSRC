@@ -1525,6 +1525,10 @@ async function startGateway() {
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
     PROMETHEUS_ELECTRON_PID:      String(process.pid),
+    // Keep the gateway's own stall recovery aligned with the Electron
+    // watchdog. An unset value should use the production-safe default; an
+    // explicit 0/false remains available for diagnostics.
+    PROMETHEUS_GATEWAY_STALL_AUTORESTART: process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART ?? '1',
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',

@@ -83,6 +83,32 @@ export interface ChatMessage {
   historicalEvents?: ImportedHistoricalEvent[];
 }
 
+// Process/live-trace entries are delivery and continuity metadata, not model
+// context. Older sessions can contain thousands of them on one assistant
+// message; keeping a bounded recent tail prevents session loads and snapshot
+// serialization from becoming an event-loop hotspot.
+const MAX_PERSISTED_PROCESS_ENTRIES = 300;
+const MAX_PERSISTED_LIVE_TRACE_ENTRIES = 300;
+
+function boundHistoryRuntimeMetadata(history: any[]): any[] {
+  return (Array.isArray(history) ? history : []).map((message: any) => {
+    const processEntries = Array.isArray(message?.processEntries) ? message.processEntries : null;
+    const liveTraceEntries = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : null;
+    const boundedProcessEntries = processEntries && processEntries.length > MAX_PERSISTED_PROCESS_ENTRIES
+      ? processEntries.slice(-MAX_PERSISTED_PROCESS_ENTRIES)
+      : processEntries;
+    const boundedLiveTraceEntries = liveTraceEntries && liveTraceEntries.length > MAX_PERSISTED_LIVE_TRACE_ENTRIES
+      ? liveTraceEntries.slice(-MAX_PERSISTED_LIVE_TRACE_ENTRIES)
+      : liveTraceEntries;
+    if (boundedProcessEntries === processEntries && boundedLiveTraceEntries === liveTraceEntries) return message;
+    return {
+      ...message,
+      ...(boundedProcessEntries ? { processEntries: boundedProcessEntries } : {}),
+      ...(boundedLiveTraceEntries ? { liveTraceEntries: boundedLiveTraceEntries } : {}),
+    };
+  });
+}
+
 export interface VoiceRoomParticipant {
   key: string;
   kind: 'main' | 'subagent';
@@ -1526,7 +1552,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     return {
       id: sessionId,
-      history: Array.isArray(data?.history) ? data.history : [],
+      history: boundHistoryRuntimeMetadata(Array.isArray(data?.history) ? data.history : []),
       workspace: typeof data?.workspace === 'string' ? data.workspace : getConfig().getWorkspacePath(),
       channel: data?.channel || inferChannelFromSessionId(sessionId),
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
@@ -2300,7 +2326,7 @@ export function getSession(id: string): Session {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       const session: Session = {
         id: sessionId,
-        history: Array.isArray(data.history) ? data.history : [],
+        history: boundHistoryRuntimeMetadata(Array.isArray(data.history) ? data.history : []),
         workspace: data.workspace || getConfig().getWorkspacePath(),
         title: typeof data.title === 'string' ? data.title : undefined,
         autoTitleLocked: data.autoTitleLocked === true,
@@ -2760,7 +2786,15 @@ export function getHistoryForApiCall(
       : String(msg.content || '');
     const content = cleaned || (/\[tool-note:[^\]]+\]/i.test(String(msg.content || '')) ? '' : String(msg.content || ''));
     if (!content.trim()) return null;
-    return { ...msg, content };
+    // Keep model-context copies small. Full process/live traces remain in the
+    // session/audit stores for UI continuity and diagnostics, but the model
+    // only receives role/content below in chat.router.
+    const contextMessage = { ...msg } as any;
+    delete contextMessage.processEntries;
+    delete contextMessage.liveTraceEntries;
+    delete contextMessage.toolLog;
+    delete contextMessage.historicalEvents;
+    return { ...contextMessage, content };
   }).filter((msg): msg is ChatMessage => !!msg);
 }
 
@@ -3249,11 +3283,14 @@ function scrubSession(session: Session): Session {
         ? scrubPersistedData(msg.historicalEvents).slice(0, 500)
         : msg.historicalEvents,
       processEntries: Array.isArray(msg.processEntries)
-        ? msg.processEntries.map((entry) => ({
+        ? msg.processEntries.slice(-MAX_PERSISTED_PROCESS_ENTRIES).map((entry) => ({
             ...entry,
             content: entry?.content ? scrubPersistedText(String(entry.content)) : entry?.content,
           }))
         : msg.processEntries,
+      liveTraceEntries: Array.isArray(msg.liveTraceEntries)
+        ? msg.liveTraceEntries.slice(-MAX_PERSISTED_LIVE_TRACE_ENTRIES)
+        : msg.liveTraceEntries,
     })),
   };
 }

@@ -1,8 +1,8 @@
 import crypto from 'crypto';
-import fs from 'fs';
 import path from 'path';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 import { estimateMessagesTokens, estimateTextTokens, estimateToolSchemaTokens } from '../providers/model-usage';
+import { enqueueAsyncAppend } from './async-file-queue';
 import {
   resolveInstructionSegmentsShadow,
   type InstructionResolutionReport,
@@ -388,8 +388,31 @@ function promptManifestLogPath(): string {
 export function appendRuntimePromptManifest(manifest: RuntimePromptManifest): void {
   try {
     const filePath = promptManifestLogPath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, `${JSON.stringify(manifest)}\n`, 'utf-8');
+    // The full manifest remains the return value used by the live call. The
+    // durable log is telemetry, so omit the repeated per-segment decision
+    // payload by default; those decisions were the dominant part of a line
+    // and were generating hundreds of MB of synchronous JSONL writes.
+    const verbose = ['1', 'true', 'yes'].includes(
+      String(process.env.PROMETHEUS_PROMPT_MANIFEST_VERBOSE || '').trim().toLowerCase(),
+    );
+    const persisted = verbose
+      ? manifest
+      : {
+          ...manifest,
+          instructionResolution: {
+            ...manifest.instructionResolution,
+            decisions: [],
+            decisionCount: manifest.instructionResolution.decisions.length,
+            includedDecisionCount: manifest.instructionResolution.decisions.filter((decision) => decision.included).length,
+            currentDecisionCount: manifest.instructionResolution.decisions.filter((decision) => decision.currentlyIncluded).length,
+          },
+          stage4InstructionRouting: {
+            ...manifest.stage4InstructionRouting,
+            decisions: [],
+            decisionCount: manifest.stage4InstructionRouting.decisions.length,
+          },
+        };
+    enqueueAsyncAppend(filePath, `${JSON.stringify(persisted)}\n`);
   } catch {
     // Prompt observability must never break a model call.
   }

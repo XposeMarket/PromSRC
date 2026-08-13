@@ -50,7 +50,9 @@ import {
   registerLiveRuntime,
   finishLiveRuntime,
   updateLiveRuntimeCheckpoint,
+  listLiveRuntimes,
 } from '../live-runtime-registry';
+import { isModelBusy } from '../comms/broadcaster';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config';
 import { listBrowserSessions } from '../browser-tools';
@@ -94,6 +96,20 @@ const DREAM_HOUR           = 23;                    // local hour for dream elig
 const DREAM_MIN            = 30;                    // local minute for dream eligibility
 const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dream is ≤90 min away
 const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier 30m after dream success
+
+interface BrainRunOptions {
+  /** Explicit manual runs may opt into sharing the provider pool. */
+  allowForeground?: boolean;
+}
+
+function hasActiveForegroundWork(): boolean {
+  if (isModelBusy()) return true;
+  return listLiveRuntimes().some((runtime) =>
+    runtime.status === 'running'
+    && runtime.kind !== 'brain_thought'
+    && runtime.kind !== 'brain_dream',
+  );
+}
 
 function nextDateKey(dateStr: string): string {
   const parsed = new Date(`${dateStr}T12:00:00.000Z`);
@@ -552,12 +568,12 @@ export class BrainRunner {
       const now = new Date();
       const windowStart = new Date(now.getTime() - THOUGHT_INTERVAL_MS);
       const daily = loadDailyStatus(today);
-      const ok = await this._runThought(windowStart, now, today, daily.thoughts.length + 1);
+      const ok = await this._runThought(windowStart, now, today, daily.thoughts.length + 1, { allowForeground: true });
       if (!ok) throw new Error('Brain thought run did not produce verified artifacts');
     } else {
       const now = new Date();
       const pendingDate = this._getPendingDreamDate(now, loadLatestState()) || today;
-      const ok = await this._runDream(pendingDate, this._countThoughtsForDate(pendingDate));
+      const ok = await this._runDream(pendingDate, this._countThoughtsForDate(pendingDate), { allowForeground: true });
       if (!ok) throw new Error('Brain dream run did not produce verified artifacts');
     }
   }
@@ -598,6 +614,15 @@ export class BrainRunner {
     const latest   = loadLatestState();
     const pendingDreamDate = this._getPendingDreamDate(now, latest);
     const pendingCleanupDate = this._getPendingDreamCleanupDate(now, latest);
+
+    // Thought and Dream assemble large activity packages and use the same
+    // provider/worker pool as foreground chats. Never let the periodic brain
+    // ticker claim that capacity while a user turn is active or waiting on a
+    // tool; the next ticker pass will retry after the foreground work settles.
+    if (hasActiveForegroundWork()) {
+      console.log('[BrainRunner] Foreground chat active; deferring automatic brain work');
+      return;
+    }
 
     // Dream check first — takes priority if eligible
     if (
@@ -874,8 +899,13 @@ export class BrainRunner {
     windowEnd: Date,
     dateStr: string,
     thoughtNumber: number,
+    options: BrainRunOptions = {},
   ): Promise<boolean> {
     if (this.thoughtRunning) return false;
+    if (!options.allowForeground && hasActiveForegroundWork()) {
+      console.log('[BrainRunner] Foreground chat became active; deferring Thought');
+      return false;
+    }
     this.thoughtRunning = true;
     const runStartedAt = Date.now();
 
@@ -1218,8 +1248,16 @@ export class BrainRunner {
 
   // ─── Dream run ────────────────────────────────────────────────────────────
 
-  private async _runDream(dateStr: string, thoughtCount: number): Promise<boolean> {
+  private async _runDream(
+    dateStr: string,
+    thoughtCount: number,
+    options: BrainRunOptions = {},
+  ): Promise<boolean> {
     if (this.dreamRunning) return false;
+    if (!options.allowForeground && hasActiveForegroundWork()) {
+      console.log('[BrainRunner] Foreground chat became active; deferring Dream');
+      return false;
+    }
     this.dreamRunning = true;
     const runStartedAt = Date.now();
     const runId = crypto.randomUUID();
@@ -1574,8 +1612,12 @@ export class BrainRunner {
 
   // ─── Thought prompt ───────────────────────────────────────────────────────
 
-  private async _runDreamCleanup(dateStr: string): Promise<boolean> {
+  private async _runDreamCleanup(dateStr: string, options: BrainRunOptions = {}): Promise<boolean> {
     if (this.dreamCleanupRunning || this.dreamRunning) return false;
+    if (!options.allowForeground && hasActiveForegroundWork()) {
+      console.log('[BrainRunner] Foreground chat became active; deferring Dream cleanup');
+      return false;
+    }
     this.dreamCleanupRunning = true;
     const runStartedAt = Date.now();
     const runId = crypto.randomUUID();

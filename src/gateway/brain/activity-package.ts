@@ -447,24 +447,35 @@ function visitTimedRecords(state: CollectorState, sourceName: string, filePath: 
   }
 }
 
-function walkFiles(root: string, out: string[], depth = 0): void {
+function yieldToGateway(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function walkFiles(
+  root: string,
+  out: string[],
+  depth = 0,
+  budget: { visited: number } = { visited: 0 },
+): Promise<void> {
   if (depth > MAX_WALK_DEPTH || out.length >= MAX_FILES_PER_SOURCE || !fs.existsSync(root)) return;
   let entries: fs.Dirent[] = [];
   try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
   entries.sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
     if (out.length >= MAX_FILES_PER_SOURCE) return;
+    budget.visited += 1;
+    if (budget.visited % 256 === 0) await yieldToGateway();
     if (/^(raw|vault|node_modules|\.git|dist|build|\.cache|activity-packages)$/i.test(entry.name)) continue;
     const full = path.join(root, entry.name);
-    if (entry.isDirectory()) walkFiles(full, out, depth + 1);
+    if (entry.isDirectory()) await walkFiles(full, out, depth + 1, budget);
     else if (entry.isFile()) out.push(full);
   }
 }
 
-function safeJsonRead(filePath: string): unknown {
-  const stat = fs.statSync(filePath);
+async function safeJsonRead(filePath: string): Promise<unknown> {
+  const stat = await fs.promises.stat(filePath);
   if (stat.size > 50 * 1024 * 1024) throw new Error(`json file exceeds 50 MiB safety limit (${stat.size})`);
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 }
 
 async function readJsonLines(state: CollectorState, sourceName: string, filePath: string): Promise<void> {
@@ -479,6 +490,7 @@ async function readJsonLines(state: CollectorState, sourceName: string, filePath
       try {
         const parsed = JSON.parse(line) as unknown;
         visitTimedRecords(state, sourceName, filePath, parsed, lineNumber);
+        if (lineNumber % 256 === 0) await yieldToGateway();
       } catch (err) {
         addSourceError(coverage, `line ${lineNumber}: invalid JSON (${String(err)})`);
       }
@@ -536,7 +548,7 @@ async function collectSource(state: CollectorState, definition: SourceDefinition
     if (!fs.existsSync(root)) continue;
     let stat: fs.Stats;
     try { stat = fs.statSync(root); } catch (err) { addSourceError(coverage, `${root}: ${String(err)}`); continue; }
-    if (stat.isDirectory()) walkFiles(root, files);
+    if (stat.isDirectory()) await walkFiles(root, files);
     else files.push(root);
   }
   files.sort((a, b) => a.localeCompare(b));
@@ -566,7 +578,7 @@ async function collectSource(state: CollectorState, definition: SourceDefinition
       coverage.filesParsed += 1;
       state.filesParsed += 1;
       if (isJsonl(filePath) || definition.mode === 'jsonl') await readJsonLines(state, definition.name, filePath);
-      else visitTimedRecords(state, definition.name, filePath, safeJsonRead(filePath));
+      else visitTimedRecords(state, definition.name, filePath, await safeJsonRead(filePath));
     } catch (err) {
       addSourceError(coverage, `${relativeRef(filePath, state.repoRoot)}: ${String(err)}`);
     }
@@ -584,7 +596,7 @@ function addBrowserSnapshot(state: CollectorState): void {
   if (sessions.length) coverage.status = coverage.eventsIncluded ? 'ok' : 'empty';
 }
 
-function readUnresolved(state: CollectorState): void {
+async function readUnresolved(state: CollectorState): Promise<void> {
   const add = (kind: string, value: unknown, filePath: string): void => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     const record = value as Record<string, unknown>;
@@ -608,14 +620,20 @@ function readUnresolved(state: CollectorState): void {
   for (const root of roots) {
     const files: string[] = [];
     if (!fs.existsSync(root)) continue;
-    try { if (fs.statSync(root).isDirectory()) walkFiles(root, files); else files.push(root); } catch { continue; }
+    try { if (fs.statSync(root).isDirectory()) await walkFiles(root, files); else files.push(root); } catch { continue; }
     for (const filePath of files.sort()) {
       try {
         if (isJsonl(filePath)) {
-          const content = fs.readFileSync(filePath, 'utf8');
-          for (const line of content.split(/\r?\n/)) { if (!line.trim()) continue; try { add(path.basename(root), JSON.parse(line), filePath); } catch { /* source parser records the operational error */ } }
+          const content = await fs.promises.readFile(filePath, 'utf8');
+          let lineNumber = 0;
+          for (const line of content.split(/\r?\n/)) {
+            lineNumber += 1;
+            if (!line.trim()) continue;
+            try { add(path.basename(root), JSON.parse(line), filePath); } catch { /* source parser records the operational error */ }
+            if (lineNumber % 256 === 0) await yieldToGateway();
+          }
         } else {
-          const parsed = safeJsonRead(filePath);
+          const parsed = await safeJsonRead(filePath);
           if (Array.isArray(parsed)) parsed.forEach((item) => add(path.basename(root), item, filePath));
           else add(path.basename(root), parsed, filePath);
         }
@@ -624,11 +642,13 @@ function readUnresolved(state: CollectorState): void {
   }
 }
 
-function scanWorkspaceMtimes(state: CollectorState): void {
+async function scanWorkspaceMtimes(state: CollectorState): Promise<void> {
   const source = getSource(state, 'workspace_files', ['filesystem:workspace'], ['This source observes current file mtimes. It cannot prove an unrecorded deletion; history/tool events are the deletion authority.']);
   const files: string[] = [];
-  walkFiles(state.options.workspacePath, files);
-  for (const filePath of files) {
+  await walkFiles(state.options.workspacePath, files);
+  for (let index = 0; index < files.length; index += 1) {
+    const filePath = files[index];
+    if (index > 0 && index % 256 === 0) await yieldToGateway();
     const normalized = path.relative(state.options.workspacePath, filePath).replace(/\\/g, '/');
     if (/^(audit|\.prometheus\/audit|node_modules|\.git|dist|build|\.cache|Brain\/activity-packages)(\/|$)/i.test(normalized)) continue;
     try {
@@ -726,8 +746,8 @@ export async function buildThoughtActivityPackage(options: BuildActivityPackageO
   };
   for (const definition of getSourceDefinitions(options)) await collectSource(state, definition);
   addBrowserSnapshot(state);
-  readUnresolved(state);
-  scanWorkspaceMtimes(state);
+  await readUnresolved(state);
+  await scanWorkspaceMtimes(state);
 
   const events = sortEvents([...state.eventsByIdentity.values()]);
   const serializedEvents = JSON.stringify(events);

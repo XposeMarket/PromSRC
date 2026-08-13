@@ -66,6 +66,18 @@ function scrubArgs(args: Record<string, any> | undefined): Record<string, any> |
 // ─── Writer ──────────────────────────────────────────────────────────────────
 
 let _logPath: string | null = null;
+let _lastRotationCheckAt = 0;
+let _rotationInProgress = false;
+let _rotationPendingLines: string[] = [];
+let _rotationPendingBytes = 0;
+
+// Tool calls can be very frequent during a long turn. Reading and splitting
+// the entire audit log after every call made that normal path synchronous and
+// increasingly expensive as the log grew. Check cheaply and infrequently;
+// only perform the full read when the file is genuinely large.
+const AUDIT_ROTATION_CHECK_INTERVAL_MS = 60_000;
+const AUDIT_ROTATION_SIZE_THRESHOLD_BYTES = 32 * 1024 * 1024;
+const AUDIT_ROTATION_PENDING_BYTES = 4 * 1024 * 1024;
 
 function getOrInitLogPath(): string {
   if (_logPath) return _logPath;
@@ -98,7 +110,16 @@ export function appendAuditEntry(entry: Partial<AuditLogEntry>): void {
       error: entry.error ? String(entry.error).slice(0, 300) : undefined,
     };
     const logPath = getOrInitLogPath();
-    fs.appendFileSync(logPath, JSON.stringify(full) + '\n', 'utf-8');
+    const line = `${JSON.stringify(full)}\n`;
+    if (_rotationInProgress) {
+      const bytes = Buffer.byteLength(line, 'utf8');
+      if (_rotationPendingBytes + bytes <= AUDIT_ROTATION_PENDING_BYTES) {
+        _rotationPendingLines.push(line);
+        _rotationPendingBytes += bytes;
+      }
+      return;
+    }
+    fs.appendFileSync(logPath, line, 'utf-8');
   } catch {
     // Never throw — audit log is best-effort
   }
@@ -213,14 +234,63 @@ export function getRecentAuditSummary(n = 50): AuditLogEntry[] {
  * Rotate the log — keep only the last `maxLines` entries.
  * Called automatically when the log exceeds 10 000 lines.
  */
+async function flushRotationPending(logPath: string): Promise<void> {
+  while (_rotationPendingLines.length > 0) {
+    const lines = _rotationPendingLines;
+    _rotationPendingLines = [];
+    _rotationPendingBytes = 0;
+    await fs.promises.appendFile(logPath, lines.join(''), 'utf8');
+  }
+}
+
+async function rotateLogAsync(logPath: string, maxLines: number): Promise<void> {
+  const temporaryPath = `${logPath}.${process.pid}.${Date.now()}.rotate.tmp`;
+  try {
+    const contents = await fs.promises.readFile(logPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.trim());
+    if (lines.length > maxLines) {
+      const trimmed = lines.slice(lines.length - maxLines);
+      await fs.promises.writeFile(temporaryPath, `${trimmed.join('\n')}\n`, 'utf8');
+      await fs.promises.rename(temporaryPath, logPath);
+      console.log(`[AuditLog] Rotated log to ${trimmed.length} entries`);
+    }
+  } catch {
+    // Best effort; rotation must never affect a running tool call.
+  } finally {
+    await fs.promises.rm(temporaryPath, { force: true }).catch(() => undefined);
+    try { await flushRotationPending(logPath); } catch { /* telemetry is best-effort */ }
+    _rotationInProgress = false;
+  }
+}
+
 export function maybeRotateLog(maxLines = 10_000): void {
+  const defaultCall = arguments.length === 0;
+  const now = Date.now();
+  if (defaultCall) {
+    if (now - _lastRotationCheckAt < AUDIT_ROTATION_CHECK_INTERVAL_MS) return;
+    _lastRotationCheckAt = now;
+  }
+  if (_rotationInProgress) return;
+
   try {
     const logPath = getOrInitLogPath();
-    if (!fs.existsSync(logPath)) return;
+    const stat = fs.statSync(logPath);
+    if (defaultCall && stat.size < AUDIT_ROTATION_SIZE_THRESHOLD_BYTES) return;
+
+    if (defaultCall) {
+      _rotationInProgress = true;
+      void rotateLogAsync(logPath, maxLines);
+      return;
+    }
+
+    _rotationInProgress = true;
     const lines = fs.readFileSync(logPath, 'utf-8').split('\n').filter(l => l.trim());
     if (lines.length <= maxLines) return;
     const trimmed = lines.slice(lines.length - maxLines);
     fs.writeFileSync(logPath, trimmed.join('\n') + '\n', 'utf-8');
     console.log(`[AuditLog] Rotated log to ${trimmed.length} entries`);
-  } catch { /* best-effort */ }
+  } catch { /* best-effort */
+  } finally {
+    _rotationInProgress = false;
+  }
 }

@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
+import { enqueueAsyncAppend, enqueueAsyncWrite } from '../../runtime/async-file-queue';
 import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 
@@ -48,9 +49,8 @@ function parseNonNegativeIntEnv(name: string, fallback: number): number {
 
 const EVENT_LOOP_STALL_RESTART_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MS', 45_000);
 const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_RESTART_MIN_UPTIME_MS', 120_000);
-const EVENT_LOOP_STALL_AUTORESTART_ENABLED =
-  process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === '1'
-  || process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === 'true';
+const stallAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART || '').trim().toLowerCase();
+const EVENT_LOOP_STALL_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(stallAutorestartEnv);
 const EVENT_LOOP_STALL_DIAGNOSTIC_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_DIAGNOSTIC_MS', 5_000);
 
 function appendEventLoopStallDiagnostic(configDir: string, now: number, heartbeatDriftMs: number, elapsedMs: number): void {
@@ -85,7 +85,7 @@ function appendEventLoopStallDiagnostic(configDir: string, now: number, heartbea
       lastMainSessionId: _lastMainSessionId,
       runtimes,
     };
-    fs.appendFileSync(path.join(configDir, 'gateway-event-loop-stalls.ndjson'), `${JSON.stringify(record)}\n`, 'utf-8');
+    enqueueAsyncAppend(path.join(configDir, 'gateway-event-loop-stalls.ndjson'), `${JSON.stringify(record)}\n`);
   } catch {}
 }
 
@@ -136,12 +136,11 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       _lastRestartableHeartbeatDriftMs = heartbeatDriftMs;
     }
     const configDir = getConfig().getConfigDir();
-    fs.mkdirSync(configDir, { recursive: true });
     appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs);
     _lastHeartbeatCpuUsage = process.cpuUsage();
     _lastHeartbeatAt = now;
     const memory = process.memoryUsage();
-    fs.writeFileSync(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
+    enqueueAsyncWrite(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
       pid: process.pid,
       timestamp: now,
       reason,
@@ -166,7 +165,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
         external: memory.external,
         arrayBuffers: memory.arrayBuffers,
       },
-    }), 'utf-8');
+    }));
     maybeScheduleEventLoopStallRecovery(heartbeatDriftMs, now);
   } catch {}
 }
