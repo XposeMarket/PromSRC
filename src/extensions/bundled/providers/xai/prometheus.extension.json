@@ -13,6 +13,7 @@
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
       "staticModels": [
+        "grok-4.6",
         "grok-4.5",
         "grok-composer-2.5-fast",
         "grok-4.3",
@@ -72,7 +73,7 @@
         "input": "select",
         "options": ["", "none", "low", "medium", "high", "xhigh"],
         "required": false,
-        "help": "Blank uses xAI default. Sent only for effort-capable Grok chat models such as grok-4.3, grok-4.5, and grok-4.20-multi-agent; unsupported models omit it to avoid xAI request errors."
+        "help": "Blank uses xAI default. Sent only for effort-capable Grok chat models such as grok-4.3, grok-4.5, grok-4.6, and grok-4.20-multi-agent; unsupported models omit it to avoid xAI request errors."
       },
       {
         "key": "endpoint",

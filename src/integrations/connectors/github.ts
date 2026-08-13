@@ -146,6 +146,15 @@ export class GitHubConnector extends OAuthConnector {
     return this.ghGet(`/repos/${owner}/${repo}/commits?per_page=${perPage}`);
   }
 
+  async listCheckRuns(owner: string, repo: string, ref: string, perPage = 30): Promise<any[]> {
+    const data = await this.ghGet(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=${perPage}`);
+    return Array.isArray(data?.check_runs) ? data.check_runs : [];
+  }
+
+  async createPullRequest(owner: string, repo: string, payload: { title: string; head: string; base: string; body?: string }): Promise<any> {
+    return this.ghPost(`/repos/${owner}/${repo}/pulls`, payload);
+  }
+
   async searchCode(query: string, perPage = 20): Promise<any[]> {
     const params = new URLSearchParams({ q: query, per_page: String(perPage) });
     const data = await this.ghGet(`/search/code?${params}`);

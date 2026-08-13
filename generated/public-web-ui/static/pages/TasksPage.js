@@ -687,7 +687,7 @@ async function bgtRefreshOpenPanel() {
     bgtRecentProcessRuns = [];
   }
   try {
-    bgtCodingWorkspace = await loadCodingWorkspace();
+    bgtCodingWorkspace = await loadCodingWorkspace(String(task.agentWorkspace || '').trim(), String(task.sessionId || '').trim());
   } catch {
     bgtCodingWorkspace = null;
   }

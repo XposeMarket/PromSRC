@@ -256,6 +256,14 @@ export function filterGatewayEntries(entries = loadGatewayCatalog(), filter = ge
   return entries.filter((entry) => ids.has(entry.gatewayId));
 }
 
+// Session visibility is deliberately stricter than the user-selected view
+// filter. A target may remain in the catalog while it is suspect, offline, or
+// revoked, but its chats must not remain selectable in an aggregate view.
+export function filterOnlineGatewayEntries(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .filter((entry) => String(entry?.status || '') === MOBILE_GATEWAY_STATUS.ONLINE);
+}
+
 export function upsertGateway(entry, { token = '', deviceId = '' } = {}) {
   const normalized = normalizeGatewayDescriptor(entry);
   if (!normalized.gatewayId || !normalized.origin) throw new Error('Gateway identity and origin are required.');
@@ -511,6 +519,13 @@ export async function refreshGatewayStatuses({ gatewayIds = null } = {}) {
   return Promise.all(entries.map((entry) => probeGateway(entry).catch(() => getGateway(entry.gatewayId) || entry)));
 }
 
+async function _loadOnlineSelectedGatewayEntries() {
+  const selected = filterGatewayEntries(loadGatewayCatalog());
+  if (!selected.length) return [];
+  await refreshGatewayStatuses({ gatewayIds: selected.map((entry) => entry.gatewayId) });
+  return filterOnlineGatewayEntries(filterGatewayEntries(loadGatewayCatalog()));
+}
+
 async function _readGatewayCatalog(entry, state = 'active', limit = 50) {
   const params = new URLSearchParams({ state, limit: String(limit), offset: '0' });
   try {
@@ -549,7 +564,10 @@ async function _readGatewayCatalog(entry, state = 'active', limit = 50) {
 }
 
 export async function loadMobileGatewaySessionPage({ limit = 20, offset = 0, state = 'active' } = {}) {
-  const selected = filterGatewayEntries(loadGatewayCatalog());
+  // Re-probe on every session page request. This intentionally makes the
+  // aggregate view fail closed instead of relying on a stale 30-second list
+  // cache or an old "online" dot.
+  const selected = await _loadOnlineSelectedGatewayEntries();
   const pages = await Promise.all(selected.map(async (entry) => {
     try {
       const params = new URLSearchParams({ state, limit: String(limit), offset: String(offset) });
@@ -595,7 +613,7 @@ export async function loadMobileGatewayPinnedSessions({ state = 'active' } = {})
 export async function searchMobileGatewaySessions(query, { limit = 100, mode = 'content', state = 'active' } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const selected = filterGatewayEntries(loadGatewayCatalog());
+  const selected = await _loadOnlineSelectedGatewayEntries();
   const results = await Promise.all(selected.map(async (entry) => {
     try {
       const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content', scope: 'all', includeAutomated: '1', state });

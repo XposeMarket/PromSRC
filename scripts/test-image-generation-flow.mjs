@@ -13,6 +13,7 @@ const utils = read('src/image-generation/utils.ts');
 const openai = read('src/image-generation/providers/openai.ts');
 const codex = read('src/image-generation/providers/openai-codex.ts');
 const xai = read('src/image-generation/providers/xai.ts');
+const mediaCredentials = read('src/media-generation/provider-credentials.ts');
 const tool = read('src/tools/generate-image.ts');
 const router = read('src/gateway/routes/chat.router.ts');
 const executor = read('src/gateway/agents-runtime/subagent-executor.ts');
@@ -107,6 +108,17 @@ assert.match(codex, /on_partial_image/, 'Codex auth provider must emit partial-i
 assert.match(codex, /partial_images: request\.partial_images/, 'Codex auth provider must honor partial_images control');
 assert.match(codex, /generation_id: generated\.id \|\| null/, 'Codex auth final images must retain generation identity for partial replacement');
 assert.match(xai, /transparency: false/, 'xAI provider must declare transparency unsupported');
+assert.match(registry, /Prefer it when callers say "openai"/, 'OpenAI image routing must prefer saved Codex OAuth before API-key auth');
+assert.match(mediaCredentials, /getConfiguredProviderAccountId/, 'media providers must resolve the selected saved account');
+assert.match(mediaCredentials, /providerSettings[\s\S]*accountId/, 'media providers must merge account-scoped settings');
+assert.match(openai, /getConfiguredProviderConfig\('openai'\)/, 'OpenAI images must read the selected saved provider credential');
+assert.match(codex, /getConfiguredProviderAccountId\('openai_codex'\)/, 'Codex images must read the selected OAuth account');
+assert.match(xai, /getConfiguredProviderConfig\('xai'\)/, 'xAI images must read the selected saved provider credential');
+assert.match(codex, /pendingPartialCallbacks/, 'Codex partial callbacks must settle before the generation result returns');
+assert.match(codex, /item_id[\s\S]*image_generation_id[\s\S]*generation_id/, 'partial previews must use stable generation identity fields');
+assert.match(previewHelpers.generatedImagePreviewIdentity({ parent_generation_id: 'ig_parent', partial_index: 0 }), /generation:ig_parent:partial:0/, 'partial index zero must be a valid preview identity');
+assert.match(read('web-ui/src/styles/pages.css'), /\.assistant-image-pending-preview[\s\S]*width: min\(100vw - 80px, 320px\)[\s\S]*aspect-ratio: 16 \/ 9/, 'desktop image loading card must be compact');
+assert.match(read('web-ui/src/styles/mobile.css'), /\.pm-generated-image-batch--pending[\s\S]*width: min\(100%, 280px\)[\s\S]*\.pm-generated-image-loading-panel[\s\S]*aspect-ratio: 16 \/ 9/, 'mobile image loading card must be compact');
 
 assert.match(router, /inferImageGenerationPresentationMode/, 'main chat must infer image presentation mode at orchestration layer');
 assert.match(router, /presentation_mode = inferImageGenerationPresentationMode/, 'main chat must write inferred presentation_mode into tool args');
@@ -124,8 +136,8 @@ assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile UI must render
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile UI must replace partial generated-image previews by stable identity');
 assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not promote background image previews into a duplicate final gallery');
 assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image vision events must mark background working assets as inline-only');
-assert.match(mobile, /case 'tool_call':[\s\S]{0,900}renderStreamingThreadNow\(\)/, 'mobile tool calls must patch the streaming turn without rebuilding every image node');
-assert.match(mobile, /case 'tool_result':[\s\S]{0,1100}renderStreamingThreadNow\(\)/, 'mobile tool results must patch the streaming turn without rebuilding every image node');
+assert.match(mobile, /case 'tool_call': \{[\s\S]{0,900}renderStreamingThreadNow\(\)/, 'mobile tool calls must patch the streaming turn without rebuilding every image node');
+assert.match(mobile, /case 'tool_result': \{[\s\S]{0,1400}renderStreamingThreadNow\(\)/, 'mobile tool results must patch the streaming turn without rebuilding every image node');
 assert.match(skill, /presentation_mode="foreground"[\s\S]*presentation_mode="background"/, 'imagegen skill must teach foreground/background routing');
 assert.match(skill, /PNG alpha `mask`/, 'imagegen skill must document selection mask editing');
 

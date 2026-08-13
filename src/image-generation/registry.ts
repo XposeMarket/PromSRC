@@ -53,7 +53,11 @@ function inferProviderIdsFromModel(model?: string): string[] {
 function compatibleProviderIds(providerId?: string): string[] {
   const normalized = normalizeProviderId(providerId);
   if (!normalized) return [];
-  if (normalized === 'openai') return ['openai', 'openai_codex'];
+  // A connected ChatGPT/Codex OAuth session is a valid OpenAI image route.
+  // Prefer it when callers say "openai" so a missing API key never masks a
+  // saved OAuth credential. Fall back to the API-key route when OAuth is not
+  // connected.
+  if (normalized === 'openai') return ['openai_codex', 'openai'];
   if (normalized === 'openai_codex') return ['openai_codex', 'openai'];
   return [normalized];
 }

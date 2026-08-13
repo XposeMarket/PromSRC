@@ -2,7 +2,7 @@
 
 Task:
 1. Run a command that prints the Node.js version.
-2. Run an intentionally failing command for a nonexistent executable named `definitely_not_a_real_command_hermes_bench`.
+2. Run an intentionally failing command for a nonexistent executable named `definitely_not_a_real_command_phase6_bench`.
 3. Classify the failure as command-not-found or equivalent.
 4. Run a corrected harmless command that prints exactly `SHELL_RECOVERED`.
 5. Save a short report to `benchmarks/agent-comparison/fixtures/shell_ops_basic_v1/report.md` with the Node version and failure classification.

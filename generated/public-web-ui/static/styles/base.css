@@ -163,7 +163,7 @@ body {
   overflow: hidden;
 }
 
-/* ── Topbar (slim, inside center column) ── */
+/* ── Topbar (center column in web/PWA; window overlay in Electron) ── */
 .topbar {
   height: 56px;
   background: transparent;
@@ -241,6 +241,18 @@ body {
 .status-pill.stat-compact {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
+}
+
+/* System telemetry is useful as a readout, not as another header control. */
+#system-pill {
+  min-height: 0;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  gap: 0;
+  white-space: nowrap;
 }
 
 body.right-canvas-open #system-pill {
@@ -406,8 +418,32 @@ body.right-canvas-open .page-title {
 }
 
 .sidebar.collapsed {
-  width: 64px;
-  min-width: 64px;
+  width: 0;
+  min-width: 0;
+  overflow: hidden !important;
+  visibility: hidden;
+  pointer-events: none;
+  border-right: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+/* A collapsed sidebar has no hit area of its own. This invisible full-height
+   strip gives the user a reliable left-edge hover target without bringing back
+   the old mini-sidebar. */
+.sidebar-edge-reveal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  z-index: 1100;
+  opacity: 0;
+  pointer-events: none;
+  background: transparent;
+}
+.sidebar-edge-reveal.is-active {
+  pointer-events: auto;
 }
 
 /* Hide sessions, pinned chats, and hamburger when sidebar collapsed */
@@ -493,29 +529,26 @@ body.right-canvas-open .page-title {
   position: absolute;
   inset: 50% 0 auto;
   height: 1px;
-  background: rgba(249,115,22,0.10);
+  background: color-mix(in srgb, var(--pm-shell-gold, var(--pm-gold, var(--brand))) 22%, transparent);
 }
 .sidebar-pages-toggle :is(span, svg) { display: none; }
 .sidebar-pages-toggle:focus-visible { outline: none; }
-.sidebar-pages-toggle:focus-visible::before { height: 2px; background: var(--flame-border); }
+.sidebar-pages-toggle:focus-visible::before { height: 2px; background: var(--pm-shell-gold-light, var(--pm-gold, var(--brand))); }
 
 .sidebar.pages-collapsed .sidebar-pages-toggle {
   display: grid;
   align-items: center;
-  /* Hold the rule at the same x-position as the Sessions heading below.
-     "Pages" is shorter, so an auto-sized first column made its rule begin
-     noticeably too early. */
   grid-template-columns: 74px minmax(0, 1fr) auto;
   gap: 9px;
   width: 100%;
-  min-height: 18px;
+  min-height: 27px;
   height: auto;
   margin: 0;
   padding: 5px 3px 3px;
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--p1-gold-muted, var(--pm-gold, var(--sidebar-muted)));
+  color: var(--pm-shell-gold-muted, var(--p1-gold-muted, var(--pm-gold, var(--sidebar-muted))));
   font: 700 9px/1 Georgia, 'Times New Roman', serif;
   letter-spacing: 2px;
   text-transform: uppercase;
@@ -525,20 +558,21 @@ body.right-canvas-open .page-title {
   position: static;
   display: block;
   grid-column: 2;
+  min-width: 0;
   width: 100%;
   height: 1px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-gold, var(--brand)) 42%, transparent), transparent 84%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--pm-gold, var(--brand))) 56%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--pm-gold, var(--brand))) 16%, transparent) 84%, transparent);
 }
 .sidebar.pages-collapsed .sidebar-pages-toggle :is(span, svg) { display: block; }
 .sidebar.pages-collapsed .sidebar-pages-toggle span { grid-column: 1; }
 .sidebar.pages-collapsed .sidebar-pages-toggle svg {
   grid-column: 3;
-  color: var(--pm-gold, var(--brand));
+  color: var(--pm-shell-gold, var(--pm-gold, var(--brand)));
   letter-spacing: 0;
   transition: transform .18s ease, color .15s ease;
 }
-.sidebar.pages-collapsed .sidebar-pages-toggle:hover { color: var(--pm-gold, var(--brand)); }
-.sidebar.pages-collapsed .sidebar-pages-toggle:hover svg { color: var(--p1-gold-light, var(--pm-gold, var(--brand))); }
+.sidebar.pages-collapsed .sidebar-pages-toggle:hover { color: var(--pm-shell-gold, var(--pm-gold, var(--brand))); }
+.sidebar.pages-collapsed .sidebar-pages-toggle:hover svg { color: var(--pm-shell-gold-light, var(--p1-gold-light, var(--pm-gold, var(--brand)))); }
 .sidebar.pages-collapsed .nav-group { display: none; }
 .sidebar.collapsed .sidebar-pages-toggle { display: none; }
 
@@ -638,6 +672,21 @@ body.right-canvas-open .page-title {
   text-transform: uppercase;
   letter-spacing: .08em;
 }
+.sidebar-section-toggle {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-section-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand, #f97316) 70%, transparent);
+  outline-offset: -2px;
+}
 
 /* Nav items */
 .nav-item {
@@ -728,6 +777,7 @@ body.right-canvas-open .page-title {
   flex-direction: column;
   gap: 8px;
 }
+.sidebar-section.is-collapsed > .session-list { display: none !important; }
 
 .session-list { display: flex; flex-direction: column; gap: 5px; }
 
@@ -851,6 +901,25 @@ body.right-canvas-open .page-title {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: margin-right .24s ease;
+}
+
+/* The minimized Sources surface is a floating peek. It must not become a
+   second layout column or expose the full right drawer underneath it. */
+body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
+  margin-right: 0;
+}
+body:not(.pm-mobile-active).sources-minimized-open #right-panel {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  border-left-color: transparent !important;
+  overflow: hidden !important;
+}
+body:not(.pm-mobile-active).sources-minimized-open #right-panel > * {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 body.immersive-center-hidden .center-col {
@@ -1228,7 +1297,7 @@ main,
 }
 .sidebar.collapsed ~ .workspace .page-view,
 .page-view.sidebar-collapsed {
-  left: 64px !important;
+  left: 0 !important;
 }
 :root[data-theme="dark"] .page-view { background: var(--panel); }
 
@@ -1304,4 +1373,122 @@ body.left-collapsed .sidebar-inner {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;
+}
+
+/* ─── Electron title-bar overlay ──────────────────────────────
+   The main BrowserWindow uses Electron's hidden title bar with the native
+   platform controls still visible. The existing topbar becomes the shared
+   app header and occupies that overlay area across the full window. Browser
+   and PWA surfaces keep the original center-column topbar behavior. */
+:root {
+  --window-chrome-height: 32px;
+}
+
+body.electron-shell:not(.pm-mobile-active) .app {
+  height: 100vh;
+  padding-top: var(--window-chrome-height);
+}
+
+body.electron-shell:not(.pm-mobile-active) .sidebar,
+body.electron-shell:not(.pm-mobile-active) .workspace,
+body.electron-shell:not(.pm-mobile-active) .right-panel {
+  height: calc(100vh - var(--window-chrome-height));
+  max-height: calc(100vh - var(--window-chrome-height));
+}
+
+body.electron-shell:not(.pm-mobile-active) .sources-minimized-panel {
+  top: calc(var(--window-chrome-height) + 14px);
+}
+
+body.electron-shell:not(.pm-mobile-active) .sidebar-edge-reveal {
+  top: var(--window-chrome-height);
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar {
+  position: fixed;
+  inset: 0 0 auto;
+  width: 100vw;
+  height: var(--window-chrome-height);
+  padding: 0 8px;
+  gap: 6px;
+  z-index: 1000;
+  -webkit-app-region: drag;
+  user-select: none;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.08), 0 6px 18px rgba(0,0,0,0.10);
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar-left,
+body.electron-shell:not(.pm-mobile-active) .topbar-right {
+  position: relative;
+  z-index: 1;
+  height: var(--window-chrome-height);
+  gap: 6px;
+}
+
+/* Electron uses a ChatGPT-style thin titlebar. The current chat title and
+   workspace subtitle belong in the conversation itself, not in the native
+   window chrome. */
+body.electron-shell:not(.pm-mobile-active) .page-title {
+  display: none;
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar .icon-btn,
+body.electron-shell:not(.pm-mobile-active) .topbar .panel-toggle-btn {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  border-radius: 7px;
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar .icon-btn svg,
+body.electron-shell:not(.pm-mobile-active) .topbar .panel-toggle-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar .status-pill {
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar .stat-compact {
+  font-size: 9px;
+}
+
+/* Keep the title and empty header surface draggable even when a child
+   component adds its own stacking context. Interactive controls opt out
+   below so they remain clickable instead of moving the window. */
+body.electron-shell:not(.pm-mobile-active) .topbar-left,
+body.electron-shell:not(.pm-mobile-active) .topbar-left .page-title,
+body.electron-shell:not(.pm-mobile-active) .topbar-right {
+  -webkit-app-region: drag;
+}
+
+body.electron-shell:not(.pm-mobile-active) .topbar button,
+body.electron-shell:not(.pm-mobile-active) .topbar input,
+body.electron-shell:not(.pm-mobile-active) .topbar [role="button"],
+body.electron-shell:not(.pm-mobile-active) .topbar [onclick],
+body.electron-shell:not(.pm-mobile-active) #update-pill {
+  -webkit-app-region: no-drag;
+}
+
+/* Windows/Linux keep native controls on the right side of the overlay. */
+body.electron-win32:not(.pm-mobile-active) .topbar-right,
+body.electron-linux:not(.pm-mobile-active) .topbar-right {
+  padding-right: 148px;
+}
+
+/* macOS keeps its native traffic lights on the left. */
+body.electron-darwin:not(.pm-mobile-active) .topbar-left {
+  padding-left: 76px;
+}
+
+body.electron-shell:not(.pm-mobile-active) .window-sidebar-toggle {
+  display: grid;
+}
+
+body.electron-shell:not(.pm-mobile-active) #sidebarToggle {
+  display: none;
 }

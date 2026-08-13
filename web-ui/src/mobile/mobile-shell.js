@@ -12,6 +12,7 @@ import {
   isMobileGatewayCatalogEnabled,
   isCurrentGateway,
   loadMobileGatewayPinnedSessions,
+  refreshGatewayStatuses,
   onGatewayCatalogChanged,
   parseTargetNamespacedId,
   targetNamespacedId,
@@ -309,6 +310,9 @@ let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
+let _drawerRenderInFlight = 0;
+let _drawerGatewayHeartbeatTimer = null;
+let _drawerGatewayStatusProbeInFlight = false;
 let _drawerRenderSeq = 0;
 let _drawerStateCache = null;
 let _drawerPinnedCollapsed = false;
@@ -316,6 +320,7 @@ let _drawerProjectsCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
 let _drawerGatewayFilterCleanup = null;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
+const PM_DRAWER_GATEWAY_HEARTBEAT_MS = 15_000;
 const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
   'button',
   '[role="button"]',
@@ -370,7 +375,11 @@ export async function refreshMobileDrawerSessions({ force = false } = {}) {
     const freshEnough = state.initialized
       && Number(state.loadedAt || 0) > 0
       && Date.now() - Number(state.loadedAt || 0) < PM_DRAWER_REFRESH_TTL_MS;
-    if (!force && freshEnough) return;
+    // Gateway-backed session lists are liveness-sensitive. Re-run the
+    // read-only target probes whenever the drawer is reopened so an offline
+    // computer cannot leave its old chats selectable from the cache.
+    const gatewayAware = isMobileGatewayCatalogEnabled() && loadGatewayCatalog().length > 0;
+    if (!force && freshEnough && !gatewayAware) return;
     _resetDrawerPageState();
     await _renderDrawerSessions(_drawerCallbacks);
   } catch (err) {
@@ -593,6 +602,35 @@ function _getThemeList() {
     { ...gray, id: 'gray', label: 'Ash & Ember' },
     ...themed.map((theme) => ({ ...theme })),
   ];
+}
+
+function _stopDrawerGatewayHeartbeat() {
+  if (_drawerGatewayHeartbeatTimer) clearInterval(_drawerGatewayHeartbeatTimer);
+  _drawerGatewayHeartbeatTimer = null;
+}
+
+async function _pollDrawerGatewayStatuses() {
+  if (!_drawerEl?.classList?.contains('open') || _drawerGatewayStatusProbeInFlight) return;
+  if (!isMobileGatewayCatalogEnabled() || !loadGatewayCatalog().length) return;
+  const before = new Map(loadGatewayCatalog().map((entry) => [entry.gatewayId, String(entry.status || '')]));
+  _drawerGatewayStatusProbeInFlight = true;
+  let changed = false;
+  try {
+    await refreshGatewayStatuses();
+    const after = loadGatewayCatalog();
+    changed = after.some((entry) => before.get(entry.gatewayId) !== String(entry.status || ''))
+      || after.length !== before.size;
+  } catch {}
+  _drawerGatewayStatusProbeInFlight = false;
+  if (changed) invalidateMobileDrawerSessions('gateway-status-heartbeat');
+}
+
+function _startDrawerGatewayHeartbeat() {
+  _stopDrawerGatewayHeartbeat();
+  if (!isMobileGatewayCatalogEnabled() || !loadGatewayCatalog().length) return;
+  _drawerGatewayHeartbeatTimer = setInterval(() => {
+    _pollDrawerGatewayStatuses().catch(() => {});
+  }, PM_DRAWER_GATEWAY_HEARTBEAT_MS);
 }
 
 function _resolveTheme(themeId) {
@@ -1086,6 +1124,18 @@ function _renderDrawerGatewayFilterPanel() {
 function _mountDrawerGatewayFilterPanel() {
   _drawerGatewayFilterCleanup?.();
   _drawerGatewayFilterCleanup = onGatewayCatalogChanged((detail) => {
+    const type = String(detail?.type || '');
+    if (type === 'status_changed') {
+      // Session visibility itself is refreshed by the in-flight loader. Do
+      // not recursively start another probe while that loader is running.
+      const pageState = _drawerPageStateFor();
+      if (!_drawerGatewayStatusProbeInFlight && !_drawerRefreshing && !_drawerRenderInFlight && !pageState.loading) {
+        _resetDrawerPageState();
+        if (_drawerEl?.classList?.contains('open') && !_drawerSearch) {
+          refreshMobileDrawerSessions({ force: true }).catch(() => {});
+        }
+      }
+    }
     if (!detail || ['filter_changed', 'gateway_upserted', 'gateway_forgotten', 'status_changed'].includes(String(detail.type || ''))) {
       _renderDrawerGatewayFilterPanel();
     }
@@ -1095,6 +1145,7 @@ function _mountDrawerGatewayFilterPanel() {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  _stopDrawerGatewayHeartbeat();
   disposeMobileHapticGestureSurfaces();
   root.innerHTML = '';
   root.hidden = false;
@@ -1340,6 +1391,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
+  _drawerRenderInFlight += 1;
   try {
     await _migrateLegacyPinnedSessionsToServer();
     if (!isCurrent()) return;
@@ -1371,6 +1423,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     if (head) head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
   } finally {
+    _drawerRenderInFlight = Math.max(0, _drawerRenderInFlight - 1);
     restoreScroll();
   }
 }
@@ -2350,6 +2403,7 @@ export function openDrawer() {
   document.body.classList.add('pm-mobile-drawer-open');
   _drawerEl.classList.add('open');
   _scrimEl.classList.add('open');
+  _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
     _renderDrawerSessions(_drawerCallbacks).catch(() => {});
     setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
@@ -2361,6 +2415,7 @@ export function closeDrawer() {
   document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');
   _scrimEl.classList.remove('open');
+  _stopDrawerGatewayHeartbeat();
   setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
 }
 

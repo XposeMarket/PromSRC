@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config.js';
+import { getConfiguredProviderAccountId } from '../../media-generation/provider-credentials.js';
 import {
   buildCodexCloudflareHeaders,
   getValidToken,
@@ -91,8 +92,22 @@ type CodexStreamResult = {
     imageB64: string;
     revisedPrompt?: string | null;
     order: number;
+    partialIndex?: number | null;
   }>;
 };
+
+type CodexImageRequestResult =
+  | { ok: true; result: CodexStreamResult }
+  | { ok: false; response: Response; rawText: string };
+
+function isCodexImageRequestFailure(value: CodexImageRequestResult): value is Extract<CodexImageRequestResult, { ok: false }> {
+  return value.ok === false;
+}
+
+function readOptionalIndex(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
 
 function extractImagesFromFinalResponse(finalResponse: any): CodexStreamResult['images'] {
   const output = Array.isArray(finalResponse?.output) ? finalResponse.output : [];
@@ -101,10 +116,13 @@ function extractImagesFromFinalResponse(finalResponse: any): CodexStreamResult['
   for (const item of output) {
     if (item?.type === 'image_generation_call' && typeof item?.result === 'string' && item.result) {
       images.push({
-        id: typeof item?.id === 'string' ? item.id : null,
+        id: typeof item?.id === 'string'
+          ? item.id
+          : (typeof item?.call_id === 'string' ? item.call_id : null),
         imageB64: item.result,
         revisedPrompt: typeof item?.revised_prompt === 'string' ? item.revised_prompt : null,
         order: order++,
+        partialIndex: null,
       });
     }
   }
@@ -126,6 +144,7 @@ async function collectImageFromStream(
   let eventOrder = 0;
   const completedImages = new Map<string, CodexStreamResult['images'][number]>();
   const partialImages = new Map<string, CodexStreamResult['images'][number]>();
+  const pendingPartialCallbacks = new Set<Promise<void>>();
 
   const imageKeyFor = (value: any, fallbackPrefix: string) => {
     const key = String(value || '').trim();
@@ -172,12 +191,16 @@ async function collectImageFromStream(
     if (payloadType === 'response.output_item.done') {
       const item = payload?.item;
       if (item?.type === 'image_generation_call' && typeof item?.result === 'string' && item.result) {
-        const key = imageKeyFor(item?.id, 'done');
+        const id = typeof item?.id === 'string'
+          ? item.id
+          : (typeof item?.call_id === 'string' ? item.call_id : null);
+        const key = imageKeyFor(id, 'done');
         completedImages.set(key, {
-          id: typeof item?.id === 'string' ? item.id : null,
+          id,
           imageB64: item.result,
           revisedPrompt: typeof item?.revised_prompt === 'string' ? item.revised_prompt : null,
           order: eventOrder++,
+          partialIndex: null,
         });
       }
       return;
@@ -188,16 +211,33 @@ async function collectImageFromStream(
         ? payload.partial_image_b64
         : (typeof payload?.b64_json === 'string' ? payload.b64_json : '');
       if (partialB64) {
-        const key = imageKeyFor(payload?.item_id ?? payload?.id ?? payload?.partial_image_index, 'partial');
+        // item_id/call_id are stable across preview updates. Some gateway
+        // events also include a transport id in `id`; do not use that as the
+        // replacement key because it changes for every partial frame.
+        const id = typeof payload?.item_id === 'string'
+          ? payload.item_id
+          : (typeof payload?.image_generation_id === 'string'
+            ? payload.image_generation_id
+            : (typeof payload?.generation_id === 'string' ? payload.generation_id : null));
+        const partialIndex = readOptionalIndex(
+          payload?.partial_image_index ?? payload?.image_index ?? payload?.index,
+        );
+        const key = imageKeyFor(id || (partialIndex !== null ? `index_${partialIndex}` : ''), 'partial');
         if (!completedImages.has(key)) {
           const partial = {
-            id: typeof payload?.item_id === 'string' ? payload.item_id : (typeof payload?.id === 'string' ? payload.id : null),
+            id,
             imageB64: partialB64,
             revisedPrompt: null,
             order: eventOrder++,
+            partialIndex,
           };
           partialImages.set(key, partial);
-          Promise.resolve(onPartial?.(partial)).catch(() => undefined);
+          const callback = Promise.resolve()
+            .then(() => onPartial?.(partial))
+            .then(() => undefined)
+            .catch(() => undefined);
+          pendingPartialCallbacks.add(callback);
+          void callback.finally(() => pendingPartialCallbacks.delete(callback));
         }
       }
       return;
@@ -227,6 +267,10 @@ async function collectImageFromStream(
 
   const remaining = buffer.trim();
   if (remaining) handleBlock(remaining);
+
+  if (pendingPartialCallbacks.size) {
+    await Promise.all(Array.from(pendingPartialCallbacks));
+  }
 
   if (finalResponse) {
     const fromFinal = extractImagesFromFinalResponse(finalResponse);
@@ -265,7 +309,8 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
   }
 
   async isAvailable(): Promise<boolean> {
-    return loadTokens(getConfigDir()) !== null;
+    const accountId = getConfiguredProviderAccountId('openai_codex');
+    return loadTokens(getConfigDir(), accountId) !== null;
   }
 
   resolveModel(requestedModel?: string): string {
@@ -312,8 +357,9 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
     }
 
     try {
-      const token = await getValidToken(configDir);
-      const tokens = loadTokens(configDir);
+      const accountId = getConfiguredProviderAccountId('openai_codex');
+      const token = await getValidToken(configDir, accountId);
+      const tokens = loadTokens(configDir, accountId);
       const headers: Record<string, string> = {
         ...buildCodexCloudflareHeaders(token, tokens?.account_id || ''),
         'Content-Type': 'application/json',
@@ -354,7 +400,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         }
       };
 
-      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean): Promise<{ ok: true; result: CodexStreamResult } | { ok: false; response: Response; rawText: string }> => {
+      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean): Promise<CodexImageRequestResult> => {
         const content: any[] = [{ type: 'input_text', text: requestedCount > 1 ? promptForGeneration : prompt }];
         for (const reference of referenceImages) {
           content.push({ type: 'input_image', image_url: reference.imageUrl });
@@ -412,32 +458,41 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
             outputRunDir: undefined,
             saveToWorkspace: false,
           });
-          await request.on_partial_image({ ...persisted, partial: true, generation_id: partial.id || null, partial_index: partial.order });
+          await request.on_partial_image({
+            ...persisted,
+            partial: true,
+            generation_id: partial.id || null,
+            partial_index: partial.partialIndex ?? partial.order,
+          });
         }) };
       };
 
       if (request.count > 1) {
         const batch = await runCodexImageRequest(request.count, true);
-        if (batch.ok && batch.result.images.length) {
+        if (isCodexImageRequestFailure(batch)) {
+          if (batch.response.status !== 401) {
+            // Let the single-image fallback below produce the detailed error.
+          } else {
+            return buildImageGenerationError({
+              provider: this.id,
+              model,
+              prompt,
+              aspectRatio: request.aspect_ratio,
+              background: request.background,
+              outputFormat: request.output_format,
+              presentationMode: request.presentation_mode,
+              error: `OpenAI image generation via Codex auth failed: ${String(batch.rawText || batch.response.statusText || batch.response.status).slice(0, 400)}`,
+              errorType: 'auth_required',
+            });
+          }
+        } else if (batch.result.images.length) {
           await persistStreamImages(batch.result);
-        } else if (!batch.ok && batch.response.status === 401) {
-          return buildImageGenerationError({
-            provider: this.id,
-            model,
-            prompt,
-            aspectRatio: request.aspect_ratio,
-            background: request.background,
-            outputFormat: request.output_format,
-            presentationMode: request.presentation_mode,
-            error: `OpenAI image generation via Codex auth failed: ${String(batch.rawText || batch.response.statusText || batch.response.status).slice(0, 400)}`,
-            errorType: 'auth_required',
-          });
         }
       }
 
       while (images.length < request.count) {
         const single = await runCodexImageRequest(1, false);
-        if (!single.ok) {
+        if (isCodexImageRequestFailure(single)) {
           if (images.length) break;
           return buildImageGenerationError({
             provider: this.id,

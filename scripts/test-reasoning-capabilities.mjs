@@ -27,6 +27,7 @@ assert.equal(getReasoningCapability('anthropic', 'claude-haiku-4-5-20251001').th
 assert.deepEqual(efforts('perplexity', 'sonar-reasoning-pro'), ['low', 'medium', 'high']);
 assert.deepEqual(efforts('xai', 'grok-4.20-multi-agent'), ['low', 'medium', 'high', 'xhigh']);
 assert.deepEqual(efforts('xai', 'grok-4.3'), ['none', 'low', 'medium', 'high']);
+assert.deepEqual(efforts('xai', 'grok-4.6'), ['none', 'low', 'medium', 'high']);
 assert.equal(supportsFastSpeed('openai', 'gpt-5.5'), true);
 assert.equal(supportsFastSpeed('openai', 'gpt-5.4-nano'), false);
 assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-8'), true);

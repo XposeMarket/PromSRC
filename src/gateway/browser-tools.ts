@@ -2,9 +2,9 @@
 /**
  * browser-tools.ts - Browser Automation for Prometheus
  * 
- * Strategy: connect to a Prometheus-owned Chrome profile by default.
- * Main chat uses CHROME_DEBUG_PORT and a dedicated Prometheus profile; user
- * Chrome is opt-in only through browser_set_profile_target/browser_open target.
+ * Strategy: use the Electron in-house browser by default in the desktop app.
+ * The Prometheus-owned Chrome/CDP lane and the user's Chrome extension remain
+ * available as explicit secondary targets.
  * Background agents, tasks, and team agents get isolated persistent profiles
  * and CDP ports derived from their stable owner identity.
  * 
@@ -83,6 +83,7 @@ interface BrowserSession {
 
 interface InHouseBrowserSession {
   sessionId: string;
+  profileId: string;
   url: string;
   title: string;
   activeTabId: string;
@@ -206,6 +207,18 @@ export interface BrowserSessionInfo {
   profileKind?: BrowserProfileKind;
   browserTarget?: BrowserProfileKind;
   profileLabel?: string;
+  inhouseProfile?: string;
+  activeTabId?: string;
+  tabs?: Array<{
+    id: string;
+    index: number;
+    title: string;
+    url: string;
+    loading: boolean;
+    active: boolean;
+    canGoBack?: boolean;
+    canGoForward?: boolean;
+  }>;
   mode?: BrowserInteractionMode;
   captured?: boolean;
   controlOwner?: BrowserInteractionState['controlOwner'];
@@ -2148,6 +2161,23 @@ export async function browserDoctor(sessionId: string): Promise<string> {
     }
     return lines.join('\n');
   }
+  if (selectedTarget === 'inhouse') {
+    lines.push('INFO Browser profile target: Prometheus in-house browser (Electron native surface).');
+    try {
+      const state: any = await callInHouseBrowser('state', { sessionId: resolved });
+      const available = state?.available !== false;
+      (available ? ok : fail)('Electron browser RPC', available ? 'connected on the authenticated loopback bridge' : 'RPC responded but native surface is unavailable');
+      if (state?.attached && Array.isArray(state?.tabs)) {
+        ok('Session', `active id=${resolved}, ${state.tabs.length} tab${state.tabs.length === 1 ? '' : 's'}`);
+        ok('Current page', `${state.title || '(untitled)'} ${state.url || 'about:blank'}`.trim());
+      } else {
+        warn('Session', 'no active in-app browser tab; browser_open will create one');
+      }
+    } catch (err: any) {
+      fail('Electron browser RPC', String(err?.message || err));
+    }
+    return lines.join('\n');
+  }
   if (!session) {
     warn('Session', 'no active browser session');
     const metadata = registerBrowserSessionMetadata(resolved);
@@ -2503,7 +2533,10 @@ function getBrowserProfileLabel(kind: BrowserProfileKind): string {
 
 function getMainBrowserTarget(sessionId: string): BrowserProfileKind {
   const resolved = resolveSessionId(sessionId);
-  return mainBrowserTargetPreferences.get(resolved) || 'prometheus';
+  // Electron desktop sessions use the embedded browser unless the user
+  // explicitly selects a secondary Chrome lane. Web deployments retain the
+  // regular Prometheus lane because there is no native RPC surface there.
+  return mainBrowserTargetPreferences.get(resolved) || (isInHouseBrowserAvailable() ? 'inhouse' : 'prometheus');
 }
 
 function getInHouseBrowserRpcConfig(): { url: string; token: string } | null {
@@ -2522,14 +2555,25 @@ async function callInHouseBrowser<T = any>(route: string, payload: Record<string
   if (!cfg) {
     throw new Error('Prometheus in-house browser is only available in the Electron desktop app.');
   }
-  const resp = await fetch(`${cfg.url}/${String(route || '').replace(/^\/+/, '')}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${cfg.token}`,
-    },
-    body: JSON.stringify(payload || {}),
-  } as any);
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 12_000) : null;
+  let resp: any;
+  try {
+    resp = await fetch(`${cfg.url}/${String(route || '').replace(/^\/+/, '')}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${cfg.token}`,
+      },
+      body: JSON.stringify(payload || {}),
+      signal: controller?.signal,
+    } as any);
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('Timed out connecting to the Prometheus in-house browser.');
+    throw new Error(`Could not connect to the Prometheus in-house browser: ${error?.message || error}`);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
   const data: any = await resp.json().catch(() => ({}));
   if (!resp.ok || data?.ok === false || data?.error) {
     throw new Error(String(data?.error || `In-house browser RPC failed (${resp.status}).`));
@@ -2561,6 +2605,7 @@ function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowse
   const now = Date.now();
   const next: InHouseBrowserSession = {
     sessionId: resolved,
+    profileId: String(state?.profile || existing?.profileId || resolveInHouseProfileId(resolved) || 'main').trim(),
     url: String(state?.url || existing?.url || ''),
     title: String(state?.title || existing?.title || ''),
     activeTabId: String(state?.activeTabId || existing?.activeTabId || '').trim(),
@@ -2580,6 +2625,61 @@ function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowse
     recordBrowserHistoryResource(resolved, next.url, next.title, { source: 'inhouse_browser' });
   }
   return next;
+}
+
+/**
+ * Accept state pushed by the Electron renderer when the user opens or drives
+ * the embedded browser directly. Tool calls normally populate this map through
+ * browser_open, but a manual canvas open must be visible to the agent too.
+ */
+export function syncInHouseBrowserState(sessionId: string, state: any = {}): BrowserSessionInfo & Record<string, any> {
+  const resolved = resolveSessionId(sessionId);
+  const profileId = String(state?.profile || state?.inhouseProfile || '').trim();
+  if (profileId) inHouseProfilePreferences.set(resolved, normalizeInHouseProfileId(profileId) || 'main');
+  const metadata = getBrowserSessionMetadata(resolved);
+  if (metadata.ownerType === 'main') mainBrowserTargetPreferences.set(resolved, 'inhouse');
+  else inHouseTargetSessions.add(resolved);
+
+  const active = state?.active !== false && state?.attached !== false;
+  if (!active || (state?.attached === false && Array.isArray(state?.tabs) && state.tabs.length === 0)) {
+    clearInHouseSession(resolved);
+    return buildInHouseStatusPayload(resolved, 'Prometheus in-house browser is closed for this chat session.', {
+      active: false,
+      url: String(state?.url || ''),
+      title: String(state?.title || ''),
+      tabs: [],
+      activeTabId: '',
+      inhouseProfile: profileId ? (normalizeInHouseProfileId(profileId) || 'main') : 'main',
+      profileLabel: String(state?.profileLabel || '').trim(),
+      source: 'user',
+    });
+  }
+
+  const inHouse = upsertInHouseSession(resolved, state);
+  return buildInHouseStatusPayload(resolved, 'Prometheus in-house browser is open for this chat session.', {
+    active: true,
+    url: inHouse.url,
+    title: inHouse.title,
+    tabs: inHouse.tabs,
+    activeTabId: inHouse.activeTabId,
+    inhouseProfile: inHouse.profileId,
+    profileLabel: String(state?.profileLabel || '').trim(),
+    source: 'user',
+  });
+}
+
+export function setInHouseBrowserProfilePreference(sessionId: string, profileId: unknown): BrowserSessionInfo & Record<string, any> {
+  const resolved = resolveSessionId(sessionId);
+  const normalized = normalizeInHouseProfileId(profileId) || 'main';
+  inHouseProfilePreferences.set(resolved, normalized);
+  const metadata = getBrowserSessionMetadata(resolved);
+  if (metadata.ownerType === 'main') mainBrowserTargetPreferences.set(resolved, 'inhouse');
+  else inHouseTargetSessions.add(resolved);
+  return buildInHouseStatusPayload(resolved, `In-house browser profile set to ${normalized}.`, {
+    active: !!getInHouseSession(resolved),
+    inhouseProfile: normalized,
+    source: 'system',
+  });
 }
 
 function clearInHouseSession(sessionId: string): void {
@@ -2630,6 +2730,7 @@ function buildInHouseStatusPayload(sessionId: string, statusLabel: string, extra
   const resolved = resolveSessionId(sessionId);
   const inHouse = getInHouseSession(resolved);
   const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+  const inhouseProfile = String(extra.inhouseProfile || inHouse?.profileId || resolveInHouseProfileId(resolved) || 'main').trim();
   return {
     sessionId: resolved,
     active: !!inHouse,
@@ -2637,9 +2738,10 @@ function buildInHouseStatusPayload(sessionId: string, statusLabel: string, extra
     title: String(extra.title || inHouse?.title || ''),
     activeTabId: String(extra.activeTabId || inHouse?.activeTabId || '').trim(),
     tabs: Array.isArray(extra.tabs) ? normalizeInHouseTabs(extra.tabs) : normalizeInHouseTabs(inHouse?.tabs),
+    inhouseProfile,
     profileKind: 'inhouse',
     browserTarget: 'inhouse',
-    profileLabel: getBrowserProfileLabel('inhouse'),
+    profileLabel: String(extra.profileLabel || (inhouseProfile === 'main' ? getBrowserProfileLabel('inhouse') : `In-house profile ${inhouseProfile}`)),
     profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
     debugPort: 0,
     mode: interactionState.mode,
@@ -4685,7 +4787,7 @@ function browserWorkspaceRoot(): string {
 export async function browserSetProfileTarget(
   sessionId: string,
   target: unknown,
-  options?: { closeExisting?: boolean; profileDirectory?: unknown },
+  options?: { closeExisting?: boolean; profileDirectory?: unknown; inhouseProfile?: unknown },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const metadata = getBrowserSessionMetadata(resolved);
@@ -4697,9 +4799,11 @@ export async function browserSetProfileTarget(
     return 'ERROR: Prometheus in-house browser is only available in the Electron desktop app. Use target="prometheus" for the regular Chrome/CDP browser.';
   }
   const profileDirectory = normalizeChromeProfileDirectory(options?.profileDirectory);
+  const inhouseProfile = normalizeInHouseProfileId(options?.inhouseProfile);
   const currentTarget = getMainBrowserTarget(resolved);
   mainBrowserTargetPreferences.set(resolved, nextTarget);
   if (profileDirectory) mainBrowserProfileDirectoryPreferences.set(resolved, profileDirectory);
+  if (nextTarget === 'inhouse' && inhouseProfile) inHouseProfilePreferences.set(resolved, inhouseProfile);
   const pendingInit = browserSessionInitInFlight.get(resolved);
   if (pendingInit && options?.closeExisting !== false) await pendingInit.catch(() => {});
   const existing = sessions.get(resolved);
@@ -5199,6 +5303,7 @@ export async function browserOpen(
       const targetResult = await browserSetProfileTarget(resolvedSessionId, requestedTarget || getMainBrowserTarget(resolvedSessionId), {
         closeExisting: true,
         profileDirectory: options?.profileDirectory,
+        inhouseProfile: requestedInHouseProfile,
       });
       if (targetResult.startsWith('ERROR')) return targetResult;
     } else if (requestedTargetKind === 'inhouse') {
@@ -7001,9 +7106,9 @@ export function getBrowserToolDefinitions(): any[] {
           properties: {
             action: { type: 'string', enum: ['doctor', 'set_profile_target', 'open', 'list_tabs', 'select_tab', 'new_tab', 'close_tab', 'close'] },
             url: { type: 'string', description: 'URL for open/new_tab.' },
-            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Browser target for open/set_profile_target.' },
-            profile: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Alias for target.' },
-            inhouse_profile: { type: 'string' },
+            target: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], default: 'inhouse', description: 'Browser target for open/set_profile_target. On Electron desktop, omit this to use the embedded in-house browser. prometheus is the secondary Prometheus-owned Chrome/CDP lane; user_chrome is the paired real Chrome extension lane.' },
+            profile: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], description: 'Alias for target. Defaults to inhouse on Electron desktop.' },
+            inhouse_profile: { type: 'string', description: 'Optional persistent in-app profile id. Main chat defaults to "main"; imported Chrome profiles use the id returned by the desktop profile settings.' },
             profile_directory: { type: 'string' },
             close_existing: { type: 'boolean' },
             index: { type: 'number', description: 'Tab index for select_tab/close_tab.' },
@@ -7154,12 +7259,13 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'browser_set_profile_target',
         description:
-          'Main chat only: choose which browser lane future browser tools use. target="prometheus" is the regular Prometheus-owned Chrome/CDP flow. target="inhouse" uses the embedded Electron browser. target="user_chrome" uses the paired Prometheus Personal Chrome extension and Chrome debugger permission against the already-running real profile; it never uses port 9223 or requires Chrome to close. Subagents cannot use this and remain isolated.',
+          'Main chat only: choose which browser lane future browser tools use. In the Electron desktop app the embedded in-house browser is the default. target="prometheus" selects the regular Prometheus-owned Chrome/CDP flow. target="inhouse" selects the embedded Electron browser. target="user_chrome" selects the paired Prometheus Personal Chrome extension and already-running real Chrome profile; it never uses port 9223 or requires Chrome to close. Subagents cannot use this and remain isolated.',
         parameters: {
           type: 'object',
           required: ['target'],
           properties: {
-            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'prometheus = regular Chrome/CDP profile; inhouse = embedded Electron browser; user_chrome = paired Personal Chrome extension.' },
+            target: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], default: 'inhouse', description: 'inhouse = embedded Electron browser (desktop default); prometheus = regular Chrome/CDP profile; user_chrome = paired Personal Chrome extension.' },
+            inhouse_profile: { type: 'string', description: 'Optional persistent in-app profile id. Use "main" for the Prometheus profile or an imported profile id from desktop Settings.' },
             profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used when launching user_chrome fresh.' },
             close_existing: { type: 'boolean', description: 'Close/recreate the current main browser session if it is using a different target. Default true.' },
           },
@@ -7170,14 +7276,14 @@ export function getBrowserToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'browser_open',
-        description: 'Open a URL in a Prometheus browser lane. Defaults to target="prometheus", the regular Playwright-controlled Chrome/CDP profile. Use target="inhouse" for the embedded Electron browser. Use target="user_chrome" for the paired Personal Chrome extension controlling the already-running real Chrome profile; no debug port or Chrome restart is involved. Browser tools automatically operate on whichever lane was last opened. Always use browser_open first to establish a session. Default observe="screenshot"; request observe="snapshot" for DOM refs, or observe="compact"/"none" when speed matters.',
+        description: 'Open a URL in a Prometheus browser lane. In the Electron desktop app this defaults to target="inhouse", the embedded persistent browser. Use target="prometheus" for the secondary Prometheus-owned Chrome/CDP profile. Use target="user_chrome" for the paired Personal Chrome extension controlling the already-running real Chrome profile; no debug port or Chrome restart is involved. Browser tools automatically operate on whichever lane was last opened. Always use browser_open first to establish a session. Default observe="screenshot"; request observe="snapshot" for DOM refs, or observe="compact"/"none" when speed matters.',
         parameters: {
           type: 'object', required: ['url'],
           properties: {
             url: { type: 'string', description: 'Full URL to navigate to. For searches, build the search URL directly.' },
-            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Browser target. prometheus = regular Chrome/CDP; inhouse = embedded Electron in-app browser (persistent per-profile logins); user_chrome = user Chrome. Main chat may use any; subagents may use prometheus (default isolated) or inhouse.' },
-            profile: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'Alias for target while the two-lane browser rollout is in progress.' },
-            inhouse_profile: { type: 'string', description: 'Optional in-house browser profile id (an isolated, persistent login partition). Defaults to "main" for main chat and an isolated per-agent profile for subagents. Use "main" to share the main chat logins, or a distinct id like "account-b" to run a separate account without clashing.' },
+            target: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], default: 'inhouse', description: 'Browser target. inhouse = embedded Electron in-app browser (default in the desktop app, persistent per-profile logins); prometheus = secondary Prometheus-owned Chrome/CDP; user_chrome = user Chrome. Main chat may use any; subagents may use prometheus (default isolated) or inhouse.' },
+            profile: { type: 'string', enum: ['inhouse', 'prometheus', 'user_chrome'], description: 'Alias for target. Defaults to inhouse on Electron desktop.' },
+            inhouse_profile: { type: 'string', description: 'Optional in-house browser profile id (an isolated, persistent login partition). Defaults to "main" for main chat and an isolated per-agent profile for subagents. Use "main" for the Prometheus profile, or choose an imported Chrome profile id from desktop Settings.' },
             profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used with target="user_chrome".' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM, description: 'Observation mode after this action. Overrides system default. Use "compact" for a small orientation summary. Default: screenshot for navigation.' },
           },
@@ -9391,7 +9497,10 @@ export function getBrowserSessionInfo(sessionId: string): BrowserSessionInfo {
       profileDir: 'Electron persistent partition: persist:prometheus-inhouse-browser',
       profileKind: 'inhouse',
       browserTarget: 'inhouse',
-      profileLabel: getBrowserProfileLabel('inhouse'),
+      profileLabel: inHouse.profileId === 'main' ? getBrowserProfileLabel('inhouse') : `In-house profile ${inHouse.profileId}`,
+      inhouseProfile: inHouse.profileId,
+      activeTabId: inHouse.activeTabId,
+      tabs: normalizeInHouseTabs(inHouse.tabs),
       mode: interactionState?.mode,
       captured: interactionState?.captured,
       controlOwner: interactionState?.controlOwner,

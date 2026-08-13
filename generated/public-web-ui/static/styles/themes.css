@@ -3487,3 +3487,115 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active::after {
   background: var(--pm-shell-accent) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Desktop sidebar section rhythm
+
+   Pinned Chats, Projects, and Sessions share the Prometheus One heading
+   treatment on every desktop skin: label, divider, then the existing spark.
+   The first two headings are buttons so their contents can collapse like the
+   mobile drawer without changing the underlying session/project data.
+   ───────────────────────────────────────────────────────────────────────── */
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) :is(.section-title, .sidebar-section-toggle) {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 27px;
+  padding: 8px 6px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pm-shell-gold-muted, var(--sidebar-muted));
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  line-height: 1.2;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .section-title::after {
+  content: "✦";
+  flex: 1;
+  overflow: hidden;
+  color: var(--pm-shell-gold, var(--brand));
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  text-align: right;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold-muted, var(--muted)) 45%, transparent), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-toggle::after {
+  content: none;
+  display: none;
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-decoration {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 9px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-decoration::before {
+  content: "";
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold-muted, var(--muted)) 45%, transparent), transparent 84%);
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--pm-shell-gold, var(--brand));
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+body:not(.pm-mobile-active) .sidebar:not(.collapsed) .sidebar-section-toggle[aria-expanded="false"] .sidebar-section-icon {
+  transform: rotate(-90deg);
+}
+
+/* Keep the message column and composer on one shared track. The extra gutter
+   is applied inside the chat scroller when Canvas/browser shifts the center
+   column left, so neither side can start flush against the shifted edge. */
+body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view {
+  --chat-surface-gutter: 0px;
+  --chat-column-width: min(800px, calc(100% - 40px));
+}
+
+body:not(.pm-mobile-active):not(.side-chat-split-active).right-canvas-open #chat-view {
+  --chat-surface-gutter: clamp(24px, 2.8vw, 44px);
+  --chat-column-width: min(800px, calc(100% - 40px - var(--chat-surface-gutter) - var(--chat-surface-gutter)));
+}
+
+body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > #chat-messages {
+  box-sizing: border-box;
+  padding-inline: var(--chat-surface-gutter);
+}
+
+body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > #chat-messages:not(.side-chat-split-shell) .msg-shell,
+body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > .chat-input-area {
+  width: var(--chat-column-width);
+  max-width: 100%;
+}
+
+/* Keep the composer visually above the queued-prompt tab. The upper shadow is
+   deliberately on the composer itself so it masks the queue's lower overlap. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area {
+  z-index: 12;
+  box-shadow: 0 -12px 26px color-mix(in srgb, var(--pm-chat-page-bg, var(--bg)) 82%, transparent), 0 10px 24px rgba(0, 0, 0, .14) !important;
+}

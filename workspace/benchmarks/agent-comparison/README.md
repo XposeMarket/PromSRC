@@ -1,75 +1,75 @@
-# Prometheus vs Hermes Agent Benchmark
+# Phase 6 — Prometheus / Hermes / OpenClaw agent benchmark
 
-Purpose: compare Prometheus and Hermes on real workflow execution, with normalized telemetry around latency, tool usage, cost/usage where available, errors, retries, artifacts, and pass/fail outcome.
+This directory is the single comparison harness. New agents and lanes extend it; they do not get separate benchmark systems.
 
-## Current Hermes readiness
+## Current controlled setup
 
-Hermes is installed at:
-
-```text
-oss agents/hermes-agent
-```
-
-Hermes is configured to use Raul's OpenAI Codex OAuth account with:
+All three agents are configured for the same target model and reasoning level:
 
 ```text
-provider: openai-codex
-model: gpt-5.5
+model: gpt-5.6-luna
+reasoning: high
 ```
 
-Browser readiness is now verified after Chromium was installed into the Playwright cache.
+The runtime labels remain explicit because the harnesses do not have identical provider plumbing:
 
-Smoke command used by Prometheus:
+- `prometheus_codex_http`: Prometheus gateway → OpenAI Codex Responses endpoint.
+- `hermes_codex_http`: Hermes agent loop → OpenAI Codex Responses endpoint.
+- `openclaw_codex_app_server`: OpenClaw CLI/agent loop → OpenClaw Codex provider plugin → Codex app-server.
+
+The last label is intentional. OpenClaw is still the harness being tested; the Codex app-server is the model/runtime provider underneath it. Results must never call this “pure embedded OpenClaw runtime” unless a separately authenticated OpenAI API-key profile is used.
+
+Port safety is part of the controlled setup: Prometheus reserves Tailscale Funnel target port `18789`. The OpenClaw benchmark gateway must stay loopback-only on `19089` (or another explicitly isolated non-Funnel port); never bind OpenClaw to `18789`.
+
+## Run the orchestrator
+
+From the repository root:
 
 ```powershell
-cd "oss agents\hermes-agent"
-python -m uv run hermes chat --provider openai-codex -m gpt-5.5 --quiet --query "Use your browser tool to open https://example.com, read the page title or main heading, then close/cleanup if your tools support it. Reply with exactly: HERMES_BROWSER_SMOKE_OK: <title-or-heading>. If browser tools are unavailable, reply HERMES_BROWSER_SMOKE_BLOCKED: <reason>."
+node workspace/benchmarks/agent-comparison/run_phase6_benchmark.mjs --lanes file_ops_basic_v1,shell_ops_basic_v1
 ```
 
-Observed result:
+Defaults run the selected lanes through Prometheus, Hermes, and OpenClaw with isolated per-agent workspaces. Each lane gets a fresh session and a verifier checks both the final response and workspace artifacts.
+
+Outputs:
 
 ```text
-HERMES_BROWSER_SMOKE_OK: Example Domain
+runs/<date>/<run_id>/<agent>/<benchmark_id>/
+  prompt.txt
+  stdout.txt
+  stderr.txt
+  events.jsonl
+  summary.json
+reports/phase6-<run_id>.md
 ```
 
-## Benchmark lanes for v1
+## Phase 6 order
 
-1. `file_ops_basic_v1` — read/search/write/patch/verify workspace files.
-2. `shell_ops_basic_v1` — version command, failing command classification, corrected command, artifact write.
-3. `local_web_debug_v1` — create local HTML/JS bug fixture, serve it, browser-test it, diagnose console/UI issue, patch it, retest.
-4. `browser_external_v1` — open a simple public page, extract visible heading/title, screenshot/cleanup.
-5. `desktop_basic_v1` — screenshot/list/focus/click/type/verify where each agent has equivalent host-desktop tools. If Hermes lacks equivalent host desktop control, mark capability unavailable rather than failure.
+1. File and shell tasks.
+2. Read-only browser research on simple public pages.
+3. Deterministic browser fixture with a mock CAPTCHA (never a real anti-bot challenge).
+4. Harmless desktop-computer workflows.
+5. Website creation with skills and without skills.
+6. Three.js object, scene, game, and cinematic tasks.
+7. Controlled bug investigation.
+8. Read-only real-site research on X, Reddit, news, and documentation.
 
-## Normalized output shape
+Public-site lanes must not log in, post, purchase, submit personal information, or perform destructive actions. Browser-fixture CAPTCHA behavior is a local deterministic checkbox/mock challenge only.
 
-Each benchmark run should produce:
+## Outcome rules
 
-- `runs/<date>/<agent>/<benchmark_id>/events.jsonl`
-- `runs/<date>/<agent>/<benchmark_id>/summary.json`
-- benchmark artifacts such as logs, screenshots, diffs, generated files
-- a combined Markdown report under `reports/`
+- `pass`: the task was attempted and the final response plus independent artifact/evidence checks are correct.
+- `fail`: the agent attempted the task but produced an incorrect, incomplete, or unverifiable result.
+- `blocked`: the required capability was unavailable, such as no browser or no host-desktop control. A blocked lane is not a quality failure.
 
-Summary fields:
+Do not rank agents from one run. Use repeated runs per lane, report median and p90 wall time, and keep cold-start and warm-session measurements separate. Compare quality first, then latency/tool efficiency among passes.
 
-```json
-{
-  "run_id": "bench_...",
-  "agent": "prometheus|hermes",
-  "benchmark_id": "local_web_debug_v1",
-  "status": "pass|fail|blocked",
-  "blocked_reason": null,
-  "total_wall_ms": 0,
-  "tool_calls": 0,
-  "tool_errors": 0,
-  "retries": 0,
-  "tokens_input": null,
-  "tokens_output": null,
-  "estimated_cost_usd": null,
-  "artifacts": [],
-  "notes": ""
-}
-```
+## Existing lanes
 
-## Fairness rule
+- `file_ops_basic_v1` — read/search/write/verify workspace files.
+- `shell_ops_basic_v1` — version command, intentional command-not-found recovery, artifact write.
+- `local_web_debug_v1` — create and debug a local counter app.
+- `browser_external_v1` — read-only `example.com` browser check.
+- `desktop_basic_v1` — fresh screen observation and harmless window check.
 
-Separate capability availability from task quality. If an agent lacks a browser or desktop lane, that lane is `blocked`, not `fail`. File/shell/browser lanes should be run first because Hermes is now browser-ready.
+Later lanes should add their prompt, fixture, verifier, and evidence requirements here rather than weakening an existing lane.

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08111f">
+  <title>Three.js Object Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: #e8f2ff;
+      background: #08111f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #08111f; }
+    body { min-height: 100vh; overflow: hidden; }
+    #scene { display: block; width: 100vw; height: 100vh; }
+    .label {
+      position: fixed;
+      left: 24px;
+      bottom: 22px;
+      margin: 0;
+      color: rgba(232, 242, 255, 0.72);
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="An animated orange Three.js torus knot"></canvas>
+  <p class="label">Three.js object · rotating torus knot</p>
+  <!-- Pinned CDN import keeps this fixture self-contained without credentials or side effects. -->
+  <script type="module" src="./scene.js"></script>
+</body>
+</html>

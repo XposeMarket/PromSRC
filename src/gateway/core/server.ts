@@ -37,6 +37,8 @@ import {
   stopBrowserLiveStream,
   setBrowserControlCaptureState,
   setBrowserInteractionModeState,
+  syncInHouseBrowserState,
+  setInHouseBrowserProfilePreference,
 } from '../browser-tools';
 import { evaluateGatewayRequest } from '../gateway-auth';
 import { getSessionStatus } from '../routes/account.router';
@@ -819,6 +821,42 @@ export function createServer(
                 timestamp: Date.now(),
               }));
             } catch {}
+          });
+          return;
+        }
+        if (msg?.type === 'browser:native_state' && msg?.sessionId) {
+          const sessionId = String(msg.sessionId || '');
+          const status = syncInHouseBrowserState(sessionId, {
+            active: msg.active !== false,
+            attached: msg.attached !== false,
+            profile: String(msg.profile || msg.inhouseProfile || '').trim(),
+            profileLabel: String(msg.profileLabel || '').trim(),
+            url: String(msg.url || '').trim(),
+            title: String(msg.title || '').trim(),
+            activeTabId: String(msg.activeTabId || '').trim(),
+            tabs: Array.isArray(msg.tabs) ? msg.tabs : [],
+          });
+          broadcastPayload({
+            type: 'browser:status',
+            ...status,
+            sessionId,
+            source: 'user',
+            tool: 'browser_native_state',
+            statusLabel: status.statusLabel || 'In-house browser state updated.',
+            timestamp: Date.now(),
+          });
+          return;
+        }
+        if (msg?.type === 'browser:profile_preference' && msg?.sessionId) {
+          const sessionId = String(msg.sessionId || '');
+          const status = setInHouseBrowserProfilePreference(sessionId, msg.profile || msg.inhouseProfile);
+          broadcastPayload({
+            type: 'browser:status',
+            ...status,
+            sessionId,
+            source: 'system',
+            tool: 'browser_profile_preference',
+            timestamp: Date.now(),
           });
           return;
         }

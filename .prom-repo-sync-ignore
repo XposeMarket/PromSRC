@@ -12,6 +12,7 @@ oss-agents/
 workspace/oss agents/
 workspace/oss-agents/
 workspace/audit/
+audit/
 workspace/Brain/
 workspace/memory/
 workspace/workspace/memory/
@@ -29,6 +30,9 @@ workspace/scratch/
 workspace/tool-bench-lab/
 workspace/automation-bench-cleanup-*/
 workspace/automation-retest-*/
+workspace/benchmarks/agent-comparison/.smoke/
+workspace/benchmarks/agent-comparison/runs/
+workspace/benchmarks/agent-comparison/reports/
 workspace/games/**/build*/
 videos/
 captures/
@@ -45,3 +49,4 @@ native/desktop-helper-macos/.build/
 *.mp4
 *.mov
 *.webm
+({src

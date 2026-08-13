@@ -2828,6 +2828,164 @@ function onAnthropicModelChange() {
 // Legacy alias so any old references still work
 async function refreshOllamaModels() { await refreshProviderModels(); }
 
+let chromeProfileCatalog = { profiles: [], imported: [] };
+
+function getChromeProfilesBridge() {
+  return window.prometheusChromeProfiles && typeof window.prometheusChromeProfiles.detect === 'function'
+    ? window.prometheusChromeProfiles
+    : null;
+}
+
+function setChromeProfileImportStatus(message, tone = '') {
+  const status = document.getElementById('settings-chrome-profile-status');
+  if (!status) return;
+  status.textContent = String(message || '');
+  status.dataset.tone = String(tone || '').trim();
+}
+
+function getStoredInHouseProfileId() {
+  try { return localStorage.getItem('prometheus.inhouse.profile') || 'main'; } catch { return 'main'; }
+}
+
+function setStoredInHouseProfileId(profileId) {
+  const value = String(profileId || '').trim() || 'main';
+  try { localStorage.setItem('prometheus.inhouse.profile', value); } catch {}
+  return value;
+}
+
+function renderChromeProfileCatalog(catalog = chromeProfileCatalog) {
+  chromeProfileCatalog = {
+    profiles: Array.isArray(catalog?.profiles) ? catalog.profiles : [],
+    imported: Array.isArray(catalog?.imported) ? catalog.imported : [],
+  };
+  const defaultSelect = document.getElementById('settings-browser-profile-default');
+  const detectedSelect = document.getElementById('settings-chrome-profile-select');
+  if (defaultSelect) {
+    defaultSelect.replaceChildren(new Option('Prometheus profile', 'main'));
+    chromeProfileCatalog.imported.forEach((profile) => {
+      const option = new Option(`Imported Chrome · ${profile.name || profile.directory || profile.id}`, profile.id);
+      defaultSelect.appendChild(option);
+    });
+    const stored = getStoredInHouseProfileId();
+    defaultSelect.value = [...defaultSelect.options].some((option) => option.value === stored) ? stored : 'main';
+    if (defaultSelect.value !== stored) setStoredInHouseProfileId('main');
+  }
+  if (detectedSelect) {
+    detectedSelect.replaceChildren();
+    if (!chromeProfileCatalog.profiles.length) {
+      detectedSelect.appendChild(new Option('No Chrome profiles detected', ''));
+      detectedSelect.disabled = true;
+    } else {
+      chromeProfileCatalog.profiles.forEach((profile) => {
+        const suffix = profile.imported ? ' · already imported' : '';
+        const option = new Option(`${profile.name || profile.directory} · ${profile.sourceLabel || 'Chrome'}${suffix}`, profile.id);
+        detectedSelect.appendChild(option);
+      });
+      detectedSelect.disabled = false;
+    }
+  }
+  const toggle = document.getElementById('settings-browser-profile-import-toggle');
+  const panel = document.getElementById('settings-chrome-profile-import-panel');
+  const bridge = getChromeProfilesBridge();
+  if (!bridge) {
+    if (toggle) toggle.disabled = true;
+    if (defaultSelect) defaultSelect.disabled = true;
+    if (panel) { panel.hidden = false; panel.style.display = 'block'; }
+    setChromeProfileImportStatus('Chrome profile import is available in the Prometheus desktop app.', 'muted');
+    return;
+  }
+  if (toggle) toggle.disabled = false;
+  if (defaultSelect) defaultSelect.disabled = false;
+}
+
+async function loadChromeProfileSettings() {
+  const bridge = getChromeProfilesBridge();
+  if (!bridge) {
+    renderChromeProfileCatalog({ profiles: [], imported: [] });
+    return;
+  }
+  try {
+    setChromeProfileImportStatus('Detecting Chrome profiles…');
+    const catalog = await bridge.detect();
+    renderChromeProfileCatalog(catalog);
+    const count = Array.isArray(catalog?.profiles) ? catalog.profiles.length : 0;
+    const importedCount = Array.isArray(catalog?.imported) ? catalog.imported.length : 0;
+    setChromeProfileImportStatus(
+      count
+        ? `${count} Chrome profile${count === 1 ? '' : 's'} detected${importedCount ? ` · ${importedCount} imported` : ''}. Close Chrome before importing for the cleanest copy.`
+        : 'No Chrome profiles were detected on this computer.',
+      count ? '' : 'muted',
+    );
+  } catch (error) {
+    renderChromeProfileCatalog({ profiles: [], imported: [] });
+    setChromeProfileImportStatus(`Could not detect Chrome profiles: ${error?.message || error}`, 'error');
+  }
+}
+
+function toggleChromeProfileImportPanel(enabled) {
+  const panel = document.getElementById('settings-chrome-profile-import-panel');
+  const next = enabled === true;
+  try { localStorage.setItem('prometheus.chrome-profile-import.open', next ? '1' : '0'); } catch {}
+  if (panel) {
+    panel.hidden = !next;
+    panel.style.display = next ? 'block' : 'none';
+  }
+  if (next) void loadChromeProfileSettings();
+}
+
+function selectInHouseBrowserProfile(profileId) {
+  const value = setStoredInHouseProfileId(profileId);
+  window.dispatchEvent(new CustomEvent('prometheus-inhouse-profile-changed', { detail: { profileId: value } }));
+  const sessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  if (sessionId && window.ws && window.ws.readyState === WebSocket.OPEN) {
+    try {
+      window.ws.send(JSON.stringify({
+        type: 'browser:profile_preference',
+        sessionId,
+        profile: value,
+        timestamp: Date.now(),
+      }));
+    } catch {}
+  }
+  setChromeProfileImportStatus(value === 'main' ? 'New in-app browser sessions use the Prometheus profile.' : 'New in-app browser sessions use the imported profile.', '');
+}
+
+async function importSelectedChromeProfile() {
+  const bridge = getChromeProfilesBridge();
+  const select = document.getElementById('settings-chrome-profile-select');
+  const profileId = String(select?.value || '').trim();
+  const profile = chromeProfileCatalog.profiles.find((entry) => entry.id === profileId);
+  if (!bridge || !profileId || !profile) {
+    setChromeProfileImportStatus('Choose a detected Chrome profile first.', 'error');
+    return;
+  }
+  const confirmed = await new Promise((resolve) => showConfirm(
+    `Prometheus will copy “${profile.name || profile.directory}” into its own persistent browser storage. Your Chrome profile will not be modified.`,
+    () => resolve(true),
+    () => resolve(false),
+    {
+      title: 'Import Chrome profile?',
+      confirmText: 'Import profile',
+      cancelText: 'Cancel',
+      details: `Source: ${profile.sourceLabel || 'Chrome'} · ${profile.directory}\nClose Chrome before importing. Passwords and cookies may require signing in again when the operating system encrypts them for the original browser app.`,
+    },
+  ));
+  if (!confirmed) return;
+  try {
+    setChromeProfileImportStatus('Copying profile data…');
+    const imported = await bridge.import(profileId);
+    await loadChromeProfileSettings();
+    if (imported?.id) {
+      setStoredInHouseProfileId(imported.id);
+      const defaultSelect = document.getElementById('settings-browser-profile-default');
+      if (defaultSelect) defaultSelect.value = imported.id;
+    }
+    setChromeProfileImportStatus(`Imported ${imported?.name || profile.name || profile.directory}. New in-app browser sessions can use it from the profile selector.`, 'success');
+  } catch (error) {
+    setChromeProfileImportStatus(`Chrome profile import failed: ${error?.message || error}`, 'error');
+  }
+}
+
 async function openSettings(tab) {
   _scheduleSettingsVisibilityRefresh();
   document.getElementById('settings-modal').style.display = 'flex';
@@ -2843,6 +3001,11 @@ async function openSettings(tab) {
   window._settingsCredentialsLoadedToUI = false;
   resetCommandPermissionListVisibility();
   setSettingsSaveFeedback();
+  const importToggle = document.getElementById('settings-browser-profile-import-toggle');
+  let importPanelOpen = false;
+  try { importPanelOpen = localStorage.getItem('prometheus.chrome-profile-import.open') === '1'; } catch {}
+  if (importToggle) importToggle.checked = importPanelOpen;
+  toggleChromeProfileImportPanel(importPanelOpen);
   const targetTab = tab || window.settingsTab || 'system';
   setSettingsTab(targetTab);
   const bootJobs = [
@@ -2878,6 +3041,7 @@ async function openSettings(tab) {
     }).catch(() => {
       window._settingsSearchLoadedToUI = false;
     }),
+    loadChromeProfileSettings().catch(() => {}),
     loadSessionCompactionSettings().catch(() => {}),
     loadAutoSettleSettings().catch(() => {}),
   ];
@@ -6743,6 +6907,7 @@ window.loadMigrationPanel = loadMigrationPanel;
 window.loadMCPServers = loadMCPServers;
 window.loadModelSettings = loadModelSettings;
 window.loadSearchSettingsSummary = loadSearchSettingsSummary;
+window.loadChromeProfileSettings = loadChromeProfileSettings;
 window.loadSelectedAgentMd = loadSelectedAgentMd;
 window.loadSessionCompactionSettings = loadSessionCompactionSettings;
 window.loadAutoSettleSettings = loadAutoSettleSettings;
@@ -6808,6 +6973,9 @@ window.sendSelectedChannelTest = sendSelectedChannelTest;
 window.setAgentForm = setAgentForm;
 window.setButtonBusy = setButtonBusy;
 window.toggleDesktopAutoUpdate = toggleDesktopAutoUpdate;
+window.toggleChromeProfileImportPanel = toggleChromeProfileImportPanel;
+window.selectInHouseBrowserProfile = selectInHouseBrowserProfile;
+window.importSelectedChromeProfile = importSelectedChromeProfile;
 window.checkDesktopForUpdates = checkDesktopForUpdates;
 window.downloadDesktopUpdate = downloadDesktopUpdate;
 window.installDesktopUpdate = installDesktopUpdate;

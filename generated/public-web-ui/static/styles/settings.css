@@ -2546,6 +2546,77 @@
   justify-self: end;
 }
 
+#settings-modal .settings-browser-profile-row .settings-row-select {
+  width: min(100%, 300px);
+}
+
+#settings-modal .settings-profile-toggle {
+  display: inline-flex;
+  justify-self: end;
+  align-items: center;
+  cursor: pointer;
+}
+
+#settings-modal .settings-profile-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#settings-modal .settings-profile-toggle-track {
+  display: inline-flex;
+  align-items: center;
+  width: 38px;
+  height: 22px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  transition: background .16s ease, border-color .16s ease;
+}
+
+#settings-modal .settings-profile-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .16s ease, background .16s ease;
+}
+
+#settings-modal .settings-profile-toggle input:checked + .settings-profile-toggle-track {
+  border-color: color-mix(in srgb, var(--brand) 65%, var(--line));
+  background: color-mix(in srgb, var(--brand) 22%, var(--panel-2));
+}
+
+#settings-modal .settings-profile-toggle input:checked + .settings-profile-toggle-track .settings-profile-toggle-thumb {
+  transform: translateX(16px);
+  background: var(--brand);
+}
+
+#settings-modal .settings-chrome-profile-import-panel {
+  padding: 12px 14px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 72%, var(--panel));
+}
+
+#settings-modal .settings-chrome-profile-import-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+#settings-modal .settings-chrome-profile-import-controls .settings-row-select {
+  width: min(100%, 360px);
+}
+
+#settings-modal .settings-chrome-profile-status {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 #settings-modal .settings-credential-control {
   display: flex;
   align-items: center;
@@ -2601,5 +2672,17 @@
   #settings-modal .settings-search-row .settings-row-select {
     width: 100%;
     justify-self: stretch;
+  }
+
+  #settings-modal .settings-profile-toggle {
+    justify-self: start;
+  }
+
+  #settings-modal .settings-chrome-profile-import-controls {
+    justify-content: stretch;
+  }
+
+  #settings-modal .settings-chrome-profile-import-controls .settings-row-select {
+    width: 100%;
   }
 }

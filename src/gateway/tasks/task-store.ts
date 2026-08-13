@@ -398,6 +398,7 @@ export interface TaskSummary {
   /** Compact routing fields used to avoid deserializing historical tasks on chat admission. */
   replyLookupVersion?: 1;
   originatingSessionId?: string;
+  parentTaskId?: string;
   subagentProfile?: string;
   proposalTeamId?: string;
   proposalManagerSessionId?: string;
@@ -593,6 +594,9 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
     originatingSessionId: typeof input?.originatingSessionId === 'string' && input.originatingSessionId.trim()
       ? input.originatingSessionId.trim()
       : undefined,
+    parentTaskId: typeof input?.parentTaskId === 'string' && input.parentTaskId.trim()
+      ? input.parentTaskId.trim()
+      : undefined,
     subagentProfile: typeof input?.subagentProfile === 'string' && input.subagentProfile.trim()
       ? input.subagentProfile.trim().slice(0, 160)
       : undefined,
@@ -745,6 +749,9 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
     replyLookupVersion: 1,
     originatingSessionId: typeof task.originatingSessionId === 'string' && task.originatingSessionId.trim()
       ? task.originatingSessionId.trim()
+      : undefined,
+    parentTaskId: typeof task.parentTaskId === 'string' && task.parentTaskId.trim()
+      ? task.parentTaskId.trim()
       : undefined,
     subagentProfile: typeof task.subagentProfile === 'string' && task.subagentProfile.trim()
       ? task.subagentProfile.trim().slice(0, 160)

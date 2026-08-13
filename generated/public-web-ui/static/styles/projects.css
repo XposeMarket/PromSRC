@@ -924,3 +924,45 @@ body.in-project-session .project-editors-wrap { display: flex; }
 .project-chat-folder svg { width: 100%; height: 100%; }
 .project-chat-children { margin: 1px 0 4px 16px; padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--line, #596273) 76%, transparent); }
 .project-chat-children[hidden] { display: none; }
+
+/* Keep the project tree heading borderless. Its shared sidebar decoration is
+   defined with the other desktop section headings; child chat cards keep
+   their existing spacing. */
+#sidebar-projects-section > .section-title {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+#sidebar-projects-section .project-chat-row {
+  border: 0;
+  box-shadow: none;
+}
+#sidebar-projects-section .project-chat-project-title {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  white-space: nowrap;
+}
+#sidebar-projects-section .project-chat-row.imported-project .project-chat-project-title {
+  gap: 0;
+}
+#sidebar-projects-section .project-chat-icon-line {
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-right: 0;
+  vertical-align: middle;
+}
+#sidebar-projects-section .project-chat-folder,
+#sidebar-projects-section .project-chat-icon-line .imported-source-logo,
+#sidebar-projects-section .project-chat-icon-line .imported-source-logo-fallback {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+#sidebar-projects-section .project-chat-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

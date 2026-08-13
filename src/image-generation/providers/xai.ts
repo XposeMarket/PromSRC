@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config.js';
+import { getConfiguredProviderConfig } from '../../media-generation/provider-credentials.js';
 import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
 import type {
   ImageGenerationProvider,
@@ -46,10 +47,7 @@ function coerceModelId(value?: string): string | undefined {
 }
 
 function getXAIProviderConfig(): Record<string, unknown> {
-  const cfg = getConfig().getConfig() as any;
-  return (cfg.llm?.providers?.xai && typeof cfg.llm.providers.xai === 'object')
-    ? cfg.llm.providers.xai
-    : {};
+  return getConfiguredProviderConfig('xai');
 }
 
 function getXAIImageProviderConfig(): Record<string, unknown> {
@@ -73,15 +71,17 @@ function getApiBase(): string {
 
 function getConfiguredAuthMode(): string {
   const providerCfg = getXAIProviderConfig();
-  const explicit = String(providerCfg.auth_mode || '').trim();
+  const explicit = String(providerCfg.auth_mode || providerCfg.authType || '').trim();
+  if (/^oauth/i.test(explicit)) return 'oauth';
   if (explicit) return explicit;
-  return isXAIConnected(getConfig().getConfigDir()) ? 'oauth' : 'api_key';
+  return isXAIConnected(getConfig().getConfigDir(), String(providerCfg.accountId || '').trim() || undefined) ? 'oauth' : 'api_key';
 }
 
 async function getBearerToken(): Promise<string | undefined> {
   const providerCfg = getXAIProviderConfig();
   if (getConfiguredAuthMode() === 'oauth') {
-    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir());
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir(), accountId);
     return creds.api_key;
   }
   return resolveSecretReference(providerCfg.api_key) || process.env.XAI_API_KEY;
@@ -89,7 +89,8 @@ async function getBearerToken(): Promise<string | undefined> {
 
 async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
   if (getConfiguredAuthMode() === 'oauth') {
-    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir());
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfig().getConfigDir(), accountId);
     return { bearerToken: creds.api_key, baseUrl: creds.base_url };
   }
   return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
@@ -244,7 +245,8 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
       }
 
       const rawText = await response.text();
-      const parsed = rawText ? JSON.parse(rawText) : {};
+      let parsed: any = {};
+      try { parsed = rawText ? JSON.parse(rawText) : {}; } catch {}
       if (!response.ok) {
         const message = String(parsed?.error?.message || rawText || response.statusText || 'Image generation request failed').slice(0, 400);
         return buildImageGenerationError({

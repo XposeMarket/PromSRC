@@ -76,6 +76,25 @@ function _suggestedDeviceName() {
   return 'Mobile device';
 }
 
+function _parsePairingEntry(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { code: '', origin: normalizeGatewayOrigin(window.location.origin), fullLink: '' };
+  try {
+    const url = new URL(raw);
+    if (['http:', 'https:'].includes(url.protocol)) {
+      const embeddedCode = String(url.searchParams.get('pair') || '').trim();
+      if (embeddedCode) {
+        return {
+          code: embeddedCode,
+          origin: normalizeGatewayOrigin(url.origin),
+          fullLink: url.href,
+        };
+      }
+    }
+  } catch {}
+  return { code: raw, origin: normalizeGatewayOrigin(window.location.origin), fullLink: '' };
+}
+
 async function _ensureAccountBeforePairing(setStage) {
   const current = getAccount();
   if (current?.accessActive || current?.purchaseActive || current?.subscriptionActive || current?.isAdmin) return true;
@@ -185,23 +204,40 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
       status: '',
       actions: `
         <form id="pm-pair-code-form" style="display:flex;flex-direction:column;gap:10px;">
-          <input id="pm-pair-code-input" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="PAIR-ABCD-1234" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:14px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:.08em;" />
+          <input id="pm-pair-code-input" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="PAIR-ABCD-1234 or paste link" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:14px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:.08em;" />
+          <input id="pm-pair-origin-input" type="url" inputmode="url" autocomplete="url" spellcheck="false" value="${_escapeHtml(window.location.origin)}" placeholder="https://your-machine.ts.net" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:11px 13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;" />
+          <div style="font-size:12px;color:var(--pm-muted);line-height:1.45;">Use the Gateway address shown on the desktop. If you paste the full pairing link above, this address is ignored.</div>
           <button class="pm-btn primary" type="submit">Pair with code</button>
           <button class="pm-btn ghost" type="button" id="pm-pair-retry">I scanned the QR</button>
         </form>`,
     });
     const form = page.querySelector('#pm-pair-code-form');
     const input = page.querySelector('#pm-pair-code-input');
+    const originInput = page.querySelector('#pm-pair-origin-input');
     input?.focus?.();
-    input?.addEventListener('input', () => { input.value = String(input.value || '').toUpperCase(); });
+    input?.addEventListener('input', () => {
+      const raw = String(input.value || '');
+      // Pair codes are case-insensitive; base64url pairing links are not.
+      input.value = /^https?:\/\//i.test(raw.trim()) ? raw : raw.toUpperCase();
+    });
     form?.addEventListener('submit', (ev) => {
       ev.preventDefault();
-      const typedCode = String(input?.value || '').trim();
-      if (!typedCode) {
+      const typed = String(input?.value || '').trim();
+      const parsed = _parsePairingEntry(typed);
+      if (!parsed.code) {
         statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter the pair code from desktop Settings.</span>';
         return;
       }
-      window.location.href = `${window.location.origin}/?pair=${encodeURIComponent(typedCode)}${pairRoute}`;
+      if (parsed.fullLink) {
+        window.location.href = parsed.fullLink;
+        return;
+      }
+      const targetOrigin = normalizeGatewayOrigin(originInput?.value || parsed.origin || window.location.origin);
+      if (!targetOrigin) {
+        statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter a valid gateway address, such as https://your-machine.ts.net.</span>';
+        return;
+      }
+      window.location.href = `${targetOrigin}/?pair=${encodeURIComponent(parsed.code)}${pairRoute}`;
     });
     page.querySelector('#pm-pair-retry')?.addEventListener('click', () => location.reload());
     return;

@@ -56,6 +56,7 @@ function xaiModelSupportsReasoningEffort(modelName: string): boolean {
   return name === 'grok-latest'
     || /^grok-4\.3(?:-|$)/i.test(name)
     || /^grok-4\.5(?:-|$)/i.test(name)
+    || /^grok-4\.6(?:-|$)/i.test(name)
     || /^grok-4\.20-multi-agent(?:-|$)/i.test(name)
     || /^grok-3-mini(?:-|$)/i.test(name);
 }
@@ -110,6 +111,9 @@ function getKnownProviderModelInfo(providerId: string, modelName: string): Parti
       return { contextWindowTokens: 256_000, tokenizer: 'openai' };
     }
     if (/^grok-4\.5(?:-latest)?$/i.test(name)) {
+      return { contextWindowTokens: 500_000, tokenizer: 'openai' };
+    }
+    if (/^grok-4\.6(?:-latest)?$/i.test(name)) {
       return { contextWindowTokens: 500_000, tokenizer: 'openai' };
     }
     if (/^(grok-4\.3(?:-latest)?|grok-latest)$/i.test(name) || /^grok-4\.20(?:$|-)/i.test(name)) {

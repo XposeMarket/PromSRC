@@ -134,6 +134,8 @@ function renderProjectChatRow(project) {
   const id = escHtmlLocal(project.id);
   const isOpen = _expandedProjectIds.has(String(project.id));
   const pinned = projectPinned(project);
+  const importedLogo = projectImportedLogo(project);
+  const importedClass = importedLogo ? ' imported-project' : '';
   const children = (project.sessions || []).slice().sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a)).map((session) => {
     const cached = Array.isArray(window.chatSessions) ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || '')) : null;
     const nested = { ...(cached || {}), ...session, projectId: project.id, projectName: project.name };
@@ -143,9 +145,9 @@ function renderProjectChatRow(project) {
   }).join('');
   const folder = '<span class="project-chat-folder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>';
   return `<div class="project-chat-group${isOpen ? ' open' : ''}${pinned ? ' pinned-project' : ''}" data-project-chat-group="${id}">
-    <div class="job-item chat-session-item project-chat-row" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" onclick="window.toggleProjectChatRow && window.toggleProjectChatRow('${id}')">
+    <div class="job-item chat-session-item project-chat-row${importedClass}" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" onclick="window.toggleProjectChatRow && window.toggleProjectChatRow('${id}')">
       <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" onclick="window.toggleProjectPin && window.toggleProjectPin('${id}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${typeof window.SKILL_STAR_ICON === 'function' ? window.SKILL_STAR_ICON(pinned) : '☆'}</button>
-      <div class="job-item-head job-item-head--pinned"><div class="job-item-title-wrap"><div class="job-item-title project-chat-project-title"><span class="project-chat-icon-line">${folder}${projectImportedLogo(project)}</span>${escHtmlLocal(project.name)}</div></div></div>
+      <div class="job-item-head job-item-head--pinned"><div class="job-item-title-wrap"><div class="job-item-title project-chat-project-title"><span class="project-chat-icon-line">${folder}${importedLogo}</span><span class="project-chat-project-name">${escHtmlLocal(project.name)}</span></div></div></div>
       <div class="job-item-meta"><span class="job-item-time">${timeAgo(projectLastActivity(project))}</span></div>
     </div>
     <div class="project-chat-children"${isOpen ? '' : ' hidden'}>${children || '<div class="project-empty-session">No chats yet.</div>'}</div>

@@ -1,4 +1,4 @@
-import { getConfig } from '../../config/config.js';
+import { getConfiguredProviderConfig } from '../../media-generation/provider-credentials.js';
 import type {
   ImageGenerationProvider,
   ImageGenerationResolvedRequest,
@@ -58,10 +58,7 @@ function resolveApiModelForRequest(model: string, requestedModel: string | undef
 }
 
 function getOpenAIProviderConfig(): Record<string, unknown> {
-  const cfg = getConfig().getConfig() as any;
-  return (cfg.llm?.providers?.openai && typeof cfg.llm.providers.openai === 'object')
-    ? cfg.llm.providers.openai
-    : {};
+  return getConfiguredProviderConfig('openai');
 }
 
 function getApiBase(): string {
@@ -236,7 +233,8 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
       }
 
       const rawText = await response.text();
-      const parsed = rawText ? JSON.parse(rawText) : {};
+      let parsed: any = {};
+      try { parsed = rawText ? JSON.parse(rawText) : {}; } catch {}
       if (!response.ok) {
         const message = String(parsed?.error?.message || rawText || response.statusText || 'Image generation request failed').slice(0, 400);
         return buildImageGenerationError({
@@ -248,7 +246,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           outputFormat: request.output_format,
           presentationMode: request.presentation_mode,
           error: `OpenAI image generation failed: ${message}`,
-          errorType: 'api_error',
+          errorType: response.status === 401 ? 'auth_required' : 'api_error',
         });
       }
 

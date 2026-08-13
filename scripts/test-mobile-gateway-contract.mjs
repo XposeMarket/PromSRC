@@ -42,7 +42,7 @@ function loadCatalogForTest() {
     unescape,
     console,
   };
-  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson,\n  hasAnyGatewayCredential\n};`, context, { filename: 'mobile-gateway-catalog.js' });
+  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson,\n  hasAnyGatewayCredential, filterOnlineGatewayEntries, loadMobileGatewaySessionPage,\n  searchMobileGatewaySessions\n};`, context, { filename: 'mobile-gateway-catalog.js' });
   context.__setDeviceToken = (value) => { deviceToken = String(value || ''); };
   return context;
 }
@@ -73,6 +73,8 @@ function assertContractFiles() {
   assert.match(pairing, /consumePendingRequestToken/);
   assert.match(pairing, /api\/pairing\/me\/revoke/);
   assert.match(auth, /X-Pairing-Device-Fingerprint/);
+  assert.match(auth, /pathname === '\/api\/gateway\/descriptor'/, 'descriptor liveness probes must be CORS-allowed');
+  assert.match(auth, /pathname === '\/api\/status'/, 'legacy status fallback must remain CORS-allowed');
   assert.match(pages, /BarcodeDetector/);
   assert.match(pages, /jsQR/);
   assert.match(pages, /attemptBoth/);
@@ -90,6 +92,8 @@ function assertContractFiles() {
   assert.match(pages, /pm-mobile-context-popover-open/);
   assert.match(pages, /requestedSession === MOBILE_CHAT_SESSION_ID \? `/, 'gateway selector must be limited to the new-chat draft');
   assert.match(pages, /requestedSession !== MOBILE_CHAT_SESSION_ID \|\| !targetChip/, 'existing chats must not open the gateway selector');
+  assert.match(pages, /selectedGateway\.status !== MOBILE_GATEWAY_STATUS\.ONLINE/, 'chat sends must fail closed for every non-online target state');
+  assert.match(pages, /probeGateway\(selectedGateway\)/, 'chat sends must verify target liveness before admission');
   assert.match(mobileApi, /_isCurrentMobileRequestTarget/);
   assert.match(mobileApi, /REMOTE_EXECUTION_NOT_ENABLED/);
   assert.match(router, /loadMobileGatewaySessionGroups/);
@@ -98,6 +102,10 @@ function assertContractFiles() {
   assert.match(shell, /pm-drawer-gateway-filter/);
   assert.match(shell, /pm-drawer-gateway-pill/);
   assert.match(shell, /pm-session-gateway/);
+  assert.match(shell, /gatewayAware/);
+  assert.match(shell, /type === 'status_changed'/);
+  assert.match(shell, /PM_DRAWER_GATEWAY_HEARTBEAT_MS/);
+  assert.match(shell, /refreshGatewayStatuses/);
   assert.match(css, /--pm-drawer-width: min\(76vw, 350px\)/);
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /\.pm-chat-target-chip \{[\s\S]*display: none/);
@@ -111,6 +119,8 @@ function assertContractFiles() {
   assert.doesNotMatch(index, /id="gateway-status-pill"/);
   assert.match(css, /\.pm-header \.pm-online::before[\s\S]{0,120}display: none/);
   assert.match(shell, /pm-model-badge/);
+  assert.match(catalog, /filterOnlineGatewayEntries/);
+  assert.match(catalog, /await _loadOnlineSelectedGatewayEntries/);
 }
 
 async function run() {
@@ -160,6 +170,55 @@ async function run() {
   assert.equal(request.url, 'https://mac.example/api/mobile/gateway/catalog');
   assert.equal(request.options.headers.get('X-Pairing-Token'), 'mac-token');
   assert.equal(new URL(request.url).search, '', 'target credentials never enter the URL');
+
+  // Session aggregation is liveness-gated, not merely catalog-filtered. Both
+  // independent targets can expose the same local session id without a
+  // collision while they are live.
+  let desktopReachable = true;
+  ctx.fetch = async (url, options) => {
+    request = { url, options };
+    const parsed = new URL(url);
+    const gatewayId = parsed.hostname === 'mac.example' ? mac.gatewayId : desktop.gatewayId;
+    if (parsed.pathname === '/api/gateway/descriptor') {
+      if (gatewayId === desktop.gatewayId && !desktopReachable) throw new TypeError('Failed to fetch');
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ gateway: { gatewayId, name: gatewayId === mac.gatewayId ? mac.name : desktop.name, platform: gatewayId === mac.gatewayId ? 'darwin' : 'win32', version: '1.0.9' } }),
+      };
+    }
+    if (parsed.pathname === '/api/mobile/gateway/catalog') {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ sessions: [{ id: 'same-session', title: `${gatewayId} chat`, lastMessageAt: 10 }] }),
+      };
+    }
+    if (parsed.pathname === '/api/sessions/search') {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ sessions: [{ id: 'same-session', title: `${gatewayId} chat` }] }),
+      };
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify({ success: true }) };
+  };
+  c.updateGatewayStatus(mac.gatewayId, { status: 'unknown' });
+  c.updateGatewayStatus(desktop.gatewayId, { status: 'unknown' });
+  const livePage = await c.loadMobileGatewaySessionPage({ limit: 20, offset: 0, state: 'active' });
+  assert.deepEqual(new Set(livePage.sessions.map((session) => session.id)), new Set(['gw-mac::same-session', 'gw-desktop::same-session']), 'online aggregate includes both target-namespaced sessions');
+  assert.deepEqual(Array.from(c.filterOnlineGatewayEntries(c.loadGatewayCatalog()), (entry) => entry.gatewayId).sort(), ['gw-desktop', 'gw-mac'], 'both live gateways pass the online-only filter');
+
+  desktopReachable = false;
+  const offlinePage = await c.loadMobileGatewaySessionPage({ limit: 20, offset: 0, state: 'active' });
+  assert.deepEqual(Array.from(offlinePage.sessions, (session) => session.id), ['gw-mac::same-session'], 'offline gateway sessions disappear from aggregate results');
+  assert.equal(c.getGateway(desktop.gatewayId).status, 'offline', 'failed liveness probe records offline state');
+  assert.deepEqual(Array.from(await c.searchMobileGatewaySessions('same-session', { limit: 20 }), (session) => session.id), ['gw-mac::same-session'], 'search cannot return sessions from an offline gateway');
+
+  desktopReachable = true;
+  const recoveredPage = await c.loadMobileGatewaySessionPage({ limit: 20, offset: 0, state: 'active' });
+  assert.deepEqual(new Set(Array.from(recoveredPage.sessions, (session) => session.id)), new Set(['gw-mac::same-session', 'gw-desktop::same-session']), 'sessions reappear after the target recovers');
+  assert.equal(c.getGateway(desktop.gatewayId).status, 'online', 'recovery probe restores online state');
 
   c.updateGatewayStatus(desktop.gatewayId, { status: 'offline' });
   await assert.rejects(() => c.gatewayFetchJson(desktop.gatewayId, '/api/mobile/gateway/catalog'), (error) => error.code === 'GATEWAY_OFFLINE');

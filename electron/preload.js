@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
 
 // ─── App Metadata ───────────────────────────────────────────────────────────
 contextBridge.exposeInMainWorld('prometheusApp', {
+  isElectron: true,
+  platform: process.platform,
   getVersion: () => ipcRenderer.invoke('get-app-version'),
 });
 
@@ -87,6 +89,17 @@ contextBridge.exposeInMainWorld('prometheusFiles', {
   getCanvasFilePath: (file) => {
     try { return webUtils.getPathForFile(file); } catch { return ''; }
   },
+});
+
+// Chrome profile import is intentionally a desktop-only, explicit opt-in
+// bridge. The renderer receives profile labels and IDs, never cookie/password
+// contents; main performs the validated copy into Prometheus-owned storage.
+contextBridge.exposeInMainWorld('prometheusChromeProfiles', {
+  detect: () => ipcRenderer.invoke('chrome-profiles:detect'),
+  import: (profileId, options = {}) => ipcRenderer.invoke('chrome-profiles:import', {
+    profileId: String(profileId || ''),
+    refresh: options?.refresh === true,
+  }),
 });
 
 // ─── Native In-App Browser Bridge ───────────────────────────────────────────

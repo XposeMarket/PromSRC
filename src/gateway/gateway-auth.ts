@@ -119,6 +119,8 @@ function isMobileGatewayBridgePath(request?: Pick<Request, 'path' | 'url'>): boo
   return (
     pathname === '/api/pairing/claim' ||
     /^\/api\/pairing\/poll\/[^/]+$/.test(pathname) ||
+    pathname === '/api/gateway/descriptor' ||
+    pathname === '/api/status' ||
     pathname === '/api/mobile/gateway/catalog'
   );
 }
@@ -234,7 +236,7 @@ export function buildGatewayCorsOptions(request?: Pick<Request, 'path' | 'url'>)
       // Pairing claim/poll are still protected by the short-lived QR
       // challenge and desktop approval. Catalog reads are still protected by
       // the target-scoped pairing token. Allowing HTTPS hub origins on only
-      // these three paths lets the in-app scanner connect gateways without
+      // these five paths lets the in-app scanner connect gateways without
       // turning the rest of the API into a cross-origin surface.
       const bridgeOrigin = Boolean(origin) && isHttpsOrigin(origin) && isMobileGatewayBridgePath(request);
       callback(null, isTrustedGatewayOrigin(origin) || bridgeOrigin);

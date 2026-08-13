@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config.js';
+import { getConfiguredProviderConfig } from '../../media-generation/provider-credentials.js';
 import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
 import type {
   VideoGenerationProvider,
@@ -32,10 +33,7 @@ function coerceModelId(value?: string): string | undefined {
 }
 
 function getXAIProviderConfig(): Record<string, unknown> {
-  const cfg = getConfig().getConfig() as any;
-  return (cfg.llm?.providers?.xai && typeof cfg.llm.providers.xai === 'object')
-    ? cfg.llm.providers.xai
-    : {};
+  return getConfiguredProviderConfig('xai');
 }
 
 function getXAIVideoProviderConfig(): Record<string, unknown> {
@@ -64,9 +62,10 @@ function getApiKey(): string | undefined {
 
 function getConfiguredAuthMode(): string {
   const providerCfg = getXAIProviderConfig();
-  const explicit = String(providerCfg.auth_mode || '').trim();
+  const explicit = String(providerCfg.auth_mode || providerCfg.authType || '').trim();
+  if (/^oauth/i.test(explicit)) return 'oauth';
   if (explicit) return explicit;
-  return isXAIConnected(getConfigDir()) ? 'oauth' : 'api_key';
+  return isXAIConnected(getConfigDir(), String(providerCfg.accountId || '').trim() || undefined) ? 'oauth' : 'api_key';
 }
 
 function getConfigDir(): string {
@@ -75,7 +74,8 @@ function getConfigDir(): string {
 
 async function getBearerToken(): Promise<string | undefined> {
   if (getConfiguredAuthMode() === 'oauth') {
-    const creds = await getValidXAIRuntimeCredentials(getConfigDir());
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfigDir(), accountId);
     return creds.api_key;
   }
   return getApiKey();
@@ -83,7 +83,8 @@ async function getBearerToken(): Promise<string | undefined> {
 
 async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
   if (getConfiguredAuthMode() === 'oauth') {
-    const creds = await getValidXAIRuntimeCredentials(getConfigDir());
+    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
+    const creds = await getValidXAIRuntimeCredentials(getConfigDir(), accountId);
     return { bearerToken: creds.api_key, baseUrl: creds.base_url };
   }
   return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
@@ -248,7 +249,8 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
         signal: AbortSignal.timeout(60_000),
       });
       const startText = await startResponse.text();
-      const startParsed = startText ? JSON.parse(startText) : {};
+      let startParsed: any = {};
+      try { startParsed = startText ? JSON.parse(startText) : {}; } catch {}
 
       if (!startResponse.ok) {
         const message = String(startParsed?.error?.message || startText || startResponse.statusText || 'Video generation request failed').slice(0, 400);
@@ -289,7 +291,8 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
           signal: AbortSignal.timeout(60_000),
         });
         const statusText = await statusResponse.text();
-        const statusParsed = statusText ? JSON.parse(statusText) : {};
+        let statusParsed: any = {};
+        try { statusParsed = statusText ? JSON.parse(statusText) : {}; } catch {}
         if (!statusResponse.ok) {
           const message = String(statusParsed?.error?.message || statusText || statusResponse.statusText || 'Video polling failed').slice(0, 400);
           return buildVideoGenerationError({

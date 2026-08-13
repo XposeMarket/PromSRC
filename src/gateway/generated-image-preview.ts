@@ -15,8 +15,10 @@ export function generatedImagePreviewIdentity(image: Partial<GeneratedImageAsset
   const generationId = cleanString(image?.generation_id || image?.generationId);
   if (generationId) return `generation:${generationId}`;
   const parentGenerationId = cleanString(image?.parent_generation_id || image?.parentGenerationId);
-  const partialIndex = cleanString(image?.partial_index ?? image?.partialIndex);
-  if (parentGenerationId && partialIndex) return `generation:${parentGenerationId}:partial:${partialIndex}`;
+  const partialIndex = image?.partial_index ?? image?.partialIndex;
+  if (parentGenerationId && partialIndex !== undefined && partialIndex !== null && String(partialIndex).trim() !== '') {
+    return `generation:${parentGenerationId}:partial:${String(partialIndex).trim()}`;
+  }
   const relPath = cleanPath(image?.rel_path || image?.relPath || image?.workspacePath);
   if (relPath) return `workspace:${relPath}`;
   const cacheFile = generatedImageCacheFileName(image);

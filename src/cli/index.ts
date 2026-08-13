@@ -1183,11 +1183,11 @@ gateway
 
 // ---- AGENT ----
 program
-  .command('agent <mission>')
+  .command('agent <mission...>')
   .description('Run a mission via the gateway (starts gateway if needed)')
   .option('-p, --priority <number>', 'Job priority', '0')
-  .action(async (mission: string) => {
-    await runMissionThroughGateway(mission);
+  .action(async (mission: string[]) => {
+    await runMissionThroughGateway(mission.join(' '));
   });
 
 // ---- JOBS ----

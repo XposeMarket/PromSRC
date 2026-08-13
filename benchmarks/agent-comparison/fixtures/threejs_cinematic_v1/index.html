@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#050914">
+  <title>Signal of the Quiet Moon — Three.js Cinematic</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      background: #050914;
+      color: #e7f6ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; overflow: hidden; background: #050914; }
+    body { position: relative; }
+    #scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+    .vignette {
+      position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(circle at 50% 45%, transparent 24%, rgba(1, 4, 14, .26) 63%, rgba(1, 3, 10, .92) 120%);
+      mix-blend-mode: multiply;
+    }
+    .hud {
+      position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between;
+      padding: clamp(22px, 5vw, 64px); pointer-events: none;
+    }
+    .eyebrow { margin: 0 0 10px; color: #7ed7ff; font: 600 11px/1.2 ui-monospace, monospace; letter-spacing: .28em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 540px; font: 400 clamp(30px, 5vw, 72px)/.96 Georgia, serif; letter-spacing: -.045em; text-wrap: balance; }
+    .subtitle { max-width: 350px; margin: 16px 0 0; color: rgba(231, 246, 255, .64); font-size: 13px; line-height: 1.6; }
+    .footer { display: flex; align-items: end; justify-content: space-between; gap: 28px; }
+    .beat { min-width: 190px; }
+    .beat-label { margin: 0 0 9px; color: rgba(231, 246, 255, .52); font: 10px ui-monospace, monospace; letter-spacing: .18em; text-transform: uppercase; }
+    #beat-name { margin: 0; color: #b7ecff; font: 500 16px/1.2 ui-monospace, monospace; }
+    .meter { width: min(340px, 38vw); height: 2px; background: rgba(199, 232, 255, .16); overflow: hidden; }
+    #progress { width: 0%; height: 100%; background: linear-gradient(90deg, #67d6ff, #c5f4ff); box-shadow: 0 0 12px #67d6ff; }
+    .hint { margin: 0; color: rgba(231, 246, 255, .42); font: 10px ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    @media (max-width: 620px) { .footer { align-items: start; flex-direction: column; } .meter { width: 70vw; } }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="A cinematic moonlit Three.js environment"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+  <main class="hud">
+    <header>
+      <p class="eyebrow">Field recording 07 · 04:17 local</p>
+      <h1>Signal of the Quiet Moon</h1>
+      <p class="subtitle">A small observatory waits beneath a sky of drifting light. The beacon wakes, turns, and sends one last pulse into the dark.</p>
+    </header>
+    <footer class="footer">
+      <section class="beat" aria-live="polite">
+        <p class="beat-label">Now entering</p>
+        <p id="beat-name">Distant approach</p>
+      </section>
+      <section>
+        <div class="meter" aria-label="Cinematic timeline progress"><div id="progress"></div></div>
+        <p class="hint">looping transmission · threejs cinematic v1</p>
+      </section>
+    </footer>
+  </main>
+  <!-- Three.js is loaded from a pinned, documented CDN version so this fixture stays dependency-free. -->
+  <script type="module" src="./scene.js"></script>
+</body>
+</html>

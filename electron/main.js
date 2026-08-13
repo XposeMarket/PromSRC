@@ -18,6 +18,7 @@ const {
   BrowserWindow,
   BrowserView,
   WebContentsView,
+  session,
   shell,
   Menu,
   dialog,
@@ -40,6 +41,11 @@ const {
   parseWindowsListeningPids,
 } = require('./security');
 const { getNativeBrowserViewImplementations } = require('./native-browser-view');
+const {
+  getChromeProfileCatalog,
+  getImportedChromeProfile,
+  copyChromeProfile,
+} = require('./chrome-profile');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const DEFAULT_GATEWAY_PORT = 18789;
@@ -598,9 +604,10 @@ async function checkForPrometheusUpdates(source = 'manual', lockHeld = false) {
 // time. Other tabs/profiles stay detached from the window but remain alive for
 // background automation (DOM snapshot / run-js).
 const NATIVE_BROWSER_DEFAULT_PROFILE = 'main';
-const nativeBrowserViews = new Map();      // `${partition}::${tabId}` -> WebContentsView/BrowserView
+const nativeBrowserViews = new Map();      // `${profileKey}::${tabId}` -> WebContentsView/BrowserView
 const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
-const nativeBrowserSessionTabs = new Map(); // sessionId -> { partition, tabIds, activeTabId }
+const nativeBrowserSessionTabs = new Map(); // `${sessionId}::${profileKey}` -> { partition, tabIds, activeTabId }
+const nativeBrowserProfileSessions = new Map(); // imported profile id -> Electron Session
 let nativeBrowserTabSequence = 0;
 let presentedNativePartition = '';         // partition currently shown in the canvas
 let presentedNativeTabId = '';             // tab currently shown in the canvas
@@ -610,6 +617,7 @@ const nativeBrowserState = {
   visible: false,
   sessionId: '',
   profile: '',
+  profileLabel: 'Prometheus in-house browser',
   partition: '',
   activeTabId: '',
   tabs: [],
@@ -1636,11 +1644,47 @@ function partitionForNativeProfile(profileId) {
 }
 
 function nativeProfileFromPartition(partition) {
-  return String(partition || '').replace(/^persist:prometheus-inhouse-/, '') || NATIVE_BROWSER_DEFAULT_PROFILE;
+  const value = String(partition || '').trim();
+  if (value.startsWith('imported:')) return value.slice('imported:'.length) || NATIVE_BROWSER_DEFAULT_PROFILE;
+  return value.replace(/^persist:prometheus-inhouse-/, '') || NATIVE_BROWSER_DEFAULT_PROFILE;
+}
+
+function nativeImportedProfileId(profileId) {
+  const value = String(profileId || '').trim();
+  if (value.startsWith('imported:')) return value.slice('imported:'.length).trim();
+  return value.startsWith('imported-') ? value : '';
+}
+
+function resolveNativeProfileDescriptor(profileId = '') {
+  const importedId = nativeImportedProfileId(profileId);
+  if (importedId) {
+    const imported = getImportedChromeProfile(USER_DATA_DIR, importedId);
+    if (imported?.importedPath) {
+      let importedSession = nativeBrowserProfileSessions.get(imported.id);
+      if (!importedSession) {
+        importedSession = session.fromPath(path.resolve(imported.importedPath));
+        nativeBrowserProfileSessions.set(imported.id, importedSession);
+      }
+      return {
+        key: `imported:${imported.id}`,
+        profileId: imported.id,
+        session: importedSession,
+        label: `Imported Chrome · ${imported.name || imported.directory || imported.id}`,
+      };
+    }
+  }
+  const normalized = String(profileId || '').trim();
+  const key = partitionForNativeProfile(normalized || NATIVE_BROWSER_DEFAULT_PROFILE);
+  return {
+    key,
+    profileId: nativeProfileFromPartition(key),
+    session: null,
+    label: 'Prometheus in-house browser',
+  };
 }
 
 function resolveNativePartition(sessionId, profileId) {
-  if (profileId) return partitionForNativeProfile(profileId);
+  if (profileId) return resolveNativeProfileDescriptor(profileId).key;
   const sid = String(sessionId || '').trim();
   if (sid && nativeBrowserSessionPartitions.has(sid)) return nativeBrowserSessionPartitions.get(sid);
   return partitionForNativeProfile(NATIVE_BROWSER_DEFAULT_PROFILE);
@@ -1648,7 +1692,7 @@ function resolveNativePartition(sessionId, profileId) {
 
 function nativeSessionKey(sessionId, partition) {
   const sid = String(sessionId || '').trim();
-  return sid || `partition:${partition}`;
+  return sid ? `${sid}::${partition}` : `partition:${partition}`;
 }
 
 function nativeTabKey(partition, tabId) {
@@ -1761,6 +1805,22 @@ function normalizeNativeBrowserBounds(bounds = {}) {
   };
 }
 
+function clampNativeBrowserBoundsToContent(bounds = {}) {
+  const next = normalizeNativeBrowserBounds(bounds);
+  const size = mainWindow?.getContentSize?.();
+  const contentWidth = Number(size?.[0] || 0);
+  const contentHeight = Number(size?.[1] || 0);
+  if (!contentWidth || !contentHeight) return next;
+  const x = Math.min(next.x, contentWidth);
+  const y = Math.min(next.y, contentHeight);
+  return {
+    x,
+    y,
+    width: Math.max(0, Math.min(next.width, contentWidth - x)),
+    height: Math.max(0, Math.min(next.height, contentHeight - y)),
+  };
+}
+
 function normalizeBrowserUrlForLoad(url) {
   return normalizeEmbeddedBrowserUrl(url);
 }
@@ -1812,6 +1872,9 @@ function broadcastNativeBrowserState(extra = {}) {
   nativeBrowserState.activeTabId = tabId || '';
   nativeBrowserState.tabs = nativeTabsForSession(nativeBrowserState.sessionId, partition, tabId);
   nativeBrowserState.profile = partition ? nativeProfileFromPartition(partition) : nativeBrowserState.profile;
+  nativeBrowserState.profileLabel = partition
+    ? resolveNativeProfileDescriptor(nativeBrowserState.profile).label
+    : nativeBrowserState.profileLabel;
   nativeBrowserState.partition = partition || nativeBrowserState.partition;
   const payload = { ...nativeBrowserState, ...extra, timestamp: Date.now() };
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1826,9 +1889,12 @@ function nativeSessionStatePayload(sessionId, view, partition, extra = {}) {
   const meta = view ? refreshNativeViewMeta(view) : { url: 'about:blank', title: '', loading: false, lastError: '', tabId: '' };
   const registry = getNativeTabRegistry(sessionId, partition, false);
   const activeTabId = String(registry?.activeTabId || meta.tabId || '').trim();
+  const profile = nativeProfileFromPartition(partition);
+  const profileDescriptor = resolveNativeProfileDescriptor(profile);
   return {
     sessionId: String(sessionId || ''),
-    profile: nativeProfileFromPartition(partition),
+    profile,
+    profileLabel: profileDescriptor.label,
     partition,
     attached: extra.attached !== undefined ? extra.attached : true,
     url: meta.url || 'about:blank',
@@ -1910,14 +1976,16 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   let view = getNativeViewByPartition(partition, tabId);
   if (view) return { view, partition, tabId };
 
+  const profileDescriptor = resolveNativeProfileDescriptor(partition);
   const webPreferences = {
-    partition,
     nodeIntegration: false,
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
     preload: path.join(__dirname, 'inhouse-browser-preload.js'),
   };
+  if (profileDescriptor.session) webPreferences.session = profileDescriptor.session;
+  else webPreferences.partition = partition;
   let creationError = null;
   for (const implementation of nativeBrowserViewImplementations()) {
     let candidate = null;
@@ -1985,12 +2053,17 @@ function presentNativeView(partition, tabId = '', sessionId = '') {
 function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
   const sid = String(sessionId || nativeBrowserState.sessionId || '').trim();
   const partition = resolveNativePartition(sid, '');
+  if (!nativeBrowserState.attached) {
+    nativeBrowserState.visible = false;
+    nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
+    return broadcastNativeBrowserState({ visible: false });
+  }
   if (tabId) {
     const registry = getNativeTabRegistry(sid, partition, false);
     if (registry?.tabIds.includes(String(tabId).trim())) registry.activeTabId = String(tabId).trim();
   }
   presentNativeView(partition);
-  const next = normalizeNativeBrowserBounds(bounds);
+  const next = clampNativeBrowserBoundsToContent(bounds);
   nativeBrowserState.bounds = next;
   nativeBrowserState.visible = nativeBrowserState.attached && next.width > 8 && next.height > 8;
   const view = getNativeViewByPartition(partition, presentedNativeTabId);
@@ -2005,11 +2078,14 @@ function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
 }
 
 function hideNativeBrowserSurface(reason = '') {
+  nativeBrowserState.attached = false;
   nativeBrowserState.visible = false;
   nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
-  const view = presentedNativePartition ? getNativeViewByPartition(presentedNativePartition, presentedNativeTabId) : null;
-  if (view) { try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
-  return broadcastNativeBrowserState({ reason });
+  for (const [, view] of nativeBrowserViews) {
+    try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {}
+    detachNativeBrowserView(view);
+  }
+  return broadcastNativeBrowserState({ reason, attached: false, visible: false });
 }
 
 async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '', tabId = '' } = {}) {
@@ -2191,13 +2267,28 @@ function setNativeBrowserDesignMode({ sessionId = '', enabled = false } = {}) {
 }
 
 function stateNativeBrowserSurface({ sessionId = '' } = {}) {
+  // The RPC server starts before the renderer, so refresh this lazily as well
+  // as during window creation. That lets browserDoctor/browser tools recognize
+  // the in-app surface before the user has opened the canvas once.
+  refreshNativeBrowserAvailability();
   const sid = String(sessionId || '').trim();
-  if (sid && nativeBrowserSessionPartitions.has(sid)) {
-    const partition = nativeBrowserSessionPartitions.get(sid);
-    const registry = getNativeTabRegistry(sid, partition, false);
-    const view = getNativeViewByPartition(partition, registry?.activeTabId || '');
-    if (view) return nativeSessionStatePayload(sid, view, partition);
-    if (registry) return nativeSessionStatePayload(sid, null, partition, { attached: false });
+  if (sid) {
+    if (nativeBrowserSessionPartitions.has(sid)) {
+      const partition = nativeBrowserSessionPartitions.get(sid);
+      const registry = getNativeTabRegistry(sid, partition, false);
+      const view = getNativeViewByPartition(partition, registry?.activeTabId || '');
+      if (view) return nativeSessionStatePayload(sid, view, partition);
+      if (registry) return nativeSessionStatePayload(sid, null, partition, { attached: false });
+    }
+    // Never return the globally presented view for a session that has no native
+    // registry yet. That view may belong to another chat and would leak its
+    // tabs/URL into browserDoctor or a newly opened session.
+    return {
+      ...nativeSessionStatePayload(sid, null, partitionForNativeProfile(NATIVE_BROWSER_DEFAULT_PROFILE), { attached: false }),
+      available: nativeBrowserState.available,
+      visible: false,
+      presented: false,
+    };
   }
   return broadcastNativeBrowserState();
 }
@@ -2655,6 +2746,12 @@ handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
 });
 
 handleTrustedMain('native-browser:available', () => refreshNativeBrowserAvailability());
+handleTrustedMain('chrome-profiles:detect', () => getChromeProfileCatalog(USER_DATA_DIR));
+handleTrustedMain('chrome-profiles:import', async (_event, options = {}) => {
+  const profileId = String(options?.profileId || '').trim();
+  if (!profileId) throw new Error('Choose a Chrome profile to import.');
+  return copyChromeProfile(USER_DATA_DIR, profileId, { refresh: options?.refresh === true });
+});
 handleTrustedMain('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
 handleTrustedMain('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
 handleTrustedMain('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId, bounds && bounds.tabId));
@@ -2737,6 +2834,27 @@ function createWindow() {
     height:          920,
     minWidth:        960,
     minHeight:       640,
+    // Let the renderer own the title-bar surface while Electron keeps the
+    // platform-native window buttons. This is the same overlay model used by
+    // modern desktop apps: the app header can occupy the title-bar area, but
+    // minimize/maximize/close remain OS-managed and continue to work with
+    // keyboard shortcuts, double-click, and accessibility tooling.
+    frame:           false,
+    titleBarStyle:   process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    // Keep the Windows/Linux native controls inside the same dark surface as
+    // the renderer header. `transparent` looks like a white rectangle on
+    // Windows when the frameless overlay is composited by DWM.
+    titleBarOverlay: process.platform === 'darwin'
+      ? false
+      : {
+          color:       '#1f1f1f',
+          symbolColor: '#d8c9a8',
+          height:      32,
+        },
+    trafficLightPosition: process.platform === 'darwin'
+      ? { x: 12, y: 8 }
+      : undefined,
+    thickFrame:      true,
     icon:            ICON_IMAGE.isEmpty() ? ICON_PATH : ICON_IMAGE,
     title:           'Prometheus',
     backgroundColor: '#0a0a0a',
