@@ -146,6 +146,14 @@ const EMPTY_CHAT_STARTER_PROMPTS = [
     prompt: 'Help me turn a rough idea into a clear plan. Start by making the idea concrete, then propose the smallest useful first version.',
   },
 ];
+const EMPTY_CHAT_BRAIN_CARD_ICONS = [
+  'solar:stars-minimalistic-2-bold-duotone',
+  'solar:compass-bold-duotone',
+  'solar:lightbulb-bolt-bold-duotone',
+  'solar:magic-stick-3-bold-duotone',
+  'solar:rocket-2-bold-duotone',
+];
+let emptyChatBrainCardIconOrder = [];
 let emptyChatBrainCards = [];
 let emptyChatBrainCardsLoaded = false;
 let emptyChatBrainCardsLoading = false;
@@ -458,6 +466,7 @@ function updateSideChatChrome() {
     btn.title = hasLinks ? `${links.length} linked side chat${links.length === 1 ? '' : 's'}` : 'Side chats';
   }
   document.body?.classList?.toggle('side-chat-split-active', sideChatActive || backgroundAgentActive);
+  document.body?.classList?.toggle('background-agent-detail-active', backgroundAgentActive);
 }
 
 function showSideChatSplit(sideChatId = window.activeSideChatId) {
@@ -599,6 +608,94 @@ function handleSideChatInputKeydown(event) {
 }
 
 function handleSideChatInputResize(input) {
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(180, Math.max(42, input.scrollHeight))}px`;
+}
+
+function backgroundAgentSteerMessageRecord(backgroundId, text, timestamp = Date.now()) {
+  const id = String(backgroundId || '').trim();
+  const content = String(text || '').replace(/\s+/g, ' ').trim();
+  const at = Number(timestamp || Date.now()) || Date.now();
+  if (!id || !content) return null;
+  return {
+    id: `background_steer_${id}_${at}`,
+    role: 'user',
+    content,
+    timestamp: at,
+    channelLabel: 'steer',
+    workflowGroupId: `chat_steer_background_${id}_${at}`,
+    workflowPart: 'interruption',
+  };
+}
+
+function rememberBackgroundAgentSteer(backgroundId, text) {
+  const id = String(backgroundId || '').trim();
+  const content = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!id || !content) return false;
+  const steer = backgroundAgentSteerMessageRecord(id, content);
+  if (!steer) return false;
+  const lane = ensureBackgroundSpawnDockMap().get(id);
+  if (lane) {
+    lane.steerMessages = [
+      ...(Array.isArray(lane.steerMessages) ? lane.steerMessages : []),
+      steer,
+    ].slice(-80);
+    lane.updatedAt = Date.now();
+    persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+    return true;
+  }
+  const stored = findBackgroundAgentWork(id, window.activeChatSessionId);
+  if (!stored) return false;
+  persistBackgroundAgentWork({
+    ...stored,
+    steerMessages: [
+      ...(Array.isArray(stored.steerMessages) ? stored.steerMessages : []),
+      steer,
+    ].slice(-80),
+    updatedAt: Date.now(),
+  });
+  return true;
+}
+
+async function sendBackgroundAgentSteerMessage(message = null) {
+  const backgroundId = String(window.backgroundAgentDetailId || '').trim();
+  if (!backgroundId) return;
+  const input = document.getElementById('background-agent-chat-input');
+  const text = String(message == null ? input?.value || '' : message).trim();
+  if (!text) return;
+  if (input) input.disabled = true;
+  try {
+    await api('/api/background-agents/steer', {
+      method: 'POST',
+      body: JSON.stringify({
+        backgroundId,
+        message: text,
+        source: 'web_background_agent_chat',
+        kind: 'constraint',
+      }),
+    });
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+    }
+    rememberBackgroundAgentSteer(backgroundId, text);
+    renderBackgroundAgentDetail();
+  } catch (error) {
+    showToast('Could not steer background agent', String(error?.message || error || 'The live agent is no longer available.'), 'error');
+  } finally {
+    if (input) input.disabled = false;
+  }
+}
+
+function handleBackgroundAgentInputKeydown(event) {
+  if (event?.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    void sendBackgroundAgentSteerMessage();
+  }
+}
+
+function handleBackgroundAgentInputResize(input) {
   if (!input) return;
   input.style.height = 'auto';
   input.style.height = `${Math.min(180, Math.max(42, input.scrollHeight))}px`;
@@ -1327,6 +1424,8 @@ function makeEmptyStreamState() {
     pendingInterruptionWorkflowPresentationCleared: false,
     steerWorkflowGroupIds: [],
     steerTimerAnchored: false,
+    visualGeneration: null,
+    visualCompletedCount: 0,
   };
 }
 
@@ -1361,8 +1460,16 @@ function applyStreamStateToWindow(id) {
   window.pendingApprovals = Array.isArray(st.pendingApprovals) ? st.pendingApprovals : [];
 }
 
+function hasSessionThinkingState(id) {
+  const sid = String(id || '').trim();
+  return !!sid
+    && !!window._sessionThinking
+    && Object.prototype.hasOwnProperty.call(window._sessionThinking, sid);
+}
+
 function isSessionThinking(id) {
-  return !!(id && window._sessionThinking && window._sessionThinking[id]);
+  const sid = String(id || '').trim();
+  return hasSessionThinkingState(sid) && window._sessionThinking[sid] === true;
 }
 
 function syncActiveSessionRunState() {
@@ -1892,9 +1999,16 @@ function getBrowserCanvasState() {
 }
 
 function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
+  const primarySessionId = getBrowserCanvasPrimarySessionId();
+  const snapshotSessionId = String(state.sessionId || '').trim();
+  const belongsToPrimarySession = !primarySessionId || snapshotSessionId === primarySessionId;
   const browserSessions = {};
   Object.entries(getBrowserSessionRegistry(state)).forEach(([sessionId, record]) => {
     if (!record || typeof record !== 'object') return;
+    // Browser records live in a process-wide registry, but the canvas snapshot
+    // is persisted per chat. Never copy another chat's agents into this chat's
+    // durable browser state.
+    if (primarySessionId && String(sessionId || '').trim() !== primarySessionId) return;
     const { frameBase64, ...rest } = record;
     browserSessions[sessionId] = {
       ...rest,
@@ -1904,7 +2018,7 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
   return {
     surface: String(state.surface || 'files') === 'browser' ? 'browser' : 'files',
     interactionMode: normalizeBrowserInteractionMode(state.interactionMode),
-    active: state.active === true,
+    active: belongsToPrimarySession && state.active === true,
     browserDesignMode: state.browserDesignMode === true,
     browserDesignSelectMode: state.browserDesignSelectMode === true,
     browserDesignSelections: Array.isArray(state.browserDesignSelections)
@@ -1917,14 +2031,14 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
      browserSessions,
      nativeTabs: normalizeNativeBrowserTabs(state.nativeTabs),
      activeNativeTabId: String(state.activeNativeTabId || '').trim(),
-     sessionId: String(state.sessionId || '').trim(),
+     sessionId: belongsToPrimarySession ? snapshotSessionId : '',
     followSessionId: String(state.followSessionId || '').trim(),
-    url: String(state.url || '').trim(),
-    title: String(state.title || '').trim(),
-    lastRestorableUrl: String(state.lastRestorableUrl || '').trim(),
-    lastRestorableTitle: String(state.lastRestorableTitle || '').trim(),
-    lastTool: String(state.lastTool || '').trim(),
-    statusLabel: String(state.statusLabel || '').trim(),
+    url: belongsToPrimarySession ? String(state.url || '').trim() : '',
+    title: belongsToPrimarySession ? String(state.title || '').trim() : '',
+    lastRestorableUrl: belongsToPrimarySession ? String(state.lastRestorableUrl || '').trim() : '',
+    lastRestorableTitle: belongsToPrimarySession ? String(state.lastRestorableTitle || '').trim() : '',
+    lastTool: belongsToPrimarySession ? String(state.lastTool || '').trim() : '',
+    statusLabel: belongsToPrimarySession ? String(state.statusLabel || '').trim() : '',
     selectedElement: cloneBrowserDesignSelection(state.selectedElement),
     namedElements: Array.isArray(state.namedElements)
       ? state.namedElements.map((entry) => ({
@@ -1969,6 +2083,17 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
 function restoreBrowserCanvasSessionState(saved) {
   const state = getBrowserCanvasState();
   const restored = saved && typeof saved === 'object' ? saved : {};
+  const primarySessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+  const restoredSessionId = String(restored.sessionId || '').trim();
+  const savedRegistry = restored.browserSessions && typeof restored.browserSessions === 'object' && !Array.isArray(restored.browserSessions)
+    ? restored.browserSessions
+    : {};
+  const currentRegistry = Object.fromEntries(Object.entries(savedRegistry).filter(([sessionId]) => (
+    !primarySessionId || String(sessionId || '').trim() === primarySessionId
+  )));
+  const hasCurrentSessionState = !primarySessionId
+    || restoredSessionId === primarySessionId
+    || Object.prototype.hasOwnProperty.call(currentRegistry, primarySessionId);
   state.surface = String(restored.surface || 'files') === 'browser' ? 'browser' : 'files';
   state.interactionMode = normalizeBrowserInteractionMode(restored.interactionMode);
   state.controlCaptured = false;
@@ -1979,14 +2104,14 @@ function restoreBrowserCanvasSessionState(saved) {
   state.streamStatus = '';
   state.streamLastFrameAt = 0;
   state.frameFormat = 'png';
-  state.active = restored.active === true;
+  state.active = hasCurrentSessionState && restored.active === true;
   state.browserDesignMode = restored.browserDesignMode === true;
   state.browserDesignSelectMode = restored.browserDesignSelectMode === true;
   state.browserDesignSelections = Array.isArray(restored.browserDesignSelections)
     ? restored.browserDesignSelections.slice(0, 24).map((selection) => cloneBrowserDesignSelection(selection)).filter(Boolean)
     : [];
-   state.browserSessions = restored.browserSessions && typeof restored.browserSessions === 'object' && !Array.isArray(restored.browserSessions)
-    ? Object.fromEntries(Object.entries(restored.browserSessions).map(([sessionId, record]) => {
+   state.browserSessions = currentRegistry && typeof currentRegistry === 'object'
+    ? Object.fromEntries(Object.entries(currentRegistry).map(([sessionId, record]) => {
         const clean = record && typeof record === 'object' ? { ...record } : {};
         clean.frameBase64 = '';
         return [sessionId, clean];
@@ -1994,14 +2119,21 @@ function restoreBrowserCanvasSessionState(saved) {
      : {};
    state.nativeTabs = normalizeNativeBrowserTabs(restored.nativeTabs);
    state.activeNativeTabId = String(restored.activeNativeTabId || '').trim();
-   state.sessionId = String(restored.sessionId || '').trim();
-  state.followSessionId = String(restored.followSessionId || '').trim();
-  state.url = String(restored.url || '').trim();
-  state.title = String(restored.title || '').trim();
-  state.lastRestorableUrl = String(restored.lastRestorableUrl || '').trim();
-  state.lastRestorableTitle = String(restored.lastRestorableTitle || '').trim();
-  state.lastTool = String(restored.lastTool || '').trim();
-  state.statusLabel = String(restored.statusLabel || '').trim() || (state.active ? 'Browser active' : 'Browser idle');
+   state.sessionId = hasCurrentSessionState
+     ? String(primarySessionId || restoredSessionId || '').trim()
+     : '';
+  const restoredFollowSessionId = String(restored.followSessionId || '').trim();
+  state.followSessionId = hasCurrentSessionState && currentRegistry[restoredFollowSessionId]
+    ? restoredFollowSessionId
+    : '';
+  state.url = hasCurrentSessionState ? String(restored.url || '').trim() : '';
+  state.title = hasCurrentSessionState ? String(restored.title || '').trim() : '';
+  state.lastRestorableUrl = hasCurrentSessionState ? String(restored.lastRestorableUrl || '').trim() : '';
+  state.lastRestorableTitle = hasCurrentSessionState ? String(restored.lastRestorableTitle || '').trim() : '';
+  state.lastTool = hasCurrentSessionState ? String(restored.lastTool || '').trim() : '';
+  state.statusLabel = hasCurrentSessionState
+    ? (String(restored.statusLabel || '').trim() || (state.active ? 'Browser active' : 'Browser idle'))
+    : 'Browser idle';
   state.agentCursor = null;
   state.selectedElement = cloneBrowserDesignSelection(restored.selectedElement);
   state.namedElements = Array.isArray(restored.namedElements)
@@ -2479,6 +2611,16 @@ function renderHighlightedTextPillMarkup(context = getActiveChatHighlightedTextC
     <span class="pill-icon"><iconify-icon icon="solar:quote-up-square-bold-duotone" width="14" height="14"></iconify-icon></span>
     <span class="pill-copy"><strong class="pill-name">Annotation</strong><em class="pill-ext" title="${escHtml(context.text)}">${escHtml(preview)}</em></span>
     <button class="pill-remove" onclick="clearHighlightedTextAnnotation()" title="Remove annotation" aria-label="Remove annotation">&times;</button>
+  </div>`;
+}
+
+function renderDesignAnnotationPillMarkup(count = 1) {
+  const total = Math.max(1, Number(count) || 1);
+  const label = total === 1 ? 'Annotation' : `${total} Annotations`;
+  return `<div class="chat-file-pill chat-annotation-pill" title="${escHtml(`${label} attached to the next message`)}">
+    <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
+    <span class="pill-copy"><strong class="pill-name">${escHtml(label)}</strong></span>
+    <button class="pill-remove" onclick="clearDesignSelectionAttachments()" title="Remove ${escHtml(label.toLowerCase())}" aria-label="Remove ${escHtml(label.toLowerCase())}">&times;</button>
   </div>`;
 }
 
@@ -7058,6 +7200,10 @@ function setDraftChatSession(id = generateSessionId()) {
   const nextId = String(id || '').trim() || generateSessionId();
   window.activeChatSessionId = nextId;
   setAgentSessionId(nextId);
+  emptyChatBrainCardIconOrder = [];
+  // A draft is a new browser scope as well as a new message scope. Clear the
+  // previous chat's registry before rendering the empty chat surface.
+  restoreBrowserCanvasSessionState(null);
   window.chatHistory = [];
   window.processLogEntries = [];
   window.currentCreativeMode = null;
@@ -7549,9 +7695,13 @@ function loadStoredSessionStubsForStartup() {
 function sessionStubFromServer(s) {
   const channel = String(s.channel || 'web');
   const projectId = String(s.projectId || '').trim();
+  const preview = String(s.lastMessagePreview || s.preview || '').replace(/\s+/g, ' ').trim();
   return normalizeStoredSession({
     id: s.id,
-    title: s.title || s.preview || s.id,
+    title: s.title || preview || s.id,
+    preview,
+    lastMessage: preview,
+    lastMessagePreview: preview,
     history: [],
     processLog: [],
     creativeMode: s.creativeMode,
@@ -7573,6 +7723,8 @@ function sessionStubFromServer(s) {
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
     lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
+    messageCount: Number.isFinite(Number(s.messageCount)) ? Math.max(0, Math.floor(Number(s.messageCount))) : 0,
+    chatModelRoute: s.chatModelRoute && typeof s.chatModelRoute === 'object' ? s.chatModelRoute : null,
     channel,
     voiceRoom: s.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : null,
     lastOrigin: s.lastOrigin && typeof s.lastOrigin === 'object' ? s.lastOrigin : undefined,
@@ -7605,7 +7757,11 @@ function mergeServerSessionSummaries(summaries) {
       }
     }
     const serverStub = sessionStubFromServer(serverSession);
-    const existing = byId.get(String(serverSession.id));
+    const sessionId = String(serverSession.id);
+    const existing = byId.get(sessionId);
+    const activeRun = hasSessionThinkingState(sessionId)
+      ? window._sessionThinking[sessionId] === true
+      : serverStub.activeRun === true;
     if (existing) {
       const serverUpdatedAt = Number(serverStub.updatedAt || 0);
       const localUpdatedAt = Number(existing.updatedAt || existing.createdAt || 0);
@@ -7617,6 +7773,11 @@ function mergeServerSessionSummaries(summaries) {
         createdAt: existing.createdAt || serverStub.createdAt,
         updatedAt: Math.max(localUpdatedAt, serverUpdatedAt) || serverStub.updatedAt,
         lastMessageAt: Math.max(localLastMessageAt, serverLastMessageAt) || existing.lastMessageAt || serverStub.lastMessageAt || 0,
+        preview: String(serverStub.preview || existing.preview || '').trim(),
+        lastMessage: String(serverStub.lastMessage || existing.lastMessage || '').trim(),
+        lastMessagePreview: String(serverStub.lastMessagePreview || existing.lastMessagePreview || '').trim(),
+        messageCount: Math.max(Number(existing.messageCount || 0), Number(serverStub.messageCount || 0), Array.isArray(existing.history) ? existing.history.length : 0),
+        chatModelRoute: serverStub.chatModelRoute || existing.chatModelRoute || null,
         channel: serverStub.channel || existing.channel,
         voiceRoom: serverStub.voiceRoom || existing.voiceRoom || null,
         lastOrigin: serverStub.lastOrigin || existing.lastOrigin,
@@ -7634,7 +7795,7 @@ function mergeServerSessionSummaries(summaries) {
         sidebarOrder: serverStub.sidebarOrder ?? existing.sidebarOrder ?? null,
         settledAt: serverStub.settledAt || null,
         settled: serverStub.settled === true,
-        activeRun: serverStub.activeRun === true,
+        activeRun,
       });
       const hasHistoryButNoProcessLog = Array.isArray(existing.history) && existing.history.length > 0
         && (!Array.isArray(existing.processLog) || existing.processLog.length === 0);
@@ -7642,8 +7803,9 @@ function mergeServerSessionSummaries(summaries) {
         existing._needsServerLoad = true;
       }
     } else {
-      window.chatSessions.push(serverStub);
-      byId.set(String(serverSession.id), serverStub);
+      const newSession = { ...serverStub, activeRun };
+      window.chatSessions.push(newSession);
+      byId.set(sessionId, newSession);
     }
   }
   if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
@@ -7680,6 +7842,7 @@ async function _loadSessionFromServer(id, options = {}) {
         timestamp: m.timestamp,
       }));
     sess.history = mergeServerAndLocalHistory(localHistory, serverHistory);
+    sess.messageCount = Array.isArray(s.history) ? s.history.length : Number(s.messageCount || 0);
     const serverProcessLog = Array.isArray(s.processLog) ? s.processLog : [];
     const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
     sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
@@ -7694,6 +7857,7 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.creativeTimelineMs = Number.isFinite(Number(s.creativeTimelineMs)) ? Number(s.creativeTimelineMs) : 0;
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
     sess.mainChatGoal = s.mainChatGoal || null;
+    sess.chatModelRoute = s.chatModelRoute && typeof s.chatModelRoute === 'object' ? s.chatModelRoute : (sess.chatModelRoute || null);
     sess.pinnedAt = Number(s.pinnedAt || 0) || null;
     sess.settledAt = Number(s.settledAt || 0) || null;
     sess.settled = s.settled === true || Number(s.settledAt || 0) > 0;
@@ -7716,6 +7880,16 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
     sess.lastMessageAt = s.lastMessageAt || getSessionLastMessageAt(sess);
+    const lastMessage = [...(sess.history || [])].reverse().find((message) => {
+      const role = String(message?.role || '').toLowerCase();
+      return ['user', 'assistant', 'ai'].includes(role) && String(message?.content || '').trim();
+    });
+    const preview = String(lastMessage?.content || '').replace(/\s+/g, ' ').trim();
+    if (preview) {
+      sess.preview = preview.slice(0, 220);
+      sess.lastMessage = sess.preview;
+      sess.lastMessagePreview = sess.preview;
+    }
     delete sess._needsServerLoad;
     saveChatSessions();
     if (window.activeChatSessionId === id) {
@@ -8067,7 +8241,7 @@ function syncActiveChat() {
   canvasWorkspaceRootPath = '';
   canvasFolderExpanded.clear();
   window.runtimeProgressState = normalizeDeclaredRuntimeProgressState(sess?.progressState);
-  if (sess?.activeRun === true && !window._sessionThinking?.[sess.id]) {
+  if (sess?.activeRun === true && !hasSessionThinkingState(sess.id)) {
     window._sessionThinking[sess.id] = true;
     const st = getSessionStreamState(sess.id) || resetSessionStreamState(sess.id);
     st.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess);
@@ -8088,8 +8262,9 @@ function syncActiveChat() {
       window.activeModelBadge = null;
     }
   }
-  // Mark session as read when opening it
-  if (sess) sess.unread = false;
+  // Opening or switching chats must not clear a pending unread marker. The
+  // marker belongs to this session and is cleared only by an explicit read
+  // action (or by sending a new message in that session).
   renderMainGoalStrip();
   renderChatMessages();
   renderProcessLog();
@@ -8434,7 +8609,10 @@ const DEFAULT_CHAT_TOPBAR_SUBTITLE = 'Prometheus operator workspace';
 function syncChatTopbarTitle() {
   const titleEl = document.getElementById('page-title-text');
   const subEl = document.getElementById('page-title-sub');
-  if (!titleEl && !subEl) return;
+  const contextTitleEl = document.getElementById('chat-context-title');
+  const contextProjectEl = document.getElementById('chat-context-project');
+  const contextProjectNameEl = document.getElementById('chat-context-project-name');
+  if (!titleEl && !subEl && !contextTitleEl && !contextProjectEl && !contextProjectNameEl) return;
 
   const sessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
   const session = sessions.find((candidate) => String(candidate?.id || '') === String(window.activeChatSessionId || '')) || null;
@@ -8455,6 +8633,13 @@ function syncChatTopbarTitle() {
   if (subEl) subEl.textContent = isProjectSession && projectName
     ? `Project · ${projectName}`
     : DEFAULT_CHAT_TOPBAR_SUBTITLE;
+  if (contextTitleEl) contextTitleEl.textContent = sessionTitle;
+  if (contextProjectNameEl) contextProjectNameEl.textContent = projectName;
+  if (contextProjectEl) {
+    const showProject = isProjectSession && Boolean(projectName);
+    contextProjectEl.hidden = !showProject;
+    contextProjectEl.setAttribute('aria-hidden', String(!showProject));
+  }
 }
 
 // ---- Mode switching ----
@@ -13004,11 +13189,23 @@ function getEmptyChatStarterCards() {
   return emptyChatBrainCards.length ? emptyChatBrainCards : EMPTY_CHAT_STARTER_PROMPTS;
 }
 
+function getEmptyChatBrainCardIcon(index) {
+  if (!emptyChatBrainCardIconOrder.length) {
+    emptyChatBrainCardIconOrder = EMPTY_CHAT_BRAIN_CARD_ICONS.slice();
+    for (let cursor = emptyChatBrainCardIconOrder.length - 1; cursor > 0; cursor -= 1) {
+      const swap = Math.floor(Math.random() * (cursor + 1));
+      [emptyChatBrainCardIconOrder[cursor], emptyChatBrainCardIconOrder[swap]] = [emptyChatBrainCardIconOrder[swap], emptyChatBrainCardIconOrder[cursor]];
+    }
+  }
+  return emptyChatBrainCardIconOrder[index % emptyChatBrainCardIconOrder.length];
+}
+
 function renderEmptyChatStarterCards() {
   const cards = getEmptyChatStarterCards();
   return `<div class="chat-pulse-cards" aria-label="Starter prompts">
     ${cards.map((card, index) => `
       <button class="chat-pulse-card" type="button" aria-label="${escHtml(`${card.title}: ${card.body}`)}" onclick="applyEmptyChatStarterPrompt(${index})">
+        <span class="chat-pulse-card-icon" aria-hidden="true"><iconify-icon icon="${getEmptyChatBrainCardIcon(index)}" width="18" height="18"></iconify-icon></span>
         <span class="chat-pulse-card-title" aria-hidden="true">${escHtml(card.title)}</span>
         <span class="chat-pulse-card-body">${escHtml(card.body)}</span>
       </button>
@@ -13044,6 +13241,11 @@ function getEmptyProjectChatWelcome() {
 function isDesktopNewChatDraft() {
   const chatView = document.getElementById('chat-view');
   if (!chatView?.classList.contains('chat-empty')) return false;
+  // The project selector belongs exclusively to the Prometheus landing state
+  // that renders the Brain starter cards. Other empty drafts (including chats
+  // created from a project/chat action) may briefly look like a generic empty
+  // chat before their context attaches, but must never display this selector.
+  if (!document.querySelector('#chat-messages > #chat-welcome .chat-pulse-cards')) return false;
   if (getEmptyProjectChatWelcome()) return false;
   if (window.sideChatSplitOpen && getActiveSideChatLink()) return false;
   if (String(window.backgroundAgentDetailId || '').trim()) return false;
@@ -13097,12 +13299,20 @@ function renderDesktopNewChatContextDock() {
   const trigger = document.getElementById('chat-new-context-trigger');
   const label = document.getElementById('chat-new-context-label');
   if (!dock || !trigger || !label) return;
+  if (String(window.backgroundAgentDetailId || '').trim()) {
+    closeDesktopNewChatContextPopover();
+    dock.hidden = true;
+    dock.setAttribute('aria-hidden', 'true');
+    return;
+  }
   if (!isDesktopNewChatDraft()) {
     closeDesktopNewChatContextPopover();
     dock.hidden = true;
+    dock.setAttribute('aria-hidden', 'true');
     return;
   }
   dock.hidden = false;
+  dock.setAttribute('aria-hidden', 'false');
   const selectedProjectId = String(desktopNewChatContext.projectId || '').trim();
   const icon = dock.querySelector('.chat-new-context-icon');
   if (icon) icon.innerHTML = desktopNewChatContextIcon(selectedProjectId ? 'folder' : 'chat');
@@ -13573,10 +13783,21 @@ function renderBackgroundAgentSidePaneHtml(record) {
       agentName: identity.name,
       agentColor: identity.color,
     }),
+    liveTraceEntries: backgroundAgentEventsToLiveTraceEntries(record.events),
     _backgroundAgentLive: running,
     streaming: running,
   };
-  const historyHtml = renderVisibleChatHistoryHtml([message], {
+  const steerHistory = (Array.isArray(record.steerMessages) ? record.steerMessages : [])
+    .map((steer) => ({
+      role: 'user',
+      content: String(steer?.content || '').trim(),
+      timestamp: Number(steer?.timestamp || Date.now()) || Date.now(),
+      channelLabel: 'steer',
+      workflowGroupId: String(steer?.workflowGroupId || `chat_steer_background_${record.id}`).trim(),
+      workflowPart: 'interruption',
+    }))
+    .filter((steer) => steer.content);
+  const historyHtml = renderVisibleChatHistoryHtml([...steerHistory, message], {
     sessionId: `background:${record.id}`,
     readonly: true,
     hideSideChatBoundary: true,
@@ -13592,6 +13813,31 @@ function renderBackgroundAgentSidePaneHtml(record) {
       </div>
       <div class="side-chat-messages background-agent-side-messages" id="background-agent-side-messages">
         ${historyHtml || '<div class="side-chat-empty">Waiting for live agent activity...</div>'}
+      </div>
+      <div class="side-chat-composer background-agent-side-composer chat-input-area">
+        <div class="chat-input-row">
+          <button class="chat-attach-btn" type="button" onclick="showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')" title="Attach file(s)" aria-label="Attach file(s)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <button class="chat-voice-btn" type="button" onclick="showToast('Use the main composer mic for voice input, then steer this agent from here.', '', 'info')" title="Dictate message" aria-label="Dictate message">
+            <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          </button>
+          <div class="chat-composer-input-wrap">
+            <textarea id="background-agent-chat-input" rows="1" placeholder="Steer ${escHtml(identity.name)} directly" autocomplete="off" oninput="handleBackgroundAgentInputResize(this)" onkeydown="handleBackgroundAgentInputKeydown(event)"></textarea>
+          </div>
+          <button class="send-btn" type="button" onclick="sendBackgroundAgentSteerMessage()" title="Send live steer" aria-label="Send live steer">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
+          </button>
+        </div>
+        <div class="agent-toggle side-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
+          <div class="chat-hint" style="margin:0;flex:1">Live steer · sent directly to ${escHtml(identity.name)}</div>
+          <div class="chat-model-switcher-wrap">
+            <button type="button" style="background:none;border:none;padding:0;cursor:default;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Background agent model">
+              <span>${escHtml(document.getElementById('chat-model-name')?.textContent || 'your model')}</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </section>`;
 }
@@ -15725,6 +15971,8 @@ let skillTriggerPillExpanded = false;
 let skillTriggerSelectedId = '';
 let skillTriggerLastKey = '';
 let skillTriggerCacheLoadPromise = null;
+let skillTriggerCacheReady = Array.isArray(window.prometheusSkillsCache)
+  && window.prometheusSkillsCache.length > 0;
 let skillMatchCacheQuery = '';
 let skillMatchCacheResult = [];
 let skillMatchInflight = '';
@@ -15882,19 +16130,25 @@ function isSkillTriggerExcluded(skill) {
 }
 
 function ensureSkillTriggerCacheLoaded() {
-  if (getInstalledSkillCache().length || skillTriggerCacheLoadPromise) return;
-  const loader = typeof window.loadInstalledSkills === 'function'
-    ? window.loadInstalledSkills()
-    : fetch('/api/skills')
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((data) => {
-        const skills = Array.isArray(data?.skills) ? data.skills : [];
-        window.prometheusSkillsCache = skills;
-        window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills } }));
-      });
-  skillTriggerCacheLoadPromise = Promise.resolve(loader)
-    .catch((err) => console.warn('[skills] composer trigger cache load failed:', err))
+  if (skillTriggerCacheReady) return Promise.resolve(getInstalledSkillCache());
+  if (skillTriggerCacheLoadPromise) return skillTriggerCacheLoadPromise;
+  skillTriggerCacheLoadPromise = api('/api/skills')
+    .then((data) => {
+      const skills = Array.isArray(data?.skills) ? data.skills : [];
+      window.prometheusSkillsCache = skills;
+      skillTriggerCacheReady = true;
+      window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills } }));
+      return skills;
+    })
+    .catch((err) => {
+      console.warn('[skills] composer trigger cache load failed:', err);
+      if (!Array.isArray(window.prometheusSkillsCache)) window.prometheusSkillsCache = [];
+      skillTriggerCacheReady = true;
+      window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills: window.prometheusSkillsCache, error: err } }));
+      return window.prometheusSkillsCache;
+    })
     .finally(() => { skillTriggerCacheLoadPromise = null; });
+  return skillTriggerCacheLoadPromise;
 }
 
 function fetchSkillTriggerMatches(value) {
@@ -15911,8 +16165,7 @@ function fetchSkillTriggerMatches(value) {
   if (skillMatchDebounce) clearTimeout(skillMatchDebounce);
   skillMatchDebounce = setTimeout(() => {
     skillMatchInflight = text;
-    fetch(`/api/skills/match?q=${encodeURIComponent(text)}&limit=8`)
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+    api(`/api/skills/match?q=${encodeURIComponent(text)}&limit=8`)
       .then((data) => {
         if (skillMatchInflight !== text) return;
         skillMatchCacheQuery = text;
@@ -16482,6 +16735,35 @@ function clearChatComposerAfterSend(input) {
 
 window.clearActiveSlashCommand = clearActiveSlashCommand;
 
+function syncSessionSidebarSummary(session) {
+  if (!session || typeof session !== 'object') return;
+  const history = Array.isArray(session.history) ? session.history : [];
+  let visibleMessageCount = 0;
+  let lastVisibleMessage = null;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const message = history[i];
+    const role = String(message?.role || '').toLowerCase();
+    if (role !== 'user' && role !== 'assistant' && role !== 'ai') continue;
+    if (!isInternalChatMessage(message)) visibleMessageCount += 1;
+    if (!lastVisibleMessage && !isInternalChatMessage(message) && String(message?.content || '').trim()) {
+      lastVisibleMessage = message;
+    }
+  }
+  const previousCount = Number(session.messageCount || 0);
+  session.messageCount = Math.max(Number.isFinite(previousCount) ? previousCount : 0, visibleMessageCount);
+  if (!lastVisibleMessage) return;
+  const timestamp = Number(lastVisibleMessage.timestamp || 0);
+  if (Number.isFinite(timestamp) && timestamp > Number(session.lastMessageAt || 0)) {
+    session.lastMessageAt = timestamp;
+  }
+  const preview = String(lastVisibleMessage.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  if (preview) {
+    session.preview = preview;
+    session.lastMessage = preview;
+    session.lastMessagePreview = preview;
+  }
+}
+
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
   const idx = window.chatSessions.findIndex(s => s.id === id);
@@ -16492,10 +16774,12 @@ function persistSession(id) {
     window.processLogEntries = Array.isArray(s.processLog) ? s.processLog : (s.processLog = []);
     window.runtimeProgressState = normalizeDeclaredRuntimeProgressState(s.progressState);
   }
+  syncSessionSidebarSummary(s);
   applyAutoSessionTitleOnce(s, s.history);
   s.updatedAt = Date.now();
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  window.scheduleSessionListRefresh?.();
   if (typeof window.updateStats === 'function') window.updateStats([]);
   // Re-render messages only if user is currently viewing this session.
   if (isSessionVisibleInChatSurface(id)) {
@@ -16954,11 +17238,17 @@ async function sendChat(queuedMessage = null, options = {}) {
     return assistantMessage;
   };
   if (options.voicePendingTurnId) removeVoicePendingTurnInternal(options.voicePendingTurnId);
+  if (thisSession) {
+    // Set the run state before the first sidebar paint. This keeps the regular
+    // list, project tree, and priority rail in lockstep with the composer.
+    thisSession.activeRun = true;
+    thisSession.unread = false;
+  }
+  window._sessionThinking[thisSessionId] = true;
   persistSession(thisSessionId);
   if (!queuedTurn) {
     clearChatComposerAfterSend(input);
   }
-  window._sessionThinking[thisSessionId] = true;
   window.chatMessagesUserScrolledUp = false;
   if (window.activeChatSessionId === thisSessionId) syncActiveSessionRunState();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
@@ -17031,6 +17321,10 @@ async function sendChat(queuedMessage = null, options = {}) {
       }
       delete window._sessionThinking[thisSessionId];
       delete window._sessionAbortControllers[thisSessionId];
+      if (thisSession) {
+        thisSession.activeRun = false;
+        thisSession.unread = true;
+      }
       if (window.activeChatSessionId === thisSessionId) {
         syncActiveSessionRunState();
         applyStreamStateToWindow(thisSessionId);
@@ -17403,6 +17697,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              beginFinalResponse(streamState);
 	              _settlePendingChatSteerPresentation(thisSessionId, streamState);
 	              streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
+              syncStreamingVisualActivity(streamState, streamState.streamingAIText, applyLiveToolActivity);
               if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
               scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
             }
@@ -17982,6 +18277,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'done':
 	            finalReply = event.reply || finalReply || '';
 	            if (finalReply) partialContent = finalReply;
+	            syncStreamingVisualActivity(streamState, finalReply || streamState.streamingAIText, applyLiveToolActivity, { finalize: true });
 	            if (event.thinking) collectTurnThinking(event.thinking);
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
 	            finalFileChanges = event.fileChanges || null;
@@ -17999,6 +18295,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              beginFinalResponse(streamState);
 	              _settlePendingChatSteerPresentation(thisSessionId, streamState);
 	              streamState.streamingAIText = finalReply;
+	              syncStreamingVisualActivity(streamState, streamState.streamingAIText, applyLiveToolActivity, { finalize: true });
 	              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
 	              scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 	            }
@@ -18170,7 +18467,15 @@ async function sendChat(queuedMessage = null, options = {}) {
     return;
   }
   delete window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId];
-  if (thisSession) thisSession.activeRun = false;
+  const isViewingThisSession = window.activeChatSessionId === thisSessionId;
+  if (thisSession) {
+    thisSession.activeRun = false;
+    // Sending a turn clears unread while the session is Working. Completion
+    // always advances that state to Unread, including when the chat is still
+    // visible, so the default list marks it and Priority retains it instead of
+    // immediately reclassifying it into Today.
+    thisSession.unread = true;
+  }
   clearDesktopActiveChatRun(thisSessionId);
   persistSession(thisSessionId);
   scheduleChatResourcesReload(thisSessionId, 80);
@@ -18178,7 +18483,6 @@ async function sendChat(queuedMessage = null, options = {}) {
   // reuse the completed turn's state and recreate an empty Working bubble.
   window._sessionStreamState[thisSessionId] = makeEmptyStreamState();
   syncActiveSessionRunState();
-  const isViewingThisSession = window.activeChatSessionId === thisSessionId;
   if (isViewingThisSession) {
     applyStreamStateToWindow(thisSessionId);
     if (typeof window.setButtonState === 'function') window.setButtonState(false);
@@ -18364,6 +18668,7 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
+    steerMessages: lane.steerMessages,
   };
 }
 
@@ -18428,6 +18733,7 @@ function upsertBackgroundSpawnLane(msg = {}) {
     error: existing.error || '',
     fileChanges: msg.fileChanges || existing.fileChanges || null,
     plan: existing.plan || null,
+    steerMessages: Array.isArray(existing.steerMessages) ? existing.steerMessages : [],
   };
   lanes.set(id, lane);
   return lane;
@@ -18450,10 +18756,87 @@ function backgroundSpawnPreview(value, max = 180) {
   return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
 }
 
+function backgroundAgentEventsToLiveTraceEntries(events = []) {
+  const trace = [];
+  (Array.isArray(events) ? events : []).forEach((entry, index) => {
+    if (!entry || typeof entry !== 'object') return;
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : entry;
+    const eventType = String(extra.eventType || extra.event || entry.eventType || entry.type || '').trim().toLowerCase();
+    const action = String(extra.action || extra.name || extra.toolName || '').trim();
+    const payload = {
+      ...extra,
+      action,
+      args: extra.args || extra.params || extra.input,
+      result: extra.result ?? extra.output ?? extra.error ?? (entry.type === 'result' || entry.type === 'error' ? entry.content : undefined),
+      message: extra.message || (entry.type === 'info' ? entry.content : undefined),
+      error: extra.error || entry.type === 'error',
+      ok: extra.ok !== false && extra.success !== false && entry.type !== 'error' && !extra.error,
+      callId: extra.callId || extra.toolCallId || extra.tool_call_id,
+    };
+    if (eventType === 'tool_call' || entry.type === 'tool' || entry.type === 'skill') {
+      if (action) applyToolActivityEvent(trace, 'call', payload);
+      return;
+    }
+    if (eventType === 'tool_result' || entry.type === 'result' || entry.type === 'error') {
+      if (action) applyToolActivityEvent(trace, 'result', payload);
+      else {
+        const text = String(entry.content || extra.message || extra.error || '').trim();
+        if (text) trace.push({
+          id: `background_trace_${index}`,
+          type: entry.type === 'error' ? 'error' : 'result',
+          text,
+          ts: String(entry.ts || ''),
+        });
+      }
+      return;
+    }
+    if (eventType === 'tool_progress') {
+      if (action) applyToolActivityEvent(trace, 'progress', payload);
+      return;
+    }
+    if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
+      const text = String(extra.thinking || extra.text || entry.content || '').trim();
+      if (!text) return;
+      const previous = trace[trace.length - 1];
+      const visibleExtra = {
+        ...extra,
+        source: String(extra.source || 'reasoning_summary'),
+        visibility: 'user',
+      };
+      if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
+        previous.text = `${previous.text || ''}${text}`;
+        previous.extra = visibleExtra;
+      } else {
+        trace.push({
+          id: `background_trace_${index}`,
+          type: 'think',
+          text,
+          ts: String(entry.ts || ''),
+          extra: visibleExtra,
+        });
+      }
+      return;
+    }
+    if (eventType === 'info' || eventType === 'heartbeat' || eventType === 'ui_preflight') {
+      const text = String(extra.message || extra.current_step || extra.state || entry.content || '').trim();
+      if (!text || /^processing$/i.test(text)) return;
+      trace.push({
+        id: `background_trace_${index}`,
+        type: 'think',
+        text,
+        ts: String(entry.ts || ''),
+        extra: { ...extra, source: 'agent_progress', visibility: 'user' },
+      });
+    }
+  });
+  return trace;
+}
+
 function backgroundSpawnProcessEntryFromEvent(msg = {}) {
   const eventType = String(msg.eventType || msg.type || '').trim();
   const ts = new Date().toLocaleTimeString();
   const action = String(msg.action || msg.name || msg.toolName || '').trim();
+  const extra = { ...msg, event: eventType };
   const label = backgroundSpawnToolLabel({ ...msg, eventType: action || eventType });
   switch (eventType) {
     case 'tool_call': {
@@ -18462,7 +18845,7 @@ function backgroundSpawnProcessEntryFromEvent(msg = {}) {
         ? formatToolCallForLog(action, args && typeof args === 'object' ? args : {}, null)
         : label;
       const suffix = !action && args ? `: ${backgroundSpawnPreview(args, 140)}` : '';
-      return { ts, type: action?.startsWith?.('skill_') ? 'skill' : 'tool', actor: 'Background Agent', content: `${content}${suffix}`, extra: msg };
+      return { ts, type: action?.startsWith?.('skill_') ? 'skill' : 'tool', actor: 'Background Agent', content: `${content}${suffix}`, extra };
     }
     case 'tool_result': {
       const text = String(msg.result || msg.output || msg.error || '').trim();
@@ -18470,35 +18853,35 @@ function backgroundSpawnProcessEntryFromEvent(msg = {}) {
       const content = action
         ? formatToolResultForLog(action, backgroundSpawnPreview(text, 240), ok, null)
         : `${label}${text ? ` -> ${backgroundSpawnPreview(text, 220)}` : ok ? ' complete' : ' failed'}`;
-      return { ts, type: ok ? 'result' : 'error', actor: 'Background Agent', content, extra: msg };
+      return { ts, type: ok ? 'result' : 'error', actor: 'Background Agent', content, extra };
     }
     case 'tool_progress': {
       const text = String(msg.message || '').trim();
-      return text ? { ts, type: 'info', actor: 'Background Agent', content: action ? formatToolProgressForLog(action, text) : `${label}: ${text}`, extra: msg } : null;
+      return text ? { ts, type: 'info', actor: 'Background Agent', content: action ? formatToolProgressForLog(action, text) : `${label}: ${text}`, extra } : null;
     }
     case 'thinking':
     case 'agent_thought': {
       const text = String(msg.thinking || msg.text || '').trim();
-      return text ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: msg } : null;
+      return text ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: { ...extra, source: 'reasoning_summary', visibility: 'user' } } : null;
     }
     case 'thinking_delta': {
       const text = String(msg.thinking || msg.text || '').trim();
-      return text ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: msg } : null;
+      return text ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: { ...extra, source: 'reasoning_summary', visibility: 'user' } } : null;
     }
     case 'info':
     case 'heartbeat':
     case 'ui_preflight': {
       const text = String(msg.message || msg.current_step || msg.state || '').trim();
-      return text && !/^processing$/i.test(text) ? { ts, type: 'info', actor: 'Background Agent', content: text, extra: msg } : null;
+      return text && !/^processing$/i.test(text) ? { ts, type: 'info', actor: 'Background Agent', content: text, extra } : null;
     }
     case 'final':
     case 'done': {
       const text = String(msg.text || msg.reply || '').trim();
-      return text ? { ts, type: 'final', actor: 'Background Agent', content: text, extra: msg } : null;
+      return text ? { ts, type: 'final', actor: 'Background Agent', content: text, extra } : null;
     }
     case 'error': {
       const text = String(msg.message || msg.error || 'Background spawn failed').trim();
-      return { ts, type: 'error', actor: 'Background Agent', content: text, extra: msg };
+      return { ts, type: 'error', actor: 'Background Agent', content: text, extra };
     }
     default:
       return null;
@@ -18866,7 +19249,11 @@ document.getElementById('chat-input').addEventListener('scroll', function() {
 document.getElementById('chat-input').addEventListener('blur', () => {
   setTimeout(hideSlashCommandPopover, 120);
 });
-window.addEventListener('prometheus:skills-cache-updated', () => {
+window.addEventListener('prometheus:skills-cache-updated', (event) => {
+  if (Array.isArray(event?.detail?.skills)) {
+    window.prometheusSkillsCache = event.detail.skills;
+    skillTriggerCacheReady = true;
+  }
   const input = document.getElementById('chat-input');
   if (input) {
     handleSkillTriggerInput(input);
@@ -19496,14 +19883,22 @@ function renderSourcePanelProcesses(data, { mini = false } = {}) {
   </section>`;
 }
 
-function sourcePanelBrowserItems() {
+function sourcePanelBrowserItems(sessionId = window.activeChatSessionId || window.agentSessionId || sourcePanelState.activeSessionId) {
   const browserState = typeof getBrowserCanvasState === 'function'
     ? getBrowserCanvasState()
     : (window.browserCanvasState || {});
+  const currentSessionId = String(sessionId || '').trim();
   const visibleSessionId = typeof getBrowserCanvasVisibleSessionId === 'function'
     ? getBrowserCanvasVisibleSessionId()
     : String(browserState.followSessionId || browserState.sessionId || '');
-  const records = typeof getBrowserCanvasSessionTabs === 'function' ? getBrowserCanvasSessionTabs() : [];
+  // The browser registry also contains detached/background agents from other
+  // chats. The minimized Sources panel is chat-scoped, so it must never render
+  // those records just because they are still alive in this renderer.
+  const records = typeof getBrowserCanvasSessionTabs === 'function'
+    ? getBrowserCanvasSessionTabs().filter((record) => (
+      currentSessionId && String(record?.sessionId || '').trim() === currentSessionId
+    ))
+    : [];
   const visible = records.filter((record) => record?.active || record?.streamActive || record?.url || record?.title || record?.nativeTabs?.length);
   if (!visible.length) return [{ key: 'browser:new-tab', type: 'browser', title: 'New tab', meta: '', record: null, active: browserState.active === true }];
   return visible.map((record, index) => ({
@@ -19543,7 +19938,7 @@ function renderSourcePanelBrowser(data, { mini = false } = {}) {
   </section>`;
 }
 
-function sourcePanelData(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+function sourcePanelData(sessionId = window.activeChatSessionId || sourcePanelState.activeSessionId) {
   const resourceItems = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : []).map(sourcePanelResourceItem);
   const links = resourceItems.filter((item) => item.bucket === 'links' && sourcePanelMatchesItem(item));
   const files = resourceItems.filter((item) => item.bucket !== 'links');
@@ -19556,7 +19951,7 @@ function sourcePanelData(sessionId = sourcePanelState.activeSessionId || window.
   const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
   data.processes = sourcePanelProcessItems(sessionId);
   data.environment = sourcePanelEnvironmentItems(data);
-  data.browserItems = sourcePanelBrowserItems();
+  data.browserItems = sourcePanelBrowserItems(sessionId);
   return data;
 }
 
@@ -22077,7 +22472,9 @@ function disableRealtimeVoiceMode() {
 function resizeChatInput(input = document.getElementById('chat-input')) {
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  const desktopComposer = window.innerWidth > 900 && !document.body?.classList.contains('pm-mobile-active');
+  const maxHeight = desktopComposer ? 300 : 140;
+  input.style.height = Math.min(input.scrollHeight, maxHeight) + 'px';
   updateDesktopComposerRichPreview(input);
   updateDesktopComposerSendButton();
 }
@@ -22090,10 +22487,8 @@ function hasDesktopComposerOutboundContent() {
 function isDesktopComposerTurnActive() {
   const sessionId = String(window.activeChatSessionId || '').trim();
   const activeSession = (window.chatSessions || []).find((session) => String(session?.id || '') === sessionId);
-  return !!(
-    window._sessionThinking?.[sessionId]
-    || activeSession?.activeRun === true
-  );
+  if (hasSessionThinkingState(sessionId)) return window._sessionThinking[sessionId] === true;
+  return activeSession?.activeRun === true;
 }
 
 function updateDesktopComposerSendButton() {
@@ -28144,26 +28539,15 @@ function updateDesignSelectionChip() {
       renderDesignSelectionPills();
       return;
     }
-    const label = context.selector
-      || (context.id ? `#${context.id}` : '')
-      || context.tagName
-      || 'element';
-    const text = String(context.text || '').trim().replace(/\s+/g, ' ');
-    const snippet = String(context.htmlSnippet || context.snippet || '').trim().replace(/\s+/g, ' ');
-    const truncatedLabel = label.length > 42 ? `${label.slice(0, 40)}...` : label;
-    // A raw outerHTML snippet can be one long, unbreakable attribute string
-    // (for example an input element). Keep the composer chip compact and let
-    // its title carry the full selection context instead.
-    const contextSummary = text || (context.id ? `#${context.id}` : (context.tagName || 'element'));
-    const truncatedContext = contextSummary.length > 48
-      ? `${contextSummary.slice(0, 46)}…`
-      : contextSummary;
+    const annotationCount = designMultiSelectedElements.length || 1;
+    const annotationLabel = annotationCount === 1 ? 'Annotation' : `${annotationCount} Annotations`;
+    if (chip) {
+      chip.textContent = annotationLabel;
+      chip.title = `${annotationLabel} attached to the next message`;
+      chip.style.display = 'block';
+    }
     pills.style.display = 'flex';
-    const elementPill = `<div class="chat-file-pill chat-annotation-pill" title="${escHtml([`Annotation: ${label}`, text ? `Text: ${text}` : '', snippet ? `Snippet: ${snippet.slice(0, 500)}` : ''].filter(Boolean).join('\n\n'))}">
-      <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
-      <span class="pill-copy"><strong class="pill-name">Annotation</strong><em class="pill-ext" title="${escHtml(contextSummary)}">${escHtml(truncatedLabel)}${truncatedContext ? ` · ${escHtml(truncatedContext)}` : ''}</em></span>
-      <button class="pill-remove" onclick="clearDesignSelectionContext()" title="Remove">&times;</button>
-    </div>`;
+    const elementPill = renderDesignAnnotationPillMarkup(annotationCount);
     pills.innerHTML = [renderHighlightedTextPillMarkup(highlightedContext), elementPill].filter(Boolean).join('');
     syncChatAttachmentStackVisibility();
   };
@@ -28221,13 +28605,11 @@ function updateDesignSelectionChip() {
     setSingleSelectionPill(null);
     return;
   }
-  const label = designSelectedElementContext.selector
-    || (designSelectedElementContext.id ? `#${designSelectedElementContext.id}` : '')
-    || designSelectedElementContext.tagName
-    || 'element';
+  const annotationCount = designMultiSelectedElements.length || 1;
+  const annotationLabel = annotationCount === 1 ? 'Annotation' : `${annotationCount} Annotations`;
   if (chip) {
-    chip.textContent = `Annotation: ${label}`;
-    chip.title = `Selected design annotation: ${label}`;
+    chip.textContent = annotationLabel;
+    chip.title = `${annotationLabel} attached to the next message`;
     chip.style.display = 'block';
   }
   setSingleSelectionPill(designSelectedElementContext);
@@ -28367,6 +28749,13 @@ function setCanvasProjectState(projectRoot, projectLabel, options = {}) {
 }
 
 function clearDesignSelectionContext() {
+  if (designLastClickedFrame?.contentDocument) {
+    try {
+      designLastClickedFrame.contentDocument
+        .querySelectorAll('[data-prometheus-design-selected="true"]')
+        .forEach((node) => node.removeAttribute('data-prometheus-design-selected'));
+    } catch {}
+  }
   designSelectedElementContext = null;
   updateDesignSelectionChip();
   if (typeof hideAllDesignPopovers === 'function') hideAllDesignPopovers();
@@ -42407,6 +42796,10 @@ function removeDesignSelectionPill(idx) {
     try { entry.element.removeAttribute('data-prometheus-design-multi-selected'); } catch {}
   }
   designMultiSelectedElements.splice(idx, 1);
+  if (!designMultiSelectedElements.length) {
+    clearDesignSelectionContext();
+    return;
+  }
   renderDesignSelectionPills();
 }
 
@@ -42429,28 +42822,28 @@ function clearDesignMultiSelection() {
   renderDesignSelectionPills();
 }
 
+function clearDesignSelectionAttachments() {
+  clearDesignMultiSelection();
+  clearDesignSelectionContext();
+  exitDesignSelectMode();
+}
+
 function renderDesignSelectionPills() {
   const cont = document.getElementById('chat-design-selection-pills');
   if (!cont) return;
   const highlightedPill = renderHighlightedTextPillMarkup();
-  if (!designMultiSelectedElements.length && !highlightedPill) {
+  const designModeActive = normalizeCreativeMode(window.currentCreativeMode) === 'design';
+  if ((!designModeActive || !designMultiSelectedElements.length) && !highlightedPill) {
     cont.style.display = 'none';
     cont.innerHTML = '';
     syncChatAttachmentStackVisibility();
     return;
   }
   cont.style.display = 'flex';
-  const designPills = designMultiSelectedElements.map((entry, idx) => {
-    const c = entry.context;
-    const label = c.selector || (c.id ? `#${c.id}` : '') || c.tagName || 'element';
-    const truncated = label.length > 40 ? `${label.slice(0, 38)}…` : label;
-    return `<div class="chat-file-pill chat-annotation-pill" title="${escHtml(`Annotation ${idx + 1}\n\n${label}`)}">
-      <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
-      <span class="pill-copy"><strong class="pill-name">Annotation ${idx + 1}</strong><em class="pill-ext">${escHtml(truncated)}</em></span>
-      <button class="pill-remove" onclick="removeDesignSelectionPill(${idx})" title="Remove">&times;</button>
-    </div>`;
-  });
-  cont.innerHTML = [highlightedPill, ...designPills].filter(Boolean).join('');
+  const designPill = designModeActive && designMultiSelectedElements.length
+    ? renderDesignAnnotationPillMarkup(designMultiSelectedElements.length)
+    : '';
+  cont.innerHTML = [highlightedPill, designPill].filter(Boolean).join('');
   syncChatAttachmentStackVisibility();
 }
 
@@ -46319,6 +46712,9 @@ window.closeSideChatSplit = closeSideChatSplit;
 window.sendSideChatMessage = sendSideChatMessage;
 window.handleSideChatInputKeydown = handleSideChatInputKeydown;
 window.handleSideChatInputResize = handleSideChatInputResize;
+window.sendBackgroundAgentSteerMessage = sendBackgroundAgentSteerMessage;
+window.handleBackgroundAgentInputKeydown = handleBackgroundAgentInputKeydown;
+window.handleBackgroundAgentInputResize = handleBackgroundAgentInputResize;
 window.startEditUserMessage = startEditUserMessage;
 window.cancelEditUserMessage = cancelEditUserMessage;
 window.submitEditedUserMessage = submitEditedUserMessage;
@@ -46484,6 +46880,8 @@ window.canvasAddToContext = canvasAddToContext;
 window.renderChatFilePills = renderChatFilePills;
 window.removeChatFile = removeChatFile;
 window.clearHighlightedTextAnnotation = clearHighlightedTextAnnotation;
+window.clearDesignSelectionContext = clearDesignSelectionContext;
+window.clearDesignSelectionAttachments = clearDesignSelectionAttachments;
 window.stageFiles = stageFiles;
 window.handleDesignEdit = handleDesignEdit;
 window.handleDesignChat = handleDesignChat;
@@ -46973,6 +47371,8 @@ function appendTelegramMessageToSession(sessionId, message) {
   ) {
     if (next.role === 'assistant') {
       delete window._sessionThinking[sid];
+      sess.activeRun = false;
+      sess.unread = true;
       window._sessionStreamState[sid] = makeEmptyStreamState();
       if (sid === window.activeChatSessionId) {
         syncActiveSessionRunState();
@@ -46988,6 +47388,7 @@ function appendTelegramMessageToSession(sessionId, message) {
   if (next.role === 'assistant') {
     delete window._sessionThinking[sid];
     sess.activeRun = false;
+    sess.unread = true;
     window._sessionStreamState[sid] = makeEmptyStreamState();
   }
   if (sid !== window.activeChatSessionId) sess.unread = true;
@@ -47139,6 +47540,93 @@ function applyToolActivityToStreamState(streamState, phase, payload = {}) {
   if (!streamState) return null;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   return applyToolActivityEvent(streamState.liveTraceEntries, phase, payload);
+}
+
+function inspectStreamingVisualFences(text) {
+  const source = String(text || '');
+  const completed = [...source.matchAll(/```(chart|svg|html|mermaid)\s*\r?\n[\s\S]*?```/gi)]
+    .map((match) => String(match[1] || '').toLowerCase());
+  const openRe = /```(chart|svg|html|mermaid)\s*\r?\n/gi;
+  let lastOpen = null;
+  for (const match of source.matchAll(openRe)) lastOpen = match;
+  let pending = null;
+  if (lastOpen && Number.isFinite(lastOpen.index)) {
+    const bodyStart = Number(lastOpen.index) + String(lastOpen[0] || '').length;
+    if (source.indexOf('```', bodyStart) < 0) {
+      pending = {
+        renderer: String(lastOpen[1] || '').toLowerCase(),
+        ordinal: completed.length,
+      };
+    }
+  }
+  return { completed, pending };
+}
+
+function syncStreamingVisualActivity(streamState, text, applyActivity, { finalize = false } = {}) {
+  if (!streamState || typeof applyActivity !== 'function') return;
+  const inspection = inspectStreamingVisualFences(text);
+  const completeCount = inspection.completed.length;
+  const active = streamState.visualGeneration;
+  const finish = (generation) => {
+    if (!generation) return;
+    applyActivity('result', {
+      action: 'present_visual',
+      callId: generation.callId,
+      args: { renderer: generation.renderer, ordinal: generation.ordinal },
+      result: 'Rendered interactive visual.',
+      ok: true,
+      extra: { presentation: 'interactive_visual', renderer: generation.renderer },
+    });
+    streamState.visualCompletedCount = Math.max(Number(streamState.visualCompletedCount || 0), generation.ordinal + 1);
+  };
+
+  if (inspection.pending) {
+    if (active && (active.ordinal !== inspection.pending.ordinal || active.renderer !== inspection.pending.renderer)) {
+      if (completeCount > active.ordinal) finish(active);
+      streamState.visualGeneration = null;
+    }
+    if (!streamState.visualGeneration) {
+      const generation = {
+        callId: `stream_visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        renderer: inspection.pending.renderer,
+        ordinal: inspection.pending.ordinal,
+      };
+      applyActivity('call', {
+        action: 'present_visual',
+        callId: generation.callId,
+        args: { renderer: generation.renderer, ordinal: generation.ordinal },
+        extra: { presentation: 'interactive_visual', renderer: generation.renderer },
+      });
+      streamState.visualGeneration = generation;
+    }
+    return;
+  }
+
+  if (active && completeCount > active.ordinal) {
+    finish(active);
+    streamState.visualGeneration = null;
+  }
+
+  if (finalize) {
+    let completedCount = Math.min(completeCount, Math.max(0, Number(streamState.visualCompletedCount || 0)));
+    while (completedCount < completeCount) {
+      const renderer = inspection.completed[completedCount] || 'interactive';
+      const generation = {
+        callId: `stream_visual_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        renderer,
+        ordinal: completedCount,
+      };
+      applyActivity('call', {
+        action: 'present_visual',
+        callId: generation.callId,
+        args: { renderer, ordinal: completedCount },
+        extra: { presentation: 'interactive_visual', renderer },
+      });
+      finish(generation);
+      completedCount += 1;
+    }
+    streamState.visualCompletedCount = completedCount;
+  }
 }
 
 function desktopCommandActivityCollections(sessionId) {
@@ -47559,7 +48047,6 @@ function _switchToChannelSession(sid) {
   if (!sess) return;
   window.activeChatSessionId = sid;
   setAgentSessionId(sid);
-  sess.unread = false;
   saveChatSessions();
   syncActiveChat();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
@@ -47677,6 +48164,9 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       beginFinalResponse(streamState);
       _settlePendingChatSteerPresentation(sid, streamState);
       streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
+      syncStreamingVisualActivity(streamState, streamState.streamingAIText, (phase, payload) =>
+        applyToolActivityToStreamState(streamState, phase, payload)
+      );
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'agent_mode') {
@@ -47790,6 +48280,9 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     _settlePendingChatSteerPresentation(sid, streamState);
     const reply = String(evt.reply || '');
     const content = reconcileFinalResponse(streamState.streamingAIText, reply);
+    syncStreamingVisualActivity(streamState, content || streamState.streamingAIText, (phase, payload) =>
+      applyToolActivityToStreamState(streamState, phase, payload),
+    { finalize: true });
     if (content) {
       const workEndedAt = Date.now();
       const workStartedAt = Number(streamState.turnStartedAt || 0) || workEndedAt;
@@ -47832,7 +48325,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       clearDesktopActiveChatRun(sid);
     }
     window._sessionStreamState[sid] = makeEmptyStreamState();
-    if (sid !== window.activeChatSessionId) sess.unread = true;
+    sess.unread = true;
     if (!isViewing && !_isMobileShellActive()) {
       _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), content || 'Prometheus finished the response.', {
         state: 'complete',
@@ -47847,6 +48340,9 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       beginFinalResponse(streamState);
       _settlePendingChatSteerPresentation(sid, streamState);
       streamState.streamingAIText = reconcileFinalResponse(streamState.streamingAIText, text);
+      syncStreamingVisualActivity(streamState, streamState.streamingAIText, (phase, payload) =>
+        applyToolActivityToStreamState(streamState, phase, payload),
+      { finalize: true });
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'error') {
@@ -47858,7 +48354,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (!desktopRun?.clientRequestId || !clientRequestId || desktopRun.clientRequestId === clientRequestId) {
       clearDesktopActiveChatRun(sid);
     }
-    if (sid !== window.activeChatSessionId) sess.unread = true;
+    sess.unread = true;
     if (!isViewing && !_isMobileShellActive()) {
       _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), text, {
         state: 'failed',

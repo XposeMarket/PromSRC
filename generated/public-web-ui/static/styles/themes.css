@@ -54,6 +54,7 @@
   --pm-ember: #6b2f0e;
   --pm-gold: #fb923c;
 }
+
 :root[data-skin="gray"] body {
   background: var(--bg);
 }
@@ -3620,6 +3621,19 @@ body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > .chat-inpu
   max-width: 100%;
 }
 
+/* Canvas keeps the composer absolutely anchored to the bottom of the chat
+   column. Reserve a matching vertical shelf in the message scroller so the
+   last turn stays comfortably above it when the composer grows or wraps.
+   This is intentionally limited to active conversations; the empty-chat
+   Brain-card composition has its own flow layout. */
+body:not(.pm-mobile-active).right-canvas-open #chat-view:not(.chat-empty) > #chat-messages {
+  --chat-canvas-composer-clearance: clamp(212px, 24vh, 292px);
+  padding-top: clamp(30px, 4vh, 44px);
+  padding-bottom: var(--chat-canvas-composer-clearance);
+  scroll-padding-bottom: var(--chat-canvas-composer-clearance);
+  gap: clamp(30px, 3.2vh, 40px);
+}
+
 /* Keep the composer visually above the queued-prompt tab. The upper shadow is
    deliberately on the composer itself so it masks the queue's lower overlap. */
 body:not(.pm-mobile-active) #chat-view > .chat-input-area {
@@ -3691,4 +3705,1307 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .source-panel-canvas-btn.browser-live:is(:hover, :focus-visible) {
   color: var(--text) !important;
+}
+
+/* Final desktop empty-chat geometry. The welcome node can briefly render
+   before ChatPage applies the chat-empty class, so anchor this override to the
+   actual welcome surface as well. This keeps the composer in the same content
+   stack as the Brain cards instead of leaving a full-height flex spacer above
+   it. */
+@media (min-width: 901px) {
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    align-items: stretch !important;
+    justify-content: center !important;
+    padding: clamp(12px, 2.5vh, 28px) 20px clamp(12px, 2vh, 22px) !important;
+    gap: 0 !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages {
+    flex: 0 0 auto !important;
+    min-height: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    padding: 0 0 8px !important;
+    overflow: visible !important;
+    justify-content: flex-start !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages > #chat-welcome {
+    height: auto !important;
+    max-height: none !important;
+    flex: 0 1 auto !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area {
+    position: relative !important;
+    bottom: auto !important;
+    left: auto !important;
+    transform: none !important;
+    flex: 0 0 auto !important;
+    margin: 0 auto !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-pulse-card,
+  body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+  body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible,
+  body:not(.pm-mobile-active) #chat-view .chat-new-context-dock,
+  body:not(.pm-mobile-active) #chat-view .chat-new-context-popover {
+    border: 0 !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* The cards are now a light prompt rail rather than separate panels. Keep
+     the three prompts close enough to read as one Brain group. */
+  body:not(.pm-mobile-active) #chat-view .chat-pulse-cards {
+    gap: 4px !important;
+    margin-top: 8px !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+    min-height: 38px;
+    padding: 7px 6px;
+  }
+}
+
+/* Desktop sidebar header + priority rail. Keep these controls quiet and
+   aligned with the P1 mark; the sidebar itself is the only surface. */
+@media (min-width: 901px) {
+  body:not(.pm-mobile-active) .sidebar .brand-copy {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-top {
+    align-items: center;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-top-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-header-btn {
+    position: relative;
+    display: inline-grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    padding: 0;
+    border: 0 !important;
+    border-radius: 7px;
+    background: transparent !important;
+    color: var(--sidebar-muted, var(--muted));
+    box-shadow: none !important;
+    cursor: pointer;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-header-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-header-btn:hover,
+  body:not(.pm-mobile-active) .sidebar-header-btn:focus-visible,
+  body:not(.pm-mobile-active) .sidebar-header-btn[aria-expanded="true"] {
+    outline: none;
+    background: var(--sidebar-item-hover) !important;
+    color: var(--sidebar-text);
+  }
+
+  body:not(.pm-mobile-active) .sidebar-unread-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--pm-shell-gold-light, var(--pm-gold, var(--brand)));
+    box-shadow: 0 0 0 2px var(--sidebar-bg), 0 0 10px color-mix(in srgb, var(--pm-shell-gold-light, var(--brand)) 70%, transparent);
+  }
+
+  body:not(.pm-mobile-active) .sidebar-search[hidden],
+  body:not(.pm-mobile-active) .sidebar-priority-panel[hidden] {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-priority-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  body:not(.pm-mobile-active) .priority-section {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-section .section-title {
+    flex: 0 0 auto;
+  }
+
+  body:not(.pm-mobile-active) .priority-section-list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-section.is-collapsed .priority-section-list,
+  body:not(.pm-mobile-active) .priority-project-group.is-collapsed .priority-project-children {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .priority-section-toggle {
+    min-height: 27px;
+  }
+
+  body:not(.pm-mobile-active) .priority-empty {
+    padding: 6px;
+    color: var(--sidebar-muted, var(--muted));
+    font-size: 10.5px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card {
+    position: relative;
+    min-width: 0;
+    margin: 0 0 2px;
+    padding: 8px 8px 7px;
+    border: 0 !important;
+    border-radius: 8px;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--sidebar-text, var(--text));
+    cursor: pointer;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card:hover,
+  body:not(.pm-mobile-active) .priority-chat-card:focus-within,
+  body:not(.pm-mobile-active) .priority-chat-card.active {
+    outline: none;
+    border: 0 !important;
+    background: var(--sidebar-item-hover) !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card.is-working::before,
+  body:not(.pm-mobile-active) .priority-chat-card.unread::before {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-topline {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 22px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-title-wrap {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 5px;
+    padding-right: 70px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card .imported-source-logo,
+  body:not(.pm-mobile-active) .priority-chat-card .imported-source-logo-fallback {
+    display: inline-block;
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--sidebar-text, var(--text));
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-time {
+    position: absolute;
+    top: 10px;
+    right: 8px;
+    max-width: 72px;
+    overflow: hidden;
+    color: var(--sidebar-muted, var(--muted));
+    font-size: 10px;
+    line-height: 1.2;
+    pointer-events: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity .12s ease;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card:hover .priority-chat-time,
+  body:not(.pm-mobile-active) .priority-chat-card:focus-within .priority-chat-time {
+    opacity: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-actions {
+    position: absolute;
+    top: 7px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s ease;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-card:hover .priority-chat-actions,
+  body:not(.pm-mobile-active) .priority-chat-card:focus-within .priority-chat-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-actions .chat-session-action-btn {
+    position: static;
+    flex: 0 0 22px;
+    padding: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-preview {
+    display: -webkit-box;
+    min-width: 0;
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--sidebar-muted, var(--muted));
+    font-size: 10.5px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-meta {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 5px;
+    margin-top: 4px;
+    overflow: hidden;
+    color: var(--sidebar-muted, var(--muted));
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-model,
+  body:not(.pm-mobile-active) .priority-chat-project {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-project {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  body:not(.pm-mobile-active) .priority-chat-folder-icon {
+    flex: 0 0 12px;
+    width: 12px;
+    height: 12px;
+    color: var(--pm-shell-gold, var(--brand));
+  }
+
+  body:not(.pm-mobile-active) .priority-project-group {
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    margin: 0 0 2px;
+    padding: 6px 62px 6px 7px;
+    border: 0 !important;
+    border-radius: 8px;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--sidebar-text, var(--text));
+    cursor: pointer;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title:hover,
+  body:not(.pm-mobile-active) .priority-project-title:focus-within {
+    background: var(--sidebar-item-hover) !important;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 48%, transparent);
+    outline-offset: -2px;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title-name {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    gap: 4px;
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title .project-chat-icon-line {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 2px;
+    margin: 0;
+    vertical-align: middle;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title .project-chat-folder,
+  body:not(.pm-mobile-active) .priority-project-title .imported-source-logo,
+  body:not(.pm-mobile-active) .priority-project-title .imported-source-logo-fallback {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title.imported-project .priority-project-title-name {
+    gap: 0;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title.imported-project .project-chat-icon-line {
+    gap: 0;
+    margin-right: -3px;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-time {
+    position: absolute;
+    top: 9px;
+    right: 8px;
+    color: var(--sidebar-muted, var(--muted));
+    font-size: 10px;
+    transition: opacity .12s ease;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-action {
+    position: absolute;
+    top: 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0 !important;
+    border-radius: 6px;
+    background: transparent !important;
+    color: var(--sidebar-muted, var(--muted));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-title .project-chat-new-btn { right: 31px; font-size: 16px; line-height: 1; }
+  body:not(.pm-mobile-active) .priority-project-title .project-chat-pin-btn { right: 7px; }
+  body:not(.pm-mobile-active) .priority-project-title:hover .priority-project-time,
+  body:not(.pm-mobile-active) .priority-project-title:focus-within .priority-project-time { opacity: 0; }
+  body:not(.pm-mobile-active) .priority-project-title:hover .priority-project-action,
+  body:not(.pm-mobile-active) .priority-project-title:focus-within .priority-project-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-action:hover,
+  body:not(.pm-mobile-active) .priority-project-action.active {
+    color: var(--pm-shell-gold-light, var(--brand));
+    background: var(--sidebar-active-bg) !important;
+  }
+
+  body:not(.pm-mobile-active) .priority-project-children {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    margin: 0 0 5px 12px;
+    padding-left: 5px;
+  }
+
+  /* Desktop session/project surfaces are flat; hover color is the only row cue. */
+  body:not(.pm-mobile-active) .sidebar :is(
+    #jobs-list .job-item,
+    #pinned-chats-list .job-item,
+    #sidebar-projects-list .job-item,
+    .project-card,
+    .project-sidebar-group,
+    .project-sidebar-row,
+    .project-chat-group,
+    .project-chat-row,
+    .project-chat-children,
+    .project-sessions-list,
+    .priority-chat-card,
+    .priority-project-title
+  ) {
+    border: 0 !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(
+    #jobs-list .job-item,
+    #pinned-chats-list .job-item,
+    #sidebar-projects-list .job-item,
+    .project-card,
+    .project-sidebar-row,
+    .project-chat-row,
+    .priority-chat-card,
+    .priority-project-title
+  ):is(:hover, :focus-visible, .active) {
+    background: var(--sidebar-item-hover) !important;
+  }
+
+  /* Keep expandable project rows compact: the source marks are small sidebar
+     glyphs, not cards. The title should follow them immediately. */
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-row {
+    min-height: 32px;
+    padding: 6px 62px 6px 8px;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-row .job-item-head,
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-row .job-item-title-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-project-title {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 4px !important;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-icon-line {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 2px !important;
+    margin: 0 !important;
+    vertical-align: middle;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-folder,
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-icon-line .imported-source-logo,
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-icon-line .imported-source-logo-fallback {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-project-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0 !important;
+  }
+
+  /* The imported child title used to inherit a full-width grid, which made
+     the title look detached from its source logo. Keep the logo and title in
+     one measured flex row instead. */
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card {
+    min-height: 34px;
+    padding: 6px 62px 6px 8px;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .job-item-head,
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .job-item-title-wrap {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .job-item-title-wrap {
+    gap: 4px;
+    padding-right: 0;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .imported-source-logo,
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .imported-source-logo-fallback {
+    display: block;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-children .project-chat-session-card .job-item-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(
+    #jobs-list .job-item.is-working::before,
+    #jobs-list .job-item.unread::before,
+    #pinned-chats-list .job-item.is-working::before,
+    #pinned-chats-list .job-item.unread::before,
+    #sidebar-projects-list .job-item.is-working::before,
+    #sidebar-projects-list .job-item.unread::before
+  ) {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(.project-chat-children, .project-sessions-list, .project-sidebar-group .project-sessions-list) {
+    border-left: 0 !important;
+    border-top: 0 !important;
+    border-bottom: 0 !important;
+    background: transparent !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .chat-session-item.is-editing .chat-settle-btn {
+    right: 56px;
+  }
+
+  /* Pinned and expandable-project rows use smaller legacy action boxes, but
+     their controls should share the same vertical center as normal chats. */
+  body:not(.pm-mobile-active) .sidebar #pinned-chats-list .chat-session-action-btn {
+    top: calc(50% + 2px);
+    transform: translateY(-50%);
+  }
+
+  body:not(.pm-mobile-active) .sidebar #sidebar-projects-section .project-chat-new-btn,
+  body:not(.pm-mobile-active) .sidebar #sidebar-projects-section .project-chat-pin-btn {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  /* The plus is text rather than an SVG, so remove its font leading and give
+     it the same optical center as the adjacent star glyph. */
+  body:not(.pm-mobile-active) .sidebar #sidebar-projects-section .project-chat-new-btn {
+    line-height: 0;
+    transform: translateY(calc(-50% + 1px));
+  }
+}
+
+/* Prometheus One keeps the suggestion cards on their own graphite surface,
+   but the chat canvas itself stays uniformly black. */
+:root[data-skin="light"] {
+  --pm-chat-page-bg: #000;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, #chat-messages) {
+  background: #000 !important;
+  background-image: none !important;
+}
+
+/* Shared desktop chat/source context rail. Keep the active chat visible under
+   the app chrome and give the Sources drawer the same compact rhythm. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.chat-context-header, .right-panel .source-panel-topbar) {
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
+  flex: 0 0 40px;
+  background: var(--pm-chat-page-bg, var(--bg)) !important;
+  color: var(--text) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-header {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  overflow: hidden;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-context-title {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: -.015em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project[hidden] {
+  display: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-context-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
+  padding: 0 12px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
+  font-size: 12px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.source-panel-icon-btn, .source-panel-close-btn) {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+/* The chat context rail replaces the browser-mode duplicate title in the
+   app header; Electron already hides that title in its native chrome. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).chat-mode-active .topbar .page-title {
+  display: none;
+}
+
+/* Let the sidebar and app header read as one surface. The conversation gets
+   the soft Codex-style corner while the left panel is open; when the panel is
+   closed, the chat expands to the edge and stays square. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
+  border-right-color: transparent !important;
+  border-bottom-color: transparent !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.main-shell-wrap, .main-shell) {
+  border-left: 0 !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.collapsed) ~ .workspace .main-shell-wrap {
+  border-top-left-radius: 14px;
+  overflow: hidden;
+}
+
+/* Final empty-chat polish: the selector is a back shelf for the composer,
+   not a second foreground card. Inherit the actual rendered composer surface
+   so skins cannot drift apart after a theme switch. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > .chat-new-context-dock {
+  z-index: 0 !important;
+  border: 0 !important;
+  border-color: transparent !important;
+  background: inherit !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area > :is(.chat-input-row, .agent-toggle, .queued-prompts-panel, .chat-composer-attachment-stack, .chat-skill-trigger-pill) {
+  z-index: 2 !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
+  z-index: 20 !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-new-context-popover {
+  background: inherit !important;
+  background-image: none !important;
+  border: 0 !important;
+  border-color: transparent !important;
+  box-shadow: 0 18px 34px rgba(0, 0, 0, .24) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Brain cards are compact rounded surfaces again. They keep their separation
+   through spacing and shadow rather than a visible outline. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+  --pm-brain-card-surface: var(--pm-brain-card-bg, var(--panel-2));
+}
+
+:root[data-skin="light"] { --pm-brain-card-surface: #26251f; }
+:root[data-skin="gray"] { --pm-brain-card-surface: #3a3a3a; }
+:root[data-skin="dark"] { --pm-brain-card-surface: #333333; }
+:root[data-skin="blue"] { --pm-brain-card-surface: #17335f; }
+:root[data-skin="purple"] { --pm-brain-card-surface: #2a1650; }
+:root[data-skin="custom"] { --pm-brain-card-surface: var(--panel-2); }
+
+@media (min-width: 901px) {
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-welcome {
+    width: min(780px, 100%) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-cards {
+    width: 100% !important;
+    max-width: 780px !important;
+    align-self: center;
+    gap: 6px !important;
+    margin-top: 9px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card,
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card:is(:hover, :focus-visible) {
+    position: relative;
+    min-height: 36px !important;
+    box-sizing: border-box;
+    justify-content: center !important;
+    gap: 0 !important;
+    padding: 6px 14px !important;
+    border: 0 !important;
+    border-radius: 12px !important;
+    background: var(--pm-brain-card-surface) !important;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .035) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-icon {
+    position: absolute;
+    left: 14px;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:is(.chat-empty, :has(> #chat-messages > #chat-welcome)) .chat-pulse-card-body {
+    flex: 0 1 auto;
+    max-width: 100%;
+    text-align: center;
+    line-height: 1.22 !important;
+  }
+}
+
+/* The minimized Sources peek belongs to the chat surface, not the titlebar. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel {
+  top: 50% !important;
+  transform: translateX(calc(100% + 28px)) translateY(-50%) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-visible {
+  transform: translateX(0) translateY(-50%) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sources-minimized-panel.is-closing {
+  transform: translateX(calc(100% + 28px)) translateY(-50%) !important;
+}
+
+/* Keep the P1 empty canvas black all the way through the message surface. */
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.main-shell-wrap, main.main-shell, #chat-view, #chat-messages) {
+  background: #000 !important;
+  background-image: none !important;
+}
+
+/* Sidebar action alignment: ordinary chat rows are the canonical control
+   geometry. Projects, pinned chats, and the priority rail use the same boxes,
+   glyph sizes, right insets, and vertical centering. */
+@media (min-width: 901px) {
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .chat-session-item:not(.project-chat-row) .chat-session-action-btn,
+    #pinned-chats-list .chat-session-action-btn,
+    .project-chat-row .project-chat-new-btn,
+    .project-chat-row .project-chat-pin-btn,
+    .project-sidebar-row .project-card-add-btn,
+    .project-sidebar-row .project-card-pin-btn,
+    .priority-project-title .project-chat-new-btn,
+    .priority-project-title .project-chat-pin-btn
+  ) {
+    position: absolute !important;
+    top: 50% !important;
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    min-height: 20px !important;
+    box-sizing: border-box;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 6px !important;
+    background: transparent !important;
+    color: var(--sidebar-muted, var(--muted)) !important;
+    line-height: 0 !important;
+    transform: translateY(-50%) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .chat-session-item:not(.project-chat-row) .chat-session-action-btn svg,
+    #pinned-chats-list .chat-session-action-btn svg,
+    .project-chat-row .project-chat-pin-btn svg,
+    .project-sidebar-row .project-card-pin-btn svg,
+    .priority-project-title .project-chat-pin-btn svg
+  ) {
+    display: block;
+    width: 13px !important;
+    height: 13px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .chat-session-item:not(.project-chat-row) .chat-settle-btn,
+    #pinned-chats-list .chat-settle-btn,
+    .project-chat-row .project-chat-new-btn,
+    .project-sidebar-row .project-card-add-btn,
+    .priority-project-title .project-chat-new-btn
+  ) {
+    right: 34px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .chat-session-item:not(.project-chat-row) .chat-pin-btn,
+    #pinned-chats-list .chat-pin-btn,
+    .project-chat-row .project-chat-pin-btn,
+    .project-sidebar-row .project-card-pin-btn,
+    .priority-project-title .project-chat-pin-btn
+  ) {
+    right: 8px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .project-chat-new-btn,
+    .project-card-add-btn
+  ) {
+    font: 600 14px/0 'Manrope', sans-serif !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    .chat-session-item:not(.project-chat-row) .chat-session-action-btn:is(:hover, .active),
+    #pinned-chats-list .chat-session-action-btn:is(:hover, .active),
+    .project-chat-row :is(.project-chat-new-btn, .project-chat-pin-btn):is(:hover, .active),
+    .project-sidebar-row :is(.project-card-add-btn, .project-card-pin-btn):is(:hover, .active),
+    .priority-project-title :is(.project-chat-new-btn, .project-chat-pin-btn):is(:hover, .active)
+  ) {
+    background: color-mix(in srgb, var(--brand) 12%, transparent) !important;
+    color: var(--brand) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(
+    #pinned-chats-list .job-item,
+    #sidebar-projects-section .project-chat-row,
+    #sidebar-projects-section .project-chat-children .project-chat-session-card,
+    .project-sidebar-row
+  ) {
+    padding-right: 64px !important;
+  }
+
+  /* The priority chat card keeps its horizontal action group, but each
+     control now uses the same 20px/13px treatment as the regular list. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions {
+    top: 8px !important;
+    right: 6px !important;
+    gap: 4px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn {
+    position: static !important;
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    min-height: 20px !important;
+    padding: 0 !important;
+    transform: none !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-actions .chat-session-action-btn svg {
+    display: block;
+    width: 13px !important;
+    height: 13px !important;
+  }
+}
+
+/* Desktop chat state indicators. Keep unread/working sessions on their own
+   transparent surface and restore the highlighted ring that the shared job
+   row provides; only the outline changes, never the row fill. */
+@media (min-width: 901px) {
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card) {
+    isolation: isolate;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--pm-orange, var(--brand)) 22%, transparent),
+      0 0 14px color-mix(in srgb, var(--pm-orange, var(--brand)) 30%, transparent) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working) {
+    background: transparent !important;
+    border-color: color-mix(in srgb, var(--brand) 62%, transparent) !important;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 20%, transparent) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before,
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
+    content: "" !important;
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    padding: 1.5px;
+    border-radius: inherit;
+    z-index: 1;
+    pointer-events: none;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).is-working::before {
+    background: conic-gradient(
+      from var(--pm-angle, 0deg),
+      rgba(255,255,255,.30),
+      color-mix(in srgb, var(--pm-orange, var(--brand)) 86%, transparent),
+      rgba(255,255,255,.08),
+      color-mix(in srgb, var(--pm-gold, var(--brand)) 64%, transparent),
+      color-mix(in srgb, var(--pm-ember, var(--brand)) 72%, transparent),
+      rgba(255,255,255,.26)
+    );
+    opacity: .95;
+    animation: prometheus-liquid-spin 2.8s linear infinite;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.chat-session-item.job-item, .project-chat-session-card).unread:not(.is-working)::before {
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--brand) 78%, transparent),
+      color-mix(in srgb, var(--brand) 38%, transparent) 58%,
+      color-mix(in srgb, var(--brand) 68%, transparent)
+    );
+    opacity: .92;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .session-unread-dot {
+    display: inline-block;
+    flex: 0 0 7px;
+    width: 7px;
+    height: 7px;
+    margin: 0 7px 0 1px;
+    border-radius: 50%;
+    background: var(--brand) !important;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent), 0 0 10px color-mix(in srgb, var(--brand) 44%, transparent);
+  }
+
+  /* Priority metadata carries the word label beside the message count, while
+     regular rows use the compact left-side dot. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-status {
+    font-size: inherit;
+    font-weight: 800;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-unread {
+    color: var(--brand) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-working {
+    color: var(--pm-orange, var(--brand)) !important;
+    text-transform: lowercase;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working,
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
+    background: transparent !important;
+    border-width: 1px !important;
+    border-style: solid !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working {
+    border-color: transparent !important;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--pm-orange, var(--brand)) 22%, transparent),
+      0 0 14px color-mix(in srgb, var(--pm-orange, var(--brand)) 30%, transparent) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working) {
+    border-color: color-mix(in srgb, var(--brand) 62%, transparent) !important;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 20%, transparent) !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before,
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
+    content: "" !important;
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    padding: 1.5px;
+    border-radius: inherit;
+    z-index: 1;
+    pointer-events: none;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.is-working::before {
+    background: conic-gradient(
+      from var(--pm-angle, 0deg),
+      rgba(255,255,255,.30),
+      color-mix(in srgb, var(--pm-orange, var(--brand)) 86%, transparent),
+      rgba(255,255,255,.08),
+      color-mix(in srgb, var(--pm-gold, var(--brand)) 64%, transparent),
+      color-mix(in srgb, var(--pm-ember, var(--brand)) 72%, transparent),
+      rgba(255,255,255,.26)
+    );
+    opacity: .95;
+    animation: prometheus-liquid-spin 2.8s linear infinite;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .priority-chat-card.unread:not(.is-working)::before {
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--brand) 78%, transparent),
+      color-mix(in srgb, var(--brand) 38%, transparent) 58%,
+      color-mix(in srgb, var(--brand) 68%, transparent)
+    );
+    opacity: .92;
+  }
+
+  /* The selector dock remains a back shelf even while its menu is open. The
+     menu keeps its own local stacking order without lifting the whole shelf
+     over the composer. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view .chat-input-area > .chat-new-context-dock {
+    z-index: 0 !important;
+  }
+
+  /* Move only the empty-chat welcome group upward; the composer remains in
+     its existing flow position. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages > #chat-welcome {
+    transform: translateY(clamp(-44px, -3.6vh, -14px)) !important;
+  }
+
+  /* Give the desktop composer the same breathing room as the reference UI,
+     and keep the first line close to the upper-left rather than vertically
+     centered in a short one-line box. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-input {
+    max-height: 300px !important;
+    padding: 5px 2px 9px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-composer-rich-preview {
+    max-height: 300px !important;
+    padding: 5px 2px 9px !important;
+  }
+}
+
+/* Popover surfaces are intentionally borderless across desktop. Keep borders
+   on their interactive rows and controls; this only removes the enclosing
+   panel rim, including the project/desktop selector and model panels. */
+body:not(.pm-mobile-active) :where(
+  .chat-new-context-dock,
+  .model-switcher-panel,
+  .session-hover-preview,
+  .session-hover-preview-options,
+  [class$="-popover"],
+  [class*="-popover "],
+  [id$="-popover"],
+  [id$="Popover"]
+) {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+
+/* Desktop empty-chat spacing and prompt-card sizing. Keep the quote and Brain
+   rail visually above the composer, while leaving the composer in its normal
+   flow position so its controls do not move. The cards stay compact but their
+   copy is allowed to wrap instead of being clipped into a single line. */
+@media (min-width: 901px) {
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) > :is(p, .hint, .chat-pulse-cards) {
+    position: relative;
+    top: -28px;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) .chat-pulse-cards {
+    width: min(560px, calc(100% - 64px)) !important;
+    max-width: 560px !important;
+    gap: 5px !important;
+    margin-top: 4px !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) .chat-pulse-card,
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) .chat-pulse-card:is(:hover, :focus-visible) {
+    min-height: 30px !important;
+    width: 100%;
+    align-self: center;
+    padding: 6px 42px !important;
+    border-radius: 9px !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) .chat-pulse-card-icon {
+    left: 12px !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view .chat-welcome:has(.chat-pulse-cards) .chat-pulse-card-body {
+    flex: 0 1 460px !important;
+    width: min(460px, 100%) !important;
+    max-width: 460px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere;
+    line-height: 1.25 !important;
+  }
+
+  /* The selector is a back shelf. The foreground composer edge owns the
+     overlap shadow so the shelf cannot visually sit on top of the composer. */
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area {
+    isolation: isolate;
+  }
+
+  /* Keep only a small tucked edge behind the composer. The earlier 34px
+     overlap made the selector look like it was floating in front of the input. */
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area > .chat-new-context-dock {
+    bottom: calc(100% - 12px) !important;
+    padding-bottom: 16px !important;
+  }
+
+  body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area > .chat-new-context-dock {
+    z-index: 0 !important;
+  }
+
+  /* The row wrappers use display: contents, so raise their real grid items
+     explicitly. This keeps the composer controls and its edge in front of
+     the recessed selector shelf while the shelf remains clickable above it. */
+  body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area > :is(.chat-input-row, .agent-toggle) > * {
+    position: relative;
+    z-index: 2 !important;
+  }
+
+  /* Do not paint a solid pseudo-element across the composer edge. The
+     composer itself already owns the overlap shadow; a separate strip made
+     the project selector look like a broken horizontal overlay. */
+  body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area::before {
+    content: none !important;
+    display: none !important;
+  }
+
+  /* Queue and project selection are intentionally just a shade darker than
+     the composer so they read as the recessed layer in the same stack. */
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-input-area :is(.queued-prompts-panel, .chat-new-context-dock, .chat-new-context-popover) {
+    background: color-mix(in srgb, var(--pm-pinned-chat-bg) 90%, #000 10%) !important;
+    background-image: none !important;
+  }
+}
+
+/* Keep all desktop project/model/reasoning popover shells borderless. Inner
+   rows may still use separators or focus treatments where they are useful. */
+body:not(.pm-mobile-active) :is(
+  #chat-new-context-popover,
+  #model-switcher-popover,
+  .model-switcher-panel,
+  .model-switcher-detail,
+  .subagent-reasoning-popover
+) {
+  border: 0 !important;
+  border-color: transparent !important;
+}
+
+/* Final desktop empty-chat composition. The context selector is a sibling of
+   the composer so it can genuinely sit beneath the composer's painted surface
+   instead of competing inside the same background/stacking context. */
+@media (min-width: 901px) {
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome {
+    transform: none !important;
+    gap: 8px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome:has(.chat-pulse-cards)
+    > :is(p, .hint, .chat-pulse-cards) {
+    position: static !important;
+    top: auto !important;
+    transform: none !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome
+    > :is(h2, p, .hint) {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome
+    > p {
+    line-height: 1.35 !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome:has(.chat-pulse-cards)
+    > .chat-pulse-cards {
+    width: min(540px, calc(100% - 64px)) !important;
+    max-width: 540px !important;
+    gap: 6px !important;
+    margin: 12px auto 22px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome
+    .chat-pulse-card {
+    width: 100% !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 7px 42px !important;
+    border-radius: 9px !important;
+  }
+
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"])
+    body:not(.pm-mobile-active)
+    #chat-view:has(> #chat-messages > #chat-welcome)
+    > #chat-messages
+    > #chat-welcome
+    .chat-pulse-card-body {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    max-width: 420px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+    line-height: 1.25 !important;
+  }
+
 }

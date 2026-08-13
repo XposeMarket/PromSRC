@@ -244,6 +244,10 @@ function describeTool(actionRaw, argsRaw = {}) {
 
   if (action === 'web_search') return make('web.search', 'web search', 'Preparing web search…', search ? `Searching the web for ${quote(search)}` : 'Searching the web', 'Searched the web', { family: 'web', target: search, countNoun: 'web search' });
   if (action === 'web_fetch') return make('web.fetch', 'web fetch', 'Preparing page fetch…', url ? `Fetching ${compact(url, 90)}` : 'Fetching page', url ? `Fetched ${compact(url, 90)}` : 'Fetched page', { family: 'web', target: url, countNoun: 'page fetch' });
+  if (/^(?:present_visual|render_visual|generate_visual|interactive_visual)$/.test(action)) {
+    const renderer = firstValue(args, ['renderer', 'format', 'type'], 40);
+    return make('presentation.visual', 'interactive visual', 'Preparing interactive visual…', renderer ? `Generating interactive visual · ${renderer}` : 'Generating interactive visual', 'Rendered interactive visual', { family: 'presentation', target: renderer, countNoun: 'interactive visual' });
+  }
   if (/^(?:generate_image|image_gen|imagegen)$/.test(action)) return make('media.image', 'image generation', 'Preparing image generation…', 'Generating image', 'Generated image', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'image generation' });
   if (/^(?:generate_video|video_gen)$/.test(action)) return make('media.video', 'video generation', 'Preparing video generation…', 'Generating video', 'Generated video', { family: 'media', target: firstValue(args, ['prompt'], 80), countNoun: 'video generation' });
 

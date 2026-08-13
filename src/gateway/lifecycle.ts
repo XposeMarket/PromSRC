@@ -157,7 +157,11 @@ function resolveDirectGatewayLaunch(root: string): { entry: string; args: string
       }
     } catch {}
   }
-  if (sourceExists) return { entry: sourceEntry, args: [...process.execArgv, sourceEntry] };
+  if (sourceExists) {
+    const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    if (fs.existsSync(tsxCli)) return { entry: sourceEntry, args: [tsxCli, sourceEntry] };
+    return { entry: sourceEntry, args: [...process.execArgv, sourceEntry] };
+  }
   if (compiledExists) return { entry: compiledEntry, args: [compiledEntry] };
   return null;
 }
@@ -703,7 +707,18 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   )
     ? 'prom_apply_dev_changes'
     : 'gateway_restart';
-  await shutdownGateway(restartTrigger);
+  const shutdownTimeoutMs = Math.max(5_000, Number(process.env.PROMETHEUS_RESTART_SHUTDOWN_TIMEOUT_MS || 12_000));
+  let shutdownTimer: NodeJS.Timeout | null = null;
+  await Promise.race([
+    shutdownGateway(restartTrigger),
+    new Promise<void>((resolve) => {
+      shutdownTimer = setTimeout(() => {
+        console.warn(`[lifecycle] Gateway shutdown exceeded ${shutdownTimeoutMs}ms; continuing with owned restart handoff.`);
+        resolve();
+      }, shutdownTimeoutMs);
+    }),
+  ]);
+  if (shutdownTimer) clearTimeout(shutdownTimer);
 
   // If Electron spawned this gateway, let Electron own the replacement process.
   // That keeps packaged apps on the correct executable, env, data dir, and UI reload path.

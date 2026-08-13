@@ -1044,7 +1044,7 @@ body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-pin-btn.acti
 #sidebar-projects-section .project-chat-project-title {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   white-space: nowrap;
 }
@@ -1072,5 +1072,5 @@ body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-pin-btn.acti
 }
 
 body:not(.pm-mobile-active) #sidebar-projects-section .project-chat-row.imported-project .project-chat-project-name {
-  margin-left: -2px;
+  margin-left: 0;
 }

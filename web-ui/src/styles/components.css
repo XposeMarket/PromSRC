@@ -620,6 +620,47 @@
   .chat-session-item.imported-session-card .imported-source-logo-fallback {
     display: block;
   }
+
+  /* Keep every idle/hover action on the same 20px box. The check icon has a
+     larger visual footprint than the star, so the shared 13px glyph box keeps
+     both controls centered on the title baseline. */
+  .chat-session-item:not(.project-chat-row) {
+    position: relative;
+    box-sizing: border-box;
+    min-height: 30px;
+    padding: 6px 64px 6px 8px;
+  }
+
+  .chat-session-item:not(.project-chat-row) .job-item-head {
+    width: 100%;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .chat-session-item:not(.project-chat-row) .job-item-title-wrap {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .chat-session-item:not(.project-chat-row) .chat-session-action-btn {
+    top: 50%;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    line-height: 0;
+    transform: translateY(-50%);
+  }
+
+  .chat-session-item:not(.project-chat-row) .chat-session-action-btn svg {
+    display: block;
+    width: 13px;
+    height: 13px;
+  }
+
+  .chat-session-item:not(.project-chat-row) .chat-settle-btn { right: 34px; }
+  .chat-session-item:not(.project-chat-row) .chat-pin-btn { right: 8px; }
 }
 
 .imported-source-logo-fallback {
@@ -693,6 +734,12 @@
   border-radius: 6px;
   cursor: pointer;
 }
+.chat-settle-btn { right: 32px; }
+.chat-settle-btn:hover,
+.chat-settle-btn.active {
+  color: var(--brand);
+  background: rgba(249,115,22,0.12);
+}
 .chat-session-rename-btn {
   right: 56px;
 }
@@ -735,12 +782,22 @@ body:not(.pm-mobile-active) .chat-session-item .chat-pin-btn {
   pointer-events: none;
   transition: opacity .12s ease, color .12s ease, background .12s ease;
 }
+body:not(.pm-mobile-active) .chat-session-item .chat-settle-btn {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s ease, color .12s ease, background .12s ease;
+}
 body:not(.pm-mobile-active) .chat-session-item:hover .chat-session-top-time,
 body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-session-top-time {
   opacity: 0;
 }
 body:not(.pm-mobile-active) .chat-session-item:hover .chat-pin-btn,
 body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-pin-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+body:not(.pm-mobile-active) .chat-session-item:hover .chat-settle-btn,
+body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-settle-btn {
   opacity: 1;
   pointer-events: auto;
 }
@@ -800,6 +857,12 @@ body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-pin-btn {
   width: 18px;
   height: 18px;
 }
+#pinned-chats-list .chat-settle-btn {
+  top: 4px;
+  right: 24px;
+  width: 18px;
+  height: 18px;
+}
 #pinned-chats-list .chat-session-rename-btn {
   top: 4px;
   right: 44px;
@@ -819,6 +882,19 @@ body:not(.pm-mobile-active) .chat-session-item:focus-within .chat-pin-btn {
 #pinned-chats-list .chat-session-action-btn svg {
   width: 11px;
   height: 11px;
+}
+
+/* Priority cards keep the same compact action language as normal sidebar rows. */
+.priority-chat-card .chat-session-action-btn svg,
+.priority-project-title .project-chat-pin-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.priority-chat-card .chat-session-action-btn,
+.priority-project-title .project-chat-new-btn,
+.priority-project-title .project-chat-pin-btn {
+  width: 22px;
+  height: 22px;
 }
 
 .session-terminal {
@@ -1374,7 +1450,7 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 0;
+  gap: 8px;
   text-align: left;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1395,6 +1471,20 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   border-color: var(--line-strong);
   background: color-mix(in srgb, var(--panel), var(--pm-orange) 4%);
   box-shadow: 0 14px 36px rgba(16, 24, 40, 0.11);
+}
+
+.chat-pulse-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: var(--pm-orange, var(--brand));
+}
+
+.chat-pulse-card-icon iconify-icon {
+  display: block;
 }
 
 .chat-pulse-card:focus-visible {
@@ -1420,7 +1510,8 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 
 .chat-pulse-card-body {
   display: block;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
   color: var(--text);
   font-size: 13px;
@@ -1452,6 +1543,27 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 
 .msg.user {
   justify-content: flex-end;
+}
+
+/* Visuals are inline conversation content, not a second card surface. The
+   embedded document owns any intentional internal surfaces and receives the
+   current Prometheus theme tokens from utils.js. */
+.visual-block {
+  width: 100%;
+  max-width: 100%;
+  margin: 12px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.visual-block iframe {
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  display: block;
+  background: transparent;
 }
 
 .msg-bubble-stack {
@@ -2579,36 +2691,47 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   z-index: 1;
 }
 
-/* The new-chat context selector sits in the same clipped, glassy shelf as the
-   queued-message stack. It is rendered only for the desktop empty-chat state;
-   keeping the scope here prevents the mobile composer from inheriting desktop
-   positioning. */
-body:not(.pm-mobile-active) .chat-new-context-dock {
+/* Desktop new-chat stack: welcome content, recessed project shelf, composer.
+   The selector is a sibling of the composer so its popover can clear the Brain
+   cards while its tucked lower edge remains beneath the composer surface. */
+body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > #chat-messages {
+  position: relative;
+  z-index: 0;
+}
+body:not(.pm-mobile-active) #chat-view > .chat-new-context-dock {
   display: flex;
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  bottom: calc(100% - 34px);
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+  width: min(708px, calc(100% - 72px));
+  max-width: calc(100% - 72px);
+  margin: 0 auto -18px;
   box-sizing: border-box;
   min-height: 52px;
-  padding: 6px 8px 38px;
+  padding: 6px 8px 24px;
   overflow: visible;
   border: 1px solid var(--composer-border);
   border-radius: 14px;
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--composer-bg), var(--panel) 22%),
-      color-mix(in srgb, var(--composer-bg), transparent 8%)
-    );
+  background: color-mix(in srgb, var(--composer-bg) 88%, #000 12%);
   box-shadow: 0 -8px 24px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.12);
   backdrop-filter: blur(16px) saturate(1.15);
   -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  z-index: 1;
+}
+body:not(.pm-mobile-active).desktop-new-context-popover-open #chat-view > .chat-new-context-dock {
+  z-index: 1;
+}
+body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .chat-input-area {
+  position: relative;
   z-index: 2;
 }
 body:not(.pm-mobile-active) .chat-new-context-dock[hidden],
 body:not(.pm-mobile-active) .chat-new-context-popover[hidden] {
   display: none;
+}
+body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-dock,
+body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-popover {
+  display: none !important;
 }
 .chat-new-context-trigger {
   width: 100%;
@@ -2640,10 +2763,12 @@ body:not(.pm-mobile-active) .chat-new-context-popover[hidden] {
   color: var(--pm-gold, var(--brand));
 }
 .chat-new-context-icon {
-  width: 25px;
-  height: 25px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--brand) 15%, var(--panel-2));
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .chat-new-context-icon svg { width: 15px; height: 15px; }
 .chat-new-context-value {
@@ -2680,15 +2805,10 @@ body:not(.pm-mobile-active) .chat-new-context-popover[hidden] {
   padding: 6px;
   border: 1px solid var(--composer-border);
   border-radius: 14px;
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--composer-bg), var(--panel) 22%),
-      color-mix(in srgb, var(--composer-bg), transparent 8%)
-    );
+  background: color-mix(in srgb, var(--composer-bg) 94%, #000 6%);
   box-shadow: 0 16px 34px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.12);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   z-index: 20;
 }
 .chat-new-context-popover-title {
@@ -3249,27 +3369,28 @@ body:not(.pm-mobile-active) .chat-new-context-popover[hidden] {
   }
 }
 
-/* The empty desktop chat is a composed landing state, not a scrolling
-   document. Keep the welcome stack and composer together in the available
-   center-column height; the old viewport-sized bottom padding was reserved
-   for the absolute composer and now pushes the flow composer too high. */
+/* The empty desktop chat is a composed landing state. Let the message column
+   size to the welcome cards so the flow composer follows the third card rather
+   than being pushed to the bottom by an empty flex spacer. */
 @media (min-width: 901px) {
   body:not(.pm-mobile-active) #chat-view.chat-empty {
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     align-items: stretch;
-    justify-content: flex-start;
+    justify-content: center;
     padding: clamp(12px, 2.5vh, 28px) 20px clamp(12px, 2vh, 22px);
     gap: 0;
   }
 
   body:not(.pm-mobile-active) #chat-view.chat-empty > #chat-messages {
-    flex: 1 1 auto;
-    min-height: 0;
+    flex: 0 0 auto;
+    min-height: auto;
     width: 100%;
+    height: auto;
     padding: 0 0 8px;
     overflow-x: hidden;
-    overflow-y: auto;
-    justify-content: center;
+    overflow-y: visible;
+    justify-content: flex-start;
     align-items: center;
     -webkit-mask-image: none;
     mask-image: none;
@@ -6289,7 +6410,8 @@ select.settings-input {
     border-radius: 14px;
   }
   #chat-input,
-  #side-chat-input {
+  #side-chat-input,
+  #background-agent-chat-input {
     min-height: 48px;
     font-size: 13px;
     padding: 9px 44px 9px 11px;
@@ -8909,8 +9031,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 .right-panel .source-panel-topbar {
   align-items: center;
   justify-content: space-between;
-  height: 56px;
-  min-height: 56px;
+  height: 40px;
+  min-height: 40px;
   box-sizing: border-box;
   padding: 0 16px;
   flex-shrink: 0;

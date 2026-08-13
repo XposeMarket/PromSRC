@@ -125,6 +125,34 @@ function isMobileGatewayBridgePath(request?: Pick<Request, 'path' | 'url'>): boo
   );
 }
 
+function hasPairingHeaderOrPreflightRequest(request?: Pick<Request, 'headers' | 'method' | 'path' | 'url'>): boolean {
+  const headers = request?.headers as Record<string, any> | undefined;
+  if (getHeaderValue(headers, 'x-pairing-token')) return true;
+  const requestedHeaders = getHeaderValue(headers, 'access-control-request-headers');
+  return requestedHeaders
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .includes('x-pairing-token');
+}
+
+function isMobileGatewayMediaPath(request?: Pick<Request, 'url' | 'path'>): boolean {
+  const pathname = String(request?.path || request?.url || '').split('?', 1)[0];
+  return (
+    pathname === '/api/canvas/inline' ||
+    pathname === '/api/canvas/download' ||
+    pathname.startsWith('/api/canvas/workspace/')
+  );
+}
+
+function hasPairingQueryCredential(request?: Pick<Request, 'url' | 'path'>): boolean {
+  try {
+    const parsed = new URL(String(request?.url || request?.path || ''), 'http://localhost');
+    return Boolean(String(parsed.searchParams.get('pt') || '').trim());
+  } catch {
+    return false;
+  }
+}
+
 function extractGatewayToken(req: GatewayRequestLike, allowQueryToken = false): string {
   const authHeader = getHeaderValue(req.headers, 'authorization');
   if (authHeader.toLowerCase().startsWith('bearer ')) {
@@ -230,16 +258,22 @@ export function requireGatewayAuth(req: Request, res: Response, next: NextFuncti
   next();
 }
 
-export function buildGatewayCorsOptions(request?: Pick<Request, 'path' | 'url'>): CorsOptions {
+export function buildGatewayCorsOptions(request?: Pick<Request, 'headers' | 'method' | 'path' | 'url'>): CorsOptions {
   return {
     origin(origin, callback) {
       // Pairing claim/poll are still protected by the short-lived QR
-      // challenge and desktop approval. Catalog reads are still protected by
-      // the target-scoped pairing token. Allowing HTTPS hub origins on only
-      // these five paths lets the in-app scanner connect gateways without
-      // turning the rest of the API into a cross-origin surface.
+      // challenge and desktop approval. For post-pairing mobile execution,
+      // the browser must present the target-scoped X-Pairing-Token header (or
+      // a media URL carrying the same target-scoped grant). CORS can allow the
+      // preflight before the token is sent; gateway auth verifies the token on
+      // the actual request. This permits a phone PWA to use two independent
+      // gateways without forwarding cookies or account credentials.
       const bridgeOrigin = Boolean(origin) && isHttpsOrigin(origin) && isMobileGatewayBridgePath(request);
-      callback(null, isTrustedGatewayOrigin(origin) || bridgeOrigin);
+      const pairedMobileOrigin = Boolean(origin) && (
+        hasPairingHeaderOrPreflightRequest(request) ||
+        (isMobileGatewayMediaPath(request) && hasPairingQueryCredential(request))
+      );
+      callback(null, isTrustedGatewayOrigin(origin) || bridgeOrigin || pairedMobileOrigin);
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token', 'X-Pairing-Device-Fingerprint', 'X-Prometheus-Render-Token'],

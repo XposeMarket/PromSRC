@@ -2,7 +2,7 @@
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import {
   getGateway,
   getGatewayFilter,
@@ -10,7 +10,7 @@ import {
   loadGatewayCatalog,
   gatewayStatusLabel,
   isMobileGatewayCatalogEnabled,
-  isCurrentGateway,
+  gatewayFetchJson,
   loadMobileGatewayPinnedSessions,
   refreshGatewayStatuses,
   onGatewayCatalogChanged,
@@ -174,21 +174,30 @@ function _syncPinnedCacheFromSessions(sessions) {
   _savePinnedSessionIds(Array.from(ids));
 }
 
+function _mobileSessionRequest(sessionId, suffix = '', options = {}) {
+  const id = String(sessionId || '').trim();
+  if (!id) throw new Error('Session id required.');
+  const parsed = parseTargetNamespacedId(id);
+  const target = parsed ? getGateway(parsed.gatewayId) : null;
+  const gatewaySessionId = parsed?.targetId || id;
+  const path = `/api/sessions/${encodeURIComponent(gatewaySessionId)}${suffix}`;
+  if (!parsed) return mobileGatewayFetch(path, options);
+  if (!target) throw new Error('This chat’s gateway is unavailable. Reconnect it before trying again.');
+  if (target.execution?.enabled !== true) {
+    throw new Error('Remote execution is not enabled for this gateway target. Refresh the gateway connection and try again.');
+  }
+  return gatewayFetchJson(target, path, options);
+}
+
 async function _togglePin(sessionId) {
   const id = String(sessionId || '');
   if (!id) return false;
-  const parsed = parseTargetNamespacedId(id);
-  const target = parsed ? getGateway(parsed.gatewayId) : null;
-  if (parsed && (!target || !isCurrentGateway(target))) {
-    throw new Error('Pinning a remote chat is disabled in the first read-only multi-gateway slice.');
-  }
-  const gatewaySessionId = parsed?.targetId || id;
   const wasPinned = _isPinned(id);
   const nextPinned = !wasPinned;
   _setLocalPinned(id, nextPinned);
   _setCachedSessionPinned(id, nextPinned ? Date.now() : null);
   try {
-    const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(gatewaySessionId), {
+    const result = await _mobileSessionRequest(id, '', {
       method: 'PATCH',
       body: JSON.stringify({ pinned: nextPinned }),
     });
@@ -219,11 +228,7 @@ function _setCachedSessionUnread(sessionId, unread, mobileLastReadAt = null) {
 async function _markSessionUnread(sessionId) {
   const id = String(sessionId || '').trim();
   if (!id) return null;
-  const parsed = parseTargetNamespacedId(id);
-  const target = parsed ? getGateway(parsed.gatewayId) : null;
-  if (parsed && (!target || !isCurrentGateway(target))) throw new Error('This remote chat is read-only in the first slice.');
-  const gatewaySessionId = parsed?.targetId || id;
-  const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(gatewaySessionId) + '/mobile-unread', {
+  const result = await _mobileSessionRequest(id, '/mobile-unread', {
     method: 'POST',
     body: JSON.stringify({}),
   });
@@ -331,7 +336,7 @@ const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
   '.pm-icon-btn',
   '.pm-drawer-item',
   '.pm-drawer-new-chat',
-  '.pm-drawer-close',
+  '.pm-drawer-search-toggle',
   '.pm-session-row',
   '.pm-channel-card',
   '.pm-command-action',
@@ -375,9 +380,9 @@ export async function refreshMobileDrawerSessions({ force = false } = {}) {
     const freshEnough = state.initialized
       && Number(state.loadedAt || 0) > 0
       && Date.now() - Number(state.loadedAt || 0) < PM_DRAWER_REFRESH_TTL_MS;
-    // Gateway-backed session lists are liveness-sensitive. Re-run the
-    // read-only target probes whenever the drawer is reopened so an offline
-    // computer cannot leave its old chats selectable from the cache.
+    // Gateway-backed session lists are liveness-sensitive. Re-run the target
+    // probes whenever the drawer is reopened so an offline computer cannot
+    // leave its old chats selectable from the cache.
     const gatewayAware = isMobileGatewayCatalogEnabled() && loadGatewayCatalog().length > 0;
     if (!force && freshEnough && !gatewayAware) return;
     _resetDrawerPageState();
@@ -1181,9 +1186,9 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
-      <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Close menu">${ICONS.x}</button>
+      <button class="pm-drawer-search-toggle" type="button" data-mobile-drawer-search-toggle aria-label="Search chats" aria-expanded="false">${_searchIcon()}</button>
       <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
-      <label class="pm-drawer-search" aria-label="Search chats">
+      <label class="pm-drawer-search" aria-label="Search chats" hidden>
         ${_searchIcon()}
         <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
       </label>
@@ -1276,7 +1281,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   });
 
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
-  _drawerEl.querySelector('[data-mobile-drawer-close]')?.addEventListener('click', closeDrawer);
+  _drawerEl.querySelector('[data-mobile-drawer-search-toggle]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const search = _drawerEl.querySelector('.pm-drawer-search');
+    _setDrawerSearchOpen(search?.hidden !== false);
+  });
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
@@ -2134,7 +2144,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
     pmHaptic(10);
     settleBtn.disabled = true;
     var run = function(confirmPinned) {
-      return mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId) + (settled ? '/unsettle' : '/settle'), {
+      return _mobileSessionRequest(sessionId, settled ? '/unsettle' : '/settle', {
         method: 'POST',
         body: JSON.stringify(settled ? {} : { confirmPinned: confirmPinned === true }),
       });
@@ -2267,7 +2277,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
     var saveBtn = document.getElementById('pm-sess-rename-save');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026'; }
     try {
-      await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId), {
+      await _mobileSessionRequest(sessionId, '', {
         method: 'PATCH',
         body: JSON.stringify({ title: newTitle }),
       });
@@ -2344,7 +2354,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks) {
     var lbl = confirmBtn.querySelector('.pm-msheet-row-label');
     if (lbl) lbl.textContent = 'Deleting\u2026';
     try {
-      await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+      await _mobileSessionRequest(sessionId, '', { method: 'DELETE' });
       pmHaptic(14);
       // Remove from pin list
       _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));
@@ -2398,6 +2408,28 @@ function _searchIcon() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 }
 
+function _setDrawerSearchOpen(open, { focus = true } = {}) {
+  if (!_drawerEl) return;
+  const nextOpen = open === true;
+  const search = _drawerEl.querySelector('.pm-drawer-search');
+  const input = _drawerEl.querySelector('#pm-drawer-search-input');
+  const toggle = _drawerEl.querySelector('[data-mobile-drawer-search-toggle]');
+  if (!nextOpen) {
+    _drawerSearch = '';
+    if (input) input.value = '';
+  }
+  if (search) search.hidden = !nextOpen;
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(nextOpen));
+    toggle.setAttribute('aria-label', nextOpen ? 'Close search' : 'Search chats');
+    toggle.innerHTML = _searchIcon();
+  }
+  if (_drawerCallbacks) _renderDrawerSearchState(_drawerCallbacks);
+  if (nextOpen && focus) {
+    requestAnimationFrame(() => input?.focus());
+  }
+}
+
 function _formatSessionDate(value) {
   try {
     return new Date(Number(value || Date.now())).toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -2423,6 +2455,7 @@ export function openDrawer() {
 }
 
 export function closeDrawer() {
+  _setDrawerSearchOpen(false, { focus: false });
   if (!_drawerEl || !_scrimEl) return;
   document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');

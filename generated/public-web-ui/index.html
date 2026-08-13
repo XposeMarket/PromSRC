@@ -283,12 +283,12 @@
 </script>
 <link rel="stylesheet" href="static/styles/fonts.css">
 <link rel="stylesheet" href="static/styles/base.css?v=electron-titlebar-overlay-v6">
-<link rel="stylesheet" href="static/styles/components.css?v=desktop-composer-sidebar-fix-v1">
+<link rel="stylesheet" href="static/styles/components.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="static/styles/onboarding.css">
 <link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
-<link rel="stylesheet" href="static/styles/projects.css?v=desktop-project-actions-v1">
+<link rel="stylesheet" href="static/styles/projects.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/themes.css?v=desktop-sidebar-alignment-v5">
+<link rel="stylesheet" href="static/styles/themes.css?v=desktop-sidebar-priority-v2">
 <link rel="stylesheet" href="static/styles/settings.css?v=full-page-settings-v2">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
@@ -352,7 +352,7 @@
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'static/styles/mobile.css?v=pm-v288-2026-08-11-gateway-context-visibility';
+          cssTag.href = 'static/styles/mobile.css?v=pm-v290-2026-08-13-remote-gateway-execution';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -2071,16 +2071,25 @@
     <div class="sidebar-top">
       <div class="brand" onclick="toggleSidebar()" style="cursor:pointer;transition:opacity 0.2s" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'" title="Toggle sidebar">
         <div class="logo"><img src="/assets/Prometheus.png" alt="Prometheus"></div>
-        <div class="brand-copy">
-          <div class="brand-title">Prometheus</div>
-          <div class="brand-sub">Operator workspace</div>
-        </div>
       </div>
-      <button class="icon-btn" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Collapse sidebar" title="Collapse sidebar">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15">
-          <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
-        </svg>
-      </button>
+      <div class="sidebar-top-actions" aria-label="Sidebar controls">
+        <button class="sidebar-header-btn" id="sidebarSearchToggle" onclick="toggleSidebarSearch(event)" aria-label="Open search" aria-expanded="false" title="Search chats">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+            <circle cx="10.8" cy="10.8" r="6.3"></circle><path d="m16 16 5 5"></path>
+          </svg>
+        </button>
+        <button class="sidebar-header-btn sidebar-priority-btn" id="sidebarPriorityToggle" onclick="togglePriorityPanel(event)" aria-label="Open priority chats" aria-expanded="false" aria-pressed="false" title="Priority chats">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path>
+          </svg>
+          <span class="sidebar-unread-dot" id="sidebarUnreadDot" hidden aria-hidden="true"></span>
+        </button>
+        <button class="sidebar-header-btn" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="15" height="15" aria-hidden="true">
+            <line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <button class="new-chat" id="sessions-new-btn" onclick="newChatSession()">
@@ -2090,7 +2099,7 @@
       <span>New chat</span>
     </button>
 
-    <div class="sidebar-search">
+    <div class="sidebar-search" hidden>
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><circle cx="6.5" cy="6.5" r="4"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
       <input id="session-search" type="text" placeholder="Search sessions, skills..." oninput="filterSessions(this.value)">
     </div>
@@ -2181,6 +2190,10 @@
         </div>
       </div>
     </div><!-- end nav-group -->
+
+    <div class="sidebar-priority-panel" id="sidebar-priority-panel" hidden aria-live="polite">
+      <div id="sidebar-priority-content"></div>
+    </div>
 
     <!-- PINNED CHATS (sits between More and Sessions) -->
     <div class="sidebar-section" id="sidebar-pinned-section" style="display:none">
@@ -2348,6 +2361,20 @@
 
 <!-- MAIN CONTENT AREA -->
 <main class="main-shell">
+  <!-- Shared chat context row. This stays outside the scrollable chat view so
+       the active chat/project remains visible while messages move underneath. -->
+  <header id="chat-context-header" class="chat-context-header" aria-live="polite">
+    <div class="chat-context-copy">
+      <strong id="chat-context-title">New chat</strong>
+      <span id="chat-context-project" class="chat-context-project" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>
+          <path d="M3.5 9.5h17"/>
+        </svg>
+        <span id="chat-context-project-name"></span>
+      </span>
+    </div>
+  </header>
   <!-- CHAT VIEW (default) -->
   <div id="chat-view">
     <div id="chat-messages">
@@ -2360,23 +2387,23 @@
     </div>
     <div id="chat-text-selection-popover" class="chat-text-selection-popover" role="menu" aria-label="Highlighted text actions" hidden></div>
     <div id="background-spawn-dock" class="background-spawn-dock" hidden></div>
+    <div id="chat-new-context-dock" class="chat-new-context-dock" hidden>
+      <button
+        id="chat-new-context-trigger"
+        class="chat-new-context-trigger"
+        type="button"
+        onclick="toggleDesktopNewChatContextPopover(event)"
+        aria-label="Choose chat project"
+        aria-expanded="false"
+      >
+        <span class="chat-new-context-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>
+        <span class="chat-new-context-value"><strong id="chat-new-context-label">Chat</strong><small>Directed chat</small></span>
+        <span class="chat-new-context-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </button>
+      <div id="chat-new-context-popover" class="chat-new-context-popover" role="dialog" aria-label="Choose chat project" hidden></div>
+    </div>
     <div class="chat-input-area">
       <div id="main-goal-strip" class="main-goal-strip" style="display:none"></div>
-      <div id="chat-new-context-dock" class="chat-new-context-dock" hidden>
-        <button
-          id="chat-new-context-trigger"
-          class="chat-new-context-trigger"
-          type="button"
-          onclick="toggleDesktopNewChatContextPopover(event)"
-          aria-label="Choose chat project"
-          aria-expanded="false"
-        >
-          <span class="chat-new-context-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>
-          <span class="chat-new-context-value"><strong id="chat-new-context-label">Chat</strong><small>Directed chat</small></span>
-          <span class="chat-new-context-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
-        </button>
-        <div id="chat-new-context-popover" class="chat-new-context-popover" role="dialog" aria-label="Choose chat project" hidden></div>
-      </div>
       <!-- Queued prompts panel -->
 	      <div class="queued-prompts-panel" id="queued-prompts-panel">
 	        <div class="queued-prompts-list" id="queued-prompts-list"></div>
@@ -5661,27 +5688,124 @@ let _sessionSearchLoading = false;
 let _sessionSearchError = '';
 let _sessionSearchTimer = null;
 let _sessionSearchSeq = 0;
-let _sessionShowCount = 20; // limit displayed chats to 20, then show "More"
+const SIDEBAR_SESSION_PAGE_SIZE = 20;
+let _sessionShowCount = SIDEBAR_SESSION_PAGE_SIZE; // keep the default and Priority views equally bounded
 let _settledSessions = [];
 let _settledSessionsOffset = 0;
 let _settledSessionsHasMore = false;
 let _settledSessionsLoading = false;
 let _settledViewOpen = false;
+let _priorityPanelOpen = false;
+let _sidebarSearchOpen = false;
+const _priorityCollapsedSections = new Set();
+const _priorityCollapsedProjects = new Set();
+window.isPriorityProjectCollapsed = (id) => _priorityCollapsedProjects.has(String(id || '').trim());
 let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
 let _channelsEditMode = false;
 let _pinnedChats = JSON.parse(localStorage.getItem('prometheus_pinned_chats') || '[]');
 
+function _isPrioritySession(session) {
+  if (!session || typeof session !== 'object') return false;
+  if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(String(session.id || ''))) return false;
+  return session.settled !== true && Number(session.settledAt || 0) <= 0;
+}
+
+function _isSessionWorking(session) {
+  const id = String(session?.id || '').trim();
+  if (!id) return false;
+  const thinkingMap = window._sessionThinking;
+  if (thinkingMap && Object.prototype.hasOwnProperty.call(thinkingMap, id)) {
+    return thinkingMap[id] === true;
+  }
+  return session?.activeRun === true;
+}
+
+function _isPriorityAttentionSession(session) {
+  return _isPrioritySession(session) && (_isSessionWorking(session) || session?.unread === true);
+}
+
+function _priorityAttentionSessions() {
+  return (window.chatSessions || []).filter(_isPriorityAttentionSession);
+}
+
+function syncPriorityBell() {
+  const button = document.getElementById('sidebarPriorityToggle');
+  const dot = document.getElementById('sidebarUnreadDot');
+  const priorityCount = _priorityAttentionSessions().length;
+  const hasPriority = priorityCount > 0;
+  if (dot) dot.hidden = !hasPriority;
+  if (button) {
+    button.classList.toggle('has-unread', hasPriority);
+    button.setAttribute('aria-label', hasPriority ? `Open priority chats (${priorityCount} priority)` : 'Open priority chats');
+    button.title = hasPriority ? `${priorityCount} priority chat${priorityCount === 1 ? '' : 's'}` : 'Priority chats';
+  }
+}
+
+function toggleSidebarSearch(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const sidebar = document.getElementById('sidebar');
+  const search = document.querySelector('.sidebar-search');
+  const button = document.getElementById('sidebarSearchToggle');
+  if (!sidebar || !search) return;
+  _sidebarSearchOpen = !_sidebarSearchOpen;
+  sidebar.classList.toggle('sidebar-search-open', _sidebarSearchOpen);
+  search.hidden = !_sidebarSearchOpen;
+  button?.setAttribute('aria-expanded', String(_sidebarSearchOpen));
+  button?.setAttribute('aria-label', _sidebarSearchOpen ? 'Close search' : 'Open search');
+  button && (button.title = _sidebarSearchOpen ? 'Close search' : 'Search chats');
+  if (_sidebarSearchOpen) setTimeout(() => document.getElementById('session-search')?.focus(), 0);
+}
+
+function togglePriorityPanel(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  _priorityPanelOpen = !_priorityPanelOpen;
+  const sidebar = document.getElementById('sidebar');
+  const button = document.getElementById('sidebarPriorityToggle');
+  sidebar?.classList.toggle('priority-panel-open', _priorityPanelOpen);
+  button?.setAttribute('aria-expanded', String(_priorityPanelOpen));
+  button?.setAttribute('aria-pressed', String(_priorityPanelOpen));
+  button?.setAttribute('aria-label', _priorityPanelOpen ? 'Close priority chats' : 'Open priority chats');
+  if (_priorityPanelOpen && _settledViewOpen) closeSettledSessionsView();
+  renderSessionsList();
+}
+
+function togglePrioritySection(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const toggle = event?.currentTarget;
+  const section = toggle?.closest?.('[data-priority-section]');
+  const key = String(section?.dataset?.prioritySection || '').trim();
+  if (!key) return;
+  if (_priorityCollapsedSections.has(key)) _priorityCollapsedSections.delete(key);
+  else _priorityCollapsedSections.add(key);
+  renderSessionsList();
+}
+
+function togglePriorityProject(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const title = event?.currentTarget;
+  const group = title?.closest?.('[data-priority-project-id]');
+  const key = String(group?.dataset?.priorityProjectId || '').trim();
+  if (!key) return;
+  if (_priorityCollapsedProjects.has(key)) _priorityCollapsedProjects.delete(key);
+  else _priorityCollapsedProjects.add(key);
+  renderSessionsList();
+}
+
 function filterSessions(query) {
   _sessionSearchQuery = (query || '').toLowerCase().trim();
-  _sessionShowCount = 20;
+  _sessionShowCount = SIDEBAR_SESSION_PAGE_SIZE;
   requestSessionSearch(query);
   renderSessionsList();
   if (typeof filterSkills === 'function') filterSkills(query);
 }
 
 function showMoreSessions() {
-  _sessionShowCount += 20; // Show 20 more
+  _sessionShowCount += SIDEBAR_SESSION_PAGE_SIZE;
   renderSessionsList();
 }
 
@@ -5938,24 +6062,25 @@ function _renderChannelDrill(channelKey) {
   const sessionCards = sessions.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
-    const isWorking = !!(
-      (window._sessionThinking && window._sessionThinking[s.id])
-      || s.activeRun === true
-    );
+    const isWorking = _isSessionWorking(s);
+    const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+      ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
+      : '';
     const channelTimestamp = getSessionLastMessageAt(s) || s.createdAt;
     return `
 <div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${escHtml(s.title || 'Untitled')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openSession('${s.id}')">
-   <span class="chat-session-top-time" title="Last activity">${timeAgo(channelTimestamp)}</span>
+   ${renderImportedSourceMeta(s, channelTimestamp)}
    ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
+      ${unreadDot}
       ${renderImportedSourceLogo(s)}
       <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
    <div class="job-item-meta">
      ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
+     ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
    </div>
 </div>`;
   }).join('');
@@ -5963,21 +6088,22 @@ function _renderChannelDrill(channelKey) {
   const serverCards = serverOnly.map(s => {
     const isActive = s.id === window.activeChatSessionId;
     const isPinned = _pinnedChats.includes(s.id);
-    const isWorking = !!(
-      (window._sessionThinking && window._sessionThinking[s.id])
-      || s.activeRun === true
-    );
+    const isWorking = _isSessionWorking(s);
     const serverTimestamp = getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt;
+    const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+      ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
+      : '';
   const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     const roster = Array.isArray(s.voiceRoom?.participants)
       ? s.voiceRoom.participants.map((participant) => participant.label).filter(Boolean).join(' · ')
       : '';
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
-   <span class="chat-session-top-time" title="Last activity">${timeAgo(serverTimestamp)}</span>
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
+   ${renderImportedSourceMeta(s, serverTimestamp)}
    ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
+      ${unreadDot}
       ${renderImportedSourceLogo(s)}
       <div class="job-item-title">${title}</div>
       ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
@@ -5985,7 +6111,7 @@ function _renderChannelDrill(channelKey) {
   </div>
    <div class="job-item-meta">
      ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
+     ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
    </div>
 </div>`;
   }).join('');
@@ -6471,7 +6597,7 @@ function renderImportedSourceLogo(session) {
 }
 
 function renderImportedSourceMeta(session, normalTimestamp) {
-  return `<span class="job-item-time">${timeAgo(normalTimestamp ?? (getSessionLastMessageAt(session) || session?.createdAt))}</span>`;
+  return `<span class="chat-session-top-time" title="Last activity">${timeAgo(normalTimestamp ?? (getSessionLastMessageAt(session) || session?.createdAt))}</span>`;
 }
 
 function escapeRegExp(text) {
@@ -6486,6 +6612,9 @@ function getSessionSearchResult(sessionId) {
 function sessionFromSearchResult(result) {
   if (!result || !result.id) return null;
   const existing = (window.chatSessions || []).find(s => String(s.id) === String(result.id));
+  const sessionId = String(result.id);
+  const thinkingMap = window._sessionThinking;
+  const hasLocalThinkingState = thinkingMap && Object.prototype.hasOwnProperty.call(thinkingMap, sessionId);
   return {
     ...(existing || {}),
     id: result.id,
@@ -6500,7 +6629,7 @@ function sessionFromSearchResult(result) {
     projectName: result.projectName || existing?.projectName || '',
     settledAt: result.settledAt || existing?.settledAt || null,
     settled: result.settled === true || existing?.settled === true || Number(result.settledAt || existing?.settledAt || 0) > 0,
-    activeRun: result.activeRun === true || existing?.activeRun === true,
+    activeRun: hasLocalThinkingState ? thinkingMap[sessionId] === true : result.activeRun === true,
     _searchOnly: !existing,
     _needsServerLoad: !existing,
   };
@@ -6581,6 +6710,30 @@ function getSessionSortTime(s) {
   return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
 }
 
+function _priorityTimestampMillis(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  if (numeric >= 1e14) return Math.round(numeric / 1000);
+  if (numeric < 1e11) return Math.round(numeric * 1000);
+  return numeric;
+}
+
+function _prioritySessionActivityTime(session) {
+  const candidates = [
+    session?.lastMessageAt,
+    session?.lastActiveAt,
+    session?.updatedAt,
+    session?.createdAt,
+  ].map(_priorityTimestampMillis).filter(Boolean);
+  (Array.isArray(session?.history) ? session.history : []).forEach((message) => {
+    const role = String(message?.role || '').toLowerCase();
+    if (!['user', 'assistant', 'ai'].includes(role)) return;
+    const timestamp = _priorityTimestampMillis(message?.timestamp);
+    if (timestamp) candidates.push(timestamp);
+  });
+  return candidates.length ? Math.max(...candidates) : Date.now();
+}
+
 let _sessionListRefreshFrame = 0;
 function scheduleSessionListRefresh() {
   if (_sessionListRefreshFrame) return;
@@ -6610,7 +6763,7 @@ async function loadSettledSessions({ reset = false } = {}) {
       state: 'settled',
       scope: 'all',
       includeAutomated: '0',
-      limit: '20',
+      limit: String(SIDEBAR_SESSION_PAGE_SIZE),
       offset: String(_settledSessionsOffset),
     });
     const response = await fetch(`/api/sessions?${params.toString()}`);
@@ -6631,6 +6784,10 @@ async function loadSettledSessions({ reset = false } = {}) {
 }
 
 function toggleSettledSessionsView() {
+  _priorityPanelOpen = false;
+  document.getElementById('sidebar')?.classList.remove('priority-panel-open');
+  document.getElementById('sidebarPriorityToggle')?.setAttribute('aria-expanded', 'false');
+  document.getElementById('sidebarPriorityToggle')?.setAttribute('aria-pressed', 'false');
   _settledViewOpen = true;
   _sessionSearchQuery = '';
   _sessionSearchResults = [];
@@ -6681,7 +6838,112 @@ function _renderSettledSessionsList(el) {
   el.innerHTML = content;
 }
 
+const CHAT_SETTLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="m8.5 12.2 2.2 2.2 4.8-5"></path></svg>';
+
+function _prioritySessionPreview(session) {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  const readText = (value) => {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      return value.text || value.content || value.message || value.body?.text || '';
+    }
+    return '';
+  };
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    const role = String(message?.role || '').toLowerCase();
+    const content = String(readText(message?.content) || readText(message?.body) || readText(message?.text) || readText(message?.message) || '').replace(/\s+/g, ' ').trim();
+    if ((role === 'user' || role === 'assistant' || role === 'ai') && content) return content;
+  }
+  const fallback = String(
+    readText(session?.lastMessagePreview)
+      || readText(session?.lastMessage)
+      || readText(session?.preview)
+      || readText(session?.latestMessage)
+      || readText(session?.summary)
+      || '',
+  ).replace(/\s+/g, ' ').trim();
+  return fallback || 'No messages yet.';
+}
+
+function _prioritySessionModel(session) {
+  const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
+  return String(route?.model || session?.model || session?.modelName || (String(session?.id || '') === String(window.activeChatSessionId || '') ? window._activeModel : '') || 'Prometheus').trim();
+}
+
+function _prioritySessionMessageCount(session) {
+  const explicit = Number(session?.messageCount || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
+  return Array.isArray(session?.history) ? session.history.length : 0;
+}
+
+function _priorityDayLabel(timestamp) {
+  const value = _priorityTimestampMillis(timestamp);
+  const date = new Date(Number.isFinite(value) && value > 0 ? value : Date.now());
+  const now = new Date();
+  const startOfDay = (candidate) => new Date(candidate.getFullYear(), candidate.getMonth(), candidate.getDate()).getTime();
+  const dayDelta = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (dayDelta <= 0) return 'Today';
+  if (dayDelta === 1) return 'Yesterday';
+  if (dayDelta < 7) return new Intl.DateTimeFormat(undefined, { weekday: 'long' }).format(date);
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
+}
+
+function renderPriorityChatSessionCard(s, options = {}) {
+  const isPinned = _pinnedChats.includes(s.id);
+  const isSettled = options.settled === true || s.settled === true || Number(s.settledAt || 0) > 0;
+  const projectId = String(options.projectId || '').trim();
+  const projectLabel = String(options.projectLabel || (options.projectNested ? s.projectName : '') || '').trim();
+  const openHandler = projectId
+    ? `openProjectSession('${projectId}','${s.id}')`
+    : s._searchOnly
+      ? `openSearchSession('${s.id}')`
+      : isSettled
+        ? `openSettledSession('${s.id}')`
+        : `openSession('${s.id}')`;
+  const sessionTimestamp = _prioritySessionActivityTime(s);
+  const title = String(s.title || 'New chat').trim() || 'New chat';
+  const preview = _prioritySessionPreview(s);
+  const model = _prioritySessionModel(s);
+  const messageCount = _prioritySessionMessageCount(s);
+  const isWorking = _isSessionWorking(s);
+  const priorityStatus = isWorking
+    ? '<span class="priority-chat-status priority-chat-working">Working</span>'
+    : s.unread
+      ? '<span class="priority-chat-status priority-chat-unread">Unread</span>'
+      : '';
+  const folderIcon = '<svg class="priority-chat-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path><path d="M3.5 9.5h17"></path></svg>';
+  const settleLabel = isSettled ? 'Reopen chat' : 'Settle chat';
+  const settleAction = isSettled
+    ? `confirmSessionHoverUnsettle('${s.id}')`
+    : `confirmSessionHoverSettle('${s.id}', '${escHtml(title)}')`;
+  const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
+  return `
+    <div class="priority-chat-card${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(title)}" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+      <div class="priority-chat-topline">
+        <div class="priority-chat-title-wrap">
+          ${renderImportedSourceLogo(s)}
+          <span class="priority-chat-title">${escHtml(title)}</span>
+        </div>
+        <span class="priority-chat-time" title="Last activity">${timeAgo(sessionTimestamp)}</span>
+        <div class="priority-chat-actions" aria-label="Chat actions">
+          <button class="chat-session-action-btn chat-settle-btn${isSettled ? ' active' : ''}" type="button" onclick="event.preventDefault();event.stopPropagation();${settleAction}" title="${settleLabel}" aria-label="${settleLabel}">${CHAT_SETTLE_ICON}</button>
+          <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" type="button" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+        </div>
+      </div>
+      <div class="priority-chat-preview">${escHtml(preview)}</div>
+      <div class="priority-chat-meta">
+        <span class="priority-chat-model">${escHtml(model)}</span>
+        <span aria-hidden="true">·</span>
+        <span>${messageCount} message${messageCount === 1 ? '' : 's'}</span>
+        ${priorityStatus ? `<span aria-hidden="true">·</span>${priorityStatus}` : ''}
+        ${projectLabel ? `<span aria-hidden="true">·</span><span class="priority-chat-project">${folderIcon}<span>${escHtml(projectLabel)}</span></span>` : ''}
+      </div>
+    </div>`;
+}
+
 function renderChatSessionCard(s, options = {}) {
+  if (options.priority === true) return renderPriorityChatSessionCard(s, options);
   const isPinned = _pinnedChats.includes(s.id);
   const isSettled = options.settled === true || s.settled === true || Number(s.settledAt || 0) > 0;
   const searchResult = getSessionSearchResult(s.id);
@@ -6700,27 +6962,34 @@ function renderChatSessionCard(s, options = {}) {
       ? `openSettledSession('${s.id}')`
       : `openSession('${s.id}')`;
   const searchPreview = renderSessionSearchPreview(s);
-  const isWorking = !!(
-    (window._sessionThinking && window._sessionThinking[s.id])
-    || s.activeRun === true
-  );
+  const isWorking = _isSessionWorking(s);
   const sessionTimestamp = getSessionLastMessageAt(s) || s.createdAt;
   const sessionMeta = [
     s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : '',
     sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : '',
-    isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : ''),
+    isWorking ? '<span class="session-working-badge">Working</span>' : '',
   ].filter(Boolean).join('');
+  const unreadDot = s.unread && !isWorking && !_isImportedSession(s)
+    ? '<span class="session-unread-dot" title="Unread" aria-label="Unread"></span>'
+    : '';
   const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
   const projectDeleteAction = projectId && options.projectDelete
     ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtml(s.title || 'New chat')}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
     : '';
+  const settleLabel = isSettled ? 'Reopen chat' : 'Settle chat';
+  const settleAction = isSettled
+    ? `confirmSessionHoverUnsettle('${s.id}')`
+    : `confirmSessionHoverSettle('${s.id}', '${escHtml(s.title || 'New chat')}')`;
+  const settleButton = `<button class="chat-session-action-btn chat-settle-btn${isSettled ? ' active' : ''}" onclick="event.preventDefault();event.stopPropagation();${settleAction}" title="${settleLabel}" aria-label="${settleLabel}">${CHAT_SETTLE_ICON}</button>`;
   return `
     <div class="job-item chat-session-item${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
-      <span class="chat-session-top-time" title="Last activity">${timeAgo(sessionTimestamp)}</span>
+      ${renderImportedSourceMeta(s, sessionTimestamp)}
+      ${settleButton}
       <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
       ${projectDeleteAction}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
+          ${unreadDot}
           ${renderImportedSourceLogo(s)}
           <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
@@ -6800,6 +7069,80 @@ function endSidebarSessionDrag() {
   document.querySelectorAll('.chat-session-item.drag-over').forEach((card) => card.classList.remove('drag-over'));
   _sidebarDraggedCard = null;
   _sidebarDraggedSessionId = '';
+}
+
+function _prioritySection(title, body, count = 0) {
+  if (!body) return '';
+  const key = String(title || '').trim();
+  const collapsed = _priorityCollapsedSections.has(key);
+  return `<section class="priority-section sidebar-section${collapsed ? ' is-collapsed' : ''}" data-priority-section="${escHtml(key)}">
+    <button class="section-title sidebar-section-toggle priority-section-toggle" type="button" onclick="togglePrioritySection(event)" aria-expanded="${collapsed ? 'false' : 'true'}">
+      <span>${escHtml(key)}</span>
+      <span class="sidebar-section-decoration" aria-hidden="true"><span class="sidebar-section-icon">✦</span></span>
+    </button>
+    <div class="priority-section-list">${body}</div>
+  </section>`;
+}
+
+function _renderPriorityPanel(el) {
+  const priorityPanel = document.getElementById('sidebar-priority-panel');
+  const priorityContent = document.getElementById('sidebar-priority-content');
+  const pinnedSection = document.getElementById('sidebar-pinned-section');
+  const projectsSection = document.getElementById('sidebar-projects-section');
+  const sessionsSection = document.getElementById('sidebar-sessions-section');
+  if (!priorityPanel || !priorityContent) return;
+
+  priorityPanel.hidden = false;
+  if (pinnedSection) pinnedSection.style.display = 'none';
+  if (projectsSection) projectsSection.style.display = 'none';
+  if (sessionsSection) sessionsSection.style.display = 'none';
+
+  const activeSessions = (window.chatSessions || [])
+    .filter(_isPrioritySession)
+    .sort((a, b) => _prioritySessionActivityTime(b) - _prioritySessionActivityTime(a));
+  // Priority attention is not paginated behind newer ordinary chats. Every
+  // working or unread session must remain visible in the Priority section.
+  const prioritySessions = activeSessions.filter(_isPriorityAttentionSession);
+  const chronologicalCandidates = activeSessions.filter((session) => (
+    !_isPriorityAttentionSession(session)
+    && (
+      isTopLevelWebChatSession(session)
+        || String(session?.projectId || '').trim()
+        || String(session?.source || '').toLowerCase() === 'project'
+    )
+  ));
+  const displayedChronologicalSessions = chronologicalCandidates.slice(0, _sessionShowCount);
+  const hasMorePrioritySessions = chronologicalCandidates.length > _sessionShowCount;
+  const priorityHtml = prioritySessions.map((session) => renderChatSessionCard(session, {
+    priority: true,
+    projectId: session.projectId || '',
+    projectNested: Boolean(session.projectId),
+    projectLabel: session.projectName || '',
+  })).join('');
+
+  // Priority mode is intentionally a flat inbox. Project membership remains
+  // visible on each card through its folder/project metadata, but project
+  // chats are not hidden behind a second expandable tree here.
+  const chronologicalSessions = displayedChronologicalSessions;
+  const dayGroups = new Map();
+  chronologicalSessions.forEach((session) => {
+    const label = _priorityDayLabel(_prioritySessionActivityTime(session));
+    if (!dayGroups.has(label)) dayGroups.set(label, []);
+    dayGroups.get(label).push(session);
+  });
+  const dayHtml = Array.from(dayGroups.entries()).map(([label, sessions]) => _prioritySection(
+    label,
+    sessions.map(session => renderChatSessionCard(session, { priority: true })).join(''),
+    sessions.length,
+  )).join('');
+  const prioritySection = _prioritySection('Priority', priorityHtml || '<div class="priority-empty">No priority chats.</div>', prioritySessions.length);
+  const chronologicalSection = dayHtml || '<div class="priority-empty">No active chats yet.</div>';
+  const priorityControls = `
+    ${hasMorePrioritySessions ? `<button class="sessions-show-more-btn" onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">+ Show more (${chronologicalCandidates.length - _sessionShowCount} more)</button>` : ''}
+    <button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">Settled</button>`;
+  priorityContent.innerHTML = prioritySection + chronologicalSection + priorityControls;
+  syncPriorityBell();
+  void el;
 }
 
 function sidebarSessionIdsInList(list) {
@@ -6898,6 +7241,15 @@ async function dropSidebarSession(event) {
 function renderSessionsList() {
   const el = document.getElementById('jobs-list');
   if (!el) return;
+  const priorityPanel = document.getElementById('sidebar-priority-panel');
+  if (_priorityPanelOpen) {
+    _renderPriorityPanel(el);
+    return;
+  }
+  if (priorityPanel) priorityPanel.hidden = true;
+  const sessionsSection = document.getElementById('sidebar-sessions-section');
+  if (sessionsSection) sessionsSection.style.display = '';
+  syncPriorityBell();
   if (_settledViewOpen) {
     _renderSettledSessionsList(el);
     return;
@@ -9154,7 +9506,7 @@ let _errBackdrop = null;
     './static/api.js',
     './static/utils.js',
     './static/ws.js',
-    './static/app.js?v=desktop-composer-sidebar-fix-v1',
+    './static/app.js?v=desktop-sidebar-priority-v2',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
@@ -9351,7 +9703,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v288-2026-08-11-gateway-context-visibility')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v290-2026-08-13-remote-gateway-execution')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -9385,7 +9737,7 @@ let _errBackdrop = null;
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v288-2026-08-11-gateway-context-visibility';
+    const PM_PWA_VERSION = 'pm-v290-2026-08-13-remote-gateway-execution';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a

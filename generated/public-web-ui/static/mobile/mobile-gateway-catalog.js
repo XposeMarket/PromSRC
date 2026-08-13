@@ -1,9 +1,10 @@
 // Phone-side registry for independent Prometheus gateways.
 //
 // This module deliberately owns only client catalog metadata, target-scoped
-// credentials, read-only status/catalog reads, and immutable chat target
-// bindings. It is not a federation layer and it never forwards work from one
-// gateway to another.
+// credentials, target-scoped status/catalog reads, and immutable chat target
+// bindings. Chat and voice work runs directly on the selected gateway with
+// that gateway's paired-device grant; it is not a federation layer and it
+// never forwards work from one gateway to another.
 
 import { API } from '../state.js';
 import {
@@ -147,6 +148,7 @@ function _currentLegacyEntry() {
     platform: 'local',
     version: 'legacy',
     capabilities: ['catalog.read', 'status.read', 'pairing'],
+    execution: { enabled: true, mode: 'same-origin' },
     status: MOBILE_GATEWAY_STATUS.UNKNOWN,
   }, { origin, legacy: true });
 }
@@ -160,6 +162,18 @@ export function normalizeGatewayDescriptor(raw = {}, { origin = '', legacy = fal
   const status = Object.values(MOBILE_GATEWAY_STATUS).includes(String(raw.status || ''))
     ? String(raw.status)
     : MOBILE_GATEWAY_STATUS.UNKNOWN;
+  const rawExecution = raw.execution && typeof raw.execution === 'object' ? raw.execution : null;
+  const execution = {
+    // Older descriptors are safe to read but must not be used for a remote
+    // mutation/stream until that gateway advertises the direct paired-device
+    // execution contract. The current same-origin legacy entry remains usable.
+    enabled: rawExecution ? rawExecution.enabled === true : legacy === true,
+    mode: String(rawExecution?.mode || (legacy ? 'same-origin' : 'read-only')).trim().slice(0, 80),
+    scopes: Array.isArray(rawExecution?.scopes)
+      ? [...new Set(rawExecution.scopes.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 40)
+      : [],
+    reason: String(rawExecution?.reason || '').trim().slice(0, 160),
+  };
   const lastContactAt = Number(raw.lastContactAt || raw.lastSeenAt || 0) || 0;
   return {
     gatewayId: id,
@@ -172,6 +186,7 @@ export function normalizeGatewayDescriptor(raw = {}, { origin = '', legacy = fal
     capabilities,
     protocol: String(raw.protocol || MOBILE_GATEWAY_PROTOCOL).trim(),
     protocolVersion: Number(raw.protocolVersion || raw.protocol?.version || MOBILE_GATEWAY_PROTOCOL_VERSION) || MOBILE_GATEWAY_PROTOCOL_VERSION,
+    execution,
     status,
     lastContactAt,
     lastError: String(raw.lastError || '').trim().slice(0, 240),
@@ -363,8 +378,14 @@ export function setMobileActiveGatewayTarget(entryOrId) {
     window.__pmMobileActiveGatewayId = String(entry?.gatewayId || '').trim();
     window.__pmMobileActiveGatewayOrigin = origin;
     window.__pmMobileActiveGatewayToken = token;
+    window.__pmMobileActiveGatewayExecutionEnabled = entry?.execution?.enabled === true;
   } catch {}
   return entry || null;
+}
+
+export function isGatewayExecutionEnabled(entryOrId) {
+  const entry = typeof entryOrId === 'string' ? getGateway(entryOrId) : entryOrId;
+  return entry?.execution?.enabled === true;
 }
 
 export function isCurrentGateway(entry) {

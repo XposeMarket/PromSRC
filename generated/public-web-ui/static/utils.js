@@ -153,28 +153,153 @@ export function log(text, type = 'log') {
 
 // ─── Visual Block Renderer ────────────────────────────────────
 
-export function buildVisualSrcdoc(lang, code, isDark) {
-  const mermaidTheme = isDark ? 'dark' : 'neutral';
-  const visualCanvasBg = isDark ? '#101014' : '#ffffff';
-  const sharedStyles = `*{margin:0;padding:0;box-sizing:border-box}html,body{background:${visualCanvasBg}!important;color-scheme:${isDark ? 'dark' : 'light'};scrollbar-width:none;-ms-overflow-style:none}::-webkit-scrollbar{display:none}`;
-  const mermaidControlsBg = isDark ? 'rgba(18,25,38,0.92)' : 'rgba(255,255,255,0.94)';
-  const mermaidControlsBorder = isDark ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.14)';
-  const mermaidControlsText = isDark ? '#dbeafe' : '#1e293b';
+const VISUAL_THEME_FALLBACKS = Object.freeze({
+  bg: 'transparent',
+  bgSoft: 'transparent',
+  surface: 'transparent',
+  surfaceSecondary: 'transparent',
+  border: 'currentColor',
+  borderStrong: 'currentColor',
+  text: 'currentColor',
+  muted: 'currentColor',
+  accent: 'currentColor',
+  accentStrong: 'currentColor',
+  success: 'currentColor',
+  warning: 'currentColor',
+  danger: 'currentColor',
+});
+
+function cleanVisualCssValue(value, fallback) {
+  const cleaned = String(value || '').replace(/[<>{};\r\n]/g, '').trim();
+  return cleaned || fallback;
+}
+
+function readVisualTheme() {
+  const root = document.documentElement;
+  const styles = typeof getComputedStyle === 'function' ? getComputedStyle(root) : null;
+  const read = (names, fallback) => {
+    for (const name of names) {
+      const value = styles?.getPropertyValue(name)?.trim();
+      if (value) return cleanVisualCssValue(value, fallback);
+    }
+    return fallback;
+  };
+  const theme = {
+    isDark: root.getAttribute('data-theme') === 'dark',
+    bg: read(['--bg', '--pm-chat-page-bg'], VISUAL_THEME_FALLBACKS.bg),
+    bgSoft: read(['--bg-soft'], VISUAL_THEME_FALLBACKS.bgSoft),
+    surface: read(['--panel', '--composer-panel'], VISUAL_THEME_FALLBACKS.surface),
+    surfaceSecondary: read(['--panel-2', '--composer-bg'], VISUAL_THEME_FALLBACKS.surfaceSecondary),
+    border: read(['--line', '--composer-border'], VISUAL_THEME_FALLBACKS.border),
+    borderStrong: read(['--line-strong'], VISUAL_THEME_FALLBACKS.borderStrong),
+    text: read(['--text', '--fg', '--composer-text'], VISUAL_THEME_FALLBACKS.text),
+    muted: read(['--muted', '--composer-muted'], VISUAL_THEME_FALLBACKS.muted),
+    accent: read(['--brand', '--pm-custom-accent'], VISUAL_THEME_FALLBACKS.accent),
+    accentStrong: read(['--brand-2'], VISUAL_THEME_FALLBACKS.accentStrong),
+    success: read(['--ok'], VISUAL_THEME_FALLBACKS.success),
+    warning: read(['--warn'], VISUAL_THEME_FALLBACKS.warning),
+    danger: read(['--err'], VISUAL_THEME_FALLBACKS.danger),
+  };
+  theme.series = [theme.accent, theme.accentStrong, theme.success, theme.warning, theme.danger, theme.muted];
+  theme.vars = {
+    '--prom-bg': theme.bg,
+    '--prom-bg-soft': theme.bgSoft,
+    '--prom-surface': theme.surface,
+    '--prom-surface-secondary': theme.surfaceSecondary,
+    '--prom-border': theme.border,
+    '--prom-border-strong': theme.borderStrong,
+    '--prom-text': theme.text,
+    '--prom-muted': theme.muted,
+    '--prom-accent': theme.accent,
+    '--prom-accent-strong': theme.accentStrong,
+    '--prom-success': theme.success,
+    '--prom-warning': theme.warning,
+    '--prom-danger': theme.danger,
+    '--prom-series-1': theme.series[0],
+    '--prom-series-2': theme.series[1],
+    '--prom-series-3': theme.series[2],
+    '--prom-series-4': theme.series[3],
+    '--prom-series-5': theme.series[4],
+    '--prom-series-6': theme.series[5],
+    '--bg': theme.bg,
+    '--bg-soft': theme.bgSoft,
+    '--panel': theme.surface,
+    '--panel-2': theme.surfaceSecondary,
+    '--line': theme.border,
+    '--line-strong': theme.borderStrong,
+    '--text': theme.text,
+    '--fg': theme.text,
+    '--muted': theme.muted,
+    '--brand': theme.accent,
+    '--brand-2': theme.accentStrong,
+    '--ok': theme.success,
+    '--warn': theme.warning,
+    '--err': theme.danger,
+  };
+  return theme;
+}
+
+function normalizeVisualTheme(input) {
+  if (input && typeof input === 'object' && input.vars) return input;
+  const theme = { isDark: typeof input === 'boolean' ? input : !!input?.isDark, ...VISUAL_THEME_FALLBACKS };
+  theme.series = [theme.accent, theme.accentStrong, theme.success, theme.warning, theme.danger, theme.muted];
+  theme.vars = Object.fromEntries([
+    ['--prom-bg', theme.bg], ['--prom-bg-soft', theme.bgSoft], ['--prom-surface', theme.surface],
+    ['--prom-surface-secondary', theme.surfaceSecondary], ['--prom-border', theme.border],
+    ['--prom-border-strong', theme.borderStrong], ['--prom-text', theme.text], ['--prom-muted', theme.muted],
+    ['--prom-accent', theme.accent], ['--prom-accent-strong', theme.accentStrong], ['--prom-success', theme.success],
+    ['--prom-warning', theme.warning], ['--prom-danger', theme.danger],
+    ...theme.series.map((value, index) => [`--prom-series-${index + 1}`, value]),
+    ['--bg', theme.bg], ['--bg-soft', theme.bgSoft], ['--panel', theme.surface], ['--panel-2', theme.surfaceSecondary],
+    ['--line', theme.border], ['--line-strong', theme.borderStrong], ['--text', theme.text], ['--fg', theme.text],
+    ['--muted', theme.muted], ['--brand', theme.accent], ['--brand-2', theme.accentStrong],
+    ['--ok', theme.success], ['--warn', theme.warning], ['--err', theme.danger],
+  ]);
+  return theme;
+}
+
+function visualThemeCss(theme) {
+  const vars = theme?.vars && typeof theme.vars === 'object' ? theme.vars : {};
+  return Object.entries(vars)
+    .map(([name, value]) => `${name}:${cleanVisualCssValue(value, 'transparent')}`)
+    .join(';');
+}
+
+export function buildVisualSrcdoc(lang, code, themeInput) {
+  const theme = normalizeVisualTheme(themeInput);
+  const mermaidThemeVariables = visualScriptJson({
+    background: 'transparent',
+    primaryColor: theme.surface,
+    primaryTextColor: theme.text,
+    primaryBorderColor: theme.borderStrong,
+    lineColor: theme.muted,
+    secondaryColor: theme.surfaceSecondary,
+    secondaryTextColor: theme.text,
+    secondaryBorderColor: theme.border,
+    tertiaryColor: theme.bgSoft,
+    tertiaryTextColor: theme.text,
+    tertiaryBorderColor: theme.border,
+    textColor: theme.text,
+    mainBkg: theme.surface,
+    nodeBorder: theme.borderStrong,
+    clusterBkg: theme.surfaceSecondary,
+    clusterBorder: theme.border,
+    edgeLabelBackground: 'transparent',
+  });
+  const chartTheme = visualScriptJson({ text: theme.text, muted: theme.muted, border: theme.border, series: theme.series });
+  const sharedStyles = `:root{${visualThemeCss(theme)}color-scheme:${theme.isDark ? 'dark' : 'light'}}*{margin:0;padding:0;box-sizing:border-box}html,body{background:transparent!important;color:var(--prom-text);color-scheme:${theme.isDark ? 'dark' : 'light'};max-width:100%;overflow-x:hidden}body{min-height:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}`;
 
   if (lang === 'chart') {
-    const chartColors = isDark
-      ? `Chart.defaults.color='#cdd6f4';Chart.defaults.borderColor='rgba(255,255,255,0.1)';`
-      : `Chart.defaults.color='#374151';Chart.defaults.borderColor='rgba(0,0,0,0.1)';`;
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <script src="/vendor/chart/chart.umd.js"><\/script>
-<style>${sharedStyles}body{display:flex;align-items:center;justify-content:center;height:100vh}canvas{max-width:100%;max-height:100%}<\/style>
+<style>${sharedStyles}body{display:flex;align-items:center;justify-content:center;min-height:220px;padding:8px}canvas{width:100%!important;max-width:100%;max-height:100%}<\/style>
 </head><body><canvas id="c"></canvas>
-<script>try{${chartColors}const cfg=(${code});if(cfg.options)cfg.options.responsive=true;else cfg.options={responsive:true};new Chart(document.getElementById('c'),cfg);}catch(e){document.body.innerHTML='<pre style="color:red;padding:8px;font-size:11px">'+e.message+'<\\/pre>';}<\/script>
+<script>try{const visualTheme=${chartTheme};Chart.defaults.color=visualTheme.text;Chart.defaults.borderColor=visualTheme.border;const cfg=(${code});if(cfg.options)cfg.options.responsive=true;else cfg.options={responsive:true};const datasets=cfg.data&&Array.isArray(cfg.data.datasets)?cfg.data.datasets:[];datasets.forEach((dataset,index)=>{const color=visualTheme.series[index%visualTheme.series.length];if(!dataset.backgroundColor)dataset.backgroundColor=color;if(!dataset.borderColor)dataset.borderColor=color;});const chart=new Chart(document.getElementById('c'),cfg);window.addEventListener('prometheus:visual-theme-change',(event)=>{const next=event.detail||{};if(next.text)Chart.defaults.color=next.text;if(next.border)Chart.defaults.borderColor=next.border;chart.update('none');});}catch(e){document.body.innerHTML='<pre style="color:var(--prom-danger);padding:8px;font-size:11px;white-space:pre-wrap">'+e.message+'<\\/pre>';}<\/script>
 <\/body><\/html>`;
   }
   if (lang === 'svg') {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>${sharedStyles}html,body{height:100%}body{padding:0}.sv-shell{position:relative;min-height:280px;height:100%;overflow:hidden;background:transparent}.sv-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.sv-viewport.dragging{cursor:grabbing}.sv-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.sv-stage svg{max-width:none!important;height:auto;display:block}.sv-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-controls,.sv-shell:focus-within .sv-controls{opacity:1;transform:translateY(0);pointer-events:auto}.sv-btn{border:1px solid ${mermaidControlsBorder};background:${mermaidControlsBg};color:${mermaidControlsText};border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.sv-btn:hover{filter:brightness(1.08)}.sv-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:${mermaidControlsText};opacity:0;transform:translateY(4px);background:${mermaidControlsBg};border:1px solid ${mermaidControlsBorder};border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-hint,.sv-shell:focus-within .sv-hint{opacity:.82;transform:translateY(0)}<\/style>
+<style>${sharedStyles}body{padding:0}.sv-shell{position:relative;min-height:200px;height:200px;overflow:hidden;background:transparent}.sv-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.sv-viewport.dragging{cursor:grabbing}.sv-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.sv-stage svg{max-width:none!important;height:auto;display:block}.sv-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-controls,.sv-shell:focus-within .sv-controls{opacity:1;transform:translateY(0);pointer-events:auto}.sv-btn{border:1px solid var(--prom-border);background:var(--prom-surface);color:var(--prom-text);border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.sv-btn:hover{filter:brightness(1.08)}.sv-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:var(--prom-muted);opacity:0;transform:translateY(4px);background:var(--prom-surface);border:1px solid var(--prom-border);border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.sv-shell:hover .sv-hint,.sv-shell:focus-within .sv-hint{opacity:.82;transform:translateY(0)}<\/style>
 <\/head><body>
 <div class="sv-shell">
   <div class="sv-controls">
@@ -274,7 +399,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   if (lang === 'mermaid') {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <script src="/vendor/mermaid/mermaid.min.js"><\/script>
-<style>${sharedStyles}html,body{height:100%}body{padding:0;font-family:sans-serif}.mm-shell{position:relative;min-height:280px;height:100%;overflow:hidden;background:transparent}.mm-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.mm-viewport.dragging{cursor:grabbing}.mm-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.mermaid svg{max-width:none!important;height:auto;background:transparent!important}.mermaid{background:transparent!important}.mm-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-controls{opacity:1;transform:translateY(0);pointer-events:auto}.mm-btn{border:1px solid ${mermaidControlsBorder};background:${mermaidControlsBg};color:${mermaidControlsText};border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.mm-btn:hover{filter:brightness(1.08)}.mm-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:${mermaidControlsText};opacity:0;transform:translateY(4px);background:${mermaidControlsBg};border:1px solid ${mermaidControlsBorder};border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-hint{opacity:.82;transform:translateY(0)}<\/style>
+<style>${sharedStyles}body{padding:0}.mm-shell{position:relative;min-height:200px;height:200px;overflow:hidden;background:transparent}.mm-viewport{position:absolute;inset:0;cursor:grab;touch-action:none;user-select:none}.mm-viewport.dragging{cursor:grabbing}.mm-stage{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}.mermaid svg{max-width:none!important;height:auto;background:transparent!important}.mermaid{background:transparent!important}.mm-controls{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:5;opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-controls{opacity:1;transform:translateY(0);pointer-events:auto}.mm-btn{border:1px solid var(--prom-border);background:var(--prom-surface);color:var(--prom-text);border-radius:8px;padding:4px 9px;font-weight:700;font-size:12px;line-height:1;cursor:pointer;backdrop-filter:blur(2px)}.mm-btn:hover{filter:brightness(1.08)}.mm-hint{position:absolute;left:10px;bottom:10px;font-size:11px;color:var(--prom-muted);opacity:0;transform:translateY(4px);background:var(--prom-surface);border:1px solid var(--prom-border);border-radius:999px;padding:4px 9px;pointer-events:none;transition:opacity .2s ease,transform .2s ease}.mm-shell:hover .mm-hint{opacity:.82;transform:translateY(0)}<\/style>
 <\/head><body>
 <div class="mm-shell">
   <div class="mm-controls">
@@ -294,6 +419,8 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   const viewport = document.getElementById('mm-viewport');
   const stage = document.getElementById('mm-stage');
   const graphEl = document.getElementById('mm-graph');
+  const mermaidSource = graphEl.textContent || '';
+  const baseMermaidThemeVariables = ${mermaidThemeVariables};
   const zoomInBtn = document.getElementById('mm-zoom-in');
   const zoomOutBtn = document.getElementById('mm-zoom-out');
   const resetBtn = document.getElementById('mm-reset');
@@ -416,7 +543,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   function showRenderError(err) {
     viewport.style.touchAction = 'auto';
     const msg = err && err.message ? err.message : String(err || 'Mermaid render failed');
-    stage.innerHTML = '<pre style="color:#b91c1c;padding:12px;font-size:11px;white-space:pre-wrap">Mermaid render error: ' + msg + '<\/pre>';
+    stage.innerHTML = '<pre style="color:var(--prom-danger);padding:12px;font-size:11px;white-space:pre-wrap">Mermaid render error: ' + msg + '<\/pre>';
   }
 
   function resolveMermaid() {
@@ -450,10 +577,33 @@ export function buildVisualSrcdoc(lang, code, isDark) {
 
   resolveMermaid()
     .then((mm) => {
-      mm.initialize({startOnLoad:false,theme:'${mermaidTheme}',securityLevel:'strict',htmlLabels:false,themeVariables:{background:'transparent',primaryBackground:'transparent'}});
+      mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:baseMermaidThemeVariables});
       const run = mm.run
         ? mm.run({ querySelector: '#mm-graph' })
         : Promise.resolve(mm.init(undefined, graphEl));
+      window.addEventListener('prometheus:visual-theme-change',(event)=>{
+        const next=event.detail||{};
+        graphEl.textContent=mermaidSource;
+        mm.initialize({startOnLoad:false,theme:'base',securityLevel:'strict',htmlLabels:false,themeVariables:Object.assign({},baseMermaidThemeVariables,{
+          primaryColor:next.surface||baseMermaidThemeVariables.primaryColor,
+          primaryTextColor:next.text||baseMermaidThemeVariables.primaryTextColor,
+          primaryBorderColor:next.borderStrong||baseMermaidThemeVariables.primaryBorderColor,
+          lineColor:next.muted||baseMermaidThemeVariables.lineColor,
+          secondaryColor:next.surfaceSecondary||baseMermaidThemeVariables.secondaryColor,
+          secondaryTextColor:next.text||baseMermaidThemeVariables.secondaryTextColor,
+          secondaryBorderColor:next.border||baseMermaidThemeVariables.secondaryBorderColor,
+          tertiaryColor:next.bgSoft||baseMermaidThemeVariables.tertiaryColor,
+          tertiaryTextColor:next.text||baseMermaidThemeVariables.tertiaryTextColor,
+          tertiaryBorderColor:next.border||baseMermaidThemeVariables.tertiaryBorderColor,
+          textColor:next.text||baseMermaidThemeVariables.textColor,
+          mainBkg:next.surface||baseMermaidThemeVariables.mainBkg,
+          nodeBorder:next.borderStrong||baseMermaidThemeVariables.nodeBorder,
+          clusterBkg:next.surfaceSecondary||baseMermaidThemeVariables.clusterBkg,
+          clusterBorder:next.border||baseMermaidThemeVariables.clusterBorder,
+        })});
+        const rerun=mm.run?mm.run({querySelector:'#mm-graph'}):Promise.resolve(mm.init(undefined,graphEl));
+        Promise.resolve(rerun).then(()=>{normalizeSvgSize();fitToViewport();}).catch(showRenderError);
+      });
       return Promise.resolve(run);
     })
     .then(() => {
@@ -471,7 +621,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   }
   // html block
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>${sharedStyles}body{font-family:sans-serif}<\/style>
+<style>${sharedStyles}body{font-family:inherit;color:var(--prom-text);min-height:0;width:100%;overflow-x:hidden}<\/style>
 <\/head><body>${code}<\/body><\/html>`;
 }
 
@@ -489,10 +639,12 @@ function injectVisualResizeBridge(srcdoc, options = {}) {
   const bridge = `<script>(function(){
 var visualId=${visualScriptJson(visualId)},last=0,state=${visualScriptJson(initialState)}||{};
 function post(type,extra){try{parent.postMessage(Object.assign({type:type,visualId:visualId},extra||{}),'*')}catch(e){}}
-function send(){try{var d=document.documentElement,b=document.body;var viewport=Math.max(280,window.innerHeight||0);var measured=Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0);var h=measured<=viewport+24?viewport:measured;h=Math.min(10000,Math.max(280,h));if(Math.abs(h-last)>1){last=h;post('prometheus:visual-resize',{height:h})}}catch(e){}}
+function send(){try{var d=document.documentElement,b=document.body;var viewport=Math.max(120,window.innerHeight||0);var measured=Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0);var h=measured<=viewport+24?viewport:measured;h=Math.min(10000,Math.max(120,h));if(Math.abs(h-last)>1){last=h;post('prometheus:visual-resize',{height:h})}}catch(e){}}
 function keyFor(el,index){return el.getAttribute('data-state-key')||el.id||el.name||('control-'+index)}
 function captureControls(){var controls={};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var key=keyFor(el,index);controls[key]={value:el.value};if(el.type==='checkbox'||el.type==='radio')controls[key].checked=!!el.checked});var details={};document.querySelectorAll('details').forEach(function(el,index){details[el.id||('details-'+index)]=!!el.open});state=Object.assign({},state,{controls:controls,details:details});if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});return state}
 function restoreControls(){var controls=state&&state.controls||{};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var saved=controls[keyFor(el,index)];if(!saved)return;if(Object.prototype.hasOwnProperty.call(saved,'value'))el.value=saved.value;if(Object.prototype.hasOwnProperty.call(saved,'checked'))el.checked=!!saved.checked});var details=state&&state.details||{};document.querySelectorAll('details').forEach(function(el,index){var key=el.id||('details-'+index);if(Object.prototype.hasOwnProperty.call(details,key))el.open=!!details[key]})}
+function applyTheme(theme){try{if(!theme||typeof theme!=='object')return;var vars=theme.vars||{};Object.keys(vars).forEach(function(name){if(/^--[a-z0-9-]+$/i.test(name))document.documentElement.style.setProperty(name,String(vars[name]||''))});window.dispatchEvent(new CustomEvent('prometheus:visual-theme-change',{detail:theme}));send()}catch(e){}}
+window.addEventListener('message',function(event){var data=event&&event.data;if(!data||data.type!=='prometheus:visual-theme'||String(data.visualId||'')!==String(visualId))return;applyTheme(data.theme)});
 window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})}};
 window.openai=window.openai||{};window.openai.widgetState=state;window.openai.setWidgetState=function(next){window.prometheusVisual.setState(next)};window.openai.sendFollowUpMessage=function(input){window.prometheusVisual.sendFollowUpMessage(input);return Promise.resolve()};
 restoreControls();document.addEventListener('input',captureControls,true);document.addEventListener('change',captureControls,true);document.addEventListener('toggle',captureControls,true);
@@ -504,6 +656,18 @@ if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.docume
 function installVisualMessageBridge() {
   if (window.__PROM_VISUAL_MESSAGE_BRIDGE_INSTALLED__) return;
   window.__PROM_VISUAL_MESSAGE_BRIDGE_INSTALLED__ = true;
+  const broadcastTheme = () => {
+    const theme = readVisualTheme();
+    document.querySelectorAll('iframe[data-prom-visual="true"]').forEach((frame) => {
+      const visualId = String(frame.getAttribute('data-visual-id') || '');
+      if (!visualId || !frame.contentWindow) return;
+      try {
+        frame.contentWindow.postMessage({ type: 'prometheus:visual-theme', visualId, theme }, '*');
+      } catch {}
+    });
+  };
+  document.addEventListener('prom-theme-change', () => setTimeout(broadcastTheme, 0));
+  document.addEventListener('prom-appearance-change', () => setTimeout(broadcastTheme, 0));
   window.addEventListener('message', (event) => {
     const data = event?.data;
     if (!data || !String(data.type || '').startsWith('prometheus:visual-')) return;
@@ -519,7 +683,7 @@ function installVisualMessageBridge() {
       // html/body { height: 100% }; adding even one pixel creates a resize
       // feedback loop where the iframe reports its newly enlarged viewport
       // forever (especially visible in iOS Safari as a giant blank canvas).
-      const bounded = Math.min(10000, Math.max(280, Math.ceil(height)));
+      const bounded = Math.min(10000, Math.max(120, Math.ceil(height)));
       const current = Math.ceil(frame.getBoundingClientRect().height || 0);
       if (Math.abs(current - bounded) <= 1) return;
       frame.style.height = `${bounded}px`;
@@ -546,64 +710,18 @@ function fallbackVisualId(lang, code, ordinal = 0) {
   return `visual_local_${(hash >>> 0).toString(36)}`;
 }
 
-function buildPartialHtmlPreviewCode(partialCode) {
-  let code = String(partialCode || '');
-  const completedStyles = [...code.matchAll(/<style\b[^>]*>[\s\S]*?<\/style\s*>/ig)].map((match) => match[0]).join('');
-
-  const bodyMatch = code.match(/<body\b[^>]*>/i);
-  if (bodyMatch && typeof bodyMatch.index === 'number') {
-    code = completedStyles + code.slice(bodyMatch.index + bodyMatch[0].length);
-  } else {
-    code = code
-      .replace(/^\s*<!doctype[^>]*>\s*/i, '')
-      .replace(/<\/?html\b[^>]*>/gi, '')
-      .replace(/<head\b[\s\S]*?<\/head\s*>/gi, completedStyles);
-  }
-
-  code = code
-    .replace(/<\/body\s*>[\s\S]*$/i, '')
-    .replace(/<\/html\s*>/gi, '');
-
-  for (const tag of ['script', 'style']) {
-    const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'ig');
-    const closeRe = new RegExp(`</${tag}\\s*>`, 'ig');
-    const opens = [...code.matchAll(openRe)];
-    const closes = [...code.matchAll(closeRe)];
-    const lastOpen = opens.length ? opens[opens.length - 1] : null;
-    const lastClose = closes.length ? closes[closes.length - 1] : null;
-    if (lastOpen && (!lastClose || lastClose.index < lastOpen.index)) {
-      code = code.slice(0, lastOpen.index);
-    }
-  }
-
-  code = code.replace(/<!--[\s\S]*$/, '');
-  return code.trim();
-}
-
-function buildPartialHtmlSrcdoc(partialCode, isDark) {
-  const previewCode = buildPartialHtmlPreviewCode(partialCode);
-  const textColor = isDark ? '#cbd5e1' : '#334155';
-  const mutedColor = isDark ? '#94a3b8' : '#64748b';
-  const bg = isDark ? 'rgba(15,23,42,0.16)' : 'rgba(248,250,252,0.62)';
-  const emptyState = `<div style="min-height:280px;display:flex;align-items:center;justify-content:center;color:${mutedColor};font:12px system-ui,sans-serif;background:${bg}">Assembling visual canvas...<\/div>`;
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>*{box-sizing:border-box}html,body{margin:0;min-height:280px;background:transparent!important;color:${textColor};font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:280px}script{display:none!important}<\/style>
-<\/head><body>${previewCode || emptyState}<\/body><\/html>`;
-}
-
 export function buildVisualIframe(lang, code, options = {}) {
   installVisualMessageBridge();
   const artifact = options.artifact && typeof options.artifact === 'object' ? options.artifact : null;
   const visualId = String(artifact?.id || options.visualId || fallbackVisualId(lang, code, options.ordinal || 0));
   const id = `vis_${visualId.replace(/[^a-z0-9_-]/gi, '_')}`;
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const srcdoc = injectVisualResizeBridge(buildVisualSrcdoc(lang, code, isDark), { visualId, state: artifact?.state || options.state || {} });
+  const theme = readVisualTheme();
+  const srcdoc = injectVisualResizeBridge(buildVisualSrcdoc(lang, code, theme), { visualId, state: artifact?.state || options.state || {} });
   const encoded = escapeAttr(srcdoc);
   const escapedLang = lang.replace(/"/g, '');
   const escapedCode = escapeAttr(code);
-  const minHeight = lang === 'chart' ? 340 : lang === 'html' ? 420 : 360;
-  const frameBackground = isDark ? '#101014' : '#ffffff';
-  return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+  const minHeight = lang === 'chart' ? 240 : lang === 'html' ? 180 : 220;
+  return `<div class="visual-block visual-block--inline" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" data-vis-surface="inline">
   <iframe
     id="${id}"
     data-prom-visual="true"
@@ -611,30 +729,10 @@ export function buildVisualIframe(lang, code, options = {}) {
     data-visual-version="${escapeAttr(artifact?.version || 1)}"
     srcdoc="${encoded}"
     sandbox="allow-scripts allow-downloads"
-    style="width:100%;height:${minHeight}px;min-height:${minHeight}px;border:none;display:block;background:${frameBackground};color-scheme:${isDark ? 'dark' : 'light'}"
+    style="width:100%;height:${minHeight}px;min-height:${minHeight}px;border:none;display:block;background:transparent;color-scheme:${theme.isDark ? 'dark' : 'light'}"
     loading="lazy"
   ><\/iframe>
 <\/div>`;
-}
-
-// ─── Partial Visual (streaming in-progress) ──────────────────
-
-function buildPartialVisual(lang, partialCode) {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-
-  // Partial fenced visuals are rebuilt on every streaming token. Keep them as a
-  // stable placeholder until the closing fence arrives, then mount the iframe.
-  const bg = isDark ? 'rgba(30,41,59,0.8)' : '#f8fafc';
-  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
-  const textColor = isDark ? '#94a3b8' : '#64748b';
-  const labels = { mermaid: 'diagram', chart: 'chart', svg: 'graphic', html: 'visual' };
-  const label = labels[lang] || 'visual';
-  return `<div class="visual-block" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid ${border};background:${bg};min-height:200px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
-  <style>@keyframes vis-spin{to{transform:rotate(360deg)}}@keyframes vis-bar{0%,100%{transform:scaleX(.3)}50%{transform:scaleX(1)}}</style>
-  <div style="width:32px;height:32px;border-radius:50%;border:2px solid rgba(99,102,241,.2);border-top-color:#6366f1;animation:vis-spin .8s linear infinite"></div>
-  <div style="color:${textColor};font-size:12px;font-family:sans-serif">Building ${label}…</div>
-  <div style="width:120px;height:3px;background:rgba(99,102,241,.15);border-radius:99px;overflow:hidden"><div style="height:100%;background:#6366f1;border-radius:99px;transform-origin:left;animation:vis-bar 1.2s ease-in-out infinite"></div></div>
-</div>`;
 }
 
 // ─── Markdown Renderer ────────────────────────────────────────
@@ -689,7 +787,7 @@ export function renderMd(text, options = {}) {
       html = html.replace(placeholderRe, (_, i) => {
         const v = visuals[+i];
         if (!v) return '';
-        return v.partial ? buildPartialVisual(v.lang, v.code) : buildVisualIframe(v.lang, v.code, { artifact: v.artifact, ordinal: v.ordinal });
+        return v.partial ? '' : buildVisualIframe(v.lang, v.code, { artifact: v.artifact, ordinal: v.ordinal });
       });
       html = html.replace(/<p>\s*(<div class="visual-block"[\s\S]*?<\/div>)\s*<\/p>/g, '$1');
     }

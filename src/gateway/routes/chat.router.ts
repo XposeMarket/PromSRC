@@ -79,7 +79,7 @@ import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
-import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
+import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, backgroundSteer, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
 import { initCredentialHandler, getCredentialHandler } from '../../security/credential-handler';
 import { getVerificationFlowManager, getApprovalQueue } from '../verification-flow';
@@ -4672,6 +4672,14 @@ async function handleChat(
   const responseStyleInstruction = executionMode === 'heartbeat'
     ? 'Report only actionable heartbeat results. For no-op heartbeats, output exactly HEARTBEAT_OK and nothing else.'
     : 'Match the user\'s tone and pacing. Be natural, warm, and conversational. Use concise replies for quick asks, and expand with context, personality, and guidance when helpful or when the user invites depth.';
+  const visualPresentationInstruction = [
+    'PRESENTATION SELECTION: choose the simplest response surface that fully solves the user\'s goal. First reason semantically about whether this is text, a deterministic native component, an interactive UI, an artifact, or an external action; do not jump straight to HTML.',
+    'Prefer a trusted deterministic renderer/tool when it fully represents a known domain (for example weather, maps, products, stocks, sports, tables, or standard charts). Use the interactive-artifacts renderer when meaningful local interaction is the point and no existing native component is sufficient.',
+    'Freeform interactive HTML is deliberately capable: it may be a rich self-contained fractal explorer, simulator, dashboard, lesson, configurable tracker, or mini-game. Do not reduce it to a tiny card or refuse complexity merely because it is generated UI. Keep it reasonably contained in the conversation, responsive from 320px upward, and update local state in place.',
+    'Generated visuals run in a sandbox. They may use HTML, CSS, vanilla JavaScript, local state, and the Prometheus visual state bridge, but must never receive credentials or directly access Electron/Node, the filesystem, cookies, browser permissions, external accounts, arbitrary iframes, or unrestricted networking. External actions must go through an explicitly registered Prometheus tool and policy check.',
+    'Theme contract: visual roots and controls must be transparent unless the visual itself intentionally creates an internal surface. Never hardcode a light/dark canvas or a fixed outer panel. Use Prometheus tokens such as --prom-bg, --prom-surface, --prom-surface-secondary, --prom-border, --prom-text, --prom-muted, --prom-accent, --prom-success, --prom-warning, and --prom-danger; charts and diagrams should inherit the host theme.',
+    'Inline visuals may sit between prose and should be one complete fenced chart, mermaid, svg, or html block when emitted. Keep surrounding explanation short. Use a larger artifact surface only when the experience is genuinely long-lived, multi-view, editing-heavy, or the deliverable itself should live independently of the message. Never generate a visual merely for decoration.',
+  ].join('\n');
   const planProtocolInstruction = hasDurableTaskPlan
     ? 'This run already has a durable task plan. Do NOT call bg_plan_declare, bg_plan_advance, declare_plan, or complete_plan_step. Execute the current durable step and call step_complete(note) once it is finished.'
     : executionMode === 'background_agent'
@@ -4752,6 +4760,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       'Execution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.',
       buildModelCapabilitySystemBlock(),
       visualGroundingPolicy,
+      visualPresentationInstruction,
       skillRecoveryInstruction,
       teamRoutingBlock,
       creativeBlock,
@@ -7727,6 +7736,7 @@ RULES:
               ? 'Call skill_read now for exactly one best-fit skill: chart-visualizer, mermaid-diagrams, svg-diagrams, or interactive-artifacts.'
               : 'You already read a visual skill; follow it now.',
             'Return exactly one complete fenced visual block using chart, mermaid, svg, or html.',
+            'An html block may be a rich self-contained interactive experience (for example a simulator, fractal lab, lesson, dashboard, tracker, or mini-game); do not replace requested interaction with a static card or prose outline.',
             'Do not call show_ui_card or show_comparison. Do not substitute a Markdown table or prose outline.',
             'Keep any surrounding explanation to one short sentence.',
           ].join('\n'),
@@ -20675,6 +20685,32 @@ router.post('/api/chat/steer', (req, res) => {
   }
 });
 
+router.post('/api/background-agents/steer', (req, res) => {
+  try {
+    const body = req.body || {};
+    const backgroundId = assertSafeStorageId(
+      String(body.backgroundId || body.id || '').trim(),
+      'background agent id',
+    );
+    const message = String(body.message || body.text || '').trim();
+    if (!message) {
+      res.status(400).json({ ok: false, success: false, error: 'Message required' });
+      return;
+    }
+    const result = backgroundSteer(backgroundId, message, {
+      source: String(body.source || 'web_background_agent_chat').trim() || 'web_background_agent_chat',
+      kind: String(body.kind || 'constraint').trim() as any,
+    });
+    if (!result.queued) {
+      res.status(409).json({ ok: false, success: false, ...result });
+      return;
+    }
+    res.json({ ok: true, success: true, ...result });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, success: false, error: String(err?.message || err || 'Could not steer background agent.') });
+  }
+});
+
 router.get('/api/push/public-key', (_req, res) => {
   try {
     res.json({ success: true, publicKey: getWebPushPublicKey() });
@@ -21338,10 +21374,12 @@ function markActiveRunsOnSessionList<T extends any>(input: T): T {
       .filter((runtime: any) => runtime?.kind === 'main_chat' && runtime?.sessionId)
       .map((runtime: any) => String(runtime.sessionId)),
   );
-  if (!activeSessionIds.size) return input;
 
   const mark = (session: any) => session && typeof session === 'object'
-    ? { ...session, activeRun: activeSessionIds.has(String(session.id || '')) || session.activeRun === true }
+    // The live-runtime registry is authoritative. Do not carry a persisted
+    // activeRun bit forward after the runtime has finished, or a stale flag
+    // can make the sidebar show Working on the wrong chat after a switch.
+    ? { ...session, activeRun: activeSessionIds.has(String(session.id || '')) }
     : session;
 
   if (Array.isArray(input)) return input.map(mark) as T;

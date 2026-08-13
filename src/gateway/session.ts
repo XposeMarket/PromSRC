@@ -1241,6 +1241,21 @@ function getLastMessageTimestamp(history: any[]): number | undefined {
   return undefined;
 }
 
+function getLastMessagePreview(history: any[], max = 220): string {
+  if (!Array.isArray(history)) return '';
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const msg = history[i];
+    if (!isSummaryTimelineMessage(msg)) continue;
+    const raw = typeof msg?.content === 'string'
+      ? msg.content
+      : (msg?.content == null ? '' : JSON.stringify(msg.content));
+    const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    return text.length > max ? `${text.slice(0, Math.max(1, max - 3))}...` : text;
+  }
+  return '';
+}
+
 function getMobileUnreadState(lastAssistantAt: number | undefined, mobileLastReadAt: number | undefined): boolean {
   const assistantAt = Number(lastAssistantAt || 0);
   if (!Number.isFinite(assistantAt) || assistantAt <= 0) return false;
@@ -1275,6 +1290,7 @@ function buildSessionSummary(session: Session): SessionSummary {
   const title = getSessionDisplayTitle(session);
   const lastMessageAt = getLastMessageTimestamp(session.history);
   const lastAssistantAt = getLastAssistantTimestamp(session.history);
+  const preview = getLastMessagePreview(session.history) || title;
   const channel = session.channel || inferChannelFromSessionId(session.id);
   const mobileLastReadAt = Number.isFinite(Number(session.mobileLastReadAt)) ? Number(session.mobileLastReadAt) : undefined;
   return {
@@ -1293,7 +1309,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     activeRun: false,
     messageCount: Array.isArray(session.history) ? session.history.length : 0,
     title,
-    preview: title,
+    preview,
     lastOrigin: getLatestSessionOrigin(session.history, channel),
     creativeMode: session.creativeMode || null,
     canvasProjectRoot: session.canvasProjectRoot || null,
@@ -1352,6 +1368,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
     const title = String(data?.title || '').trim() || getSessionTitleFromHistory(history);
     const lastMessageAt = getLastMessageTimestamp(history);
     const lastAssistantAt = getLastAssistantTimestamp(history);
+    const preview = getLastMessagePreview(history) || title;
     const mobileLastReadAt = Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined;
     const settledAt = Number.isFinite(Number(data?.settledAt)) && Number(data.settledAt) > 0 ? Number(data.settledAt) : undefined;
     const channel = data?.channel === 'terminal'
@@ -1379,7 +1396,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       activeRun: false,
       messageCount: history.length,
       title,
-      preview: title,
+      preview,
       lastOrigin: getLatestSessionOrigin(history, channel),
       creativeMode: normalizeCreativeMode(data?.creativeMode),
       canvasProjectRoot: typeof data?.canvasProjectRoot === 'string' && data.canvasProjectRoot.trim()
@@ -1434,7 +1451,10 @@ function getSortedSessionSummaries(
     ) {
       sessionIndexCommandTitleRebuildAttempted = true;
       index = rebuildSessionIndex();
-    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && !summary.lastMessageAt)) {
+    } else if (Object.values(index.summaries).some((summary) => (
+      summary.messageCount > 0
+      && (!summary.lastMessageAt || !String(summary.preview || '').trim() || String(summary.preview || '').trim() === String(summary.title || '').trim())
+    ))) {
       index = rebuildSessionIndex();
     }
   }

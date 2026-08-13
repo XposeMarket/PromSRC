@@ -393,7 +393,7 @@ function formatBootBrainAttempt(kind: 'thought' | 'dream', latestState: Record<s
     ? (latestState.lastThoughtWindow ? `window ${latestState.lastThoughtWindow}` : '')
     : (latestState.lastDreamAttemptDate ? `target ${latestState.lastDreamAttemptDate}` : '');
   const errorText = compactSingleLine(String(kind === 'thought' ? latestState.lastThoughtError || '' : latestState.lastDreamError || ''), 220);
-  const suffix = status === 'failed' && errorText
+  const suffix = (status === 'failed' || status === 'aborted') && errorText
     ? `: ${errorText}`
     : '';
   return `- ${kind}_attempt [${new Date(attemptTs).toISOString()}] ${status}${detail ? ` (${detail})` : ''}${suffix}`;

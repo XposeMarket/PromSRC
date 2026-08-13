@@ -13,9 +13,8 @@ Return one fenced `chart` block containing only a Chart.js configuration object.
   data: {
     labels: ["Q1", "Q2", "Q3", "Q4"],
     datasets: [{
-      label: "Revenue ($k)",
-      data: [42, 58, 73, 95],
-      backgroundColor: "#E76F3C"
+    label: "Revenue ($k)",
+      data: [42, 58, 73, 95]
     }]
   },
   options: {
@@ -56,6 +55,6 @@ Use horizontal bars for many or long category labels. Use a multi-dataset line f
 - For scatter and bubble charts, x and y must remain numeric objects rather than category labels.
 - Preserve null/missing values as gaps unless the user authorizes interpolation.
 
-Default to an editorial, accessible palette rather than generic purple/blue AI styling: ember `#E76F3C`, forest `#2F6B5F`, ochre `#D4A72C`, umber `#8B5E3C`, slate `#6B7280`, danger `#C64B4B`, and success `#3E8E63`. Use color consistently across datasets and ensure adjacent series remain distinguishable without color alone when possible.
+Leave dataset colors unset by default. Prometheus injects a theme-aware series palette from `--prom-series-*` / the active accent and semantic tokens, so the same chart follows light, dark, blue, purple, gray, and custom themes. Only provide explicit colors when the user supplied a meaningful semantic color or explicitly asked for one; never bake a light/dark canvas into the config.
 
 Read [references/config-examples.md](references/config-examples.md) only when the requested shape needs a scatter, radar, doughnut, or multi-series configuration example. The rules in this entrypoint override any legacy styling shown in preserved examples.

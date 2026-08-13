@@ -6,7 +6,7 @@ import {
   escapeHtml,
   renderMobileHeader,
   wireHeaderActions,
-} from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
+} from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import {
   gatewayStatusLabel,
   getGatewayFilter,
@@ -80,7 +80,12 @@ export async function renderMobileGatewaysPage(page, { navigate }) {
     wireHeaderActions(page, { onLeft: () => navigate?.('#mobile/chat') });
     return page;
   }
-  try { window.__pmMobileActiveGatewayOrigin = ''; window.__pmMobileActiveGatewayId = ''; } catch {}
+  try {
+    window.__pmMobileActiveGatewayOrigin = '';
+    window.__pmMobileActiveGatewayId = '';
+    window.__pmMobileActiveGatewayToken = '';
+    window.__pmMobileActiveGatewayExecutionEnabled = false;
+  } catch {}
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Gateway Connections', online: true, leftIcon: 'back', hideTitle: false })}
     <main class="pm-body pm-gateways-page" id="pm-gateways-page">

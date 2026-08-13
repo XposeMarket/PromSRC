@@ -4,20 +4,20 @@
 
 import { markClientPerformance } from '../performance.js';
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=pm-v287-2026-08-11-context-chevron';
+} from './mobile-pages.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
+} from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import {
   loadMobileGatewaySessionGroups,
   searchMobileGatewaySessions,
@@ -34,7 +34,7 @@ let mobileRenderGeneration = 0;
 
 function loadMobilePairingPage() {
   if (!mobilePairingPagePromise) {
-    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v266-2026-08-11-new-project-popover')
+    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v290-2026-08-13-remote-gateway-execution')
       .catch((error) => {
         mobilePairingPagePromise = null;
         throw error;
@@ -266,14 +266,15 @@ function render() {
   const activePairCode = pairCode || scannerPairCode;
   const gatewayCatalogEnabled = isMobileGatewayCatalogEnabled();
 
-  // The current legacy API helpers are intentionally single-origin. Clear a
-  // chat target before rendering another surface so a prior remote read-only
-  // chat cannot accidentally constrain or redirect unrelated local UI calls.
+  // Chat and Voice API calls are target-aware. Clear a chat target before
+  // rendering an unrelated surface so a prior remote target cannot constrain
+  // or redirect unrelated local UI calls.
   if (!['chat', 'voice'].includes(page)) {
     try {
       window.__pmMobileActiveGatewayOrigin = '';
       window.__pmMobileActiveGatewayId = '';
       window.__pmMobileActiveGatewayToken = '';
+      window.__pmMobileActiveGatewayExecutionEnabled = false;
     } catch {}
   }
 

@@ -68,11 +68,14 @@ function assertContractFiles() {
   assert.match(identity, /gateway-identity\.json/);
   assert.match(identity, /gatewayId/);
   assert.match(identity, /catalog\.read/);
+  assert.match(identity, /paired-device-direct/);
+  assert.match(identity, /chat\.write/);
   assert.match(pairing, /api\/mobile\/gateway\/catalog/);
   assert.match(pairing, /x-pairing-device-fingerprint/);
   assert.match(pairing, /consumePendingRequestToken/);
   assert.match(pairing, /api\/pairing\/me\/revoke/);
   assert.match(auth, /X-Pairing-Device-Fingerprint/);
+  assert.match(auth, /access-control-request-headers/);
   assert.match(auth, /pathname === '\/api\/gateway\/descriptor'/, 'descriptor liveness probes must be CORS-allowed');
   assert.match(auth, /pathname === '\/api\/status'/, 'legacy status fallback must remain CORS-allowed');
   assert.match(pages, /BarcodeDetector/);
@@ -94,8 +97,15 @@ function assertContractFiles() {
   assert.match(pages, /requestedSession !== MOBILE_CHAT_SESSION_ID \|\| !targetChip/, 'existing chats must not open the gateway selector');
   assert.match(pages, /selectedGateway\.status !== MOBILE_GATEWAY_STATUS\.ONLINE/, 'chat sends must fail closed for every non-online target state');
   assert.match(pages, /probeGateway\(selectedGateway\)/, 'chat sends must verify target liveness before admission');
+  assert.match(pages, /gatewayExecutionRefresh\.then\(\(\) => loadMobileChatSession/, 'opening a stale remote chat must refresh execution metadata before loading history');
+  assert.match(pages, /refreshedVoiceGateway/, 'selecting a stale remote chat as a Voice target must refresh execution metadata first');
+  assert.match(pages, /targetNamespacedId\(selectedGateway\?\.gatewayId, actualSessionId\)/, 'new remote chats must keep their gateway in the route after the first send');
+  assert.match(pages, /_saveMobileLastChatContext\(\{[\s\S]*gatewayId: selectedGateway\.gatewayId/, 'chat sends must persist the selected gateway for legacy bare routes');
   assert.match(mobileApi, /_isCurrentMobileRequestTarget/);
-  assert.match(mobileApi, /REMOTE_EXECUTION_NOT_ENABLED/);
+  assert.match(mobileApi, /__pmMobileActiveGatewayExecutionEnabled/);
+  assert.match(mobileApi, /if \(!_isCurrentMobileRequestTarget\(\)\) return ''/);
+  assert.doesNotMatch(mobileApi, /chat execution is\s+strictly local/);
+  assert.doesNotMatch(shell, /disabled in the first read-only multi-gateway slice/);
   assert.match(router, /loadMobileGatewaySessionGroups/);
   assert.match(router, /hasAnyGatewayCredential/);
   assert.doesNotMatch(shell, /pm-drawer-gateway-link/);
@@ -128,10 +138,11 @@ async function run() {
   const ctx = loadCatalogForTest();
   const c = ctx.__catalog;
 
-  const mac = c.upsertGateway({ gatewayId: 'gw-mac', name: 'MacBook Prometheus', platform: 'darwin', version: '1.0.9', origin: 'https://mac.example' }, { token: 'mac-token', deviceId: 'dev-mac' });
-  const desktop = c.upsertGateway({ gatewayId: 'gw-desktop', name: 'Desktop Prometheus', platform: 'win32', version: '1.0.9', origin: 'https://desktop.example' }, { token: 'desktop-token', deviceId: 'dev-desktop' });
+  const mac = c.upsertGateway({ gatewayId: 'gw-mac', name: 'MacBook Prometheus', platform: 'darwin', version: '1.0.9', origin: 'https://mac.example', execution: { enabled: true, mode: 'paired-device-direct', scopes: ['chat.write'] } }, { token: 'mac-token', deviceId: 'dev-mac' });
+  const desktop = c.upsertGateway({ gatewayId: 'gw-desktop', name: 'Desktop Prometheus', platform: 'win32', version: '1.0.9', origin: 'https://desktop.example', execution: { enabled: true, mode: 'paired-device-direct', scopes: ['chat.write'] } }, { token: 'desktop-token', deviceId: 'dev-desktop' });
   assert.equal(c.loadGatewayCatalog().length, 2, 'two independent gateways are catalogued');
   assert.notEqual(c.getGatewayToken(mac.gatewayId), c.getGatewayToken(desktop.gatewayId), 'credentials are target-scoped');
+  assert.equal(c.getGateway(mac.gatewayId).execution.enabled, true, 'paired gateways advertise direct execution');
   assert.equal(c.targetNamespacedId(mac.gatewayId, 'same-session'), 'gw-mac::same-session');
   assert.equal(c.targetNamespacedId(desktop.gatewayId, 'same-session'), 'gw-desktop::same-session');
   assert.notEqual(c.targetNamespacedId(mac.gatewayId, 'same-session'), c.targetNamespacedId(desktop.gatewayId, 'same-session'), 'same local ids cannot collide across targets');

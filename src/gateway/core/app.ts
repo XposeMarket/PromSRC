@@ -55,7 +55,8 @@ export function createApp(): express.Application {
     next();
   });
   // CORS is request-aware so the mobile hub bridge can be allowed narrowly
-  // for pairing claim/poll and read-only gateway catalog requests.
+  // for pairing claim/poll, gateway catalog reads, and paired-device
+  // execution requests carrying a target-scoped grant.
   app.use((req, res, next) => cors(buildGatewayCorsOptions(req))(req, res, next));
   // Provider routes must enforce their smaller limit before the general JSON
   // parser buffers or parses the request. The raw parser preserves exact HMAC bytes.

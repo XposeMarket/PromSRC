@@ -28,7 +28,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { activateToolCategory, addMessage, clearHistory, clearSessionMutationScope, persistToolLog, setSessionMutationScope } from '../session';
+import { activateToolCategory, addMessage, clearHistory, clearSessionMutationScope, persistToolLog, setSessionMutationScope, setWorkspace } from '../session';
 import { formatToolObservationsForContext, persistToolResultsAsObservations } from '../tool-observations';
 import { isKnownProviderId } from '../../providers/provider-registry.js';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
@@ -78,6 +78,12 @@ import {
   type BrainJobUsageRecord,
   type BrainUsageSummary,
 } from './brain-usage.js';
+import {
+  brainRunOutcomeError,
+  resolveBrainRunOutcome,
+  type BrainRunOutcome,
+  type BrainRunStatus,
+} from './brain-run-outcome.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -94,10 +100,11 @@ function nextDateKey(dateStr: string): string {
   parsed.setUTCDate(parsed.getUTCDate() + 1);
   return parsed.toISOString().slice(0, 10);
 }
-// Failed model-backed runs used to retry every 30-60 minutes. When an artifact
-// integrity check kept failing, that turned the 15-minute ticker into a costly
-// retry storm. Successful runs retain their normal cadence; only failures back
-// off long enough to avoid repeatedly consuming the provider and gateway.
+// Failed or aborted model-backed runs used to retry every 30-60 minutes. When
+// an artifact integrity check kept failing, that turned the 15-minute ticker
+// into a costly retry storm. Successful runs retain their normal cadence; only
+// failures and aborts back off long enough to avoid repeatedly consuming the
+// provider and gateway.
 const THOUGHT_RETRY_BACKOFF_MS = 6 * 60 * 60 * 1000;
 const DREAM_RETRY_BACKOFF_MS   = 6 * 60 * 60 * 1000;
 
@@ -350,7 +357,7 @@ type HandleChatFn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; reason?: string },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
@@ -387,7 +394,7 @@ export interface BrainJobStatus {
   ranToday?: boolean;
   pendingDate?: string;
   lastAttempt?: string | null;
-  lastOutcome?: 'idle' | 'success' | 'failed';
+  lastOutcome?: BrainRunStatus;
   lastError?: string | null;
   usage?: BrainJobUsageRecord | null;
 }
@@ -463,7 +470,7 @@ export class BrainRunner {
     const cadenceDueMs = lastThought
       ? Math.max(lastThought.getTime() + THOUGHT_INTERVAL_MS, now.getTime())
       : now.getTime();
-    const failedRetryDueMs = state.lastThoughtStatus === 'failed' && state.lastThoughtAttemptAt
+    const failedRetryDueMs = (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted') && state.lastThoughtAttemptAt
       ? new Date(state.lastThoughtAttemptAt).getTime() + THOUGHT_RETRY_BACKOFF_MS
       : 0;
     const nextThoughtMs = Math.max(cadenceDueMs, Number.isFinite(failedRetryDueMs) ? failedRetryDueMs : 0);
@@ -762,7 +769,7 @@ export class BrainRunner {
   ): { windowStart: Date; windowEnd: Date } | null {
     // Don't run thoughts if dream is imminent or already ran today
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
-    if (state.lastThoughtStatus === 'failed' && state.lastThoughtAttemptAt) {
+    if ((state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted') && state.lastThoughtAttemptAt) {
       const lastAttemptMs = new Date(state.lastThoughtAttemptAt).getTime();
       if (Number.isFinite(lastAttemptMs)) {
         const elapsedSinceAttempt = now.getTime() - lastAttemptMs;
@@ -799,7 +806,7 @@ export class BrainRunner {
 
   private _isDreamRetryReady(now: Date, state: BrainLatestState, pendingDate: string): boolean {
     if (
-      state.lastDreamStatus !== 'failed'
+      !['failed', 'aborted'].includes(state.lastDreamStatus)
       || !state.lastDreamAttemptAt
       || state.lastDreamAttemptDate !== pendingDate
     ) {
@@ -813,7 +820,7 @@ export class BrainRunner {
 
   private _isDreamCleanupRetryReady(now: Date, state: BrainLatestState, pendingDate: string): boolean {
     if (
-      state.lastDreamCleanupStatus !== 'failed'
+      !['failed', 'aborted'].includes(state.lastDreamCleanupStatus)
       || !state.lastDreamCleanupAttemptAt
       || state.lastDreamCleanupAttemptDate !== pendingDate
     ) {
@@ -882,7 +889,7 @@ export class BrainRunner {
       sessionId,
       startedAt: runStartedAt,
     });
-    const abortSignal = { aborted: false };
+    const abortSignal: { aborted: boolean; reason?: string } = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_thought',
       label: `Brain thought - ${dateStr} ${windowLabel}`,
@@ -901,6 +908,12 @@ export class BrainRunner {
     state.lastThoughtStatus = 'idle';
     state.lastThoughtError = null;
     saveLatestState(state);
+
+    // Brain session IDs are date-based and can outlive a gateway instance.
+    // Bind them to this runner's workspace before the cron chat path resolves
+    // its persisted session workspace, otherwise an old isolated instance can
+    // receive the model's file writes.
+    setWorkspace(sessionId, this.deps.workspacePath);
 
     clearHistory(sessionId);
 	    addMessage(
@@ -1037,7 +1050,7 @@ export class BrainRunner {
         thoughtReasoning ? { enabled: true, level: thoughtReasoning } : undefined,
       );
       resultText = abortSignal.aborted
-        ? 'ABORTED: Brain thought run aborted by operator.'
+        ? `ABORTED: Brain thought run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
       checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
@@ -1057,8 +1070,10 @@ export class BrainRunner {
 	    } finally {
 	      finishLiveRuntime(runtimeId);
 	      clearSessionMutationScope(sessionId);
-	      this.thoughtRunning = false;
-	    }
+      this.thoughtRunning = false;
+    }
+
+    const wasAborted = abortSignal.aborted;
 
     addMessage(
       sessionId,
@@ -1082,7 +1097,7 @@ export class BrainRunner {
       }
     };
     let recoveredArtifact = false;
-    if (!runFailed && !artifactFresh() && String(resultText || '').trim()) {
+    if (!wasAborted && !runFailed && !artifactFresh() && String(resultText || '').trim()) {
       try {
         fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
         fs.writeFileSync(absOutFile, [
@@ -1114,7 +1129,7 @@ export class BrainRunner {
       }
       // An empty array is a valid quiet-window result. Recover only the missing
       // sidecar, never manufacture capsules from prose.
-      if (!capsuleArtifactValid && fileLooksFresh && !runFailed) {
+      if (!capsuleArtifactValid && fileLooksFresh && !wasAborted && !runFailed) {
         fs.mkdirSync(path.dirname(absCapsuleFile), { recursive: true });
         fs.writeFileSync(absCapsuleFile, '[]\n', 'utf-8');
         capsuleArtifactValid = true;
@@ -1122,7 +1137,9 @@ export class BrainRunner {
     } catch {
       capsuleArtifactValid = false;
     }
-    const success = fileLooksFresh && capsuleArtifactValid && !runFailed;
+    const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;
+    const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
+    const success = outcome === 'success';
 
     const latestAfter = loadLatestState();
     if (success) {
@@ -1134,10 +1151,15 @@ export class BrainRunner {
         : null;
       saveLatestState(latestAfter);
     } else {
-      latestAfter.lastThoughtStatus = 'failed';
-      latestAfter.lastThoughtError = runFailed
-        ? String(resultText).slice(0, 500)
-        : `Expected thought artifact missing or stale: ${outFile}`;
+      latestAfter.lastThoughtStatus = outcome;
+      latestAfter.lastThoughtError = brainRunOutcomeError(
+        'thought',
+        outcome,
+        runFailed
+          ? String(resultText).slice(0, 500)
+          : `Expected thought artifact missing or stale: ${outFile}`,
+        abortSignal.reason,
+      );
       saveLatestState(latestAfter);
     }
 
@@ -1156,7 +1178,7 @@ export class BrainRunner {
     }
 
     const usage = finishBrainJobUsage(usageHandle, {
-      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      outcome,
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
     });
 
@@ -1212,7 +1234,7 @@ export class BrainRunner {
       sessionId,
       startedAt: runStartedAt,
     });
-    const abortSignal = { aborted: false };
+    const abortSignal: { aborted: boolean; reason?: string } = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
       label: `Brain dream - ${dateStr}`,
@@ -1224,6 +1246,11 @@ export class BrainRunner {
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
     checkpointBrainRuntime(runtimeId, 'dream_started', { phase: 'preparing' });
+
+    // A date-based cron session can be reused by another isolated instance.
+    // Always bind it to the workspace owned by this Brain runner before the
+    // model resolves any workspace-relative tools.
+    setWorkspace(sessionId, this.deps.workspacePath);
 
     clearHistory(sessionId);
     addMessage(
@@ -1343,7 +1370,7 @@ export class BrainRunner {
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
       );
       resultText = abortSignal.aborted
-        ? 'ABORTED: Brain dream run aborted by operator.'
+        ? `ABORTED: Brain dream run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
       checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
@@ -1356,6 +1383,8 @@ export class BrainRunner {
 	      clearBrainDreamProposalBudget(sessionId);
 	      this.dreamRunning = false;
 	    }
+
+    const wasAborted = abortSignal.aborted;
 
     addMessage(
       sessionId,
@@ -1381,7 +1410,7 @@ export class BrainRunner {
       }
     };
 
-    if (!runFailed && !artifactFresh(absOutFile) && String(resultText || '').trim()) {
+    if (!wasAborted && !runFailed && !artifactFresh(absOutFile) && String(resultText || '').trim()) {
       try {
         fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
         fs.writeFileSync(absOutFile, [
@@ -1401,7 +1430,7 @@ export class BrainRunner {
       }
     }
 
-    if (!runFailed && artifactFresh(absOutFile) && !artifactFresh(proposalsFilePath)) {
+    if (!wasAborted && !runFailed && artifactFresh(absOutFile) && !artifactFresh(proposalsFilePath)) {
       try {
         fs.mkdirSync(path.dirname(proposalsFilePath), { recursive: true });
         fs.writeFileSync(proposalsFilePath, [
@@ -1435,7 +1464,7 @@ export class BrainRunner {
           carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
         }
       }
-      if (!carryForwardFresh && dreamFresh && !runFailed) {
+      if (!carryForwardFresh && dreamFresh && !wasAborted && !runFailed) {
         fs.mkdirSync(path.dirname(absCarryDecisionFile), { recursive: true });
         const fallback = {
           targetDate: carryTargetDate,
@@ -1454,7 +1483,9 @@ export class BrainRunner {
     const artifactsFresh = dreamFresh && proposalsFresh && carryForwardFresh;
     const proposalIds = this._extractProposalIds(toolResults).slice(-100);
     const proposalContractError = this._detectProposalContractError(proposalsFilePath, proposalIds);
-    const success = artifactsFresh && !runFailed && !proposalContractError;
+    const verifiedSuccess = artifactsFresh && !runFailed && !proposalContractError;
+    const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
+    const success = outcome === 'success';
 
 	    const state = loadLatestState();
 	    if (success) {
@@ -1492,20 +1523,25 @@ export class BrainRunner {
         }
       }
     } else {
-      state.lastDreamStatus = 'failed';
-      state.lastDreamError = runFailed
-        ? String(resultText).slice(0, 500)
-        : proposalContractError
-          ? proposalContractError
-        : `Expected dream artifacts missing/stale after recovery attempts: ${[
-          dreamFresh ? null : outFile,
-          proposalsFresh ? null : 'proposals.md',
-        ].filter(Boolean).join(', ') || '(unknown)'}`;
+      state.lastDreamStatus = outcome;
+      state.lastDreamError = brainRunOutcomeError(
+        'dream',
+        outcome,
+        runFailed
+          ? String(resultText).slice(0, 500)
+          : proposalContractError
+            ? proposalContractError
+          : `Expected dream artifacts missing/stale after recovery attempts: ${[
+            dreamFresh ? null : outFile,
+            proposalsFresh ? null : 'proposals.md',
+          ].filter(Boolean).join(', ') || '(unknown)'}`,
+        abortSignal.reason,
+      );
       saveLatestState(state);
     }
 
     const usage = finishBrainJobUsage(usageHandle, {
-      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      outcome,
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
     });
 
@@ -1554,7 +1590,7 @@ export class BrainRunner {
       sessionId,
       startedAt: runStartedAt,
     });
-    const abortSignal = { aborted: false };
+    const abortSignal: { aborted: boolean; reason?: string } = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
       label: `Brain dream cleanup - ${dateStr}`,
@@ -1573,6 +1609,10 @@ export class BrainRunner {
     state.lastDreamCleanupStatus = 'idle';
     state.lastDreamCleanupError = null;
     saveLatestState(state);
+
+    // Cleanup sessions are also date-based and can carry a stale workspace
+    // binding from another isolated gateway instance.
+    setWorkspace(sessionId, this.deps.workspacePath);
 
     clearHistory(sessionId);
     addMessage(
@@ -1647,7 +1687,7 @@ export class BrainRunner {
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
       );
       resultText = abortSignal.aborted
-        ? 'ABORTED: Brain dream cleanup run aborted by operator.'
+        ? `ABORTED: Brain dream cleanup run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
       checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
@@ -1659,6 +1699,8 @@ export class BrainRunner {
       clearSessionMutationScope(sessionId);
       this.dreamCleanupRunning = false;
     }
+
+    const wasAborted = abortSignal.aborted;
 
     addMessage(
       sessionId,
@@ -1673,9 +1715,32 @@ export class BrainRunner {
 
     const cleanupExists = fs.existsSync(absOutFile);
     const cleanupStats = cleanupExists ? fs.statSync(absOutFile) : null;
-    const fileLooksFresh = !!cleanupStats && cleanupStats.size > 0 && cleanupStats.mtimeMs >= (runStartedAt - 5000);
+    let fileLooksFresh = !!cleanupStats && cleanupStats.size > 0 && cleanupStats.mtimeMs >= (runStartedAt - 5000);
     const runFailed = /^error:/i.test(String(resultText || '').trim());
-    const success = fileLooksFresh && !runFailed;
+    let recoveredArtifact = false;
+    if (!wasAborted && !fileLooksFresh && !runFailed && String(resultText || '').trim()) {
+      try {
+        fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
+        fs.writeFileSync(absOutFile, [
+          `# Dream Cleanup - ${dateStr}`,
+          `_Generated: ${fmtLocal(new Date())}_`,
+          '',
+          '## Artifact Recovery Note',
+          'The model-backed Dream cleanup returned a response but did not write a fresh cleanup artifact. Prometheus recovered the run by saving that response here.',
+          '',
+          '## Recovered Cleanup Response',
+          String(resultText || '').trim(),
+          '',
+        ].join('\n'), 'utf-8');
+        recoveredArtifact = true;
+      } catch (err: any) {
+        console.warn('[BrainRunner] Failed to recover dream cleanup artifact:', err?.message || err);
+      }
+    }
+    if (recoveredArtifact) fileLooksFresh = true;
+    const verifiedSuccess = fileLooksFresh && !runFailed;
+    const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
+    const success = outcome === 'success';
 
     const latestAfter = loadLatestState();
     if (success) {
@@ -1683,7 +1748,9 @@ export class BrainRunner {
       latestAfter.lastDreamCleanupCompletedAt = new Date().toISOString();
       latestAfter.lastDreamCleanupAttemptDate = dateStr;
       latestAfter.lastDreamCleanupStatus = 'success';
-      latestAfter.lastDreamCleanupError = null;
+      latestAfter.lastDreamCleanupError = recoveredArtifact
+        ? `Recovered missing/stale dream cleanup artifact: ${outFile}`
+        : null;
       saveLatestState(latestAfter);
 
       const daily = loadDailyStatus(dateStr);
@@ -1692,15 +1759,20 @@ export class BrainRunner {
       daily.dreamCleanupCompletedAt = new Date().toISOString();
       saveDailyStatus(daily);
     } else {
-      latestAfter.lastDreamCleanupStatus = 'failed';
-      latestAfter.lastDreamCleanupError = runFailed
-        ? String(resultText).slice(0, 500)
-        : `Expected dream cleanup artifact missing/stale: ${outFile}`;
+      latestAfter.lastDreamCleanupStatus = outcome;
+      latestAfter.lastDreamCleanupError = brainRunOutcomeError(
+        'dream cleanup',
+        outcome,
+        runFailed
+          ? String(resultText).slice(0, 500)
+          : `Expected dream cleanup artifact missing/stale: ${outFile}`,
+        abortSignal.reason,
+      );
       saveLatestState(latestAfter);
     }
 
     const usage = finishBrainJobUsage(usageHandle, {
-      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      outcome,
       error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
     });
 

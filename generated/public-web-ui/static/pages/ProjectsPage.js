@@ -146,7 +146,10 @@ function renderProjectChatRow(project) {
   const projectTimestamp = projectLastActivity(project);
   const children = (project.sessions || []).slice().sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a)).map((session) => {
     const cached = Array.isArray(window.chatSessions) ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || '')) : null;
-    const nested = { ...(cached || {}), ...session, projectId: project.id, projectName: project.name };
+    // The project API is a snapshot. Prefer the live local session object so
+    // working/unread/preview metadata changes appear in the sidebar without a
+    // reload while a project chat is streaming.
+    const nested = { ...session, ...(cached || {}), projectId: project.id, projectName: project.name };
     return typeof window.renderChatSessionCard === 'function'
       ? window.renderChatSessionCard(nested, { projectId: project.id, projectNested: true, projectDelete: false })
       : '';
@@ -171,6 +174,50 @@ window.renderProjectChatRows = function({ pinned = false, query = '' } = {}) {
     .sort((a, b) => (projectPinned(b) ? Number(b.pinnedAt || 0) : projectLastActivity(b)) - (projectPinned(a) ? Number(a.pinnedAt || 0) : projectLastActivity(a)))
     .map(renderProjectChatRow)
     .join('');
+};
+
+// The bell/priority rail keeps project chats visible as their own groups. The
+// project title remains the familiar project row, while its child chats use
+// the priority rail's richer Hermes-style session card and are never hidden
+// behind the normal expandable tree.
+window.renderPriorityProjectGroups = function() {
+  return _projects
+    .filter((project) => project && (project.sessions || []).length)
+    .slice()
+    .sort((a, b) => {
+      const pinnedDelta = Number(projectPinned(b)) - Number(projectPinned(a));
+      return pinnedDelta || projectLastActivity(b) - projectLastActivity(a);
+    })
+    .map((project) => {
+      const projectId = escHtmlLocal(project.id);
+      const projectName = escHtmlLocal(project.name || 'Untitled project');
+      const importedLogo = projectImportedLogo(project);
+      const folder = '<span class="project-chat-folder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path><path d="M3.5 9.5h17"></path></svg></span>';
+      const pinned = projectPinned(project);
+      const collapsed = typeof window.isPriorityProjectCollapsed === 'function'
+        && window.isPriorityProjectCollapsed(project.id);
+      const children = (project.sessions || [])
+        .slice()
+        .sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a))
+        .map((session) => {
+          const cached = Array.isArray(window.chatSessions)
+            ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || ''))
+            : null;
+          const nested = { ...session, ...(cached || {}), projectId: project.id, projectName: project.name, source: 'project' };
+          return typeof window.renderChatSessionCard === 'function'
+            ? window.renderChatSessionCard(nested, { priority: true, projectId: project.id, projectNested: true, projectLabel: project.name, projectDelete: false })
+            : '';
+        }).join('');
+      return `<section class="priority-project-group${collapsed ? ' is-collapsed' : ''}" data-priority-project-id="${projectId}">
+        <div class="priority-project-title project-chat-row${importedLogo ? ' imported-project' : ''}" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}" onclick="togglePriorityProject(event)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); togglePriorityProject(event); }" title="${escHtmlLocal(project.workspacePath || project.externalImport?.sourcePath || project.name)}">
+          <div class="priority-project-title-name"><span class="project-chat-icon-line">${folder}${importedLogo}</span><span>${projectName}</span></div>
+          <span class="priority-project-time">${timeAgo(projectLastActivity(project))}</span>
+          <button class="project-chat-new-btn priority-project-action" type="button" onclick="event.preventDefault();event.stopPropagation();window.newProjectSession && window.newProjectSession('${projectId}')" title="New chat in project" aria-label="New chat in project">+</button>
+          <button class="project-chat-pin-btn priority-project-action${pinned ? ' active' : ''}" type="button" onclick="event.preventDefault();event.stopPropagation();window.toggleProjectPin && window.toggleProjectPin('${projectId}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
+        </div>
+        <div class="priority-project-children"${collapsed ? ' hidden' : ''}>${children}</div>
+      </section>`;
+    }).join('');
 };
 
 async function createProjectApi(name, workspacePath = '') {
@@ -367,11 +414,15 @@ function renderProjectSessionItem(projectId, s, options = {}) {
       ? window.chatSessions.find((session) => String(session?.id || '') === String(s?.id || ''))
       : null;
     const nestedSession = {
-      ...(cachedSession || {}),
       ...s,
-      title,
+      ...(cachedSession || {}),
+      // Keep a local title when one was just generated by the active turn.
+      title: cachedSession?.title || title,
       updatedAt: cachedSession?.updatedAt || s.updatedAt || activity,
-      lastMessageAt: cachedSession?.lastMessageAt || s.lastMessageAt || activity,
+      lastMessageAt: Math.max(
+        Number(cachedSession?.lastMessageAt || 0),
+        Number(s.lastMessageAt || activity || 0),
+      ) || activity,
     };
     if (typeof window.renderChatSessionCard === 'function') {
       return window.renderChatSessionCard(nestedSession, { projectId, projectNested: true, projectDelete: true });

@@ -21,6 +21,9 @@ assert.deepEqual(
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const utils = read('web-ui/src/utils.js');
+const toolActivity = read('web-ui/src/tool-activity.js');
+const componentsCss = read('web-ui/src/styles/components.css');
+const mobileCss = read('web-ui/src/styles/mobile.css');
 assert.match(desktop, /getChatSlashCommands\('desktop'\)/);
 assert.match(mobile, /getChatSlashCommands\('mobile'\)/);
 assert.match(desktop, /prometheus:visual-state-change/);
@@ -32,8 +35,20 @@ assert.doesNotMatch(utils, /Math\.ceil\(height\)\s*\+\s*16/);
 assert.match(utils, /Math\.abs\(current - bounded\) <= 1/);
 assert.match(utils, /measured<=viewport\+24\?viewport:measured/);
 assert.match(utils, /height:\$\{minHeight\}px/);
-assert.match(utils, /const visualCanvasBg = isDark/);
+assert.match(utils, /--prom-surface/);
+assert.match(utils, /background:transparent/);
+assert.match(utils, /data-vis-surface="inline"/);
+assert.match(utils, /v\.partial \? ''/);
+assert.doesNotMatch(utils, /Building \$\{label\}/);
+assert.doesNotMatch(utils, /Assembling visual canvas/);
 assert.match(utils, /function normalizeSvgSize\(\)/);
+assert.match(toolActivity, /presentation\.visual/);
+assert.match(toolActivity, /Generating interactive visual/);
+assert.match(desktop, /syncStreamingVisualActivity/);
+assert.match(componentsCss, /\.visual-block[\s\S]*background: transparent/);
+const mobileVisualSection = mobileCss.slice(mobileCss.indexOf('.pm-bubble .visual-block'), mobileCss.indexOf('.pm-visual-save-row'));
+assert.doesNotMatch(mobileVisualSection, /margin-left: -14px/);
+assert.doesNotMatch(mobileVisualSection, /min-height: 260px/);
 
 const skill = read('workspace/skills/interactive-visuals/SKILL.md');
 for (const lane of ['chart-visualizer', 'mermaid-diagrams', 'svg-diagrams', 'interactive-artifacts']) {
@@ -41,12 +56,16 @@ for (const lane of ['chart-visualizer', 'mermaid-diagrams', 'svg-diagrams', 'int
 }
 assert.match(skill, /do not call `show_ui_card`/i);
 assert.match(skill, /exactly one complete fenced visual block/i);
+assert.match(skill, /freeform/i);
+assert.match(skill, /theme tokens/i);
 
 const chatRouter = read('src/gateway/routes/chat.router.ts');
 const promptContext = read('src/gateway/prompt-context.ts');
 const skillsManagerSource = read('src/gateway/skills-runtime/skills-manager.ts');
 assert.match(chatRouter, /VISUAL FINALIZATION BLOCKED/);
 assert.match(chatRouter, /hasReadSpecializedVisualSkill/);
+assert.match(chatRouter, /PRESENTATION SELECTION/);
+assert.match(chatRouter, /fractal explorer/);
 assert.match(promptContext, /selectedSkillCtxLocal/);
 assert.match(skillsManagerSource, /\[USER_SELECTED_SKILL_INSTRUCTIONS\]/);
 assert.match(skillsManagerSource, /String\(skill\.instructions/);

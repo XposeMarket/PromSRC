@@ -19,8 +19,25 @@ function appendExitDiagnostic(type: string, details: Record<string, unknown> = {
   }
 }
 
+function installBrokenPipeGuards(): void {
+  // The gateway is supervised through a pipe. A disconnected supervisor or
+  // WebSocket relay can make a later console/log write emit EPIPE; without a
+  // listener Node treats that as an uncaught exception and tears down the
+  // gateway, interrupting active Brain runs and every other long-lived job.
+  for (const [name, stream] of [['stdout', process.stdout], ['stderr', process.stderr]] as const) {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      if (error?.code === 'EPIPE') return;
+      appendExitDiagnostic('output_stream_error', {
+        stream: name,
+        error: error?.stack || error?.message || String(error),
+      });
+    });
+  }
+}
+
 if (!processWithMarker[marker]) {
   processWithMarker[marker] = true;
+  installBrokenPipeGuards();
 
   const originalExit = process.exit.bind(process) as typeof process.exit;
   process.exit = ((code?: string | number | null | undefined): never => {

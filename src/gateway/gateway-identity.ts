@@ -15,6 +15,7 @@ const FILE_NAME = 'gateway-identity.json';
 const PROTOCOL = 'prometheus-mobile-gateway';
 const PROTOCOL_VERSION = 1;
 const MOBILE_GATEWAY_CATALOG_ENABLED = process.env.PROMETHEUS_MOBILE_GATEWAY_CATALOG !== '0';
+const MOBILE_GATEWAY_EXECUTION_ENABLED = process.env.PROMETHEUS_MOBILE_GATEWAY_EXECUTION !== '0';
 
 interface StoredIdentity {
   version: 1;
@@ -95,9 +96,18 @@ export function getGatewayDescriptor(origin = ''): Record<string, unknown> {
       'status.read',
       'pairing',
       'target-selection',
+      ...(MOBILE_GATEWAY_EXECUTION_ENABLED ? ['chat.read', 'chat.write', 'chat.stream', 'voice'] : []),
     ],
-    // Explicitly advertise the first-slice boundary so a client cannot infer
-    // that this catalog endpoint is permission to execute remote work.
-    execution: { enabled: false, reason: 'first_slice_read_only' },
+    // Execution remains target-scoped: the phone must present the paired
+    // device grant issued by this gateway. No account cookie or credential is
+    // forwarded between gateways.
+    execution: {
+      enabled: MOBILE_GATEWAY_EXECUTION_ENABLED,
+      mode: MOBILE_GATEWAY_EXECUTION_ENABLED ? 'paired-device-direct' : 'read-only',
+      scopes: MOBILE_GATEWAY_EXECUTION_ENABLED
+        ? ['chat.read', 'chat.write', 'chat.stream', 'voice']
+        : ['catalog.read', 'status.read'],
+      reason: MOBILE_GATEWAY_EXECUTION_ENABLED ? 'paired_device_scope' : 'execution_disabled_by_configuration',
+    },
   };
 }

@@ -157,15 +157,31 @@ function migrateLegacyCredentials(configDir: string): void {
 
 export function loadTokens(configDir: string, accountId?: string): OAuthTokens | null {
   migrateLegacyCredentials(configDir);
-  const vault  = getVault(configDir);
-  const secret = vault.get(accountVaultKey(accountId), 'oauth:load');
+  const vault = getVault(configDir);
+  const normalizedAccountId = String(accountId || '').trim();
+  const requestedKey = accountVaultKey(normalizedAccountId);
+  let storedKey = requestedKey;
+  let secret = vault.get(requestedKey, 'oauth:load');
+
+  // Before provider accounts were introduced, the Codex OAuth token lived at
+  // the unscoped key. Treat that entry as the legacy default when the current
+  // provider is asking for an account-scoped token. This also repairs a stale
+  // scoped entry left behind by a different desktop vault key: the valid
+  // legacy token is copied into the requested account slot below.
+  if (!secret && normalizedAccountId) {
+    storedKey = VAULT_KEY;
+    secret = vault.get(VAULT_KEY, 'oauth:load_legacy_fallback');
+  }
   if (!secret) return null;
   try {
     const tokens = JSON.parse(secret.expose()) as OAuthTokens;
     const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
     if (!nonTtlTokenMigrated.has(key)) {
       // One-time in-process migration: rewrite entry without vault TTL.
-      vault.set(accountVaultKey(accountId), JSON.stringify(tokens), 'oauth:migrate_non_ttl');
+      vault.set(storedKey, JSON.stringify(tokens), 'oauth:migrate_non_ttl');
+      if (storedKey !== requestedKey) {
+        vault.set(requestedKey, JSON.stringify(tokens), 'oauth:migrate_account_alias');
+      }
       nonTtlTokenMigrated.add(key);
     }
     return tokens;

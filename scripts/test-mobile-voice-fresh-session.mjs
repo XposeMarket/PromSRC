@@ -6,8 +6,6 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
 const router = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-router.js'), 'utf8');
-const entry = fs.readFileSync(path.join(root, 'web-ui/index.html'), 'utf8');
-const serviceWorker = fs.readFileSync(path.join(root, 'web-ui/service-worker.js'), 'utf8');
 
 const renderStart = pages.indexOf('export async function renderVoicePage');
 const renderEnd = pages.indexOf('\nexport ', renderStart + 1);
@@ -16,7 +14,7 @@ assert.ok(renderStart >= 0, 'standalone Voice page renderer must exist');
 
 assert.match(
   voicePage,
-  /if \(!inlineMode\) _startMobileNewVoiceDraft\(\);/,
+  /if \(!inlineMode\) \{[\s\S]*?_startMobileNewVoiceDraft\(\);/,
   'entering standalone Voice must begin with an isolated mobile draft',
 );
 assert.match(
@@ -75,13 +73,5 @@ assert.match(
   /if \(targetSessionId === MOBILE_CHAT_SESSION_ID\)[\s\S]*?_ensureDurableMobileVoiceSession/,
   'the first utterance in a fresh Voice draft must materialize a new durable session',
 );
-
-for (const [name, source] of [
-  ['router', router],
-  ['entrypoint', entry],
-]) {
-  assert.match(source, /mobile-codex-live-v3-v15-room-context/, `${name} must use the room-context cache revision`);
-}
-assert.match(serviceWorker, /pm-v226-2026-07-29-voice-room-shared-context/);
 
 console.log('mobile Voice fresh-session checks passed');

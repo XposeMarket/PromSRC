@@ -10,16 +10,17 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
+import type { BrainRunStatus } from './brain-run-outcome';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface BrainLatestState {
   /** ISO timestamp of the last thought run */
   lastThoughtAt: string | null;
-  /** ISO timestamp of the last thought attempt (success or fail) */
+  /** ISO timestamp of the last thought attempt (success, failure, or abort) */
   lastThoughtAttemptAt: string | null;
   /** Last known thought outcome */
-  lastThoughtStatus: 'idle' | 'success' | 'failed';
+  lastThoughtStatus: BrainRunStatus;
   /** Last thought failure error, if any */
   lastThoughtError: string | null;
   /** HH-mm label of the last thought window (e.g. "06-00") */
@@ -28,12 +29,12 @@ export interface BrainLatestState {
   lastDreamDate: string | null;
   /** ISO timestamp of the last successful dream completion */
   lastDreamCompletedAt: string | null;
-  /** ISO timestamp of the last dream attempt (success or fail) */
+  /** ISO timestamp of the last dream attempt (success, failure, or abort) */
   lastDreamAttemptAt: string | null;
   /** YYYY-MM-DD local date the last dream attempt targeted */
   lastDreamAttemptDate: string | null;
   /** Last known dream outcome */
-  lastDreamStatus: 'idle' | 'success' | 'failed';
+  lastDreamStatus: BrainRunStatus;
   /** Last dream failure error, if any */
   lastDreamError: string | null;
   /** YYYY-MM-DD local date of the last completed dream cleanup pass */
@@ -45,7 +46,7 @@ export interface BrainLatestState {
   /** YYYY-MM-DD local date the last dream cleanup attempt targeted */
   lastDreamCleanupAttemptDate: string | null;
   /** Last known dream cleanup outcome */
-  lastDreamCleanupStatus: 'idle' | 'success' | 'failed';
+  lastDreamCleanupStatus: BrainRunStatus;
   /** Last dream cleanup failure error, if any */
   lastDreamCleanupError: string | null;
   /** ISO timestamp when the current gateway session started */

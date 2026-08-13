@@ -59,7 +59,7 @@ export interface LiveRuntimeRegistration {
   detail?: string;
   /** Stable client-generated id used to reconnect to the same user turn. */
   clientRequestId?: string;
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; reason?: string };
   onAbort?: () => void;
   recoveryPolicy?: 'resume' | 'rerun' | 'mark_interrupted' | 'do_not_resume';
   recoveryData?: Record<string, any>;
@@ -169,7 +169,7 @@ export function isInterruptedByRestart(
 }
 
 interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; reason?: string };
   onAbort?: () => void;
   pendingSteers?: RuntimeSteerEvent[];
 }
@@ -557,6 +557,7 @@ export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRunti
   record.updatedAt = Date.now();
   if (record.abortSignal) {
     record.abortSignal.aborted = true;
+    record.abortSignal.reason = 'operator_abort';
   }
 
   try {
@@ -856,7 +857,10 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
     // Persist the restart epoch onto recoveryData so it survives in the durable
     // ledger and the post-restart process can match "interrupted by this restart".
     record.recoveryData = { ...(record.recoveryData || {}), restartEpoch, interruptReason: reason };
-    if (record.abortSignal) record.abortSignal.aborted = true;
+    if (record.abortSignal) {
+      record.abortSignal.aborted = true;
+      record.abortSignal.reason = reason;
+    }
     const snapshot = toSnapshot(record);
     interrupted.push(snapshot);
     // Persist the FULL snapshot (with process log) so the owning session can

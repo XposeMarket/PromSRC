@@ -920,6 +920,55 @@ function resolveInstallRoot(): string {
   return path.resolve(__dirname, '..', '..');
 }
 
+function resolveElectronDevExecutable(): string {
+  const rootDir = resolveInstallRoot();
+  const candidates = process.platform === 'win32'
+    ? [
+      path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron.exe'),
+      path.join(rootDir, 'node_modules', '.bin', 'electron.cmd'),
+    ]
+    : [
+      path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron'),
+      path.join(rootDir, 'node_modules', '.bin', 'electron'),
+    ];
+  const executable = candidates.find(candidate => fs.existsSync(candidate));
+  if (!executable) {
+    throw new Error('The local Electron runtime is not installed. Run npm install in PromSRC first.');
+  }
+  return executable;
+}
+
+function launchElectronDev(options: { port?: string; dataDir?: string }): void {
+  const rootDir = resolveInstallRoot();
+  const executable = resolveElectronDevExecutable();
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  env.PROMETHEUS_ELECTRON_DEV = '1';
+  const requestedPort = options.port || process.env.PROMETHEUS_GATEWAY_PORT;
+  if (requestedPort) {
+    const port = parseGatewayPort(requestedPort);
+    if (!port) throw new Error(`Invalid gateway port: ${requestedPort}`);
+    env.PROMETHEUS_GATEWAY_PORT = String(port);
+  }
+  if (options.dataDir) {
+    env.PROMETHEUS_ELECTRON_DATA_DIR = path.resolve(options.dataDir);
+  }
+
+  const child = spawn(executable, ['.'], {
+    cwd: rootDir,
+    env,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+  });
+  child.unref();
+
+  // Electron's main process uses its explicit env override or its desktop
+  // default; the terminal gateway config's port is not consulted here.
+  const port = env.PROMETHEUS_GATEWAY_PORT || String(DEFAULT_GATEWAY_PORT);
+  console.log(`[prom] Electron dev app launched from ${rootDir} (gateway port ${port}).`);
+  console.log('[prom] This uses the local source runtime; no installer or package build is involved.');
+}
+
 function readPackageMeta(rootDir: string): { name: string; version: string } {
   try {
     const pkgPath = path.join(rootDir, 'package.json');
@@ -1051,13 +1100,28 @@ program
     getDatabase();
     ui.success('Job database initialized');
     ui.header('Next Steps');
-    ui.info('1. Start the gateway:  prom');
-    ui.info(`2. Open browser:       ${getGatewayUrl('localhost')}`);
+    ui.info('1. Start the desktop app:  prom');
+    ui.info('2. Start terminal/web mode: prom gateway start');
     ui.info('3. Go to Settings → Models to configure your LLM provider');
     ui.blank();
   });
 
 // ---- GATEWAY ----
+program
+  .command('electron')
+  .alias('desktop')
+  .description('Launch the local Electron desktop app from source (no installer/build)')
+  .option('--port <port>', 'Use a specific local gateway port')
+  .option('--data-dir <path>', 'Use a separate Electron user-data directory')
+  .action((options: { port?: string; dataDir?: string }) => {
+    try {
+      launchElectronDev(options);
+    } catch (error: any) {
+      ui.error(error?.message || String(error));
+      process.exitCode = 1;
+    }
+  });
+
 const gateway = program.command('gateway').description('Control the gateway server');
 
 gateway
@@ -1345,13 +1409,11 @@ program
     await runCanonicalCliUpdate(actionMode as 'check' | 'apply', Boolean(options.yes));
   });
 
-// Default: calling `prom` with no arguments targets the one persistent dev
-// instance assigned to this checkout. The gateway start command detects a
-// healthy listener and exits cleanly, so an accidental second launch cannot
-// silently allocate another port and data directory. Multiple instances remain
-// available through the explicit --new-instance and --auto-instance flags.
+// Default: calling `prom` with no arguments launches the local Electron app
+// from source for fast desktop testing. The regular terminal/web gateway stays
+// available explicitly through `prom gateway start`.
 if (process.argv.slice(2).length === 0) {
-  process.argv.push('gateway', 'start', '--canonical-dev-instance');
+  process.argv.push('electron');
 }
 
 program.parse();

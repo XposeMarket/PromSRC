@@ -28,6 +28,20 @@ This will:
 2. Spin up your gateway (`tsx src/gateway/server-v2.ts`) on the selected local port
 3. Open the Prometheus UI in a native window
 
+For the same source-based desktop launch through the installed `prom` command,
+use:
+
+```powershell
+prom
+# or explicitly:
+prom electron
+prom desktop
+```
+
+These commands run the local Electron runtime directly. They do not build an
+installer or run the packaged updater. Use `prom gateway start` when you want
+the regular terminal/web gateway without Electron.
+
 Use this to test before building the installer.
 
 ---
@@ -93,12 +107,13 @@ D:\Prometheus\
 ## Run multiple local instances
 
 The normal gateway port remains `18789`. Electron uses it when available and
-automatically selects the next free port when another gateway already owns it.
+fails clearly if another gateway already owns it, so a desktop test launch
+cannot silently connect to the wrong instance. Close the existing Prometheus
+gateway first, or pass a dedicated port to `prom electron --port <port>`.
 
-The bare `prom` command uses the same behavior from any directory: it starts
-the normal configured instance when `18789` is free, and automatically creates
-an isolated next instance when that port is already occupied. Run `prom` again
-from another terminal to start another instance.
+The regular terminal/web gateway remains available through `prom gateway start`.
+For an isolated terminal gateway, use the explicit `--new-instance` or
+`--auto-instance` flags below.
 
 For additional terminal gateways, give each instance both a unique port and a
 unique data directory:

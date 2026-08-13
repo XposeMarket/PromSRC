@@ -78,9 +78,19 @@ const GATEWAY_HEALTH_INTERVAL_MS = 15_000;
 const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
 const GATEWAY_HEALTH_FAILURE_LIMIT = 2;
 const GATEWAY_BUSY_RECOVERY_GRACE_MS = 45_000;
+const GATEWAY_QUIT_GRACE_MS = 12_000;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
 const IS_PACKAGED_RUNTIME = app.isPackaged;
+const IS_SOURCE_ELECTRON_DEV = !IS_PACKAGED_RUNTIME && process.env.PROMETHEUS_ELECTRON_DEV === '1';
+
+// The source Electron launcher must never reuse the installed app's Chromium
+// renderer cache. The gateway state stays shared below, but the renderer gets
+// its own profile so a stale packaged instance cannot make current source UI
+// look like an older release.
+if (IS_SOURCE_ELECTRON_DEV) {
+  app.commandLine.appendSwitch('disable-http-cache');
+}
 
 function getPackagedAppRoot() {
   // Public builds use app.asar, while the unsigned tester build intentionally
@@ -111,11 +121,23 @@ const configuredUserDataDir = String(
 const USER_DATA_DIR = configuredUserDataDir
   ? path.resolve(configuredUserDataDir)
   : defaultUserDataDir;
+// Keep the Electron profile aligned with the canonical Prometheus data root in
+// source development too.  The vault master key is sealed through Electron's
+// safeStorage, whose backing key is profile-scoped on Windows.  Using a
+// source-only profile here made direct `electron .` launches unable to decrypt
+// the key created by the installed desktop app, so the gateway silently fell
+// back to the legacy plaintext key and all saved credentials appeared missing.
+// The source renderer cache is still cleared below; the profile itself must be
+// shared so installed and source runs use the same vault encryption context.
+const ELECTRON_PROFILE_DIR = USER_DATA_DIR;
 app.setAppUserModelId(APP_ID);
 app.setName('Prometheus');
-app.setPath('userData', USER_DATA_DIR);
+app.setPath('userData', ELECTRON_PROFILE_DIR);
 if (!fs.existsSync(USER_DATA_DIR)) {
   fs.mkdirSync(USER_DATA_DIR, { recursive: true });
+}
+if (!fs.existsSync(ELECTRON_PROFILE_DIR)) {
+  fs.mkdirSync(ELECTRON_PROFILE_DIR, { recursive: true });
 }
 
 // ─── First-Run Stamp ───────────────────────────────────────────────────────
@@ -851,6 +873,32 @@ function assertGatewayPortAvailable(port) {
   }
 }
 
+function getGatewayPortOwnerPids(port = gatewayPort) {
+  if (process.platform !== 'win32') return [];
+  try {
+    const output = execSync('netstat -ano -p tcp', {
+      encoding: 'utf-8', stdio: 'pipe', timeout: 5_000,
+    });
+    return parseWindowsListeningPids(output, port);
+  } catch {
+    return [];
+  }
+}
+
+// Only clean listeners whose runtime status still identifies the gateway that
+// Electron just owned. This prevents a restart race from killing an unrelated
+// process that happened to claim the same port after the old child exited.
+function forceCleanupOwnedGatewayPort(expectedPid) {
+  const status = readGatewayRuntimeStatus();
+  if (Number(status?.pid || 0) !== Number(expectedPid || 0)) return;
+  for (const pid of getGatewayPortOwnerPids()) {
+    if (!pid || pid === process.pid) continue;
+    try {
+      execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe', timeout: 8_000 });
+    } catch {}
+  }
+}
+
 // ─── Gateway Log ───────────────────────────────────────────────────────────
 // In packaged builds stdout/stderr have no terminal — write to a log file so
 // crashes are diagnosable. Also keeps the last 200 lines in memory for the
@@ -1103,6 +1151,16 @@ function killGatewayProcessTree(child = gatewayProcess) {
   }
   try { child.kill('SIGKILL'); } catch {}
 }
+
+// Electron can still be torn down by a renderer crash, an OS close request,
+// or an explicit process exit before the async before-quit handshake finishes.
+// Make the final process boundary synchronous so a managed gateway cannot be
+// left behind holding the desktop port.
+process.on('exit', () => {
+  if (!gatewayProcess || !gatewayProcess.pid) return;
+  if (gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
+  killGatewayProcessTree(gatewayProcess);
+});
 
 function waitForGatewayProcessExit(child, timeoutMs = 10_000) {
   if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
@@ -1466,6 +1524,7 @@ async function startGateway() {
     PROMETHEUS_VERSION:            CURRENT_VERSION,
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
+    PROMETHEUS_ELECTRON_PID:      String(process.pid),
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
@@ -1491,19 +1550,17 @@ async function startGateway() {
       windowsHide: true,
     });
   } else {
-    const isWin = process.platform === 'win32';
-    const tsxBin = path.join(
-      APP_ROOT, 'node_modules', '.bin', isWin ? 'tsx.cmd' : 'tsx'
-    );
-    const tsxExists = fs.existsSync(tsxBin);
-    const [cmd, args] = tsxExists
-      ? [tsxBin, [getGatewayEntryPath()]]
-      : ['npx', ['tsx', getGatewayEntryPath()]];  // fallback
-
-    gatewayProcess = spawn(cmd, args, {
+    // Do not spawn the Windows .cmd shim with shell:true. Electron would then
+    // track only cmd.exe while the real tsx/node gateway became a detached
+    // descendant, which is exactly how ports survived an app close. Run tsx's
+    // JS entrypoint directly under Electron's Node runtime instead.
+    const tsxCli = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    if (!fs.existsSync(tsxCli)) {
+      throw new Error(`The local tsx runtime is missing: ${tsxCli}`);
+    }
+    gatewayProcess = spawn(process.execPath, [tsxCli, getGatewayEntryPath()], {
       cwd:   getGatewayWorkingDirectory(),
-      env:   gatewayEnv,
-      shell: isWin,
+      env:   { ...gatewayEnv, ELECTRON_RUN_AS_NODE: '1' },
       windowsHide: true,
     });
   }
@@ -1534,9 +1591,16 @@ async function startGateway() {
 
   gatewayProcess.on('exit', (code, signal) => {
     writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
+    // A timed-out restart may have terminated the gateway before its worker
+    // descendants released the listener. Clean only the old Electron-owned
+    // port before attempting the replacement.
+    forceCleanupOwnedGatewayPort(gatewayProcess?.pid || 0);
     if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
-      restartGatewayFromElectron();
+      restartGatewayFromElectron({
+        terminateExisting: true,
+        reason: 'gateway requested restart',
+      });
       return;
     }
     if (!isQuitting) {
@@ -1569,6 +1633,7 @@ async function restartGatewayFromElectron(options = {}) {
       writeGatewayLog(`[main] Terminating unresponsive gateway tree (pid=${staleProcess.pid || 'unknown'})\n`);
       killGatewayProcessTree(staleProcess);
       await waitForGatewayProcessExit(staleProcess);
+      forceCleanupOwnedGatewayPort(staleProcess.pid || 0);
     }
     gatewayProcess = null;
     await startGateway();
@@ -3043,6 +3108,19 @@ function setupAutoUpdater() {
   }, 10_000); // 10s after app is ready
 }
 
+async function prepareSourceElectronRenderer() {
+  if (!IS_SOURCE_ELECTRON_DEV) return;
+  try {
+    await session.defaultSession.clearCache();
+    await session.defaultSession.clearStorageData({
+      storages: ['serviceworkers', 'cachestorage'],
+    });
+    writeGatewayLog(`[main] Source Electron renderer cache reset (${ELECTRON_PROFILE_DIR})\n`);
+  } catch (error) {
+    writeGatewayLog(`[main] Source Electron renderer cache reset failed: ${error && error.message ? error.message : error}\n`);
+  }
+}
+
 // ─── App Lifecycle ─────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   if (!singleInstanceLock) return;
@@ -3071,6 +3149,7 @@ app.whenReady().then(async () => {
   try {
     await startGateway();
     await waitForGateway();
+    await prepareSourceElectronRenderer();
     createWindow();
     loader.close();
     setupAutoUpdater();
@@ -3100,10 +3179,9 @@ app.on('before-quit', (event) => {
   }
 
   // A safe update has already completed this handshake and cleared
-  // gatewayProcess before quitAndInstall. For a normal quit, keep the same
-  // graceful-only rule: never force-kill a process that may still be draining
-  // user work. If the gateway cannot close, cancel this quit attempt and leave
-  // the app available for recovery/retry.
+  // gatewayProcess before quitAndInstall. For a normal quit, give the gateway
+  // a bounded graceful-drain window, then terminate only this Electron-owned
+  // process tree so closing the app cannot strand a listener or child worker.
   if (!gatewayProcess || gatewayProcess.killed || gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
   if (gatewayShuttingDown) {
     event.preventDefault();
@@ -3117,25 +3195,20 @@ app.on('before-quit', (event) => {
   let settled = false;
   let shutdownTimer;
   let shutdownRequest;
-  const cancelQuit = (message) => {
+  const finishQuit = (message, forceKill = false) => {
     if (settled) return;
     settled = true;
     clearTimeout(shutdownTimer);
     try { shutdownRequest?.destroy(); } catch {}
     target.removeListener('exit', onExit);
-    if (target.exitCode != null || target.signalCode != null) {
-      if (gatewayProcess === target) gatewayProcess = null;
-    } else {
-      // If the child exits after the HTTP request failed, do not treat the
-      // expected late exit as an unexpected gateway crash.
-      target.once('exit', () => {
-        if (gatewayProcess === target) gatewayProcess = null;
-      });
+    if (forceKill) {
+      killGatewayProcessTree(target);
+      forceCleanupOwnedGatewayPort(target.pid || 0);
     }
+    if (gatewayProcess === target) gatewayProcess = null;
     gatewayShuttingDown = false;
-    isQuitting = false;
-    writeGatewayLog(`[main] Graceful quit cancelled: ${message}\n`);
-    dialog.showErrorBox('Prometheus — Gateway still busy', `${message}\n\nNo process was force-killed. Try closing Prometheus again after active work finishes.`);
+    writeGatewayLog(`[main] ${forceKill ? 'Forced' : 'Graceful'} quit complete: ${message}\n`);
+    app.quit();
   };
   const onExit = () => {
     if (settled) return;
@@ -3146,15 +3219,19 @@ app.on('before-quit', (event) => {
   };
   target.once('exit', onExit);
   shutdownTimer = setTimeout(() => {
-    cancelQuit('The Prometheus gateway did not shut down gracefully within 30 seconds.');
-  }, 30_000);
+    finishQuit(`The Prometheus gateway did not shut down gracefully within ${GATEWAY_QUIT_GRACE_MS / 1000} seconds.`, true);
+  }, GATEWAY_QUIT_GRACE_MS);
 
   shutdownRequest = http.request(
     { hostname: '127.0.0.1', port: gatewayPort, path: '/api/internal/shutdown', method: 'POST', timeout: 5_000 },
     (res) => { res.resume(); },
   );
-  shutdownRequest.on('error', () => {
-    cancelQuit('The Prometheus gateway could not be reached for graceful shutdown.');
+  shutdownRequest.on('timeout', () => {
+    writeGatewayLog('[main] Graceful quit request timed out; waiting for bounded process cleanup\n');
+    shutdownRequest.destroy();
+  });
+  shutdownRequest.on('error', (error) => {
+    writeGatewayLog(`[main] Graceful quit request failed: ${error?.message || error}\n`);
   });
   shutdownRequest.end();
 });

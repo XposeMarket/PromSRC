@@ -668,7 +668,7 @@ export function setMobileSubagentReasoningContext(context = null) {
 
 async function _openReasoningSheet() {
   pmHaptic(10);
-  const sheet = _openSheet('', '<div class="pm-msheet-loading">LoadingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   sheet?.removeAttribute('style');
@@ -813,7 +813,7 @@ async function _openSubagentReasoningSheet() {
   const context = _subagentReasoningContext;
   if (!context?.agentId) return;
   pmHaptic(10);
-  const sheet = _openSheet('', '<div class="pm-msheet-loading">LoadingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   sheet?.removeAttribute('style');
@@ -865,7 +865,7 @@ function _queueReasoningSave(provider, patch, immediate = false) {
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Advanced: provider / model / intelligence controls ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 async function _openSwitchSheet() {
-  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>', '<div class="pm-msheet-loading">Loading controlsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
+  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">&rsaquo;</span>', '<div class="pm-msheet-loading">Loading controls...</div>');
   sheet?.classList.add('is-model-switch');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
   sheet?.removeAttribute('style');
@@ -888,12 +888,12 @@ function _advancedRow(label, value, action, { disabled = false } = {}) {
     <button type="button" class="pm-advanced-row" data-action="${_esc(action)}" ${disabled ? 'disabled' : ''}>
       <span class="pm-advanced-row-label">${_esc(label)}</span>
       <span class="pm-advanced-row-value">${_esc(value)}</span>
-      <span class="pm-advanced-row-chev" aria-hidden="true">ÃƒÂ¢Ã…â€™Ã¢â‚¬Å¾</span>
+      <span class="pm-advanced-row-chev" aria-hidden="true">&rsaquo;</span>
     </button>`;
 }
 
 function _renderAdvancedSheet() {
-  _setSheetTitle('Advanced <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>');
+  _setSheetTitle('Advanced <span class="pm-msheet-chev">&rsaquo;</span>');
   const { provider, model, cfg, options, effortValue } = _currentAdvancedState();
   const rows = [
     _advancedRow('Provider', _providerLabel(provider), 'provider'),
@@ -913,8 +913,8 @@ function _renderSpeedList(provider) {
   const cfg = (_llmCache?.providers || {})[provider] || {};
   if (!supportsFastSpeed(provider, cfg.model || '')) return _renderAdvancedSheet();
   const current = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Speed`);
-  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}</button>`).join('');
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Speed`);
+  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
   body?.querySelectorAll('[data-speed]').forEach(btn => btn.addEventListener('click', () => {
@@ -928,7 +928,7 @@ function _renderSpeedList(provider) {
 }
 
 function _renderProviderList() {
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Provider`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Provider`);
   const { provider: activeProvider } = _activeModel(_llmCache);
   const ids = (_credentialedIds || []).slice();
   if (activeProvider && !ids.includes(activeProvider)) ids.unshift(activeProvider);
@@ -949,7 +949,7 @@ function _renderProviderList() {
     <button type="button" class="pm-msheet-row" data-provider="${_esc(id)}">
       <span class="pm-msheet-row-label">${_esc(_providerLabel(id))}</span>
       ${id === activeProvider ? '<span class="pm-msheet-dot" title="Current"></span>' : ''}
-      <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>
+      <span class="pm-msheet-chev">&rsaquo;</span>
     </button>`).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
@@ -967,14 +967,14 @@ function _renderProviderList() {
 
 function _renderModelList(provider) {
   const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Model`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Model`);
   const models = _modelsForProvider(provider);
 
   let rows = models.map((m) => {
     const isActive = provider === activeProvider && m === activeModel;
     return `<button type="button" class="pm-msheet-row" data-model="${_esc(m)}">
       <span class="pm-msheet-row-label">${_esc(prettifyModelName(m, provider))}</span>
-      ${isActive ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}
+      ${isActive ? '<span class="pm-msheet-check">&#10003;</span>' : ''}
     </button>`;
   }).join('');
   if (!models.length) {
@@ -996,12 +996,12 @@ function _renderEffortList(provider) {
     return;
   }
   const current = String(cfg.reasoning_effort || '').trim();
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Intelligence`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Intelligence`);
   const rows = options.map((value) => {
     const isActive = value === current || (!value && !current);
     return `<button type="button" class="pm-msheet-row" data-effort="${_esc(value)}">
       <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider))}</span>
-      ${isActive ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}
+      ${isActive ? '<span class="pm-msheet-check">&#10003;</span>' : ''}
     </button>`;
   }).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
@@ -1026,7 +1026,7 @@ async function _switchModel(provider, model, { keepOpen = false, returnToAdvance
     await _saveChatModelRoute({ providerId: provider, model, reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined, accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined });
     window.__pmChatModelRoute = await _loadChatModelRoute();
     const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
-    _toast(`Model ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${prettifyModelName(model, provider)}`, 'success');
+    _toast(`Model -> ${prettifyModelName(model, provider)}`, 'success');
     await refreshMobileModelBadge(false, { provider, model });
     try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}
     if (keepOpen && returnToAdvanced) _renderAdvancedSheet();

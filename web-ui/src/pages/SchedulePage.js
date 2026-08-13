@@ -317,22 +317,26 @@ function _renderBrainUsage() {
   const byJob = summary.byJob || {};
   const jobRows = ['thought', 'dream', 'dream_cleanup'].map((job) => {
     const value = byJob[job] || {};
+    const successfulRuns = Number(value.successfulRuns || 0);
+    const failedRuns = Number(value.failedRuns || 0);
+    const abortedRuns = Number(value.abortedRuns || 0);
     return `<div style="padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);min-width:125px">
       <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em">${_brainUsageJobLabel(job)}</div>
       <div style="font-size:13px;font-weight:700;margin-top:2px">${_formatBrainUsageTokens(value.totalTokens)} tokens</div>
-      <div style="font-size:10px;color:var(--muted)">${Number(value.runs || 0)} run${Number(value.runs || 0) === 1 ? '' : 's'} · ${_formatBrainUsageCost(value.totalCostMicros)}</div>
+      <div style="font-size:10px;color:var(--muted)">${Number(value.runs || 0)} run${Number(value.runs || 0) === 1 ? '' : 's'} · ${successfulRuns} complete · ${failedRuns} failed · ${abortedRuns} aborted · ${_formatBrainUsageCost(value.totalCostMicros)}</div>
     </div>`;
   }).join('');
   const recentRows = records.slice(0, 6).map((record) => {
     const when = record.completedAt ? new Date(record.completedAt).toLocaleString() : '—';
     const outcome = String(record.outcome || 'unknown');
+    const error = String(record.error || '').trim();
     const outcomeColor = outcome === 'success' ? '#0d5c2f' : outcome === 'aborted' ? '#7d5700' : '#9b1c1c';
     return `<tr>
       <td style="padding:5px 7px;white-space:nowrap">${escHtml(when)}</td>
       <td style="padding:5px 7px;white-space:nowrap">${escHtml(_brainUsageJobLabel(record.job))}</td>
       <td style="padding:5px 7px;text-align:right;white-space:nowrap">${_formatBrainUsageTokens(record.totalTokens)}</td>
       <td style="padding:5px 7px;text-align:right;white-space:nowrap">${_formatBrainUsageCost(record.totalCostMicros)}</td>
-      <td style="padding:5px 7px;color:${outcomeColor};font-weight:700;white-space:nowrap">${escHtml(outcome)}</td>
+      <td title="${escHtml(error)}" style="padding:5px 7px;color:${outcomeColor};font-weight:700;white-space:nowrap">${escHtml(outcome)}</td>
     </tr>`;
   }).join('');
   const history = recentRows
@@ -347,7 +351,7 @@ function _renderBrainUsage() {
       <div style="font-weight:700;font-size:13px">Brain cost tracker</div>
       <div style="font-size:10px;color:var(--muted)">Last 30 days · estimated pricing</div>
     </div>
-    <div style="font-size:11px;color:var(--muted);margin:4px 0 9px">${Number(summary.runs || 0)} runs · ${_formatBrainUsageTokens(summary.totalTokens)} tokens · ${_formatBrainUsageCost(summary.totalCostMicros)} estimated cost</div>
+    <div style="font-size:11px;color:var(--muted);margin:4px 0 9px">${Number(summary.runs || 0)} runs · ${Number(summary.successfulRuns || 0)} complete · ${Number(summary.failedRuns || 0)} failed · ${Number(summary.abortedRuns || 0)} aborted · ${_formatBrainUsageTokens(summary.totalTokens)} tokens · ${_formatBrainUsageCost(summary.totalCostMicros)} estimated cost</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">${jobRows}</div>
     ${history}
   </div>`;
@@ -370,6 +374,9 @@ function _renderBrainCards() {
     const statusTxt   = running ? '#6d28d9'
       : enabled ? '#0d5c2f'
       : '#374151';
+    const outcome = String(job.lastOutcome || 'idle');
+    const outcomeLabel = outcome === 'success' ? 'completed' : outcome === 'failed' ? 'failed' : outcome === 'aborted' ? 'aborted' : 'not run';
+    const outcomeColor = outcome === 'success' ? '#0d5c2f' : outcome === 'failed' ? '#9b1c1c' : outcome === 'aborted' ? '#7d5700' : 'var(--muted)';
 
     const toggleFn = isThought
       ? `toggleBrainJob('thought', ${!enabled})`
@@ -378,11 +385,15 @@ function _renderBrainCards() {
       ? `runBrainNow('thought')`
       : `runBrainNow('dream')`;
 
-    const extra = isThought && job.todayCount !== undefined
+    const runNote = job.lastError
+      ? ` <span style="color:var(--muted)">— ${escHtml(String(job.lastError).slice(0, 220))}</span>`
+      : '';
+    const outcomeNote = `<div style="font-size:11px;color:${outcomeColor}">Last outcome: <strong>${outcomeLabel}</strong>${runNote}</div>`;
+    const extra = `${isThought && job.todayCount !== undefined
       ? `<div style="font-size:11px;color:var(--muted)">Thoughts today: <strong>${job.todayCount}</strong></div>`
       : job.ranToday !== undefined
         ? `<div style="font-size:11px;color:var(--muted)">Dream ran tonight: <strong>${job.ranToday ? 'yes' : 'not yet'}</strong></div>`
-        : '';
+        : ''}${outcomeNote}`;
 
     return `
       <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;padding:12px;

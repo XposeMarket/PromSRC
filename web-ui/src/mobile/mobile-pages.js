@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
+} from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   applyMobileDraftModelRouteToSession,
@@ -58,7 +58,7 @@ import {
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
- } from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
+ } from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
 import {
   getGateway,
   loadGatewayCatalog,
@@ -10597,15 +10597,16 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   let requestedSession = String(routedTarget?.targetId || routedSession).trim() || MOBILE_CHAT_SESSION_ID;
   const boundTarget = getMobileSessionTarget(requestedSession);
   const currentGateway = loadGatewayCatalog().find((entry) => isCurrentGateway(entry));
+  const preferredGatewayId = requestedSession === MOBILE_CHAT_SESSION_ID
+    ? (currentGateway?.gatewayId || rememberedChatContext.gatewayId || getActiveGatewayId())
+    : (rememberedChatContext.gatewayId || currentGateway?.gatewayId || getActiveGatewayId());
   const gatewayTarget = resolveMobileSessionGateway(requestedSession, {
     // A fresh chat belongs to this PWA's gateway. Remembered context is still
-    // used for an existing session, but it must never redirect a new draft to
-    // the Electron gateway or an old dev port after a restart.
+    // preferred for an existing session so a reload does not silently move a
+    // remote chat onto the phone's current gateway after a restart.
     pendingGatewayId: routedTarget?.gatewayId
       || boundTarget?.gatewayId
-      || (currentGateway?.gatewayId || '')
-      || rememberedChatContext.gatewayId
-      || getActiveGatewayId(),
+      || preferredGatewayId,
     fallbackToCurrentGateway: requestedSession !== MOBILE_CHAT_SESSION_ID && !routedTarget?.gatewayId,
   });
   if (routedTarget?.gatewayId && requestedSession !== MOBILE_CHAT_SESSION_ID) {
@@ -10615,6 +10616,21 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   }
   setMobileActiveGatewayTarget(gatewayTarget);
   try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
+  // A gateway paired before direct execution was enabled can still have a
+  // cached read-only descriptor in localStorage. Refresh remote capability
+  // metadata before the first history request; otherwise the loader rejects
+  // the chat before the send path gets a chance to probe the target.
+  const gatewayExecutionRefresh = gatewayTarget
+    && !isCurrentGateway(gatewayTarget)
+    && gatewayTarget.execution?.enabled !== true
+    ? probeGateway(gatewayTarget).then((freshGateway) => {
+      if (freshGateway) {
+        setMobileActiveGatewayTarget(freshGateway);
+        try { window.__pmMobileActiveSessionGateway = freshGateway.gatewayId || ''; } catch {}
+      }
+      return freshGateway;
+    }).catch(() => gatewayTarget)
+    : Promise.resolve(gatewayTarget);
   const isVoiceRoomTranscript = voiceRoomTranscript === true && requestedSession.startsWith('voice_room_');
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
@@ -12903,12 +12919,12 @@ void main() {
     }, 20_000);
     // The local skeleton already provides the instant paint. Always reconcile
     // the visible chat against the gateway instead of accepting a 30s API copy.
-    loadMobileChatSession(requestedSession, {
+    gatewayExecutionRefresh.then(() => loadMobileChatSession(requestedSession, {
       force: true,
       historyLimit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
       processLimit: 60,
       fullProcess: false,
-    })
+    }))
       .then((session) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
         clearChatLoadRetryTimer();
@@ -13362,6 +13378,7 @@ void main() {
 
   function setBusy(busy, sessionForBusy = requestedSession) {
     const sid = String(sessionForBusy || requestedSession || MOBILE_CHAT_SESSION_ID);
+    const wasBusy = !!__pmChat.activeRuns?.[sid]?.busy;
     _markMobileSessionRunning(sid, !!busy);
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     if (busy) {
@@ -13373,6 +13390,7 @@ void main() {
       delete __pmChat.activeRuns[sid];
     }
     __pmChat.busy = Object.values(__pmChat.activeRuns).some((run) => run?.busy);
+    if (wasBusy !== !!busy) invalidateMobileDrawerSessions('chat-run-state');
     const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
     updateComposerSubmitState(sid);
     _renderMobileQueuedPromptsPanel(activeSid);
@@ -15846,6 +15864,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         workspace: targetWorkspaceLabel,
       });
       setMobileActiveGatewayTarget(selectedGateway);
+      // Persist the target selected for the admitted turn as well as the
+      // immutable session binding. This repairs older bare session routes if
+      // they are reopened before the next drawer refresh has namespaced them.
+      _saveMobileLastChatContext({
+        gatewayId: selectedGateway.gatewayId,
+        gatewayName: selectedGateway.name,
+        projectId: targetProjectId,
+        projectName: targetProjectLabel,
+      });
     }
     if (isUnsavedDraftSession) {
       __pmChat.threads[actualSessionId] = [];
@@ -15854,7 +15881,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       _rememberMobileLastChatSession(actualSessionId);
       __pmChat.threads[requestedSession] = [];
       __pmChat.attachments[requestedSession] = [];
-      try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(actualSessionId)}`); } catch {}
+      const routedActualSessionId = targetNamespacedId(selectedGateway?.gatewayId, actualSessionId) || actualSessionId;
+      try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(routedActualSessionId)}`); } catch {}
       requestedSession = actualSessionId;
       __pmVoice.targetSessionId = actualSessionId;
       __pmVoice.targetSessionLabel = _currentChatVoiceSessionLabel();
@@ -27789,9 +27817,21 @@ export async function renderVoicePage(page, ctx) {
   // draft on every page entry; choosing a drawer session below is the only
   // operation that opts this render into existing conversation context.
   const requestedVoiceRoomSessionId = String(ctx?.sessionId || '').trim();
+  const routedVoiceTarget = parseTargetNamespacedId(requestedVoiceRoomSessionId);
+  const voiceGatewaySessionId = routedVoiceTarget?.targetId || requestedVoiceRoomSessionId;
+  const initialVoiceGateway = voiceGatewaySessionId
+    ? resolveMobileSessionGateway(voiceGatewaySessionId, {
+      pendingGatewayId: routedVoiceTarget?.gatewayId || '',
+      fallbackToCurrentGateway: !routedVoiceTarget?.gatewayId,
+    })
+    : null;
+  if (routedVoiceTarget?.gatewayId && voiceGatewaySessionId) {
+    bindMobileSessionTarget(voiceGatewaySessionId, routedVoiceTarget.gatewayId, { started: true });
+  }
+  if (initialVoiceGateway) setMobileActiveGatewayTarget(initialVoiceGateway);
   if (!inlineMode) {
-    if (requestedVoiceRoomSessionId.startsWith('voice_room_')) {
-      await _loadDurableMobileVoiceRoom(requestedVoiceRoomSessionId).catch((error) => {
+    if (voiceGatewaySessionId.startsWith('voice_room_')) {
+      await _loadDurableMobileVoiceRoom(voiceGatewaySessionId).catch((error) => {
         console.warn('[mobile voice] could not load Voice Room session:', error);
         _startMobileNewVoiceDraft();
       });
@@ -30390,8 +30430,24 @@ void main() {
   }
 
   const voiceSessionTargetPicker = async (sessionId) => {
-    const sid = String(sessionId || '').trim();
+    const rawSid = String(sessionId || '').trim();
+    const parsedTarget = parseTargetNamespacedId(rawSid);
+    const sid = parsedTarget?.targetId || rawSid;
     if (!sid || !_isActiveVoiceRender()) return false;
+    if (parsedTarget?.gatewayId) {
+      bindMobileSessionTarget(sid, parsedTarget.gatewayId, { started: true });
+    }
+    const selectedVoiceGateway = resolveMobileSessionGateway(sid, {
+      pendingGatewayId: parsedTarget?.gatewayId || '',
+      fallbackToCurrentGateway: !parsedTarget?.gatewayId,
+    });
+    if (selectedVoiceGateway) setMobileActiveGatewayTarget(selectedVoiceGateway);
+    if (selectedVoiceGateway
+        && !isCurrentGateway(selectedVoiceGateway)
+        && selectedVoiceGateway.execution?.enabled !== true) {
+      const refreshedVoiceGateway = await probeGateway(selectedVoiceGateway).catch(() => null);
+      if (refreshedVoiceGateway) setMobileActiveGatewayTarget(refreshedVoiceGateway);
+    }
     const sessionData = await loadMobileChatSession(sid, {
       force: true,
       historyLimit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,

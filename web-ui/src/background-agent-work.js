@@ -61,11 +61,31 @@ export function resolveBackgroundAgentIdentity(id, options = {}) {
 function normalizeBackgroundAgentEvent(event = {}) {
   const content = String(event.content || event.text || event.message || '').trim();
   if (!content && !event.type) return null;
+  const extra = event.extra && typeof event.extra === 'object'
+    ? event.extra
+    : null;
   return {
     ts: String(event.ts || event.time || '').trim(),
     type: String(event.type || 'info').trim(),
     actor: String(event.actor || '').trim(),
     content,
+    ...(extra ? { extra } : {}),
+  };
+}
+
+function normalizeBackgroundAgentSteer(message = {}) {
+  const content = String(message.content || message.text || message.message || '').replace(/\s+/g, ' ').trim();
+  if (!content) return null;
+  const timestamp = Number(message.timestamp || message.createdAt || Date.now()) || Date.now();
+  const id = String(message.id || `background_steer_${timestamp}_${hashBackgroundAgent(content)}`).trim();
+  return {
+    id,
+    role: 'user',
+    content,
+    timestamp,
+    channelLabel: 'steer',
+    workflowGroupId: String(message.workflowGroupId || `chat_steer_background_${timestamp}`).trim(),
+    workflowPart: 'interruption',
   };
 }
 
@@ -94,6 +114,10 @@ export function normalizeBackgroundAgentWork(record = {}) {
       .map(normalizeBackgroundAgentEvent)
       .filter(Boolean)
       .slice(-240),
+    steerMessages: (Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : [])
+      .map(normalizeBackgroundAgentSteer)
+      .filter(Boolean)
+      .slice(-80),
   };
 }
 
@@ -125,7 +149,14 @@ export function persistBackgroundAgentWork(record = {}) {
   if (!normalized) return null;
   const records = readBackgroundAgentWork();
   const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
-  if (index >= 0) records[index] = { ...records[index], ...normalized, events: normalized.events.length ? normalized.events : records[index].events };
+  if (index >= 0) {
+    records[index] = {
+      ...records[index],
+      ...normalized,
+      events: normalized.events.length ? normalized.events : records[index].events,
+      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : records[index].steerMessages,
+    };
+  }
   else records.push(normalized);
   writeBackgroundAgentWork(records);
   return normalized;

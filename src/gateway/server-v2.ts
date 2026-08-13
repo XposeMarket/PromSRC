@@ -944,7 +944,7 @@ const getGatewayQueueStatus = () => ({
   },
 });
 
-// Read-only identity surface for a phone's gateway catalog. The paired-device
+// Identity surface for a phone's gateway catalog and target capability check. The paired-device
 // token is checked by requireGatewayAuth; no token is accepted in the query
 // string on this route. Descriptor metadata is deliberately available to a
 // paired device without forwarding this gateway's account cookie/session.
@@ -1271,9 +1271,20 @@ void startGatewayListeners();
 startupMark('gateway listener startup scheduled after readiness warmup');
 
 let shuttingDown = false;
+let electronParentWatchdog: NodeJS.Timeout | null = null;
 async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (electronParentWatchdog) {
+    clearInterval(electronParentWatchdog);
+    electronParentWatchdog = null;
+  }
+  // Persistence or a provider worker can occasionally hang during teardown.
+  // Never let that keep an Electron-owned port alive indefinitely.
+  const forceExitTimer = setTimeout(() => {
+    console.warn('[Gateway] Graceful shutdown timed out; forcing process exit.');
+    process.exit(0);
+  }, 12_000);
   console.log('[Gateway] Shutting down...');
   try {
     const interrupted = prepareActiveRuntimesForGatewayShutdown(`signal_${signal.toLowerCase()}`);
@@ -1308,22 +1319,46 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   } catch (err: any) {
     console.warn('[Gateway] Async persistence drain failed:', err?.message || err);
   }
-  void shutdownMemoryIndexRefreshWorker().catch(() => undefined);
-  void shutdownContextBuildWorkerPool().catch(() => undefined);
-  void shutdownModelCallWorkerPool().catch(() => undefined);
+  try {
+    await Promise.all([
+      shutdownMemoryIndexRefreshWorker(),
+      shutdownContextBuildWorkerPool(),
+      shutdownModelCallWorkerPool(),
+    ]);
+  } catch (err: any) {
+    console.warn('[Gateway] Worker shutdown failed:', err?.message || err);
+  }
   try { if (wss) wss.close(); } catch {}
   try { secureBundle?.wss.close(); } catch {}
   try { xaiVoiceStreaming.close(); } catch {}
   try { secureXaiVoiceStreaming?.close(); } catch {}
   try {
     try { secureBundle?.server.close(); } catch {}
-    server.close(() => process.exit(0));
-    const forceExitTimer = setTimeout(() => process.exit(0), 1200) as any;
-    if (typeof forceExitTimer?.unref === 'function') forceExitTimer.unref();
+    server.close(() => {
+      clearTimeout(forceExitTimer);
+      process.exit(0);
+    });
   } catch { process.exit(0); }
 }
 
 process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+
+// Normal close uses the local shutdown endpoint. This second boundary handles
+// Electron crashes, force-closes, and renderer failures: if the owning desktop
+// process disappears, the gateway cleans itself up instead of orphaning its
+// listener and worker tree.
+const electronParentPid = Number(process.env.PROMETHEUS_ELECTRON_PID || 0);
+if (Number.isInteger(electronParentPid) && electronParentPid > 0 && electronParentPid !== process.pid) {
+  electronParentWatchdog = setInterval(() => {
+    try {
+      process.kill(electronParentPid, 0);
+    } catch {
+      console.warn(`[Gateway] Electron parent ${electronParentPid} is gone; shutting down orphaned gateway.`);
+      void gracefulShutdown('SIGTERM');
+    }
+  }, 2_000);
+  electronParentWatchdog.unref?.();
+}
 
 export { app, server };

@@ -87,13 +87,17 @@ function _buildUrl(path) {
 
 function _mobileRequestToken() {
   try {
-    return String(window.__pmMobileActiveGatewayToken || '').trim() || getDeviceToken();
+    const targetToken = String(window.__pmMobileActiveGatewayToken || '').trim();
+    if (targetToken) return targetToken;
+    // Never fall back to the phone's legacy/current-gateway grant while a
+    // different gateway is active. Each remote target must receive only its
+    // own paired-device credential.
+    if (!_isCurrentMobileRequestTarget()) return '';
+    return getDeviceToken();
   } catch {
     return getDeviceToken();
   }
 }
-
-const REMOTE_EXECUTION_NOT_ENABLED = 'REMOTE_EXECUTION_NOT_ENABLED';
 
 function _isCurrentMobileRequestTarget() {
   try {
@@ -107,8 +111,24 @@ function _isCurrentMobileRequestTarget() {
 
 function _assertMobileRequestTarget() {
   if (_isCurrentMobileRequestTarget()) return;
-  const error = new Error('Remote execution is not enabled for this gateway target.');
-  error.code = REMOTE_EXECUTION_NOT_ENABLED;
+
+  // A remote target is valid only after the catalog has admitted it as an
+  // execution-capable gateway and set the target-scoped pairing grant. This
+  // keeps a stale/legacy catalog entry from silently sending work to an
+  // arbitrary origin while allowing the paired Mac/desktop gateways to run
+  // their own chats directly.
+  let executionEnabled = false;
+  let token = '';
+  try {
+    executionEnabled = window.__pmMobileActiveGatewayExecutionEnabled === true;
+    token = _mobileRequestToken();
+  } catch {}
+  if (executionEnabled && token) return;
+
+  const error = new Error(token
+    ? 'Remote execution is not enabled for this gateway target. Refresh the gateway connection and try again.'
+    : 'This gateway is not paired on this phone. Reconnect it before sending a message.');
+  error.code = token ? 'REMOTE_EXECUTION_NOT_ENABLED' : 'GATEWAY_NOT_PAIRED';
   throw error;
 }
 
@@ -1967,7 +1987,7 @@ export async function loadCanvasFile(relPath) {
 }
 
 function appendPairingQuery(url) {
-  const token = getDeviceToken();
+  const token = _mobileRequestToken();
   if (!token) return url;
   const sep = url.includes('?') ? '&' : '?';
   return `${url}${sep}pt=${encodeURIComponent(token)}`;
@@ -1977,7 +1997,7 @@ function appendPairingQuery(url) {
 export function buildWorkspaceCanvasUrl(relPath) {
   const path = String(relPath || '').trim().replace(/^\/+/, '');
   if (!path) return '';
-  const base = String(API || '').replace(/\/+$/, '');
+  const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '');
   const segments = path.split('/').map(encodeURIComponent).join('/');
   const url = appendPairingQuery(`${base}/api/canvas/workspace/${segments}`);
   const sep = url.includes('?') ? '&' : '?';
@@ -1988,14 +2008,14 @@ export function buildWorkspaceCanvasUrl(relPath) {
 // Canvas routes accept the paired-device token via `?pt=<token>` (iframes/media cannot set headers).
 export function buildInlineMediaUrl(relPath) {
   if (!relPath) return '';
-  const base = String(API || '').replace(/\/+$/, '');
+  const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '');
   const qs = new URLSearchParams({ path: relPath });
   return appendPairingQuery(`${base}/api/canvas/inline?${qs.toString()}`);
 }
 
 export function buildDownloadMediaUrl(relPath) {
   if (!relPath) return '';
-  const base = String(API || '').replace(/\/+$/, '');
+  const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '');
   const qs = new URLSearchParams({ path: relPath });
   return appendPairingQuery(`${base}/api/canvas/download?${qs.toString()}`);
 }
@@ -2205,9 +2225,6 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       signal: ctrl.signal,
     };
     try {
-      // Catalog reads may target another gateway, but chat execution is
-      // strictly local to the current PWA origin. Do not let a remembered
-      // remote target silently send or save a new turn in the wrong gateway.
       _assertMobileRequestTarget();
       res = await fetch(url, requestInit);
     } catch (err) {

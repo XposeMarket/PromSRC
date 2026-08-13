@@ -230,7 +230,7 @@ body.pm-mobile-active :where(
   .pm-icon-btn,
   .pm-drawer-item,
   .pm-drawer-new-chat,
-  .pm-drawer-close,
+  .pm-drawer-search-toggle,
   .pm-session-row,
   .pm-channel-card,
   .pm-settings-channel,
@@ -256,7 +256,7 @@ body.pm-mobile-active :where(
   .pm-icon-btn,
   .pm-drawer-item,
   .pm-drawer-new-chat,
-  .pm-drawer-close,
+  .pm-drawer-search-toggle,
   .pm-session-row,
   .pm-channel-card,
   .pm-settings-channel,
@@ -2126,13 +2126,13 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 .pm-drawer-gateway-pill-dot.is-offline { background: #d8473a; }
 .pm-drawer-gateway-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pm-theme-toggle,
-.pm-drawer-close {
+.pm-drawer-search-toggle {
   appearance: none;
   position: absolute;
   top: max(env(safe-area-inset-top), 18px);
   width: 40px;
   height: 40px;
-  border: 1px solid rgba(255,255,255,.10);
+  border: 0;
   border-radius: 999px;
   background: rgba(255,255,255,.12);
   color: #f6f4f0;
@@ -2143,11 +2143,11 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   box-shadow: none;
 }
 .pm-theme-toggle { right: 18px; }
-.pm-drawer-close { right: calc(18px + 48px); }
+.pm-drawer-search-toggle { right: calc(18px + 48px); }
 .pm-theme-toggle svg,
-.pm-drawer-close svg { width: 19px; height: 19px; }
+.pm-drawer-search-toggle svg { width: 19px; height: 19px; }
 .pm-theme-toggle:active,
-.pm-drawer-close:active { transform: scale(.96); }
+.pm-drawer-search-toggle:active { transform: scale(.96); }
 .pm-drawer-search {
   display: flex;
   align-items: center;
@@ -4452,27 +4452,15 @@ html.pm-session-context-open * {
   white-space: nowrap;
 }
 .pm-bubble .visual-block {
-  max-width: calc(100% + 28px);
-  margin-left: -14px !important;
-  margin-right: -14px !important;
+  max-width: 100%;
+  margin: 10px 0 !important;
+  border: 0 !important;
   border-radius: 0 !important;
-  border-left: none !important;
-  border-right: none !important;
-}
-.pm-bubble .visual-block:first-child {
-  margin-top: -12px !important;
-  border-top-left-radius: 18px !important;
-  border-top-right-radius: 18px !important;
-  border-top: none !important;
-}
-.pm-bubble .visual-block:last-child {
-  margin-bottom: -12px !important;
-  border-bottom-left-radius: 18px !important;
-  border-bottom-right-radius: 18px !important;
-  border-bottom: none !important;
+  background: transparent !important;
+  overflow: visible !important;
 }
 .pm-bubble .visual-block iframe {
-  min-height: 260px !important;
+  min-height: 0 !important;
   touch-action: none;
 }
 .pm-bubble .visual-block[data-vis-lang="html"] iframe {
@@ -4482,21 +4470,8 @@ html.pm-session-context-open * {
   max-width: 100%;
   margin-left: 0 !important;
   margin-right: 0 !important;
-  border-radius: 12px !important;
-  border-left: 1px solid var(--pm-border) !important;
-  border-right: 1px solid var(--pm-border) !important;
-}
-.pm-msg.from-ai .pm-bubble .visual-block:first-child {
-  margin-top: 0 !important;
-  border-top-left-radius: 12px !important;
-  border-top-right-radius: 12px !important;
-  border-top: 1px solid var(--pm-border) !important;
-}
-.pm-msg.from-ai .pm-bubble .visual-block:last-child {
-  margin-bottom: 0 !important;
-  border-bottom-left-radius: 12px !important;
-  border-bottom-right-radius: 12px !important;
-  border-bottom: 1px solid var(--pm-border) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
 }
 .pm-visual-save-row {
   display: flex;
@@ -10364,8 +10339,8 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 
 :root[data-skin="dark"] body.pm-mobile-active .pm-theme-toggle,
-:root[data-theme="dark"] body.pm-mobile-active .pm-drawer-close {
-  border-color: rgba(214, 183, 94, .32);
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle {
+  border: 0;
   background: linear-gradient(145deg, rgba(214, 183, 94, .08), rgba(255, 255, 255, .025));
   color: var(--p1-bone);
   box-shadow:
@@ -10373,8 +10348,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
     0 8px 24px rgba(0, 0, 0, .32);
 }
 :root[data-skin="dark"] body.pm-mobile-active .pm-theme-toggle:active,
-:root[data-theme="dark"] body.pm-mobile-active .pm-drawer-close:active {
-  border-color: rgba(240, 217, 139, .58);
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer-search-toggle:active {
   color: var(--p1-gold-light);
 }
 
@@ -16684,7 +16658,7 @@ body.pm-mobile-active .pm-drawer {
   box-shadow: none !important;
 }
 body.pm-mobile-active .pm-theme-toggle,
-body.pm-mobile-active .pm-drawer-close {
+body.pm-mobile-active .pm-drawer-search-toggle {
   background: var(--pm-bg) !important;
   background-image: none !important;
 }
@@ -17785,22 +17759,23 @@ body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-selector {
   position: static;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr;
   align-items: center;
-  width: 100%;
-  margin-bottom: 12px;
-  column-gap: 10px;
+  width: min(100%, calc(100vw - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left, 0px)) - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right, 0px))));
+  margin: 0 auto;
+  margin-bottom: 0;
+  column-gap: 0;
   row-gap: 8px;
 }
 
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary {
   grid-column: 1;
   grid-row: 1;
-  justify-content: flex-start;
-  width: auto;
-  max-width: none;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
-  min-height: 32px;
+  min-height: 30px;
   margin: 0;
   padding: 0 4px;
   border-radius: 0;
@@ -17824,8 +17799,12 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced {
   position: static;
   inset: auto;
   z-index: auto;
-  grid-column: 2;
-  grid-row: 1;
+  grid-column: 1;
+  grid-row: 3;
+  justify-self: center;
+  width: 100%;
+  justify-content: center;
+  margin: 0;
 }
 
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
@@ -17843,7 +17822,7 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
   grid-auto-columns: 1fr;
   align-items: stretch;
   width: 100%;
-  height: 64px;
+  height: 56px;
   margin: 0;
   padding: 7px;
   overflow: hidden;
@@ -17891,6 +17870,67 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control.is-dragging 
   transition: none;
 }
 
+/* Keep the reasoning sheet aligned with the bottom tab bar, while giving the
+   advanced provider/model/intelligence/speed lists enough room to breathe. */
+body.pm-mobile-active .pm-msheet.is-reasoning {
+  height: 252px;
+  max-height: calc(100dvh - var(--pm-tabbar-h, 60px) - env(safe-area-inset-bottom, 0px) - 12px);
+  padding: 12px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-msheet-body {
+  width: 100%;
+  max-width: none;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch {
+  max-height: min(60dvh, 520px);
+  padding: 12px 22px calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-body {
+  max-height: calc(min(60dvh, 520px) - 98px - env(safe-area-inset-bottom, 0px));
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-panel {
+  border-radius: 24px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row {
+  grid-template-columns: minmax(100px, 1fr) minmax(0, auto) 20px;
+  min-height: 44px;
+  padding: 0 16px 0 18px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-label {
+  font-size: 14px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-value {
+  max-width: 52vw;
+  font-size: 13px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-chev {
+  font-size: 18px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row {
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row-label,
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row-raw {
+  font-size: 14px;
+}
+
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-check,
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-chev {
+  font-size: 18px;
+}
+
 /* Imported project cards need a touch more separation than imported chat
    rows. OpenAI retains the same white logo tile used by desktop. */
 body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-import-logo + .pm-session-title,
@@ -17902,4 +17942,168 @@ body.pm-mobile-active .pm-drawer .pm-session-import-logo--openai {
   padding: 2px;
   border-radius: 4px;
   background: #fff;
+}
+
+/* Keep the connected-gateway strip horizontally usable without exposing a
+   second scrollbar inside the hamburger drawer. */
+body.pm-mobile-active .pm-drawer-gateway-pills {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+body.pm-mobile-active .pm-drawer-gateway-pills::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* The context window sits just below the chip, but slightly higher than the
+   old panel so it clears the composer/header overlap on short screens. */
+body.pm-mobile-active .pm-ctx-popover {
+  top: calc(var(--pm-mobile-context-chip-top) + 34px);
+  border: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The drawer search is an icon-only control until the user asks for it. */
+body.pm-mobile-active .pm-drawer-search-toggle,
+body.pm-mobile-active .pm-theme-toggle {
+  border: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Mobile glass cleanup: retain the translucent material and inner rim, but
+   remove the cast shadow behind floating glass surfaces. */
+body.pm-mobile-active :where(
+  .pm-app,
+  .pm-drawer,
+  .pm-header,
+  .pm-header-action-cluster,
+  .pm-header .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-completion-toast,
+  .pm-tabbar,
+  .pm-tab-indicator,
+  .pm-tabbar-haptic-gesture-surface,
+  .pm-composer,
+  .pm-msheet,
+  .pm-chat-settings-popover,
+  .pm-ctx-popover,
+  .pm-chat-target-popover,
+  .pm-new-chat-context-dock,
+  .pm-new-chat-context-popover,
+  .pm-main-plan-pill,
+  .pm-main-plan-popover,
+  .pm-mobile-goal-pill,
+  .pm-mobile-goal-details,
+  .pm-chat-connection-status,
+  .pm-mobile-queued-prompts,
+  .pm-tool-progress-pill,
+  .pm-background-spawn-pill,
+  .pm-background-spawn-close,
+  .pm-background-spawn-lane,
+  .pm-mobile-queued-popover,
+  .pm-mobile-question-popover,
+  .pm-chat-slash-popover,
+  .pm-skill-ref-popover,
+  .pm-schedule-action-popover,
+  .pm-mobile-sources-popover,
+  .pm-mobile-sources-panel,
+  [class$="-popover"]
+) {
+  box-shadow: none !important;
+}
+
+/* Every mobile popover/sheet is a borderless surface. Nested action rows keep
+   their own separators and focus treatments. */
+body.pm-mobile-active :where(
+  .pm-msheet,
+  .pm-chat-settings-popover,
+  .pm-ctx-popover,
+  .pm-chat-target-popover,
+  .pm-new-chat-context-dock,
+  .pm-new-chat-context-popover,
+  .pm-main-plan-popover,
+  .pm-mobile-queued-popover,
+  .pm-mobile-question-popover,
+  .pm-chat-slash-popover,
+  .pm-skill-ref-popover,
+  .pm-schedule-action-popover,
+  .pm-mobile-sources-popover,
+  .pm-mobile-sources-panel,
+  [class$="-popover"]
+) {
+  border-width: 0 !important;
+  border-color: transparent !important;
+}
+
+body.pm-mobile-active .pm-msheet::before,
+body.pm-mobile-active .pm-msheet::after,
+body.pm-mobile-active .pm-chat-settings-popover::before,
+body.pm-mobile-active .pm-mobile-sources-panel::before {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* The compact-surface recipe above is intentionally shared, but its later
+   border shorthand can otherwise restore a rim on these mobile-only sheets.
+   Keep the surfaces themselves borderless; action rows remain independently
+   styled buttons inside them. */
+body.pm-mobile-active :is(
+  .pm-chat-settings-popover,
+  .pm-new-chat-context-popover,
+  .pm-new-project-popover,
+  .pm-chat-target-popover,
+  .pm-msheet,
+  .pm-attach-sheet-panel
+) {
+  border: 0 !important;
+  border-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+body.pm-mobile-active :is(
+  .pm-chat-settings-popover::before,
+  .pm-chat-settings-popover::after,
+  .pm-new-chat-context-popover::before,
+  .pm-new-chat-context-popover::after,
+  .pm-new-project-popover::before,
+  .pm-new-project-popover::after,
+  .pm-chat-target-popover::before,
+  .pm-chat-target-popover::after,
+  .pm-msheet::before,
+  .pm-msheet::after,
+  .pm-attach-sheet-panel::before,
+  .pm-attach-sheet-panel::after
+) {
+  content: none !important;
+  display: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Match New Chat to the drawer tabs below it. The stronger P1 rules earlier
+   in this file use the same controls, so these important dimensions keep the
+   visible button and its icon aligned across every mobile theme. */
+body.pm-mobile-active .pm-drawer-new-chat {
+  width: 100% !important;
+  height: 50px !important;
+  min-height: 50px !important;
+  padding: 8px 13px !important;
+  gap: 11px !important;
+}
+
+body.pm-mobile-active .pm-drawer-new-chat .pm-icon {
+  width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+body.pm-mobile-active .pm-drawer-new-chat .pm-icon svg {
+  width: 16px !important;
+  height: 16px !important;
 }
