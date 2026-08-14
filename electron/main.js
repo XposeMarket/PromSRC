@@ -47,6 +47,11 @@ const {
   getImportedChromeProfile,
   copyChromeProfile,
 } = require('./chrome-profile');
+const {
+  getPosixListeningPids,
+  killGatewayPortOwner,
+  killGatewayProcessTree: killManagedGatewayProcessTree,
+} = require('./gateway-process');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 function parseGatewayPort(value) {
@@ -927,14 +932,31 @@ function getConfiguredTailscaleFunnel() {
   }
 }
 
+function getTailscaleCliPath() {
+  const configured = String(process.env.PROMETHEUS_TAILSCALE_BIN || '').trim();
+  const installedCandidates = process.platform === 'darwin'
+    ? [
+      '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+      path.join(process.env.HOME || '', 'Applications/Tailscale.app/Contents/MacOS/Tailscale'),
+    ]
+    : process.platform === 'win32'
+      ? [
+        path.join(String(process.env.ProgramFiles || ''), 'Tailscale', 'tailscale.exe'),
+        path.join(String(process.env.LOCALAPPDATA || ''), 'Tailscale', 'tailscale.exe'),
+      ]
+      : [];
+  return [configured, ...installedCandidates].find((candidate) => candidate && fs.existsSync(candidate)) || 'tailscale';
+}
+
 // Funnel's public URL is stable; only its local target must follow a relay
 // port selected for this Electron profile. Do this after the relay is bound so
 // there is no gap where Funnel forwards requests to a closed local listener.
 function synchronizeTailscaleFunnelTarget() {
   const funnel = getConfiguredTailscaleFunnel();
   if (!funnel) return;
+  const tailscaleBin = getTailscaleCliPath();
   try {
-    execFileSync('tailscale', ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
+    execFileSync(tailscaleBin, ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
       encoding: 'utf8',
       stdio: 'pipe',
       windowsHide: true,
@@ -942,7 +964,7 @@ function synchronizeTailscaleFunnelTarget() {
     });
     writeGatewayLog(`[main] Tailscale Funnel ${funnel.publicUrl} now targets local relay ${gatewayPort}\n`);
   } catch (error) {
-    writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort}: ${error?.message || error}\n`);
+    writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort} via ${tailscaleBin}: ${error?.message || error}\n`);
   }
 }
 
@@ -1029,7 +1051,7 @@ function assertGatewayPortAvailable(port) {
 }
 
 function getGatewayPortOwnerPids(port = gatewayPort) {
-  if (process.platform !== 'win32') return [];
+  if (process.platform !== 'win32') return getPosixListeningPids(port);
   try {
     const output = execSync('netstat -ano -p tcp', {
       encoding: 'utf-8', stdio: 'pipe', timeout: 5_000,
@@ -1043,14 +1065,23 @@ function getGatewayPortOwnerPids(port = gatewayPort) {
 // Only clean listeners whose runtime status still identifies the gateway that
 // Electron just owned. This prevents a restart race from killing an unrelated
 // process that happened to claim the same port after the old child exited.
-function forceCleanupOwnedGatewayPort(expectedPid, port = gatewayBackendPort || gatewayPort) {
+function forceCleanupOwnedGatewayPort(
+  expectedPid,
+  expectedRuntimePid = 0,
+  port = gatewayBackendPort || gatewayPort,
+) {
   const status = readGatewayRuntimeStatus();
-  if (Number(status?.pid || 0) !== Number(expectedPid || 0)) return;
+  const statusPid = Number(status?.pid || 0);
+  const runtimePid = Number(expectedRuntimePid || statusPid || 0);
+  if (!runtimePid) return;
+  if (expectedRuntimePid && statusPid && statusPid !== runtimePid) return;
+  if (!expectedRuntimePid && statusPid !== Number(expectedPid || 0)) return;
   for (const pid of getGatewayPortOwnerPids(port)) {
-    if (!pid || pid === process.pid) continue;
-    try {
-      execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe', timeout: 8_000 });
-    } catch {}
+    // Only terminate the listener identified by the gateway's own runtime
+    // status. Never kill an unrelated process that claimed the port during a
+    // restart race.
+    if (!pid || pid === process.pid || pid !== runtimePid) continue;
+    killGatewayPortOwner(pid);
   }
 }
 
@@ -1296,17 +1327,6 @@ function shouldDeferGatewayHealthRecovery(status, lease, expectedPid) {
   return false;
 }
 
-function killGatewayProcessTree(child = gatewayProcess) {
-  if (!child || !child.pid) return;
-  if (process.platform === 'win32') {
-    try {
-      execSync(`taskkill /PID ${child.pid} /F /T`, { stdio: 'pipe', timeout: 8_000 });
-      return;
-    } catch {}
-  }
-  try { child.kill('SIGKILL'); } catch {}
-}
-
 // Electron can still be torn down by a renderer crash, an OS close request,
 // or an explicit process exit before the async before-quit handshake finishes.
 // Make the final process boundary synchronous so a managed gateway cannot be
@@ -1314,8 +1334,19 @@ function killGatewayProcessTree(child = gatewayProcess) {
 process.on('exit', () => {
   if (!gatewayProcess || !gatewayProcess.pid) return;
   if (gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
-  killGatewayProcessTree(gatewayProcess);
+  killManagedGatewayProcessTree(gatewayProcess);
 });
+
+async function waitForGatewayPortRelease(timeoutMs = 10_000) {
+  const port = gatewayBackendPort || gatewayPort;
+  const deadline = Date.now() + timeoutMs;
+  while (!(await isGatewayPortAvailable(port))) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Prometheus gateway backend port ${port} remained occupied after process cleanup.`);
+    }
+    await sleep(100);
+  }
+}
 
 function waitForGatewayProcessExit(child, timeoutMs = 10_000) {
   if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
@@ -1715,6 +1746,7 @@ async function startGateway() {
         ELECTRON_RUN_AS_NODE: '1',
       },
       windowsHide: true,
+      detached: process.platform !== 'win32',
     });
   } else {
     // Do not spawn the Windows .cmd shim with shell:true. Electron would then
@@ -1729,6 +1761,7 @@ async function startGateway() {
       cwd:   getGatewayWorkingDirectory(),
       env:   { ...gatewayEnv, ELECTRON_RUN_AS_NODE: '1' },
       windowsHide: true,
+      detached: process.platform !== 'win32',
     });
   }
 
@@ -1762,7 +1795,8 @@ async function startGateway() {
     // A timed-out restart may have terminated the gateway before its worker
     // descendants released the listener. Clean only the old Electron-owned
     // port before attempting the replacement.
-    forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0);
+    const exitedRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
+    forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
     if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
       restartGatewayFromElectron({
@@ -1798,10 +1832,12 @@ async function restartGatewayFromElectron(options = {}) {
   try {
     if (terminateExisting && gatewayProcess) {
       const staleProcess = gatewayProcess;
+      const staleRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
       writeGatewayLog(`[main] Terminating unresponsive gateway tree (pid=${staleProcess.pid || 'unknown'})\n`);
-      killGatewayProcessTree(staleProcess);
+      killManagedGatewayProcessTree(staleProcess);
       await waitForGatewayProcessExit(staleProcess);
-      forceCleanupOwnedGatewayPort(staleProcess.pid || 0);
+      forceCleanupOwnedGatewayPort(staleProcess.pid || 0, staleRuntimePid);
+      await waitForGatewayPortRelease();
     }
     gatewayProcess = null;
     await startGateway();
@@ -3369,6 +3405,7 @@ app.on('before-quit', (event) => {
   }
 
   const target = gatewayProcess;
+  const targetRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
   gatewayShuttingDown = true;
   event.preventDefault();
 
@@ -3382,8 +3419,8 @@ app.on('before-quit', (event) => {
     try { shutdownRequest?.destroy(); } catch {}
     target.removeListener('exit', onExit);
     if (forceKill) {
-      killGatewayProcessTree(target);
-      forceCleanupOwnedGatewayPort(target.pid || 0);
+      killManagedGatewayProcessTree(target);
+      forceCleanupOwnedGatewayPort(target.pid || 0, targetRuntimePid);
     }
     if (gatewayProcess === target) gatewayProcess = null;
     gatewayShuttingDown = false;
