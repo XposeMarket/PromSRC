@@ -15,6 +15,7 @@ import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydr
 import { api } from '../api.js';
 import { escHtml, renderMd, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
+import { applyToolActivityEvent } from '../tool-activity.js';
 
 // ── Stubs for cross-module globals not yet migrated ──────────────
 let _teamsDataSig = '';
@@ -93,6 +94,7 @@ let teamChatMentionState = null;
 let teamRunStartPendingByTeam = {}; // teamId -> true while Start Run is waiting for manager stream
 let teamRunAbortInFlightByTeam = {}; // teamId -> true while Pause is requesting abort
 let teamChatApprovalsByTeam = {}; // teamId -> inline approval cards shown in team chat
+let unifiedDesktopChatRendererPromise = null;
 
 function encodeTeamInlineJsString(value) {
   return JSON.stringify(String(value ?? ''))
@@ -1155,6 +1157,47 @@ function newTeamChatProcessEntry(type, content, extra = undefined) {
   };
 }
 
+function appendTeamDesktopLiveTrace(stream, type, text, { append = false, extra = null } = {}) {
+  if (!stream) return;
+  const rawContent = String(text || '');
+  const content = rawContent.trim();
+  if (!content) return;
+  if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
+  const normalizedType = String(type || 'info').toLowerCase() === 'reasoning_summary' ? 'think' : String(type || 'info').toLowerCase();
+  const safeExtra = normalizedType === 'think'
+    ? { source: 'reasoning_summary', visibility: 'user', ...(extra && typeof extra === 'object' ? extra : {}) }
+    : (extra && typeof extra === 'object' ? extra : null);
+  const last = stream.liveTraceEntries[stream.liveTraceEntries.length - 1];
+  const incomingSource = String(safeExtra?.source || '').toLowerCase();
+  const lastSource = String(last?.extra?.source || '').toLowerCase();
+  if (append && last && String(last.type || '').toLowerCase() === normalizedType
+    && (!incomingSource || incomingSource === lastSource)) {
+    const previousText = String(last.text || '');
+    const previousTrimmed = previousText.trim();
+    if (content.length > previousTrimmed.length && content.startsWith(previousTrimmed)) {
+      last.text = content;
+    } else if (!previousTrimmed.endsWith(content)) {
+      last.text = `${previousText}${rawContent}`;
+    }
+    if (safeExtra) last.extra = { ...(last.extra || {}), ...safeExtra };
+    return;
+  }
+  if (last && String(last.type || '').toLowerCase() === normalizedType && String(last.text || '').trim() === content) return;
+  stream.liveTraceEntries.push({
+    id: `team_trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: normalizedType,
+    text: content,
+    ts: new Date().toLocaleTimeString(),
+    ...(safeExtra ? { extra: safeExtra } : {}),
+  });
+}
+
+function applyTeamDesktopToolActivity(stream, phase, event) {
+  if (!stream) return;
+  if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
+  applyToolActivityEvent(stream.liveTraceEntries, phase, event);
+}
+
 function pushTeamChatProgressLine(line) {
   if (!teamChatStreamingState) return;
   const text = String(line || '').trim();
@@ -1202,12 +1245,14 @@ function ensureTeamDispatchStream(teamId, taskId, patch = {}) {
     lastTool: '',
     progressLines: ['Working...'],
     processEntries: [],
+    liveTraceEntries: [],
     stepCount: 0,
     durationMs: 0,
   };
   Object.assign(existing, patch || {});
   if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
   if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!Array.isArray(existing.liveTraceEntries)) existing.liveTraceEntries = [];
   if (!existing.progressLines.length) existing.progressLines = ['Working...'];
   existing.updatedAt = Date.now();
   streamMap[taskId] = existing;
@@ -1313,12 +1358,14 @@ function ensureTeamManagerStream(teamId, streamId, patch = {}) {
     thinking: '',
     progressLines: ['Thinking...'],
     processEntries: [],
+    liveTraceEntries: [],
     stepCount: 0,
     durationMs: 0,
   };
   Object.assign(existing, patch || {});
   if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
   if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!Array.isArray(existing.liveTraceEntries)) existing.liveTraceEntries = [];
   if (!existing.progressLines.length) existing.progressLines = ['Thinking...'];
   existing.updatedAt = Date.now();
   streamMap[streamId] = existing;
@@ -1354,8 +1401,18 @@ function applyTeamManagerStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
+        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+          appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
+        }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
       }
+      break;
+    }
+    case 'reasoning_summary_delta':
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(event.text || event.summary || event.thinking || '');
+      if (chunk) appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
       break;
     }
     case 'thinking':
@@ -1401,6 +1458,7 @@ function applyTeamManagerStreamEvent(msg) {
         `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
         (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'call', event);
       break;
     }
     case 'tool_result': {
@@ -1416,6 +1474,7 @@ function applyTeamManagerStreamEvent(msg) {
         `${stepPrefix}${action} => ${text || '(no output)'}`,
         event.actor ? { actor: event.actor } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'result', { ...event, error: !ok });
       break;
     }
     case 'tool_progress': {
@@ -1424,6 +1483,7 @@ function applyTeamManagerStreamEvent(msg) {
       if (!action || !progressMsg) break;
       pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
       addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      applyTeamDesktopToolActivity(stream, 'progress', event);
       break;
     }
     case 'final': {
@@ -1485,12 +1545,14 @@ function ensureTeamMemberStream(teamId, streamId, patch = {}) {
     thinking: '',
     progressLines: ['Thinking...'],
     processEntries: [],
+    liveTraceEntries: [],
     stepCount: 0,
     durationMs: 0,
   };
   Object.assign(existing, patch || {});
   if (!Array.isArray(existing.progressLines)) existing.progressLines = [];
   if (!Array.isArray(existing.processEntries)) existing.processEntries = [];
+  if (!Array.isArray(existing.liveTraceEntries)) existing.liveTraceEntries = [];
   if (!existing.progressLines.length) existing.progressLines = ['Thinking...'];
   existing.updatedAt = Date.now();
   streamMap[streamId] = existing;
@@ -1526,8 +1588,18 @@ function applyTeamMemberStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
+        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+          appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
+        }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
       }
+      break;
+    }
+    case 'reasoning_summary_delta':
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(event.text || event.summary || event.thinking || '');
+      if (chunk) appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
       break;
     }
     case 'thinking':
@@ -1566,6 +1638,7 @@ function applyTeamMemberStreamEvent(msg) {
         `${action}${argsPreview ? ` ${argsPreview}` : ''}`,
         (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'call', event);
       break;
     }
     case 'tool_result': {
@@ -1579,6 +1652,7 @@ function applyTeamMemberStreamEvent(msg) {
         `${action} => ${text || '(no output)'}`,
         event.actor ? { actor: event.actor } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'result', { ...event, error: !ok });
       break;
     }
     case 'tool_progress': {
@@ -1587,6 +1661,7 @@ function applyTeamMemberStreamEvent(msg) {
       if (!action || !progressMsg) break;
       pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
       addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      applyTeamDesktopToolActivity(stream, 'progress', event);
       break;
     }
     case 'final': {
@@ -1929,7 +2004,9 @@ function refreshTeamChatComposerState(teamId) {
   const abortMode = busy && !hasOutbound;
   const btn = document.getElementById('team-chat-send-button');
   if (btn) {
-    btn.textContent = abortMode ? 'Stop' : busy ? 'Queue' : 'Send';
+    btn.innerHTML = abortMode
+      ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>'
+      : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>';
     btn.title = abortMode ? 'Stop the active team chat turn' : busy ? 'Queue this message for the team' : 'Send message';
     btn.setAttribute('aria-label', abortMode ? 'Stop' : busy ? 'Queue message' : 'Send');
     btn.onclick = () => abortMode ? abortTeamChat(teamId) : sendTeamChat(teamId);
@@ -1963,6 +2040,7 @@ function attachTeamStreamingMetadata(messages, streamingState) {
       metadata: {
         ...(msg.metadata || {}),
         processEntries: Array.isArray(streamingState.processEntries) ? [...streamingState.processEntries] : [],
+        liveTraceEntries: Array.isArray(streamingState.liveTraceEntries) ? [...streamingState.liveTraceEntries] : [],
         thinking: String(streamingState.thinking || '').trim() || undefined,
       },
     };
@@ -1978,6 +2056,7 @@ function attachTeamStreamingMetadata(messages, streamingState) {
       content: finalContent,
       metadata: {
         processEntries: Array.isArray(streamingState.processEntries) ? [...streamingState.processEntries] : [],
+        liveTraceEntries: Array.isArray(streamingState.liveTraceEntries) ? [...streamingState.liveTraceEntries] : [],
         thinking: String(streamingState.thinking || '').trim() || undefined,
         localStreamingFallback: true,
       },
@@ -2004,6 +2083,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
       content: '',
       thinking: '',
       processEntries: [],
+      liveTraceEntries: [],
       progressLines: [],
       managerStarted: true,
       completed: false,
@@ -2025,7 +2105,20 @@ function applyTeamChatStreamFrame(teamId, frame) {
       if (chunk) {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = `${teamChatStreamingState.thinking || ''}${chunk}`;
+        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+          appendTeamDesktopLiveTrace(teamChatStreamingState, 'reasoning_summary', chunk, { append: true });
+        }
         pushTeamChatProgressLine('Thinking...');
+      }
+      break;
+    }
+    case 'reasoning_summary_delta':
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(event.text || event.summary || event.thinking || '');
+      if (chunk) {
+        markTeamChatManagerStarted(teamId);
+        appendTeamDesktopLiveTrace(teamChatStreamingState, 'reasoning_summary', chunk, { append: true });
       }
       break;
     }
@@ -2069,6 +2162,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
         const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
         pushTeamChatProgressLine(`${stepPrefix}Running ${action}...`);
         addTeamChatProcessEntry('tool', `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`, args || undefined);
+        applyTeamDesktopToolActivity(teamChatStreamingState, 'call', event);
       }
       break;
     }
@@ -2081,6 +2175,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
       markTeamChatManagerStarted(teamId);
       pushTeamChatProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
       addTeamChatProcessEntry(ok ? 'result' : 'error', `${stepPrefix}${action} => ${text || '(no output)'}`, event.actor ? { actor: event.actor } : undefined);
+      applyTeamDesktopToolActivity(teamChatStreamingState, 'result', { ...event, error: !ok });
       break;
     }
     case 'tool_progress': {
@@ -2090,6 +2185,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
         markTeamChatManagerStarted(teamId);
         pushTeamChatProgressLine(`${action}: ${progressMsg}`);
         addTeamChatProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+        applyTeamDesktopToolActivity(teamChatStreamingState, 'progress', event);
       }
       break;
     }
@@ -2178,8 +2274,18 @@ function applyTeamDispatchStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
+        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+          appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
+        }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
       }
+      break;
+    }
+    case 'reasoning_summary_delta':
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(event.text || event.summary || event.thinking || '');
+      if (chunk) appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
       break;
     }
     case 'thinking':
@@ -2226,6 +2332,7 @@ function applyTeamDispatchStreamEvent(msg) {
         `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
         (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'call', event);
       break;
     }
     case 'tool_result': {
@@ -2241,6 +2348,7 @@ function applyTeamDispatchStreamEvent(msg) {
         `${stepPrefix}${action} => ${text || '(no output)'}`,
         event.actor ? { actor: event.actor } : undefined,
       );
+      applyTeamDesktopToolActivity(stream, 'result', { ...event, error: !ok });
       break;
     }
     case 'tool_progress': {
@@ -2249,6 +2357,7 @@ function applyTeamDispatchStreamEvent(msg) {
       if (!action || !progressMsg) break;
       pushTeamDispatchProgressLine(stream, `${action}: ${progressMsg}`);
       addTeamDispatchProcessEntry(stream, 'info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+      applyTeamDesktopToolActivity(stream, 'progress', event);
       break;
     }
     case 'final': {
@@ -2284,6 +2393,157 @@ function applyTeamDispatchStreamEvent(msg) {
   return stream;
 }
 
+function ensureUnifiedDesktopChatRenderer() {
+  if (window.__PROM_UNIFIED_DESKTOP_CHAT) return Promise.resolve(window.__PROM_UNIFIED_DESKTOP_CHAT);
+  if (!unifiedDesktopChatRendererPromise) {
+    unifiedDesktopChatRendererPromise = import('./ChatPage.js?v=desktop-sidebar-priority-v2')
+      .then(() => window.__PROM_UNIFIED_DESKTOP_CHAT || null)
+      .catch((error) => {
+        unifiedDesktopChatRendererPromise = null;
+        console.warn('[Teams] desktop chat renderer unavailable:', error);
+        return null;
+      });
+  }
+  return unifiedDesktopChatRendererPromise;
+}
+
+function normalizeTeamDesktopChatMessage(message) {
+  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+  const isUser = String(message?.from || message?.role || '').toLowerCase() === 'user';
+  const timestamp = Number(message?.timestamp || message?.ts || Date.now()) || Date.now();
+  const durationMs = Number(message?.workDurationMs || metadata.durationMs || (Number(message?.duration || 0) * 1000)) || 0;
+  const actorLabel = String(message?.fromName || (isUser ? '' : message?.from === 'manager' ? 'Manager' : 'Team member')).trim();
+  return {
+    ...message,
+    role: isUser ? 'user' : 'assistant',
+    content: stripTeamChatUploadNote(String(message?.content || message?.text || ''), metadata.attachmentPreviews || []),
+    timestamp,
+    metadata,
+    processEntries: Array.isArray(message?.processEntries) ? message.processEntries : (Array.isArray(metadata.processEntries) ? metadata.processEntries : []),
+    liveTraceEntries: Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : (Array.isArray(metadata.liveTraceEntries) ? metadata.liveTraceEntries : []),
+    workStartedAt: Number(message?.workStartedAt || metadata.startedAt || timestamp) || timestamp,
+    workEndedAt: Number(message?.workEndedAt || metadata.finishedAt || (durationMs ? timestamp + durationMs : 0)) || 0,
+    workDurationMs: durationMs,
+    ...(actorLabel && !isUser ? { workflowLabel: actorLabel } : {}),
+  };
+}
+
+function teamDesktopStreamMessage(stream, label, idPrefix) {
+  const startedAt = Number(stream?.startedAt || Date.now()) || Date.now();
+  const finishedAt = Number(stream?.finishedAt || 0) || 0;
+  const durationMs = Number(stream?.durationMs || (finishedAt ? finishedAt - startedAt : 0)) || 0;
+  return {
+    id: `${idPrefix}_${String(stream?.streamId || stream?.taskId || startedAt)}`,
+    role: 'assistant',
+    content: String(stream?.content || stream?.finalReply || '').trim(),
+    timestamp: startedAt,
+    workStartedAt: startedAt,
+    workEndedAt: finishedAt,
+    workDurationMs: durationMs,
+    processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
+    liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
+    liveProgressLines: Array.isArray(stream?.progressLines) ? [...stream.progressLines] : [],
+    workflowLabel: label,
+    _backgroundAgentLive: stream?.completed !== true,
+    streaming: stream?.completed !== true,
+    metadata: {
+      processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
+      liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
+      startedAt,
+      finishedAt,
+      durationMs,
+    },
+  };
+}
+
+function renderTeamUnifiedDesktopChatMessages(team) {
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  if (!renderer) return '<div class="side-chat-empty">Loading the unified chat surface...</div>';
+  const history = teamChatMessages.map(normalizeTeamDesktopChatMessage);
+  const liveMessages = [];
+  if (teamChatStreamingState?.teamId === team.id && teamChatStreamingState.managerStarted) {
+    liveMessages.push(teamDesktopStreamMessage(teamChatStreamingState, 'Manager', 'team_chat_live'));
+  }
+  getTeamManagerStreams(team.id).forEach((stream) => liveMessages.push(teamDesktopStreamMessage(stream, 'Manager', 'team_manager_live')));
+  getTeamMemberStreams(team.id).forEach((stream) => {
+    liveMessages.push(teamDesktopStreamMessage(stream, String(stream.agentName || stream.agentId || 'Team member'), 'team_member_live'));
+  });
+  getTeamDispatchStreams(team.id).forEach((stream) => {
+    liveMessages.push(teamDesktopStreamMessage(stream, String(stream.agentName || stream.agentId || 'Subagent'), 'team_dispatch_live'));
+  });
+
+  const historyHtml = renderer.renderHistory(history, {
+    sessionId: `team_chat_${team.id}`,
+    readonly: true,
+    hideSideChatBoundary: true,
+  });
+  const liveHtml = liveMessages.map((message) => message._backgroundAgentLive
+    ? renderer.renderLiveMessage(message, { sessionId: `team_chat_${team.id}` })
+    : renderer.renderHistory([message], { sessionId: `team_chat_${team.id}`, readonly: true, hideSideChatBoundary: true })).join('');
+  const approvalsHtml = renderTeamChatApprovals(team.id);
+  if (historyHtml || liveHtml || approvalsHtml) return `${historyHtml}${liveHtml}${approvalsHtml}`;
+  return '<div class="side-chat-empty">Team room is quiet. Message the team or address a participant with @manager or @agent.</div>';
+}
+
+function renderTeamUnifiedDesktopChat(team) {
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  if (!renderer) {
+    ensureUnifiedDesktopChatRenderer().then(() => {
+      if (activeTeamId === team.id && teamBoardTab === 'chat') renderTeamBoard(team.id);
+    });
+    return '<section class="unified-agent-chat-shell"><div class="side-chat-empty">Loading the unified chat surface...</div></section>';
+  }
+  const teamArg = teamChatJsArg(team.id);
+  const memberNames = (team.subagentIds || []).map((id) => {
+    const agent = _findAgentInTeam(id);
+    return String(agent?.name || id).trim();
+  }).filter(Boolean);
+  const participantLine = ['Manager', ...memberNames].join(' · ');
+  const busy = isTeamChatBusy(team.id);
+  const mentionPopover = '<div id="team-chat-mention-popover" style="display:none;position:absolute;left:0;right:0;bottom:calc(100% + 10px);z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 38px rgba(0,0,0,0.22);overflow:hidden"></div>';
+  const inputDecorations = `<div id="team-chat-input-mirror" aria-hidden="true" style="position:absolute;inset:0;padding:12px 14px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;pointer-events:none;color:var(--text);overflow:hidden"></div><div id="team-chat-input-placeholder" style="position:absolute;left:14px;right:14px;top:12px;font-size:13px;line-height:1.6;color:var(--muted);pointer-events:none">${busy ? 'Queue a message for the team, or use @manager or @someone...' : 'Message the team, or use @manager or @someone...'}</div>`;
+  return `<section class="unified-agent-chat-shell" id="team-unified-chat-overlay" aria-label="${escHtml(team.name || 'Team')} chat">
+    <header class="unified-agent-chat-header">
+      <div class="side-chat-title-wrap">
+        <div class="side-chat-kicker">Team chat</div>
+        <div class="side-chat-title">${escHtml(team.name || 'Team')}</div>
+        <div class="unified-agent-chat-participants">${escHtml(participantLine)}</div>
+      </div>
+      <button class="side-chat-close" type="button" onclick="closeUnifiedTeamChat(${teamArg})" title="Return to context" aria-label="Return to context">×</button>
+    </header>
+    <div class="unified-agent-chat-messages" id="team-chat-messages">
+      ${renderTeamUnifiedDesktopChatMessages(team)}
+    </div>
+    ${renderer.renderComposer({
+      inputId: 'team-chat-input',
+      fileInputId: 'team-chat-file-input',
+      stagingId: 'team-chat-file-staging',
+      sendButtonId: 'team-chat-send-button',
+      composerClass: 'unified-agent-chat-composer team-chat-unified-composer',
+      placeholder: busy ? 'Queue a message for the team...' : 'Message the team...',
+      attachAction: `openTeamChatFilePicker(${teamArg})`,
+      voiceAction: "toggleUnifiedDesktopComposerDictation('team-chat-input', this)",
+      sendAction: busy ? `abortTeamChat(${teamArg})` : `sendTeamChat(${teamArg})`,
+      fileInputOnChange: `onTeamChatFilesChosen(${teamArg}, this)`,
+      inputAttributes: 'spellcheck="true"',
+      inputStyle: 'position:relative;z-index:1;width:100%;resize:none;border:none;padding:12px 14px;font-size:13px;line-height:1.6;font-family:inherit;background:transparent;color:transparent;caret-color:var(--text);outline:none;min-height:64px',
+      inputWrapStyle: 'position:relative;border:1px solid var(--line);border-radius:14px;background:var(--panel-2);box-shadow:0 8px 22px rgba(0,0,0,0.08);overflow:hidden',
+      extraTopMarkup: mentionPopover,
+      extraInputMarkup: inputDecorations,
+      footerHint: 'Enter to send · Shift+Enter for newline',
+      queueBadgeId: 'team-chat-queue-badge',
+      queueCount: getTeamChatQueue(team.id).length,
+    })}
+  </section>`;
+}
+
+function closeUnifiedTeamChat(teamId) {
+  if (!teamId || activeTeamId !== teamId) return;
+  hideTeamChatMentionPopover();
+  teamBoardTab = 'context';
+  renderTeamBoard(teamId);
+}
+
 function renderActiveTeamChat(teamId, opts = {}) {
   if (teamBoardTab !== 'chat' || activeTeamId !== teamId) return;
   const { forceBottom = false } = opts;
@@ -2291,6 +2551,28 @@ function renderActiveTeamChat(teamId, opts = {}) {
   if (!contentEl) return;
   const team = teamsData.find((t) => t.id === teamId);
   if (!team) return;
+
+  const unifiedOverlay = document.getElementById('team-unified-chat-overlay');
+  const unifiedMessages = document.getElementById('team-chat-messages');
+  if (unifiedOverlay && unifiedMessages) {
+    const prevScrollTop = unifiedMessages.scrollTop;
+    const wasNearBottom = (unifiedMessages.scrollHeight - (unifiedMessages.scrollTop + unifiedMessages.clientHeight)) < 28;
+    unifiedMessages.innerHTML = renderTeamUnifiedDesktopChatMessages(team);
+    const input = document.getElementById('team-chat-input');
+    if (input) {
+      bindTeamChatInputListeners(input, teamId);
+      refreshTeamChatMentionState(teamId);
+      resizeTeamChatInput();
+    }
+    refreshTeamChatComposerState(teamId);
+    requestAnimationFrame(() => {
+      const el = document.getElementById('team-chat-messages');
+      if (!el) return;
+      if (forceBottom || wasNearBottom) el.scrollTop = el.scrollHeight;
+      else el.scrollTop = Math.min(prevScrollTop, Math.max(0, el.scrollHeight - el.clientHeight));
+    });
+    return;
+  }
 
   const msgElBefore = document.getElementById('team-chat-messages');
   const inputBefore = document.getElementById('team-chat-input');
@@ -3027,6 +3309,10 @@ async function loadTeamBoardData(teamId) {
 function renderTeamBoard(teamId) {
   const team = teamsData.find(t => t.id === teamId);
   if (!team) return;
+  const existingTeamChatInput = teamBoardTab === 'chat' && activeTeamId === teamId
+    ? document.getElementById('team-chat-input')
+    : null;
+  if (existingTeamChatInput) teamChatDraftByTeam[teamId] = existingTeamChatInput.value || '';
   const header = document.getElementById('team-board-header');
   const body = document.getElementById('team-board-body');
   if (!header || !body) return;
@@ -3059,17 +3345,26 @@ function renderTeamBoard(teamId) {
   const tabContentStyle = teamBoardTab === 'chat'
     ? 'flex:1;min-height:0;overflow:hidden;padding:0;display:flex;flex-direction:column;gap:0;position:relative'
     : 'flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px';
-  body.innerHTML = `
+  const tabNavHtml = teamBoardTab === 'chat' ? '' : `
     <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2)">
       ${tabs.map(t => `
         <button onclick="switchTeamTab('${t}','${teamId}')" 
           style="border:none;background:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:${t===teamBoardTab?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${t===teamBoardTab?'var(--brand)':'transparent'};transition:all 0.15s">
           ${tabLabels[t]}${t==='memory'&&pendingCount>0?` <span style="background:#e05c5c;color:#fff;border-radius:999px;font-size:10px;padding:1px 6px">${pendingCount}</span>`:''}
         </button>`).join('')}
-    </div>
-    <div id="team-tab-content" style="${tabContentStyle}">
-      ${renderTeamTabContent(team)}
     </div>`;
+  body.innerHTML = `
+    ${tabNavHtml}
+    <div id="team-tab-content" style="${tabContentStyle}">
+      ${teamBoardTab === 'chat' ? renderTeamUnifiedDesktopChat(team) : renderTeamTabContent(team)}
+    </div>`;
+  const newTeamChatInput = document.getElementById('team-chat-input');
+  if (newTeamChatInput) newTeamChatInput.value = teamChatDraftByTeam[teamId] || '';
+  if (teamBoardTab === 'chat') {
+    setTimeout(() => {
+      if (activeTeamId === teamId && teamBoardTab === 'chat') renderActiveTeamChat(teamId, { forceBottom: true });
+    }, 0);
+  }
 
   // Characters section (left side - shown in canvas area)
   renderTeamCharacters(team);
@@ -3079,12 +3374,11 @@ function renderTeamBoard(teamId) {
   teamChatPolling = null;
 }
 
-function switchTeamTab(tab, teamId) {
+async function switchTeamTab(tab, teamId) {
   teamBoardTab = tab;
+  if (tab === 'chat') await ensureUnifiedDesktopChatRenderer();
+  if (activeTeamId !== teamId || teamBoardTab !== tab) return;
   renderTeamBoard(teamId);
-  if (tab === 'chat') {
-    setTimeout(() => renderActiveTeamChat(teamId, { forceBottom: true }), 100);
-  }
   if (tab === 'memory') {
     loadTeamMemoryFiles(teamId);
   }
@@ -4556,6 +4850,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
     content: '',
     thinking: '',
     processEntries: [],
+    liveTraceEntries: [],
     progressLines: [],
     managerStarted: false,
     completed: false,
@@ -4622,7 +4917,21 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             if (chunk) {
               const becameVisible = markTeamChatManagerStarted(teamId);
               streamState.thinking = `${streamState.thinking || ''}${chunk}`;
+              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+                appendTeamDesktopLiveTrace(streamState, 'reasoning_summary', chunk, { append: true });
+              }
               pushTeamChatProgressLine('Thinking...');
+              refreshTeamChatStreamingUI(teamId, becameVisible);
+            }
+            break;
+          }
+          case 'reasoning_summary_delta':
+          case 'reasoning_delta':
+          case 'reasoning_summary': {
+            const chunk = String(event.text || event.summary || event.thinking || '');
+            if (chunk) {
+              const becameVisible = markTeamChatManagerStarted(teamId);
+              appendTeamDesktopLiveTrace(streamState, 'reasoning_summary', chunk, { append: true });
               refreshTeamChatStreamingUI(teamId, becameVisible);
             }
             break;
@@ -4680,6 +4989,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
               const argsPreview = args ? JSON.stringify(args).slice(0, 240) : '';
               pushTeamChatProgressLine(`${stepPrefix}Running ${action}...`);
               addTeamChatProcessEntry('tool', `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`, args || undefined);
+              applyTeamDesktopToolActivity(streamState, 'call', event);
               refreshTeamChatStreamingUI(teamId, true);
             }
             break;
@@ -4693,6 +5003,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             markTeamChatManagerStarted(teamId);
             pushTeamChatProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`);
             addTeamChatProcessEntry(ok ? 'result' : 'error', `${stepPrefix}${action} => ${text || '(no output)'}`, event.actor ? { actor: event.actor } : undefined);
+            applyTeamDesktopToolActivity(streamState, 'result', { ...event, error: !ok });
             refreshTeamChatStreamingUI(teamId, true);
             break;
           }
@@ -4703,6 +5014,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
               markTeamChatManagerStarted(teamId);
               pushTeamChatProgressLine(`${action}: ${progressMsg}`);
               addTeamChatProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined);
+              applyTeamDesktopToolActivity(streamState, 'progress', event);
               refreshTeamChatStreamingUI(teamId, true);
             }
             break;
@@ -4741,6 +5053,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
                     source: 'team_chat_stream',
                     localStreamingFallback: true,
                     processEntries: Array.isArray(streamState.processEntries) ? [...streamState.processEntries] : [],
+                    liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? [...streamState.liveTraceEntries] : [],
                     thinking: String(streamState.thinking || '').trim(),
                   },
                 });
@@ -6043,6 +6356,7 @@ window.getTeamContextReferences = getTeamContextReferences;
 window.renderTeamContextReferenceCards = renderTeamContextReferenceCards;
 window.getTeamChatSignature = getTeamChatSignature;
 window.renderActiveTeamChat = renderActiveTeamChat;
+window.closeUnifiedTeamChat = closeUnifiedTeamChat;
 window.showMoreTeamChat = showMoreTeamChat;
 window.resolveTeamInlineApproval = resolveTeamInlineApproval;
 window.toggleTeamChatProcess = function(id) {

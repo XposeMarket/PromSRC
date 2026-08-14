@@ -10958,9 +10958,13 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <div class="pm-mobile-side-thread" id="pm-mobile-side-thread"></div>
         <form class="pm-composer pm-mobile-side-composer" id="pm-mobile-side-composer">
           <span class="pm-glass-lens" aria-hidden="true"></span>
+          <span class="pm-glass-border" aria-hidden="true"></span>
+          <div class="pm-attach-tray" id="pm-mobile-side-attach-tray" hidden></div>
           <div class="pm-composer-row">
             <button type="button" class="pm-icon-btn" id="pm-mobile-side-attach" aria-label="Attach files">${ICONS.paperclip}</button>
-            <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+            <div class="pm-composer-input-wrap" id="pm-mobile-side-input-wrap">
+              <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+            </div>
             <button type="button" class="pm-icon-btn" id="pm-mobile-side-mic" aria-label="Voice input">${ICONS.micSmall}</button>
             <button type="submit" class="pm-send" id="pm-mobile-side-send" aria-label="Send side chat">${ICONS.send}</button>
           </div>
@@ -14163,6 +14167,12 @@ void main() {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) scheduleSideRenderSoon();
         return 'streaming';
       }
+      case 'reasoning_delta':
+      case 'reasoning_summary': {
+        const chunk = String(evt.text || evt.summary || evt.thinking || '');
+        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) scheduleSideRenderSoon();
+        return 'streaming';
+      }
       case 'thinking':
       case 'agent_thought': {
         if (_handleMobileCleanThought(aiTurn, evt)) scheduleSideRenderSoon();
@@ -15301,6 +15311,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'reasoning_summary_delta': {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadSoon();
+        return 'streaming';
+      }
+      case 'reasoning_delta':
+      case 'reasoning_summary': {
+        const chunk = String(evt.text || evt.summary || evt.thinking || '');
+        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) renderThreadSoon();
         return 'streaming';
       }
       case 'thinking':
@@ -35881,6 +35897,7 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
   return `
     <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
       <span class="pm-glass-lens" aria-hidden="true"></span>
+      <span class="pm-glass-border" aria-hidden="true"></span>
       <input id="${id}-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
       <div class="pm-composer-row">
@@ -36214,6 +36231,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 
 function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
   if (!message || !evt) return false;
+  _maybeFlushMobileThinkingBeforeEvent(message, evt);
   const applyCompletedTurnPresentation = () => {
     if (Array.isArray(evt.artifacts)) message.artifacts = evt.artifacts;
     if (Array.isArray(evt.generatedImages)) message.generatedImages = evt.generatedImages;
@@ -36243,30 +36261,25 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'thinking_delta': {
       const chunk = String(evt.thinking || evt.text || '');
       if (!chunk) return false;
+      _handleMobileThinkingDelta(message, evt);
       message._thinking = `${message._thinking || ''}${chunk}`;
-      message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
-      // Explicit reasoning summaries update the replaceable progress slot.
-      if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-        _setMobileLiveProgressNarration(message, chunk);
-        _appendMobileReasoningSummary(message, chunk);
-      }
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
     case 'reasoning_summary_delta': {
-      const chunk = String(evt.text || evt.summary || '');
+      return _handleMobileReasoningSummaryDelta(message, evt);
+    }
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(evt.text || evt.summary || evt.thinking || '');
       if (!chunk) return false;
-      _setMobileLiveProgressNarration(message, chunk);
-      _appendMobileReasoningSummary(message, chunk);
-      return true;
+      return _handleMobileReasoningSummaryDelta(message, { ...evt, text: chunk });
     }
     case 'thinking':
     case 'agent_thought': {
       const thought = String(evt.thinking || evt.text || '').trim();
       if (!thought) return false;
-      _flushMobilePendingThinkingBurst(message);
-      message._thinking = message._thinking ? `${message._thinking}\n\n${thought}` : thought;
-      _setMobileLiveProgressNarration(message, thought, { replace: true });
+      _handleMobileCleanThought(message, evt);
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
@@ -37377,6 +37390,7 @@ async function _renderTeamChatTab(slot, teamId) {
       return _renderMobileAgentChatBubble(normalized, {
         sender: normalized.fromLabel,
         live: message === liveMsg,
+        keepLiveTraceVisible: message === liveMsg,
       });
     } catch (err) {
       // Team history should remain readable even when a legacy or unusually
@@ -41600,6 +41614,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     _renderMobileAgentChatList(listEl, rendered, (m) => _renderMobileAgentChatBubble(m, {
       sender: agent.name || agent.id || 'Subagent',
       live: m === liveMsg,
+      keepLiveTraceVisible: m === liveMsg,
     }));
     listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
       btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));

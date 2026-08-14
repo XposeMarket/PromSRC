@@ -46,6 +46,7 @@ let subagentChatApprovalsByAgent = {}; // agentId -> inline approval cards shown
 let subagentRunComposerStateByTask = {}; // taskId -> { busy, queue, controller, error, stopRequested }
 let subagentReasoningPopoverCleanup = null;
 let subagentDesktopVoiceTargetAgentId = '';
+let unifiedDesktopChatRendererPromise = null;
 let agentPackImportPath = 'workspace/oss-agents/marketplace-plan/examples/technical-docs-agent';
 let agentPackImportPreview = null;
 let agentPackImportBusy = false;
@@ -929,7 +930,10 @@ function appendSubagentLiveTrace(state, type, text, { append = false, extra = nu
   if (normalizedType === 'final' || normalizedType === 'user') return;
   if (!Array.isArray(state.liveTraceEntries)) state.liveTraceEntries = [];
   const last = state.liveTraceEntries[state.liveTraceEntries.length - 1];
-  if (append && last && String(last.type || '').toLowerCase() === normalizedType) {
+  const incomingSource = String(extra?.source || '').toLowerCase();
+  const lastSource = String(last?.extra?.source || '').toLowerCase();
+  if (append && last && String(last.type || '').toLowerCase() === normalizedType
+    && (!incomingSource || incomingSource === lastSource)) {
     last.text = `${last.text || ''}${content}`;
     return;
   }
@@ -1825,6 +1829,127 @@ function updateSubagentReasoningTrigger(agent) {
   trigger.setAttribute('aria-label', `Reasoning level: ${label}`);
 }
 
+async function ensureUnifiedDesktopChatRenderer() {
+  if (window.__PROM_UNIFIED_DESKTOP_CHAT) return window.__PROM_UNIFIED_DESKTOP_CHAT;
+  if (!unifiedDesktopChatRendererPromise) {
+    unifiedDesktopChatRendererPromise = import('./ChatPage.js?v=desktop-sidebar-priority-v2')
+      .then(() => window.__PROM_UNIFIED_DESKTOP_CHAT || null)
+      .catch((error) => {
+        unifiedDesktopChatRendererPromise = null;
+        console.warn('[Subagents] desktop chat renderer unavailable:', error);
+        return null;
+      });
+  }
+  return unifiedDesktopChatRendererPromise;
+}
+
+function normalizeSubagentDesktopChatMessage(message) {
+  const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+  const timestamp = Number(message?.timestamp || message?.ts || Date.now()) || Date.now();
+  const durationMs = Number(message?.workDurationMs || metadata.durationMs || (Number(message?.duration || 0) * 1000)) || 0;
+  return {
+    ...message,
+    role: message?.role === 'user' ? 'user' : 'assistant',
+    content: String(message?.content || message?.text || '').trim(),
+    timestamp,
+    metadata,
+    processEntries: Array.isArray(message?.processEntries) ? message.processEntries : (Array.isArray(metadata.processEntries) ? metadata.processEntries : []),
+    liveTraceEntries: Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : (Array.isArray(metadata.liveTraceEntries) ? metadata.liveTraceEntries : []),
+    workStartedAt: Number(message?.workStartedAt || metadata.startedAt || timestamp) || timestamp,
+    workEndedAt: Number(message?.workEndedAt || metadata.finishedAt || (durationMs ? timestamp + durationMs : 0)) || 0,
+    workDurationMs: durationMs,
+  };
+}
+
+function subagentUnifiedDesktopHistory(agent) {
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  if (!renderer) return '<div class="side-chat-empty">Loading the unified chat surface...</div>';
+  const agentLabel = String(agent.name || agent.id || 'Subagent').trim();
+  const history = subagentChatHistory.map((message) => {
+    const normalized = normalizeSubagentDesktopChatMessage(message);
+    return normalized.role === 'assistant' && !normalized.workflowLabel
+      ? { ...normalized, workflowLabel: agentLabel }
+      : normalized;
+  });
+  const liveMessages = [];
+  const stream = getSubagentStreamingState(agent.id);
+  if (stream) {
+    liveMessages.push({
+      id: `subagent_live_${agent.id}`,
+      role: 'assistant',
+      content: String(stream.content || stream.finalReply || ''),
+      timestamp: Number(stream.startedAt || Date.now()) || Date.now(),
+      workStartedAt: Number(stream.startedAt || Date.now()) || Date.now(),
+      liveTraceEntries: Array.isArray(stream.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
+      processEntries: Array.isArray(stream.processEntries) ? [...stream.processEntries] : [],
+      liveProgressLines: Array.isArray(stream.progressLines) ? [...stream.progressLines] : [],
+      _backgroundAgentLive: true,
+      streaming: stream.completed !== true,
+      workflowLabel: agent.name || agent.id,
+    });
+  }
+  const historyHtml = renderer.renderHistory(history, {
+    sessionId: getSubagentChatSessionId(agent.id),
+    readonly: true,
+    hideSideChatBoundary: true,
+  });
+  const liveHtml = liveMessages.map((message) => message.streaming
+    ? renderer.renderLiveMessage(message, { sessionId: getSubagentChatSessionId(agent.id) })
+    : renderer.renderHistory([message], { sessionId: getSubagentChatSessionId(agent.id), readonly: true, hideSideChatBoundary: true })).join('');
+  const approvalsHtml = renderSubagentChatApprovals(agent.id);
+  if (historyHtml || liveHtml || approvalsHtml) return `${historyHtml}${liveHtml}${approvalsHtml}`;
+  return `<div class="side-chat-empty">Start a direct chat with ${escHtml(agent.name || agent.id)}. The agent's reasoning summaries and tool activity will stream here.</div>`;
+}
+
+function renderSubagentUnifiedDesktopChat(agent) {
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  if (!renderer) {
+    ensureUnifiedDesktopChatRenderer().then(() => {
+      if (activeSubagentId === agent.id && subagentDetailTab === 'chat') renderSubagentBoard(agent.id);
+    });
+    return '<section class="unified-agent-chat-shell"><div class="side-chat-empty">Loading the unified chat surface...</div></section>';
+  }
+  const busy = isSubagentChatBusy(agent.id);
+  const agentArg = subagentChatJsArg(agent.id);
+  return `<section class="unified-agent-chat-shell" id="subagent-unified-chat" aria-label="Chat with ${escHtml(agent.name || agent.id)}">
+    <header class="unified-agent-chat-header">
+      <div class="side-chat-title-wrap">
+        <div class="side-chat-kicker">Subagent chat</div>
+        <div class="side-chat-title">${escHtml(agent.name || agent.id)}</div>
+        <div class="unified-agent-chat-participants">Direct channel · tool activity and reasoning summaries stream live</div>
+      </div>
+      <button class="side-chat-close" type="button" onclick="closeUnifiedSubagentChat('${escHtml(agent.id)}')" title="Return to overview" aria-label="Return to overview">×</button>
+    </header>
+    <div class="unified-agent-chat-messages" id="subagent-chat-messages">
+      ${subagentUnifiedDesktopHistory(agent)}
+    </div>
+    ${renderer.renderComposer({
+      inputId: 'subagent-chat-input',
+      fileInputId: 'subagent-chat-file-input',
+      stagingId: 'subagent-chat-file-staging',
+      sendButtonId: 'subagent-chat-send-button',
+      composerClass: 'unified-agent-chat-composer subagent-panel-chat-composer',
+      placeholder: busy ? `Queue a message for ${agent.name || agent.id}...` : `Message ${agent.name || agent.id}...`,
+      attachAction: 'openSubagentChatFilePicker()',
+      voiceAction: `startSubagentDesktopVoice(${agentArg})`,
+      sendAction: busy ? `abortSubagentChat(${agentArg})` : `sendSubagentChat(${agentArg})`,
+      fileInputOnChange: `onSubagentChatFilesChosen(${agentArg}, this)`,
+      inputAttributes: `onpaste="handleSubagentChatPaste(event, ${agentArg})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${agentArg});}"`,
+      footerHint: 'Enter to send · Shift+Enter for newline',
+      queueBadgeId: 'subagent-chat-queue-badge',
+      queueCount: getSubagentChatQueue(agent.id).length,
+      footerExtraMarkup: renderSubagentReasoningTrigger(agent),
+    })}
+  </section>`;
+}
+
+function closeUnifiedSubagentChat(agentId) {
+  if (!agentId || activeSubagentId !== agentId) return;
+  subagentDetailTab = 'overview';
+  closeSubagentReasoningPopover({ restoreFocus: false });
+  renderSubagentBoard(agentId);
+}
+
 function renderSubagentBoard(agentId) {
   const agent = subagentsData.find(a => a.id === agentId);
   if (!agent) return;
@@ -1852,17 +1977,19 @@ function renderSubagentBoard(agentId) {
       <button onclick="closeSubagentDetail()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">✕</button>
     </div>`;
 
-  body.innerHTML = `
-    <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
-      ${['overview','chat','memory','runs','heartbeat'].map(tab => {
-        const labels = { overview:'Overview', chat:'Chat', memory:'Memory', runs:`Runs (${subagentRuns.length})`, heartbeat:'Heartbeat' };
-        const isActive = tab === subagentDetailTab;
-        return `<button onclick="switchSubagentTab('${tab}','${escHtml(agentId)}')" style="padding:10px 14px;font-size:12px;font-weight:${isActive?'700':'500'};border:none;background:none;cursor:pointer;white-space:nowrap;color:${isActive?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${isActive?'var(--brand)':'transparent'};margin-bottom:-1px;transition:all 0.15s">${labels[tab]}</button>`;
-      }).join('')}
-    </div>
-    <div id="subagent-tab-content" style="flex:1;min-height:0;overflow-y:${subagentDetailTab === 'chat' ? 'hidden' : 'auto'};padding:14px 16px">
-      ${renderSubagentTabContent(agent)}
-    </div>`;
+  body.innerHTML = subagentDetailTab === 'chat'
+    ? `<div id="subagent-tab-content" class="unified-agent-chat-tab-content" style="flex:1;min-height:0;overflow:hidden;padding:0">${renderSubagentUnifiedDesktopChat(agent)}</div>`
+    : `
+      <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
+        ${['overview','chat','memory','runs','heartbeat'].map(tab => {
+          const labels = { overview:'Overview', chat:'Chat', memory:'Memory', runs:`Runs (${subagentRuns.length})`, heartbeat:'Heartbeat' };
+          const isActive = tab === subagentDetailTab;
+          return `<button onclick="switchSubagentTab('${tab}','${escHtml(agentId)}')" style="padding:10px 14px;font-size:12px;font-weight:${isActive?'700':'500'};border:none;background:none;cursor:pointer;white-space:nowrap;color:${isActive?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${isActive?'var(--brand)':'transparent'};margin-bottom:-1px;transition:all 0.15s">${labels[tab]}</button>`;
+        }).join('')}
+      </div>
+      <div id="subagent-tab-content" style="flex:1;min-height:0;overflow-y:auto;padding:14px 16px">
+        ${renderSubagentTabContent(agent)}
+      </div>`;
 
   if (subagentDetailTab === 'overview') {
     agentModelPickerHydrate('sa-model', agent);
@@ -1921,6 +2048,7 @@ async function switchSubagentTab(tab, agentId) {
       subagentChatHistory = preserveSubagentProcessMetadata(normalizeSubagentChatMessages(d.messages || []));
       await restoreSubagentChatApprovals(agentId);
     } catch {}
+    await ensureUnifiedDesktopChatRenderer();
   }
 
   renderSubagentBoard(agentId);
@@ -2733,6 +2861,7 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     content: '',
     thinking: '',
     processEntries: [],
+    liveTraceEntries: [],
     progressLines: [`${getActiveSubagentName(agentId)} is thinking...`],
     completed: false,
     finalReply: '',
@@ -2812,9 +2941,28 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             const chunk = String(event.thinking || event.text || '');
             if (!chunk) break;
             streamState.thinking = `${streamState.thinking || ''}${chunk}`;
+            if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+              appendSubagentLiveTrace(streamState, 'think', chunk, {
+                append: true,
+                extra: { source: 'reasoning_summary', visibility: 'user' },
+              });
+            }
             if (!streamState.progressLines?.some((line) => /^Thinking/i.test(String(line)))) {
               pushSubagentProgressLine('Thinking...', streamState);
             }
+            refreshSubagentStreamingUI(agentId);
+            break;
+          }
+
+          case 'reasoning_summary_delta':
+          case 'reasoning_delta':
+          case 'reasoning_summary': {
+            const chunk = String(event.text || event.summary || event.thinking || '');
+            if (!chunk) break;
+            appendSubagentLiveTrace(streamState, 'think', chunk, {
+              append: true,
+              extra: { source: 'reasoning_summary', visibility: 'user' },
+            });
             refreshSubagentStreamingUI(agentId);
             break;
           }
@@ -3787,6 +3935,7 @@ window.refreshSubagents = refreshSubagents;
 window.openSubagentDetail = openSubagentDetail;
 window.openScheduleOwnerAgent = openScheduleOwnerAgent;
 window.closeSubagentDetail = closeSubagentDetail;
+window.closeUnifiedSubagentChat = closeUnifiedSubagentChat;
 window.switchSubagentTab = switchSubagentTab;
 window.sendSubagentChat = sendSubagentChat;
 window.abortSubagentChat = abortSubagentChat;
