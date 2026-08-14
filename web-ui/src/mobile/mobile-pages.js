@@ -24864,8 +24864,13 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     if (event?.__prometheusCodexBridge) {
       _startMobileRealtimeLiveCameraVision('codex_transcription_delta');
       if (__pmRealtimeAgent.pendingImages.length) {
-        _flushMobileRealtimeAgentPendingImages('codex_transcription_delta', {
+        const cameraState = _mobileRealtimeLiveVisionState();
+        const attachmentPreparation = _flushMobileRealtimeAgentPendingImages('codex_transcription_delta', {
           turnId: _mobileRealtimeLiveVisionState().turnId,
+        }).catch(() => false);
+        cameraState.pendingAttachmentPreparation = attachmentPreparation;
+        attachmentPreparation.finally(() => {
+          if (cameraState.pendingAttachmentPreparation === attachmentPreparation) cameraState.pendingAttachmentPreparation = null;
         }).catch(() => {});
       }
     }
@@ -26259,7 +26264,11 @@ async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
       requestBytes: requestUrls.reduce((sum, url) => sum + url.length, 0),
       reason: opts.reason || '',
     });
-    const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', { method: 'POST', body: JSON.stringify(reqBody) });
+    const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
+      method: 'POST',
+      body: JSON.stringify(reqBody),
+      timeoutMs: 45_000,
+    });
     if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return '';
     const summary = String(res?.summary || '').trim();
     if (!summary) { _voiceDebug('realtime-agent-xai-summary-empty', { error: res?.error || '' }); return ''; }
@@ -26267,7 +26276,12 @@ async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
     return summary;
   } catch (err) {
     const message = String(err?.message || err || '').trim();
-    _voiceDebug('realtime-agent-xai-summary-failed', { message });
+    _voiceDebug('realtime-agent-xai-summary-failed', {
+      message,
+      status: Number(err?.status || 0) || 0,
+      code: String(err?.code || '').trim(),
+      bodyError: String(err?.body?.error || err?.body?.message || '').trim().slice(0, 240),
+    });
     if (opts.toast !== false) {
       try { pmToast(`Could not summarize the image for xAI voice${message ? `: ${message.slice(0, 180)}` : '.'}`, 'error'); } catch {}
     }
@@ -26450,35 +26464,52 @@ function _stageMobileRealtimeAgentFile(attachment, sessionId) {
   return file;
 }
 
-// Stage a captured photo: show it in the chat bubble and hold it for the next
-// spoken/text turn. Sending only at the turn boundary keeps the image and the
-// transcription in one ordered realtime conversation window.
-function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
+function _queueMobileRealtimeAgentImage(attachment, options = {}) {
   const dataUrl = String(attachment?.dataUrl || '').trim();
-  if (!dataUrl) return false;
-  const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  if (!dataUrl) return null;
   const img = {
     dataUrl,
     name: String(attachment?.name || 'Camera snapshot').trim(),
     mimeType: String(attachment?.mimeType || 'image/jpeg'),
     base64: String(attachment?.base64 || dataUrl.replace(/^data:[^;]+;base64,/, '')),
     realtimeInjected: false,
+    frameId: String(attachment?.frameId || '').trim(),
+    turnId: Number(attachment?.turnId || 0) || 0,
+    capturedAt: Number(attachment?.capturedAt || 0) || 0,
+    encodedAt: Number(attachment?.encodedAt || 0) || 0,
   };
   if (String(__pmRealtimeAgent.conn?.provider || '') === 'xai') {
     img.xaiSummaryPromise = _summarizeMobileXaiVisionImages([dataUrl], {
       name: img.name,
-      reason: 'image_staged',
+      reason: options.reason || 'image_staged',
       toast: false,
+      isCurrent: options.isCurrent,
     });
   }
+  if (!Array.isArray(__pmRealtimeAgent.pendingImages)) __pmRealtimeAgent.pendingImages = [];
   __pmRealtimeAgent.pendingImages.push(img);
   // Update the session-level runtime prompt as soon as the capture is staged.
   // The actual image event waits for the next turn so it cannot race VAD.
-  _sendMobileRealtimeCameraRuntimeUpdate('image_staged');
-  _scheduleMobileRealtimeAgentPendingImageFlush('image_staged');
-  _stageMobileRealtimeAgentAttachmentPreview({
-    kind: 'image', name: img.name, mimeType: img.mimeType, dataUrl: img.dataUrl, base64: img.base64, sizeLabel: '',
-  }, sid);
+  _sendMobileRealtimeCameraRuntimeUpdate(options.reason || 'image_staged');
+  return img;
+}
+
+// Stage a captured photo: show it in the chat bubble and hold it for the next
+// spoken/text turn. Sending only at the turn boundary keeps the image and the
+// transcription in one ordered realtime conversation window. Live camera
+// frames use this same queue with preview/auto-flush disabled, then explicitly
+// flush the queue before their turn response.
+function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
+  const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const img = _queueMobileRealtimeAgentImage(attachment, options);
+  if (!img) return false;
+  if (options.skipAutoFlush !== true) _scheduleMobileRealtimeAgentPendingImageFlush(options.reason || 'image_staged');
+  if (options.preview !== false) {
+    _stageMobileRealtimeAgentAttachmentPreview({
+      kind: 'image', name: img.name, mimeType: img.mimeType, dataUrl: img.dataUrl, base64: img.base64, sizeLabel: '',
+      frameId: img.frameId, turnId: img.turnId, capturedAt: img.capturedAt, encodedAt: img.encodedAt,
+    }, sid);
+  }
   if (options.toast !== false) {
     try { pmToast('Photo ready - say what you want to know about it.', 'success'); } catch {}
   }
@@ -26494,6 +26525,7 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
   const images = __pmRealtimeAgent.pendingImages;
   if (!images || !images.length) return false;
   const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   const all = images.slice();
   const restorePendingImages = () => {
     const current = Array.isArray(__pmRealtimeAgent.pendingImages)
@@ -26514,14 +26546,16 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
     imageCount: all.length,
     turnId: options.turnId,
     userText: options.promptText,
+    feedOpen: options.feedOpen,
   });
   if (_isMobileCodexV3RealtimeConnection()) {
     let injected = false;
     for (const image of all) {
+      if (!isCurrent()) break;
       const label = all.length === 1
         ? 'Live camera image attached.'
         : `Live camera image ${all.indexOf(image) + 1} of ${all.length} attached.`;
-      if (await _injectRealtimeImageItemToConversation(image, options.label || label)) {
+      if (await _injectRealtimeImageItemToConversation(image, options.label || label, { isCurrent })) {
         injected = true;
       }
     }
@@ -26552,7 +26586,14 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
       }
       injected = await _sendMobileXaiVisionSummaryToRealtime(
         all.map((im) => im.dataUrl),
-        { name: all.length > 1 ? 'camera images' : (all[0]?.name || 'camera photo'), reason, promptText, precomputedSummary: summary },
+        {
+          name: all.length > 1 ? 'camera images' : (all[0]?.name || 'camera photo'),
+          reason,
+          promptText,
+          precomputedSummary: summary,
+          isCurrent,
+          toast: options.toast,
+        },
       );
     } finally {
       __pmRealtimeAgent.turn.xaiVisionInjecting = false;
@@ -26588,6 +26629,7 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
     let delivered = 0;
     for (let i = 0; i < all.length; i++) {
       const image = all[i];
+      if (!isCurrent()) break;
       if (image?.realtimeInjected) {
         delivered += 1;
         continue;
@@ -26595,7 +26637,7 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
       const label = all.length === 1
         ? 'Live camera image attached.'
         : `Live camera image ${i + 1} of ${all.length} attached.`;
-      const sent = await _injectRealtimeImageItemToConversation(image, label);
+      const sent = await _injectRealtimeImageItemToConversation(image, options.label || label, { isCurrent });
       if (sent) delivered += 1;
       else if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') break;
     }
@@ -26646,6 +26688,15 @@ async function _awaitMobileRealtimeCameraOperation(operation, timeoutMs = 900, o
     return null;
   }
   return result?.value ?? null;
+}
+
+function _mobileRealtimeLiveCameraAssociationTimeoutMs() {
+  // OpenAI only needs the local canvas/downscale and data-channel send. xAI
+  // must wait for the HTTP vision sidecar, whose normal mobile request budget
+  // is much longer than a realtime audio tick.
+  const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  if (provider === 'xai' || _isMobileCodexV3RealtimeConnection(__pmRealtimeAgent.conn)) return 48_000;
+  return 12_000;
 }
 
 function _mobileRealtimeLiveVisionState() {
@@ -26700,6 +26751,10 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
   const capturedAt = Number(frame?.capturedAt || 0) || Date.now();
   const encodedAt = Number(frame?.encodedAt || capturedAt) || capturedAt;
   const frameId = String(frame?.frameId || `live_camera_${turnId}_${capturedAt}_${++state.frameSequence}`);
+  if (state.lastAssociatedTurnId === turnId && state.lastAssociatedFrameId === frameId) {
+    _voiceDebug('realtime-agent-live-camera-frame-already-associated', { turnId, frameId });
+    return true;
+  }
   const ageMs = Math.max(0, Date.now() - capturedAt);
   if (ageMs > 3200) {
     _voiceDebug('realtime-agent-live-camera-frame-dropped-stale', {
@@ -26772,18 +26827,57 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
     feedOpen: true,
   });
   let sent = false;
+  let associationRun = null;
   try {
     const correlation = `[LIVE_CAMERA_VOICE_TURN turn=${turnId} frame=${frameId}]`;
-    sent = provider === 'xai'
-      ? await _sendMobileXaiVisionSummaryToRealtime([image.dataUrl], {
-        name: image.name,
-        reason: options.reason || 'live_camera_speech',
-        promptText: correlation,
-        toast: false,
-        isCurrent,
-      })
-      : await _injectRealtimeImageItemToConversation(image, 'Live camera image attached.', { isCurrent });
+    const sid = String(
+      __pmRealtimeAgent.conn?.sessionId
+        || __pmVoice?.targetSessionId
+        || __pmChat?.activeSessionId
+        || MOBILE_CHAT_SESSION_ID,
+    ).trim() || MOBILE_CHAT_SESSION_ID;
+    // Use the exact same queue and flush transaction as the capture button.
+    // The old live path sent directly to each provider, which meant OpenAI
+    // could time out while downscaling and xAI could bypass the staged vision
+    // summary entirely.
+    const previousPreparation = state.pendingAttachmentPreparation;
+    associationRun = Promise.resolve(previousPreparation)
+      .catch(() => false)
+      .then(async () => {
+        if (!isCurrent()) return false;
+        const staged = _stageMobileRealtimeAgentImage({
+          dataUrl: image.dataUrl,
+          name: image.name,
+          mimeType: image.mimeType,
+          base64: image.base64,
+          frameId,
+          turnId,
+          capturedAt,
+          encodedAt,
+        }, sid, {
+          toast: false,
+          preview: false,
+          skipAutoFlush: true,
+          reason: options.reason || 'live_camera_speech',
+          isCurrent,
+        });
+        if (!staged) return false;
+        return _flushMobileRealtimeAgentPendingImages(options.reason || 'live_camera_speech', {
+          turnId,
+          promptText: correlation,
+          label: `${correlation} Live camera image attached.`,
+          feedOpen: true,
+          isCurrent,
+          toast: false,
+        });
+      });
+    state.pendingAttachmentPreparation = associationRun;
+    sent = await associationRun;
+    if (state.pendingAttachmentPreparation === associationRun) state.pendingAttachmentPreparation = null;
   } catch (err) {
+    if (state.pendingAttachmentPreparation === associationRun) {
+      state.pendingAttachmentPreparation = null;
+    }
     _voiceDebug('realtime-agent-live-camera-association-failed', {
       reason: options.reason || 'live_camera',
       provider,
@@ -26937,7 +27031,7 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
       const selected = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : current;
       await _awaitMobileRealtimeCameraOperation(
         () => _associateMobileRealtimeLiveCameraFrame(selected, { reason, generation, turnId }),
-        1400,
+        _mobileRealtimeLiveCameraAssociationTimeoutMs(),
         () => {
           if (Number(state.generation || 0) === generation) state.generation += 1;
           _voiceDebug('realtime-agent-live-camera-association-timeout', { reason, turnId });
@@ -26981,7 +27075,7 @@ async function _prepareMobileRealtimeLiveCameraForTurn(reason = 'turn_ready') {
       let timedOut = false;
       await _awaitMobileRealtimeCameraOperation(
         () => state.inFlight,
-        1000,
+        _mobileRealtimeLiveCameraAssociationTimeoutMs(),
         () => {
           timedOut = true;
           if (Number(state.generation || 0) === generation) state.generation += 1;
@@ -27030,7 +27124,7 @@ async function _prepareMobileRealtimeLiveCameraForTurn(reason = 'turn_ready') {
         authoritative: true,
         turnCaptureStartedAt: state.turnCaptureStartedAt,
       }),
-      1400,
+      _mobileRealtimeLiveCameraAssociationTimeoutMs(),
       () => {
         if (Number(state.generation || 0) === generation) state.generation += 1;
         state.phase = 'association_timeout';
@@ -27196,6 +27290,7 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
       const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
         method: 'POST',
         body: JSON.stringify({ dataUrl: snapshotImageUrl, name }),
+        timeoutMs: 45_000,
       });
       const summary = String(vision?.summary || '').trim();
       if (!summary) throw new Error(vision?.error || 'xAI vision returned no camera summary.');
@@ -27294,6 +27389,7 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
       const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
         method: 'POST',
         body: JSON.stringify({ frames: requestFrames.map((dataUrl, index) => ({ ...frames[index], dataUrl })), durationMs, name: 'mobile camera video frames' }),
+        timeoutMs: 45_000,
       });
       const summary = String(vision?.summary || '').trim();
       if (!summary) throw new Error(vision?.error || 'xAI vision returned no video summary.');
@@ -27487,6 +27583,15 @@ function _mobileRealtimeAgentPttRelease() {
     }
     setTimeout(async () => {
       await Promise.resolve(_prepareMobileRealtimeLiveCameraForTurn('xai_ptt_release')).catch(() => false);
+      // xAI receives camera pixels through the vision sidecar. It cannot use
+      // the OpenAI image event directly, so flush the same staged-image queue
+      // as the capture button before committing the spoken audio.
+      if (Array.isArray(__pmRealtimeAgent.pendingImages) && __pmRealtimeAgent.pendingImages.length) {
+        await _flushMobileRealtimeAgentPendingImages('xai_ptt_release', {
+          turnId: _mobileRealtimeLiveVisionState().turnId,
+          toast: true,
+        }).catch(() => false);
+      }
       commitAndRespond();
       _setMobileRealtimeAgentMicEnabled(false);
     }, 180);

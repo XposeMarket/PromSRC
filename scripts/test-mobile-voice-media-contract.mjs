@@ -117,7 +117,7 @@ assert.match(pages, /_flushMobileRealtimeAgentPendingImages\('speech_started', \
 assert.match(pages, /function _sendMobileRealtimeDataChannelEvent\(dc, event\)/);
 assert.match(pages, /interrupt_response: !!enabled/);
 assert.match(pages, /const restorePendingImages = \(\) =>/);
-assert.match(pages, /await _injectRealtimeImageItemToConversation\(image, label\)/);
+assert.match(pages, /await _injectRealtimeImageItemToConversation\(image, (?:options\.label \|\| )?label/);
 assert.match(pages, /realtime-agent-data-channel-send-failed/);
 
 // Camera transport contract: camera state is carried into the next voice
@@ -132,7 +132,18 @@ assert.match(pages, /Multiple live camera images attached/);
 assert.match(pages, /The mobile camera live feed is active\. Inspect the attached live camera image/);
 assert.match(pages, /realtime-agent-camera-screenshot-fallback-blocked/);
 assert.match(pages, /_downscaleDataUrlForRealtime\(url, isVideo \? 960 : 1280/);
+assert.match(pages, /function _queueMobileRealtimeAgentImage\(attachment, options = \{\}\)/);
+assert.match(pages, /skipAutoFlush: true/);
+assert.match(pages, /_mobileRealtimeLiveCameraAssociationTimeoutMs/);
+assert.match(pages, /timeoutMs: 45_000/);
+assert.match(pages, /bodyError: String\(err\?\.body\?\.error/);
 assert.doesNotMatch(pages, /type: 'input_image', detail: 'auto'/);
+const liveAssociation = pages.slice(pages.indexOf('async function _associateMobileRealtimeLiveCameraFrame'));
+const liveAssociationEnd = liveAssociation.indexOf('\nfunction _stopMobileRealtimeLiveCameraVision');
+const liveAssociationBody = liveAssociation.slice(0, liveAssociationEnd);
+assert.ok(liveAssociationBody.includes('_stageMobileRealtimeAgentImage('), 'live camera must use the shared staged-image path');
+assert.ok(liveAssociationBody.includes('_flushMobileRealtimeAgentPendingImages('), 'live camera must use the shared image flush path');
+assert.doesNotMatch(liveAssociationBody, /provider === 'xai'\s*\n\s*\?/);
 const release = pages.slice(pages.indexOf('function _mobileRealtimeAgentPttRelease()'));
 assert.match(release, /await Promise\.resolve\(_prepareMobileRealtimeLiveCameraForTurn\('ptt_release'\)\)/);
 const publicPttRelease = release.slice(release.indexOf('const flushThenCommit = async'));
@@ -141,6 +152,7 @@ const xaiPttStart = release.indexOf("if (conn?.provider === 'xai')", release.ind
 const xaiPttRelease = release.slice(xaiPttStart);
 assert.ok(xaiPttStart >= 0, 'xAI PTT branch must be present');
 assert.ok(xaiPttRelease.indexOf("_prepareMobileRealtimeLiveCameraForTurn('xai_ptt_release')") < xaiPttRelease.indexOf('commitAndRespond();'), 'xAI PTT must associate the camera frame before response creation');
+assert.ok(xaiPttRelease.indexOf("_flushMobileRealtimeAgentPendingImages('xai_ptt_release'") < xaiPttRelease.indexOf('commitAndRespond();'), 'xAI PTT must flush staged camera images before response creation');
 const vadBoundary = pages.slice(pages.indexOf("if (type === 'input_audio_buffer.speech_started')"));
 assert.ok(vadBoundary.indexOf("_prepareMobileRealtimeLiveCameraForTurn('speech_stopped')") < vadBoundary.indexOf("_maybeReleaseMobileRealtimeCameraResponseGate('speech_stopped_camera_ready')"), 'server-VAD must prepare the camera before releasing the response gate');
 
@@ -168,6 +180,10 @@ assert.match(generatedPages, /function _sendMobileRealtimeCameraTurnContext\(opt
 assert.match(generatedPages, /function _scheduleMobileRealtimeAgentPendingImageFlush\(reason = 'camera_image_staged'\)/);
 assert.match(generatedPages, /realtime-agent-camera-screenshot-fallback-blocked/);
 assert.match(generatedPages, /_downscaleDataUrlForRealtime\(url, isVideo \? 960 : 1280/);
+assert.match(generatedPages, /function _queueMobileRealtimeAgentImage\(attachment, options = \{\}\)/);
+assert.match(generatedPages, /skipAutoFlush: true/);
+assert.match(generatedPages, /_mobileRealtimeLiveCameraAssociationTimeoutMs/);
+assert.match(generatedPages, /timeoutMs: 45_000/);
 assert.doesNotMatch(generatedPages, /type: 'input_image', detail: 'auto'/);
 assert.match(generatedPages, /realtime-agent-user-turn-held-open/);
 assert.match(generatedPages, /realtime-agent-user-turn-continued-after-pause/);
