@@ -3661,6 +3661,101 @@ body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-pop
   cursor: default;
 }
 
+.unified-desktop-chat-composer {
+  box-sizing: border-box;
+}
+.unified-desktop-chat-composer .chat-composer-attachment-stack {
+  display: block;
+  min-height: 0;
+}
+.unified-desktop-chat-composer .chat-file-staging {
+  margin: 0 0 6px;
+}
+.unified-desktop-chat-composer .unified-chat-model-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  font: 11px 'Manrope', sans-serif;
+  cursor: default;
+}
+.unified-chat-queue-badge {
+  align-items: center;
+  margin-left: 8px;
+  color: var(--brand);
+  font-weight: 700;
+}
+.unified-live-progress {
+  margin: 6px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.unified-agent-chat-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #d8d6d2 url('/assets/chat-main-background.png') center center / cover no-repeat;
+}
+:root[data-theme="dark"] .unified-agent-chat-shell {
+  background: #1a1a1a url('/assets/chat-main-background-dark.png') center center / cover no-repeat;
+}
+.unified-agent-chat-header {
+  min-height: 46px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--panel), transparent 12%);
+  backdrop-filter: blur(16px);
+}
+.unified-agent-chat-header .side-chat-title-wrap { min-width: 0; }
+.unified-agent-chat-header .side-chat-kicker,
+.unified-agent-chat-header .side-chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unified-agent-chat-participants {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unified-agent-chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 22px 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  scrollbar-width: thin;
+}
+.unified-agent-chat-messages .msg-shell { width: min(100%, 680px); }
+.unified-agent-chat-composer.chat-input-area {
+  position: absolute !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: 18px !important;
+  transform: translateX(-50%) !important;
+  width: min(760px, calc(100% - 52px)) !important;
+  max-width: calc(100% - 52px) !important;
+  margin: 0 !important;
+}
+.unified-agent-chat-composer .chat-input-row { align-items: center; }
+.unified-agent-chat-composer .chat-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unified-agent-chat-composer .subagent-reasoning-trigger { flex: 0 0 auto; }
+
 #side-chats-toggle-btn.active {
   color: var(--brand);
   border-color: color-mix(in srgb, var(--brand), var(--line) 42%);
@@ -4737,6 +4832,7 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 #chat-input,
 #side-chat-input,
 .subagent-panel-chat-composer .chat-textarea,
+.unified-desktop-chat-composer .chat-textarea,
 #mission-input,
 #skill-search-input {
   flex: 1;
@@ -4753,7 +4849,8 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 
 #chat-input,
 #side-chat-input,
-.subagent-panel-chat-composer .chat-textarea {
+.subagent-panel-chat-composer .chat-textarea,
+.unified-desktop-chat-composer .chat-textarea {
   min-width: 0;
   min-height: 48px;
   max-height: 150px;
@@ -4787,17 +4884,20 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 }
 #chat-input::placeholder,
 #side-chat-input::placeholder,
-.subagent-panel-chat-composer .chat-textarea::placeholder {
+.subagent-panel-chat-composer .chat-textarea::placeholder,
+.unified-desktop-chat-composer .chat-textarea::placeholder {
   color: var(--composer-muted);
 }
 #chat-input:focus,
 #side-chat-input:focus,
 .subagent-panel-chat-composer .chat-textarea:focus,
+.unified-desktop-chat-composer .chat-textarea:focus,
 #mission-input:focus,
 #skill-search-input:focus { border-color: #9fc1f7; box-shadow: 0 0 0 4px rgba(22, 104, 227, 0.11); }
 #chat-input:focus,
 #side-chat-input:focus,
-.subagent-panel-chat-composer .chat-textarea:focus {
+.subagent-panel-chat-composer .chat-textarea:focus,
+.unified-desktop-chat-composer .chat-textarea:focus {
   border-color: color-mix(in srgb, var(--pm-orange), transparent 38%);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--pm-orange), transparent 82%),

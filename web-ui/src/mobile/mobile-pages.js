@@ -9581,11 +9581,6 @@ let pmSelectedComposerSkillIds = [];
 let pmSelectedComposerSkills = [];
 let pmSkillComposerSelectionIndex = 0;
 
-const PM_SKILL_TRIGGER_STOPWORDS = new Set([
-  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
-  'me', 'my', 'our', 'this', 'that', 'please',
-]);
-
 function _pmNormalizeSkillText(value) {
   return String(value || '')
     .toLowerCase()
@@ -9593,31 +9588,6 @@ function _pmNormalizeSkillText(value) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function _pmNormalizeSkillTextLoose(value) {
-  return _pmNormalizeSkillText(value)
-    .split(' ')
-    .filter((word) => word && !PM_SKILL_TRIGGER_STOPWORDS.has(word))
-    .join(' ');
-}
-
-function _pmSkillTriggerMatchesText(trigger, rawText, words) {
-  const normalizedTrigger = _pmNormalizeSkillText(trigger);
-  if (!normalizedTrigger) return false;
-  const normalizedText = _pmNormalizeSkillText(rawText);
-  if (normalizedTrigger.includes(' ')) {
-    if (normalizedText.includes(normalizedTrigger)) return true;
-    const looseTrigger = _pmNormalizeSkillTextLoose(trigger);
-    const looseText = _pmNormalizeSkillTextLoose(rawText);
-    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
-  }
-  return words.some((word) => {
-    const normalizedWord = _pmNormalizeSkillText(word);
-    if (normalizedWord === normalizedTrigger) return true;
-    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
-    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
-  });
 }
 
 // Unified matcher: the pill now uses the SAME backend matcher that surfaces
@@ -9786,9 +9756,19 @@ function _pmComposerSkillMatches(value) {
   const text = String(value || '').toLowerCase().trim();
   if (!text) return [];
   const filterExcluded = (matches) => (Array.isArray(matches) ? matches : []).filter((skill) => !_pmIsSkillExcluded(skill));
-  // Return the cached result for the current query if available.
-  if (text === _pmSkillMatchCacheQuery) return filterExcluded(_pmSkillMatchCacheResult);
+  // Never render a stale response for a newer composer query.
+  if (text !== _pmSkillMatchCacheQuery) return [];
   return filterExcluded(_pmSkillMatchCacheResult);
+}
+
+function _pmSkillMatchEvidence(skill) {
+  const evidence = [
+    ...(Array.isArray(skill?.promptSignalEvidence) ? skill.promptSignalEvidence : []),
+    ...(Array.isArray(skill?.matchedPromptSignals) ? skill.matchedPromptSignals : []),
+    ...(Array.isArray(skill?.matchedTriggers) ? skill.matchedTriggers : []),
+    ...(Array.isArray(skill?.matchedDomains) ? skill.matchedDomains.map((value) => `domain: ${value}`) : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(evidence)].slice(0, 3);
 }
 
 function _pmFetchComposerSkillMatches(value, page) {
@@ -9916,7 +9896,8 @@ function _pmRenderSkillTriggerPill(page, input) {
       <div class="pm-skill-trigger-row">
         ${matches.map((skill) => `
           <button type="button" class="pm-skill-trigger-item${String(skill.id || '') === pmSkillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escapeHtml(skill.id || '')}">
-            ${escapeHtml(skill.name || skill.id || 'Skill')}
+            <span>${escapeHtml(skill.name || skill.id || 'Skill')}</span>
+            <small>${escapeHtml(`${skill.confidence || 'match'}${Number.isFinite(Number(skill.score)) ? ` · ${Math.round(Number(skill.score))}` : ''}`)}</small>
           </button>
         `).join('')}
       </div>
@@ -9925,6 +9906,7 @@ function _pmRenderSkillTriggerPill(page, input) {
           <div class="pm-skill-trigger-desc-copy">
             <strong>${escapeHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
             <span>${escapeHtml(selectedSkill.description || 'No description available.')}</span>
+            <small>${escapeHtml(_pmSkillMatchEvidence(selectedSkill).length ? `Matched: ${_pmSkillMatchEvidence(selectedSkill).join(' · ')}` : 'Matched by the canonical skill router.')}</small>
           </div>
           <button type="button" class="pm-skill-trigger-remove" data-skill-id="${escapeHtml(_pmSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}
@@ -10958,9 +10940,13 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <div class="pm-mobile-side-thread" id="pm-mobile-side-thread"></div>
         <form class="pm-composer pm-mobile-side-composer" id="pm-mobile-side-composer">
           <span class="pm-glass-lens" aria-hidden="true"></span>
+          <span class="pm-glass-border" aria-hidden="true"></span>
+          <div class="pm-attach-tray" id="pm-mobile-side-attach-tray" hidden></div>
           <div class="pm-composer-row">
             <button type="button" class="pm-icon-btn" id="pm-mobile-side-attach" aria-label="Attach files">${ICONS.paperclip}</button>
-            <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+            <div class="pm-composer-input-wrap" id="pm-mobile-side-input-wrap">
+              <textarea class="pm-composer-input" id="pm-mobile-side-input" rows="1" placeholder="Follow up" aria-label="Side chat message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send"></textarea>
+            </div>
             <button type="button" class="pm-icon-btn" id="pm-mobile-side-mic" aria-label="Voice input">${ICONS.micSmall}</button>
             <button type="submit" class="pm-send" id="pm-mobile-side-send" aria-label="Send side chat">${ICONS.send}</button>
           </div>
@@ -14163,6 +14149,12 @@ void main() {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) scheduleSideRenderSoon();
         return 'streaming';
       }
+      case 'reasoning_delta':
+      case 'reasoning_summary': {
+        const chunk = String(evt.text || evt.summary || evt.thinking || '');
+        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) scheduleSideRenderSoon();
+        return 'streaming';
+      }
       case 'thinking':
       case 'agent_thought': {
         if (_handleMobileCleanThought(aiTurn, evt)) scheduleSideRenderSoon();
@@ -15301,6 +15293,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'reasoning_summary_delta': {
         if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadSoon();
+        return 'streaming';
+      }
+      case 'reasoning_delta':
+      case 'reasoning_summary': {
+        const chunk = String(evt.text || evt.summary || evt.thinking || '');
+        if (_handleMobileReasoningSummaryDelta(aiTurn, { ...evt, text: chunk })) renderThreadSoon();
         return 'streaming';
       }
       case 'thinking':
@@ -35881,6 +35879,7 @@ function _renderMobileAgentComposerHtml(prefix, placeholder) {
   return `
     <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
       <span class="pm-glass-lens" aria-hidden="true"></span>
+      <span class="pm-glass-border" aria-hidden="true"></span>
       <input id="${id}-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
       <div class="pm-attach-tray" id="${id}-attach-tray" hidden></div>
       <div class="pm-composer-row">
@@ -36214,6 +36213,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 
 function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
   if (!message || !evt) return false;
+  _maybeFlushMobileThinkingBeforeEvent(message, evt);
   const applyCompletedTurnPresentation = () => {
     if (Array.isArray(evt.artifacts)) message.artifacts = evt.artifacts;
     if (Array.isArray(evt.generatedImages)) message.generatedImages = evt.generatedImages;
@@ -36243,30 +36243,25 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'thinking_delta': {
       const chunk = String(evt.thinking || evt.text || '');
       if (!chunk) return false;
+      _handleMobileThinkingDelta(message, evt);
       message._thinking = `${message._thinking || ''}${chunk}`;
-      message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
-      // Explicit reasoning summaries update the replaceable progress slot.
-      if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-        _setMobileLiveProgressNarration(message, chunk);
-        _appendMobileReasoningSummary(message, chunk);
-      }
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
     case 'reasoning_summary_delta': {
-      const chunk = String(evt.text || evt.summary || '');
+      return _handleMobileReasoningSummaryDelta(message, evt);
+    }
+    case 'reasoning_delta':
+    case 'reasoning_summary': {
+      const chunk = String(evt.text || evt.summary || evt.thinking || '');
       if (!chunk) return false;
-      _setMobileLiveProgressNarration(message, chunk);
-      _appendMobileReasoningSummary(message, chunk);
-      return true;
+      return _handleMobileReasoningSummaryDelta(message, { ...evt, text: chunk });
     }
     case 'thinking':
     case 'agent_thought': {
       const thought = String(evt.thinking || evt.text || '').trim();
       if (!thought) return false;
-      _flushMobilePendingThinkingBurst(message);
-      message._thinking = message._thinking ? `${message._thinking}\n\n${thought}` : thought;
-      _setMobileLiveProgressNarration(message, thought, { replace: true });
+      _handleMobileCleanThought(message, evt);
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
@@ -37377,6 +37372,7 @@ async function _renderTeamChatTab(slot, teamId) {
       return _renderMobileAgentChatBubble(normalized, {
         sender: normalized.fromLabel,
         live: message === liveMsg,
+        keepLiveTraceVisible: message === liveMsg,
       });
     } catch (err) {
       // Team history should remain readable even when a legacy or unusually
@@ -41600,6 +41596,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     _renderMobileAgentChatList(listEl, rendered, (m) => _renderMobileAgentChatBubble(m, {
       sender: agent.name || agent.id || 'Subagent',
       live: m === liveMsg,
+      keepLiveTraceVisible: m === liveMsg,
     }));
     listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
       btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));

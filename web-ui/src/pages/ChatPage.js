@@ -13608,8 +13608,20 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content, msg) : ''}`
       : userContentHtml;
+    const liveTraceHtml = !isUser && msg?._backgroundAgentLive === true
+      ? renderLiveTurnTrace(desktopWorkflowTraceEntriesForMessage(msg), { streaming: true })
+      : (!isUser ? (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg)) : '');
+    const liveProgressHtml = !isUser && options.live === true && !liveTraceHtml && !String(msg?.content || '').trim()
+      && Array.isArray(msg?.liveProgressLines) && msg.liveProgressLines.length
+      ? `<div class="unified-live-progress">${msg.liveProgressLines.map((line) => `<div>• ${escHtml(line)}</div>`).join('')}</div>`
+      : '';
+    const liveThinkingHtml = !isUser && options.live === true && !liveTraceHtml && !liveProgressHtml && !String(msg?.content || '').trim()
+      ? '<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>'
+      : '';
     const assistantWorkTimerHtml = !isUser
-      ? renderAssistantWorkTimer(msg, { active: msg?._steerTimerAnchor === true })
+      ? (options.live === true
+        ? renderAssistantWorkTimer(null, { active: true, startedAt: Number(msg?.workStartedAt || msg?.timestamp || Date.now()) })
+        : renderAssistantWorkTimer(msg, { active: msg?._steerTimerAnchor === true }))
       : '';
     const assistantStatusDividerHtml = assistantWorkTimerHtml
       ? '<div class="assistant-status-divider" aria-hidden="true"></div>'
@@ -13630,11 +13642,11 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
                 ${assistantWorkTimerHtml}
                 ${assistantStatusDividerHtml}
-                ${!isUser ? (msg?._backgroundAgentLive === true
-                  ? renderLiveTurnTrace(desktopWorkflowTraceEntriesForMessage(msg), { streaming: true })
-                  : (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg))) : ''}
+                ${liveTraceHtml}
+                ${liveProgressHtml}
                 ${assistantRoleHtml}
                 ${assistantContentHtml}
+                ${liveThinkingHtml}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderAssistantGeneratedImages(msg, originalIndex) : ''}
@@ -13651,6 +13663,140 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
       </div>
     </div>`;
   }).join('');
+}
+
+function renderUnifiedDesktopLiveMessageHtml(message, options = {}) {
+  const source = message && typeof message === 'object' ? message : {};
+  const normalized = {
+    ...source,
+    role: 'assistant',
+    _backgroundAgentLive: true,
+    streaming: true,
+    timestamp: Number(source.timestamp || source.ts || Date.now()) || Date.now(),
+    workStartedAt: Number(source.workStartedAt || source.startedAt || source.timestamp || source.ts || Date.now()) || Date.now(),
+  };
+  return renderVisibleChatHistoryHtml([normalized], {
+    sessionId: options.sessionId || '',
+    readonly: true,
+    hideSideChatBoundary: true,
+    live: true,
+  });
+}
+
+function renderUnifiedDesktopComposerHtml(options = {}) {
+  const inputId = String(options.inputId || 'unified-chat-input').trim();
+  const fileInputId = String(options.fileInputId || `${inputId}-file-input`).trim();
+  const stagingId = String(options.stagingId || '').trim();
+  const sendButtonId = String(options.sendButtonId || `${inputId}-send-button`).trim();
+  const placeholder = String(options.placeholder || 'Send a message').trim();
+  const composerClass = String(options.composerClass || '').trim();
+  const inputClass = String(options.inputClass || 'chat-textarea').trim();
+  const inputAttributes = String(options.inputAttributes || '').trim();
+  const inputStyle = String(options.inputStyle || '').trim();
+  const inputWrapClass = String(options.inputWrapClass || '').trim();
+  const inputWrapStyle = String(options.inputWrapStyle || '').trim();
+  const extraTopMarkup = String(options.extraTopMarkup || '');
+  const extraInputMarkup = String(options.extraInputMarkup || '');
+  const footerExtraMarkup = String(options.footerExtraMarkup || '');
+  const fileInputOnChange = String(options.fileInputOnChange || '').trim();
+  const attachAction = String(options.attachAction || `document.getElementById('${fileInputId}')?.click()`).trim();
+  const voiceAction = String(options.voiceAction || '').trim();
+  const sendAction = String(options.sendAction || '').trim();
+  const footerHint = String(options.footerHint || '').trim();
+  const modelName = String(options.modelName || document.getElementById('chat-model-name')?.textContent || 'your model').trim();
+  const queueBadgeId = String(options.queueBadgeId || '').trim();
+  const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
+  const busy = options.busy === true;
+  const attachButton = `<button class="chat-attach-btn" type="button" onclick="${attachAction}" title="Attach file(s)" aria-label="Attach file(s)">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+  </button>`;
+  const voiceButton = `<button class="chat-voice-btn" type="button"${voiceAction ? ` onclick="${voiceAction}"` : ''} title="Dictate message" aria-label="Dictate message">
+    <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+  </button>`;
+  const sendIcon = busy
+    ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>'
+    : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>';
+  const queueBadge = queueBadgeId
+    ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
+    : '';
+  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1">
+    ${extraTopMarkup}
+    ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
+    <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
+    <div class="chat-input-row">
+      ${attachButton}
+      ${voiceButton}
+      <div class="chat-composer-input-wrap ${escHtml(inputWrapClass)}"${inputWrapStyle ? ` style="${inputWrapStyle}"` : ''}>
+        ${extraInputMarkup}
+        <textarea id="${escHtml(inputId)}" class="${escHtml(inputClass)}" rows="1" placeholder="${escHtml(placeholder)}" autocomplete="off"${inputStyle ? ` style="${inputStyle}"` : ''}${inputAttributes ? ` ${inputAttributes}` : ''}></textarea>
+      </div>
+      <button id="${escHtml(sendButtonId)}" class="send-btn" type="button" onclick="${sendAction}" title="${busy ? 'Stop' : 'Send'}" aria-label="${busy ? 'Stop' : 'Send'}">${sendIcon}</button>
+    </div>
+    <div class="agent-toggle unified-desktop-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
+      <div class="chat-hint" style="margin:0;flex:1">${escHtml(footerHint)}${queueBadge}</div>
+      ${footerExtraMarkup}
+      <div class="chat-model-switcher-wrap">
+        <button type="button" class="unified-chat-model-label" title="Chat model" aria-label="Chat model">
+          <span>${escHtml(modelName)}</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function toggleUnifiedDesktopComposerDictation(inputId, button = null) {
+  const input = document.getElementById(String(inputId || '').trim());
+  if (!input) return;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast('Speech unavailable', 'This browser does not expose speech dictation.', 'error');
+    return;
+  }
+  const states = window.__promUnifiedDesktopDictationStates || (window.__promUnifiedDesktopDictationStates = {});
+  const key = String(inputId || '').trim();
+  const existing = states[key];
+  if (existing?.recognition) {
+    existing.active = false;
+    try { existing.recognition.stop(); } catch {}
+    delete states[key];
+    button?.classList.remove('recording', 'active');
+    return;
+  }
+  const recognition = new SpeechRecognition();
+  const state = { recognition, active: true };
+  states[key] = state;
+  recognition.lang = navigator.language || 'en-US';
+  recognition.interimResults = false;
+  recognition.continuous = false;
+  button?.classList.add('recording', 'active');
+  recognition.onresult = (event) => {
+    const transcript = Array.from(event.results || [])
+      .map((result) => String(result?.[0]?.transcript || ''))
+      .join(' ')
+      .trim();
+    if (!transcript || !state.active) return;
+    const current = String(input.value || '').trimEnd();
+    input.value = `${current}${current ? ' ' : ''}${transcript}`;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  };
+  recognition.onerror = (event) => {
+    if (!state.active) return;
+    const error = String(event?.error || 'unknown');
+    if (!['no-speech', 'aborted'].includes(error)) showToast('Dictation error', error === 'not-allowed' ? 'Microphone permission was denied.' : 'Could not transcribe that recording.', 'error');
+  };
+  recognition.onend = () => {
+    if (states[key] === state) delete states[key];
+    button?.classList.remove('recording', 'active');
+  };
+  try {
+    recognition.start();
+  } catch (err) {
+    delete states[key];
+    button?.classList.remove('recording', 'active');
+    showToast('Dictation unavailable', err?.message || 'Could not start dictation.', 'error');
+  }
 }
 
 function renderSessionThinkingBodyHtml(sessionId) {
@@ -13748,34 +13894,15 @@ function renderSideChatPaneHtml() {
         ${historyHtml || '<div class="side-chat-empty">Start a side chat from the composer or message action.</div>'}
         ${thinkingHtml}
       </div>
-      <div class="side-chat-composer chat-input-area">
-        <div class="chat-input-row">
-          <button class="chat-attach-btn" type="button" onclick="showToast('Side chat attachments are coming next.', 'For now, attach files in the main composer before opening side context.', 'info')" title="Attach file(s)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-          </button>
-          <button class="chat-voice-btn" type="button" onclick="showToast('Side chat dictation is coming next.', 'Use the main composer mic for voice input right now.', 'info')" title="Dictate message" aria-label="Dictate message">
-            <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-          </button>
-          <div class="chat-composer-input-wrap">
-            <textarea id="side-chat-input" rows="1" placeholder="Send Prometheus a message" autocomplete="off" oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"></textarea>
-          </div>
-          <button class="send-btn" type="button" onclick="sendSideChatMessage()" title="Send side chat">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
-          </button>
-        </div>
-        <div class="agent-toggle side-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
-          <div class="chat-hint" style="margin:0;flex:1"></div>
-          <div class="chat-model-switcher-wrap">
-            <button type="button" style="background:none;border:none;padding:0;cursor:default;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Side chat model">
-              <span>${escHtml(document.getElementById('chat-model-name')?.textContent || 'gpt-5.5')}</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <button class="chat-context-window-btn" type="button" onclick="showToast('Side chat context is inherited from the parent chat.', '', 'info')" title="Context window" aria-label="Context window">
-              <span class="chat-context-window-dot"></span>
-            </button>
-          </div>
-        </div>
-      </div>
+      ${renderUnifiedDesktopComposerHtml({
+        inputId: 'side-chat-input',
+        placeholder: 'Send Prometheus a message',
+        composerClass: 'side-chat-composer',
+        attachAction: "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
+        voiceAction: "toggleUnifiedDesktopComposerDictation('side-chat-input', this)",
+        sendAction: 'sendSideChatMessage()',
+        inputAttributes: 'oninput="handleSideChatInputResize(this)" onkeydown="handleSideChatInputKeydown(event)"',
+      })}
     </section>`;
 }
 
@@ -13808,11 +13935,17 @@ function renderBackgroundAgentSidePaneHtml(record) {
       workflowPart: 'interruption',
     }))
     .filter((steer) => steer.content);
-  const historyHtml = renderVisibleChatHistoryHtml([...steerHistory, message], {
-    sessionId: `background:${record.id}`,
-    readonly: true,
-    hideSideChatBoundary: true,
-  });
+  const historyHtml = running
+    ? `${renderVisibleChatHistoryHtml(steerHistory, {
+      sessionId: `background:${record.id}`,
+      readonly: true,
+      hideSideChatBoundary: true,
+    })}${renderUnifiedDesktopLiveMessageHtml(message, { sessionId: `background:${record.id}` })}`
+    : renderVisibleChatHistoryHtml([...steerHistory, message], {
+      sessionId: `background:${record.id}`,
+      readonly: true,
+      hideSideChatBoundary: true,
+    });
   return `
     <section class="side-chat-pane background-agent-side-pane" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
@@ -13825,7 +13958,17 @@ function renderBackgroundAgentSidePaneHtml(record) {
       <div class="side-chat-messages background-agent-side-messages" id="background-agent-side-messages">
         ${historyHtml || '<div class="side-chat-empty">Waiting for live agent activity...</div>'}
       </div>
-      <div class="side-chat-composer background-agent-side-composer chat-input-area">
+      ${renderUnifiedDesktopComposerHtml({
+        inputId: 'background-agent-chat-input',
+        placeholder: `Steer ${identity.name} directly`,
+        composerClass: 'side-chat-composer background-agent-side-composer',
+        attachAction: "showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')",
+        voiceAction: "toggleUnifiedDesktopComposerDictation('background-agent-chat-input', this)",
+        sendAction: 'sendBackgroundAgentSteerMessage()',
+        inputAttributes: 'oninput="handleBackgroundAgentInputResize(this)" onkeydown="handleBackgroundAgentInputKeydown(event)"',
+        footerHint: `Live steer · sent directly to ${identity.name}`,
+      })}
+      <!-- <div class="legacy-background-agent-composer">
         <div class="chat-input-row">
           <button class="chat-attach-btn" type="button" onclick="showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')" title="Attach file(s)" aria-label="Attach file(s)">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -13849,7 +13992,7 @@ function renderBackgroundAgentSidePaneHtml(record) {
             </button>
           </div>
         </div>
-      </div>
+      </div> -->
     </section>`;
 }
 
@@ -16009,11 +16152,6 @@ let selectedComposerSkillIds = [];
 let selectedComposerSkillRefs = [];
 let skillComposerSelectionIndex = 0;
 
-const SKILL_TRIGGER_STOPWORDS = new Set([
-  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
-  'me', 'my', 'our', 'this', 'that', 'please',
-]);
-
 function normalizeSkillMatchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -16021,66 +16159,6 @@ function normalizeSkillMatchText(value) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function normalizeSkillMatchTextLoose(value) {
-  return normalizeSkillMatchText(value)
-    .split(' ')
-    .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
-    .join(' ');
-}
-
-function skillTriggerMatchesText(trigger, rawText, words) {
-  const normalizedTrigger = normalizeSkillMatchText(trigger);
-  if (!normalizedTrigger) return false;
-  const normalizedText = normalizeSkillMatchText(rawText);
-  if (normalizedTrigger.includes(' ')) {
-    if (normalizedText.includes(normalizedTrigger)) return true;
-    const looseTrigger = normalizeSkillMatchTextLoose(trigger);
-    const looseText = normalizeSkillMatchTextLoose(rawText);
-    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
-  }
-  return words.some((word) => {
-    const normalizedWord = normalizeSkillMatchText(word);
-    if (normalizedWord === normalizedTrigger) return true;
-    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
-    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
-  });
-}
-
-function getSkillTriggerCandidates(skill) {
-  const candidates = [];
-  const addValue = (value) => {
-    if (Array.isArray(value)) {
-      value.forEach(addValue);
-      return;
-    }
-    const text = String(value || '').trim();
-    if (text) candidates.push(text);
-  };
-  addValue(skill?.triggers);
-  addValue(skill?.trigger);
-  addValue(skill?.keywords);
-  addValue(skill?.aliases);
-  addValue(skill?.manifest?.triggers);
-  addValue(skill?.manifest?.trigger);
-  addValue(skill?.manifest?.keywords);
-  addValue(skill?.manifest?.aliases);
-  addValue(skill?.metadata?.triggers);
-  addValue(skill?.metadata?.trigger);
-  addValue(skill?.metadata?.keywords);
-  addValue(skill?.metadata?.aliases);
-  if (!candidates.length) {
-    addValue(skill?.name);
-    addValue(skill?.id);
-  }
-  const seen = new Set();
-  return candidates.filter((candidate) => {
-    const key = normalizeSkillMatchText(candidate);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function getInstalledSkillCache() {
@@ -16215,16 +16293,20 @@ function fetchSkillTriggerMatches(value) {
 }
 
 function getComposerSkillMatches(value) {
-  const text = String(value || '').toLowerCase();
-  const words = text.split(/\W+/).filter((word) => word.length > 2);
+  const text = String(value || '').toLowerCase().trim();
   if (!text.trim()) return [];
-  const cachedMatches = text.trim() === skillMatchCacheQuery ? skillMatchCacheResult : [];
-  const localMatches = getInstalledSkillCache()
-    .filter((skill) => !isSkillTriggerExcluded(skill))
-    .filter((skill) => getSkillTriggerCandidates(skill).some((trigger) => skillTriggerMatchesText(trigger, text, words)))
-    .slice(0, 8);
-  const matches = cachedMatches.length ? cachedMatches : localMatches;
-  return matches.filter((skill) => !isSkillTriggerExcluded(skill)).slice(0, 8);
+  if (text !== skillMatchCacheQuery) return [];
+  return skillMatchCacheResult.filter((skill) => !isSkillTriggerExcluded(skill)).slice(0, 8);
+}
+
+function getSkillMatchEvidence(skill) {
+  const evidence = [
+    ...(Array.isArray(skill?.promptSignalEvidence) ? skill.promptSignalEvidence : []),
+    ...(Array.isArray(skill?.matchedPromptSignals) ? skill.matchedPromptSignals : []),
+    ...(Array.isArray(skill?.matchedTriggers) ? skill.matchedTriggers : []),
+    ...(Array.isArray(skill?.matchedDomains) ? skill.matchedDomains.map((value) => `domain: ${value}`) : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(evidence)].slice(0, 3);
 }
 
 function renderSkillTriggerIcon() {
@@ -16306,6 +16388,7 @@ function renderSkillTriggerPill(value = '') {
         ${matches.map((skill) => `
           <button type="button" class="skill-trigger-item${String(skill.id || '') === skillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escHtml(skill.id || '')}" role="listitem">
             <span class="skill-trigger-item-title">${escHtml(skill.name || skill.id || 'Skill')}</span>
+            <span class="skill-trigger-item-meta">${escHtml(`${skill.confidence || 'match'}${Number.isFinite(Number(skill.score)) ? ` · ${Math.round(Number(skill.score))}` : ''}`)}</span>
           </button>
         `).join('')}
       </div>
@@ -16314,6 +16397,7 @@ function renderSkillTriggerPill(value = '') {
           <div class="skill-trigger-description-copy">
             <strong>${escHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
             <span>${escHtml(selectedSkill.description || 'No description available.')}</span>
+            <small>${escHtml(getSkillMatchEvidence(selectedSkill).length ? `Matched: ${getSkillMatchEvidence(selectedSkill).join(' · ')}` : 'Matched by the canonical skill router.')}</small>
           </div>
           <button type="button" class="skill-trigger-remove" data-skill-id="${escHtml(getSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}
@@ -46716,6 +46800,15 @@ window.updateAgentMode = updateAgentMode;
 window.renderReactSteps = renderReactSteps;
 window.toggleSteps = toggleSteps;
 window.renderAssistantContent = renderAssistantContent;
+// Shared desktop chat surface consumed by the subagent and team boards.  Keep
+// these functions here so every desktop agent surface uses the same history,
+// live trace, reasoning, timer, and composer markup as the main chat.
+window.__PROM_UNIFIED_DESKTOP_CHAT = {
+  renderHistory: renderVisibleChatHistoryHtml,
+  renderLiveMessage: renderUnifiedDesktopLiveMessageHtml,
+  renderComposer: renderUnifiedDesktopComposerHtml,
+  renderLiveTrace: renderLiveTurnTrace,
+};
 window.renderAssistantGeneratedImages = renderAssistantGeneratedImages;
 window.pcUpdateProductCarouselArrows = pcUpdateProductCarouselArrows;
 window.pcScrollLeft = pcScrollLeft;
@@ -46758,6 +46851,7 @@ window.emailComposerDiscard = emailComposerDiscard;
 window.emailComposerNotice = emailComposerNotice;
 window.openInFileLocation = openInFileLocation;
 window.renderChatMessages = renderChatMessages;
+window.toggleUnifiedDesktopComposerDictation = toggleUnifiedDesktopComposerDictation;
 window.applyEmptyChatStarterPrompt = applyEmptyChatStarterPrompt;
 window.toggleVoiceSettingsPopover = toggleVoiceSettingsPopover;
 window.closeVoiceSettingsPopover = closeVoiceSettingsPopover;
