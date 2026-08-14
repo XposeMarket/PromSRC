@@ -19277,6 +19277,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
   contextPacket: Record<string, any>;
   voiceAgentMemory?: string;
   voiceRuntime?: string;
+  cameraRuntime?: string;
   wakePhrase?: string;
   conversationTranscript?: string;
   conversationSummary?: string;
@@ -19291,6 +19292,13 @@ function buildRealtimeVoiceAgentInstructions(args: {
   // context. This is what makes voice pick up mid-conversation instead of acting
   // like a fresh chat.
   const continuityLines: string[] = [];
+  if (args.cameraRuntime) {
+    continuityLines.push(
+      '## Mobile camera runtime (highest priority)',
+      args.cameraRuntime,
+      '',
+    );
+  }
   const voiceRoomTranscript = compactVoiceText(args.contextPacket?.voiceRoom?.transcriptText || '', 7000);
   if (voiceRoomTranscript) {
     continuityLines.push(
@@ -19429,6 +19437,29 @@ function buildRealtimeVoiceAgentInstructions(args: {
   return clampRealtimeInstructions(lines.filter(Boolean).join('\n'));
 }
 
+function mobileCameraRuntimeContextText(value: unknown): string {
+  if (!value || typeof value !== 'object' || (value as any).active !== true) return '';
+  const runtime = value as any;
+  const feedOpen = runtime.feedOpen === true;
+  const pendingImageCount = Math.max(0, Number(runtime.pendingImageCount || 0) || 0);
+  const attachmentLine = pendingImageCount === 1
+    ? 'Live camera image attached.'
+    : pendingImageCount > 1
+      ? `Multiple live camera images attached (${pendingImageCount}). Treat them as sequential current camera context.`
+      : 'The live camera feed is open; use the next live camera frame as visual context when it arrives.';
+  return [
+    '[MOBILE_CAMERA_RUNTIME]',
+    feedOpen
+      ? 'The mobile camera live feed is open and is the primary visual source for this voice conversation.'
+      : 'A live camera image captured while the mobile camera was open is attached to the current voice turn.',
+    attachmentLine,
+    'When the user asks what they are showing you, inspect the attached live camera image or images directly.',
+    'Do not call voice_desktop or voice_browser to obtain a screenshot for a camera-relative request. Never substitute a desktop screenshot for the mobile camera.',
+    'Treat this block as runtime metadata for the next spoken request; do not answer this metadata item separately.',
+    '[/MOBILE_CAMERA_RUNTIME]',
+  ].join('\n');
+}
+
 router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
   try {
     const body = req.body || {};
@@ -19437,6 +19468,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
     const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
+    const cameraRuntimeContext = mobileCameraRuntimeContextText(body.cameraRuntime || body.camera_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const currentTime = buildVoiceTimeContext(body.deviceTime || body.device_time || body.clientTime || body.client_time);
     contextPacket.currentTime = currentTime;
@@ -19460,6 +19492,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       contextPacket,
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
+      cameraRuntime: cameraRuntimeContext,
       wakePhrase,
       conversationTranscript: buildVoiceConversationTranscript(sessionId, 24, 600, voiceTarget),
       conversationSummary: buildVoiceCompactionSummaryBlock(sessionId, 4000, voiceTarget),
@@ -19843,6 +19876,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
     const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
+    const cameraRuntimeContext = mobileCameraRuntimeContextText(body.cameraRuntime || body.camera_runtime);
     if (voiceRuntimeContext) contextPacket.voiceRuntime = voiceRuntimeContext;
     const currentTime = buildVoiceTimeContext(body.deviceTime || body.device_time || body.clientTime || body.client_time);
     contextPacket.currentTime = currentTime;
@@ -19862,6 +19896,7 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       contextPacket,
       voiceAgentMemory,
       voiceRuntime: voiceRuntimeContext,
+      cameraRuntime: cameraRuntimeContext,
       wakePhrase,
       conversationTranscript: buildVoiceConversationTranscript(sessionId, 24, 600, voiceTarget),
       conversationSummary: buildVoiceCompactionSummaryBlock(sessionId, 4000, voiceTarget),
