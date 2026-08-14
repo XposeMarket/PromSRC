@@ -24708,6 +24708,15 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   }
   if (type === 'response.created') {
     const cameraState = _mobileRealtimeLiveVisionState();
+    const xaiVisionInjectionAgeMs = cameraState.xaiVisionInjectionAt
+      ? Math.max(0, Date.now() - Number(cameraState.xaiVisionInjectionAt || 0))
+      : Infinity;
+    const xaiVisionResponse = String(__pmRealtimeAgent.conn?.provider || '') === 'xai'
+      && !cameraState.responseGateActive
+      && !cameraState.audioCommitted
+      && !cameraState.responseRequestedAt
+      && xaiVisionInjectionAgeMs <= 15_000
+      && (__pmRealtimeAgent.turn?.xaiVisionInjecting || cameraState.xaiVisionInjectionAt);
     const cameraGateRace = cameraState.responseGateActive && cameraState.phase !== 'response_ready';
     cameraState.responseStartedAt = Date.now();
     _voiceDebug('realtime-agent-model-inference-start', {
@@ -24721,7 +24730,13 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       cameraFrameId: cameraState.lastAssociatedFrameId || '',
       cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
     });
-    _stopMobileRealtimeLiveCameraVision('response_created');
+    // xAI can open a response while the vision-sidecar text item is still
+    // being accepted. That response is cancelled below; it is not the user's
+    // spoken reply. Preserve an explicit resume request so the live camera
+    // timer does not die permanently after its first injected frame.
+    cameraState.resumeAfterXaiVisionResponse = xaiVisionResponse
+      && _mobileRealtimeXaiLiveCameraCanResume();
+    _stopMobileRealtimeLiveCameraVision(xaiVisionResponse ? 'xai_vision_response_created' : 'response_created');
     _finalizeMobileRealtimeUserTurn(sessionId, 'response_created');
     if (cameraGateRace) {
       // The server can beat the session.update(create_response:false) packet
@@ -24740,7 +24755,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'response.cancel' })); } catch {}
       try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
       _voiceDebug('realtime-agent-xai-premature-response-cancelled-for-vision', {
-        reason: __pmRealtimeAgent.turn?.xaiVisionInjectReason || '',
+        reason: __pmRealtimeAgent.turn?.xaiVisionInjectReason || cameraState.xaiVisionInjectionReason || '',
       });
       return;
     }
@@ -25146,6 +25161,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   }
   if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
     const cameraState = _mobileRealtimeLiveVisionState();
+    const resumeXaiLiveCamera = cameraState.resumeAfterXaiVisionResponse === true;
+    cameraState.resumeAfterXaiVisionResponse = false;
+    cameraState.xaiVisionInjectionAt = 0;
+    cameraState.xaiVisionInjectionReason = '';
     _voiceDebug('realtime-agent-model-response-finished', {
       type,
       provider: __pmRealtimeAgent.conn?.provider || 'openai_webrtc',
@@ -25226,6 +25245,17 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();
     }, responseStatusHoldMs);
     setTimeout(() => _restoreMobileRealtimeInputAfterOutput('response_done'), 450);
+    if (resumeXaiLiveCamera) {
+      // Wait until the cancelled xAI response has released its response flags;
+      // then begin a fresh camera turn with the newest cached frame.
+      setTimeout(() => {
+        if (!_mobileRealtimeXaiLiveCameraCanResume()) return;
+        if (__pmRealtimeAgent.activeResponse || __pmVoice.realtimeSpeechActiveResponse) return;
+        if (_startMobileRealtimeLiveCameraVision('xai_vision_response_resume')) {
+          _voiceDebug('realtime-agent-live-camera-resumed-after-xai-vision-response');
+        }
+      }, 0);
+    }
     if (__pmRealtimeAgent.quiet.pendingActivate) {
       __pmRealtimeAgent.quiet.pendingActivate = false;
       _activateMobileRealtimeAgentQuietMode();
@@ -26582,6 +26612,13 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
       __pmRealtimeAgent.turn.xaiVisionInjectReason = '';
     }
     if (injected) all.forEach((image) => { image.realtimeInjected = true; });
+    if (injected) {
+      const liveCameraState = _mobileRealtimeLiveVisionState();
+      if (liveCameraState.active) {
+        liveCameraState.xaiVisionInjectionAt = Date.now();
+        liveCameraState.xaiVisionInjectionReason = reason;
+      }
+    }
     restorePendingImages();
     if (!_mobileRealtimeCameraPendingImageCount() && !_mobileRealtimeCameraFeedIsOpen()) {
       __pmRealtimeAgent.cameraRuntime.turnContextKey = '';
@@ -26707,7 +26744,18 @@ function _mobileRealtimeLiveVisionState() {
     audioCommitted: false,
     responseRequestedAt: 0,
     responseStartedAt: 0,
+    resumeAfterXaiVisionResponse: false,
+    xaiVisionInjectionAt: 0,
+    xaiVisionInjectionReason: '',
   });
+}
+
+function _mobileRealtimeXaiLiveCameraCanResume() {
+  if (String(__pmRealtimeAgent.conn?.provider || '') !== 'xai') return false;
+  if (typeof __pmRealtimeAgent.liveCameraFrameReader !== 'function') return false;
+  if (!_mobileRealtimeCameraFeedIsOpen()) return false;
+  const listenMode = String(__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode || '').trim();
+  return listenMode === 'always_listening' || __pmRealtimeAgent.ptt?.held === true;
 }
 
 function _mobileRealtimeLiveVisionIsCurrent(state, generation, turnId) {
@@ -27196,6 +27244,8 @@ function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
   state.audioCommitted = false;
   state.responseStartedAt = 0;
   state.responseRequestedAt = 0;
+  state.xaiVisionInjectionAt = 0;
+  state.xaiVisionInjectionReason = '';
   state.responseGateActive = (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
     && !_isMobileCodexV3RealtimeConnection(__pmRealtimeAgent.conn);
   state.lastSentAt = 0;
