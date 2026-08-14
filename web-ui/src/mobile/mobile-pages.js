@@ -14721,15 +14721,12 @@ void main() {
           }, sid);
           for (let i = 1; i < frames.length; i++) {
             if (!String(frames[i]?.dataUrl || '').trim()) continue;
-            const frameImg = {
+            _stageMobileRealtimeAgentImage({
               dataUrl: frames[i].dataUrl,
               name: frames[i].name || `video-frame-${i + 1}.jpg`,
               mimeType: frames[i].mimeType || 'image/jpeg',
               base64: '',
-              realtimeInjected: false,
-            };
-            __pmRealtimeAgent.pendingImages.push(frameImg);
-            _injectRealtimeImageItemToConversation(frameImg, `Video frame ${i + 1} of ${frames.length} from the mobile camera clip - sequential visual context for what I say next.`).catch(() => {});
+            }, sid, { toast: false });
           }
         },
       });
@@ -24867,7 +24864,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     if (event?.__prometheusCodexBridge) {
       _startMobileRealtimeLiveCameraVision('codex_transcription_delta');
       if (__pmRealtimeAgent.pendingImages.length) {
-        _flushMobileRealtimeAgentPendingImages('codex_transcription_delta').catch(() => {});
+        _flushMobileRealtimeAgentPendingImages('codex_transcription_delta', {
+          turnId: _mobileRealtimeLiveVisionState().turnId,
+        }).catch(() => {});
       }
     }
     if (!String(__pmRealtimeAgent.turn.liveUserTranscript || '').trim()) {
@@ -25297,7 +25296,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
         turn.currentUserSpeechStoppedAt = 0;
         _startMobileRealtimeLiveCameraVision('speech_started');
         cameraState.pendingAttachmentPreparation = __pmRealtimeAgent.pendingImages.length
-          ? _flushMobileRealtimeAgentPendingImages('speech_started', { createResponse: false }).catch(() => false)
+          ? _flushMobileRealtimeAgentPendingImages('speech_started', { createResponse: false, turnId: cameraState.turnId }).catch(() => false)
           : Promise.resolve(false);
       }
     } else if (type === 'input_audio_buffer.speech_stopped') {
@@ -25523,6 +25522,31 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
   }
   const args = call?.args && typeof call.args === 'object' ? call.args : {};
   _voiceDebug('realtime-agent-tool-call', { name, args });
+
+  const action = String(args?.action || '').trim().toLowerCase();
+  const isScreenshotTool = (name === 'voice_desktop' || name === 'voice_browser' || /^(?:voice_desktop|voice_browser)_screenshot$/.test(name))
+    && (!action || action === 'screenshot' || name.endsWith('_screenshot'));
+  const spokenTurn = String(
+    __pmRealtimeAgent.turn?.liveUserTranscript
+      || __pmRealtimeAgent.turn?.lastUserTranscript
+      || __pmRealtimeAgent.turn?.currentUserTranscriptSegment
+      || '',
+  ).replace(/\s+/g, ' ').trim();
+  const cameraRelativeRequest = /\b(?:can you see|what (?:am|is) (?:i|we|the user)?\s*show(?:ing|n)?|look at (?:this|that)|what(?:'s| is) this|what(?:'s| is) in (?:the )?(?:camera|frame|picture|image)|describe (?:this|the )?(?:camera|frame|picture|image)|in front of (?:me|you)|what do you see)\b/i.test(spokenTurn)
+    && !/\b(?:desktop|browser|window|app|screen capture|screenshot)\b/i.test(spokenTurn);
+  if (isScreenshotTool && cameraRelativeRequest && _mobileRealtimeCameraRuntimeIsActive()) {
+    _voiceDebug('realtime-agent-camera-screenshot-fallback-blocked', {
+      name,
+      action,
+      transcript: spokenTurn.slice(0, 220),
+    });
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({
+      ok: false,
+      blocked: true,
+      error: 'The mobile camera live feed is active. Inspect the attached live camera image instead of taking a desktop or browser screenshot.',
+    }));
+    return;
+  }
 
   if (name === 'voice_room_handoff') {
     await _executeMobileVoiceRoomHandoffTool(args, callId, sessionId);
@@ -26117,7 +26141,6 @@ async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = 
               },
               {
                 type: 'input_image',
-                detail: 'auto',
                 image_url: imageUrl,
               },
             ],
@@ -26146,10 +26169,9 @@ function _sendMobileRealtimeDataChannelEvent(dc, event) {
 }
 
 // Inject one image into the realtime conversation as a user item, with NO
-// response.create. Done at STAGE time (when the audio buffer is idle) — injecting
-// while the user is actively speaking races the auto-response and the model ends
-// up "not seeing" the image. Verified: an image item added while idle is visible
-// to a later spoken/typed turn's response.
+// response.create. The caller owns the turn boundary: images are delivered
+// immediately before the associated spoken/text turn, never speculatively when
+// the camera capture button is pressed.
 async function _injectRealtimeImageItemToConversation(img, label) {
   const options = arguments.length > 2 && arguments[2] && typeof arguments[2] === 'object' ? arguments[2] : {};
   const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
@@ -26195,13 +26217,13 @@ async function _injectRealtimeImageItemToConversation(img, label) {
           role: 'user',
           content: [
             { type: 'input_text', text: label || 'Image captured from the mobile camera. Keep it in view and use it as visual context for what I say next.' },
-            { type: 'input_image', detail: 'auto', image_url: imageUrl },
+            { type: 'input_image', image_url: imageUrl },
           ],
         },
       });
       if (!sent) return false;
       img.realtimeInjected = true;
-      _voiceDebug('realtime-agent-image-injected-at-stage', { name: img.name });
+      _voiceDebug('realtime-agent-image-injected-for-turn', { name: img.name });
       return true;
     } catch (err) {
       _voiceDebug('realtime-agent-image-inject-failed', { message: err?.message || String(err) });
@@ -26221,10 +26243,22 @@ async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
   if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return '';
   const isVideo = urls.length > 1;
   try {
+    // Camera stills can be several megabytes on iOS. Keep the vision-sidecar
+    // request comfortably below mobile proxy/body limits while preserving the
+    // original full-resolution image for the local preview and Codex path.
+    const requestUrls = await Promise.all(
+      urls.map((url) => _downscaleDataUrlForRealtime(url, isVideo ? 960 : 1280, isVideo ? 0.66 : 0.72, 180000)),
+    );
     const reqBody = isVideo
-      ? { frames: urls.map((u) => ({ dataUrl: u })), durationMs: Number(opts.durationMs || 0) || 0, name: String(opts.name || 'camera video') }
-      : { dataUrl: urls[0], name: String(opts.name || 'camera photo') };
-    _voiceDebug('realtime-agent-xai-summary-start', { isVideo, count: urls.length, reason: opts.reason || '' });
+      ? { frames: requestUrls.map((u) => ({ dataUrl: u })), durationMs: Number(opts.durationMs || 0) || 0, name: String(opts.name || 'camera video') }
+      : { dataUrl: requestUrls[0], name: String(opts.name || 'camera photo') };
+    _voiceDebug('realtime-agent-xai-summary-start', {
+      isVideo,
+      count: urls.length,
+      originalBytes: urls.reduce((sum, url) => sum + url.length, 0),
+      requestBytes: requestUrls.reduce((sum, url) => sum + url.length, 0),
+      reason: opts.reason || '',
+    });
     const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', { method: 'POST', body: JSON.stringify(reqBody) });
     if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return '';
     const summary = String(res?.summary || '').trim();
@@ -26416,9 +26450,9 @@ function _stageMobileRealtimeAgentFile(attachment, sessionId) {
   return file;
 }
 
-// Stage a captured photo: show it in the chat bubble AND inject it into the
-// realtime conversation now (no response). The user's next spoken/typed turn is
-// what triggers the model's response — so the image is "attached" to what they say.
+// Stage a captured photo: show it in the chat bubble and hold it for the next
+// spoken/text turn. Sending only at the turn boundary keeps the image and the
+// transcription in one ordered realtime conversation window.
 function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
   const dataUrl = String(attachment?.dataUrl || '').trim();
   if (!dataUrl) return false;
@@ -26438,11 +26472,10 @@ function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
     });
   }
   __pmRealtimeAgent.pendingImages.push(img);
-  // Public Realtime can accept an idle image item immediately. Codex AVAS v3
-  // must wait for the next real voice turn because its append-text bridge is a
-  // user-turn operation and would otherwise wake the agent just from opening
-  // the camera.
-  if (!_isMobileCodexV3RealtimeConnection()) _injectRealtimeImageItemToConversation(img).catch(() => {});
+  // Update the session-level runtime prompt as soon as the capture is staged.
+  // The actual image event waits for the next turn so it cannot race VAD.
+  _sendMobileRealtimeCameraRuntimeUpdate('image_staged');
+  _scheduleMobileRealtimeAgentPendingImageFlush('image_staged');
   _stageMobileRealtimeAgentAttachmentPreview({
     kind: 'image', name: img.name, mimeType: img.mimeType, dataUrl: img.dataUrl, base64: img.base64, sizeLabel: '',
   }, sid);
@@ -26477,14 +26510,26 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
     restorePendingImages();
     return false;
   }
+  _sendMobileRealtimeCameraTurnContext({
+    imageCount: all.length,
+    turnId: options.turnId,
+    userText: options.promptText,
+  });
   if (_isMobileCodexV3RealtimeConnection()) {
     let injected = false;
     for (const image of all) {
-      if (await _injectRealtimeImageItemToConversation(image, options.label || 'Use this camera image as context for the current spoken turn.')) {
+      const label = all.length === 1
+        ? 'Live camera image attached.'
+        : `Live camera image ${all.indexOf(image) + 1} of ${all.length} attached.`;
+      if (await _injectRealtimeImageItemToConversation(image, options.label || label)) {
         injected = true;
       }
     }
     restorePendingImages();
+    if (!_mobileRealtimeCameraPendingImageCount() && !_mobileRealtimeCameraFeedIsOpen()) {
+      __pmRealtimeAgent.cameraRuntime.turnContextKey = '';
+    }
+    _sendMobileRealtimeCameraRuntimeUpdate('images_flushed_codex');
     _voiceDebug('realtime-agent-image-flushed-codex-bridge', {
       count: all.length,
       injected: all.filter((image) => image.realtimeInjected).length,
@@ -26515,6 +26560,10 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
     }
     if (injected) all.forEach((image) => { image.realtimeInjected = true; });
     restorePendingImages();
+    if (!_mobileRealtimeCameraPendingImageCount() && !_mobileRealtimeCameraFeedIsOpen()) {
+      __pmRealtimeAgent.cameraRuntime.turnContextKey = '';
+    }
+    _sendMobileRealtimeCameraRuntimeUpdate('images_flushed_xai');
     _voiceDebug('realtime-agent-image-flushed-xai-summary', { count: all.length, reason, injected });
     const shouldCreateVisionResponse = options.createResponse === true
       || (reason === 'speech_started' && options.createResponse !== false);
@@ -26531,9 +26580,9 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
     }
     return !!injected;
   }
-  // Most images are injected at STAGE time (when audio is idle). Await that
-  // in-flight send before retrying so capture + turn-boundary flush cannot race
-  // and either duplicate or lose the image.
+  // Deliver every staged image in order. Multiple captures from one turn stay
+  // separate so each image fits the realtime channel and the model can inspect
+  // them as a sequence.
   try {
     const promptText = String(options.promptText || '').trim();
     let delivered = 0;
@@ -26543,15 +26592,18 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
         delivered += 1;
         continue;
       }
-      const label = [
-        all.length > 1 ? `Attached image ${i + 1} of ${all.length}.` : 'Attached image from the mobile camera.',
-        promptText && i === 0 ? `User message: ${promptText}` : 'Use it as visual context for the user\'s next voice/chat turn.',
-      ].filter(Boolean).join('\n');
+      const label = all.length === 1
+        ? 'Live camera image attached.'
+        : `Live camera image ${i + 1} of ${all.length} attached.`;
       const sent = await _injectRealtimeImageItemToConversation(image, label);
       if (sent) delivered += 1;
       else if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') break;
     }
     restorePendingImages();
+    if (!_mobileRealtimeCameraPendingImageCount() && !_mobileRealtimeCameraFeedIsOpen()) {
+      __pmRealtimeAgent.cameraRuntime.turnContextKey = '';
+    }
+    _sendMobileRealtimeCameraRuntimeUpdate('images_flushed');
     _voiceDebug('realtime-agent-image-flushed', {
       count: delivered,
       pending: __pmRealtimeAgent.pendingImages.length,
@@ -26714,6 +26766,11 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
     turnId,
     frameId,
   });
+  _sendMobileRealtimeCameraTurnContext({
+    turnId,
+    imageCount: 1,
+    feedOpen: true,
+  });
   let sent = false;
   try {
     const correlation = `[LIVE_CAMERA_VOICE_TURN turn=${turnId} frame=${frameId}]`;
@@ -26725,11 +26782,7 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
         toast: false,
         isCurrent,
       })
-      : await _injectRealtimeImageItemToConversation(image, [
-        correlation,
-        'Live camera frame captured during the user\'s active spoken turn.',
-        'Use this newest frame as visual context; do not claim the camera is unavailable.',
-      ].join(' '), { isCurrent });
+      : await _injectRealtimeImageItemToConversation(image, 'Live camera image attached.', { isCurrent });
   } catch (err) {
     _voiceDebug('realtime-agent-live-camera-association-failed', {
       reason: options.reason || 'live_camera',
@@ -27070,6 +27123,12 @@ function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
   state.responseGateActive = (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
     && !_isMobileCodexV3RealtimeConnection(__pmRealtimeAgent.conn);
   state.lastSentAt = 0;
+  __pmRealtimeAgent.cameraRuntime.turnContextKey = '';
+  _sendMobileRealtimeCameraRuntimeUpdate('live_camera_turn_started');
+  _sendMobileRealtimeCameraTurnContext({
+    turnId: state.turnId,
+    imageCount: _mobileRealtimeCameraPendingImageCount(),
+  });
   if (state.responseGateActive) _sendMobileRealtimeAgentCreateResponseFlag(false);
   _voiceDebug('realtime-agent-live-camera-started', {
     reason,
@@ -27084,6 +27143,24 @@ function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
       _queueMobileRealtimeLiveCameraFrame('speech_active_tick');
     }, 1000);
   }
+  return true;
+}
+
+function _scheduleMobileRealtimeAgentPendingImageFlush(reason = 'camera_image_staged') {
+  const state = _mobileRealtimeLiveVisionState();
+  if (!state.active || Number(state.responseStartedAt || 0) || !_mobileRealtimeCameraPendingImageCount()) return false;
+  const previous = state.pendingAttachmentPreparation || Promise.resolve(false);
+  const run = Promise.resolve(previous)
+    .catch(() => false)
+    .then(() => _flushMobileRealtimeAgentPendingImages(reason, {
+      createResponse: false,
+      turnId: state.turnId,
+    }))
+    .catch(() => false);
+  state.pendingAttachmentPreparation = run;
+  run.finally(() => {
+    if (state.pendingAttachmentPreparation === run) state.pendingAttachmentPreparation = null;
+  }).catch(() => {});
   return true;
 }
 
@@ -27115,9 +27192,10 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
       return true;
     }
     if (provider === 'xai') {
+      const snapshotImageUrl = await _downscaleDataUrlForRealtime(dataUrl, 1280, 0.72, 180000);
       const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
         method: 'POST',
-        body: JSON.stringify({ dataUrl, name }),
+        body: JSON.stringify({ dataUrl: snapshotImageUrl, name }),
       });
       const summary = String(vision?.summary || '').trim();
       if (!summary) throw new Error(vision?.error || 'xAI vision returned no camera summary.');
@@ -27157,7 +27235,6 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
           },
           {
             type: 'input_image',
-            detail: 'auto',
             image_url: snapshotImageUrl,
           },
         ],
@@ -27213,9 +27290,10 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
   try {
     if (__pmRealtimeAgent.quiet?.active) _deactivateMobileRealtimeAgentQuietMode();
     if (provider === 'xai') {
+      const requestFrames = await Promise.all(frames.map((frame) => _downscaleDataUrlForRealtime(frame.dataUrl, 960, 0.66, 180000)));
       const vision = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', {
         method: 'POST',
-        body: JSON.stringify({ frames, durationMs, name: 'mobile camera video frames' }),
+        body: JSON.stringify({ frames: requestFrames.map((dataUrl, index) => ({ ...frames[index], dataUrl })), durationMs, name: 'mobile camera video frames' }),
       });
       const summary = String(vision?.summary || '').trim();
       if (!summary) throw new Error(vision?.error || 'xAI vision returned no video summary.');
@@ -27271,7 +27349,7 @@ async function _sendMobileRealtimeAgentVideoFrames(payload = {}, options = {}) {
           role: 'user',
           content: [
             { type: 'input_text', text: `Frame ${index + 1} of ${frames.length}` },
-            { type: 'input_image', detail: 'auto', image_url: frame.dataUrl },
+            { type: 'input_image', image_url: frame.dataUrl },
           ],
         },
       }));
@@ -27420,7 +27498,9 @@ function _mobileRealtimeAgentPttRelease() {
     // creating the response, so the image is attached to this spoken turn.
     await Promise.resolve(_prepareMobileRealtimeLiveCameraForTurn('ptt_release')).catch(() => false);
     if (__pmRealtimeAgent.pendingImages.length) {
-      await _flushMobileRealtimeAgentPendingImages('ptt_release').catch(() => false);
+      await _flushMobileRealtimeAgentPendingImages('ptt_release', {
+        turnId: _mobileRealtimeLiveVisionState().turnId,
+      }).catch(() => false);
       commitAndRespond();
     } else {
       commitAndRespond();

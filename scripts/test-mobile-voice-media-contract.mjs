@@ -113,12 +113,26 @@ assert.match(pages, /realtime-agent-model-request-start/);
 assert.match(pages, /realtime-agent-model-inference-start/);
 assert.match(pages, /realtime-agent-model-response-finished/);
 assert.match(pages, /isCurrent\(\)\)/);
-assert.match(pages, /_flushMobileRealtimeAgentPendingImages\('speech_started', \{ createResponse: false \}\)/);
+assert.match(pages, /_flushMobileRealtimeAgentPendingImages\('speech_started', \{ createResponse: false, turnId: cameraState\.turnId \}\)/);
 assert.match(pages, /function _sendMobileRealtimeDataChannelEvent\(dc, event\)/);
 assert.match(pages, /interrupt_response: !!enabled/);
 assert.match(pages, /const restorePendingImages = \(\) =>/);
 assert.match(pages, /await _injectRealtimeImageItemToConversation\(image, label\)/);
 assert.match(pages, /realtime-agent-data-channel-send-failed/);
+
+// Camera transport contract: camera state is carried into the next voice
+// turn, images are flushed at that boundary in order, and a camera-relative
+// request cannot fall through to a desktop/browser screenshot.
+assert.match(pages, /cameraRuntime: \{/);
+assert.match(pages, /function _mobileRealtimeCameraRuntimeText\(options = \{\}\)/);
+assert.match(pages, /function _sendMobileRealtimeCameraTurnContext\(options = \{\}\)/);
+assert.match(pages, /function _scheduleMobileRealtimeAgentPendingImageFlush\(reason = 'camera_image_staged'\)/);
+assert.match(pages, /Live camera image attached\./);
+assert.match(pages, /Multiple live camera images attached/);
+assert.match(pages, /The mobile camera live feed is active\. Inspect the attached live camera image/);
+assert.match(pages, /realtime-agent-camera-screenshot-fallback-blocked/);
+assert.match(pages, /_downscaleDataUrlForRealtime\(url, isVideo \? 960 : 1280/);
+assert.doesNotMatch(pages, /type: 'input_image', detail: 'auto'/);
 const release = pages.slice(pages.indexOf('function _mobileRealtimeAgentPttRelease()'));
 assert.match(release, /await Promise\.resolve\(_prepareMobileRealtimeLiveCameraForTurn\('ptt_release'\)\)/);
 const publicPttRelease = release.slice(release.indexOf('const flushThenCommit = async'));
@@ -149,6 +163,12 @@ assert.match(generatedPages, /realtime-agent-live-camera-attachment-visible/);
 assert.match(generatedPages, /function _sendMobileRealtimeDataChannelEvent\(dc, event\)/);
 assert.match(generatedPages, /interrupt_response: !!enabled/);
 assert.match(generatedPages, /const restorePendingImages = \(\) =>/);
+assert.match(generatedPages, /cameraRuntime: \{/);
+assert.match(generatedPages, /function _sendMobileRealtimeCameraTurnContext\(options = \{\}\)/);
+assert.match(generatedPages, /function _scheduleMobileRealtimeAgentPendingImageFlush\(reason = 'camera_image_staged'\)/);
+assert.match(generatedPages, /realtime-agent-camera-screenshot-fallback-blocked/);
+assert.match(generatedPages, /_downscaleDataUrlForRealtime\(url, isVideo \? 960 : 1280/);
+assert.doesNotMatch(generatedPages, /type: 'input_image', detail: 'auto'/);
 assert.match(generatedPages, /realtime-agent-user-turn-held-open/);
 assert.match(generatedPages, /realtime-agent-user-turn-continued-after-pause/);
 assert.match(generatedPages, /dismissNewChatContextDock/);
