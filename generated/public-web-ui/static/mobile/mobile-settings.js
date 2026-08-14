@@ -1,4 +1,4 @@
-import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 import { prettifyModelName } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';

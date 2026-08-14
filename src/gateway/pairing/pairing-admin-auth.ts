@@ -124,7 +124,7 @@ export function getPairingAdminPolicy(): PairingAdminPolicy {
     gatewayToken: resolveGatewayAuthToken(),
     electronManaged: String(process.env.PROMETHEUS_ELECTRON_MANAGED || '').trim() === '1',
     gatewayHost: String(gateway.host || '127.0.0.1').trim(),
-    gatewayPort: Number(gateway.port || process.env.GATEWAY_PORT || 18789),
+    gatewayPort: Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || gateway.port || process.env.GATEWAY_PORT || 18789),
     httpsEnabled: !!https.enabled,
     httpsPort: Number(https.port || 0),
   };

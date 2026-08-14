@@ -47,24 +47,34 @@ function renderAssetCard(asset) {
   `;
 }
 
-export function createAssetsPanel({ container, store, getScene, applyOps, onAddToScene }) {
+export function createAssetsPanel({ container, store, getScene, applyOps, onAddToScene, filterType = null }) {
   let _unsub = null;
   let _pasteBound = false;
 
+  function visibleAssets() {
+    const assets = Array.isArray(store.getState().mediaAssets) ? store.getState().mediaAssets : [];
+    return filterType ? assets.filter(asset => asset?.type === filterType) : assets;
+  }
+
   function render() {
-    const { mediaAssets } = store.getState();
+    const mediaAssets = visibleAssets();
+    const title = filterType === 'audio' ? 'Audio library' : 'Media library';
+    const emptyText = filterType === 'audio'
+      ? 'Import a track, then double-click it to add it to the timeline.'
+      : 'Drop files here or click Import';
     container.innerHTML = `
       <div class="ce-assets-panel">
         <div class="ce-assets-toolbar">
-          <button class="ce-assets-upload-btn" data-ce-upload>+ Import</button>
+          <span class="ce-assets-toolbar__title">${_safeHtml(title)}</span>
+          <button class="ce-assets-upload-btn" data-ce-upload>+ Import${filterType === 'audio' ? ' audio' : ''}</button>
           <input type="file" class="ce-assets-file-input" data-ce-file-input
-            accept="video/*,audio/*,image/*" multiple style="display:none">
+            accept="${filterType === 'audio' ? 'audio/*' : 'video/*,audio/*,image/*'}" multiple style="display:none">
         </div>
         <div class="ce-assets-drop-zone" data-ce-drop-zone>
           ${mediaAssets.length === 0
             ? `<div class="ce-assets-empty">
                 <div class="ce-assets-empty__icon">⬡</div>
-                <div class="ce-assets-empty__text">Drop files here or click Import</div>
+                <div class="ce-assets-empty__text">${_safeHtml(emptyText)}</div>
               </div>`
             : `<div class="ce-assets-grid">${mediaAssets.map(renderAssetCard).join('')}</div>`
           }
@@ -93,8 +103,9 @@ export function createAssetsPanel({ container, store, getScene, applyOps, onAddT
       if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
     });
 
-    // Paste image from clipboard. Bind once; render() runs often.
-    if (!_pasteBound) {
+    // The unfiltered media panel owns paste handling. A second audio panel
+    // must not import the same clipboard file twice.
+    if (!filterType && !_pasteBound) {
       document.addEventListener('paste', onPaste, { once: false });
       _pasteBound = true;
     }
@@ -121,7 +132,9 @@ export function createAssetsPanel({ container, store, getScene, applyOps, onAddT
   }
 
   async function handleFiles(files) {
-    const imported = await importFiles(files);
+    const accepted = filterType ? Array.from(files || []).filter(file => file.type?.startsWith(`${filterType}/`)) : files;
+    if (!accepted?.length) return;
+    const imported = await importFiles(accepted);
     const current = store.getState().mediaAssets || [];
     store.setState({ mediaAssets: [...current, ...imported] });
   }
@@ -149,7 +162,32 @@ export function createAssetsPanel({ container, store, getScene, applyOps, onAddT
     if (!scene) return;
     const el = assetToSceneElement(asset, scene);
     if (typeof applyOps === 'function') {
-      applyOps({ op: 'add', ...el }, { selectedIds: [el.id] });
+      const ops = [{ op: 'add', ...el }];
+      if (asset.type === 'audio') {
+        ops.push({
+          op: 'set-scene',
+          patch: {
+            audioTrack: {
+              source: asset.src,
+              label: asset.name,
+              startMs: 0,
+              durationMs: asset.duration || scene.durationMs || 5000,
+              trimStartMs: 0,
+              trimEndMs: 0,
+              volume: 1,
+              muted: false,
+              analysis: asset.peaks ? {
+                status: 'ready',
+                sourceType: 'browser-import',
+                durationMs: asset.duration || null,
+                waveformPeaks: asset.peaks,
+                waveformBucketCount: asset.peaks.length,
+              } : null,
+            },
+          },
+        });
+      }
+      applyOps(ops, { selectedIds: [el.id] });
     }
     if (typeof onAddToScene === 'function') onAddToScene(el);
   }

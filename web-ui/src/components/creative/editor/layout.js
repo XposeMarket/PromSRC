@@ -25,7 +25,17 @@ const LEFT_TAB_LABELS  = { media:'Media', audio:'Audio', text:'Text', shapes:'Sh
 const RIGHT_TAB_LABELS = { properties:'Properties', keyframes:'Keyframes' };
 
 function loadSizes() {
-  try { const r = localStorage.getItem(LS_KEY); if (r) return JSON.parse(r); } catch { /**/ }
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) || {};
+      return {
+        leftW: clamp(Number(parsed.leftW) || 260, MIN_LEFT_W, MAX_LEFT_W),
+        rightW: clamp(Number(parsed.rightW) || 300, MIN_RIGHT_W, MAX_RIGHT_W),
+        timelineH: clamp(Number(parsed.timelineH) || 200, MIN_TIMELINE_H, MAX_TIMELINE_H),
+      };
+    }
+  } catch { /**/ }
   return { leftW: 260, rightW: 300, timelineH: 200 };
 }
 function saveSizes(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch { /**/ } }
@@ -161,6 +171,8 @@ export function createEditorLayout(container) {
   function dispose() {
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup',   onMouseUp);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
     root.remove();
   }
 

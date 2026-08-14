@@ -720,7 +720,7 @@ router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, re
 
 function _gatewayPort(): number {
   const cfg = getConfig().getConfig() as any;
-  return Number(cfg?.gateway?.port || process.env.GATEWAY_PORT || 18789);
+  return Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || cfg?.gateway?.port || process.env.GATEWAY_PORT || 18789);
 }
 
 async function _isFunnelActiveOnPort(port: number, httpsPort = _funnelHttpsPort()): Promise<boolean> {

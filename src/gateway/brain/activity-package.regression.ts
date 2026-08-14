@@ -3,6 +3,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { buildThoughtActivityPackage } from './activity-package';
+import {
+  buildThoughtActivityPackageIsolated,
+  getBrainActivityWorkerStatus,
+  shutdownBrainActivityWorker,
+} from './activity-package-worker-client';
 
 function writeJson(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -79,6 +84,14 @@ async function main(): Promise<void> {
     assert(pkg.eventLedger.totalEvents > 600, 'all synthetic events should be discovered');
     assert(pkg.eventLedger.continuations.length > 0, 'oversized package should create direct continuations');
     assert.equal(pkg.completeness.directContextRule, 'do_not_search_covered_activity');
+
+    const isolated = await buildThoughtActivityPackageIsolated({
+      ...options,
+      outputDir: path.join(workspacePath, 'Brain', 'activity-packages', '2026-08-01', 'isolated'),
+    });
+    assert.equal(isolated.package.packageId, pkg.packageId, 'child-process activity assembly must remain deterministic');
+    assert.equal(getBrainActivityWorkerStatus().isolation, 'child_process');
+    assert(Number(getBrainActivityWorkerStatus().broker.pid || 0) > 0, 'activity assembly must run in a child process');
     assert(pkg.unresolvedWork.some((item) => item.id === 'id:task-1'), 'running task should be listed as unresolved');
     assert(pkg.sourceCoverage.some((source) => source.source === 'tasks' && source.status === 'partial'), 'invalid source data should be visible as partial');
     const dateInput = await buildThoughtActivityPackage({
@@ -115,6 +128,7 @@ async function main(): Promise<void> {
       packageChars: pkg.metrics.packageChars,
     }));
   } finally {
+    await shutdownBrainActivityWorker();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

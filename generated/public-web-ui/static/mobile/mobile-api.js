@@ -148,6 +148,9 @@ export function buildMobileGatewayWsUrl(path, params = {}) {
 
 async function mfetch(path, opts = {}) {
   _assertMobileRequestTarget();
+  const method = String(opts.method || 'GET').trim().toUpperCase() || 'GET';
+  const canRetryGatewayRestart = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+  const gatewayRestartAttempt = Math.max(0, Math.floor(Number(opts._gatewayRestartAttempt || 0) || 0));
   const token = _mobileRequestToken();
   const headers = new Headers(opts.headers || {});
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
@@ -161,7 +164,7 @@ async function mfetch(path, opts = {}) {
     else parentSignal.addEventListener('abort', onParentAbort, { once: true });
   }
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const { timeoutMs: _timeoutMs, signal: _signal, ...fetchOpts } = opts;
+  const { timeoutMs: _timeoutMs, signal: _signal, _gatewayRestartAttempt: _restartAttempt, ...fetchOpts } = opts;
   let res;
   try {
     res = await fetch(_buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
@@ -173,6 +176,14 @@ async function mfetch(path, opts = {}) {
       : (err?.message || 'Gateway request failed.'));
     out.cause = err;
     out.retryable = true;
+    // During an Electron worker replacement the stable relay should normally
+    // return a visible 503. A mobile browser can still surface a transient
+    // network/CORS error while its prior preflight is being refreshed, so
+    // retry only safe reads and never replay a chat/tool mutation.
+    if (!parentSignal?.aborted && canRetryGatewayRestart && gatewayRestartAttempt < 8) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * (gatewayRestartAttempt + 1)));
+      return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1 });
+    }
     throw out;
   } finally {
     clearTimeout(timeout);
@@ -189,6 +200,16 @@ async function mfetch(path, opts = {}) {
   if (!res.ok) {
     const err = new Error(json?.error || `HTTP ${res.status}`);
     err.status = res.status; err.body = json;
+    const restarting = res.status === 503
+      && (json?.code === 'GATEWAY_RESTARTING' || res.headers.get('X-Prometheus-Gateway-State') === 'restarting');
+    if (restarting) {
+      err.code = 'GATEWAY_RESTARTING';
+      err.retryable = true;
+      if (!parentSignal?.aborted && canRetryGatewayRestart && gatewayRestartAttempt < 8) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * (gatewayRestartAttempt + 1)));
+        return mfetch(path, { ...opts, _gatewayRestartAttempt: gatewayRestartAttempt + 1 });
+      }
+    }
     throw err;
   }
   return json;
@@ -1928,6 +1949,7 @@ export async function updateMobileChatSessionHistory(sessionId, history = [], op
         surface: 'mobile_app',
         device: 'phone',
         source: 'mobile_history_sync',
+        ...(String(options.originReason || '').trim() ? { reason: String(options.originReason).trim() } : {}),
       },
     }),
   });

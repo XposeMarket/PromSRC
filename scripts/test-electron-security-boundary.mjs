@@ -67,6 +67,7 @@ const cliSource = fs.readFileSync(path.join(root, 'src', 'cli', 'index.ts'), 'ut
 const telegramSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'comms', 'telegram-channel.ts'), 'utf8');
 const settingsRouterSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'settings.router.ts'), 'utf8');
 const serverSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'server-v2.ts'), 'utf8');
+const gatewayPortSource = fs.readFileSync(path.join(root, 'src', 'config', 'gateway-port.ts'), 'utf8');
 const selfUpdateSource = fs.readFileSync(path.join(root, 'src', 'tools', 'self-update.ts'), 'utf8');
 const canonicalUpdaterSource = fs.readFileSync(path.join(root, 'src', 'update', 'canonical-updater.ts'), 'utf8');
 const publicBuilderSource = fs.readFileSync(path.join(root, 'electron-builder-public.yml'), 'utf8');
@@ -104,8 +105,13 @@ assert.deepEqual(
 assert.doesNotMatch(mainSource, /url\.startsWith\(GATEWAY_URL\)/);
 assert.doesNotMatch(mainSource, /killPortIfInUse/);
 assert.match(mainSource, /selectGatewayPort\(\)/);
+assert.match(mainSource, /GATEWAY_PORT_STATE_FILE/);
+assert.match(mainSource, /selectAvailableGatewayPort\(\)/);
+assert.match(mainSource, /synchronizeTailscaleFunnelTarget\(\)/);
+assert.match(mainSource, /\['funnel', '--bg', `--https=\$\{funnel\.httpsPort\}`, String\(gatewayPort\)\]/);
 assert.match(mainSource, /assertGatewayPortAvailable\(gatewayPort\)/);
 assert.match(mainSource, /PROMETHEUS_GATEWAY_PORT/);
+assert.match(gatewayPortSource, /return getRuntimeGatewayPort\(\) \|\| configured \|\| DEFAULT_GATEWAY_PORT/);
 assert.equal((mainSource.match(/ipcMain\.handle\(/g) || []).length, 1, 'all privileged invoke handlers must register through handleTrustedMain');
 for (const channel of ['get-app-version', 'external-link:open', 'select-canvas-paths', 'native-browser:navigate', 'native-browser:teach-capture', 'updater:check', 'updater:download', 'updater:set-auto-update', 'updater:install']) {
   assert.match(mainSource, new RegExp(`handleTrustedMain\\('${channel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));

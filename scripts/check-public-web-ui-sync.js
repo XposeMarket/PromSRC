@@ -3,6 +3,7 @@
 const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const esbuild = require('esbuild');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_WEB_UI = path.join(ROOT, 'web-ui');
@@ -188,6 +189,30 @@ function verifyRelativeImports(filePath) {
 }
 
 function verifyJavaScriptSyntax(filePath) {
+  const source = fs.readFileSync(filePath, 'utf8');
+  try {
+    // `node --check` can accept a module graph that Chromium later rejects
+    // before any mobile UI mounts. Parse source through esbuild as a browser
+    // ES module too, so the static check uses a second, strict parser and
+    // reports an actionable source location.
+    esbuild.transformSync(source, {
+      loader: 'js',
+      format: 'esm',
+      target: 'chrome100',
+      sourcefile: toPosix(path.relative(ROOT, filePath)),
+    });
+  } catch (error) {
+    const details = Array.isArray(error?.errors) && error.errors.length
+      ? error.errors.map((entry) => {
+        const loc = entry.location ? `:${entry.location.line}:${entry.location.column}` : '';
+        return `${entry.text || String(entry)}${loc}`;
+      }).join('\n')
+      : String(error?.message || error);
+    fail(
+      `Browser module syntax check failed for ${toPosix(path.relative(ROOT, filePath))}\n${details}`,
+    );
+  }
+
   const result = childProcess.spawnSync(process.execPath, ['--check', filePath], {
     cwd: ROOT,
     encoding: 'utf8',

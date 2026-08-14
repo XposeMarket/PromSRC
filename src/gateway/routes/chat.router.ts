@@ -10817,6 +10817,10 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     recoveryData.origin || { channel: runtime.source || 'system', surface: 'restart_recovery', device: 'server' },
     sessionId,
   );
+  const priorRecoveryAttempts = Number(recoveryData.restartRecoveryAttempts || 0);
+  const restartRecoveryAttempts = Number.isFinite(priorRecoveryAttempts) && priorRecoveryAttempts > 0
+    ? Math.floor(priorRecoveryAttempts) + 1
+    : 1;
   const abortController = new AbortController();
   const abortSignal = { aborted: false, signal: abortController.signal };
   const runtimeId = registerLiveRuntime({
@@ -10832,6 +10836,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     recoveryData: {
       ...recoveryData,
       recoveredFromRuntimeId: runtime.id,
+      restartRecoveryAttempts,
       restartRecoveryAttemptedAt: Date.now(),
     },
   });
@@ -21852,7 +21857,10 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
     const history = mergeHistoryWithExistingMessageMetadata(existingHistory, rawHistory, {
       preserveAllExisting: isMobileHistorySyncRequest(req),
     });
-    replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
+    replaceHistory(id, history as any, {
+      resetCompaction: req.body?.resetCompaction === true,
+      historyChangeSource: isMobileVisualStateSyncRequest(req) ? 'mobile_visual_state' : 'replace_history',
+    });
     flushSession(id);
     res.json({ success: true });
   } catch (e: any) {
@@ -21866,6 +21874,11 @@ function isMobileHistorySyncRequest(req: express.Request): boolean {
   return !!req.headers['x-pairing-token']
     || String(origin?.channel || '').toLowerCase() === 'mobile'
     || String(origin?.surface || '').toLowerCase() === 'mobile_app';
+}
+
+function isMobileVisualStateSyncRequest(req: express.Request): boolean {
+  return isMobileHistorySyncRequest(req)
+    && String(req.body?.origin?.reason || '').toLowerCase() === 'visual_state';
 }
 
 function timelineHistoryMessages(history: any[]): any[] {

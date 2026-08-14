@@ -202,6 +202,20 @@ async function run() {
   assert.equal(request.options.headers.get('X-Pairing-Token'), 'mac-token');
   assert.equal(new URL(request.url).search, '', 'target credentials never enter the URL');
 
+  // Electron's stable relay reports a bounded backend replacement as a
+  // retryable restart window, not as a generic offline gateway failure.
+  ctx.fetch = async () => ({
+    ok: false,
+    status: 503,
+    headers: new Headers({ 'X-Prometheus-Gateway-State': 'restarting' }),
+    text: async () => JSON.stringify({ code: 'GATEWAY_RESTARTING', error: 'Prometheus gateway is restarting.' }),
+  });
+  await assert.rejects(
+    () => c.gatewayFetchJson(mac.gatewayId, '/api/gateway/descriptor'),
+    (error) => error.code === 'GATEWAY_RESTARTING' && error.retryable === true,
+    'the mobile catalog must retain restart-aware error identity',
+  );
+
   // Session aggregation is liveness-gated, not merely catalog-filtered. Both
   // independent targets can expose the same local session id without a
   // collision while they are live.

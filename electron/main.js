@@ -32,6 +32,7 @@ const http       = require('http');
 const net        = require('net');
 const fs         = require('fs');
 const crypto     = require('crypto');
+const { createGatewayReverseProxy } = require('./gateway-reverse-proxy');
 const {
   isLocalGatewayUrl,
   isTrustedRendererUrl,
@@ -48,7 +49,6 @@ const {
 } = require('./chrome-profile');
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const DEFAULT_GATEWAY_PORT = 18789;
 function parseGatewayPort(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : null;
@@ -56,8 +56,16 @@ function parseGatewayPort(value) {
 const requestedGatewayPort = parseGatewayPort(
   process.env.PROMETHEUS_GATEWAY_PORT || process.env.GATEWAY_PORT,
 );
-let gatewayPort = requestedGatewayPort || DEFAULT_GATEWAY_PORT;
-let GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+// A caller can pin a port for a separately managed Electron instance. Normal
+// desktop launches select an available port below and keep it stable in their
+// own profile rather than depending on the historic 18789 default.
+let gatewayPort = requestedGatewayPort;
+let GATEWAY_URL = `http://127.0.0.1:${gatewayPort || 0}`;
+// Electron holds gatewayPort for its entire lifetime. The gateway child uses a
+// private loopback port so it can be replaced without making Tailscale Funnel
+// lose the public listener that paired mobile devices know.
+let gatewayBackendPort = null;
+let gatewayRelay = null;
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(
@@ -147,6 +155,10 @@ const SETUP_STAMP_FILE = path.join(USER_DATA_DIR, '.setup-complete');
 const CURRENT_VERSION  = require('../package.json').version;
 const UPDATER_SETTINGS_FILE = path.join(USER_DATA_DIR, 'updater-settings.json');
 const CANONICAL_UPDATE_CONFIG_DIR = path.join(USER_DATA_DIR, '.prometheus');
+const GATEWAY_PORT_STATE_FILE = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'electron-gateway-port.json');
+const AUTO_GATEWAY_PORT_MIN = 20_000;
+const AUTO_GATEWAY_PORT_MAX = 45_000;
+const AUTO_GATEWAY_PORT_ATTEMPTS = 512;
 
 // The shared updater protocol is compiled into dist for packaged builds. A
 // missing module is a fail-safe condition: the app can run, but it cannot
@@ -822,10 +834,11 @@ function sleep(ms) {
 }
 
 // ─── Port selection ─────────────────────────────────────────────────────────
-// A desktop process must not silently move to another port: its persistent
-// state directory is intentionally shared with the gateway it starts. Doing so
-// would create a second gateway with clashing heartbeat/lease files. Multiple
-// desktop instances should use separate PROMETHEUS_ELECTRON_DATA_DIR values.
+// Electron owns the public relay for its lifetime. The relay port is selected
+// once per Electron profile, persisted, and deliberately kept across worker
+// restarts; the child gateway uses a separate loopback backend port. A second
+// Electron profile can set PROMETHEUS_ELECTRON_DATA_DIR and receive its own
+// public relay port without clashing with this instance.
 function isGatewayPortAvailable(port) {
   return new Promise((resolve) => {
     const probe = net.createServer();
@@ -842,7 +855,53 @@ function isGatewayPortAvailable(port) {
   });
 }
 
+function readPersistedGatewayPort() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(GATEWAY_PORT_STATE_FILE, 'utf8'));
+    return parseGatewayPort(parsed?.port);
+  } catch {
+    return null;
+  }
+}
+
+function persistGatewayPort(port) {
+  try {
+    fs.mkdirSync(path.dirname(GATEWAY_PORT_STATE_FILE), { recursive: true });
+    const temporaryPath = `${GATEWAY_PORT_STATE_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporaryPath, `${JSON.stringify({ port, updatedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+    fs.renameSync(temporaryPath, GATEWAY_PORT_STATE_FILE);
+  } catch (error) {
+    writeGatewayLog(`[main] Could not persist selected gateway relay port: ${error?.message || error}\n`);
+  }
+}
+
+async function selectAvailableGatewayPort() {
+  const persistedPort = readPersistedGatewayPort();
+  if (persistedPort && await isGatewayPortAvailable(persistedPort)) {
+    writeGatewayLog(`[main] Reusing persisted gateway relay port ${persistedPort}\n`);
+    return persistedPort;
+  }
+  if (persistedPort) {
+    writeGatewayLog(`[main] Persisted gateway relay port ${persistedPort} is unavailable; selecting a replacement\n`);
+  }
+
+  const span = AUTO_GATEWAY_PORT_MAX - AUTO_GATEWAY_PORT_MIN + 1;
+  const startingOffset = crypto.randomInt(span);
+  for (let attempt = 0; attempt < AUTO_GATEWAY_PORT_ATTEMPTS; attempt += 1) {
+    const candidate = AUTO_GATEWAY_PORT_MIN + ((startingOffset + attempt) % span);
+    if (await isGatewayPortAvailable(candidate)) return candidate;
+  }
+  throw new Error('Prometheus could not find an available local relay port. Set PROMETHEUS_GATEWAY_PORT to an unused port and restart.');
+}
+
 async function selectGatewayPort() {
+  if (!gatewayPort) {
+    gatewayPort = await selectAvailableGatewayPort();
+    persistGatewayPort(gatewayPort);
+    writeGatewayLog(`[main] Selected gateway relay port ${gatewayPort}\n`);
+  }
+  GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+  if (gatewayRelay?.server?.listening) return;
   if (!(await isGatewayPortAvailable(gatewayPort))) {
     assertGatewayPortAvailable(gatewayPort);
     throw new Error(
@@ -850,7 +909,103 @@ async function selectGatewayPort() {
       'Close the existing Prometheus/gateway instance or launch this instance with a separate PROMETHEUS_ELECTRON_DATA_DIR.',
     );
   }
-  GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+}
+
+function getConfiguredTailscaleFunnel() {
+  try {
+    const configPath = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const remoteAccess = config?.gateway?.remoteAccess;
+    if (!remoteAccess?.enabled || typeof remoteAccess.publicUrl !== 'string') return null;
+    const publicUrl = new URL(remoteAccess.publicUrl.trim());
+    if (publicUrl.protocol !== 'https:' || !publicUrl.hostname.endsWith('.ts.net')) return null;
+    const httpsPort = Number(publicUrl.port || 443);
+    if (!Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65_535) return null;
+    return { httpsPort, publicUrl: publicUrl.origin };
+  } catch {
+    return null;
+  }
+}
+
+// Funnel's public URL is stable; only its local target must follow a relay
+// port selected for this Electron profile. Do this after the relay is bound so
+// there is no gap where Funnel forwards requests to a closed local listener.
+function synchronizeTailscaleFunnelTarget() {
+  const funnel = getConfiguredTailscaleFunnel();
+  if (!funnel) return;
+  try {
+    execFileSync('tailscale', ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      windowsHide: true,
+      timeout: 12_000,
+    });
+    writeGatewayLog(`[main] Tailscale Funnel ${funnel.publicUrl} now targets local relay ${gatewayPort}\n`);
+  } catch (error) {
+    writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort}: ${error?.message || error}\n`);
+  }
+}
+
+async function selectGatewayBackendPort() {
+  if (gatewayBackendPort != null) {
+    if (await isGatewayPortAvailable(gatewayBackendPort)) return gatewayBackendPort;
+    throw new Error(
+      `Prometheus gateway backend port ${gatewayBackendPort} is still in use after the previous worker stopped. ` +
+      'Wait for the previous worker to exit, then restart Prometheus.',
+    );
+  }
+
+  // Keep the public port and potential built-in HTTPS listener out of the
+  // backend range. The backend is selected once per Electron lifetime and is
+  // retained for every worker replacement.
+  const configuredHttpsPort = getConfiguredGatewayHttpsPort();
+  for (let offset = 1; offset <= 512; offset += 1) {
+    const candidate = gatewayPort + offset;
+    if (candidate > 65_535 || candidate === configuredHttpsPort) continue;
+    if (await isGatewayPortAvailable(candidate)) {
+      gatewayBackendPort = candidate;
+      return gatewayBackendPort;
+    }
+  }
+  throw new Error(`Prometheus could not reserve a private backend port near ${gatewayPort}.`);
+}
+
+function getConfiguredGatewayHttpsPort() {
+  const enabledByEnvironment = ['1', 'true'].includes(String(process.env.GATEWAY_HTTPS_ENABLED || '').trim().toLowerCase());
+  try {
+    const configPath = path.join(USER_DATA_DIR, '.prometheus', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const https = config?.gateway?.https || {};
+    const enabled = https.enabled === true || enabledByEnvironment;
+    if (!enabled) return 0;
+    const port = Number(https.port || process.env.GATEWAY_HTTPS_PORT || 18790);
+    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
+  } catch {
+    if (!enabledByEnvironment) return 0;
+    const port = Number(process.env.GATEWAY_HTTPS_PORT || 18790);
+    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
+  }
+}
+
+async function startGatewayRelay() {
+  if (gatewayRelay?.server?.listening) return;
+  if (!(await isGatewayPortAvailable(gatewayPort))) {
+    assertGatewayPortAvailable(gatewayPort);
+    throw new Error(`Prometheus cannot start the stable gateway relay because port ${gatewayPort} is already in use.`);
+  }
+  const relay = createGatewayReverseProxy({
+    port: gatewayPort,
+    getTargetPort: () => gatewayBackendPort,
+    log: writeGatewayLog,
+  });
+  try {
+    await relay.listen();
+    gatewayRelay = relay;
+    writeGatewayLog(`[main] Stable gateway relay listening on ${gatewayPort}\n`);
+  } catch (error) {
+    try { await relay.close(); } catch {}
+    throw error;
+  }
 }
 
 // Preserve the detailed Windows owner message for explicitly requested ports.
@@ -888,10 +1043,10 @@ function getGatewayPortOwnerPids(port = gatewayPort) {
 // Only clean listeners whose runtime status still identifies the gateway that
 // Electron just owned. This prevents a restart race from killing an unrelated
 // process that happened to claim the same port after the old child exited.
-function forceCleanupOwnedGatewayPort(expectedPid) {
+function forceCleanupOwnedGatewayPort(expectedPid, port = gatewayBackendPort || gatewayPort) {
   const status = readGatewayRuntimeStatus();
   if (Number(status?.pid || 0) !== Number(expectedPid || 0)) return;
-  for (const pid of getGatewayPortOwnerPids()) {
+  for (const pid of getGatewayPortOwnerPids(port)) {
     if (!pid || pid === process.pid) continue;
     try {
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'pipe', timeout: 8_000 });
@@ -1501,8 +1656,10 @@ async function startGateway() {
   writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
   await selectGatewayPort();
-  assertGatewayPortAvailable(gatewayPort);
-  writeGatewayLog(`[main] Gateway selected port ${gatewayPort} (${GATEWAY_URL})\n`);
+  await startGatewayRelay();
+  synchronizeTailscaleFunnelTarget();
+  await selectGatewayBackendPort();
+  writeGatewayLog(`[main] Gateway public port ${gatewayPort} (${GATEWAY_URL}); private backend ${gatewayBackendPort}\n`);
 
   // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
   const bundledSkillsDir = IS_PACKAGED_RUNTIME
@@ -1520,7 +1677,13 @@ async function startGateway() {
     PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
     PROMETHEUS_APP_ROOT:          APP_ROOT,
     PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
+    // The public port remains the gateway identity used by pairing, lifecycle
+    // restarts, Electron navigation, and Tailscale Funnel. Only the HTTP
+    // listener itself moves behind Electron's stable relay.
     PROMETHEUS_GATEWAY_PORT:      String(gatewayPort),
+    PROMETHEUS_GATEWAY_PUBLIC_PORT: String(gatewayPort),
+    PROMETHEUS_GATEWAY_INTERNAL_PORT: String(gatewayBackendPort),
+    PROMETHEUS_GATEWAY_INTERNAL_HOST: '127.0.0.1',
     PROMETHEUS_VERSION:            CURRENT_VERSION,
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
@@ -1569,20 +1732,21 @@ async function startGateway() {
     });
   }
 
-  writeGatewayLog(`[main] Gateway spawned (pid=${gatewayProcess.pid})\n`);
+  const spawnedGatewayProcess = gatewayProcess;
+  writeGatewayLog(`[main] Gateway spawned (pid=${spawnedGatewayProcess.pid}, backend=${gatewayBackendPort})\n`);
 
   // Hand off the master key (or an empty sentinel) as the first stdin line. The
   // child's vault-key-bootstrap reads exactly one line, then stdin is left open.
   try {
-    gatewayProcess.stdin?.write((vaultKeyHex || '') + '\n');
+    spawnedGatewayProcess.stdin?.write((vaultKeyHex || '') + '\n');
   } catch (err) {
     writeGatewayLog(`[main] Vault key handoff write failed: ${err && err.message ? err.message : err}\n`);
   }
 
-  gatewayProcess.stdout?.on('data', (d) => writeGatewayLog(d));
-  gatewayProcess.stderr?.on('data', (d) => writeGatewayLog(d));
+  spawnedGatewayProcess.stdout?.on('data', (d) => writeGatewayLog(d));
+  spawnedGatewayProcess.stderr?.on('data', (d) => writeGatewayLog(d));
 
-  gatewayProcess.on('error', (err) => {
+  spawnedGatewayProcess.on('error', (err) => {
     writeGatewayLog(`[main] Spawn error: ${err.message}\n`);
     if (!isQuitting) {
       dialog.showErrorBox(
@@ -1593,12 +1757,12 @@ async function startGateway() {
     }
   });
 
-  gatewayProcess.on('exit', (code, signal) => {
+  spawnedGatewayProcess.on('exit', (code, signal) => {
     writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
     // A timed-out restart may have terminated the gateway before its worker
     // descendants released the listener. Clean only the old Electron-owned
     // port before attempting the replacement.
-    forceCleanupOwnedGatewayPort(gatewayProcess?.pid || 0);
+    forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0);
     if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
       restartGatewayFromElectron({
@@ -1682,8 +1846,20 @@ function waitForGateway(retries = MAX_RETRIES) {
       if (settled) return;
       http.get(GATEWAY_URL, (res) => {
         res.resume();
-        if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
-        done(resolve);
+        const ready = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
+        if (ready) {
+          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
+          done(resolve);
+          return;
+        }
+        if (retries-- > 0) {
+          setTimeout(attempt, RETRY_DELAY);
+        } else {
+          if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
+          done(() => reject(new Error(
+            `Gateway did not become ready at ${GATEWAY_URL} after ${(MAX_RETRIES * RETRY_DELAY) / 1000}s`
+          )));
+        }
       }).on('error', () => {
         if (settled) return;
         if (retries-- > 0) {

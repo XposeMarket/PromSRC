@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+} from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   applyMobileDraftModelRouteToSession,
@@ -19,7 +19,6 @@ import { formatModelWithReasoning } from '../model-display.js';
 import {
   backgroundAgentAgeLabel,
   backgroundAgentPreview,
-  backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   persistBackgroundAgentWork,
@@ -58,7 +57,7 @@ import {
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
- } from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+ } from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import {
   getGateway,
   loadGatewayCatalog,
@@ -79,7 +78,7 @@ import {
   setPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { getAccount } from '../auth/account.js';
-import { renderMd } from '../utils.js';
+import { renderMd, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
@@ -1861,7 +1860,7 @@ function _persistMobileVisualArtifactState(visualId, state) {
   if (prior) clearTimeout(prior);
   _mobileVisualStateSyncTimers.set(sid, setTimeout(() => {
     _mobileVisualStateSyncTimers.delete(sid);
-    updateMobileChatSessionHistory(sid, _mobileHistoryForServer(thread)).catch(() => {});
+    updateMobileChatSessionHistory(sid, _mobileHistoryForServer(thread), { originReason: 'visual_state' }).catch(() => {});
   }, 450));
 }
 
@@ -3052,7 +3051,7 @@ function _isMobileProgressNarration(value) {
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
 }
 
-function _setMobileLiveProgressNarration(message, text) {
+function _setMobileLiveProgressNarration(message, text, { replace = false } = {}) {
   if (!message) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -3066,8 +3065,12 @@ function _setMobileLiveProgressNarration(message, text) {
     });
     return true;
   }
-  const merged = _dedupeMobileTraceProseText(_appendMobileStreamingText(existing.text || '', incoming));
-  const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
+  const merged = replace
+    ? incoming.trim()
+    : _dedupeMobileTraceProseText(_appendMobileStreamingText(existing.text || '', incoming));
+  const latest = replace
+    ? merged
+    : (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged);
   if (!latest || latest === String(existing.text || '').trim()) return false;
   existing.text = latest;
   existing.time = _nowTime();
@@ -3079,22 +3082,36 @@ function _shouldAppendMobileReasoningSummary(message, chunk) {
   if (!message || !incoming) return false;
   const last = [...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [])]
     .reverse()
-    .find((entry) => String(entry?.extra?.source || '').toLowerCase() === 'reasoning_summary');
+    .find((entry) => String(entry?.type || '').toLowerCase() === 'reasoning_summary');
   if (!last) return false;
   const previous = String(last.text || '').trim();
   const next = incoming.trimStart();
-  if (!previous || !next || /[.!?:]\s*$/.test(previous)) return false;
-  // A lowercase/whitespace-led piece is a transport continuation. A new
-  // capitalized action or sentence is a new reasoning update and must remain
-  // a separate, stable paragraph.
-  return /^\s/.test(incoming) || /^[a-z0-9,.;:)}\]]/.test(next);
+  if (!previous || !next) return false;
+  // Keep transport-sized deltas together, but start a new durable summary
+  // paragraph when the provider has finished the previous thought.
+  return !/[.!?:]\s*$/.test(previous)
+    && (/^\s/.test(incoming) || /^[a-z0-9,'"’”\-—.;:!?)}\]]/.test(next));
 }
 
 function _appendMobileReasoningSummary(message, chunk) {
-  _appendMobileLiveTrace(message, 'think', chunk, {
-    append: _shouldAppendMobileReasoningSummary(message, chunk),
-    extra: { visibility: 'user', source: 'reasoning_summary' },
+  const incoming = String(chunk || '');
+  if (!message || !incoming) return false;
+  const previous = [...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [])]
+    .reverse()
+    .find((entry) => String(entry?.type || '').toLowerCase() === 'reasoning_summary');
+  const previousText = String(previous?.text || '').trim();
+  const incomingText = incoming.trim();
+  if (previous && incomingText.length > previousText.length && incomingText.startsWith(previousText)) {
+    previous.text = incomingText;
+    previous.time = _nowTime();
+    return true;
+  }
+  if (previous && _mobileTraceThoughtTextsSimilar(previousText, incomingText)) return false;
+  _appendMobileLiveTrace(message, 'reasoning_summary', incoming, {
+    append: _shouldAppendMobileReasoningSummary(message, incoming),
+    extra: { visibility: 'summary', source: 'reasoning_summary' },
   });
+  return true;
 }
 
 function _handleMobileThinkingDelta(message, evt) {
@@ -3104,7 +3121,11 @@ function _handleMobileThinkingDelta(message, evt) {
   message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
   // Only reasoning summaries stream live (desktop parity). Raw chain-of-thought stays buffered.
   if (String(evt?.source || '').toLowerCase() === 'reasoning_summary') {
-    if (_isMobileProgressNarration(chunk)) return _setMobileLiveProgressNarration(message, chunk);
+    // `reasoning_summary` is already an explicit user-safe progress channel.
+    // Keep it in the single replaceable tool-stream status slot even when the
+    // prose does not start with one of the action verbs in
+    // `_isMobileProgressNarration`.
+    _setMobileLiveProgressNarration(message, chunk);
     _appendMobileReasoningSummary(message, chunk);
   }
   return true;
@@ -3114,7 +3135,10 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
   if (!message) return false;
   const chunk = String(evt?.text || evt?.summary || '');
   if (!chunk) return false;
-  if (_isMobileProgressNarration(chunk)) return _setMobileLiveProgressNarration(message, chunk);
+  // This event type is the authoritative, user-visible reasoning summary.
+  // It must update the collapsible tool-stream label rather than becoming a
+  // second standalone thought card.
+  _setMobileLiveProgressNarration(message, chunk);
   _appendMobileReasoningSummary(message, chunk);
   return true;
 }
@@ -3127,7 +3151,7 @@ function _handleMobileCleanThought(message, evt) {
   // "planning" and "preparing"), not standalone reasoning prose. Keep the
   // latest one only as the collapsed live tool-stream label.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
-  return _setMobileLiveProgressNarration(message, text);
+  return _setMobileLiveProgressNarration(message, text, { replace: true });
 }
 
 function _handleMobileThinkingCallback(message, text, meta = null) {
@@ -3759,7 +3783,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
-    if (!text || (type !== 'preamble' && type !== 'think')) continue;
+    if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
@@ -3786,7 +3810,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
     const text = (type === 'preamble' || type === 'think' || type === 'assistant')
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
-    if (!text || (type !== 'preamble' && type !== 'think')) continue;
+    if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
     const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
@@ -4166,6 +4190,10 @@ function _isMobileTraceThoughtType(type) {
   return value === 'preamble' || value === 'think' || value === 'assistant';
 }
 
+function _isMobileTraceReasoningSummaryType(type) {
+  return String(type || '').toLowerCase() === 'reasoning_summary';
+}
+
 function _isMobileUserVisibleReasoningTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   if (type === 'preamble' || type === 'assistant') return true;
@@ -4277,7 +4305,7 @@ function _renderMobileLiveTraceEntry(entry) {
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.time || entry.ts || '')}`).trim();
   const attr = entryId ? ` data-pm-live-entry-id="${escapeHtml(entryId)}"` : '';
   const previewHtml = _renderMobileLiveTracePreview(entry);
-  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+  if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
     return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
   }
   const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
@@ -4316,6 +4344,11 @@ function _isMobilePreparedTraceEntry(entry) {
 
 function _mobileVisibleTraceEntries(entries) {
   const thoughtTexts = [];
+  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const replaceableProgressTexts = sourceEntries
+    .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
+    .map((entry) => String(entry?.text || entry?.content || '').trim())
+    .filter(Boolean);
   return coalesceToolActivityEntries(entries).filter((entry) => {
     if (_isMobileImageGenerationStreamEntry(entry)) return false;
     if (_isMobilePreparedTraceEntry(entry)) return false;
@@ -4325,6 +4358,14 @@ function _mobileVisibleTraceEntries(entries) {
     if (!hasContent) return false;
     const type = String(entry?.type || '').toLowerCase();
     if (_isMobileTraceThoughtType(type)) {
+      // Older/replayed frames could leave the same explicit summary in a
+      // visible think row after the progress slot was created. The summary
+      // slot is authoritative; suppress that stale duplicate so the tool
+      // stream does not grow a second reasoning card.
+      if (replaceableProgressTexts.length
+        && type === 'think'
+        && String(entry?.extra?.source || '').toLowerCase() === 'reasoning_summary'
+        && replaceableProgressTexts.some((progressText) => _mobileTraceThoughtTextsSimilar(entry?.text || '', progressText))) return false;
       if (!_isMobileUserVisibleReasoningTraceEntry(entry)) return false;
       const text = _dedupeMobileTraceProseText(entry?.text || '');
       if (text) {
@@ -4353,14 +4394,8 @@ function _mobileTraceProgressSummary(entries) {
       .replace(/\s+/g, ' ')
       .trim();
     if (!text) continue;
-    const duplicatesVisibleReasoning = source.some((candidate) => {
-      if (!_isMobileUserVisibleReasoningTraceEntry(candidate)) return false;
-      return _mobileTraceThoughtTextsSimilar(candidate?.text || candidate?.content || '', text);
-    });
-    // A number of providers emit the same update once as a visible reasoning
-    // summary and once as an agent-thought status. Keep the reasoning text in
-    // place, but make the collapsed tool row a non-duplicating state label.
-    if (duplicatesVisibleReasoning) return 'Reasoning';
+    // The progress slot is the source of truth for the collapsed label. Keep
+    // its actual text instead of falling back to a generic "Reasoning" label.
     return text.slice(0, 220);
   }
   return '';
@@ -4751,7 +4786,8 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
     const summaryKey = _mobileTraceSummaryKey(summary);
     const visibleEntries = _mobileVisibleTraceEntries(group.entries);
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const itemCount = callCount || visibleEntries.length;
+    const nonReasoningEntries = visibleEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
+    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
     const itemLabel = callCount ? 'call' : 'item';
     const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
     return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
@@ -5369,6 +5405,11 @@ if (typeof window !== 'undefined' && !window.__pmMobileSessionHistoryBridgeInsta
     const sid = String(msg.sessionId || '').trim();
     if (!sid) return;
     invalidateMobileChatSessionCache(sid);
+    // The visual iframe already owns the latest local state. Its debounced
+    // history persistence is acknowledged by the gateway, but must not cause
+    // this client to fetch and rebuild the entire chat thread while the user
+    // is dragging a control or interacting with the visual.
+    if (String(msg.source || '').toLowerCase() === 'mobile_visual_state') return;
     if (String(__pmChat.activeSessionId || '').trim() === sid) {
       _scheduleMobileSessionFreshnessRefresh(sid);
     }
@@ -8588,11 +8629,11 @@ function _renderThread(threadEl, sessionKey = '') {
       return _isMobileHiddenVoiceDraftMessage(msg, index) ? '' : _renderChatMessageHtml(msg, index);
     })
     .join('');
-  threadEl.innerHTML = (olderMessagesControl + renderedMessages) || (
+  setInnerHTMLPreservingVisuals(threadEl, (olderMessagesControl + renderedMessages) || (
     sid === MOBILE_CHAT_SESSION_ID
       ? _renderMobileEmptyChatStarterCards()
       : ''
-  );
+  ));
   _syncMobileQuestionComposerPopover(sid, questionDrafts);
   try {
     threadEl.querySelectorAll('img[src]').forEach((node) => {
@@ -8803,7 +8844,14 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     && currentEl.tagName === nextEl.tagName
     && currentClass === nextClass;
   if (!sameMessageShell) {
-    currentEl.replaceWith(nextEl);
+    if (currentEl.tagName === nextEl.tagName) {
+      currentEl.className = nextClass;
+      if (nextStreaming) currentEl.setAttribute('data-streaming', '1');
+      else currentEl.removeAttribute('data-streaming');
+      setInnerHTMLPreservingVisuals(currentEl, nextEl.innerHTML);
+    } else {
+      currentEl.replaceWith(nextEl);
+    }
   } else {
     if (nextStreaming) currentEl.setAttribute('data-streaming', '1');
     else currentEl.removeAttribute('data-streaming');
@@ -8880,7 +8928,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         };
       });
     } catch {}
-    currentBubble.innerHTML = nextBubble.innerHTML;
+    setInnerHTMLPreservingVisuals(currentBubble, nextBubble.innerHTML);
     try {
       const nextLiveTraceTimeline = currentBubble.querySelector('.pm-trace-timeline');
       if (stableLiveTraceTimeline && nextLiveTraceTimeline && _patchMobileLiveTraceTimeline(stableLiveTraceTimeline, nextLiveTraceTimeline)) {
@@ -12203,8 +12251,13 @@ void main() {
       // ~1 frame/sec across the clip (12s cap → up to 12 frames) so the voice
       // agent gets a temporal sequence it can "watch".
       const sampled = await extractCameraVideoFrames(blob, { maxFrames: 12, quality: 0.72 });
-      stopCameraCapture();
-      await onVideoCapture({ file, blob, mimeType: type, ...sampled });
+      try {
+        await onVideoCapture({ file, blob, mimeType: type, ...sampled });
+      } finally {
+        // Let the voice callback enqueue/inject the sampled frames before the
+        // camera teardown clears the live-camera reader and response state.
+        stopCameraCapture();
+      }
       pmToast('Video frames sent to voice.', 'success');
       return;
     }
@@ -12526,6 +12579,9 @@ void main() {
   }
 
   function stopVoiceCameraFrameCache() {
+    const restoreRealtimeResponseCreation = __pmRealtimeAgent?.liveCameraFrameReader === voiceCameraLiveFrameReader
+      && (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening';
+    const restoreViaTurnGate = __pmRealtimeAgent?.liveCameraVision?.responseGateActive === true;
     if (voiceCameraFrameCacheTimer) clearInterval(voiceCameraFrameCacheTimer);
     voiceCameraFrameCacheTimer = null;
     voiceCameraFrameCache = null;
@@ -12539,6 +12595,7 @@ void main() {
     }
     voiceCameraLiveFrameReader = null;
     _stopMobileRealtimeLiveCameraVision('camera_closed');
+    if (restoreRealtimeResponseCreation && !restoreViaTurnGate) _sendMobileRealtimeAgentCreateResponseFlag(true);
     if (__pmRealtimeAgent?.autoCaptureCameraFrames === autoCaptureVoiceCameraFrames) {
       __pmRealtimeAgent.autoCaptureCameraFrames = null;
     }
@@ -12588,12 +12645,23 @@ void main() {
     const requestedAt = Date.now();
     const previous = voiceCameraFrameCacheRefreshPromise;
     if (previous) {
-      const existing = await previous.catch(() => null);
-      const existingCapturedAt = Number(existing?.capturedAt || 0) || 0;
-      // A turn-boundary request may await a cache refresh that started a few
-      // milliseconds earlier, but it must not accept an older timer result as
-      // the turn's frame when that refresh has already gone stale.
-      if (!force || existingCapturedAt >= requestedAt - 150) return existing;
+      let previousTimedOut = false;
+      const existing = await _awaitMobileRealtimeCameraOperation(
+        () => previous,
+        900,
+        () => { previousTimedOut = true; },
+      );
+      if (previousTimedOut) {
+        _voiceDebug('realtime-agent-live-camera-cache-refresh-timeout', { force });
+        // A stalled toBlob/FileReader must not poison every later turn-boundary
+        // refresh by leaving the old promise as the only cache source.
+      } else {
+        const existingCapturedAt = Number(existing?.capturedAt || 0) || 0;
+        // A turn-boundary request may await a cache refresh that started a few
+        // milliseconds earlier, but it must not accept an older timer result as
+        // the turn's frame when that refresh has already gone stale.
+        if (!force || existingCapturedAt >= requestedAt - 150) return existing;
+      }
     }
     // Live vision is sampled once per spoken second. Keep those frames lighter
     // than a user-captured photo. `toBlob`/FileReader keeps JPEG encoding off
@@ -12602,7 +12670,10 @@ void main() {
     const work = (async () => {
       let frame = null;
       for (let attempt = 0; attempt < (force ? 3 : 1); attempt++) {
-        frame = await readVoiceCameraFrameDataUrlAsync(768, 0.68);
+        frame = await _awaitMobileRealtimeCameraOperation(
+          () => readVoiceCameraFrameDataUrlAsync(768, 0.68),
+          force ? 500 : 800,
+        );
         if (frame?.dataUrl) break;
         if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 40));
       }
@@ -12645,6 +12716,12 @@ void main() {
     };
     __pmRealtimeAgent.liveCameraFrameReader = voiceCameraLiveFrameReader;
     __pmRealtimeAgent.liveCameraFrameAsyncReader = refreshVoiceCameraFrameCache;
+    // Disable server-VAD auto responses before the first camera turn reaches
+    // speech_stopped. Sending this at camera-open time closes the race where
+    // response.created arrives before the per-turn camera gate can be applied.
+    if ((__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening') {
+      _sendMobileRealtimeAgentCreateResponseFlag(false);
+    }
     refreshVoiceCameraFrameCache();
     voiceCameraFrameCacheTimer = setInterval(scheduleVoiceCameraFrameCacheRefresh, 1000);
   }
@@ -12753,8 +12830,13 @@ void main() {
       const target = String(cameraCaptureOptions?.target || 'chat');
       if (target === 'voice' && typeof cameraCaptureOptions?.onCapture === 'function') {
         const onCapture = cameraCaptureOptions.onCapture;
-        stopCameraCapture();
-        await onCapture(normalized, { file, dataUrl: normalized.dataUrl, blob });
+        try {
+          await onCapture(normalized, { file, dataUrl: normalized.dataUrl, blob });
+        } finally {
+          // The callback owns the voice delivery queue. Do not invalidate its
+          // connection/reader before the captured image has been staged.
+          stopCameraCapture();
+        }
       } else {
         getPendingAttachments().push(normalized);
         renderPendingAttachments();
@@ -13725,10 +13807,13 @@ void main() {
       startedAt: Number(lane.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
       completedAt: Number(lane.completedAt || lane.message?.workEndedAt || 0) || 0,
       updatedAt: Number(lane.updatedAt || Date.now()) || Date.now(),
-      result: String(lane.result || lane.message?.content || '').trim(),
+      // `result` belongs solely to the completed background run. Live token
+      // text remains on `message`, and tool results stay in processEntries.
+      result: String(lane.result || '').trim(),
       error: String(lane.error || '').trim(),
       fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
       events: processEntries,
+      message: lane.message || null,
     };
   }
 
@@ -13742,6 +13827,121 @@ void main() {
         actor: String(entry?.actor || name).trim() || name,
       }))
       .filter((entry) => entry.text);
+  }
+
+  function _mobileBackgroundAgentDetailMessage(record) {
+    const status = String(record?.status || 'running').toLowerCase();
+    const running = ['queued', 'running', 'in_progress'].includes(status);
+    const agentName = String(record?.agentName || 'Background agent');
+    const source = record?.message && typeof record.message === 'object' ? record.message : {};
+    const processEntries = Array.isArray(source.processEntries) && source.processEntries.length
+      ? source.processEntries
+      : _mobileBackgroundAgentDetailEvents(record);
+    const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
+    const finalText = String(record?.error || record?.result || '').trim();
+    const displayText = running ? sourceText : (finalText || sourceText);
+    const derivedTrace = _mobileWorkflowTraceEntriesForMessage({
+      ...source,
+      content: displayText,
+      body: { ...(source?.body || {}), text: displayText },
+      processEntries,
+      liveTraceEntries: [],
+    });
+    return {
+      ...source,
+      role: 'ai',
+      from: agentName,
+      fromLabel: agentName,
+      content: displayText,
+      body: { ...(source?.body || {}), sender: agentName, text: displayText },
+      processEntries,
+      liveTraceEntries: Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
+        ? source.liveTraceEntries
+        : derivedTrace,
+      streaming: running,
+      _done: !running,
+      _backgroundAgentLive: running,
+      workStartedAt: Number(source.workStartedAt || record?.startedAt || Date.now()) || Date.now(),
+      workEndedAt: running ? undefined : (Number(source.workEndedAt || record?.completedAt || Date.now()) || Date.now()),
+    };
+  }
+
+  let backgroundDetailPollTimer = null;
+  let backgroundDetailPollInFlight = false;
+
+  function stopMobileBackgroundAgentDetailRefresh() {
+    if (backgroundDetailPollTimer) clearInterval(backgroundDetailPollTimer);
+    backgroundDetailPollTimer = null;
+  }
+
+  function _mergeMobileBackgroundAgentSessionSnapshot(lane, session) {
+    if (!lane?.message || !session || typeof session !== 'object') return false;
+    const entries = (Array.isArray(session.processLog) ? session.processLog : [])
+      .map(_normalizeMobileProcessEntry)
+      .filter(Boolean);
+    let changed = false;
+    for (const entry of entries) {
+      const type = String(entry?.type || 'info').trim() || 'info';
+      const text = String(entry?.text || entry?.content || entry?.message || '').trim();
+      if (!text) continue;
+      const before = Array.isArray(lane.message.processEntries) ? lane.message.processEntries.length : 0;
+      _pushMobileStreamProcessEntry(lane.message, type, text, entry.extra || entry);
+      changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
+    }
+    const history = _mapServerHistoryToMobile(session.history || []);
+    const finalTurn = [...history].reverse().find((entry) => entry?.role === 'ai' && String(entry?.content || entry?.body?.text || '').trim());
+    const finalText = String(finalTurn?.content || finalTurn?.body?.text || '').trim();
+    const terminal = ['completed', 'failed'].includes(String(lane.status || '').toLowerCase());
+    if (terminal && finalText && !String(lane.result || lane.error || '').trim()) {
+      if (lane.status === 'failed') lane.error = finalText;
+      else lane.result = finalText;
+      changed = true;
+    }
+    if (changed) {
+      _mergeMobileWorkflowTraceFromProcessEntries(lane.message);
+      lane.updatedAt = Date.now();
+      persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+    }
+    return changed;
+  }
+
+  async function refreshMobileBackgroundAgentDetail(id) {
+    const cleanId = String(id || '').trim();
+    if (!cleanId || backgroundDetailPollInFlight) return;
+    const lane = _mobileBackgroundSpawnLanes()[cleanId];
+    if (!lane) return;
+    backgroundDetailPollInFlight = true;
+    try {
+      const [statusResponse, session] = await Promise.all([
+        loadMobileBackgroundStatus(cleanId).catch(() => null),
+        lane.bgSessionId
+          ? loadMobileChatSession(lane.bgSessionId, { force: true, historyLimit: 24, processLimit: 160, fullProcess: false }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const status = statusResponse?.status || statusResponse;
+      if (status) _applyMobileBackgroundSpawnStatus(status, requestedSession);
+      const refreshedLane = _mobileBackgroundSpawnLanes()[cleanId];
+      if (refreshedLane && session) _mergeMobileBackgroundAgentSessionSnapshot(refreshedLane, session);
+      const refreshedRecord = _mobileBackgroundAgentDetailRecord(cleanId);
+      if (refreshedRecord) {
+        _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+        if (sideState.backgroundAgentId === cleanId) renderMobileSideSheet();
+        if (!['queued', 'running', 'in_progress'].includes(String(refreshedRecord.status || '').toLowerCase())) {
+          stopMobileBackgroundAgentDetailRefresh();
+        }
+      }
+    } finally {
+      backgroundDetailPollInFlight = false;
+    }
+  }
+
+  function startMobileBackgroundAgentDetailRefresh(id) {
+    stopMobileBackgroundAgentDetailRefresh();
+    refreshMobileBackgroundAgentDetail(id).catch(() => {});
+    backgroundDetailPollTimer = setInterval(() => {
+      if (document.hidden || sideState.backgroundAgentId !== String(id || '').trim()) return;
+      refreshMobileBackgroundAgentDetail(id).catch(() => {});
+    }, 2200);
   }
 
   function openMobileBackgroundAgentDetail(id) {
@@ -13763,6 +13963,7 @@ void main() {
     sideSheet?.classList.add('open');
     sideSheet?.classList.add('background-agent-detail-mode');
     renderMobileSideSheet();
+    startMobileBackgroundAgentDetailRefresh(cleanId);
     resizeSideInput();
   }
 
@@ -13776,32 +13977,18 @@ void main() {
       const status = String(backgroundRecord.status || 'running').toLowerCase();
       const running = ['queued', 'running', 'in_progress'].includes(status);
       const agentName = String(backgroundRecord.agentName || 'Background agent');
-      const message = {
-        ...backgroundAgentRecordToMessage({
-          ...backgroundRecord,
-          events: _mobileBackgroundAgentDetailEvents(backgroundRecord),
-          agentName,
-        }),
-        fromLabel: agentName,
-        streaming: running,
-        _done: !running,
-      };
-      if (running) {
-        message.liveTraceEntries = _mobileWorkflowTraceEntriesForMessage({
-          ...message,
-          liveTraceEntries: [],
-        });
-      }
-      sideThreadEl.innerHTML = _renderMobileAgentChatBubble(message, {
+      const message = _mobileBackgroundAgentDetailMessage(backgroundRecord);
+      setInnerHTMLPreservingVisuals(sideThreadEl, _renderMobileAgentChatBubble(message, {
         sender: agentName,
         live: running,
-      });
+        keepLiveTraceVisible: true,
+      }));
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
         .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
-      sideThreadEl.innerHTML = visible.length
+      setInnerHTMLPreservingVisuals(sideThreadEl, visible.length
         ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
-        : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>';
+        : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>');
     }
     _wireMobileProcessRunActions(sideThreadEl);
     _wireMobileChatEnhancements(sideThreadEl);
@@ -13929,6 +14116,7 @@ void main() {
   }
 
   function closeMobileSideChatSheet() {
+    stopMobileBackgroundAgentDetailRefresh();
     sideState.backgroundAgentId = '';
     sideSheet?.classList.remove('background-agent-detail-mode');
     sideSheet?.classList.remove('open');
@@ -14958,6 +15146,7 @@ void main() {
 
   function processEntriesFromReplayFrames(frames) {
     const entries = [];
+    const replayState = { liveTraceEntries: entries };
     for (const frame of Array.isArray(frames) ? frames : []) {
       const evt = replayFrameToEvent(frame);
       if (!evt?.type) continue;
@@ -14972,17 +15161,24 @@ void main() {
           break;
         }
         case 'thinking_delta': {
-          // Match desktop: raw thinking deltas are not process/live rows.
-          // Only reasoning_summary is useful as a short think preview on replay.
+          // Match live handling: raw thinking deltas stay private. An explicit
+          // reasoning summary is reconstructed into the same replaceable
+          // progress slot used by the active stream.
           if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-            const text = String(evt.thinking || evt.text || '').trim();
-            if (text) entries.push({ type: 'think', text: text.slice(0, 220), extra: evt });
+            const text = String(evt.thinking || evt.text || '');
+            if (text) {
+              _setMobileLiveProgressNarration(replayState, text);
+              _appendMobileReasoningSummary(replayState, text);
+            }
           }
           break;
         }
         case 'reasoning_summary_delta': {
-          const text = String(evt.text || evt.summary || '').trim();
-          if (text) entries.push({ type: 'think', text: text.slice(0, 1200), extra: evt });
+          const text = String(evt.text || evt.summary || '');
+          if (text) {
+            _setMobileLiveProgressNarration(replayState, text);
+            _appendMobileReasoningSummary(replayState, text);
+          }
           break;
         }
         case 'info':
@@ -15018,6 +15214,7 @@ void main() {
           break;
       }
     }
+    _flushMobileTraceThoughtProbe(replayState, { force: true });
     return entries;
   }
 
@@ -16503,7 +16700,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!_completeMobileBackgroundSpawnLane(msg, requestedSession)) return;
     const mergedLateFileChanges = _mergeMobileLatestAssistantBackgroundFileChanges(requestedSession);
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
-    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) renderMobileSideSheet();
+    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) {
+      renderMobileSideSheet();
+      stopMobileBackgroundAgentDetailRefresh();
+    }
     updateChatComposerSpace();
     if (mergedLateFileChanges) {
       renderThreadNow();
@@ -16557,6 +16757,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    stopMobileBackgroundAgentDetailRefresh();
     stopGatewayTargetUpdates?.();
     closeTargetPopover?.();
     if (window.__pmMobilePairingScanner === pairingScannerBridge) window.__pmMobilePairingScanner = previousPairingScanner;
@@ -19502,13 +19703,51 @@ function _voiceSetStatusTone(tone = '') {
 function _voiceScrollLiveTranscriptToEnd() {
   const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
   const statusRegion = statusEl?.closest?.('.pm-voice-status-region');
-  const isVoiceSurface = document.body?.classList.contains('pm-chat-voice-active')
+  const isVoiceSurface = _isMobileInlineChatVoiceActive()
     || !!statusEl?.closest?.('.pm-voice-body--page');
   if (!statusEl || !isVoiceSurface) return;
   requestAnimationFrame(() => {
     const target = statusRegion || statusEl;
     target.scrollTop = target.scrollHeight;
   });
+}
+
+function _isMobileInlineChatVoiceActive() {
+  if (document.body?.classList.contains('pm-chat-voice-active')) return true;
+  // The camera overlay hides the composer while it is open. Use the mounted
+  // inline host as a second signal so camera-mode transcript deltas do not fall
+  // back to the standalone voice status renderer if a route repaint briefly
+  // drops the body class.
+  const shell = document.getElementById('pm-chat-voice-shell');
+  const host = document.getElementById('pm-chat-voice-inline');
+  return !!(
+    shell
+    && host
+    && !shell.hidden
+    && !host.hidden
+    && host.dataset?.pmVoiceMounted === '1'
+  );
+}
+
+function _mobileRealtimeCurrentStagedAttachmentTurn(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  const thread = __pmChat?.threads?.[sid];
+  const staged = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+  if (!staged || !Array.isArray(thread) || !thread.includes(staged)) return null;
+  const cameraTurnId = Number(staged?._pmCameraTurnId || 0) || 0;
+  if (!cameraTurnId) return staged;
+  const vision = __pmRealtimeAgent.liveCameraVision || {};
+  const activeTurnId = Number(vision.turnId || 0) || 0;
+  const associatedTurnId = Number(vision.lastAssociatedTurnId || 0) || 0;
+  const belongsToCurrentTurn = (
+    vision.active === true
+    && !Number(vision.responseStartedAt || 0)
+    && activeTurnId === cameraTurnId
+  ) || (
+    !Number(vision.responseStartedAt || 0)
+    && associatedTurnId === cameraTurnId
+  );
+  return belongsToCurrentTurn ? staged : null;
 }
 
 // Inline mobile chat voice should use the normal chat transcript for the
@@ -19523,12 +19762,13 @@ function _renderMobileRealtimeUserTranscriptInChat(text) {
     __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId,
   );
   const thread = __pmChat?.threads?.[sid];
-  const staged = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+  const staged = _mobileRealtimeCurrentStagedAttachmentTurn(sid);
   const turn = staged && Array.isArray(thread) && thread.includes(staged)
     ? staged
     : _ensureMobileRealtimeAgentChatTurn(sid, 'user');
   const activeThread = __pmChat?.threads?.[sid];
   if (!turn || !Array.isArray(activeThread)) return false;
+  if (staged) __pmRealtimeAgent.turn.mobileUserTurn = turn;
   turn.body = turn.body || { text: '', source: 'voice' };
   turn.body.text = clean;
   turn.body.source = turn.body.source || 'voice';
@@ -19599,7 +19839,7 @@ function _promoteMobileRealtimeUserDraft(targetSessionId, candidateSessionIds, f
 }
 
 function _voiceShowRealtimeUserTranscript(text, hint = 'Realtime transcript') {
-  const isChatVoice = document.body?.classList.contains('pm-chat-voice-active');
+  const isChatVoice = _isMobileInlineChatVoiceActive();
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (clean) {
     // A transcript delta is still useful feedback when iOS has not exposed a
@@ -19631,7 +19871,7 @@ function _voiceRenderHighlightedStatus(text, highlight = '') {
 }
 
 function _voiceShowRealtimeAgentMessage(text, hint = 'Realtime agent is responding', options = {}) {
-  if (document.body?.classList.contains('pm-chat-voice-active')) {
+  if (_isMobileInlineChatVoiceActive()) {
     _voiceSetStatus('', '');
     _voiceSetStatusTone('pm-voice-agent-text');
     return;
@@ -19713,6 +19953,28 @@ function _appendMobileRealtimeTranscriptDelta(previous = '', rawDelta = '') {
   // The event helper intentionally trims display text; preserve the boundary
   // here so word-level Realtime deltas do not render as "Doyouhave...".
   return `${before} ${next}`;
+}
+
+function _mergeMobileRealtimeTranscriptSnapshot(turn, snapshot = '') {
+  const next = String(snapshot || '').replace(/\s+/g, ' ').trim();
+  if (!next) return String(turn?.liveUserTranscript || '').trim();
+  const prefix = String(turn?.currentUserTranscriptPrefix || '').replace(/\s+/g, ' ').trim();
+  if (!prefix) {
+    if (turn) turn.currentUserTranscriptSegment = '';
+    return next;
+  }
+  const prefixKey = _normalizeVoiceEchoText(prefix);
+  const nextKey = _normalizeVoiceEchoText(next);
+  if (nextKey === prefixKey || nextKey.startsWith(`${prefixKey} `)) {
+    if (turn) turn.currentUserTranscriptSegment = next.slice(prefix.length).trim();
+    return next;
+  }
+  const previousSegment = String(turn?.currentUserTranscriptSegment || '').replace(/\s+/g, ' ').trim();
+  let segment = next;
+  if (previousSegment && _isProgressiveMobileRealtimeTranscript(previousSegment, next)) segment = next;
+  else if (previousSegment && _isProgressiveMobileRealtimeTranscript(next, previousSegment)) segment = previousSegment;
+  if (turn) turn.currentUserTranscriptSegment = segment;
+  return _appendMobileRealtimeTranscriptDelta(prefix, segment);
 }
 
 function _setMobileVoicePlaybackLyricProgress(localProgress) {
@@ -20225,6 +20487,7 @@ async function _speakMobileRealtimeAgentMilestone(text, options = {}) {
         }],
       },
     }));
+    if (!sent) return false;
     dc.send(JSON.stringify({
       type: 'response.create',
       response: {
@@ -21010,6 +21273,9 @@ const __pmRealtimeAgent = {
     lastAssistantTranscript: '',
     currentUserTranscriptItemId: '',
     currentUserSpeechStartedAt: 0,
+    currentUserSpeechStoppedAt: 0,
+    currentUserTranscriptPrefix: '',
+    currentUserTranscriptSegment: '',
     voiceLyricTimer: null,
     nudged: false,
     pendingWorkerDispatch: null,
@@ -21070,16 +21336,19 @@ function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
     threshold: 0.5,
     prefix_padding_ms: 300,
     silence_duration_ms: listenMode === 'always_listening' ? 500 : 800,
+    // Keep VAD/transcription active while the camera is open, but make the
+    // client explicitly own response creation for the gated camera turn.
+    interrupt_response: !!enabled,
     create_response: !!enabled,
   };
   try {
     if (__pmRealtimeAgent.conn?.provider === 'xai') {
-      dc.send(JSON.stringify({
+      _sendMobileRealtimeDataChannelEvent(dc, {
         type: 'session.update',
         session: { turn_detection: turnDetection },
-      }));
+      });
     } else {
-      dc.send(JSON.stringify({
+      _sendMobileRealtimeDataChannelEvent(dc, {
         type: 'session.update',
         session: {
           type: 'realtime',
@@ -21090,7 +21359,7 @@ function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
             },
           },
         },
-      }));
+      });
     }
   } catch {}
 }
@@ -23281,7 +23550,15 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
 
   const dcShim = {
     get readyState() { return ws.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
-    send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
+    send: (payload) => {
+      try {
+        if (ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(payload);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     close: () => { try { ws.close(); } catch {} },
   };
   let realtimeBackendReady = false;
@@ -23530,7 +23807,15 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
 
     const dcShim = {
       get readyState() { return ws.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
-      send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
+      send: (payload) => {
+        try {
+          if (ws.readyState !== WebSocket.OPEN) return false;
+          ws.send(payload);
+          return true;
+        } catch {
+          return false;
+        }
+      },
       close: () => { try { ws.close(); } catch {} },
     };
     let realtimeBackendReady = false;
@@ -23711,6 +23996,8 @@ function _ensureMobileRealtimeExchangeId({ forceNew = false } = {}) {
     turn.currentVoiceExchangeId = _newMobileRealtimeExchangeId();
     turn.currentVoiceExchangeResponseStarted = false;
     turn.currentVoiceExchangeHasUser = false;
+    turn.currentUserTranscriptPrefix = '';
+    turn.currentUserTranscriptSegment = '';
     if (forceNew) {
       turn.mobileUserTurn = null;
       turn.mobileAssistantTurn = null;
@@ -23798,6 +24085,60 @@ function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
   turn.time = _nowTime();
   turn.timestamp = Number(turn.timestamp || Date.now()) || Date.now();
   return turn;
+}
+
+function _mobileRealtimeUserTurnForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  const turn = __pmRealtimeAgent.turn?.mobileUserTurn;
+  const thread = __pmChat?.threads?.[sid];
+  return turn && Array.isArray(thread) && thread.includes(turn) ? turn : null;
+}
+
+function _mobileRealtimeUserTurnCanContinueAcrossPause(sessionId = '') {
+  const userTurn = _mobileRealtimeUserTurnForSession(sessionId);
+  const exchange = __pmRealtimeAgent.turn || {};
+  const vision = __pmRealtimeAgent.liveCameraVision || {};
+  return !!(
+    userTurn
+    && userTurn.streaming === true
+    && exchange.currentVoiceExchangeHasUser === true
+    && exchange.currentVoiceExchangeResponseStarted !== true
+    && !__pmRealtimeAgent.activeResponse
+    && !__pmVoice.realtimeSpeechActiveResponse
+    && !Number(vision.responseStartedAt || 0)
+  );
+}
+
+function _holdMobileRealtimeUserTurnOpen(sessionId, text) {
+  const sid = String(sessionId || '').trim();
+  const value = _cleanVoiceSpeechText(text || '');
+  if (!sid || !value) return null;
+  const turn = _ensureMobileRealtimeAgentChatTurn(sid, 'user');
+  if (!turn) return null;
+  turn.body = turn.body || { text: '', source: 'voice' };
+  turn.body.text = value;
+  turn.body.source = turn.body.source || 'voice';
+  turn.content = value;
+  turn.streaming = true;
+  turn.voiceRealtimeLive = true;
+  return turn;
+}
+
+function _finalizeMobileRealtimeUserTurn(sessionId, reason = 'response_started') {
+  const sid = String(sessionId || '').trim();
+  const turn = _mobileRealtimeUserTurnForSession(sid);
+  const text = String(turn?.body?.text || turn?.content || '').trim();
+  if (!turn || turn.streaming !== true || !text) return null;
+  const finalized = _finalizeMobileRealtimeAgentChatTurn(sid, 'user', text);
+  if (!finalized) return null;
+  if (__pmRealtimeAgent.stagedImageTurn === finalized) __pmRealtimeAgent.stagedImageTurn = null;
+  if (__pmRealtimeAgent.stagedAttachmentTurn === finalized) __pmRealtimeAgent.stagedAttachmentTurn = null;
+  _persistMobileThreadSnapshot(sid);
+  _renderRecent();
+  _renderMobileChatSessionNow(sid);
+  _notifyMobileChatVoiceUpdate(sid, { reason: `realtime_user_turn_finalized_${reason}`, force: true });
+  _voiceDebug('realtime-agent-user-turn-finalized', { reason, transcriptLen: text.length });
+  return finalized;
 }
 
 
@@ -24242,18 +24583,20 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
     });
     _stopMobileRealtimeLiveCameraVision('response_created');
+    _finalizeMobileRealtimeUserTurn(sessionId, 'response_created');
     if (cameraGateRace) {
-      try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'response.cancel' })); } catch {}
-      try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
-      __pmRealtimeAgent.activeResponse = false;
-      _voiceDebug('realtime-agent-model-request-cancelled-camera-not-associated', {
+      // The server can beat the session.update(create_response:false) packet
+      // on a fast VAD turn. Cancelling here strands the user with a transcript
+      // but no reply. The generation was already stopped above, so any late
+      // camera work is rejected; let this response finish as best-effort text.
+      _voiceDebug('realtime-agent-model-request-camera-gate-race-fallback', {
         cameraTurnId: cameraState.turnId || 0,
       });
-      return;
     }
     if (
       String(__pmRealtimeAgent.conn?.provider || '') === 'xai'
       && __pmRealtimeAgent.turn?.xaiVisionInjecting
+      && !cameraGateRace
     ) {
       try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'response.cancel' })); } catch {}
       try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
@@ -24370,14 +24713,29 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     if (!String(__pmRealtimeAgent.turn.liveUserTranscript || '').trim()) {
       _releaseMobileVoiceRoomHandoffAckGuard('next_user_utterance');
     }
+    const pauseTurn = _mobileRealtimeUserTurnCanContinueAcrossPause(sessionId);
+    if (pauseTurn && !String(__pmRealtimeAgent.turn.liveUserTranscript || '').trim()) {
+      const existingText = String(pauseTurn.body?.text || pauseTurn.content || '').replace(/\s+/g, ' ').trim();
+      __pmRealtimeAgent.turn.currentUserTranscriptPrefix = existingText;
+      __pmRealtimeAgent.turn.currentUserTranscriptSegment = '';
+      __pmRealtimeAgent.turn.liveUserTranscript = existingText;
+      _voiceDebug('realtime-agent-user-turn-resume-without-speech-start', { transcriptLen: existingText.length });
+    }
     const isSnapshot = type.endsWith('.updated');
     const delta = isSnapshot
       ? _eventText(event, { preferLongest: true })
       : (_mobileRealtimeRawTranscriptDelta(event) || _eventText(event));
     if (delta) {
-      __pmRealtimeAgent.turn.liveUserTranscript = isSnapshot
-        ? delta
-        : _appendMobileRealtimeTranscriptDelta(__pmRealtimeAgent.turn.liveUserTranscript || '', delta);
+      const turn = __pmRealtimeAgent.turn;
+      if (isSnapshot) {
+        turn.liveUserTranscript = _mergeMobileRealtimeTranscriptSnapshot(turn, delta);
+      } else if (String(turn.currentUserTranscriptPrefix || '').trim()) {
+        const nextSegment = _appendMobileRealtimeTranscriptDelta(turn.currentUserTranscriptSegment || '', delta);
+        turn.currentUserTranscriptSegment = nextSegment;
+        turn.liveUserTranscript = _appendMobileRealtimeTranscriptDelta(turn.currentUserTranscriptPrefix, nextSegment);
+      } else {
+        turn.liveUserTranscript = _appendMobileRealtimeTranscriptDelta(turn.liveUserTranscript || '', delta);
+      }
       if (!__pmRealtimeAgent.quiet.active) {
         _voiceShowRealtimeUserTranscript(__pmRealtimeAgent.turn.liveUserTranscript, 'Realtime transcript');
       }
@@ -24428,7 +24786,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       if (transcript !== previousTranscript) {
         _clearMobileRealtimeAgentQueuedFinalSummary('new_user_transcript');
       }
+      const continueCurrentUserTurn = _mobileRealtimeUserTurnCanContinueAcrossPause(sessionId);
       const needsNewExchange = !!(
+        !continueCurrentUserTurn
+        &&
         __pmRealtimeAgent.turn.currentVoiceExchangeHasUser
         && transcript !== previousTranscript
         && !progressiveTranscript
@@ -24444,21 +24805,24 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       __pmRealtimeAgent.turn.currentVoiceExchangeHasUser = true;
       _voiceShowRealtimeUserTranscript(transcript, 'Realtime transcript');
       __pmRealtimeAgent.turn.liveUserTranscript = '';
+      __pmRealtimeAgent.turn.currentUserTranscriptPrefix = '';
+      __pmRealtimeAgent.turn.currentUserTranscriptSegment = '';
       __pmRealtimeAgent.turn.nudged = false;
       _voiceDebug('realtime-agent-user-transcript', { transcript });
       // Surface what the user said. Subagent voice targets are persisted through
       // the subagent chat store instead of the main mobile chat thread.
       try {
         const sid = sessionId;
-        const staged = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+        const rawStaged = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+        const staged = _mobileRealtimeCurrentStagedAttachmentTurn(sid);
         const associatedCameraTurnId = Number(_mobileRealtimeLiveVisionState().lastAssociatedTurnId || 0) || 0;
-        const stagedCameraTurnId = Number(staged?._pmCameraTurnId || 0) || 0;
-        const stagedBelongsToCurrentTurn = !stagedCameraTurnId
-          || (associatedCameraTurnId > 0 && stagedCameraTurnId === associatedCameraTurnId);
+        const stagedCameraTurnId = Number(rawStaged?._pmCameraTurnId || 0) || 0;
+        const stagedBelongsToCurrentTurn = !stagedCameraTurnId || !!staged;
         const subagentTarget = _currentMobileSubagentVoiceTarget();
+        const keepUserTurnOpen = continueCurrentUserTurn;
         if (subagentTarget) {
           _voiceDebug('realtime-agent-subagent-user-transcript', { agentId: subagentTarget.agentId, transcript });
-        } else if (staged && !stagedBelongsToCurrentTurn) {
+        } else if (rawStaged && !staged && !stagedBelongsToCurrentTurn) {
           // A late frame from the previous response must never become the
           // attachment for this transcript. Leave its already-visible preview
           // in history, but detach it from the next turn's staging pointer.
@@ -24469,25 +24833,37 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
           });
           __pmRealtimeAgent.stagedImageTurn = null;
           __pmRealtimeAgent.stagedAttachmentTurn = null;
-          _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
-          _ensureMobileRealtimeAgentTurnOrder(sid);
+          if (keepUserTurnOpen) _holdMobileRealtimeUserTurnOpen(sid, transcript);
+          else {
+            _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+            _ensureMobileRealtimeAgentTurnOrder(sid);
+          }
         } else if (staged && Array.isArray(__pmChat.threads?.[sid]) && __pmChat.threads[sid].includes(staged)) {
           // The user just spoke about a staged photo — attach the transcript to the
           // photo bubble so the image + caption show as one user message.
           staged.body = staged.body || { text: '', attachments: [] };
           staged.body.text = transcript;
           staged.content = transcript;
-          staged.streaming = false;
+          staged.streaming = keepUserTurnOpen;
+          staged.voiceRealtimeLive = keepUserTurnOpen;
           staged.staged = false;
-          staged.time = _nowTime();
+          if (!keepUserTurnOpen) staged.time = _nowTime();
+          staged.workflowGroupId = staged.workflowGroupId || _ensureMobileRealtimeExchangeId();
+          staged.workflowPart = 'voice_user';
+          __pmRealtimeAgent.turn.mobileUserTurn = staged;
           __pmRealtimeAgent.stagedImageTurn = null;
           __pmRealtimeAgent.stagedAttachmentTurn = null;
         } else {
-          _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
-          // Realtime can emit response text before its final input transcript.
-          // Keep the pair in conversational order even when those event streams
-          // arrive out of order.
-          _ensureMobileRealtimeAgentTurnOrder(sid);
+          if (keepUserTurnOpen) {
+            _holdMobileRealtimeUserTurnOpen(sid, transcript);
+            _voiceDebug('realtime-agent-user-turn-held-open', { transcriptLen: transcript.length });
+          } else {
+            _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+            // Realtime can emit response text before its final input transcript.
+            // Keep the pair in conversational order even when those event streams
+            // arrive out of order.
+            _ensureMobileRealtimeAgentTurnOrder(sid);
+          }
         }
         _persistMobileThreadSnapshot(sid);
         _renderRecent();
@@ -24632,9 +25008,18 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
       inferenceMs: cameraState.responseStartedAt
         ? Math.max(0, Date.now() - cameraState.responseStartedAt)
-        : 0,
+      : 0,
     });
+    _finalizeMobileRealtimeUserTurn(sessionId, 'response_finished');
     _stopMobileRealtimeLiveCameraVision('response_finished');
+    if (
+      typeof __pmRealtimeAgent.liveCameraFrameReader === 'function'
+      && (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
+    ) {
+      // Keep the camera-open session pre-gated for the next VAD turn. Closing
+      // the camera restores create_response:true in stopVoiceCameraFrameCache.
+      _sendMobileRealtimeAgentCreateResponseFlag(false);
+    }
     __pmRealtimeAgent.activeResponse = false;
     __pmVoice.realtimeSpeechActiveResponse = false;
     __pmRealtimeAgent.quiet.suppressResponse = false;
@@ -24694,7 +25079,6 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     setTimeout(() => {
       if (!__pmRealtimeAgent.activeResponse && !__pmRealtimeAgent.turn.finalSummaryPending) _voiceShowReadyStatus();
     }, responseStatusHoldMs);
-    __pmRealtimeAgent.turn.mobileUserTurn = null;
     setTimeout(() => _restoreMobileRealtimeInputAfterOutput('response_done'), 450);
     if (__pmRealtimeAgent.quiet.pendingActivate) {
       __pmRealtimeAgent.quiet.pendingActivate = false;
@@ -24709,22 +25093,55 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     // the image is attached to this spoken turn.
     if (type === 'input_audio_buffer.speech_started') {
       if (_shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(__pmRealtimeAgent.conn?.provider || 'openai_webrtc')) return;
-      _clearMobileRealtimeAgentQueuedFinalSummary('speech_started');
-      __pmRealtimeAgent.turn.liveUserTranscript = '';
-      _ensureMobileRealtimeExchangeId({ forceNew: true });
-      __pmRealtimeAgent.turn.mobileUserTurn = null;
-      __pmRealtimeAgent.turn.mobileAssistantTurn = null;
-      __pmRealtimeAgent.turn.currentUserTranscriptItemId = '';
-      __pmRealtimeAgent.turn.currentUserSpeechStartedAt = Date.now();
-      _voiceShowRealtimeUserTranscript('', 'Listening for realtime speech');
-      __pmRealtimeAgent.turn.subagentVoiceUserLogKey = '';
-      __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
-      _startMobileRealtimeLiveCameraVision('speech_started');
       const cameraState = _mobileRealtimeLiveVisionState();
-      cameraState.pendingAttachmentPreparation = __pmRealtimeAgent.pendingImages.length
-        ? _flushMobileRealtimeAgentPendingImages('speech_started', { createResponse: false }).catch(() => false)
-        : Promise.resolve(false);
+      const turn = __pmRealtimeAgent.turn;
+      const hadSpeechPause = Number(turn.currentUserSpeechStoppedAt || 0) > Number(turn.currentUserSpeechStartedAt || 0);
+      const duplicateCameraSpeechStart = cameraState.active === true
+        && !Number(cameraState.responseStartedAt || 0)
+        && Number(cameraState.turnStartedAt || 0) > 0
+        && Date.now() - Number(cameraState.turnStartedAt || 0) < 18000
+        && !hadSpeechPause;
+      if (duplicateCameraSpeechStart) {
+        // Some mobile VAD/camera combinations repeat speech_started while the
+        // same audio item is still being transcribed. Do not reset the exchange
+        // pointer or the next transcript delta creates another chat bubble.
+        _voiceDebug('realtime-agent-duplicate-camera-speech-start-ignored', {
+          turnId: cameraState.turnId || 0,
+        });
+      } else {
+        const continueCurrentUserTurn = _mobileRealtimeUserTurnCanContinueAcrossPause(sessionId);
+        _clearMobileRealtimeAgentQueuedFinalSummary('speech_started');
+        _clearMobileRealtimeAgentPendingCreateResponse();
+        if (continueCurrentUserTurn) {
+          const existingText = String(turn.mobileUserTurn?.body?.text || turn.mobileUserTurn?.content || '').replace(/\s+/g, ' ').trim();
+          turn.currentUserTranscriptPrefix = existingText;
+          turn.currentUserTranscriptSegment = '';
+          turn.liveUserTranscript = existingText;
+          turn.currentVoiceExchangeHasUser = true;
+          _voiceShowRealtimeUserTranscript(existingText, 'Listening for realtime speech');
+          _voiceDebug('realtime-agent-user-turn-continued-after-pause', { transcriptLen: existingText.length });
+        } else {
+          turn.liveUserTranscript = '';
+          _ensureMobileRealtimeExchangeId({ forceNew: true });
+          turn.mobileUserTurn = null;
+          turn.mobileAssistantTurn = null;
+          turn.currentUserTranscriptItemId = '';
+          turn.currentUserTranscriptPrefix = '';
+          turn.currentUserTranscriptSegment = '';
+          _voiceShowRealtimeUserTranscript('', 'Listening for realtime speech');
+          turn.subagentVoiceUserLogKey = '';
+          turn.subagentVoiceReplyLogKey = '';
+        }
+        turn.currentUserTranscriptItemId = '';
+        turn.currentUserSpeechStartedAt = Date.now();
+        turn.currentUserSpeechStoppedAt = 0;
+        _startMobileRealtimeLiveCameraVision('speech_started');
+        cameraState.pendingAttachmentPreparation = __pmRealtimeAgent.pendingImages.length
+          ? _flushMobileRealtimeAgentPendingImages('speech_started', { createResponse: false }).catch(() => false)
+          : Promise.resolve(false);
+      }
     } else if (type === 'input_audio_buffer.speech_stopped') {
+      __pmRealtimeAgent.turn.currentUserSpeechStoppedAt = Date.now();
       const cameraState = _mobileRealtimeLiveVisionState();
       if (cameraState.responseGateActive) {
         const attachmentPreparation = cameraState.pendingAttachmentPreparation || Promise.resolve(false);
@@ -24743,10 +25160,24 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
         _stopMobileRealtimeLiveCameraVision(type);
       }
     } else if (type === 'input_audio_buffer.committed') {
+      __pmRealtimeAgent.turn.currentUserSpeechStoppedAt = Number(__pmRealtimeAgent.turn.currentUserSpeechStoppedAt || Date.now()) || Date.now();
       const cameraState = _mobileRealtimeLiveVisionState();
       if (cameraState.responseGateActive) {
         cameraState.audioCommitted = true;
-        _maybeReleaseMobileRealtimeCameraResponseGate('audio_committed_camera_ready');
+        const attachmentPreparation = cameraState.pendingAttachmentPreparation || Promise.resolve(false);
+        const livePreparation = cameraState.preparationReady
+          ? Promise.resolve(true)
+          : _prepareMobileRealtimeLiveCameraForTurn('audio_committed');
+        Promise.all([
+          Promise.resolve(attachmentPreparation).catch(() => false),
+          Promise.resolve(livePreparation).catch(() => false),
+        ]).then(() => {
+          cameraState.preparationReady = true;
+          _maybeReleaseMobileRealtimeCameraResponseGate('audio_committed_camera_ready');
+        }).catch(() => {
+          cameraState.preparationReady = true;
+          _maybeReleaseMobileRealtimeCameraResponseGate('audio_committed_camera_prepare_failed');
+        });
       } else {
         _stopMobileRealtimeLiveCameraVision(type);
       }
@@ -25540,6 +25971,20 @@ async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = 
   }
 }
 
+// RTCDataChannel.send() throws on a closed native channel, while the OpenAI
+// WebSocket shim historically swallowed the same failure. Keep image delivery
+// transactional: callers only mark an image injected after this returns true.
+function _sendMobileRealtimeDataChannelEvent(dc, event) {
+  if (!dc || dc.readyState !== 'open') return false;
+  try {
+    const result = dc.send(typeof event === 'string' ? event : JSON.stringify(event));
+    return result !== false;
+  } catch (err) {
+    _voiceDebug('realtime-agent-data-channel-send-failed', { message: err?.message || String(err) });
+    return false;
+  }
+}
+
 // Inject one image into the realtime conversation as a user item, with NO
 // response.create. Done at STAGE time (when the audio buffer is idle) — injecting
 // while the user is actively speaking races the auto-response and the model ends
@@ -25577,8 +26022,13 @@ async function _injectRealtimeImageItemToConversation(img, label) {
     if (!dc || dc.readyState !== 'open' || provider === 'xai') return false;
     try {
       const imageUrl = await _downscaleDataUrlForRealtime(img.dataUrl);
-      if (!isCurrent() || __pmRealtimeAgent.conn?.dc?.readyState !== 'open') return false;
-      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+      if (
+        !isCurrent()
+        || __pmRealtimeAgent.conn !== conn
+        || __pmRealtimeAgent.conn?.dc !== dc
+        || dc.readyState !== 'open'
+      ) return false;
+      const sent = _sendMobileRealtimeDataChannelEvent(dc, {
         type: 'conversation.item.create',
         item: {
           type: 'message',
@@ -25588,7 +26038,8 @@ async function _injectRealtimeImageItemToConversation(img, label) {
             { type: 'input_image', detail: 'auto', image_url: imageUrl },
           ],
         },
-      }));
+      });
+      if (!sent) return false;
       img.realtimeInjected = true;
       _voiceDebug('realtime-agent-image-injected-at-stage', { name: img.name });
       return true;
@@ -25645,7 +26096,7 @@ async function _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts = {}) {
   try {
     const dc = __pmRealtimeAgent.conn?.dc;
     if (!dc || dc.readyState !== 'open' || String(__pmRealtimeAgent.conn?.provider) !== 'xai') return false;
-    dc.send(JSON.stringify({
+    const sent = _sendMobileRealtimeDataChannelEvent(dc, {
       type: 'conversation.item.create',
       item: {
         type: 'message',
@@ -25659,7 +26110,8 @@ async function _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts = {}) {
           ].filter(Boolean).join('\n'),
         }],
       },
-    }));
+    });
+    if (!sent) return false;
     _voiceDebug('realtime-agent-xai-summary-injected', { isVideo, summaryLen: summary.length });
     return true;
   } catch (err) {
@@ -25681,6 +26133,11 @@ async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
 function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId, options = {}) {
   const cameraTurnId = Number(options.cameraTurnId || attachment?.turnId || 0) || 0;
   const cameraFrameId = String(options.cameraFrameId || attachment?.frameId || '').trim();
+  const liveVision = __pmRealtimeAgent.liveCameraVision || {};
+  const isCurrentLiveCameraTurn = cameraTurnId > 0
+    && liveVision.active === true
+    && !Number(liveVision.responseStartedAt || 0)
+    && Number(liveVision.turnId || 0) === cameraTurnId;
   const previewAttachment = {
     kind: String(attachment?.kind || 'file').trim() || 'file',
     name: String(attachment?.name || 'Voice attachment').trim(),
@@ -25699,6 +26156,19 @@ function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId, optio
   try {
     if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
     let turn = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+    const currentUserTurn = __pmRealtimeAgent.turn?.mobileUserTurn;
+    const currentExchangeId = isCurrentLiveCameraTurn ? _ensureMobileRealtimeExchangeId() : '';
+    // The authoritative live-camera frame can finish after transcription. In
+    // that case, extend the already-rendered user bubble instead of creating a
+    // second attachment-only bubble after the spoken text.
+    if (
+      isCurrentLiveCameraTurn
+      && currentUserTurn
+      && __pmChat.threads[sid].includes(currentUserTurn)
+      && (!turn || Number(turn?._pmCameraTurnId || 0) !== cameraTurnId)
+    ) {
+      turn = currentUserTurn;
+    }
     const existingCameraTurnId = Number(turn?._pmCameraTurnId || 0) || 0;
     const canReuseStagedTurn = turn
       && __pmChat.threads[sid].includes(turn)
@@ -25712,6 +26182,10 @@ function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId, optio
         body: { text: '', source: 'voice', attachments: [previewAttachment] },
         attachmentPreviews: [previewAttachment], content: '', source: 'voice_agent_realtime',
       };
+      if (currentExchangeId) {
+        turn.workflowGroupId = currentExchangeId;
+        turn.workflowPart = 'voice_user';
+      }
       __pmChat.threads[sid].push(turn);
     }
     if (cameraTurnId) {
@@ -25720,6 +26194,11 @@ function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId, optio
       turn._pmCameraAttachmentState = previewAttachment.attachmentState || 'associated';
     }
     turn.attachmentPreviews = turn.body.attachments;
+    if (isCurrentLiveCameraTurn) {
+      turn.workflowGroupId = currentExchangeId || turn.workflowGroupId || _ensureMobileRealtimeExchangeId();
+      turn.workflowPart = 'voice_user';
+      __pmRealtimeAgent.turn.mobileUserTurn = turn;
+    }
     __pmRealtimeAgent.stagedAttachmentTurn = turn;
     __pmRealtimeAgent.stagedImageTurn = turn;
     _persistMobileThreadSnapshot(sid);
@@ -25821,11 +26300,23 @@ function _stageMobileRealtimeAgentImage(attachment, sessionId, options = {}) {
 async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options = {}) {
   const images = __pmRealtimeAgent.pendingImages;
   if (!images || !images.length) return false;
-  const dc = __pmRealtimeAgent.conn?.dc;
-  if (!dc || dc.readyState !== 'open') return false;
   const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
   const all = images.slice();
-  __pmRealtimeAgent.pendingImages = [];
+  const restorePendingImages = () => {
+    const current = Array.isArray(__pmRealtimeAgent.pendingImages)
+      ? __pmRealtimeAgent.pendingImages
+      : [];
+    const unsent = all.filter((image) => !image?.realtimeInjected);
+    __pmRealtimeAgent.pendingImages = [
+      ...current.filter((image) => !all.includes(image)),
+      ...unsent,
+    ];
+  };
+  const dc = __pmRealtimeAgent.conn?.dc;
+  if (!dc || dc.readyState !== 'open') {
+    restorePendingImages();
+    return false;
+  }
   if (_isMobileCodexV3RealtimeConnection()) {
     let injected = false;
     for (const image of all) {
@@ -25833,7 +26324,7 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
         injected = true;
       }
     }
-    __pmRealtimeAgent.pendingImages = all.filter((image) => !image.realtimeInjected);
+    restorePendingImages();
     _voiceDebug('realtime-agent-image-flushed-codex-bridge', {
       count: all.length,
       injected: all.filter((image) => image.realtimeInjected).length,
@@ -25862,11 +26353,13 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
       __pmRealtimeAgent.turn.xaiVisionInjecting = false;
       __pmRealtimeAgent.turn.xaiVisionInjectReason = '';
     }
+    if (injected) all.forEach((image) => { image.realtimeInjected = true; });
+    restorePendingImages();
     _voiceDebug('realtime-agent-image-flushed-xai-summary', { count: all.length, reason, injected });
     const shouldCreateVisionResponse = options.createResponse === true
       || (reason === 'speech_started' && options.createResponse !== false);
     if (injected && shouldCreateVisionResponse && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
-      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+      _sendMobileRealtimeDataChannelEvent(__pmRealtimeAgent.conn?.dc, {
         type: 'response.create',
         response: {
           output_modalities: ['audio'],
@@ -25874,40 +26367,38 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
             ? 'Answer using the injected visual context and the user message. Do not say the image has not arrived.'
             : 'Answer using the injected visual context. Do not say the image has not arrived.',
         },
-      }));
+      });
     }
     return !!injected;
   }
-  // Most images are already injected at STAGE time (when audio was idle). Only
-  // send the ones that weren't (e.g. captured before the data channel was open).
-  const toSend = all.filter((im) => !im.realtimeInjected);
+  // Most images are injected at STAGE time (when audio is idle). Await that
+  // in-flight send before retrying so capture + turn-boundary flush cannot race
+  // and either duplicate or lose the image.
   try {
     const promptText = String(options.promptText || '').trim();
-    for (let i = 0; i < toSend.length; i++) {
-      const imageUrl = await _downscaleDataUrlForRealtime(toSend[i].dataUrl);
-      if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') break;
-      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: [
-                toSend.length > 1 ? `Attached image ${i + 1} of ${toSend.length}.` : 'Attached image from the mobile camera.',
-                promptText && i === 0 ? `User message: ${promptText}` : 'Use it as visual context for the user\'s next voice/chat turn.',
-              ].filter(Boolean).join('\n'),
-            },
-            { type: 'input_image', detail: 'auto', image_url: imageUrl },
-          ],
-        },
-      }));
-      toSend[i].realtimeInjected = true;
+    let delivered = 0;
+    for (let i = 0; i < all.length; i++) {
+      const image = all[i];
+      if (image?.realtimeInjected) {
+        delivered += 1;
+        continue;
+      }
+      const label = [
+        all.length > 1 ? `Attached image ${i + 1} of ${all.length}.` : 'Attached image from the mobile camera.',
+        promptText && i === 0 ? `User message: ${promptText}` : 'Use it as visual context for the user\'s next voice/chat turn.',
+      ].filter(Boolean).join('\n');
+      const sent = await _injectRealtimeImageItemToConversation(image, label);
+      if (sent) delivered += 1;
+      else if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') break;
     }
-    _voiceDebug('realtime-agent-image-flushed', { count: toSend.length, reason });
-    if (options.createResponse === true && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
-      __pmRealtimeAgent.conn.dc.send(JSON.stringify({
+    restorePendingImages();
+    _voiceDebug('realtime-agent-image-flushed', {
+      count: delivered,
+      pending: __pmRealtimeAgent.pendingImages.length,
+      reason,
+    });
+    if (options.createResponse === true && delivered > 0 && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
+      _sendMobileRealtimeDataChannelEvent(__pmRealtimeAgent.conn?.dc, {
         type: 'response.create',
         response: {
           output_modalities: ['audio'],
@@ -25915,13 +26406,34 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
             ? 'Use the attached mobile camera image and the user message. Do not say no image was sent unless the image input is actually absent.'
             : 'Use the attached mobile camera image directly. Do not claim the image was saved to the phone.',
         },
-      }));
+      });
     }
-    return true;
+    return delivered > 0;
   } catch (err) {
+    restorePendingImages();
     _voiceDebug('realtime-agent-image-flush-failed', { message: err?.message || String(err) });
     return false;
   }
+}
+
+async function _awaitMobileRealtimeCameraOperation(operation, timeoutMs = 900, onTimeout = null) {
+  const timeout = Math.max(150, Number(timeoutMs || 900) || 900);
+  let timer = null;
+  const source = Promise.resolve()
+    .then(() => (typeof operation === 'function' ? operation() : operation))
+    .then((value) => ({ timedOut: false, value }), () => ({ timedOut: false, value: null }));
+  const result = await Promise.race([
+    source,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true, value: null }), timeout);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (result?.timedOut) {
+    try { onTimeout?.(); } catch {}
+    return null;
+  }
+  return result?.value ?? null;
 }
 
 function _mobileRealtimeLiveVisionState() {
@@ -25959,6 +26471,7 @@ function _mobileRealtimeLiveVisionIsCurrent(state, generation, turnId) {
     && Number(state.generation || 0) === Number(generation || 0)
     && Number(state.turnId || 0) === Number(turnId || 0)
     && !Number(state.responseStartedAt || 0)
+    && !Number(state.responseRequestedAt || 0)
     && !__pmRealtimeAgent.activeResponse
     && !__pmVoice.realtimeSpeechActiveResponse
     && __pmRealtimeAgent.conn?.dc?.readyState === 'open'
@@ -26077,14 +26590,13 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
     sent: !!sent,
     uploadMs: Math.max(0, associatedAt - uploadStartedAt),
   });
-  if (!isCurrent()) {
-    _voiceDebug('realtime-agent-live-camera-frame-dropped-late', {
-      reason: options.reason || 'live_camera',
-      provider,
-      turnId,
-      frameId,
-      uploadMs: Math.max(0, associatedAt - uploadStartedAt),
-    });
+  // The response boundary may advance immediately after the data-channel
+  // accepts the image. Do not discard a successfully sent frame just because
+  // the response state changed while the UI/preview bookkeeping was running.
+  // _injectRealtimeImageItemToConversation already checked the generation and
+  // channel before sending.
+  if (!sent) {
+    state.phase = 'association_failed';
     return false;
   }
   state.lastSentAt = associatedAt;
@@ -26149,6 +26661,7 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
 
 function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
   const state = _mobileRealtimeLiveVisionState();
+  const restoreResponseCreation = state.responseGateActive === true;
   state.active = false;
   state.generation = Number(state.generation || 0) + 1;
   state.queuedFrame = null;
@@ -26160,6 +26673,7 @@ function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
   state.audioCommitted = false;
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
+  if (restoreResponseCreation) _sendMobileRealtimeAgentCreateResponseFlag(true);
   _voiceDebug('realtime-agent-live-camera-stopped', { reason });
 }
 
@@ -26200,11 +26714,22 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
       state.queuedFrame = null;
       let freshest = null;
       if (typeof asyncReader === 'function') {
-        try { freshest = await asyncReader(); } catch {}
+        freshest = await _awaitMobileRealtimeCameraOperation(
+          () => asyncReader(),
+          900,
+          () => _voiceDebug('realtime-agent-live-camera-frame-read-timeout', { reason, turnId }),
+        );
       }
       if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) break;
       const selected = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : current;
-      await _associateMobileRealtimeLiveCameraFrame(selected, { reason, generation, turnId });
+      await _awaitMobileRealtimeCameraOperation(
+        () => _associateMobileRealtimeLiveCameraFrame(selected, { reason, generation, turnId }),
+        1400,
+        () => {
+          if (Number(state.generation || 0) === generation) state.generation += 1;
+          _voiceDebug('realtime-agent-live-camera-association-timeout', { reason, turnId });
+        },
+      );
     }
   })().finally(() => {
     state.inFlight = null;
@@ -26239,13 +26764,35 @@ async function _prepareMobileRealtimeLiveCameraForTurn(reason = 'turn_ready') {
     // Drain an older association before selecting the turn's final frame. The
     // generation check below prevents that older request from becoming the
     // current frame if the response has already started.
-    if (state.inFlight) await state.inFlight.catch(() => {});
+    if (state.inFlight) {
+      let timedOut = false;
+      await _awaitMobileRealtimeCameraOperation(
+        () => state.inFlight,
+        1000,
+        () => {
+          timedOut = true;
+          if (Number(state.generation || 0) === generation) state.generation += 1;
+          _voiceDebug('realtime-agent-live-camera-previous-association-timeout', { reason, turnId });
+        },
+      );
+      if (timedOut) return false;
+    }
     if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) return false;
     let frame = null;
     try { frame = reader(); } catch {}
     let freshest = null;
     if (typeof asyncReader === 'function') {
-      try { freshest = await asyncReader({ force: true, reason, turnId }); } catch {}
+      let timedOut = false;
+      freshest = await _awaitMobileRealtimeCameraOperation(
+        () => asyncReader({ force: true, reason, turnId }),
+        1000,
+        () => {
+          timedOut = true;
+          if (Number(state.generation || 0) === generation) state.generation += 1;
+          _voiceDebug('realtime-agent-live-camera-turn-frame-read-timeout', { reason, turnId });
+        },
+      );
+      if (timedOut) return false;
     }
     if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) return false;
     const selectedCandidate = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : frame;
@@ -26262,13 +26809,21 @@ async function _prepareMobileRealtimeLiveCameraForTurn(reason = 'turn_ready') {
         freshFrameAt: Number(freshest?.capturedAt || 0) || 0,
       });
     }
-    const sent = await _associateMobileRealtimeLiveCameraFrame(selected, {
-      reason,
-      generation,
-      turnId,
-      authoritative: true,
-      turnCaptureStartedAt: state.turnCaptureStartedAt,
-    });
+    const sent = await _awaitMobileRealtimeCameraOperation(
+      () => _associateMobileRealtimeLiveCameraFrame(selected, {
+        reason,
+        generation,
+        turnId,
+        authoritative: true,
+        turnCaptureStartedAt: state.turnCaptureStartedAt,
+      }),
+      1400,
+      () => {
+        if (Number(state.generation || 0) === generation) state.generation += 1;
+        state.phase = 'association_timeout';
+        _voiceDebug('realtime-agent-live-camera-turn-association-timeout', { reason, turnId });
+      },
+    );
     state.preparationReady = true;
     _voiceDebug('realtime-agent-live-camera-turn-prepared', {
       reason,
@@ -26303,17 +26858,22 @@ function _maybeReleaseMobileRealtimeCameraResponseGate(reason = 'camera_turn_rea
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
   state.queuedFrame = null;
-  _sendMobileRealtimeAgentCreateResponseFlag(true);
   const wasCommitted = state.audioCommitted === true;
-  state.responseGateActive = false;
-  if (wasCommitted && !state.responseRequestedAt) {
-    state.responseRequestedAt = Date.now();
+  const shouldRequestResponse = wasCommitted && !state.responseRequestedAt;
+  // Mark the response boundary before releasing server VAD. Any encode/upload
+  // promise that was still unwinding now fails its isCurrent() check instead of
+  // sending a frame after the response request.
+  if (shouldRequestResponse) state.responseRequestedAt = Date.now();
+  _sendMobileRealtimeAgentCreateResponseFlag(true);
+  if (shouldRequestResponse) {
+    state.responseGateActive = false;
     _scheduleMobileRealtimeAgentResponseAfterSkillContext(reason);
   }
   _voiceDebug('realtime-agent-live-camera-response-released', {
     reason,
     turnId: state.turnId,
     wasCommitted,
+    waitingForCommit: !shouldRequestResponse,
     frameAt: state.lastAssociatedFrameAt || 0,
   });
   return true;
@@ -26321,7 +26881,13 @@ function _maybeReleaseMobileRealtimeCameraResponseGate(reason = 'camera_turn_rea
 
 function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
   const state = _mobileRealtimeLiveVisionState();
-  if (typeof __pmRealtimeAgent.liveCameraFrameReader !== 'function') return false;
+  const hasLiveCameraReader = typeof __pmRealtimeAgent.liveCameraFrameReader === 'function';
+  const hasPendingImages = Array.isArray(__pmRealtimeAgent.pendingImages)
+    && __pmRealtimeAgent.pendingImages.length > 0;
+  // A captured image can outlive the camera sheet. Keep the next VAD response
+  // gated long enough to flush that pending attachment even when no live frame
+  // reader remains attached.
+  if (!hasLiveCameraReader && !hasPendingImages) return false;
   if (!__pmRealtimeAgent.conn?.dc || __pmRealtimeAgent.conn.dc.readyState !== 'open') return false;
   if (state.active) return true;
   state.active = true;
@@ -26351,11 +26917,13 @@ function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
     turnId: state.turnId,
     responseGateActive: state.responseGateActive,
   });
-  _queueMobileRealtimeLiveCameraFrame(reason);
-  state.timer = setInterval(() => {
-    if (!state.active) return;
-    _queueMobileRealtimeLiveCameraFrame('speech_active_tick');
-  }, 1000);
+  if (hasLiveCameraReader) {
+    _queueMobileRealtimeLiveCameraFrame(reason);
+    state.timer = setInterval(() => {
+      if (!state.active) return;
+      _queueMobileRealtimeLiveCameraFrame('speech_active_tick');
+    }, 1000);
+  }
   return true;
 }
 
@@ -34773,7 +35341,11 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     const answerStarted = !!String(text || '').trim();
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
-    const liveTraceHtml = streaming && (!answerStarted || isVoiceTraceTurn) && Array.isArray(traceMessage.liveTraceEntries)
+    // Background-agent details are a live work surface: keep their tool
+    // timeline visible while an answer starts streaming instead of replacing
+    // the timeline with the first response token.
+    const keepLiveTraceVisible = options.keepLiveTraceVisible === true || message?._backgroundAgentLive === true;
+    const liveTraceHtml = streaming && (keepLiveTraceVisible || !answerStarted || isVoiceTraceTurn) && Array.isArray(traceMessage.liveTraceEntries)
       ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
@@ -35276,10 +35848,10 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (!chunk) return false;
       message._thinking = `${message._thinking || ''}${chunk}`;
       message._pendingThinkingBurst = `${message._pendingThinkingBurst || ''}${chunk}`;
-      // Desktop parity: only reasoning_summary becomes a visible think row.
+      // Explicit reasoning summaries update the replaceable progress slot.
       if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-        if (_isMobileProgressNarration(chunk)) _setMobileLiveProgressNarration(message, chunk);
-        else _appendMobileReasoningSummary(message, chunk);
+        _setMobileLiveProgressNarration(message, chunk);
+        _appendMobileReasoningSummary(message, chunk);
       }
       message._progress = `${fallbackName} is thinking...`;
       return true;
@@ -35287,8 +35859,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     case 'reasoning_summary_delta': {
       const chunk = String(evt.text || evt.summary || '');
       if (!chunk) return false;
-      if (_isMobileProgressNarration(chunk)) _setMobileLiveProgressNarration(message, chunk);
-      else _appendMobileReasoningSummary(message, chunk);
+      _setMobileLiveProgressNarration(message, chunk);
+      _appendMobileReasoningSummary(message, chunk);
       return true;
     }
     case 'thinking':
@@ -35297,7 +35869,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (!thought) return false;
       _flushMobilePendingThinkingBurst(message);
       message._thinking = message._thinking ? `${message._thinking}\n\n${thought}` : thought;
-      _setMobileLiveProgressNarration(message, thought);
+      _setMobileLiveProgressNarration(message, thought, { replace: true });
       message._progress = `${fallbackName} is thinking...`;
       return true;
     }
@@ -35855,6 +36427,14 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
       || sessionId
       || ''
   ).trim();
+  const eventType = String(msg.eventType || msg.type || '').trim().toLowerCase();
+  // A background tool result is still only a timeline event. Treating it as
+  // lane.result made mobile render the tool output as the agent's final answer
+  // and hid the live tool stream until the sheet was reopened.
+  const isFinalStreamEvent = eventType === 'final' || eventType === 'done';
+  const streamedFinalResult = isFinalStreamEvent
+    ? String(msg.reply || msg.text || msg.result || msg.output || '').trim()
+    : '';
   const lane = {
     id,
     sessionId: parentSessionId,
@@ -35881,8 +36461,11 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     },
     fileChanges: msg.fileChanges || existing.fileChanges || null,
     plan: existing.plan || null,
-    result: msg.result || existing.result || '',
-    error: msg.error || existing.error || '',
+    result: streamedFinalResult || existing.result || '',
+    // Like result, a streamed error may describe one failed tool call rather
+    // than the background run itself. The terminal bg_agent_done payload owns
+    // the durable lane error.
+    error: existing.error || '',
     approvalRequest: existing.approvalRequest || null,
   };
   lanes[id] = lane;

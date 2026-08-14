@@ -2890,7 +2890,7 @@ export function clearHistory(id: string): void {
 export function replaceHistory(
   id: string,
   history: ChatMessage[],
-  options: { resetCompaction?: boolean } = {},
+  options: { resetCompaction?: boolean; historyChangeSource?: 'replace_history' | 'mobile_visual_state' } = {},
 ): void {
   const session = getSession(id);
   const previousSummary = session.latestContextSummary;
@@ -2939,7 +2939,7 @@ export function replaceHistory(
     sessionId: id,
     timestamp: session.lastActiveAt,
     historyCount: session.history.length,
-    source: 'replace_history',
+    source: options.historyChangeSource || 'replace_history',
   });
 }
 

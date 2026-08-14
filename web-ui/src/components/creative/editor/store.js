@@ -34,7 +34,11 @@ export function createStore(initialState) {
       let prev = selector(state);
       return store.subscribe(s => {
         const next = selector(s);
-        if (next !== prev) { prev = next; onChange(next, prev); }
+        if (next !== prev) {
+          const previous = prev;
+          prev = next;
+          onChange(next, previous);
+        }
       });
     },
 
@@ -74,6 +78,16 @@ export function createEditorState() {
     timelineZoom: 1.0,   // px-per-ms scale multiplier
     timelineScrollX: 0,
     timelineScrollY: 0,
+    timelineSnap: true,
+    timelineRipple: false,
+
+    // Timeline lane state. The current editor derives lanes from scene
+    // elements, so these are keyed by lane category rather than a separate
+    // track model. This keeps the lightweight editor compatible with the
+    // existing scene document while still supporting CapCut-like mute/hide
+    // controls.
+    mutedTracks: /** @type {string[]} */ ([]),
+    hiddenTracks: /** @type {string[]} */ ([]),
 
     // UI state
     activePanel: 'assets',  // 'assets' | 'properties'

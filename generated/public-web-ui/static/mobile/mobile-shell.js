@@ -2,7 +2,7 @@
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import {
   getGateway,
   getGatewayFilter,

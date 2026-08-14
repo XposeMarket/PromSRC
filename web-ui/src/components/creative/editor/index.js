@@ -1,5 +1,5 @@
 /**
- * Creative Editor entry point — Phase 2: live viewport + renderer.
+ * Creative Editor entry point — live viewport, timeline, media, and export.
  *
  * Usage (ChatPage.js):
  *   Import syncCreativeEditor from this module and call it in applyCreativeModeUI().
@@ -26,6 +26,7 @@ import { createTextPanel } from './panels/text-panel.js';
 import { createShapesPanel } from './panels/shapes-panel.js';
 import { createEffectsPanel } from './panels/effects-panel.js';
 import { createFiltersPanel } from './panels/filters-panel.js';
+import { syncCreativeAudioPreviewToTimeline, stopCreativeAudioPreview } from '../audioEngine.js';
 
 // ── Feature flag ─────────────────────────────────────────────────────────────
 // Server config (creative_editor.enabled) wins; localStorage is dev override.
@@ -78,8 +79,27 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
   // Sync store.durationMs from scene
   function syncDuration() {
     const activeScene = getScene();
-    const d = (activeScene && typeof activeScene.durationMs === 'number') ? activeScene.durationMs : 0;
-    store.setState({ durationMs: d });
+    const baseDuration = activeScene && typeof activeScene.durationMs === 'number'
+      ? activeScene.durationMs
+      : 0;
+    const contentEnd = (activeScene?.elements || []).reduce((max, element) => {
+      const start = Math.max(0, Number(element?.meta?.startMs ?? element?.startMs) || 0);
+      const explicitEnd = Number(element?.meta?.endMs ?? element?.endMs);
+      const duration = Number(element?.meta?.durationMs ?? element?.durationMs);
+      const end = Number.isFinite(explicitEnd) && explicitEnd > start
+        ? explicitEnd
+        : start + Math.max(0, duration || 0);
+      return Math.max(max, end);
+    }, 0);
+    const audio = activeScene?.audioTrack || {};
+    const audioEnd = Math.max(0, Number(audio.startMs) || 0)
+      + Math.max(0, Number(audio.durationMs) || Number(audio.analysis?.durationMs) || 0);
+    const d = Math.max(1000, baseDuration, contentEnd, audioEnd);
+    store.setState(s => ({
+      durationMs: d,
+      timeMs: Math.min(Math.max(0, Number(s.timeMs) || 0), Math.max(0, d)),
+      playing: d > 0 ? s.playing : false,
+    }));
   }
 
   function getScene() {
@@ -102,6 +122,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
   let _renderer     = null;
   let _propPanel    = null;
   let _assetsPanel  = null;
+  let _audioPanel   = null;
   let _handles      = null;
   let _textEditor   = null;
   let _contextMenu  = null;
@@ -115,6 +136,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
   let _shapesPanel  = null;
   let _effectsPanel = null;
   let _filtersPanel = null;
+  let _playbackOverlay = null;
 
   function replaceScene(nextScene) {
     const target = getScene();
@@ -127,7 +149,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
 
   function applyEditorOps(ops, options = {}) {
     const list = Array.isArray(ops) ? ops : [ops];
-    if (!list.length) return scene;
+    if (!list.length) return getScene();
     const runner = api?.applySceneGraphOps || applySceneGraphOps;
     replaceScene(runner(getScene(), list));
     syncDuration();
@@ -135,12 +157,20 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     else store.setState(s => ({ ...s }));
     _renderer?.markDirty?.();
     if (options.history !== false) _history?.commit();
-    persistSceneSoon();
+    if (options.persist !== false) persistSceneSoon();
     return getScene();
   }
 
   function applySceneSnapshot(snapshot) {
     applyEditorOps({ op: 'set-scene', patch: snapshot }, { history: false });
+    // Track buttons mirror persisted element/audio metadata. Reset their
+    // transient category flags when undo/redo swaps in a snapshot.
+    const validIds = new Set((getScene()?.elements || []).map(element => element.id));
+    store.setState(s => ({
+      mutedTracks: [],
+      hiddenTracks: [],
+      selectedIds: (s.selectedIds || []).filter(id => validIds.has(id)),
+    }));
   }
 
   let _persistTimer = null;
@@ -153,7 +183,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       fetch('/api/canvas/creative-scene', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, mode, filename: `${mode}-scene.json`, doc: scene }),
+        body: JSON.stringify({ sessionId, mode, filename: `${mode}-scene.json`, doc: getScene() }),
       }).catch(() => {});
     }, 700);
   }
@@ -177,8 +207,13 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       container: p.media, store, getScene, applyOps: applyEditorOps,
     });
 
-    // Audio: reuse assets panel filtered — for now just a hint
-    p.audio.innerHTML = '<div class="ce-lib-panel"><div class="ce-lib-hint">Import audio via Media tab. Audio clips appear in the timeline.</div></div>';
+    _audioPanel = createAssetsPanel({
+      container: p.audio,
+      store,
+      getScene,
+      applyOps: applyEditorOps,
+      filterType: 'audio',
+    });
 
     _textPanel = createTextPanel({
       container: p.text, store, getScene, applyOps: applyEditorOps,
@@ -236,6 +271,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       history: _history,
       viewport: _viewport,
       textEditor: _textEditor,
+      timeline: _timelineEditor,
       applyOps: applyEditorOps,
     });
   }
@@ -250,7 +286,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
         if (_textEditor?.isActive()) return; // let text editor handle
 
         const { timeMs } = store.getState();
-        const hit = hitTestScene(sceneCoords.x, sceneCoords.y, scene, timeMs);
+        const hit = hitTestScene(sceneCoords.x, sceneCoords.y, getScene(), timeMs);
         const newId = hit?.id ?? null;
         const { selectedIds } = store.getState();
 
@@ -319,10 +355,12 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
 
   function handleContextAction(action, el) {
     if (!el && action !== 'paste' && action !== 'selectAll' && action !== 'fit') return;
-    const elements = scene?.elements;
+    const activeScene = getScene();
+    const elements = activeScene?.elements;
     if (!elements) return;
 
     if (action === 'delete') {
+      if (el.locked || el.meta?.locked) return;
       applyEditorOps({ op: 'delete', id: el.id }, { selectedIds: [] });
     } else if (action === 'duplicate') {
       const copy = JSON.parse(JSON.stringify(el));
@@ -337,7 +375,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       const minZ = Math.min(...elements.map(e => e.zIndex || 0));
       applyEditorOps({ op: 'set', id: el.id, patch: { zIndex: minZ - 1 } });
     } else if (action === 'selectAll') {
-      store.setState({ selectedIds: elements.map(e => e.id) });
+      store.setState({ selectedIds: elements.filter(e => e.locked !== true && e.meta?.locked !== true).map(e => e.id) });
     } else if (action === 'fit') {
       _viewport?.fitToScreen();
     }
@@ -382,11 +420,24 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
       if (scrubber && !scrubber.matches(':active')) scrubber.value = t;
       if (playBtn) playBtn.textContent = s.playing ? '⏸' : '▶';
       if (durLabel && s.durationMs) {
-        scrubber.max = s.durationMs;
+        if (scrubber) scrubber.max = s.durationMs;
         durLabel.textContent = fmtTime(s.durationMs);
       }
+      syncCreativeAudioPreviewToTimeline({
+        mode: 'video',
+        timelineMs: s.timeMs,
+        durationMs: s.durationMs || 5000,
+        track: {
+          ...(getScene()?.audioTrack || {}),
+          muted: (getScene()?.audioTrack?.muted === true)
+            || s.mutedTracks?.includes('audio')
+            || s.hiddenTracks?.includes('audio'),
+        },
+        playing: s.playing,
+      });
     });
     overlay._unsub = unsub;
+    _playbackOverlay = overlay;
 
     if (playBtn) {
       playBtn.addEventListener('click', () => {
@@ -396,6 +447,19 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     if (scrubber) {
       scrubber.addEventListener('input', () => {
         store.setState({ timeMs: Number(scrubber.value), playing: false });
+        syncCreativeAudioPreviewToTimeline({
+          mode: 'video',
+          timelineMs: Number(scrubber.value),
+          durationMs: store.getState().durationMs || 5000,
+          track: {
+            ...(getScene()?.audioTrack || {}),
+            muted: (getScene()?.audioTrack?.muted === true)
+              || store.getState().mutedTracks?.includes('audio')
+              || store.getState().hiddenTracks?.includes('audio'),
+          },
+          playing: false,
+          forceSeek: true,
+        });
       });
     }
   }
@@ -405,6 +469,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
     if (_shortcuts)    { _shortcuts.dispose();    _shortcuts    = null; }
     if (_timelineEditor) { _timelineEditor.dispose(); _timelineEditor = null; }
+    if (_playbackOverlay?._unsub) { _playbackOverlay._unsub(); _playbackOverlay = null; }
     if (_graphEditor)  { _graphEditor.dispose();  _graphEditor  = null; }
     if (_subsPanel)    { _subsPanel.dispose();    _subsPanel    = null; }
     if (_effectsPanel) { _effectsPanel.dispose(); _effectsPanel = null; }
@@ -416,12 +481,14 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     if (_textEditor)   { _textEditor.dispose();   _textEditor   = null; }
     if (_handles)      { _handles.dispose();      _handles      = null; }
     if (_propPanel)    { _propPanel.dispose();    _propPanel    = null; }
+    if (_audioPanel)   { _audioPanel.dispose();   _audioPanel   = null; }
     if (_assetsPanel)  { _assetsPanel.dispose();  _assetsPanel  = null; }
     if (_renderer)     { _renderer.dispose();     _renderer     = null; }
     if (_viewport)     { _viewport.dispose();     _viewport     = null; }
     layout.dispose();
     layout = null;
     _history = null;
+    stopCreativeAudioPreview({ reset: true, dispose: true });
     // Restore original shell children
     for (const child of _hiddenChildren) child.style.removeProperty('display');
     _hiddenChildren = [];
@@ -543,78 +610,6 @@ export async function syncCreativeEditor({ mode, shell, scene, api, compositionB
   }
 }
 
-// ── Placeholder renderers (assets, properties, timeline) ─────────────────────
-
-function renderAssetsPlaceholder(el) {
-  el.innerHTML = `
-    <div class="ce-placeholder">
-      <div class="ce-placeholder__icon">⬡</div>
-      <div class="ce-placeholder__title">Media Assets</div>
-      <div class="ce-placeholder__hint">Upload or drag media here.<br>Phase 5 will wire this up.</div>
-      <button class="ce-placeholder__btn" disabled>Upload</button>
-    </div>
-  `;
-}
-
-function renderPropertiesPlaceholder(el) {
-  el.innerHTML = `
-    <div class="ce-placeholder">
-      <div class="ce-placeholder__icon">⚙</div>
-      <div class="ce-placeholder__title">Properties</div>
-      <div class="ce-placeholder__hint">Select an element to inspect its properties.<br>Phase 4 will wire this up.</div>
-    </div>
-  `;
-}
-
-function renderTimelinePlaceholder(el, store, scene) {
-  const dur = scene?.durationMs || 5000;
-  const elements = (scene?.elements || [])
-    .filter(e => e.meta?.startMs != null || e.meta?.endMs != null)
-    .slice(0, 8);
-
-  el.innerHTML = `
-    <div class="ce-timeline-stub">
-      <div class="ce-timeline-stub__header">
-        <span class="ce-timeline-stub__label">Timeline</span>
-        <span class="ce-timeline-stub__dur">${fmtTime(dur)}</span>
-      </div>
-      <div class="ce-timeline-stub__tracks">
-        ${elements.length === 0
-          ? '<div class="ce-timeline-stub__empty">No timed elements. Add media in Phase 3.</div>'
-          : elements.map(el => renderTrackRow(el, dur)).join('')}
-        ${elements.length === 0 ? renderTrackRowEmpty() : ''}
-      </div>
-    </div>
-  `;
-}
-
-function renderTrackRow(el, durMs) {
-  const start = el.meta?.startMs || 0;
-  const end   = el.meta?.endMs || el.meta?.durationMs || durMs;
-  const left  = (start / durMs * 100).toFixed(2);
-  const width = ((end - start) / durMs * 100).toFixed(2);
-  const label = el.name || el.type || 'element';
-  return `
-    <div class="ce-track-row">
-      <div class="ce-track-row__label" title="${_safeCss(label)}">${_safeHtml(label)}</div>
-      <div class="ce-track-row__lane">
-        <div class="ce-track-row__clip" style="left:${left}%;width:${width}%">${_safeHtml(label)}</div>
-      </div>
-    </div>
-  `;
-}
-
-function renderTrackRowEmpty() {
-  return `
-    <div class="ce-track-row ce-track-row--empty">
-      <div class="ce-track-row__label">Track 1</div>
-      <div class="ce-track-row__lane">
-        <div class="ce-track-row__drop-hint">Drop media here</div>
-      </div>
-    </div>
-  `;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtTime(ms) {
@@ -623,16 +618,4 @@ function fmtTime(ms) {
   const s = Math.floor((total % 60000) / 1000);
   const f = total % 1000;
   return `${m}:${String(s).padStart(2, '0')}.${String(f).padStart(3, '0')}`;
-}
-
-function _safeHtml(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function _safeCss(s) {
-  return String(s || '').replace(/[<>"']/g, '');
 }

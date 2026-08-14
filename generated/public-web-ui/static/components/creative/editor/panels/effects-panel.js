@@ -27,7 +27,9 @@ export function createEffectsPanel({ container, store, getScene, applyOps }) {
 
   function render() {
     const el = getSelectedEl();
-    const activeEffects = el?.effects || [];
+    const activeEffects = Array.isArray(el?.meta?.effectStack)
+      ? el.meta.effectStack
+      : (el?.effects || []);
 
     container.innerHTML = `
       <div class="ce-lib-panel">
@@ -68,8 +70,9 @@ export function createEffectsPanel({ container, store, getScene, applyOps }) {
         const el2 = getSelectedEl();
         if (!el2) return;
         const idx = parseInt(btn.dataset.removeIdx);
-        const next = (el2.effects || []).filter((_, i) => i !== idx);
-        applyOps({ op: 'set', id: el2.id, patch: { effects: next } });
+        const current = Array.isArray(el2.meta?.effectStack) ? el2.meta.effectStack : (el2.effects || []);
+        const next = current.filter((_, i) => i !== idx);
+        applyOps({ op: 'set-effects', id: el2.id, effects: next });
         render();
       });
     });
@@ -82,8 +85,9 @@ export function createEffectsPanel({ container, store, getScene, applyOps }) {
         const efId = btn.dataset.addEf;
         const def = getEffect(efId);
         if (!def) return;
-        const next = [...(el2.effects || []), { id: efId, params: { ...(def.defaultParams || {}) } }];
-        applyOps({ op: 'set', id: el2.id, patch: { effects: next } });
+        const current = Array.isArray(el2.meta?.effectStack) ? el2.meta.effectStack : (el2.effects || []);
+        const next = [...current, { id: efId, params: { ...(def.defaultParams || {}) } }];
+        applyOps({ op: 'set-effects', id: el2.id, effects: next });
         render();
       });
     });

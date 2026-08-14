@@ -79,7 +79,18 @@ export function ensureCreativeAudioPreviewElement(track = {}, options = {}) {
     stopCreativeAudioPreview({ reset: true, dispose: true });
     return null;
   }
-  if (!creativeAudioPreviewElement || String(creativeAudioPreviewElement.src || '') !== src) {
+  const currentSrc = String(
+    creativeAudioPreviewElement?.getAttribute?.('src')
+      || creativeAudioPreviewElement?.src
+      || '',
+  );
+  let sameSource = currentSrc === src;
+  if (!sameSource && currentSrc && src) {
+    try {
+      sameSource = new URL(currentSrc, document.baseURI).href === new URL(src, document.baseURI).href;
+    } catch {}
+  }
+  if (!creativeAudioPreviewElement || !sameSource) {
     stopCreativeAudioPreview({ dispose: true });
     creativeAudioPreviewElement = new Audio(src);
     creativeAudioPreviewElement.preload = 'auto';

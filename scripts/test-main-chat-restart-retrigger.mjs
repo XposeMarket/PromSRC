@@ -16,12 +16,13 @@ process.env.PROMETHEUS_DATA_DIR = dataDir;
 process.env.PROMETHEUS_WORKSPACE_DIR = workspaceDir;
 const unexpectedSessionId = `restart_retrigger_${Date.now()}`;
 const plannedSessionId = `${unexpectedSessionId}_planned`;
+const cappedSessionId = `${unexpectedSessionId}_capped`;
 
 const fixture = String.raw`
 const sessions = require('./dist/gateway/session.js');
 const runtimes = require('./dist/gateway/live-runtime-registry.js');
 
-function register(sessionId, message, plannedTool) {
+function register(sessionId, message, plannedTool, restartRecoveryAttempts = 0) {
   sessions.addMessage(sessionId, { role: 'user', content: message, timestamp: Date.now(), channel: 'mobile' });
   const id = runtimes.registerLiveRuntime({
     kind: 'main_chat',
@@ -33,6 +34,7 @@ function register(sessionId, message, plannedTool) {
     recoveryData: {
       message,
       origin: { channel: 'mobile', surface: 'mobile_app', device: 'phone' },
+      ...(restartRecoveryAttempts ? { restartRecoveryAttempts } : {}),
     },
   });
   runtimes.updateLiveRuntimeCheckpoint(id, {
@@ -45,11 +47,17 @@ function register(sessionId, message, plannedTool) {
 
 register(process.env.UNEXPECTED_SESSION_ID, 'finish the interrupted foreground work', undefined);
 register(process.env.PLANNED_SESSION_ID, 'restart the gateway', 'gateway_restart');
+register(process.env.CAPPED_SESSION_ID, 'do not replay this forever', undefined, 2);
 `;
 
 const child = spawnSync(process.execPath, ['-e', fixture], {
   cwd: root,
-  env: { ...process.env, UNEXPECTED_SESSION_ID: unexpectedSessionId, PLANNED_SESSION_ID: plannedSessionId },
+  env: {
+    ...process.env,
+    UNEXPECTED_SESSION_ID: unexpectedSessionId,
+    PLANNED_SESSION_ID: plannedSessionId,
+    CAPPED_SESSION_ID: cappedSessionId,
+  },
   encoding: 'utf8',
   timeout: 20_000,
 });
@@ -88,12 +96,19 @@ try {
   assert.equal(attempts[0].sessionId, unexpectedSessionId);
   assert.equal(attempts[0].message, 'finish the interrupted foreground work');
   assert.ok(result.interruptedChats.includes(plannedSessionId), 'planned restarts still preserve a checkpoint');
+  assert.ok(result.interruptedChats.includes(cappedSessionId), 'capped recovery still preserves the interrupted session');
+  assert.equal(attempts.some((attempt) => attempt.sessionId === cappedSessionId), false, 'capped recovery must not retrigger the same turn');
 
   const unexpectedCheckpoint = sessions.getHistory(unexpectedSessionId, 10).find((entry) =>
     entry.role === 'assistant' && /^\[Interrupted by gateway restart\]/.test(String(entry.content || ''))
   );
   assert.ok(unexpectedCheckpoint, 'recovery must preserve a visible interruption checkpoint');
   assert.match(unexpectedCheckpoint.content, /automatically continue this turn/i);
+
+  const cappedPause = sessions.getHistory(cappedSessionId, 10).find((entry) =>
+    entry.role === 'assistant' && /Automatic recovery paused after/i.test(String(entry.content || ''))
+  );
+  assert.ok(cappedPause, 'recovery cap must leave a visible manual-retry message');
 
   const duplicate = recovery.recoverInterruptedRuntimes({ retriggerInterruptedMainChat: () => true });
   assert.equal(duplicate.inspected, 0, 'a recovered runtime must never be retriggered twice');

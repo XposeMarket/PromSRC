@@ -64,7 +64,6 @@ function extractVideoInfo(objectUrl) {
     video.crossOrigin = 'anonymous';
 
     video.addEventListener('loadedmetadata', () => {
-      const duration = video.duration * 1000; // ms
       // Seek to 10% for thumbnail
       video.currentTime = video.duration * 0.1;
     });
@@ -80,8 +79,14 @@ function extractVideoInfo(objectUrl) {
       const ctx = c.getContext('2d');
       ctx.drawImage(video, 0, 0, tw, th);
       const thumbnail = c.toDataURL('image/jpeg', 0.7);
+      const result = {
+        duration: Number.isFinite(video.duration) ? video.duration * 1000 : null,
+        thumbnail,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      };
       video.src = '';
-      resolve({ duration: video.duration * 1000, thumbnail, width: video.videoWidth, height: video.videoHeight });
+      resolve(result);
     }, { once: true });
 
     video.addEventListener('error', reject, { once: true });
@@ -91,24 +96,53 @@ function extractVideoInfo(objectUrl) {
 
 // ── Audio waveform peaks ──────────────────────────────────────────────────────
 
-async function extractAudioInfo(file) {
-  const ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-  const buf = await file.arrayBuffer();
-  const decoded = await ac.decodeAudioData(buf);
-  await ac.close();
-
-  const ch = decoded.getChannelData(0);
-  const blockSize = Math.floor(ch.length / WAVEFORM_SAMPLES);
-  const peaks = [];
-  for (let i = 0; i < WAVEFORM_SAMPLES; i++) {
-    let max = 0;
-    for (let j = 0; j < blockSize; j++) {
-      const abs = Math.abs(ch[i * blockSize + j] || 0);
-      if (abs > max) max = abs;
+async function extractAudioInfo(file, objectUrl = '') {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (AudioContextCtor) {
+    let ac = null;
+    try {
+      ac = new AudioContextCtor({ sampleRate: 44100 });
+      const buf = await file.arrayBuffer();
+      const decoded = await ac.decodeAudioData(buf);
+      const ch = decoded.getChannelData(0);
+      const blockSize = Math.max(1, Math.floor(ch.length / WAVEFORM_SAMPLES));
+      const peaks = [];
+      for (let i = 0; i < WAVEFORM_SAMPLES; i++) {
+        let max = 0;
+        const start = i * blockSize;
+        const end = Math.min(ch.length, start + blockSize);
+        for (let j = start; j < end; j++) {
+          const abs = Math.abs(ch[j] || 0);
+          if (abs > max) max = abs;
+        }
+        peaks.push(max);
+      }
+      return { duration: decoded.duration * 1000, peaks };
+    } finally {
+      try { await ac?.close?.(); } catch {}
     }
-    peaks.push(max);
   }
-  return { duration: decoded.duration * 1000, peaks };
+
+  // Metadata-only fallback keeps the clip usable on browsers/WebViews that
+  // do not expose Web Audio decoding.
+  return new Promise((resolve, reject) => {
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    const cleanup = () => {
+      audio.removeAttribute('src');
+      try { audio.load(); } catch {}
+    };
+    audio.addEventListener('loadedmetadata', () => {
+      const duration = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
+      cleanup();
+      resolve({ duration, peaks: null });
+    }, { once: true });
+    audio.addEventListener('error', () => {
+      cleanup();
+      reject(new Error('Could not read audio metadata.'));
+    }, { once: true });
+    audio.src = objectUrl;
+  });
 }
 
 // ── Image info ────────────────────────────────────────────────────────────────
@@ -167,7 +201,7 @@ export async function importFile(file) {
 
     } else if (mime.startsWith('audio/')) {
       type = 'audio';
-      const info = await extractAudioInfo(file);
+      const info = await extractAudioInfo(file, objectSrc);
       duration  = info.duration;
       peaks     = info.peaks;
     }
@@ -245,6 +279,10 @@ export function assetToSceneElement(asset, scene) {
       startMs:  0,
       endMs:    asset.duration || dur,
       durationMs: asset.duration || dur,
+      trimStartMs: 0,
+      trimEndMs: 0,
+      volume: 1,
+      muted: false,
     },
   };
 }

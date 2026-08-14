@@ -13,7 +13,7 @@
  */
 
 import { api } from '../api.js';
-import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm } from '../utils.js';
+import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
@@ -8262,9 +8262,6 @@ function syncActiveChat() {
       window.activeModelBadge = null;
     }
   }
-  // Opening or switching chats must not clear a pending unread marker. The
-  // marker belongs to this session and is cleared only by an explicit read
-  // action (or by sending a new message in that session).
   renderMainGoalStrip();
   renderChatMessages();
   renderProcessLog();
@@ -8435,6 +8432,7 @@ async function openTerminalSession(id, source = 'terminal') {
 
     window.activeChatSessionId = id;
     setAgentSessionId(id);
+    markSessionRead(id);
     syncActiveChat();
     refreshVisibleChannelsList();
     if (source === 'voice_room') {
@@ -8534,6 +8532,10 @@ async function openSession(id) {
   if (sess) {
     await _loadSessionFromServer(id, { force: true });
   }
+  // A session is read when its conversation is actually opened. Clear this
+  // after the server refresh so stale local/server merge state cannot put it
+  // straight back into Unread (or keep it in the Priority attention group).
+  markSessionRead(id);
   // Establish project/non-project chrome before rendering the active chat so
   // the empty composer dock reflects the session's real context immediately.
   if (typeof window._maybeClearProjectState === 'function') {
@@ -8640,6 +8642,15 @@ function syncChatTopbarTitle() {
     contextProjectEl.hidden = !showProject;
     contextProjectEl.setAttribute('aria-hidden', String(!showProject));
   }
+}
+
+function markSessionRead(sessionId) {
+  const sess = window.chatSessions.find(s => s.id === sessionId);
+  if (!sess || sess.unread !== true) return false;
+  sess.unread = false;
+  saveChatSessions();
+  window.scheduleSessionListRefresh?.();
+  return true;
 }
 
 // ---- Mode switching ----
@@ -14112,7 +14123,7 @@ function renderChatMessages() {
 
   if (!splitActive && visibleHistory.length === 0 && !voicePendingHtml) {
     if (chatView) chatView.classList.add('chat-empty');
-    container.innerHTML = `
+    setInnerHTMLPreservingVisuals(container, `
       <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
         <h2>Prometheus One</h2>
@@ -14123,7 +14134,7 @@ function renderChatMessages() {
             <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
             ${renderEmptyChatStarterCards()}`
         }
-      </div>`;
+      </div>`);
     if (!projectWelcome) loadEmptyChatBrainCards();
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     renderDesktopNewChatContextDock();
@@ -14135,7 +14146,7 @@ function renderChatMessages() {
   const mainHtml = renderVisibleChatHistoryHtml(window.chatHistory || []) + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
   if (splitActive) {
     container.classList.add('side-chat-split-shell');
-    container.innerHTML = `
+    setInnerHTMLPreservingVisuals(container, `
       <section class="side-chat-main-pane" aria-label="Main chat">
         <div class="side-chat-pane-header">
           <div>
@@ -14146,7 +14157,7 @@ function renderChatMessages() {
         <div class="side-chat-main-messages">${mainHtml}</div>
       </section>
       ${sideActive ? renderSideChatPaneHtml() : renderBackgroundAgentSidePaneHtml(backgroundAgentRecord)}
-    `;
+    `);
     if (!window.chatMessagesUserScrolledUp) {
       const mainPane = container.querySelector('.side-chat-main-messages');
       const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
@@ -14164,7 +14175,7 @@ function renderChatMessages() {
   }
 
   container.classList.remove('side-chat-split-shell');
-  container.innerHTML = mainHtml;
+  setInnerHTMLPreservingVisuals(container, mainHtml);
   // innerHTML reset clears scrollTop: stick to bottom unless the user scrolled
   // up to read, in which case restore their position instead of snapping.
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
@@ -14223,6 +14234,26 @@ function renderChatMessageNavigator() {
     target.classList.add('navigator-target');
     setTimeout(() => target.classList.remove('navigator-target'), 1400);
   }));
+  const updatePointerWave = (event) => {
+    const markers = Array.from(navigator.querySelectorAll('[data-chat-message-target]'));
+    const waveRadius = 23;
+    navigator.classList.add('is-pointer-tracking');
+    markers.forEach((marker) => {
+      const rect = marker.getBoundingClientRect();
+      const distance = Math.abs(event.clientY - (rect.top + (rect.height / 2)));
+      const strength = Math.exp(-((distance * distance) / (2 * waveRadius * waveRadius)));
+      const width = 9 + (17 * strength);
+      marker.style.setProperty('--nav-hover-wave-width', `${width.toFixed(2)}px`);
+    });
+  };
+  navigator.addEventListener('pointerenter', updatePointerWave);
+  navigator.addEventListener('pointermove', updatePointerWave);
+  navigator.addEventListener('pointerleave', () => {
+    navigator.classList.remove('is-pointer-tracking');
+    navigator.querySelectorAll('[data-chat-message-target]').forEach((marker) => {
+      marker.style.removeProperty('--nav-hover-wave-width');
+    });
+  });
   chatView.appendChild(navigator);
   updateChatMessageNavigatorActive(container);
 }
@@ -14237,11 +14268,7 @@ function updateChatMessageNavigatorActive(container = document.getElementById('c
   targets.forEach((node) => { if (node.offsetTop <= readLine) active = node; });
   const activeIndex = String(active?.getAttribute('data-chat-message-index') || '');
   const markers = Array.from(navigator.querySelectorAll('[data-chat-message-target]'));
-  const activePosition = Math.max(0, markers.findIndex((button) => button.getAttribute('data-chat-message-target') === activeIndex));
-  markers.forEach((button, position) => {
-    const distance = Math.abs(position - activePosition);
-    const waveWidth = 9 + (17 * Math.exp(-distance / 1.35));
-    button.style.setProperty('--nav-wave-width', `${waveWidth.toFixed(2)}px`);
+  markers.forEach((button) => {
     button.classList.toggle('active', button.getAttribute('data-chat-message-target') === activeIndex);
   });
 }

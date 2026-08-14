@@ -352,7 +352,7 @@
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'static/styles/mobile.css?v=pm-v290-2026-08-13-remote-gateway-execution';
+          cssTag.href = 'static/styles/mobile.css?v=pm-v291-2026-08-13-mobile-syntax-recovery';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -367,6 +367,10 @@
 <style>
   /* First-paint guard: keeps the mobile launch frame black before mobile.css arrives. */
   body.pm-mobile-active { background: #000 !important; }
+  /* The desktop-only ember effect is a fixed, full-viewport canvas. Keep it
+     out of the mobile stacking context so it cannot cover the mobile router
+     while its stylesheet is being loaded. */
+  body.pm-mobile-active #ember-canvas { display: none !important; }
   #ember-canvas {
     position: fixed;
     inset: 0;
@@ -9703,7 +9707,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v290-2026-08-13-remote-gateway-execution')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v291-2026-08-13-mobile-syntax-recovery')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -9737,7 +9741,7 @@ let _errBackdrop = null;
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v290-2026-08-13-remote-gateway-execution';
+    const PM_PWA_VERSION = 'pm-v291-2026-08-13-mobile-syntax-recovery';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a

@@ -700,6 +700,166 @@ function installVisualMessageBridge() {
   });
 }
 
+function visualIframeReuseKey(frame) {
+  if (!frame?.getAttribute) return '';
+  const wrapper = frame.closest?.('.visual-block');
+  const visualId = String(frame.getAttribute('data-visual-id') || '').trim();
+  if (!visualId) return '';
+  return [
+    visualId,
+    String(frame.getAttribute('data-visual-version') || '1'),
+    String(wrapper?.getAttribute('data-vis-lang') || ''),
+    String(wrapper?.getAttribute('data-vis-code') || ''),
+  ].join('\u0000');
+}
+
+function visualKeyForNode(node) {
+  if (!node?.querySelector && !node?.matches) return '';
+  const frame = node.matches?.('iframe[data-prom-visual="true"]')
+    ? node
+    : node.querySelector?.('iframe[data-prom-visual="true"]');
+  return visualIframeReuseKey(frame);
+}
+
+function canMorphDomNodes(current, next) {
+  if (!current || !next || current.nodeType !== next.nodeType) return false;
+  if (current.nodeType !== 1) return true;
+  return String(current.tagName || '').toLowerCase() === String(next.tagName || '').toLowerCase();
+}
+
+function syncMorphAttributes(current, next) {
+  const isVisualFrame = current.matches?.('iframe[data-prom-visual="true"]');
+  const preserved = isVisualFrame ? new Set(['srcdoc', 'style']) : new Set();
+  Array.from(current.attributes || []).forEach((attribute) => {
+    if (preserved.has(attribute.name) || next.hasAttribute(attribute.name)) return;
+    current.removeAttribute(attribute.name);
+  });
+  Array.from(next.attributes || []).forEach((attribute) => {
+    if (preserved.has(attribute.name)) return;
+    if (current.getAttribute(attribute.name) !== attribute.value) {
+      current.setAttribute(attribute.name, attribute.value);
+    }
+  });
+}
+
+function patchLinearDomNodes(parent, currentNodes, nextNodes, insertBefore = null) {
+  const currentList = Array.from(currentNodes || []);
+  const nextList = Array.from(nextNodes || []);
+  const shared = Math.min(currentList.length, nextList.length);
+  let reused = 0;
+  for (let index = 0; index < shared; index += 1) {
+    const current = currentList[index];
+    const next = nextList[index];
+    const result = morphVisualDomNode(current, next);
+    if (result) {
+      reused += result.reused;
+      continue;
+    }
+    const clone = next.cloneNode(true);
+    parent.replaceChild(clone, current);
+  }
+  for (let index = shared; index < nextList.length; index += 1) {
+    parent.insertBefore(nextList[index].cloneNode(true), insertBefore);
+  }
+  for (let index = shared; index < currentList.length; index += 1) {
+    currentList[index].remove();
+  }
+  return reused;
+}
+
+function sameVisualKeySequence(currentKeys, nextKeys) {
+  return currentKeys.length === nextKeys.length
+    && currentKeys.every((key, index) => key === nextKeys[index]);
+}
+
+function patchMorphChildren(parent, nextParent) {
+  const currentChildren = Array.from(parent.childNodes || []);
+  const nextChildren = Array.from(nextParent.childNodes || []);
+  const currentKeys = currentChildren.map(visualKeyForNode).filter(Boolean);
+  const nextKeys = nextChildren.map(visualKeyForNode).filter(Boolean);
+
+  // Visual-containing nodes act as fixed anchors. Patch each ordinary DOM
+  // segment around those anchors, so a streaming text update can add/remove
+  // siblings without ever moving or removing the live iframe node.
+  if (currentKeys.length && sameVisualKeySequence(currentKeys, nextKeys)) {
+    let currentStart = 0;
+    let nextStart = 0;
+    let reused = 0;
+    for (const key of nextKeys) {
+      const currentAnchorIndex = currentChildren.findIndex((node, index) => index >= currentStart && visualKeyForNode(node) === key);
+      const nextAnchorIndex = nextChildren.findIndex((node, index) => index >= nextStart && visualKeyForNode(node) === key);
+      if (currentAnchorIndex < 0 || nextAnchorIndex < 0) return patchLinearDomNodes(parent, currentChildren, nextChildren);
+      reused += patchLinearDomNodes(
+        parent,
+        currentChildren.slice(currentStart, currentAnchorIndex),
+        nextChildren.slice(nextStart, nextAnchorIndex),
+        currentChildren[currentAnchorIndex],
+      );
+      const anchorResult = morphVisualDomNode(currentChildren[currentAnchorIndex], nextChildren[nextAnchorIndex]);
+      if (!anchorResult) return patchLinearDomNodes(parent, currentChildren, nextChildren);
+      reused += anchorResult.reused;
+      currentStart = currentAnchorIndex + 1;
+      nextStart = nextAnchorIndex + 1;
+    }
+    reused += patchLinearDomNodes(
+      parent,
+      currentChildren.slice(currentStart),
+      nextChildren.slice(nextStart),
+    );
+    return reused;
+  }
+
+  return patchLinearDomNodes(parent, currentChildren, nextChildren);
+}
+
+function morphVisualDomNode(current, next) {
+  if (!canMorphDomNodes(current, next)) return null;
+  if (current.nodeType === 3 || current.nodeType === 8) {
+    if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+    return { reused: 0 };
+  }
+  if (current.matches?.('iframe[data-prom-visual="true"]')) {
+    return visualIframeReuseKey(current) === visualIframeReuseKey(next)
+      ? { reused: 1 }
+      : null;
+  }
+  syncMorphAttributes(current, next);
+  return { reused: patchMorphChildren(current, next) };
+}
+
+// Chat messages are intentionally rendered from fresh HTML during streaming
+// and history reconciliation. Reusing the iframe browsing context is
+// essential for interactive visuals: replacing or moving the node restarts
+// its sandbox, resets local UI state, and can make an active visual look like
+// the whole chat is refreshing. The source/version key means a genuinely
+// changed visual still gets a clean document.
+export function preserveVisualIframes(previousRoot, nextRoot) {
+  if (!previousRoot?.childNodes || !nextRoot?.childNodes) return 0;
+  return patchMorphChildren(previousRoot, nextRoot);
+}
+
+// Set a chat-rendered container's contents without tearing down unchanged
+// interactive visual iframes. This is deliberately a small DOM helper rather
+// than a renderer-specific special case so desktop, mobile, and side-chat
+// surfaces all share the same lifecycle behavior.
+export function setInnerHTMLPreservingVisuals(root, html) {
+  if (!root) return 0;
+  const markup = String(html || '');
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function' || typeof root.appendChild !== 'function') {
+    root.innerHTML = markup;
+    return 0;
+  }
+  const template = document.createElement('template');
+  template.innerHTML = markup;
+  const currentHasVisual = !!root.querySelector?.('iframe[data-prom-visual="true"]');
+  const nextHasVisual = !!template.content.querySelector?.('iframe[data-prom-visual="true"]');
+  if (!currentHasVisual && !nextHasVisual) {
+    root.innerHTML = markup;
+    return 0;
+  }
+  return preserveVisualIframes(root, template.content);
+}
+
 function fallbackVisualId(lang, code, ordinal = 0) {
   const input = `${lang}\0${ordinal}\0${code}`;
   let hash = 2166136261;
@@ -815,4 +975,6 @@ window.showConfirm = showConfirm;
 window.log = log;
 window.buildVisualSrcdoc = buildVisualSrcdoc;
 window.buildVisualIframe = buildVisualIframe;
+window.preserveVisualIframes = preserveVisualIframes;
+window.setInnerHTMLPreservingVisuals = setInnerHTMLPreservingVisuals;
 window.renderMd = renderMd;

@@ -10,11 +10,12 @@ function _safeHtml(s) {
 
 export function createExportDialog({ store, getScene }) {
   let _modal = null;
+  let _exportController = null;
 
   function open() {
     if (_modal) return;
     const scene = getScene();
-    const dur   = scene?.durationMs || 5000;
+    const dur   = Math.max(1000, Number(scene?.durationMs) || Number(store?.getState?.().durationMs) || 5000);
     const sw    = scene?.width  || 1920;
     const sh    = scene?.height || 1080;
 
@@ -83,8 +84,11 @@ export function createExportDialog({ store, getScene }) {
 
     const resVal  = _modal.querySelector('[data-ce-res]')?.value  || '1920x1080';
     const fps     = parseInt(_modal.querySelector('[data-ce-fps]')?.value  || '30');
-    const startMs = parseInt(_modal.querySelector('[data-ce-start]')?.value || '0');
-    const endMs   = parseInt(_modal.querySelector('[data-ce-end]')?.value   || String(scene.durationMs || 5000));
+    const durationMs = Math.max(1000, Number(scene.durationMs) || Number(store?.getState?.().durationMs) || 5000);
+    const requestedStart = Number(_modal.querySelector('[data-ce-start]')?.value || '0');
+    const requestedEnd = Number(_modal.querySelector('[data-ce-end]')?.value || String(durationMs));
+    const startMs = Math.max(0, Math.min(durationMs - 1, Number.isFinite(requestedStart) ? requestedStart : 0));
+    const endMs = Math.max(startMs + 1, Math.min(durationMs, Number.isFinite(requestedEnd) ? requestedEnd : durationMs));
     const [w, h]  = resVal.split('x').map(Number);
 
     const statusEl  = _modal.querySelector('[data-ce-status]');
@@ -95,6 +99,8 @@ export function createExportDialog({ store, getScene }) {
     statusEl.style.display = '';
     exportBtn.disabled = true;
     exportBtn.textContent = 'Encoding…';
+    _exportController = typeof AbortController === 'function' ? new AbortController() : null;
+    const controller = _exportController;
 
     try {
       const drawFn = buildDrawFn();
@@ -102,6 +108,8 @@ export function createExportDialog({ store, getScene }) {
         scene, drawFn,
         width: w, height: h, fps,
         startMs, endMs,
+        audioTrack: scene.audioTrack,
+        signal: controller?.signal,
         onProgress: p => {
           if (fillEl) fillEl.style.width = Math.round(p * 100) + '%';
           if (statusTxt) statusTxt.textContent = `Encoding… ${Math.round(p * 100)}%`;
@@ -120,13 +128,18 @@ export function createExportDialog({ store, getScene }) {
 
       setTimeout(close, 1500);
     } catch (err) {
+      if (err?.name === 'AbortError') return;
       console.error('[ce] export failed:', err);
-      if (statusTxt) statusTxt.textContent = 'Export failed: ' + err.message;
-      if (exportBtn) { exportBtn.disabled = false; exportBtn.textContent = 'Retry'; }
+      if (statusTxt && _modal) statusTxt.textContent = 'Export failed: ' + err.message;
+      if (exportBtn && _modal) { exportBtn.disabled = false; exportBtn.textContent = 'Retry'; }
+    } finally {
+      if (_exportController === controller) _exportController = null;
     }
   }
 
   function close() {
+    try { _exportController?.abort?.(); } catch {}
+    _exportController = null;
     if (_modal) { _modal.remove(); _modal = null; }
   }
 

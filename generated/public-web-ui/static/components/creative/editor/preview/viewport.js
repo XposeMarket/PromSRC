@@ -22,6 +22,10 @@ export function createViewport({ container, store, onHitTest }) {
   let ctx = null;
   let ro = null;
   let _panDrag = null;
+  let _spaceDown = false;
+  let _hasInitialFit = false;
+  let _lastViewportWidth = 0;
+  let _lastViewportHeight = 0;
 
   // Build DOM
   const root = document.createElement('div');
@@ -51,7 +55,14 @@ export function createViewport({ container, store, onHitTest }) {
     canvas.height = Math.round(h * dpr);
     canvas.style.width  = w + 'px';
     canvas.style.height = h + 'px';
-    fitToScreen(true);
+    if (!_hasInitialFit || (_lastViewportWidth <= 1 && _lastViewportHeight <= 1 && w > 1 && h > 1)) {
+      fitToScreen(true);
+      _hasInitialFit = true;
+    } else {
+      updateZoomLabel();
+    }
+    _lastViewportWidth = w;
+    _lastViewportHeight = h;
   }
 
   ro = new ResizeObserver(onResize);
@@ -122,7 +133,7 @@ export function createViewport({ container, store, onHitTest }) {
   // ── Middle-mouse / space+drag pan ────────────────────────────────────────────
   function onMouseDown(e) {
     // Middle mouse button or space+left drag pan
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    if (e.button === 1 || (e.button === 0 && (e.altKey || _spaceDown))) {
       e.preventDefault();
       const { panX, panY } = store.getState();
       _panDrag = { startX: e.clientX, startY: e.clientY, startPanX: panX, startPanY: panY };
@@ -150,6 +161,20 @@ export function createViewport({ container, store, onHitTest }) {
     canvas.style.cursor = '';
   }
 
+  function onKeyDown(e) {
+    if (e.code === 'Space' && !e.repeat) {
+      _spaceDown = true;
+      if (!_panDrag) canvas.style.cursor = 'grab';
+    }
+  }
+
+  function onKeyUp(e) {
+    if (e.code === 'Space') {
+      _spaceDown = false;
+      if (!_panDrag) canvas.style.cursor = '';
+    }
+  }
+
   // ── Toolbar buttons ──────────────────────────────────────────────────────────
   root.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
@@ -174,6 +199,8 @@ export function createViewport({ container, store, onHitTest }) {
   canvas.addEventListener('mousedown', onMouseDown);
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mouseup',   onMouseUp);
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
 
   // ── Subscribe to zoom/pan changes for label update ───────────────────────────
   const unsub = store.derive(s => s.zoom, () => updateZoomLabel());
@@ -190,6 +217,8 @@ export function createViewport({ container, store, onHitTest }) {
     canvas.removeEventListener('mousedown', onMouseDown);
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('keydown', onKeyDown);
+    document.removeEventListener('keyup', onKeyUp);
     unsub();
     root.remove();
   }

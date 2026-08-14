@@ -6,7 +6,7 @@ import {
   escapeHtml,
   renderMobileHeader,
   wireHeaderActions,
-} from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+} from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import {
   gatewayStatusLabel,
   getGatewayFilter,

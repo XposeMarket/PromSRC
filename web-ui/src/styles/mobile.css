@@ -372,6 +372,11 @@ body.pm-mobile-active select {
 /* Lock desktop scroll behind mobile */
 body.pm-mobile-active { overflow: hidden; }
 
+/* The desktop ember canvas is fixed at z-index 900. It must never participate
+   in mobile rendering: otherwise a valid mobile route can be completely
+   obscured by a black canvas during startup or after a cache recovery. */
+body.pm-mobile-active #ember-canvas { display: none !important; }
+
 /* Use Safari's document scroller on mobile. This lets moving page content
    participate in Safari's translucent top-chrome composition; a fixed,
    overflow-hidden app with a nested scroller cannot cross that boundary. */

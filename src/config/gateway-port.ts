@@ -22,7 +22,11 @@ export function getRuntimeGatewayPort(): number | undefined {
 
 export function resolveGatewayPort(config: unknown): number {
   const configured = parseGatewayPort((config as any)?.gateway?.port);
-  return configured || getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT;
+  // Electron passes its stable public relay port through the environment.
+  // That runtime identity must win over a persisted historical default (for
+  // example 18789) so gateway lifecycle replacements keep serving through the
+  // Electron-selected relay instead of reviving the old listener.
+  return getRuntimeGatewayPort() || configured || DEFAULT_GATEWAY_PORT;
 }
 
 export function buildGatewayUrl(port: number, host = '127.0.0.1'): string {

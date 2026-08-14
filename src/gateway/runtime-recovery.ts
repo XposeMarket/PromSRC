@@ -42,6 +42,53 @@ export interface HotRestartMainChatRecovery {
 }
 
 const crashRecoveredMainChatGoalSessionIds = new Set<string>();
+const MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS = 2;
+
+function automaticMainChatRecoveryAttempts(runtime: Pick<LiveRuntimeSnapshot, 'recoveryData'>): number {
+  const raw = Number(runtime.recoveryData?.restartRecoveryAttempts || 0);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function pauseAutomaticMainChatRecovery(runtime: LiveRuntimeSnapshot, reason = 'recovery_attempt_limit'): void {
+  const sessionId = String(runtime.sessionId || '').trim();
+  const attempts = automaticMainChatRecoveryAttempts(runtime);
+  const toolName = String(runtime.checkpoint?.toolName || '').trim();
+  if (sessionId) {
+    const content = [
+      `Automatic recovery paused after ${attempts} repeated gateway restart attempt${attempts === 1 ? '' : 's'} for this turn.`,
+      toolName ? `The last checkpointed tool was ${toolName}.` : '',
+      'The checkpoint is preserved. Retry this turn manually after the gateway is stable.',
+    ].filter(Boolean).join(' ');
+    const recent = getHistory(sessionId, 12);
+    const alreadyPresent = recent.some((message) =>
+      message.role === 'assistant'
+      && message.messageKind === 'restart_status'
+      && String(message.content || '').includes('Automatic recovery paused after')
+    );
+    if (!alreadyPresent) {
+      addMessage(sessionId, {
+        role: 'assistant',
+        messageKind: 'restart_status',
+        content,
+        timestamp: Date.now(),
+        channel: runtime.source as any,
+        channelLabel: 'Runtime Recovery',
+      } as any, {
+        disableCompactionCheck: true,
+        disableMemoryFlushCheck: true,
+      });
+      flushSession(sessionId);
+    }
+  }
+  markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+    recovery: 'chat_recovery_paused',
+    recoveryAttempts: attempts,
+    reason,
+    sessionId: runtime.sessionId,
+    pausedAt: Date.now(),
+  });
+  console.warn(`[RuntimeRecovery] Paused automatic recovery for ${sessionId || runtime.id} after ${attempts} attempt(s).`);
+}
 
 export function consumeCrashRecoveredMainChatGoalSessionIds(): string[] {
   const sessionIds = Array.from(crashRecoveredMainChatGoalSessionIds);
@@ -595,6 +642,10 @@ export function retriggerDeferredMainChatRuntime(
   runtime: LiveRuntimeSnapshot,
   retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
 ): boolean {
+  if (automaticMainChatRecoveryAttempts(runtime) >= MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS) {
+    pauseAutomaticMainChatRecovery(runtime);
+    return true;
+  }
   let started = false;
   try {
     started = retrigger(runtime) === true;
@@ -714,6 +765,13 @@ export function recoverInterruptedRuntimes(opts: {
           }
         }
         interruptedChats.push(runtime.sessionId);
+        const recoveryAttemptLimitReached = runtime.kind === 'main_chat'
+          && !plannedRestartTool
+          && automaticMainChatRecoveryAttempts(runtime) >= MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS;
+        if (recoveryAttemptLimitReached) {
+          pauseAutomaticMainChatRecovery(runtime);
+          continue;
+        }
         // Unexpected foreground turns are safe to retrigger from their durable
         // request/checkpoint. Planned restart/apply boundaries are excluded: the
         // BOOT owner handles those, and replaying the tool-owning turn could create

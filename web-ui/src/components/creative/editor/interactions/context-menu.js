@@ -2,6 +2,8 @@
  * Context menu — right-click on canvas/element.
  */
 
+import { hitTestScene } from '../preview/renderer.js';
+
 export function createContextMenu({ viewportRoot, store, getScene, onAction }) {
   let _menu = null;
 
@@ -56,19 +58,13 @@ export function createContextMenu({ viewportRoot, store, getScene, onAction }) {
     const mx   = e.clientX - rect.left;
     const my   = e.clientY - rect.top;
 
-    const { zoom, panX, panY, selectedIds, timeMs } = store.getState();
+    const { zoom, panX, panY, timeMs } = store.getState();
     const sx = (mx - panX) / zoom;
     const sy = (my - panY) / zoom;
     const scene = getScene();
 
-    // Hit test
-    const elements = (scene?.elements || []).sort((a, b) => (b.zIndex || 0) - (a.zIndex || 0));
-    const hit = elements.find(el => {
-      const t = (typeof window.resolveElementAtTime === 'function')
-        ? window.resolveElementAtTime(el, timeMs ?? 0)
-        : { x: el.x, y: el.y, width: el.width, height: el.height };
-      return sx >= t.x && sx <= t.x + t.width && sy >= t.y && sy <= t.y + t.height;
-    });
+    // Use the same rotated/animated/locked-aware hit test as the viewport.
+    const hit = hitTestScene(sx, sy, scene, timeMs ?? 0);
 
     if (hit) {
       store.setState({ selectedIds: [hit.id] });
@@ -81,7 +77,6 @@ export function createContextMenu({ viewportRoot, store, getScene, onAction }) {
       ]);
     } else {
       show(mx, my, [
-        { label: 'Paste',    action: () => onAction?.('paste',    null) },
         { label: 'Select All', action: () => onAction?.('selectAll', null) },
         'divider',
         { label: 'Fit to Screen', action: () => onAction?.('fit', null) },
@@ -92,13 +87,15 @@ export function createContextMenu({ viewportRoot, store, getScene, onAction }) {
   viewportRoot.addEventListener('contextmenu', onContextMenu);
 
   // Dismiss on click outside
-  document.addEventListener('pointerdown', e => {
+  function onDocumentPointerDown(e) {
     if (_menu && !_menu.contains(e.target)) hide();
-  });
+  }
+  document.addEventListener('pointerdown', onDocumentPointerDown);
 
   function dispose() {
     hide();
     viewportRoot.removeEventListener('contextmenu', onContextMenu);
+    document.removeEventListener('pointerdown', onDocumentPointerDown);
   }
 
   return { show, hide, dispose };

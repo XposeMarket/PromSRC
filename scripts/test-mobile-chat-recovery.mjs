@@ -28,6 +28,10 @@ assert.ok(composerRafDeclaration >= 0, 'mobile chat must declare its composer RA
 assert.ok(composerShiftDeclaration >= 0, 'mobile chat must declare its composer animation state');
 assert.ok(firstComposerSpaceCall >= 0, 'mobile chat must size its composer during startup');
 assert.match(api, /reconcileMobileChatPushNotifications/, 'mobile push must reconcile a stale browser subscription with the gateway');
+assert.match(api, /originReason/, 'mobile history writes must support a source-specific origin reason');
+assert.match(pages, /originReason: 'visual_state'/, 'visual state persistence must not look like a normal history refresh');
+assert.match(pages, /mobile_visual_state/, 'mobile must ignore the visual-state history acknowledgement locally');
+assert.match(router, /historyChangeSource: isMobileVisualStateSyncRequest/, 'the gateway must label visual-state history writes separately');
 assert.match(desktop, /DESKTOP_ACTIVE_CHAT_RUNS_KEY/, 'desktop must persist the active chat run across reloads');
 assert.match(desktop, /recoverDesktopMainChatSession/, 'desktop must have a foreground stream recovery path');
 assert.match(desktop, /const rememberedSessionId = recallActiveChatSessionId\(\)/, 'desktop startup must reconsider the last active session');
@@ -304,7 +308,7 @@ assert.match(
 );
 const fullThreadRenderStart = pages.indexOf('function _renderThread');
 const fullThreadImageCapture = pages.indexOf("threadEl.querySelectorAll('img[src]')", fullThreadRenderStart);
-const fullThreadHtmlReplace = pages.indexOf('threadEl.innerHTML = ', fullThreadImageCapture);
+const fullThreadHtmlReplace = pages.indexOf('setInnerHTMLPreservingVisuals(threadEl,', fullThreadImageCapture);
 const fullThreadImageRestore = pages.indexOf('node.replaceWith(stable)', fullThreadHtmlReplace);
 assert.ok(
   fullThreadRenderStart >= 0

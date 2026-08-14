@@ -5,10 +5,14 @@
  * Handles are DOM elements so they receive pointer events naturally.
  */
 
+import { resolveElementAtTime as resolveSceneElementAtTime } from '../../sceneGraph.js';
+
 const HANDLE_SIZE = 8;
 const ROTATE_OFFSET = 20; // px above top-center handle
 
 function resolveElementAtTime(el, atMs) {
+  const resolved = resolveSceneElementAtTime(el, atMs);
+  if (resolved) return resolved;
   if (typeof window.resolveElementAtTime === 'function') return window.resolveElementAtTime(el, atMs);
   return { x: el.x ?? 0, y: el.y ?? 0, width: el.width ?? 100, height: el.height ?? 60, rotation: el.rotation ?? 0, opacity: el.opacity ?? 1 };
 }
@@ -58,7 +62,7 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
   function render() {
     overlay.innerHTML = '';
     const el = getSelectedElement();
-    if (!el) return;
+    if (!el || el.locked === true || el.meta?.locked === true) return;
 
     const { timeMs } = store.getState();
     const r = resolveElementAtTime(el, timeMs);
@@ -66,7 +70,16 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
     const br = sceneToView(r.x + r.width, r.y + r.height);
     const vw = br.x - tl.x;
     const vh = br.y - tl.y;
-    const rot = r.rotation || 0;
+    const rot = (Number(r.rotation) || 0) + (Number(el.meta?.roll) || 0);
+    const rotation = rot * Math.PI / 180;
+    const cos = Math.cos(rotation);
+    const sin = Math.sin(rotation);
+    const center = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    const viewPoint = (x, y) => sceneToView(x, y);
+    const rotatedPoint = (x, y) => viewPoint(
+      center.x + x * cos - y * sin,
+      center.y + x * sin + y * cos,
+    );
 
     // Selection box
     const box = document.createElement('div');
@@ -84,9 +97,10 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
       const h = document.createElement('div');
       h.className = 'ce-handle ce-handle--resize';
       h.dataset.handle = def.id;
+      const point = rotatedPoint((def.cx - 0.5) * r.width, (def.cy - 0.5) * r.height);
       h.style.cssText = `
-        left:${tl.x + vw * def.cx - HANDLE_SIZE / 2}px;
-        top:${tl.y + vh * def.cy - HANDLE_SIZE / 2}px;
+        left:${point.x - HANDLE_SIZE / 2}px;
+        top:${point.y - HANDLE_SIZE / 2}px;
         cursor:${def.cursor};
       `;
       h.addEventListener('pointerdown', e => startDrag(e, def.id, el, r));
@@ -97,9 +111,11 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
     const rot_h = document.createElement('div');
     rot_h.className = 'ce-handle ce-handle--rotate';
     rot_h.dataset.handle = 'rotate';
+    const topCenter = rotatedPoint(0, -r.height / 2);
+    const rotateHandle = rotatedPoint(0, -r.height / 2 - ROTATE_OFFSET / Math.max(0.1, getTransform().zoom));
     rot_h.style.cssText = `
-      left:${tl.x + vw * 0.5 - HANDLE_SIZE / 2}px;
-      top:${tl.y - ROTATE_OFFSET - HANDLE_SIZE / 2}px;
+      left:${rotateHandle.x - HANDLE_SIZE / 2}px;
+      top:${rotateHandle.y - HANDLE_SIZE / 2}px;
       cursor: grab;
     `;
     rot_h.addEventListener('pointerdown', e => startDrag(e, 'rotate', el, r));
@@ -108,10 +124,14 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
     // Rotation connector line
     const line = document.createElement('div');
     line.className = 'ce-handle-rot-line';
+    const lineLength = Math.hypot(rotateHandle.x - topCenter.x, rotateHandle.y - topCenter.y);
+    const lineAngle = Math.atan2(rotateHandle.y - topCenter.y, rotateHandle.x - topCenter.x) * 180 / Math.PI + 90;
     line.style.cssText = `
-      left:${tl.x + vw * 0.5 - 0.5}px;
-      top:${tl.y - ROTATE_OFFSET}px;
-      height:${ROTATE_OFFSET}px;
+      left:${topCenter.x - 0.5}px;
+      top:${topCenter.y}px;
+      height:${lineLength}px;
+      transform:rotate(${lineAngle}deg);
+      transform-origin:top center;
     `;
     overlay.appendChild(line);
   }
@@ -141,8 +161,8 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
     if (!el) return;
 
     const { zoom } = getTransform();
-    const dx = (e.clientX - _drag.startMX) / zoom;
-    const dy = (e.clientY - _drag.startMY) / zoom;
+    const worldDx = (e.clientX - _drag.startMX) / zoom;
+    const worldDy = (e.clientY - _drag.startMY) / zoom;
     const r  = _drag.startR;
     const h  = _drag.handleId;
 
@@ -155,11 +175,14 @@ export function createHandlesOverlay({ viewportRoot, store, getScene, applyOps, 
       _drag.lastPatch = { rotation: Math.round(angle) };
     } else {
       // Resize
+      const angle = -((Number(r.rotation) || 0) + (Number(el.meta?.roll) || 0)) * Math.PI / 180;
+      const dx = worldDx * Math.cos(angle) - worldDy * Math.sin(angle);
+      const dy = worldDx * Math.sin(angle) + worldDy * Math.cos(angle);
       _drag.lastPatch = buildResizePatch(r, h, dx, dy);
     }
 
     if (typeof applyOps === 'function') {
-      applyOps({ op: 'set', id: el.id, patch: _drag.lastPatch }, { history: false });
+      applyOps({ op: 'set', id: el.id, patch: _drag.lastPatch }, { history: false, persist: false });
     }
     render();
     if (typeof onElementChange === 'function') onElementChange(el);

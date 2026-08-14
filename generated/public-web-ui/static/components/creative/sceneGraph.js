@@ -1439,6 +1439,36 @@ function normalizeElement(element) {
     ...element,
     meta: cloneMeta(element.meta),
   };
+  // Older creative documents kept several editable values at the element
+  // root while the editor panels write to `meta.*`. Normalize both shapes so
+  // a property edit is reflected by the preview, timeline, and export path.
+  if (!Array.isArray(next.meta.effectStack) && Array.isArray(next.effects)) {
+    next.meta.effectStack = cloneData(next.effects);
+  }
+  const mediaSource = [next.meta.source, next.source, next.src, next.url]
+    .find((value) => typeof value === 'string' && value.trim());
+  if (mediaSource) {
+    next.meta.source = String(mediaSource);
+    next.source = String(mediaSource);
+    next.src = String(mediaSource);
+    if (next.url !== undefined) next.url = String(mediaSource);
+  }
+  // Lift legacy root-level editor fields into the canonical metadata object
+  // before applying defaults. Several early quick-add panels emitted the
+  // root shape, text, and typography fields, and defaulting first silently
+  // erased those presets during normalization.
+  const copyRootMeta = (metaKey, ...rootKeys) => {
+    if (next.meta[metaKey] !== undefined && next.meta[metaKey] !== null) return;
+    const sourceKey = rootKeys.find((key) => next[key] !== undefined && next[key] !== null);
+    if (sourceKey) next.meta[metaKey] = cloneData(next[sourceKey]);
+  };
+  copyRootMeta('content', 'content', 'text');
+  [
+    'fontSize', 'fontWeight', 'fontFamily', 'fontStyle', 'lineHeight', 'letterSpacing',
+    'textAlign', 'color', 'fill', 'stroke', 'strokeWidth', 'radius', 'rx', 'shape',
+    'gradient', 'gradientFill', 'fit', 'volume', 'muted', 'speed', 'iconName',
+    'background', 'accent', 'title', 'body', 'value', 'glyph',
+  ].forEach((key) => copyRootMeta(key, key));
   next.opacity = clamp(Number.isFinite(Number(next.opacity)) ? Number(next.opacity) : 1, 0, 1);
   next.rotation = Number.isFinite(Number(next.rotation)) ? Number(next.rotation) : 0;
   next.visible = next.visible !== false;
@@ -1470,9 +1500,12 @@ function normalizeElement(element) {
   next.meta.blendMode = normalizeBlendMode(next.meta.blendMode);
   next.meta.mask = normalizeMask(next.meta.mask);
   next.meta.effectStack = normalizeEffectStack(next.meta.effectStack);
+  next.effects = cloneData(next.meta.effectStack);
 
   if (next.type === 'text') {
     next.meta.content = String(next.meta.content || 'Text');
+    next.text = next.meta.content;
+    next.content = next.meta.content;
     next.meta.fontSize = Math.max(10, Number(next.meta.fontSize) || 24);
     next.meta.fontWeight = Number(next.meta.fontWeight) || 700;
     next.meta.fontFamily = String(next.meta.fontFamily || 'Manrope');
@@ -1508,11 +1541,13 @@ function normalizeElement(element) {
   }
 
   if (next.type === 'shape') {
+    if (!next.meta.gradientFill && next.gradient) next.meta.gradientFill = cloneData(next.gradient);
     next.meta.shape = next.meta.shape || 'rect';
     next.meta.fill = next.meta.fill || '#111827';
-    next.meta.stroke = next.meta.stroke || 'transparent';
+    const normalizedStroke = String(next.meta.stroke || '').trim().toLowerCase();
+    next.meta.stroke = !normalizedStroke || normalizedStroke === 'none' ? 'transparent' : next.meta.stroke;
     next.meta.strokeWidth = Math.max(0, Number(next.meta.strokeWidth) || 0);
-    next.meta.radius = Math.max(0, Number(next.meta.radius) || 0);
+    next.meta.radius = Math.max(0, Number(next.meta.radius ?? next.meta.rx) || 0);
     next.meta.sides = Math.max(5, Math.min(8, Number(next.meta.sides) || 6));
     if (next.meta.shape === 'circle') {
       const size = Math.max(next.width, next.height);
@@ -1523,11 +1558,17 @@ function normalizeElement(element) {
     if (next.meta.shape === 'line' || next.meta.shape === 'arrow') {
       next.height = Math.max(2, Number(next.meta.strokeWidth) || 2);
     }
+    next.fill = next.meta.fill;
+    next.stroke = next.meta.stroke;
+    next.strokeWidth = next.meta.strokeWidth;
+    next.gradient = cloneData(next.meta.gradientFill || next.gradient || null);
+    next.gradientFill = cloneData(next.meta.gradientFill || null);
   }
 
   if (next.type === 'image') {
     next.meta.fit = next.meta.fit || 'cover';
     next.meta.radius = Math.max(0, Number(next.meta.radius) || 18);
+    next.fit = next.meta.fit;
   }
 
   if (next.type === 'video') {
@@ -1543,6 +1584,9 @@ function normalizeElement(element) {
     if (Number.isFinite(Number(next.meta.timelineDurationMs))) {
       next.meta.timelineDurationMs = Math.max(100, Number(next.meta.timelineDurationMs));
     }
+    next.fit = next.meta.fit;
+    next.muted = next.meta.muted;
+    next.volume = next.meta.volume;
   }
 
   if (next.type === 'hyperframes') {
@@ -1839,6 +1883,28 @@ function applySetPatch(element, patch = {}) {
   Object.entries(patch).forEach(([key, value]) => {
     if (key.includes('.')) deepSet(element, key, value);
     else element[key] = value;
+
+    // Keep the legacy root aliases in step with the canonical meta values.
+    // The renderer accepts both shapes because old scenes still exist, but
+    // new edits must not leave the two representations fighting each other.
+    if (key === 'meta.content' || key === 'meta.text') {
+      element.text = String(value ?? '');
+      element.content = String(value ?? '');
+    } else if (key === 'meta.source' || key === 'meta.src' || key === 'meta.url') {
+      element.source = value;
+      element.src = value;
+      element.url = value;
+    } else if (key === 'meta.fill') {
+      element.fill = value;
+    } else if (key === 'meta.stroke') {
+      element.stroke = value;
+    } else if (key === 'meta.strokeWidth') {
+      element.strokeWidth = value;
+    } else if (key === 'meta.fit') {
+      element.fit = value;
+    } else if (key === 'meta.effectStack') {
+      element.effects = cloneData(value);
+    }
   });
 }
 
@@ -2222,12 +2288,37 @@ export function applySceneGraphOps(doc, ops = []) {
       continue;
     }
     if (kind === 'add') {
-      nextElements.push(createSceneNode(op));
+      const added = createSceneNode(op);
+      nextElements.push(added);
+      // The lightweight editor has one canonical audio lane today. Arming an
+      // imported audio element here keeps preview/export behavior consistent
+      // even when the asset was inserted by an external command or agent.
+      if (String(added.type || '').toLowerCase() === 'audio' && added.meta?.source) {
+        nextDoc.audioTrack = normalizeAudioTrack({
+          ...(nextDoc.audioTrack || {}),
+          source: added.meta.source,
+          label: added.name || nextDoc.audioTrack?.label || 'Audio',
+          startMs: added.meta.startMs,
+          durationMs: added.meta.durationMs,
+          trimStartMs: added.meta.trimStartMs,
+          trimEndMs: added.meta.trimEndMs,
+          volume: added.meta.volume ?? nextDoc.audioTrack?.volume ?? 1,
+          muted: added.meta.muted === true,
+        });
+      }
       continue;
     }
     if (kind === 'delete') {
       const idx = nextElements.findIndex((element) => element.id === op.id);
-      if (idx !== -1) nextElements.splice(idx, 1);
+      if (idx !== -1) {
+        const removed = nextElements[idx];
+        nextElements.splice(idx, 1);
+        if (String(removed?.type || '').toLowerCase() === 'audio') {
+          const removedSource = String(removed.meta?.source || removed.source || '').trim();
+          const activeSource = String(nextDoc.audioTrack?.source || '').trim();
+          if (removedSource && (!activeSource || activeSource === removedSource)) nextDoc.audioTrack = null;
+        }
+      }
       continue;
     }
     const element = nextElements.find((candidate) => candidate.id === op.id);
@@ -2389,6 +2480,39 @@ export function applySceneGraphOps(doc, ops = []) {
     previousById,
     changedTextIds,
   );
+  // Keep the single supported audio lane mirrored with its visual timeline
+  // clip. This makes move/trim/property edits audible immediately while
+  // preserving documents that use an audioTrack without an element node.
+  const audioElements = nextDoc.elements.filter((element) => String(element?.type || '').toLowerCase() === 'audio' && String(element?.meta?.source || element?.source || '').trim());
+  const activeAudioSource = String(nextDoc.audioTrack?.source || '').trim();
+  const audioElement = audioElements.find((element) => String(element?.meta?.source || element?.source || '').trim() === activeAudioSource)
+    || (!activeAudioSource ? audioElements[0] : null);
+  if (audioElement) {
+    nextDoc.audioTrack = normalizeAudioTrack({
+      ...(nextDoc.audioTrack || {}),
+      source: audioElement.meta?.source || audioElement.source,
+      label: audioElement.name || nextDoc.audioTrack?.label || 'Audio',
+      startMs: audioElement.meta?.startMs,
+      durationMs: audioElement.meta?.durationMs,
+      trimStartMs: audioElement.meta?.trimStartMs,
+      trimEndMs: audioElement.meta?.trimEndMs,
+      volume: audioElement.meta?.volume ?? nextDoc.audioTrack?.volume ?? 1,
+      muted: audioElement.meta?.muted === true,
+    });
+  }
+  const contentEndMs = nextDoc.elements.reduce((max, element) => {
+    const start = Math.max(0, Number(element?.meta?.startMs) || 0);
+    const end = Number.isFinite(Number(element?.meta?.endMs))
+      ? Number(element.meta.endMs)
+      : start + Math.max(0, Number(element?.meta?.durationMs) || 0);
+    return Math.max(max, end);
+  }, 0);
+  const audioTrack = normalizeAudioTrack(nextDoc.audioTrack);
+  const audioEndMs = Math.max(0, Number(audioTrack.startMs) || 0)
+    + Math.max(0, Number(audioTrack.durationMs) || Number(audioTrack.analysis?.durationMs) || 0);
+  // Match a non-destructive NLE timeline: adding media extends the sequence
+  // to fit it instead of silently clipping the new clip at the old duration.
+  nextDoc.durationMs = Math.max(1000, Number(nextDoc.durationMs) || 0, contentEndMs, audioEndMs);
   return nextDoc;
 }
 

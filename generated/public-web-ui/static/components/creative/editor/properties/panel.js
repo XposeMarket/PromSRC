@@ -47,11 +47,14 @@ function textInput(key, value) {
 }
 
 function colorInput(key, value) {
-  const hex = String(value || '#000000');
+  const raw = String(value || '#000000');
+  const hex = /^#[0-9a-f]{6}$/i.test(raw)
+    ? raw
+    : (/^#[0-9a-f]{8}$/i.test(raw) ? raw.slice(0, 7) : '#000000');
   return `<div class="ce-prop-color-wrap">
     <input class="ce-prop-color" type="color" data-key="${key}" value="${_safeHtml(hex)}">
     <input class="ce-prop-input ce-prop-input--hex" type="text" data-key="${key}-hex"
-      value="${_safeHtml(hex)}" maxlength="9">
+      value="${_safeHtml(raw)}" maxlength="32">
   </div>`;
 }
 
@@ -67,7 +70,7 @@ function select(key, value, options) {
 }
 
 function metaValue(el, key, fallback) {
-  return el?.[key] ?? el?.meta?.[key] ?? fallback;
+  return el?.meta?.[key] ?? el?.[key] ?? fallback;
 }
 
 // ── Section renderer ──────────────────────────────────────────────────────────
@@ -130,6 +133,7 @@ function renderShapeSection(el) {
       ${field('Fill',   colorInput('meta.fill',   metaValue(el, 'fill', '#6366f1')))}
       ${field('Stroke', colorInput('meta.stroke', metaValue(el, 'stroke', '#ffffff')))}
       ${field('Stroke W', numInput('meta.strokeWidth', metaValue(el, 'strokeWidth', 0), { min: 0, step: 0.5 }))}
+      ${field('Radius', numInput('meta.radius', metaValue(el, 'radius', 0), { min: 0, step: 1 }))}
     </div>
   `;
 }
@@ -155,6 +159,8 @@ function renderImageSection(el) {
     <div class="ce-prop-section">
       <div class="ce-prop-section__title">Image</div>
       ${field('Src', textInput('meta.source', metaValue(el, 'source', metaValue(el, 'src', metaValue(el, 'url', '')))))}
+      ${field('Fit', select('meta.fit', metaValue(el, 'fit', 'cover'), ['cover', 'contain', 'fill']))}
+      ${field('Radius', numInput('meta.radius', metaValue(el, 'radius', 18), { min: 0, step: 1 }))}
     </div>
   `;
 }
@@ -164,9 +170,23 @@ function renderVideoSection(el) {
     <div class="ce-prop-section">
       <div class="ce-prop-section__title">Video</div>
       ${field('Src', textInput('meta.source', metaValue(el, 'source', metaValue(el, 'src', metaValue(el, 'url', '')))))}
+      ${field('Fit', select('meta.fit', metaValue(el, 'fit', 'cover'), ['cover', 'contain', 'fill']))}
       ${field('Trim start', numInput('meta.trimStartMs', metaValue(el, 'trimStartMs', 0), { min: 0, step: 100 }))}
       ${field('Trim end', numInput('meta.trimEndMs', metaValue(el, 'trimEndMs', 0), { min: 0, step: 100 }))}
+      ${field('Speed', numInput('meta.speed', metaValue(el, 'speed', 1), { min: 0.05, max: 4, step: 0.05 }))}
       ${field('Volume', numInput('meta.volume', metaValue(el, 'volume', 0), { min: 0, max: 1, step: 0.05 }))}
+      ${field('Radius', numInput('meta.radius', metaValue(el, 'radius', 18), { min: 0, step: 1 }))}
+    </div>
+  `;
+}
+
+function renderAudioSection(el) {
+  return `
+    <div class="ce-prop-section">
+      <div class="ce-prop-section__title">Audio</div>
+      ${field('Volume', numInput('meta.volume', metaValue(el, 'volume', 1), { min: 0, max: 1, step: 0.05 }))}
+      ${field('Trim start', numInput('meta.trimStartMs', metaValue(el, 'trimStartMs', 0), { min: 0, step: 100 }))}
+      ${field('Trim end', numInput('meta.trimEndMs', metaValue(el, 'trimEndMs', 0), { min: 0, step: 100 }))}
     </div>
   `;
 }
@@ -184,6 +204,8 @@ function renderElementFields(el) {
     typeSection = renderImageSection(el);
   } else if (type === 'video') {
     typeSection = renderVideoSection(el);
+  } else if (type === 'audio') {
+    typeSection = renderAudioSection(el);
   }
 
   return `

@@ -20,6 +20,7 @@ export function createHistory({ getScene, applySnapshot }) {
       width:      scene.width,
       height:     scene.height,
       durationMs: scene.durationMs,
+      audioTrack: scene.audioTrack || null,
       captions:   scene.captions || scene.subtitles || [],
       subtitles:  scene.captions || scene.subtitles || [],
     });

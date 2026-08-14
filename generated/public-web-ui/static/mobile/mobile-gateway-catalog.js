@@ -455,10 +455,13 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
         });
         try { window.dispatchEvent(new Event('pm-device-revoked')); } catch {}
       }
-      const error = new Error(String(body?.error || body?.message || `Gateway request failed (${response.status}).`));
+      const restarting = response.status === 503
+        && (body?.code === 'GATEWAY_RESTARTING' || response.headers?.get?.('X-Prometheus-Gateway-State') === 'restarting');
+      const error = new Error(String(body?.error || body?.message || (restarting ? 'Gateway is restarting. Please retry shortly.' : `Gateway request failed (${response.status}).`)));
       error.status = response.status;
       error.body = body;
-      error.code = response.status === 401 ? 'GATEWAY_REVOKED' : 'GATEWAY_REQUEST_FAILED';
+      error.code = response.status === 401 ? 'GATEWAY_REVOKED' : restarting ? 'GATEWAY_RESTARTING' : 'GATEWAY_REQUEST_FAILED';
+      error.retryable = restarting;
       throw error;
     }
     return body || {};
@@ -540,7 +543,7 @@ export async function probeGateway(entryOrId, { persist = true } = {}) {
     if (persist) updateGatewayStatus(entry.gatewayId, next);
     return next;
   } catch (error) {
-    const status = error?.code === 'GATEWAY_TIMEOUT' || error?.code === 'GATEWAY_REQUEST_FAILED'
+    const status = error?.code === 'GATEWAY_TIMEOUT' || error?.code === 'GATEWAY_REQUEST_FAILED' || error?.code === 'GATEWAY_RESTARTING'
       ? MOBILE_GATEWAY_STATUS.SUSPECT
       : error?.code === 'GATEWAY_REVOKED'
         ? MOBILE_GATEWAY_STATUS.REVOKED

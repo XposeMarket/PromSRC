@@ -26,7 +26,7 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
     <div class="ce-graph-editor">
       <div class="ce-graph-toolbar">
         <select class="ce-graph-prop-select" data-ce-graph-prop>
-          ${PROPS.map(p => `<option value="${p}">${p}</option>`).join('')}
+          ${PROPS.map(p => `<option value="${p}"${p === 'opacity' ? ' selected' : ''}>${p}</option>`).join('')}
         </select>
         <button class="ce-graph-btn" data-ce-graph-add title="Add keyframe at current time">+KF</button>
         <button class="ce-graph-btn" data-ce-graph-clear title="Clear all keyframes">Clear</button>
@@ -54,6 +54,10 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
     return (scene?.elements || []).find(e => e.id === selectedIds[0]) || null;
   }
 
+  function getDuration() {
+    return Math.max(1, Number(getScene()?.durationMs) || Number(store.getState().durationMs) || 5000);
+  }
+
   function getKeyframes(el) {
     return (el?.meta?.keyframes || [])
       .filter(kf => Number.isFinite(Number(kf?.[_activeProp])))
@@ -65,8 +69,7 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
     canvas.width = w;
 
     const el    = getSelectedEl();
-    const scene = getScene();
-    const dur   = scene?.durationMs || 5000;
+    const dur   = getDuration();
     const { timeMs } = store.getState();
 
     ctx.clearRect(0, 0, w, GRAPH_H);
@@ -172,11 +175,22 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    const dur = getScene()?.durationMs || 5000;
+    const dur = getDuration();
     for (let i = 0; i < kfs.length; i++) {
       const x = (kfs[i].t / dur) * canvas.width;
       const y = normY(kfs[i].v, _activeProp) * GRAPH_H;
-      if (Math.hypot(mx - x, my - y) < POINT_R + 3) { _drag = { i }; return; }
+      if (Math.hypot(mx - x, my - y) < POINT_R + 3) {
+        _drag = { i };
+        canvas.setPointerCapture?.(e.pointerId);
+        return;
+      }
+    }
+    // Clicking an empty graph area creates a keyframe at that time/value.
+    if (typeof applyOps === 'function') {
+      const atMs = Math.round(Math.max(0, Math.min(1, mx / Math.max(1, canvas.width))) * dur);
+      const value = Math.round(denormY(Math.max(0, Math.min(1, my / GRAPH_H)), _activeProp) * 100) / 100;
+      applyOps({ op: 'add-keyframe', id: el.id, patch: { atMs, [_activeProp]: value } });
+      draw();
     }
   });
 
@@ -186,7 +200,7 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
     if (!el) return;
     const kfs = getKeyframes(el);
     const rect = canvas.getBoundingClientRect();
-    const dur  = getScene()?.durationMs || 5000;
+    const dur  = getDuration();
     const nx   = Math.max(0, Math.min(1, (e.clientX - rect.left) / canvas.width));
     const ny   = Math.max(0, Math.min(1, (e.clientY - rect.top) / GRAPH_H));
     const target = kfs[_drag.i];
@@ -196,18 +210,20 @@ export function createGraphEditor({ container, store, getScene, applyOps }) {
         : kf
     )).sort((a,b) => (a.atMs || 0) - (b.atMs || 0));
     if (typeof applyOps === 'function') {
-      applyOps({ op: 'set-keyframes', id: el.id, keyframes: nextKfs }, { history: false });
+      applyOps({ op: 'set-keyframes', id: el.id, keyframes: nextKfs }, { history: false, persist: false });
     }
     draw();
   });
 
-  canvas.addEventListener('pointerup', () => {
+  function finishDrag() {
     if (_drag && typeof applyOps === 'function') {
       const el = getSelectedEl();
       if (el) applyOps({ op: 'set-keyframes', id: el.id, keyframes: el.meta?.keyframes || [] });
     }
     _drag = null;
-  });
+  }
+  canvas.addEventListener('pointerup', finishDrag);
+  canvas.addEventListener('pointercancel', finishDrag);
 
   // Subscribe to store changes
   const unsub = store.subscribe(() => draw());

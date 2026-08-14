@@ -4,20 +4,20 @@
 
 import { markClientPerformance } from '../performance.js';
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+} from './mobile-pages.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=pm-v290-2026-08-13-remote-gateway-execution';
+} from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
 import {
   loadMobileGatewaySessionGroups,
   searchMobileGatewaySessions,
@@ -34,7 +34,7 @@ let mobileRenderGeneration = 0;
 
 function loadMobilePairingPage() {
   if (!mobilePairingPagePromise) {
-    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v290-2026-08-13-remote-gateway-execution')
+    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v291-2026-08-13-mobile-syntax-recovery')
       .catch((error) => {
         mobilePairingPagePromise = null;
         throw error;

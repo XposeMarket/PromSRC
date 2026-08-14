@@ -197,6 +197,7 @@ import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool, warmContextBuildWorkerPool } from './chat/context-build-worker-client';
 import { prepareTaskReplyLookupIndex } from './tasks/task-store';
 import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
+import { getBrainActivityWorkerStatus, shutdownBrainActivityWorker } from './brain/activity-package-worker-client';
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
@@ -224,8 +225,21 @@ import { setNotifyBroadcastFn } from './teams/notify-bridge';
 const configManager = getConfig();
 const config = configManager.getConfig();
 const CONFIG_DIR_PATH = configManager.getConfigDir();
-const PORT = config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789);
-const HOST = config.gateway.host || process.env.GATEWAY_HOST || '0.0.0.0';
+// Electron may retain the configured/public gateway port in a stable relay
+// while this worker is restarted behind it. The internal listener override is
+// deliberately separate from PROMETHEUS_GATEWAY_PORT so pairing, lifecycle,
+// and external URLs continue to describe the public endpoint.
+const configuredInternalPort = Number(process.env.PROMETHEUS_GATEWAY_INTERNAL_PORT || '');
+const PORT = Number.isInteger(configuredInternalPort) && configuredInternalPort >= 1 && configuredInternalPort <= 65_535
+  ? configuredInternalPort
+  : (config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789));
+const configuredGatewayHost = config.gateway.host || process.env.GATEWAY_HOST || '0.0.0.0';
+const HOST = String(process.env.PROMETHEUS_GATEWAY_INTERNAL_HOST || '').trim()
+  || configuredGatewayHost;
+// The optional HTTPS listener is an independently configured endpoint. Keep
+// it on the configured host when Electron moves only the primary HTTP worker
+// behind the stable local relay.
+const HTTPS_HOST = configuredGatewayHost;
 
 function resolveConfigPath(value: unknown): string {
   const raw = String(value || '').trim();
@@ -778,6 +792,7 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
       contextBuild: getContextBuildLimiterStatus(),
       contextBuildWorkers: getContextBuildWorkerPoolStatus(),
       modelCallWorkers: getModelCallWorkerPoolStatus(),
+      brainActivityWorker: getBrainActivityWorkerStatus(),
       postTurn: getPostTurnQueueStatus(),
       sessionPersistence: getSessionPersistenceStatus(),
       sessionCache: getSessionCacheStatus(),
@@ -932,6 +947,7 @@ const getGatewayQueueStatus = () => ({
   contextBuild: getContextBuildLimiterStatus(),
   contextBuildWorkers: getContextBuildWorkerPoolStatus(),
   modelCallWorkers: getModelCallWorkerPoolStatus(),
+  brainActivityWorker: getBrainActivityWorkerStatus(),
   postTurn: getPostTurnQueueStatus(),
   sessionPersistence: getSessionPersistenceStatus(),
   sessionCache: getSessionCacheStatus(),
@@ -966,7 +982,7 @@ app.get('/api/gateway/descriptor', rejectPairingQueryToken, requireGatewayAuth, 
 });
 const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port, getGatewayQueueStatus);
 const secureBundle = httpsGateway
-  ? createServer(app, httpsGateway.port, HOST, httpsGateway.options, undefined, getGatewayQueueStatus)
+  ? createServer(app, httpsGateway.port, HTTPS_HOST, httpsGateway.options, undefined, getGatewayQueueStatus)
   : null;
 const xaiVoiceStreaming = attachXaiVoiceStreaming(server);
 const secureXaiVoiceStreaming = secureBundle ? attachXaiVoiceStreaming(secureBundle.server) : null;
@@ -996,6 +1012,7 @@ setShutdownHooks({
       shutdownMemoryIndexRefreshWorker(),
       shutdownContextBuildWorkerPool(),
       shutdownModelCallWorkerPool(),
+      shutdownBrainActivityWorker(),
     ]).then(() => undefined);
   },
   closeWebSocket: () => {
@@ -1261,8 +1278,8 @@ async function startGatewayListeners(): Promise<void> {
   });
 
   if (secureBundle && httpsGateway) {
-    secureBundle.server.listen(httpsGateway.port, HOST, () => {
-      console.log(`[Gateway] HTTPS listener ready on https://${HOST}:${httpsGateway.port}`);
+    secureBundle.server.listen(httpsGateway.port, HTTPS_HOST, () => {
+      console.log(`[Gateway] HTTPS listener ready on https://${HTTPS_HOST}:${httpsGateway.port}`);
     });
   }
 }
@@ -1324,6 +1341,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
       shutdownMemoryIndexRefreshWorker(),
       shutdownContextBuildWorkerPool(),
       shutdownModelCallWorkerPool(),
+      shutdownBrainActivityWorker(),
     ]);
   } catch (err: any) {
     console.warn('[Gateway] Worker shutdown failed:', err?.message || err);

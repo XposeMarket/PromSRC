@@ -57,11 +57,11 @@ import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config';
 import { listBrowserSessions } from '../browser-tools';
 import {
-  buildThoughtActivityPackage,
   recordThoughtSearchCalls,
   type BuiltActivityPackage,
   type ActivityPackage,
 } from './activity-package.js';
+import { buildThoughtActivityPackageIsolated } from './activity-package-worker-client';
 import { runSkillCurator } from '../skills-runtime/skill-curator';
 import {
   applyCarryForwardToIntradayFile,
@@ -966,7 +966,7 @@ export class BrainRunner {
     try {
       checkpointBrainRuntime(runtimeId, 'activity_package_started', { phase: 'activity_package' });
       const packageDir = path.join(this.deps.workspacePath, 'Brain', 'activity-packages', dateStr, windowLabel);
-      builtActivityPackage = await buildThoughtActivityPackage({
+      builtActivityPackage = await buildThoughtActivityPackageIsolated({
         configDir: getConfig().getConfigDir(),
         workspacePath: this.deps.workspacePath,
         repoRoot: process.cwd(),
@@ -976,7 +976,7 @@ export class BrainRunner {
         outputDir: packageDir,
         metricsPath: path.join(getBrainDir(), 'state', 'activity-package-metrics.jsonl'),
         browserSessions: listBrowserSessions(),
-      });
+      }, abortSignal);
       console.log(`[BrainRunner] Activity package ${builtActivityPackage.package.packageId}: ${builtActivityPackage.package.metrics.eventsIncluded} events, ${builtActivityPackage.package.metrics.packageChars} chars, ${builtActivityPackage.package.metrics.assemblyLatencyMs}ms`);
       checkpointBrainRuntime(runtimeId, 'activity_package_completed', { phase: 'prompt_build' });
     } catch (err: any) {

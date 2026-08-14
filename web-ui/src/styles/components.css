@@ -2725,9 +2725,9 @@ body:not(.pm-mobile-active) #chat-view:has(> #chat-messages > #chat-welcome) > .
   position: relative;
   z-index: 2;
 }
-body:not(.pm-mobile-active) .chat-new-context-dock[hidden],
+body:not(.pm-mobile-active) #chat-view > .chat-new-context-dock[hidden],
 body:not(.pm-mobile-active) .chat-new-context-popover[hidden] {
-  display: none;
+  display: none !important;
 }
 body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-dock,
 body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-popover {
@@ -3240,13 +3240,16 @@ body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-pop
 .chat-message-nav-marker::before {
   content: '';
   display: block;
-  width: var(--nav-wave-width, 9px);
+  width: 9px;
   height: 3px;
   flex: 0 0 auto;
   border-radius: 999px;
   background: color-mix(in srgb, var(--brand) 30%, transparent);
   box-shadow: none;
   transition: width 180ms cubic-bezier(.22,.75,.25,1), background 160ms ease, box-shadow 160ms ease;
+}
+.chat-message-navigator.is-pointer-tracking .chat-message-nav-marker::before {
+  width: var(--nav-hover-wave-width, 9px);
 }
 .chat-message-nav-marker.active::before {
   background: var(--brand);
@@ -3256,7 +3259,6 @@ body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-pop
 .chat-message-nav-marker:focus-visible {
   outline: none;
 }
-.chat-message-nav-marker:hover::before,
 .chat-message-nav-marker:focus-visible::before {
   width: 26px;
   background: color-mix(in srgb, var(--brand) 82%, #fff 18%);
@@ -6432,7 +6434,7 @@ select.settings-input {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Creative Editor — Phase 1 layout & skeleton styles
+   Creative Editor — layout, timeline, viewport, and panel styles
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Root layout grid */
@@ -7143,16 +7145,25 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 
 /* ── Multi-track timeline ─────────────────────────────────────────── */
 .ce-timeline-multitrack { display: flex; flex-direction: column; height: 100%; }
+.ce-timeline--drop-over .ce-tl-body {
+  outline: 1px dashed rgba(249,115,22,0.8);
+  outline-offset: -2px;
+  background: rgba(249,115,22,0.04);
+}
 .ce-tl-body {
   display: flex;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: auto;
+  position: relative;
 }
 .ce-tl-gutter {
   flex: 0 0 84px;
   width: 84px;
+  flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  z-index: 5;
   border-right: 1px solid rgba(255,255,255,0.06);
   background: rgba(255,255,255,0.012);
 }
@@ -7161,6 +7172,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   height: 34px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 4px;
   padding: 0 10px;
   font-size: 9px;
   font-weight: 800;
@@ -7172,7 +7185,68 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.ce-tl-lanes { position: relative; flex: 1; min-width: 0; }
+.ce-tl-gutter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ce-tl-gutter-actions {
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.ce-tl-lane-btn {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.42);
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.ce-tl-lane-btn:hover { color: #fff; background: rgba(255,255,255,0.12); }
+.ce-tl-lane-btn.is-active {
+  color: #fed7aa;
+  border-color: rgba(249,115,22,0.5);
+  background: rgba(249,115,22,0.2);
+}
+.ce-tl-lanes { position: relative; flex: 0 0 auto; min-width: 0; }
+.ce-timeline-toolbar {
+  gap: 8px;
+  min-height: 34px;
+  overflow: hidden;
+}
+.ce-timeline-toolbar__controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ce-timeline-toolbar__controls::-webkit-scrollbar { display: none; }
+.ce-timeline-tool-btn {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.76);
+  border-radius: 6px;
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ce-timeline-tool-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.ce-timeline-tool-btn.is-active {
+  border-color: rgba(249,115,22,0.55);
+  background: rgba(249,115,22,0.18);
+  color: #fed7aa;
+}
+.ce-timeline-tool-btn--danger { color: #fca5a5; border-color: rgba(244,63,94,0.32); }
 .ce-timeline-multitrack .ce-timeline-ruler { margin-left: 0; height: 18px; }
 .ce-tl-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.06); }
 .ce-tl-tick:first-child, .ce-tl-tick:last-child { background: transparent; }
@@ -7191,7 +7265,22 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
 .ce-timeline-multitrack .ce-track-row__lane { height: 100%; width: 100%; }
-.ce-timeline-multitrack .ce-timeline-playhead { bottom: 0; }
+.ce-timeline-multitrack .ce-timeline-playhead {
+  bottom: 0;
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+.ce-timeline-multitrack .ce-track-row__clip.is-locked {
+  opacity: 0.42;
+  filter: grayscale(0.35);
+  cursor: not-allowed;
+}
+.ce-timeline-multitrack .ce-track-row__clip.is-muted {
+  filter: saturate(0.3);
+}
+.ce-timeline-multitrack .ce-track-row--track-hidden .ce-track-row__lane {
+  opacity: 0.4;
+}
 /* Category clip colours */
 .ce-clip--video   { background: rgba(56,132,255,0.28);  border-color: rgba(56,132,255,0.55); }
 .ce-clip--video:hover { background: rgba(56,132,255,0.42); }

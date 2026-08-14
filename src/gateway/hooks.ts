@@ -26,7 +26,7 @@ export type HookEvent =
       sessionId: string;
       timestamp: number;
       historyCount: number;
-      source: 'add_message' | 'replace_history' | 'clear_history';
+      source: 'add_message' | 'replace_history' | 'clear_history' | 'mobile_visual_state';
     }
   | {
       type: 'agent:bootstrap';

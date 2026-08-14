@@ -81,6 +81,7 @@
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:process-hygiene": "tsx src/gateway/process-hygiene.regression.ts",
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
+    "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
     "test:mobile-voice-media": "node scripts/test-mobile-voice-media-contract.mjs",

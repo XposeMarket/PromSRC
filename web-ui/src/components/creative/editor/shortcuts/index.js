@@ -5,7 +5,7 @@
  * Shortcuts only fire when the editor is active (not in a text input).
  */
 
-export function createShortcuts({ store, getScene, history, viewport, textEditor, applyOps }) {
+export function createShortcuts({ store, getScene, history, viewport, textEditor, timeline, applyOps }) {
   const bindings = [];
 
   function bind(combo, fn) {
@@ -21,7 +21,7 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
     if (e.ctrlKey || e.metaKey) parts.push('ctrl');
     if (e.shiftKey)              parts.push('shift');
     if (e.altKey)                parts.push('alt');
-    const key = e.key.toLowerCase();
+    const key = e.code === 'Space' ? 'space' : e.key.toLowerCase();
     if (!['control','shift','alt','meta'].includes(key)) parts.push(key);
     return parts.sort().join('+');
   }
@@ -48,6 +48,7 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
   bind('j', () => store.setState(s => ({ timeMs: Math.max(0, s.timeMs - 1000) })));
   bind('l', () => store.setState(s => ({ timeMs: Math.min(s.durationMs || 0, s.timeMs + 1000) })));
   bind('k', () => store.setState({ playing: false }));
+  bind('s', () => timeline?.splitAtPlayhead?.());
 
   bind('home', () => store.setState({ timeMs: 0, playing: false }));
   bind('end',  () => store.setState(s => ({ timeMs: s.durationMs || 0, playing: false })));
@@ -60,7 +61,9 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
 
   bind('ctrl+a', () => {
     const scene = getScene();
-    const ids = (scene?.elements || []).map(e => e.id);
+    const ids = (scene?.elements || [])
+      .filter(e => e.locked !== true && e.meta?.locked !== true)
+      .map(e => e.id);
     store.setState({ selectedIds: ids });
   });
 
@@ -70,7 +73,7 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
     const scene = getScene();
     if (!selectedIds?.length || !scene) return;
     const ops = (scene.elements || [])
-      .filter(el => selectedIds.includes(el.id))
+      .filter(el => selectedIds.includes(el.id) && el.locked !== true && el.meta?.locked !== true)
       .map(el => ({ op: 'set', id: el.id, patch: { x: (el.x || 0) + dx, y: (el.y || 0) + dy } }));
     if (typeof applyOps === 'function') applyOps(ops);
   }
@@ -93,7 +96,11 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
     const scene = getScene();
     if (!selectedIds?.length || !scene) return;
     if (typeof applyOps === 'function') {
-      applyOps(selectedIds.map(id => ({ op: 'delete', id })), { selectedIds: [] });
+      const deletable = selectedIds.filter(id => {
+        const element = (scene.elements || []).find(el => el.id === id);
+        return element && element.locked !== true && element.meta?.locked !== true;
+      });
+      if (deletable.length) applyOps(deletable.map(id => ({ op: 'delete', id })), { selectedIds: [] });
     }
   }
 
@@ -104,7 +111,7 @@ export function createShortcuts({ store, getScene, history, viewport, textEditor
     const newIds = [];
     for (const id of selectedIds) {
       const el = scene.elements.find(e => e.id === id);
-      if (!el) continue;
+      if (!el || el.locked === true || el.meta?.locked === true) continue;
       const copy = JSON.parse(JSON.stringify(el));
       copy.id = 'el_' + Math.random().toString(36).slice(2);
       copy.x  = (copy.x || 0) + 20;

@@ -3,7 +3,11 @@
  * Activated by double-clicking a text element in the preview.
  */
 
+import { resolveElementAtTime as resolveSceneElementAtTime } from '../../sceneGraph.js';
+
 function resolveElementAtTime(el, atMs) {
+  const resolved = resolveSceneElementAtTime(el, atMs);
+  if (resolved) return resolved;
   if (typeof window.resolveElementAtTime === 'function') return window.resolveElementAtTime(el, atMs);
   return { x: el.x ?? 0, y: el.y ?? 0, width: el.width ?? 100, height: el.height ?? 60, rotation: el.rotation ?? 0 };
 }
@@ -28,7 +32,7 @@ export function createTextEditor({ viewportRoot, store, getScene, applyOps, onEl
     const tl = sceneToView(r.x, r.y);
     const vw = r.width  * zoom;
     const vh = r.height * zoom;
-    const rot = r.rotation || 0;
+    const rot = (Number(r.rotation) || 0) + (Number(el.meta?.roll) || 0);
 
     _overlay = document.createElement('div');
     _overlay.className = 'ce-text-edit-overlay';
@@ -43,7 +47,7 @@ export function createTextEditor({ viewportRoot, store, getScene, applyOps, onEl
 
     const ta = document.createElement('textarea');
     ta.className = 'ce-text-edit-input';
-    ta.value = el.meta?.content || el.text || el.content || '';
+    ta.value = el.meta?.content ?? el.text ?? el.content ?? '';
     ta.style.cssText = `
       width: 100%; height: 100%;
       font-size: ${(el.meta?.fontSize || el.fontSize || 48) * zoom}px;
@@ -63,7 +67,7 @@ export function createTextEditor({ viewportRoot, store, getScene, applyOps, onEl
 
     ta.addEventListener('input', () => {
       if (typeof applyOps === 'function') {
-        applyOps({ op: 'set', id: el.id, patch: { 'meta.content': ta.value } }, { history: false });
+        applyOps({ op: 'set', id: el.id, patch: { 'meta.content': ta.value } }, { history: false, persist: false });
       }
       if (typeof onElementChange === 'function') onElementChange(el);
     });
