@@ -23,8 +23,25 @@ function _readMobilePageCacheStore() {
   } catch { return {}; }
 }
 
-export function getCachedMobilePageData(key, maxAgeMs = 300_000) {
-  const id = String(key || '').trim();
+function _mobileGatewayCacheScope() {
+  try {
+    const gatewayId = String(window.__pmMobileActiveGatewayId || '').trim();
+    if (gatewayId) return `gateway:${gatewayId}`;
+    const pageOrigin = String(window.location?.origin || '').trim() || 'http://localhost';
+    const rawOrigin = String(window.__pmMobileActiveGatewayOrigin || API || pageOrigin).trim();
+    return `origin:${new URL(rawOrigin || pageOrigin, pageOrigin).origin}`;
+  } catch {
+    return 'gateway:current';
+  }
+}
+
+function _mobilePageCacheId(key, scope = _mobileGatewayCacheScope()) {
+  const logicalId = String(key || '').trim();
+  return logicalId ? `${scope}::${logicalId}` : '';
+}
+
+export function getCachedMobilePageData(key, maxAgeMs = 300_000, scope = _mobileGatewayCacheScope()) {
+  const id = _mobilePageCacheId(key, scope);
   if (!id) return null;
   const memory = _mobilePageMemoryCache.get(id);
   if (memory && Date.now() - Number(memory.savedAt || 0) <= maxAgeMs) return memory.value;
@@ -34,24 +51,26 @@ export function getCachedMobilePageData(key, maxAgeMs = 300_000) {
   return entry.value;
 }
 
-function _saveMobilePageData(key, value) {
-  const id = String(key || '').trim();
+function _saveMobilePageData(key, value, scope = _mobileGatewayCacheScope()) {
+  const logicalId = String(key || '').trim();
+  const id = _mobilePageCacheId(logicalId, scope);
   if (!id || value == null) return value;
   const entry = { savedAt: Date.now(), value };
   _mobilePageMemoryCache.set(id, entry);
   try {
     const store = _readMobilePageCacheStore();
-    if (id === 'tasks' && Date.now() - Number(store[id]?.savedAt || 0) < 20_000) return value;
+    if (logicalId === 'tasks' && Date.now() - Number(store[id]?.savedAt || 0) < 20_000) return value;
     store[id] = entry;
     const keys = Object.keys(store).sort((a, b) => Number(store[b]?.savedAt || 0) - Number(store[a]?.savedAt || 0));
-    keys.slice(8).forEach((oldKey) => delete store[oldKey]);
+    keys.slice(24).forEach((oldKey) => delete store[oldKey]);
     localStorage.setItem(PM_MOBILE_PAGE_CACHE_KEY, JSON.stringify(store));
   } catch {}
   return value;
 }
 
-function _invalidateMobilePageData(key) {
-  const id = String(key || '').trim();
+function _invalidateMobilePageData(key, scope = _mobileGatewayCacheScope()) {
+  const id = _mobilePageCacheId(key, scope);
+  if (!id) return;
   _mobilePageMemoryCache.delete(id);
   try {
     const store = _readMobilePageCacheStore();
@@ -60,11 +79,13 @@ function _invalidateMobilePageData(key) {
   } catch {}
 }
 
-function _coalesceMobilePageRequest(key, factory) {
-  const id = String(key || '').trim();
+function _coalesceMobilePageRequest(key, factory, scope = _mobileGatewayCacheScope()) {
+  const id = _mobilePageCacheId(key, scope);
   const existing = _mobilePageRequests.get(id);
   if (existing) return existing;
-  const request = Promise.resolve().then(factory).finally(() => _mobilePageRequests.delete(id));
+  const request = Promise.resolve().then(factory).finally(() => {
+    if (_mobilePageRequests.get(id) === request) _mobilePageRequests.delete(id);
+  });
   _mobilePageRequests.set(id, request);
   return request;
 }
@@ -715,10 +736,11 @@ async function _resolveMobileScheduleSessionAvailability(items) {
 }
 
 export async function loadMobileSchedules({ force = false } = {}) {
-  const cached = !force ? getCachedMobilePageData('schedules', 21_600_000) : null;
+  const cacheScope = _mobileGatewayCacheScope();
+  const cached = !force ? getCachedMobilePageData('schedules', 21_600_000, cacheScope) : null;
   if (cached) {
     const resolvedCached = await _resolveMobileScheduleSessionAvailability(cached);
-    return _saveMobilePageData('schedules', resolvedCached);
+    return _saveMobilePageData('schedules', resolvedCached, cacheScope);
   }
   return _coalesceMobilePageRequest('schedules', async () => {
   const [schedResult, brainResult] = await Promise.all([
@@ -727,10 +749,10 @@ export async function loadMobileSchedules({ force = false } = {}) {
   ]);
 
   if (!schedResult && !brainResult) {
-    const fallback = getCachedMobilePageData('schedules', 86_400_000);
+    const fallback = getCachedMobilePageData('schedules', 86_400_000, cacheScope);
     if (fallback) {
       const resolvedFallback = await _resolveMobileScheduleSessionAvailability(fallback);
-      return _saveMobilePageData('schedules', resolvedFallback);
+      return _saveMobilePageData('schedules', resolvedFallback, cacheScope);
     }
   }
 
@@ -745,8 +767,8 @@ export async function loadMobileSchedules({ force = false } = {}) {
     for (const job of schedResult.schedules) items.push(_normalizeCronJob(job));
   }
   const resolvedItems = await _resolveMobileScheduleSessionAvailability(items);
-  return _saveMobilePageData('schedules', resolvedItems);
-  });
+  return _saveMobilePageData('schedules', resolvedItems, cacheScope);
+  }, cacheScope);
 }
 
 export async function toggleSchedule(item, nextEnabled) {
@@ -799,28 +821,30 @@ export async function deleteMobileSchedule(item) {
 const MEMBER_COLORS = ['#2fae66','#c8851f','#d8473a','#a06bd6','#4a82d1','#ea6a1f'];
 const MEMBER_AVATARS = ['🤖','👹','🍄','✨','🎯','🛰️'];
 
-let _teamsCache = { at: 0, list: null };
+let _teamsCache = { scope: '', at: 0, list: null };
 
 async function _fetchTeamsList(force = false) {
-  if (!force && _teamsCache.list && Date.now() - _teamsCache.at < 10_000) return _teamsCache.list;
-  const diskCached = !force ? getCachedMobilePageData('teams_raw', 21_600_000) : null;
+  const cacheScope = _mobileGatewayCacheScope();
+  if (!force && _teamsCache.scope === cacheScope && _teamsCache.list && Date.now() - _teamsCache.at < 10_000) return _teamsCache.list;
+  const diskCached = !force ? getCachedMobilePageData('teams_raw', 21_600_000, cacheScope) : null;
   if (diskCached) {
-    _teamsCache = { at: Date.now(), list: diskCached };
+    _teamsCache = { scope: cacheScope, at: Date.now(), list: diskCached };
     return diskCached;
   }
-  const r = await _coalesceMobilePageRequest('teams_raw', () => api('/api/teams')).catch(() => null);
+  const r = await _coalesceMobilePageRequest('teams_raw', () => api('/api/teams'), cacheScope).catch(() => null);
   if (!r?.success) {
-    const fallback = getCachedMobilePageData('teams_raw', 86_400_000);
+    const fallback = getCachedMobilePageData('teams_raw', 86_400_000, cacheScope);
     if (fallback) return fallback;
   }
   const list = (r?.success && Array.isArray(r.teams)) ? r.teams : [];
-  _teamsCache = { at: Date.now(), list };
-  return _saveMobilePageData('teams_raw', list);
+  _teamsCache = { scope: cacheScope, at: Date.now(), list };
+  return _saveMobilePageData('teams_raw', list, cacheScope);
 }
 
 export function invalidateTeamsCache() {
-  _teamsCache = { at: 0, list: null };
-  _invalidateMobilePageData('teams_raw');
+  const cacheScope = _mobileGatewayCacheScope();
+  if (_teamsCache.scope === cacheScope) _teamsCache = { scope: '', at: 0, list: null };
+  _invalidateMobilePageData('teams_raw', cacheScope);
 }
 
 export async function loadMobileTeams({ force = false } = {}) {
@@ -1059,11 +1083,12 @@ function _subagentStatus(agent) {
 }
 
 export async function loadMobileSubagents({ force = false } = {}) {
-  const cached = !force ? getCachedMobilePageData('subagents', 21_600_000) : null;
+  const cacheScope = _mobileGatewayCacheScope();
+  const cached = !force ? getCachedMobilePageData('subagents', 21_600_000, cacheScope) : null;
   if (cached) return cached;
-  const r = await _coalesceMobilePageRequest('subagents', () => api('/api/agents', { timeoutMs: 8000 })).catch(() => null);
+  const r = await _coalesceMobilePageRequest('subagents', () => api('/api/agents', { timeoutMs: 8000 }), cacheScope).catch(() => null);
   if (!r) {
-    const fallback = getCachedMobilePageData('subagents', 86_400_000);
+    const fallback = getCachedMobilePageData('subagents', 86_400_000, cacheScope);
     if (fallback) return fallback;
   }
   const rawAgents = Array.isArray(r?.agents) ? r.agents : [];
@@ -1091,7 +1116,7 @@ export async function loadMobileSubagents({ force = false } = {}) {
       raw: a,
     };
   });
-  return _saveMobilePageData('subagents', normalized);
+  return _saveMobilePageData('subagents', normalized, cacheScope);
 }
 
 export async function loadMobileSubagentDetail(agentId, { force = false } = {}) {
@@ -1533,13 +1558,14 @@ export async function denyMobileProposal(id) {
 }
 
 export async function loadBgTasks({ force = false } = {}) {
-  const cached = !force ? getCachedMobilePageData('tasks', 8_000) : null;
+  const cacheScope = _mobileGatewayCacheScope();
+  const cached = !force ? getCachedMobilePageData('tasks', 8_000, cacheScope) : null;
   if (cached) return cached;
   return _coalesceMobilePageRequest('tasks', async () => {
     const r = await api('/api/bg-tasks?mobile=1', { timeoutMs: 9000 });
     if (!r?.success || !Array.isArray(r.tasks)) throw new Error(r?.error || 'Invalid tasks response');
-    return _saveMobilePageData('tasks', r.tasks);
-  });
+    return _saveMobilePageData('tasks', r.tasks, cacheScope);
+  }, cacheScope);
 }
 
 export function prefetchMobileSecondaryPages() {
@@ -1827,34 +1853,41 @@ export async function loadLatestUsableSession() {
 }
 
 // ── Session cache (30s TTL, invalidated on history writes) ────────────────────
-const _sessionCache = new Map(); // sessionId → { session, expiresAt }
-const _sessionRequests = new Map(); // `${sessionId}:${detail}` → in-flight Promise
+const _sessionCache = new Map(); // scoped session id → { session, expiresAt }
+const _sessionRequests = new Map(); // scoped session/detail → in-flight Promise
 const _SESSION_CACHE_TTL = 30_000; // ms
 
-function _sessionCacheGet(sid) {
-  const entry = _sessionCache.get(sid);
+function _sessionCacheKey(sid, scope = _mobileGatewayCacheScope()) {
+  return `${scope}::${String(sid || '').trim()}`;
+}
+
+function _sessionCacheGet(sid, scope = _mobileGatewayCacheScope()) {
+  const key = _sessionCacheKey(sid, scope);
+  const entry = _sessionCache.get(key);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { _sessionCache.delete(sid); return null; }
+  if (Date.now() > entry.expiresAt) { _sessionCache.delete(key); return null; }
   return entry.session;
 }
 
-function _sessionCacheSet(sid, session) {
-  _sessionCache.set(sid, { session, expiresAt: Date.now() + _SESSION_CACHE_TTL });
-  // Evict oldest entries if cache grows large (keep ≤ 20)
-  if (_sessionCache.size > 20) {
+function _sessionCacheSet(sid, session, scope = _mobileGatewayCacheScope()) {
+  const key = _sessionCacheKey(sid, scope);
+  _sessionCache.set(key, { session, expiresAt: Date.now() + _SESSION_CACHE_TTL });
+  // Evict oldest entries if cache grows large (keep ≤ 40 across gateways).
+  if (_sessionCache.size > 40) {
     const oldest = _sessionCache.keys().next().value;
     _sessionCache.delete(oldest);
   }
 }
 
 export function invalidateMobileChatSessionCache(sessionId) {
-  if (sessionId) _sessionCache.delete(String(sessionId));
+  if (sessionId) _sessionCache.delete(_sessionCacheKey(String(sessionId)));
   else _sessionCache.clear();
 }
 
 export async function loadMobileChatSession(sessionId, options = {}) {
   const { force = false } = options;
   const sid = String(sessionId || '').trim();
+  const gatewayScope = _mobileGatewayCacheScope();
   if (!sid) return null;
   const requestedHistoryLimit = Number.isFinite(Number(options.historyLimit))
     ? Math.max(20, Math.min(180, Math.floor(Number(options.historyLimit))))
@@ -1865,19 +1898,19 @@ export async function loadMobileChatSession(sessionId, options = {}) {
   const fullProcess = options.fullProcess === undefined ? force : options.fullProcess === true;
   const isBoundedPageRequest = requestedHistoryLimit !== null || requestedProcessLimit !== null || options.fullProcess !== undefined;
   if (!force && !isBoundedPageRequest) {
-    const cached = _sessionCacheGet(sid);
+    const cached = _sessionCacheGet(sid, gatewayScope);
     if (cached) return cached;
   }
   const historyLimit = requestedHistoryLimit ?? (force ? 180 : 70);
   const processLimit = requestedProcessLimit ?? (force ? 500 : 120);
-  const requestKey = `${sid}:${force ? 'recovery' : 'normal'}:${historyLimit}:${processLimit}:${fullProcess ? 'full-process' : 'compact-process'}`;
+  const requestKey = `${gatewayScope}:${sid}:${force ? 'recovery' : 'normal'}:${historyLimit}:${processLimit}:${fullProcess ? 'full-process' : 'compact-process'}`;
   const existingRequest = _sessionRequests.get(requestKey);
   if (existingRequest) return existingRequest;
   const request = mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${fullProcess ? '&fullProcess=1' : ''}${force ? '&_fresh=1' : ''}`, {
     timeoutMs: force ? 30000 : 20000,
   }).then((r) => {
     const session = r?.session || null;
-    if (session && !isBoundedPageRequest) _sessionCacheSet(sid, session);
+    if (session && !isBoundedPageRequest) _sessionCacheSet(sid, session, gatewayScope);
     return session;
   }).finally(() => {
     if (_sessionRequests.get(requestKey) === request) _sessionRequests.delete(requestKey);
