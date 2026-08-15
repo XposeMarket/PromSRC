@@ -11,8 +11,6 @@
 
 import { API } from './state.js';
 
-const LOCAL_GATEWAY_ORIGIN = 'http://127.0.0.1:18789';
-
 function getMobileGatewayRequestContext() {
   try {
     const rawOrigin = String(window.__pmMobileActiveGatewayOrigin || '').trim();
@@ -68,14 +66,6 @@ function buildApiCandidateUrls(path) {
       const origin = String(window.location?.origin || '').trim();
       if (API && /^https?:/i.test(origin)) pushCandidate(origin.replace(/\/$/, '') + rawPath);
     } catch {}
-
-    try {
-      const currentOrigin = String(window.location?.origin || '').replace(/\/$/, '');
-      const currentProtocol = String(window.location?.protocol || '').toLowerCase();
-      if (currentProtocol !== 'https:' && currentOrigin !== LOCAL_GATEWAY_ORIGIN) pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
-    } catch {
-      pushCandidate(LOCAL_GATEWAY_ORIGIN + rawPath);
-    }
   }
 
   return candidates;
