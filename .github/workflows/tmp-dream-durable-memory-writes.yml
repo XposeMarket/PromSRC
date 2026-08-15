@@ -1,0 +1,44 @@
+name: Temporary Dream Durable Memory Verification
+
+on:
+  push:
+    branches:
+      - review/dream-durable-memory-writes
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Apply audited fix
+        run: python3 scripts/tmp-dream-durable-memory-writes.py
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Verify unified memory wrapper
+        run: npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
+      - name: Verify Dream memory allowlist contract
+        run: npx tsx src/gateway/brain/brain-dream-memory-contract.regression.ts
+      - name: Verify actor memory isolation
+        run: node scripts/test-agent-identity-memory.mjs
+      - name: Verify prompt/context assembly
+        run: npm run test:prompt-cache
+      - name: Commit verified changes and remove temporary harness
+        run: |
+          rm -f scripts/tmp-dream-durable-memory-writes.py .github/workflows/tmp-dream-durable-memory-writes.yml
+          git config user.name 'prometheus-audit-bot'
+          git config user.email 'prometheus-audit-bot@users.noreply.github.com'
+          git add -A
+          git commit -m 'Restore Dream durable-memory writes' -m 'Give Brain Dream the real unified memory tool, add exact single-bullet update semantics for contradiction correction, and canonicalize memory category matching so existing human-readable headings are reused instead of duplicated.'
+          git push origin HEAD:review/dream-durable-memory-writes
