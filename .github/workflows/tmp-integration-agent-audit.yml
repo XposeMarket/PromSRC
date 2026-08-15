@@ -1,0 +1,81 @@
+name: Temporary integrated agent runtime audit
+
+on:
+  push:
+    branches:
+      - review/integration-agent-runtime-audit
+
+permissions:
+  contents: read
+
+jobs:
+  agent-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build native backend dependencies
+        run: npm rebuild better-sqlite3 node-pty
+      - name: Apply PR 17 build-asset change for integration test
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (!p.scripts['build:backend'].includes('copy-extension-descriptors.js')) {
+            p.scripts['build:backend'] += ' && node scripts/copy-extension-descriptors.js';
+          }
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          NODE
+      - name: Build backend
+        run: npm run build:backend
+      - name: Verify full agent runtime contract
+        run: node scripts/test-agent-runtime-contract.mjs
+      - name: Verify automations and internal-watch recovery
+        run: node scripts/test-automation-runtime-contract.mjs && npx tsx src/gateway/internal-watch/internal-watch-restart-recovery.regression.ts && npx tsx src/gateway/internal-watch/internal-watch-policy.regression.ts
+      - name: Verify reasoning capabilities
+        run: node scripts/test-reasoning-capabilities.mjs
+      - name: Verify goal restart contracts
+        run: node scripts/test-main-chat-goal-restart-contract.mjs && node scripts/test-main-chat-goal-crash-recovery.mjs && node scripts/test-main-chat-goal-steer-contract.mjs
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Capture production dependency audit
+        shell: bash
+        run: |
+          npm audit --omit=dev --json > audit-prod.json || true
+          node - <<'NODE'
+          const fs = require('fs');
+          const a = JSON.parse(fs.readFileSync('audit-prod.json', 'utf8'));
+          console.log('PRODUCTION AUDIT COUNTS', JSON.stringify(a.metadata?.vulnerabilities || {}));
+          const rows = Object.entries(a.vulnerabilities || {})
+            .map(([name, v]) => ({ name, severity: v.severity, direct: !!v.isDirect, range: v.range, fix: v.fixAvailable }))
+            .sort((a,b) => Number(b.direct)-Number(a.direct) || ['critical','high','moderate','low'].indexOf(a.severity)-['critical','high','moderate','low'].indexOf(b.severity));
+          for (const row of rows) console.log(JSON.stringify(row));
+          NODE
+      - name: Capture full dependency audit counts
+        shell: bash
+        run: |
+          npm audit --json > audit-all.json || true
+          node - <<'NODE'
+          const fs = require('fs');
+          const a = JSON.parse(fs.readFileSync('audit-all.json', 'utf8'));
+          console.log('FULL AUDIT COUNTS', JSON.stringify(a.metadata?.vulnerabilities || {}));
+          const direct = Object.entries(a.vulnerabilities || {}).filter(([,v]) => v.isDirect).map(([name,v]) => ({name, severity:v.severity, range:v.range, fix:v.fixAvailable}));
+          console.log('DIRECT VULNERABILITIES');
+          for (const row of direct) console.log(JSON.stringify(row));
+          NODE
