@@ -892,8 +892,20 @@ body.pm-model-badge-pressing * {
 .pm-msheet-session-context .pm-sess-action-delete,
 .pm-msheet-session-context .pm-sess-action-delete .pm-sess-action-icon,
 .pm-msheet-session-context .pm-sess-action-delete .pm-msheet-row-label { color: #ff6371; }
-/* Rename sheet follows the keyboard up — bottom is set dynamically via JS */
-.pm-msheet-rename { transition: transform .26s cubic-bezier(.22,.61,.36,1), bottom .18s ease, max-height .18s ease; }
+/* Rename is a compact centered dialog. While the keyboard is open JS
+   releases the fixed top edge and anchors this intrinsic-height panel above
+   the visual viewport instead of stretching it between top and bottom. */
+.pm-msheet-rename {
+  left: 50% !important;
+  width: min(360px, calc(100vw - 32px));
+  height: auto;
+  min-height: 0;
+  border-radius: 24px !important;
+  transform: translate(-50%, 8px) scale(.98);
+  transform-origin: center center;
+  transition: transform .26s cubic-bezier(.22,.61,.36,1), bottom .18s ease, max-height .18s ease;
+}
+.pm-msheet-rename.open { transform: translate(-50%, 0) scale(1); }
 .pm-sess-rename-wrap {
   display: flex; flex-direction: column; gap: 0; width: 100%;
   padding: 4px 0 8px;
@@ -17282,7 +17294,7 @@ body.pm-mobile-active :is(
   color: var(--pm-text);
   background: var(--pm-ios-popover-fill) !important;
   background-image: none !important;
-  border: 1px solid var(--pm-ios-popover-border) !important;
+  border: 0 !important;
   box-shadow: var(--pm-ios-popover-shadow) !important;
   -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
   backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
@@ -18111,4 +18123,22 @@ body.pm-mobile-active .pm-drawer-new-chat .pm-icon {
 body.pm-mobile-active .pm-drawer-new-chat .pm-icon svg {
   width: 16px !important;
   height: 16px !important;
+}
+
+/* Mobile popover shells are intentionally borderless. Keep borders on
+   interactive rows, form inputs, and focus states; only the enclosing
+   transient surface loses its rim. This final policy mirrors the desktop
+   popover treatment and intentionally wins over older component-specific
+   border declarations above. */
+body.pm-mobile-active :where(
+  .pm-msheet:not(.is-reasoning):not(.is-model-switch),
+  .pm-attach-sheet-panel,
+  .pm-skill-ref-panel,
+  [class$="-popover"],
+  [class*="-popover "],
+  [id$="-popover"],
+  [id$="Popover"]
+) {
+  border-width: 0 !important;
+  border-color: transparent !important;
 }
