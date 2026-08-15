@@ -21,6 +21,8 @@ import {
 } from './mobile-gateway-catalog.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 
+const PENDING_MANUAL_GATEWAY_ORIGIN_KEY = 'pm_mobile_pending_gateway_pair_origin_v1';
+
 function _deviceFingerprint() {
   try {
     let fp = localStorage.getItem('pm_device_fp');
@@ -32,13 +34,15 @@ function _deviceFingerprint() {
   } catch { return 'unknown'; }
 }
 
-function _pairRequestCacheKey(code) {
-  return `pm_pair_request_${encodeURIComponent(String(code || '').trim()).slice(0, 180)}`;
+function _pairRequestCacheKey(code, origin = '') {
+  const target = normalizeGatewayOrigin(origin) || normalizeGatewayOrigin(window.location.origin);
+  const scoped = `${target}|${String(code || '').trim()}`;
+  return `pm_pair_request_${encodeURIComponent(scoped).slice(0, 220)}`;
 }
 
-function _loadPairRequestCache(code) {
+function _loadPairRequestCache(code, origin = '') {
   try {
-    const key = _pairRequestCacheKey(code);
+    const key = _pairRequestCacheKey(code, origin);
     const raw = sessionStorage.getItem(key);
     if (!raw) return null;
     const cached = JSON.parse(raw);
@@ -52,18 +56,37 @@ function _loadPairRequestCache(code) {
   } catch { return null; }
 }
 
-function _storePairRequestCache(code, request) {
+function _storePairRequestCache(code, origin, request) {
   try {
     if (!request?.requestId) return;
-    sessionStorage.setItem(_pairRequestCacheKey(code), JSON.stringify({
+    sessionStorage.setItem(_pairRequestCacheKey(code, origin), JSON.stringify({
       requestId: request.requestId,
       expiresAt: request.expiresAt || (Date.now() + 10 * 60 * 1000),
     }));
   } catch {}
 }
 
-function _clearPairRequestCache(code) {
-  try { sessionStorage.removeItem(_pairRequestCacheKey(code)); } catch {}
+function _clearPairRequestCache(code, origin = '') {
+  try { sessionStorage.removeItem(_pairRequestCacheKey(code, origin)); } catch {}
+}
+
+function _setPendingManualGatewayOrigin(origin) {
+  const normalized = normalizeGatewayOrigin(origin);
+  if (!normalized) return false;
+  try {
+    sessionStorage.setItem(PENDING_MANUAL_GATEWAY_ORIGIN_KEY, normalized);
+    return true;
+  } catch { return false; }
+}
+
+function _getPendingManualGatewayOrigin() {
+  try {
+    return normalizeGatewayOrigin(sessionStorage.getItem(PENDING_MANUAL_GATEWAY_ORIGIN_KEY) || '');
+  } catch { return ''; }
+}
+
+function _clearPendingManualGatewayOrigin() {
+  try { sessionStorage.removeItem(PENDING_MANUAL_GATEWAY_ORIGIN_KEY); } catch {}
 }
 
 function _suggestedDeviceName() {
@@ -119,10 +142,15 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   const pairRoute = addMode ? '#mobile/pair/add' : '#mobile/pair';
   const pairingPayload = getPairingPayload(code);
   const pairingCode = pairingPayload?.challenge || String(code || '').trim();
+  if (addMode && !pairingCode) _clearPendingManualGatewayOrigin();
   const looksLikeEncodedQrPayload = !pairingPayload
     && String(code || '').trim().length >= 80
     && !/^PAIR(?:-[A-Z0-9]{4}){2}$/i.test(String(code || '').trim());
-  const targetOrigin = pairingPayload?.origin || normalizeGatewayOrigin(window.location.origin);
+  const pendingManualOrigin = addMode && pairingCode && !pairingPayload ? _getPendingManualGatewayOrigin() : '';
+  const targetOrigin = pairingPayload?.origin || pendingManualOrigin || normalizeGatewayOrigin(window.location.origin);
+  const currentOrigin = normalizeGatewayOrigin(window.location.origin);
+  const useTargetGatewayPairing = Boolean(pairingPayload)
+    || (addMode && targetOrigin && targetOrigin !== currentOrigin);
   const targetHint = pairingPayload?.gatewayId ? {
     gatewayId: pairingPayload.gatewayId,
     name: pairingPayload.name,
@@ -228,16 +256,26 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter the pair code from desktop Settings.</span>';
         return;
       }
+      const requestedOrigin = normalizeGatewayOrigin(parsed.fullLink
+        ? parsed.origin
+        : (originInput?.value || parsed.origin || window.location.origin));
+      if (!requestedOrigin) {
+        statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter a valid gateway address, such as https://your-machine.ts.net.</span>';
+        return;
+      }
+      if (addMode) {
+        _setPendingManualGatewayOrigin(requestedOrigin);
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('pair', parsed.code);
+        nextUrl.hash = pairRoute;
+        window.location.href = nextUrl.toString();
+        return;
+      }
       if (parsed.fullLink) {
         window.location.href = parsed.fullLink;
         return;
       }
-      const targetOrigin = normalizeGatewayOrigin(originInput?.value || parsed.origin || window.location.origin);
-      if (!targetOrigin) {
-        statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter a valid gateway address, such as https://your-machine.ts.net.</span>';
-        return;
-      }
-      window.location.href = `${targetOrigin}/?pair=${encodeURIComponent(parsed.code)}${pairRoute}`;
+      window.location.href = `${requestedOrigin}/?pair=${encodeURIComponent(parsed.code)}${pairRoute}`;
     });
     page.querySelector('#pm-pair-retry')?.addEventListener('click', () => location.reload());
     return;
@@ -257,13 +295,13 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   // 1. Claim the QR challenge.
   let requestId;
   try {
-    const cachedRequest = _loadPairRequestCache(pairingCode);
+    const cachedRequest = _loadPairRequestCache(pairingCode, targetOrigin);
     if (cachedRequest?.requestId) {
       requestId = cachedRequest.requestId;
       setStage({ status: 'Rejoining pairing request…' });
     } else {
       setStage({ status: 'Sending pairing request…' });
-      const r = pairingPayload
+      const r = useTargetGatewayPairing
         ? await pairingGatewayFetchJson(targetOrigin, '/api/pairing/claim', {
           method: 'POST',
           body: JSON.stringify({ code: pairingCode, deviceName: _suggestedDeviceName(), deviceFingerprint: _deviceFingerprint() }),
@@ -271,7 +309,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         : await claimPairing({ code: pairingCode, deviceName: _suggestedDeviceName(), deviceFingerprint: _deviceFingerprint() });
       if (!r?.success || !r.requestId) throw new Error(r?.error || 'Failed to claim');
       requestId = r.requestId;
-      _storePairRequestCache(pairingCode, r);
+      _storePairRequestCache(pairingCode, targetOrigin, r);
     }
   } catch (err) {
     setStage({
@@ -306,8 +344,11 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   let cancelled = false;
   page.querySelector('#pm-pair-cancel').addEventListener('click', () => {
     cancelled = true;
-    _clearPairRequestCache(pairingCode);
-    if (addMode) clearPendingGatewayPair();
+    _clearPairRequestCache(pairingCode, targetOrigin);
+    if (addMode) {
+      clearPendingGatewayPair();
+      _clearPendingManualGatewayOrigin();
+    }
     navigate('#mobile/gateways');
   });
 
@@ -315,20 +356,20 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   const POLL_MS = 1500;
   while (!cancelled) {
     if (Date.now() - startedAt > 10 * 60 * 1000) {
-      _clearPairRequestCache(pairingCode);
+      _clearPairRequestCache(pairingCode, targetOrigin);
       if (addMode) clearPendingGatewayPair();
       setStage({ title: 'Pairing timed out', sub: 'The request expired. Please ask the desktop for a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
       page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
       return;
     }
     try {
-      const r = pairingPayload
+      const r = useTargetGatewayPairing
         ? await pairingGatewayFetchJson(targetOrigin, `/api/pairing/poll/${encodeURIComponent(requestId)}`, {
           headers: { 'X-Pairing-Device-Fingerprint': _deviceFingerprint() },
         })
         : await pollPairing(requestId, _deviceFingerprint());
       if (r.status === 'approved' && r.deviceToken) {
-        _clearPairRequestCache(pairingCode);
+        _clearPairRequestCache(pairingCode, targetOrigin);
         const gateway = {
           ...(targetHint || {}),
           ...(r.gateway || {}),
@@ -388,6 +429,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         });
         if (!confirmed) {
           clearPendingGatewayPair();
+          _clearPendingManualGatewayOrigin();
           setStage({ title: 'Pairing cancelled', sub: 'No credential was saved on this phone.', status: '', actions: `<button class="pm-btn ghost" id="pm-pair-back">Back to gateways</button>` });
           page.querySelector('#pm-pair-back')?.addEventListener('click', () => navigate('#mobile/gateways'));
           return;
@@ -400,13 +442,14 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
           setDeviceToken(r.deviceToken, r.deviceId);
         }
         clearPendingGatewayPair();
+        _clearPendingManualGatewayOrigin();
         try { localStorage.setItem('pm_force_mobile', '1'); } catch {}
         setStage({ title: 'Gateway connected', sub: `${displayName} is now available as an independent target.`, status: '✅', actions: `<button class="pm-btn primary" id="pm-pair-done">View gateway connections</button>` });
         page.querySelector('#pm-pair-done')?.addEventListener('click', () => navigate('#mobile/gateways'));
         return;
       }
       if (r.status === 'approved_already_collected') {
-        _clearPairRequestCache(pairingCode);
+        _clearPairRequestCache(pairingCode, targetOrigin);
         if (addMode) clearPendingGatewayPair();
         setStage({
           title: 'Approval already completed',
@@ -419,14 +462,14 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         return;
       }
       if (r.status === 'denied') {
-        _clearPairRequestCache(pairingCode);
+        _clearPairRequestCache(pairingCode, targetOrigin);
         if (addMode) clearPendingGatewayPair();
         setStage({ title: 'Pairing denied', sub: 'Your desktop user denied this request. You can try again with a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
         page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
         return;
       }
       if (r.status === 'expired' || r.status === 'not_found') {
-        _clearPairRequestCache(pairingCode);
+        _clearPairRequestCache(pairingCode, targetOrigin);
         if (addMode) clearPendingGatewayPair();
         setStage({ title: 'QR expired', sub: 'Please generate a fresh QR on your desktop and scan again.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Reload</button>` });
         page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
