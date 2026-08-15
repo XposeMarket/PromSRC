@@ -18,7 +18,7 @@ const memoryPath = path.join(workspacePath, 'MEMORY.md');
 const raw = fs.readFileSync(memoryPath, 'utf8');
 const atoms = parseMemoryAtoms(raw);
 
-assert.equal(atoms.length, 60, 'the current MEMORY.md corpus should parse into 60 bullet atoms');
+assert.equal(atoms.length, 61, 'the current MEMORY.md corpus should parse into 61 bullet atoms');
 assert.equal(new Set(atoms.map((atom) => atom.id)).size, atoms.length, 'atom ids must be unique');
 for (const atom of atoms) {
   assert.ok(atom.sourceStartLine <= atom.sourceEndLine, `invalid source range for ${atom.id}`);
@@ -89,6 +89,7 @@ const corpusQueries: CorpusQuery[] = [
   { query: 'What is the gateway local UI QA rule?', expectedLine: 88 },
   { query: 'What are task delegation semantics?', expectedLine: 90 },
   { query: 'What is the NebulaX milestone lifecycle?', expectedLine: 91 },
+  { query: 'What replaced the special Prometheus self-edit workflow?', expectedLine: 92 },
 ];
 
 const failures: string[] = [];
