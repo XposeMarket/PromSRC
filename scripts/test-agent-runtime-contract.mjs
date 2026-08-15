@@ -47,6 +47,9 @@ for (const requiredCreateField of ['name', 'purpose', 'team_context', 'subagent_
 const backgroundOps = def('background_ops');
 assert.ok(backgroundOps.parameters.properties.action.enum.includes('steer'));
 assert.ok(backgroundOps.parameters.properties.message);
+assert.ok(backgroundOps.parameters.properties.model);
+assert.ok(backgroundOps.parameters.properties.provider);
+assert.ok(backgroundOps.parameters.properties.reasoning_effort);
 const backgroundSteer = def('background_steer');
 assert.deepEqual(backgroundSteer.parameters.required, ['background_id', 'message']);
 
@@ -128,6 +131,12 @@ assert.deepEqual(
   taskRunner.resolveBackgroundAgentModelRouting({ model: 'openai_codex/gpt-5.6-luna', reasoningEffort: 'low' }),
   { providerId: 'openai_codex', model: 'gpt-5.6-luna', reasoningEffort: 'low', source: 'background_spawn.override' },
 );
+
+const automationExecutorSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/capabilities/automation-executor.ts'), 'utf8');
+assert.match(automationExecutorSource, /modelOverride:\s*args\.model\s*\?\s*String\(args\.model\)\s*:\s*undefined/);
+assert.match(automationExecutorSource, /providerOverride:\s*args\.provider\s*\?\s*String\(args\.provider\)\s*:\s*undefined/);
+assert.match(automationExecutorSource, /reasoningEffort:\s*args\.reasoning_effort\s*\?\s*String\(args\.reasoning_effort\)\s*:\s*undefined/);
+assert.doesNotMatch(automationExecutorSource.match(/case 'background_spawn':[\s\S]*?case 'background_status'/)?.[0] || '', /set_agent_model|agent_model_defaults\s*=/);
 
 const executorSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
 assert.match(executorSource, /summarizeAgentRunCompact/);
