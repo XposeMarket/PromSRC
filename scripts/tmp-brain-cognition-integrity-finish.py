@@ -24,14 +24,11 @@ def replace_span(path: str, start_marker: str, end_marker: str, replacement: str
 
 runner = 'src/gateway/brain/brain-runner.ts'
 
-# The first-stage patch intentionally stops at this legacy block. Replace it by
-# semantic anchors so tabs/spaces in the historical runner cannot make the
-# audit harness brittle.
 replace_span(
     runner,
     '    const fileLooksFresh = artifactFresh();',
     '    const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;',
-    """    const fileLooksFresh = artifactFresh();
+    '''    const fileLooksFresh = artifactFresh();
     let capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
     // An empty array is a valid quiet-window result. Recover only a genuinely
     // missing sidecar; malformed or stale model output is preserved and fails
@@ -46,7 +43,7 @@ replace_span(
       }
     }
     const capsuleArtifactValid = capsuleArtifact.status === 'valid';
-    const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;""",
+    const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;''',
 )
 replace_once(
     runner,
@@ -56,16 +53,16 @@ replace_once(
 replace_once(
     runner,
     '          : `Expected thought artifact missing or stale: ${outFile}`,',
-    """          : !fileLooksFresh
+    '''          : !fileLooksFresh
             ? `Expected thought artifact missing or stale: ${outFile}`
-            : `Thought capsule artifact ${capsuleArtifact.status}: ${capsuleFile}${capsuleArtifact.error ? ` (${capsuleArtifact.error})` : ''}`,""",
+            : `Thought capsule artifact ${capsuleArtifact.status}: ${capsuleFile}${capsuleArtifact.error ? ` (${capsuleArtifact.error})` : ''}`,''',
 )
 
 replace_span(
     runner,
     '    let carryForwardFresh = false;',
     '    const artifactsFresh = dreamFresh && proposalsFresh && carryForwardFresh;',
-    """    let carryForwardFresh = false;
+    '''    let carryForwardFresh = false;
     let carryArtifact = inspectBrainCarryForwardArtifact(absCarryDecisionFile, runStartedAt, carryTargetDate);
     try {
       if (carryArtifact.status === 'valid' && carryArtifact.decision) {
@@ -91,24 +88,48 @@ replace_span(
     } catch (err: any) {
       artifactRecoveryNotes.push(`Carry-forward generation failed: ${err?.message || err}`);
     }
-    const artifactsFresh = dreamFresh && proposalsFresh && carryForwardFresh;""",
+    const artifactsFresh = dreamFresh && proposalsFresh && carryForwardFresh;''',
 )
 replace_once(
     runner,
-    "            proposalsFresh ? null : 'proposals.md',\n          ].filter(Boolean).join(', ') || '(unknown)'}`,
-",
-    "            proposalsFresh ? null : 'proposals.md',\n            carryForwardFresh ? null : `${carryDecisionFile} (${carryArtifact.status}${carryArtifact.error ? `: ${carryArtifact.error}` : ''})`,\n          ].filter(Boolean).join(', ') || '(unknown)'}`,
-",
+    "            proposalsFresh ? null : 'proposals.md',\n",
+    "            proposalsFresh ? null : 'proposals.md',\n            carryForwardFresh ? null : `${carryDecisionFile} (${carryArtifact.status}${carryArtifact.error ? `: ${carryArtifact.error}` : ''})`,\n",
 )
 
-# Strengthen activity-package rerun coverage. Insert before the existing report.
+# The public carry parser is deliberately forgiving for callers, but a Dream
+# sidecar is an integrity boundary: partial item loss must fail the run.
+integrity = Path('src/gateway/brain/brain-artifact-integrity.ts')
+text = integrity.read_text(encoding='utf-8')
+old = """  try {
+    const decision = parseBrainCarryForwardDecision(fs.readFileSync(filePath, 'utf-8'));
+    if (!decision) return { status: 'invalid', decision: null, error: 'carry-forward sidecar is not valid decision JSON' };
+    if (decision.targetDate !== targetDate) {
+"""
+new = """  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const parsedRaw = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsedRaw || typeof parsedRaw !== 'object' || !Array.isArray(parsedRaw.items)) {
+      return { status: 'invalid', decision: null, error: 'carry-forward sidecar must contain an items array' };
+    }
+    const decision = parseBrainCarryForwardDecision(raw);
+    if (!decision) return { status: 'invalid', decision: null, error: 'carry-forward sidecar is not valid decision JSON' };
+    if (decision.items.length !== parsedRaw.items.length) {
+      return { status: 'invalid', decision: null, error: `carry-forward sidecar contains ${parsedRaw.items.length - decision.items.length} invalid item(s)` };
+    }
+    if (decision.targetDate !== targetDate) {
+"""
+if text.count(old) != 1:
+    raise SystemExit('carry integrity parser anchor mismatch')
+integrity.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+# Add rerun/idempotence coverage before the existing activity-package report.
 test_path = Path('src/gateway/brain/activity-package.regression.ts')
 test = test_path.read_text(encoding='utf-8')
 marker = "    console.log('activity-package regression passed', JSON.stringify({"
 pos = test.find(marker)
 if pos < 0:
     raise SystemExit('activity-package report marker missing')
-insert = """    const rerunContinuationEvents = pkg.eventLedger.continuations.flatMap((entry) => {
+insert = '''    const rerunContinuationEvents = pkg.eventLedger.continuations.flatMap((entry) => {
       const filePath = path.join(workspacePath, entry.path);
       const rows = fs.readFileSync(filePath, 'utf8').trim().split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line));
       assert.equal(rows.length, entry.eventCount, `continuation ${entry.path} must be a snapshot, not an append-only rerun journal`);
@@ -120,33 +141,21 @@ insert = """    const rerunContinuationEvents = pkg.eventLedger.continuations.fl
       pkg.eventLedger.totalEvents - pkg.eventLedger.inline.length,
       'rerunning the same window must not grow continuation contents',
     );
-"""
-# Only add once; the first-stage patch did not reach this section.
+'''
 test_path.write_text(test[:pos] + insert + test[pos:], encoding='utf-8')
 
 Path('src/gateway/brain/brain-cognition-integrity.regression.ts').write_text(r'''import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  inspectBrainCarryForwardArtifact,
-  inspectBrainThoughtCapsuleArtifact,
-} from './brain-artifact-integrity.js';
+import { inspectBrainCarryForwardArtifact, inspectBrainThoughtCapsuleArtifact } from './brain-artifact-integrity.js';
 import { resolveThoughtCoverageCursor } from './brain-state.js';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-brain-integrity-'));
 try {
   const now = Date.now();
-  assert.equal(
-    resolveThoughtCoverageCursor({ lastThoughtWindowEndAt: '2026-08-15T12:00:00.000Z', lastThoughtAt: '2026-08-15T12:08:00.000Z' })?.toISOString(),
-    '2026-08-15T12:00:00.000Z',
-    'explicit activity boundary must win over model completion time',
-  );
-  assert.equal(
-    resolveThoughtCoverageCursor({ lastThoughtWindowEndAt: null, lastThoughtAt: '2026-08-15T12:08:00.000Z' })?.toISOString(),
-    '2026-08-15T12:08:00.000Z',
-    'legacy state must migrate through lastThoughtAt fallback',
-  );
+  assert.equal(resolveThoughtCoverageCursor({ lastThoughtWindowEndAt: '2026-08-15T12:00:00.000Z', lastThoughtAt: '2026-08-15T12:08:00.000Z' })?.toISOString(), '2026-08-15T12:00:00.000Z');
+  assert.equal(resolveThoughtCoverageCursor({ lastThoughtWindowEndAt: null, lastThoughtAt: '2026-08-15T12:08:00.000Z' })?.toISOString(), '2026-08-15T12:08:00.000Z');
 
   const capsules = path.join(root, 'capsules.json');
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'missing');
@@ -154,26 +163,23 @@ try {
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'invalid');
   fs.writeFileSync(capsules, JSON.stringify([{ id: 'broken' }]), 'utf8');
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'invalid');
-  const validCapsule = {
-    id: 'capsule-v1', threadKey: 'project:prometheus', kind: 'active_work', priority: 'high', status: 'in_progress',
-    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 6 * 60 * 60 * 1000).toISOString(),
-    summary: 'Prometheus audit remains active.', facts: ['A fact.'], nextUsefulAction: 'Continue the audit.',
-    relevance: { projects: ['Prometheus'], triggers: ['audit'], surfaces: ['main_chat'] }, evidence: ['fixture'],
-    lastValidatedAt: new Date(now).toISOString(), verificationRequired: true, supersedes: [],
-  };
+  const validCapsule = { id: 'capsule-v1', threadKey: 'project:prometheus', kind: 'active_work', priority: 'high', status: 'in_progress', createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 21600000).toISOString(), summary: 'Prometheus audit remains active.', facts: ['A fact.'], nextUsefulAction: 'Continue the audit.', relevance: { projects: ['Prometheus'], triggers: ['audit'], surfaces: ['main_chat'] }, evidence: ['fixture'], lastValidatedAt: new Date(now).toISOString(), verificationRequired: true, supersedes: [] };
   fs.writeFileSync(capsules, JSON.stringify([validCapsule]), 'utf8');
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'valid');
-  fs.utimesSync(capsules, new Date(now - 60_000), new Date(now - 60_000));
+  fs.utimesSync(capsules, new Date(now - 60000), new Date(now - 60000));
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'stale');
 
   const carry = path.join(root, 'carry.json');
   assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-16').status, 'missing');
   fs.writeFileSync(carry, '{bad json', 'utf8');
   assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-16').status, 'invalid');
-  const decision = { targetDate: '2026-08-16', generatedAt: new Date(now).toISOString(), sourceDream: 'Brain/dreams/2026-08-15/23-30-dream.md', items: [] };
+  const goodItem = { threadKey: 'project:prometheus', title: 'Audit', state: 'in_progress', verifiedFacts: ['fact'], looseEnds: ['test'], nextNaturalOpening: 'Continue', reviewBy: new Date(now + 86400000).toISOString(), evidence: ['fixture'], lastValidatedAt: new Date(now).toISOString(), verificationRequired: true };
+  const decision = { targetDate: '2026-08-16', generatedAt: new Date(now).toISOString(), sourceDream: 'Brain/dreams/2026-08-15/23-30-dream.md', items: [goodItem] };
   fs.writeFileSync(carry, JSON.stringify(decision), 'utf8');
   assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-17').status, 'invalid');
   assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-16').status, 'valid');
+  fs.writeFileSync(carry, JSON.stringify({ ...decision, items: [goodItem, { title: 'broken' }] }), 'utf8');
+  assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-16').status, 'invalid', 'partially malformed carry packets must not silently drop a thread');
 
   const runnerSource = fs.readFileSync(path.join(process.cwd(), 'src/gateway/brain/brain-runner.ts'), 'utf8');
   assert.match(runnerSource, /capsuleArtifact\.status === 'missing'/);
