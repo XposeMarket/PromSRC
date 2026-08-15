@@ -31,6 +31,7 @@ const PENDING_GATEWAY_PAIR_KEY = 'pm_mobile_pending_gateway_pair_v1';
 const TOKEN_PREFIX = 'pm_mobile_gateway_token_v1:';
 const DEVICE_PREFIX = 'pm_mobile_gateway_device_v1:';
 const STATUS_PROBE_TIMEOUT_MS = 8000;
+const FETCH_AUTH_GUARD_KEY = '__pmMobileGatewayFetchAuthGuardInstalled';
 
 export function isMobileGatewayCatalogEnabled() {
   try {
@@ -202,7 +203,12 @@ export function loadGatewayCatalog() {
     ? parsed.map((item) => normalizeGatewayDescriptor(item)).filter((item) => item.gatewayId && item.origin)
     : [];
   const legacy = _currentLegacyEntry();
-  if (getDeviceToken() && !entries.some((entry) => entry.gatewayId === legacy.gatewayId)) {
+  // Once a stable descriptor for this PWA's own origin exists, do not also
+  // synthesize the legacy current-origin entry. This lets identity migration
+  // upgrade the old single-gateway record without leaving two copies of the
+  // same computer in the phone catalog.
+  const hasCurrentOriginEntry = entries.some((entry) => normalizeGatewayOrigin(entry.origin) === legacy.origin);
+  if (getDeviceToken() && !hasCurrentOriginEntry) {
     entries.unshift({ ...legacy, status: MOBILE_GATEWAY_STATUS.UNKNOWN });
   }
   return entries;
@@ -279,16 +285,112 @@ export function filterOnlineGatewayEntries(entries = []) {
     .filter((entry) => String(entry?.status || '') === MOBILE_GATEWAY_STATUS.ONLINE);
 }
 
+function _gatewayIdsAtOrigin(entries, origin, exceptId = '') {
+  const safeOrigin = normalizeGatewayOrigin(origin);
+  const skip = String(exceptId || '').trim();
+  if (!safeOrigin) return [];
+  return (Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry?.gatewayId && entry.gatewayId !== skip && normalizeGatewayOrigin(entry.origin) === safeOrigin)
+    .map((entry) => String(entry.gatewayId));
+}
+
+function _replaceGatewayIds(values, oldIds, newId) {
+  const next = [];
+  const seen = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const id = oldIds.has(String(value)) ? newId : String(value || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
+}
+
+function _migrateGatewayReferences(oldIds, nextGateway) {
+  if (!(oldIds instanceof Set) || !oldIds.size || !nextGateway?.gatewayId) return;
+  const nextId = String(nextGateway.gatewayId);
+  const nextOrigin = normalizeGatewayOrigin(nextGateway.origin);
+
+  const active = String(_readJson(ACTIVE_KEY, '') || '').trim();
+  if (oldIds.has(active)) {
+    try { _storage()?.setItem(ACTIVE_KEY, nextId); } catch {}
+  }
+
+  const filter = _readJson(FILTER_KEY, null);
+  if (filter && typeof filter === 'object' && Array.isArray(filter.gatewayIds)) {
+    _writeJson(FILTER_KEY, {
+      ...filter,
+      gatewayIds: _replaceGatewayIds(filter.gatewayIds, oldIds, nextId),
+    });
+  }
+
+  const bindings = _readJson(SESSION_TARGETS_KEY, {});
+  let bindingsChanged = false;
+  if (bindings && typeof bindings === 'object' && !Array.isArray(bindings)) {
+    for (const [sessionId, binding] of Object.entries(bindings)) {
+      if (!binding || typeof binding !== 'object' || !oldIds.has(String(binding.gatewayId || ''))) continue;
+      bindings[sessionId] = { ...binding, gatewayId: nextId, origin: nextOrigin || normalizeGatewayOrigin(binding.origin) };
+      bindingsChanged = true;
+    }
+  }
+  if (bindingsChanged) _writeJson(SESSION_TARGETS_KEY, bindings);
+
+  try {
+    if (oldIds.has(String(window.__pmMobileActiveGatewayId || ''))) {
+      window.__pmMobileActiveGatewayId = nextId;
+      window.__pmMobileActiveGatewayOrigin = nextOrigin;
+    }
+  } catch {}
+}
+
 export function upsertGateway(entry, { token = '', deviceId = '' } = {}) {
   const normalized = normalizeGatewayDescriptor(entry);
   if (!normalized.gatewayId || !normalized.origin) throw new Error('Gateway identity and origin are required.');
-  const entries = loadGatewayCatalog().filter((item) => item.gatewayId !== normalized.gatewayId);
-  const previous = getGateway(normalized.gatewayId);
-  saveGatewayCatalog([...entries, { ...previous, ...normalized, addedAt: previous?.addedAt || normalized.addedAt }]);
-  if (token) setGatewayToken(normalized.gatewayId, token, deviceId);
+
+  const catalog = loadGatewayCatalog();
+  const exactPrevious = catalog.find((item) => item.gatewayId === normalized.gatewayId) || null;
+  const replacedIds = new Set(_gatewayIdsAtOrigin(catalog, normalized.origin, normalized.gatewayId));
+  const replacedEntries = catalog.filter((item) => replacedIds.has(item.gatewayId));
+  const inherited = exactPrevious || replacedEntries[0] || null;
+  const inheritedToken = String(token || getGatewayToken(normalized.gatewayId)
+    || replacedEntries.map((item) => getGatewayToken(item.gatewayId)).find(Boolean)
+    || (normalizeGatewayOrigin(normalized.origin) === _apiOrigin() ? getDeviceToken() : '') || '').trim();
+  const inheritedDeviceId = String(deviceId || getGatewayDeviceId(normalized.gatewayId)
+    || replacedEntries.map((item) => getGatewayDeviceId(item.gatewayId)).find(Boolean) || '').trim();
+
+  const remaining = catalog.filter((item) => item.gatewayId !== normalized.gatewayId && !replacedIds.has(item.gatewayId));
+  const merged = normalizeGatewayDescriptor({
+    ...inherited,
+    ...normalized,
+    gatewayId: normalized.gatewayId,
+    id: normalized.gatewayId,
+    addedAt: inherited?.addedAt || normalized.addedAt,
+  });
+  saveGatewayCatalog([...remaining, merged]);
+
+  if (inheritedToken) setGatewayToken(normalized.gatewayId, inheritedToken, inheritedDeviceId);
+  for (const oldId of replacedIds) setGatewayToken(oldId, '');
+  _migrateGatewayReferences(replacedIds, merged);
+
   if (!getActiveGatewayId()) setActiveGatewayId(normalized.gatewayId);
-  _emitCatalogChanged({ type: 'gateway_upserted', gateway: normalized });
-  return getGateway(normalized.gatewayId) || normalized;
+
+  try {
+    if (String(window.__pmMobileActiveGatewayId || '') === normalized.gatewayId) {
+      window.__pmMobileActiveGatewayOrigin = normalized.origin;
+      window.__pmMobileActiveGatewayToken = inheritedToken;
+      window.__pmMobileActiveGatewayExecutionEnabled = normalized.execution?.enabled === true;
+    }
+  } catch {}
+
+  if (replacedIds.size) {
+    _emitCatalogChanged({
+      type: 'gateway_identity_migrated',
+      fromGatewayIds: [...replacedIds],
+      gateway: merged,
+    });
+  }
+  _emitCatalogChanged({ type: 'gateway_upserted', gateway: merged });
+  return getGateway(normalized.gatewayId) || merged;
 }
 
 export function updateGatewayStatus(gatewayId, patch = {}) {
@@ -399,6 +501,73 @@ function _timeoutError(message = 'Gateway request timed out.') {
   return error;
 }
 
+function _handlePairingAuthRejected({ gatewayId = '', origin = '', token = '' } = {}) {
+  const safeOrigin = normalizeGatewayOrigin(origin);
+  const presentedToken = String(token || '').trim();
+  const candidates = loadGatewayCatalog();
+  const entry = candidates.find((item) => String(item.gatewayId || '') === String(gatewayId || '').trim())
+    || candidates.find((item) => safeOrigin && normalizeGatewayOrigin(item.origin) === safeOrigin);
+  if (!entry) return false;
+
+  const storedToken = String(getGatewayToken(entry.gatewayId) || (isCurrentGateway(entry) ? getDeviceToken() : '') || '').trim();
+  // A late 401 from an old request must never revoke a freshly repaired grant.
+  if (presentedToken && storedToken && presentedToken !== storedToken) return false;
+  if (!storedToken && entry.status === MOBILE_GATEWAY_STATUS.REVOKED) return false;
+
+  setGatewayToken(entry.gatewayId, '');
+  if (isCurrentGateway(entry) && (!presentedToken || getDeviceToken() === presentedToken)) clearDeviceToken();
+  const next = updateGatewayStatus(entry.gatewayId, {
+    status: MOBILE_GATEWAY_STATUS.REVOKED,
+    lastError: 'This phone is no longer paired with the gateway.',
+    revokedAt: Date.now(),
+  });
+
+  try {
+    if (String(window.__pmMobileActiveGatewayId || '') === entry.gatewayId) {
+      window.__pmMobileActiveGatewayToken = '';
+      window.__pmMobileActiveGatewayExecutionEnabled = false;
+    }
+  } catch {}
+  try { window.dispatchEvent(new Event('pm-device-revoked')); } catch {}
+  return Boolean(next);
+}
+
+function _pairingTokenFromFetch(input, options = {}) {
+  try {
+    const headers = new Headers(options?.headers || (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
+    return String(headers.get('X-Pairing-Token') || '').trim();
+  } catch { return ''; }
+}
+
+function _fetchOrigin(input) {
+  try {
+    const value = typeof Request !== 'undefined' && input instanceof Request ? input.url : input;
+    return new URL(String(value || ''), window.location.origin).origin;
+  } catch { return ''; }
+}
+
+function _installPairedFetchAuthGuard() {
+  try {
+    if (window[FETCH_AUTH_GUARD_KEY] === true || typeof window.fetch !== 'function') return;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async function guardedPrometheusMobileFetch(input, options = {}) {
+      const response = await originalFetch(input, options);
+      if (response?.status !== 401) return response;
+      const token = _pairingTokenFromFetch(input, options);
+      if (!token) return response;
+      const origin = _fetchOrigin(input);
+      const entry = loadGatewayCatalog().find((item) => {
+        if (normalizeGatewayOrigin(item.origin) !== origin) return false;
+        const stored = getGatewayToken(item.gatewayId) || (isCurrentGateway(item) ? getDeviceToken() : '');
+        return String(stored || '') === token;
+      });
+      if (entry) _handlePairingAuthRejected({ gatewayId: entry.gatewayId, origin, token });
+      return response;
+    };
+    window[FETCH_AUTH_GUARD_KEY] = true;
+  } catch {}
+}
+
 export async function gatewayFetchJson(entryOrId, path, options = {}) {
   const entry = typeof entryOrId === 'string' ? getGateway(entryOrId) : entryOrId;
   if (!entry?.gatewayId || !entry.origin) {
@@ -443,17 +612,7 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
     try { body = text ? JSON.parse(text) : null; } catch { body = null; }
     if (!response.ok) {
       if (response.status === 401) {
-        // A rejected pairing grant must not degrade into an empty chat list.
-        // Clear only the credential for the target that rejected it, then let
-        // the router take the phone back through pairing if no grant remains.
-        setGatewayToken(entry.gatewayId, '');
-        if (isCurrentGateway(entry)) clearDeviceToken();
-        updateGatewayStatus(entry.gatewayId, {
-          status: MOBILE_GATEWAY_STATUS.REVOKED,
-          lastError: 'This phone is no longer paired with the gateway.',
-          revokedAt: Date.now(),
-        });
-        try { window.dispatchEvent(new Event('pm-device-revoked')); } catch {}
+        _handlePairingAuthRejected({ gatewayId: entry.gatewayId, origin: entry.origin, token });
       }
       const restarting = response.status === 503
         && (body?.code === 'GATEWAY_RESTARTING' || response.headers?.get?.('X-Prometheus-Gateway-State') === 'restarting');
@@ -540,7 +699,10 @@ export async function probeGateway(entryOrId, { persist = true } = {}) {
     next.status = MOBILE_GATEWAY_STATUS.ONLINE;
     next.lastContactAt = Date.now();
     next.lastError = '';
-    if (persist) updateGatewayStatus(entry.gatewayId, next);
+    if (persist) {
+      if (next.gatewayId !== entry.gatewayId) return upsertGateway(next);
+      return updateGatewayStatus(entry.gatewayId, next) || next;
+    }
     return next;
   } catch (error) {
     const status = error?.code === 'GATEWAY_TIMEOUT' || error?.code === 'GATEWAY_REQUEST_FAILED' || error?.code === 'GATEWAY_RESTARTING'
@@ -785,6 +947,8 @@ function _emitCatalogChanged(detail) {
   }
   try { window.dispatchEvent(new CustomEvent('pm-gateway-catalog-changed', { detail })); } catch {}
 }
+
+_installPairedFetchAuthGuard();
 
 export function gatewayStatusLabel(status) {
   return ({ online: 'Online', suspect: 'Suspect', offline: 'Offline', revoked: 'Revoked', unknown: 'Unknown' })[String(status || '')] || 'Unknown';
