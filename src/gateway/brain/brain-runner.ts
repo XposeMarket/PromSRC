@@ -1377,7 +1377,7 @@ export class BrainRunner {
           'browser_get_page_text',
           'browser_close',
           'memory_browse',
-          'memory_write',
+          'memory',
           'list_entities',
           'read_entity',
           'write_entity',
@@ -2095,10 +2095,16 @@ If new evidence conflicts with old memory, preserve both only if the distinction
 
 If 0 items pass all 4 gates: write nothing to memory. This is normal.
 
+Memory mutation tool contract:
+- Add a new durable item with memory(action="write", file="user|soul|memory", category="...", content="...").
+- Correct one existing durable bullet with memory(action="update", file="user|soul|memory", category="...", previous_content="exact current bullet text after '- '", content="replacement text").
+- For update, copy previous_content exactly from the current file. The operation fails rather than guessing if zero or multiple bullets match.
+- Do not use generic workspace_edit/file-edit tools on USER.md, SOUL.md, or MEMORY.md in this pass.
+
 For items that pass:
-  - Edit USER.md for: user identity, preferences, projects, communication style, workflow rules
-  - Edit SOUL.md for: Prometheus behavior rules, tool policies, operating constraints
-  - Edit MEMORY.md for: durable long-term context, decisions, and historical through-lines
+  - Use memory(action="write"|"update") with file="user" for: user identity, preferences, projects, communication style, workflow rules
+  - Use memory(action="write"|"update") with file="soul" for: Prometheus behavior rules, tool policies, operating constraints
+  - Use memory(action="write"|"update") with file="memory" for: durable long-term context, decisions, and historical through-lines
   - MEMORY.md gate is stricter: only cross-session durable facts/decisions; exclude intraday, ephemeral, and quickly-changing details
   - Be surgical: add or update specific entries; do not rewrite large sections
   - Record each write in the dream output under "Memory Updates Applied"

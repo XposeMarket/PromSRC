@@ -2212,16 +2212,17 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory',
-        description: 'Unified lightweight memory wrapper. Set action="write" to save a durable fact, action="read" to read USER.md/SOUL.md/MEMORY.md, or action="search" to retrieve relevant long-term memory. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
+        description: 'Unified lightweight memory wrapper. Set action="write" to add a durable fact, action="update" to replace one exact existing durable bullet, action="read" to read USER.md/SOUL.md/MEMORY.md, or action="search" to retrieve relevant long-term memory. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
         parameters: {
           type: 'object',
           required: ['action'],
           additionalProperties: false,
           properties: {
-            action: { type: 'string', enum: ['write', 'read', 'search'], description: 'Memory operation to perform.' },
-            file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
-            category: { type: 'string', description: 'For write: category section name, such as coding, communication_style, or projects.' },
-            content: { type: 'string', description: 'For write: the specific, concise fact or update to save.' },
+            action: { type: 'string', enum: ['write', 'update', 'read', 'search'], description: 'Memory operation to perform.' },
+            file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/update/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
+            category: { type: 'string', description: 'For write/update: category section name, such as coding, communication_style, projects, or Personality.' },
+            previous_content: { type: 'string', description: 'For update: exact current bullet text after the leading "- ". The update fails if zero or multiple bullets in the category match.' },
+            content: { type: 'string', description: 'For write/update: the specific, concise durable fact to save. A fresh date stamp is added automatically.' },
             query: { type: 'string', description: 'For search: natural-language query or exact memory ID/key.' },
             mode: { type: 'string', enum: ['quick', 'deep', 'project', 'timeline'], description: 'For search: quick (default), deep, project, or timeline.' },
             limit: { type: 'integer', minimum: 1, maximum: 50, description: 'For search: maximum number of hits.' },
