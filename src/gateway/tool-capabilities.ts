@@ -86,7 +86,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   'apply_workspace_patchset', 'write_note', 'memory_write', 'memory_index_refresh',
   'memory_embedding_backfill', 'persona_update', 'schedule_memory',
   'snapshot_workspace', 'format_changed_files', 'clone_repo', 'download_url',
-  'download_media', 'generate_image', 'generate_video', 'media_generate', 'video_compose', 'write_proposal', 'memory', 'upload_image',
+  'download_media', 'video_social_cut', 'generate_image', 'generate_video', 'media_generate', 'video_compose', 'write_proposal', 'memory', 'upload_image',
   'skill_import_bundle', 'skill_manifest_write', 'skill_update_metadata',
   'skill_create_bundle', 'skill_resource_write', 'skill_export_bundle',
   'skill_update_from_source', 'skill_curator', 'skill_create',
