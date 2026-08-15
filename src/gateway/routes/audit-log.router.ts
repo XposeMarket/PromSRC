@@ -15,19 +15,19 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { queryAuditLog, getRecentAuditSummary } from '../audit-log.js';
+import { queryAuditLogAsync } from '../audit-log.js';
 import { getDevEditLedger, getDevEditLedgerPatch } from '../dev-edit-ledger.js';
 
 const router = Router();
 
-router.get('/api/audit-log', (req: Request, res: Response) => {
+router.get('/api/audit-log', async (req: Request, res: Response) => {
   try {
     const {
       from, to, agentId, toolName, tier, status,
       limit, offset, nonMainOnly,
     } = req.query as Record<string, string>;
 
-    const result = queryAuditLog({
+    const result = await queryAuditLogAsync({
       from: from || undefined,
       to: to || undefined,
       agentId: agentId || undefined,

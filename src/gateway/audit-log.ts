@@ -69,7 +69,6 @@ let _logPath: string | null = null;
 let _lastRotationCheckAt = 0;
 let _rotationInProgress = false;
 let _rotationPendingLines: string[] = [];
-let _rotationPendingBytes = 0;
 
 // Tool calls can be very frequent during a long turn. Reading and splitting
 // the entire audit log after every call made that normal path synchronous and
@@ -77,7 +76,6 @@ let _rotationPendingBytes = 0;
 // only perform the full read when the file is genuinely large.
 const AUDIT_ROTATION_CHECK_INTERVAL_MS = 60_000;
 const AUDIT_ROTATION_SIZE_THRESHOLD_BYTES = 32 * 1024 * 1024;
-const AUDIT_ROTATION_PENDING_BYTES = 4 * 1024 * 1024;
 
 function getOrInitLogPath(): string {
   if (_logPath) return _logPath;
@@ -112,11 +110,11 @@ export function appendAuditEntry(entry: Partial<AuditLogEntry>): void {
     const logPath = getOrInitLogPath();
     const line = `${JSON.stringify(full)}\n`;
     if (_rotationInProgress) {
-      const bytes = Buffer.byteLength(line, 'utf8');
-      if (_rotationPendingBytes + bytes <= AUDIT_ROTATION_PENDING_BYTES) {
-        _rotationPendingLines.push(line);
-        _rotationPendingBytes += bytes;
-      }
+      // Rotation is a short, bounded maintenance window. Preserve every entry
+      // that arrives while the old file is being replaced, then flush them to
+      // the new file. A byte cap here silently lost audit records under heavy
+      // tool traffic, which is worse than a transient memory increase.
+      _rotationPendingLines.push(line);
       return;
     }
     fs.appendFileSync(logPath, line, 'utf-8');
@@ -148,6 +146,12 @@ export interface AuditQueryOptions {
   nonMainOnly?: boolean;
 }
 
+export interface AuditQueryResult {
+  entries: AuditLogEntry[];
+  total: number;
+  hasMore: boolean;
+}
+
 function isNonMainEntry(e: AuditLogEntry): boolean {
   const aid = String(e.agentId || '').toLowerCase();
   if (aid && aid !== 'main' && aid !== 'unknown') return true;
@@ -173,35 +177,11 @@ function isNonMainEntry(e: AuditLogEntry): boolean {
   );
 }
 
-/**
- * Read audit log entries, most-recent first, with optional filtering.
- */
-export function queryAuditLog(opts: AuditQueryOptions = {}): {
-  entries: AuditLogEntry[];
-  total: number;
-  hasMore: boolean;
-} {
-  const logPath = getOrInitLogPath();
-  if (!fs.existsSync(logPath)) {
-    return { entries: [], total: 0, hasMore: false };
-  }
-
-  const lines = fs.readFileSync(logPath, 'utf-8')
-    .split('\n')
-    .filter(l => l.trim());
-
-  const allEntries: AuditLogEntry[] = [];
-  for (const line of lines) {
-    try {
-      allEntries.push(JSON.parse(line) as AuditLogEntry);
-    } catch { /* skip malformed lines */ }
-  }
-
-  // Reverse so newest first
-  allEntries.reverse();
-
-  // Filter
-  const filtered = allEntries.filter(e => {
+function filterAuditEntries(allEntries: AuditLogEntry[], opts: AuditQueryOptions): AuditQueryResult {
+  // Reverse a copy so newest entries are returned first without mutating a
+  // caller-owned array.
+  const newestFirst = allEntries.slice().reverse();
+  const filtered = newestFirst.filter(e => {
     if (opts.from && e.timestamp < opts.from) return false;
     if (opts.to   && e.timestamp > opts.to)   return false;
     if (opts.agentId && e.agentId !== opts.agentId) return false;
@@ -223,6 +203,64 @@ export function queryAuditLog(opts: AuditQueryOptions = {}): {
   };
 }
 
+function parseAuditEntries(contents: string): AuditLogEntry[] {
+  const allEntries: AuditLogEntry[] = [];
+  for (const line of contents.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      allEntries.push(JSON.parse(line) as AuditLogEntry);
+    } catch { /* skip malformed lines */ }
+  }
+  return allEntries;
+}
+
+async function parseAuditEntriesAsync(contents: string): Promise<AuditLogEntry[]> {
+  const allEntries: AuditLogEntry[] = [];
+  const lines = contents.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim()) {
+      try {
+        allEntries.push(JSON.parse(line) as AuditLogEntry);
+      } catch { /* skip malformed lines */ }
+    }
+    if (index > 0 && index % 512 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  return allEntries;
+}
+
+/**
+ * Read audit log entries, most-recent first, with optional filtering.
+ * Synchronous form is retained for internal callers that explicitly need it.
+ */
+export function queryAuditLog(opts: AuditQueryOptions = {}): AuditQueryResult {
+  const logPath = getOrInitLogPath();
+  if (!fs.existsSync(logPath)) {
+    return { entries: [], total: 0, hasMore: false };
+  }
+  return filterAuditEntries(parseAuditEntries(fs.readFileSync(logPath, 'utf-8')), opts);
+}
+
+/**
+ * Non-blocking gateway-facing query path. File I/O is asynchronous and JSON
+ * parsing yields periodically so a large audit page cannot monopolize the
+ * gateway event loop.
+ */
+export async function queryAuditLogAsync(opts: AuditQueryOptions = {}): Promise<AuditQueryResult> {
+  const logPath = getOrInitLogPath();
+  let contents: string;
+  try {
+    contents = await fs.promises.readFile(logPath, 'utf-8');
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return { entries: [], total: 0, hasMore: false };
+    throw error;
+  }
+  const entries = await parseAuditEntriesAsync(contents);
+  return filterAuditEntries(entries, opts);
+}
+
 /**
  * Return a short summary of the last N entries (for the UI log panel).
  */
@@ -238,7 +276,6 @@ async function flushRotationPending(logPath: string): Promise<void> {
   while (_rotationPendingLines.length > 0) {
     const lines = _rotationPendingLines;
     _rotationPendingLines = [];
-    _rotationPendingBytes = 0;
     await fs.promises.appendFile(logPath, lines.join(''), 'utf8');
   }
 }
