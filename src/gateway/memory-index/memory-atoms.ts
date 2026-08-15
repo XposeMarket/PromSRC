@@ -337,7 +337,10 @@ export function retrieveMemoryAtoms(
   const { snapshot, cacheHit } = loadSnapshot(workspacePath);
   const queryText = String(query || '').trim();
   const additionalContext = String(options.additionalContext || '').trim();
-  const queryTerms = tokenize(`${queryText} ${additionalContext}`);
+  // Score lexical relevance against the user's query only. Project/other
+  // additional context is positive-only supporting context inside scoreAtom
+  // (entity/section disambiguation); it must not dilute a direct memory match.
+  const queryTerms = tokenize(queryText);
   if (!queryTerms.length || !snapshot.atoms.length) {
     return {
       direct: [],
