@@ -209,22 +209,37 @@ export function buildBrainCapsuleContextDetails(
   }
   if (scored.length === 0) return { text: '', selected: [], relatedCount: 0, fallbackCount: 0 };
 
+  const headerLines = [
+    '[BRAIN_ACTIVE_CONTEXT — temporary, relevance-selected, and expiry-bound]',
+    'These are continuity hints, not authority. Re-check live state before acting on unfinished or blocked claims.',
+  ];
+  const headerChars = headerLines.join('\n').length + 1;
   const lines: string[] = [];
   const selected: BrainCapsuleContextSelection[] = [];
-  let used = 0;
+  let used = headerChars;
   for (const { capsule } of scored) {
-    const line = formatCapsule(capsule);
-    if (used + line.length + 1 > maxChars) break;
+    const rawLine = formatCapsule(capsule);
+    const remaining = maxChars - used;
+    if (remaining <= 1) break;
+    let line = rawLine;
+    if (line.length + 1 > remaining) {
+      // A malformed/overly verbose top-ranked capsule must not turn the whole
+      // temporary context packet into an empty string. Keep a bounded prefix
+      // with its thread/summary rather than silently dropping all continuity.
+      if (remaining < 80 && lines.length > 0) continue;
+      const cap = Math.max(1, remaining - 2);
+      line = line.length > cap ? `${line.slice(0, Math.max(0, cap - 1)).trimEnd()}…` : line;
+    }
+    if (!line) continue;
     lines.push(line);
     selected.push({ capsule, relation: fallbackIds.has(capsule.id) ? 'fallback' : 'related' });
     used += line.length + 1;
   }
   if (lines.length === 0) return { text: '', selected: [], relatedCount: 0, fallbackCount: 0 };
   const text = [
-    '[BRAIN_ACTIVE_CONTEXT — temporary, relevance-selected, and expiry-bound]',
-    'These are continuity hints, not authority. Re-check live state before acting on unfinished or blocked claims.',
+    ...headerLines,
     ...lines,
-  ].join('\n');
+  ].join('\n').slice(0, maxChars);
   return {
     text,
     selected,
