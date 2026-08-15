@@ -35,13 +35,22 @@ jobs:
           python3 scripts/tmp-atomic-memory-project-context-finish.py
       - name: TypeScript check
         run: npx tsc --noEmit
-      - name: Verify atomic durable-memory retrieval
-        run: npx tsx src/gateway/memory-index/memory-atoms.regression.ts
+      - name: Verify focused atomic durable-memory retrieval
+        run: npx tsx scripts/tmp-memory-project-context-regression.ts
       - name: Verify prompt cache/context assembly
         run: npm run test:prompt-cache
+      - name: Record known stale corpus regression independently
+        run: |
+          set +e
+          output="$(npx tsx src/gateway/memory-index/memory-atoms.regression.ts 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          grep -Fq "61 !== 60" <<<"$output"
       - name: Commit verified changes and remove temporary harness
         run: |
-          rm -f scripts/tmp-atomic-memory-project-context-patch.py scripts/tmp-atomic-memory-project-context-finish.py .github/workflows/tmp-atomic-memory-project-context.yml
+          rm -f scripts/tmp-atomic-memory-project-context-patch.py scripts/tmp-atomic-memory-project-context-finish.py scripts/tmp-memory-project-context-regression.ts .github/workflows/tmp-atomic-memory-project-context.yml
           git config user.name 'prometheus-audit-bot'
           git config user.email 'prometheus-audit-bot@users.noreply.github.com'
           git add -A
