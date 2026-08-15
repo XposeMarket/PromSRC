@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify-and-commit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,6 +30,8 @@ jobs:
         run: npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
       - name: Verify Dream memory allowlist contract
         run: npx tsx src/gateway/brain/brain-dream-memory-contract.regression.ts
+      - name: Build backend for dist-based actor regression
+        run: npm run build:backend
       - name: Verify actor memory isolation
         run: node scripts/test-agent-identity-memory.mjs
       - name: Verify prompt/context assembly
