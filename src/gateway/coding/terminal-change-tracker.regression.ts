@@ -136,6 +136,16 @@ function nodeCommand(code: string): string {
   return `"${executable}" -e "eval(Buffer.from('${encoded}','base64').toString())"`;
 }
 
+async function waitForPath(targetPath: string, timeoutMs = 2500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(targetPath)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for test process to create ${path.basename(targetPath)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function runProcessSupervisorCase(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-supervisor-'));
   const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-supervisor-store-'));
@@ -194,7 +204,11 @@ async function runProcessSupervisorCase(): Promise<void> {
       workspacePath: root,
       trackWorkspaceChanges: true,
     });
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // The contract under test is "an edit that happened before cancellation is
+    // still captured." Waiting a fixed 120 ms made the test scheduler-dependent:
+    // on slower runners the shell could be killed before the child Node process
+    // ever performed its synchronous write, leaving no real edit to report.
+    await waitForPath(path.join(root, 'cancelled.txt'));
     cancelled.cancel('manual_cancel');
     const cancelledExit = await cancelled.wait();
     assert.equal(cancelledExit.reason, 'manual_cancel');
