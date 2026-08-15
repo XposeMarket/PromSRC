@@ -44,6 +44,7 @@ import {
   getWindowLabel,
   fmtUtc,
   fmtLocal,
+  resolveThoughtCoverageCursor,
   type BrainLatestState,
 } from './brain-state';
 import {
@@ -63,11 +64,11 @@ import {
 } from './activity-package.js';
 import { buildThoughtActivityPackageIsolated } from './activity-package-worker-client';
 import { runSkillCurator } from '../skills-runtime/skill-curator';
+import { applyCarryForwardToIntradayFile } from './brain-continuity.js';
 import {
-  applyCarryForwardToIntradayFile,
-  parseBrainCarryForwardDecision,
-  parseBrainThoughtCapsules,
-} from './brain-continuity.js';
+  inspectBrainCarryForwardArtifact,
+  inspectBrainThoughtCapsuleArtifact,
+} from './brain-artifact-integrity.js';
 import {
   BRAIN_DREAM_MAX_PROPOSALS,
   BRAIN_DREAM_TARGET_PROPOSALS,
@@ -817,14 +818,16 @@ export class BrainRunner {
       return { windowStart, windowEnd };
     }
 
-    const elapsed     = now.getTime() - lastThought.getTime();
+    const lastCoveredAt = resolveThoughtCoverageCursor(state) || lastThought;
+    const elapsed = now.getTime() - lastCoveredAt.getTime();
 
     if (elapsed < THOUGHT_INTERVAL_MS) return null;
 
-    // Catch-up: cap window to 12h max regardless of actual gap
+    // Catch-up: cap window to 12h max regardless of actual gap. The normal
+    // start boundary is the exact prior package end, not model completion time.
     const windowStart = elapsed > CATCHUP_CAP_MS
       ? new Date(now.getTime() - CATCHUP_CAP_MS)
-      : lastThought;
+      : lastCoveredAt;
 
     return { windowStart, windowEnd };
   }
@@ -1147,26 +1150,20 @@ export class BrainRunner {
       }
     }
     const fileLooksFresh = artifactFresh();
-    let capsuleArtifactValid = false;
-    try {
-      if (fs.existsSync(absCapsuleFile)) {
-        const stat = fs.statSync(absCapsuleFile);
-        const rawCapsules = fs.readFileSync(absCapsuleFile, 'utf-8');
-        const parsedRaw = JSON.parse(rawCapsules);
-        capsuleArtifactValid = stat.mtimeMs >= (runStartedAt - 5000)
-          && Array.isArray(parsedRaw)
-          && parseBrainThoughtCapsules(rawCapsules).length === parsedRaw.length;
-      }
-      // An empty array is a valid quiet-window result. Recover only the missing
-      // sidecar, never manufacture capsules from prose.
-      if (!capsuleArtifactValid && fileLooksFresh && !wasAborted && !runFailed) {
+    let capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
+    // An empty array is a valid quiet-window result. Recover only a genuinely
+    // missing sidecar; malformed or stale model output is preserved and fails
+    // the run so continuity loss is observable instead of silently erased.
+    if (capsuleArtifact.status === 'missing' && fileLooksFresh && !wasAborted && !runFailed) {
+      try {
         fs.mkdirSync(path.dirname(absCapsuleFile), { recursive: true });
         fs.writeFileSync(absCapsuleFile, '[]\n', 'utf-8');
-        capsuleArtifactValid = true;
+        capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
+      } catch (err: any) {
+        capsuleArtifact = { status: 'invalid', count: 0, error: String(err?.message || err) };
       }
-    } catch {
-      capsuleArtifactValid = false;
     }
+    const capsuleArtifactValid = capsuleArtifact.status === 'valid';
     const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;
     const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
     const success = outcome === 'success';
@@ -1174,6 +1171,7 @@ export class BrainRunner {
     const latestAfter = loadLatestState();
     if (success) {
       latestAfter.lastThoughtAt = new Date().toISOString();
+      latestAfter.lastThoughtWindowEndAt = windowEnd.toISOString();
       latestAfter.lastThoughtWindow = windowLabel;
       latestAfter.lastThoughtStatus = 'success';
       latestAfter.lastThoughtError = recoveredArtifact
@@ -1187,7 +1185,9 @@ export class BrainRunner {
         outcome,
         runFailed
           ? String(resultText).slice(0, 500)
-          : `Expected thought artifact missing or stale: ${outFile}`,
+          : !fileLooksFresh
+            ? `Expected thought artifact missing or stale: ${outFile}`
+            : `Thought capsule artifact ${capsuleArtifact.status}: ${capsuleFile}${capsuleArtifact.error ? ` (${capsuleArtifact.error})` : ''}`,
         abortSignal.reason,
       );
       saveLatestState(latestAfter);
@@ -1494,15 +1494,15 @@ export class BrainRunner {
     const dreamFresh = artifactFresh(absOutFile);
     const proposalsFresh = artifactFresh(proposalsFilePath);
     let carryForwardFresh = false;
+    let carryArtifact = inspectBrainCarryForwardArtifact(absCarryDecisionFile, runStartedAt, carryTargetDate);
     try {
-      if (artifactFresh(absCarryDecisionFile)) {
-        const decision = parseBrainCarryForwardDecision(fs.readFileSync(absCarryDecisionFile, 'utf-8'));
-        if (decision && decision.targetDate === carryTargetDate) {
-          applyCarryForwardToIntradayFile(this.deps.workspacePath, decision);
-          carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
-        }
+      if (carryArtifact.status === 'valid' && carryArtifact.decision) {
+        applyCarryForwardToIntradayFile(this.deps.workspacePath, carryArtifact.decision);
+        carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
       }
-      if (!carryForwardFresh && dreamFresh && !wasAborted && !runFailed) {
+      // Recover only a genuinely absent optional sidecar. Malformed, stale, or
+      // wrong-target model output is preserved and makes the Dream fail closed.
+      if (!carryForwardFresh && carryArtifact.status === 'missing' && dreamFresh && !wasAborted && !runFailed) {
         fs.mkdirSync(path.dirname(absCarryDecisionFile), { recursive: true });
         const fallback = {
           targetDate: carryTargetDate,
@@ -1511,6 +1511,7 @@ export class BrainRunner {
           items: [],
         };
         fs.writeFileSync(absCarryDecisionFile, `${JSON.stringify(fallback, null, 2)}\n`, 'utf-8');
+        carryArtifact = inspectBrainCarryForwardArtifact(absCarryDecisionFile, runStartedAt, carryTargetDate);
         applyCarryForwardToIntradayFile(this.deps.workspacePath, fallback);
         carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
         artifactRecoveryNotes.push('Recovered missing carry-forward decision with an empty validated next-day section.');
@@ -1572,6 +1573,7 @@ export class BrainRunner {
           : `Expected dream artifacts missing/stale after recovery attempts: ${[
             dreamFresh ? null : outFile,
             proposalsFresh ? null : 'proposals.md',
+            carryForwardFresh ? null : `${carryDecisionFile} (${carryArtifact.status}${carryArtifact.error ? `: ${carryArtifact.error}` : ''})`,
           ].filter(Boolean).join(', ') || '(unknown)'}`,
         abortSignal.reason,
       );

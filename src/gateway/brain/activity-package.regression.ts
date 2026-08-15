@@ -120,6 +120,18 @@ async function main(): Promise<void> {
     ]);
     assert.equal(again.package.packageId, pkg.packageId, 'same stores/window must produce deterministic package ID');
     assert.equal(concurrent.package.packageId, pkg.packageId, 'concurrent builders must be deterministic');
+    const rerunContinuationEvents = pkg.eventLedger.continuations.flatMap((entry) => {
+      const filePath = path.join(workspacePath, entry.path);
+      const rows = fs.readFileSync(filePath, 'utf8').trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      assert.equal(rows.length, entry.eventCount, `continuation ${entry.path} must be a snapshot, not an append-only rerun journal`);
+      assert.equal(new Set(rows.map((row: any) => row.id)).size, rows.length, `continuation ${entry.path} must not duplicate event ids after reruns`);
+      return rows;
+    });
+    assert.equal(
+      rerunContinuationEvents.length,
+      pkg.eventLedger.totalEvents - pkg.eventLedger.inline.length,
+      'rerunning the same window must not grow continuation contents',
+    );
     console.log('activity-package regression passed', JSON.stringify({
       events: pkg.eventLedger.totalEvents,
       continuations: pkg.eventLedger.continuations.length,

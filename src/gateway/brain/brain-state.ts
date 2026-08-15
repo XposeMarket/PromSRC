@@ -15,8 +15,10 @@ import type { BrainRunStatus } from './brain-run-outcome';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface BrainLatestState {
-  /** ISO timestamp of the last thought run */
+  /** ISO timestamp of the last thought run completion */
   lastThoughtAt: string | null;
+  /** Exact end boundary of the last successfully covered Thought activity window */
+  lastThoughtWindowEndAt: string | null;
   /** ISO timestamp of the last thought attempt (success, failure, or abort) */
   lastThoughtAttemptAt: string | null;
   /** Last known thought outcome */
@@ -132,6 +134,7 @@ function getLatestStatePath(): string {
 function defaultLatestState(): BrainLatestState {
   return {
     lastThoughtAt: null,
+    lastThoughtWindowEndAt: null,
     lastThoughtAttemptAt: null,
     lastThoughtStatus: 'idle',
     lastThoughtError: null,
@@ -172,6 +175,22 @@ export function loadLatestState(): BrainLatestState {
 
 export function saveLatestState(state: BrainLatestState): void {
   safeWrite(getLatestStatePath(), state);
+}
+
+/**
+ * Returns the durable end boundary of activity already consumed by Thoughts.
+ * Older state files predate the explicit cursor, so lastThoughtAt is retained as
+ * a migration fallback only.
+ */
+export function resolveThoughtCoverageCursor(
+  state: Pick<BrainLatestState, 'lastThoughtWindowEndAt' | 'lastThoughtAt'>,
+): Date | null {
+  for (const candidate of [state.lastThoughtWindowEndAt, state.lastThoughtAt]) {
+    if (!candidate) continue;
+    const parsed = new Date(candidate);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+  }
+  return null;
 }
 
 export function markGatewayStarted(): void {
