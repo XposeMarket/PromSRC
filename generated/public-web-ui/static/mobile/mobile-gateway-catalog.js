@@ -49,8 +49,15 @@ function _readJson(key, fallback) {
   try {
     const raw = _storage()?.getItem(key);
     if (!raw) return fallback;
-    const parsed = JSON.parse(raw);
-    return parsed == null ? fallback : parsed;
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed == null ? fallback : parsed;
+    } catch {
+      // ACTIVE_KEY was historically written as a plain string rather than
+      // JSON. Read that legacy value directly so a user's selected computer
+      // survives reloads and can be migrated to a replacement gateway id.
+      return key === ACTIVE_KEY ? raw : fallback;
+    }
   } catch { return fallback; }
 }
 
