@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { rewriteRetiredToolPromptText } from '../runtime/retired-tool-migrations';
 
 type FileSnapshot = {
   mtimeMs: number;
@@ -54,7 +55,10 @@ export function memoizePromptProfileBlock(
     blockHits += 1;
     return cached.value;
   }
-  const value = build();
+  const rawValue = build();
+  const value = id.startsWith('tools:')
+    ? rewriteRetiredToolPromptText(rawValue)
+    : rawValue;
   blockSnapshots.set(id, { fingerprint, value, lastUsedAt: Date.now() });
   blockMisses += 1;
   if (blockSnapshots.size > MAX_BLOCK_SNAPSHOTS) {
