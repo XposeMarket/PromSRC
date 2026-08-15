@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  routing-and-context:
+  coding-native:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -19,51 +19,97 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Runtime prompt and workspace mode
-        run: npm run test:runtime-prompt-manifest && npm run test:workspace-tool-mode
-      - name: Chat and thread routing
-        run: npm run test:turn-route-isolation && npm run test:chat-model-route && npm run test:thread-ops-model-route
-      - name: Context accounting
-        run: npm run test:context-window && npm run test:turn-context
-      - name: Tool and instruction routing
-        run: npm run test:tool-category-manifest && npm run test:tool-category-routing && npm run test:instruction-segment-resolver
-
-  storage-imports-and-brain:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - name: Resources and imports
-        run: npm run test:resource-store && npm run test:external-import && npm run test:external-import-discovery && npm run test:session-sidebar-order
-      - name: Audit and activity
-        run: npm run test:audit-ops && npm run test:activity-package
-      - name: Brain policy and usage
-        run: npm run test:brain-proposal-policy && npm run test:brain-usage
-      - name: Process hygiene
-        run: npm run test:process-hygiene
-
-  workers-coding-and-integrations:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - name: Runtime workers
-        run: npm run test:runtime-workers
-      - name: Coding context
+      - name: Build native test dependencies
+        run: npm rebuild node-pty better-sqlite3
+      - name: Coding context and terminal tracking
         run: npm run test:coding-context
+
+  plugins-path-and-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
       - name: Plugin tool surface
         run: npm run test:plugin-tool-surface
+      - name: Path permissions
+        run: npm run test:path-permissions
+      - name: Prompt cache
+        run: npm run test:prompt-cache
       - name: Goal continuity
         run: npm run test:goal-continuity
-      - name: Path permissions and prompt cache
-        run: npm run test:path-permissions && npm run test:prompt-cache
+
+  pairing-security-and-connections:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build native backend dependencies
+        run: npm rebuild better-sqlite3 node-pty
+      - name: Build backend once
+        run: npm run build:backend
+      - name: Pairing admin boundary
+        run: node scripts/test-pairing-admin-boundary.mjs
+      - name: Storage boundaries
+        run: node scripts/test-storage-boundaries.mjs
+      - name: Tool security boundaries
+        run: node scripts/test-tool-security-boundaries.mjs
+      - name: Connector OAuth contract
+        run: node scripts/test-connector-oauth-contract.mjs
+      - name: Connection orchestrator
+        run: node scripts/test-connection-orchestrator.mjs
+
+  agents-automations-and-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build native backend dependencies
+        run: npm rebuild better-sqlite3 node-pty
+      - name: Build backend once
+        run: npm run build:backend
+      - name: Agent runtime contract
+        run: node scripts/test-agent-runtime-contract.mjs
+      - name: Automation runtime and internal-watch recovery
+        run: node scripts/test-automation-runtime-contract.mjs && npx tsx src/gateway/internal-watch/internal-watch-restart-recovery.regression.ts && npx tsx src/gateway/internal-watch/internal-watch-policy.regression.ts
+      - name: Reasoning capabilities
+        run: node scripts/test-reasoning-capabilities.mjs
+      - name: Main-chat goal restart contracts
+        run: node scripts/test-main-chat-goal-restart-contract.mjs && node scripts/test-main-chat-goal-crash-recovery.mjs && node scripts/test-main-chat-goal-steer-contract.mjs
+
+  updater-and-electron-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build native backend dependencies
+        run: npm rebuild better-sqlite3 node-pty
+      - name: Build backend once
+        run: npm run build:backend
+      - name: Canonical updater contract
+        run: node scripts/test-canonical-updater.mjs
+      - name: Electron security boundary
+        run: node scripts/test-electron-security-boundary.mjs
+      - name: Supervised restart cleanup
+        run: node scripts/test-supervised-restart-cleanup.mjs
+      - name: Gateway relay
+        run: node scripts/test-electron-gateway-relay.mjs
