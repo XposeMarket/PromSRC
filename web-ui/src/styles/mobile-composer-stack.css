@@ -174,7 +174,7 @@ body.pm-mobile-active .pm-chat-connection-status {
     + var(--pm-background-dock-live-height, 0px)
   );
   width: max-content;
-  max-width: calc(100vw - (2 * var(--pm-composer-stack-inset)));
+  max-width: calc(100vw - var(--pm-composer-stack-inset) - var(--pm-composer-stack-inset));
   min-height: 34px;
   margin: 0;
   padding: 8px 12px;
@@ -216,7 +216,7 @@ body.pm-mobile-active .pm-page :is(
   right: auto !important;
   bottom: var(--pm-composer-stack-base-bottom) !important;
   width: max-content;
-  max-width: calc(100vw - (2 * var(--pm-composer-stack-inset)));
+  max-width: calc(100vw - var(--pm-composer-stack-inset) - var(--pm-composer-stack-inset));
   margin: 0 !important;
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
   border-radius: 999px;
