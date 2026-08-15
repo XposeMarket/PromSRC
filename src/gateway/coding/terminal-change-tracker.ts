@@ -135,7 +135,15 @@ function commandPathHints(command: string | undefined, cwd: string, workspacePat
     // thousands of false workspace targets.
     if (!/[\\/]/.test(value) && !/^\.?\.?[\\/]/.test(value) && !/\.[a-z0-9]{1,12}$/i.test(value)) return;
     try {
-      const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(cwd, value);
+      // Commands can carry paths written for a different shell/OS than the
+      // gateway process that is inspecting them (for example PowerShell-style
+      // .\\file paths in a cross-platform test or remote command). Normalize
+      // separators before resolving the hint so explicit targets are captured
+      // ahead of the bounded workspace walk.
+      const pathValue = process.platform === 'win32'
+        ? value.replace(/\//g, '\\')
+        : value.replace(/\\/g, '/');
+      const absolute = path.isAbsolute(pathValue) ? path.resolve(pathValue) : path.resolve(cwd, pathValue);
       if (!isInside(workspacePath, absolute)) return;
       const relative = path.relative(workspacePath, absolute);
       if (excludedFilePath(relative)) return;
