@@ -1,0 +1,69 @@
+name: Temporary latest regression audit
+
+on:
+  push:
+    branches:
+      - review/latest-regression-audit
+
+permissions:
+  contents: read
+
+jobs:
+  routing-and-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Runtime prompt and workspace mode
+        run: npm run test:runtime-prompt-manifest && npm run test:workspace-tool-mode
+      - name: Chat and thread routing
+        run: npm run test:turn-route-isolation && npm run test:chat-model-route && npm run test:thread-ops-model-route
+      - name: Context accounting
+        run: npm run test:context-window && npm run test:turn-context
+      - name: Tool and instruction routing
+        run: npm run test:tool-category-manifest && npm run test:tool-category-routing && npm run test:instruction-segment-resolver
+
+  storage-imports-and-brain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Resources and imports
+        run: npm run test:resource-store && npm run test:external-import && npm run test:external-import-discovery && npm run test:session-sidebar-order
+      - name: Audit and activity
+        run: npm run test:audit-ops && npm run test:activity-package
+      - name: Brain policy and usage
+        run: npm run test:brain-proposal-policy && npm run test:brain-usage
+      - name: Process hygiene
+        run: npm run test:process-hygiene
+
+  workers-coding-and-integrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Runtime workers
+        run: npm run test:runtime-workers
+      - name: Coding context
+        run: npm run test:coding-context
+      - name: Plugin tool surface
+        run: npm run test:plugin-tool-surface
+      - name: Goal continuity
+        run: npm run test:goal-continuity
+      - name: Path permissions and prompt cache
+        run: npm run test:path-permissions && npm run test:prompt-cache
