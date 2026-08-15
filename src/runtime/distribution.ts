@@ -5,6 +5,13 @@ function normalizeFlag(value: unknown): string {
   return String(value || '').trim().toLowerCase();
 }
 
+// Retired model-facing tools stay implemented only as compatibility handlers for
+// old persisted sessions/tasks. They must never be re-exposed by build mode or
+// dev-tool flags. New turns use the modern on-demand tool categories instead.
+const RETIRED_MODEL_TOOL_NAMES = new Set([
+  'ask_team_coordinator',
+]);
+
 const PUBLIC_BUILD_DISABLED_TOOL_NAMES = new Set([
   'dev_source_read',
   'dev_source_edit',
@@ -155,8 +162,14 @@ export function hasPublicWebUiBuild(): boolean {
   return fs.existsSync(path.join(root, 'index.html'));
 }
 
+export function isRetiredModelTool(name: string): boolean {
+  return RETIRED_MODEL_TOOL_NAMES.has(String(name || '').trim());
+}
+
 export function isToolHiddenInPublicBuild(name: string): boolean {
-  return isPublicDistributionBuild() && PUBLIC_BUILD_DISABLED_TOOL_NAMES.has(String(name || '').trim());
+  const normalizedName = String(name || '').trim();
+  return isRetiredModelTool(normalizedName)
+    || (isPublicDistributionBuild() && PUBLIC_BUILD_DISABLED_TOOL_NAMES.has(normalizedName));
 }
 
 export function isToolCategoryHiddenInPublicBuild(category: string): boolean {
@@ -164,7 +177,8 @@ export function isToolCategoryHiddenInPublicBuild(category: string): boolean {
 }
 
 export function filterPublicBuildToolDefs<T extends { function?: { name?: string } }>(toolDefs: T[]): T[] {
-  if (!isPublicDistributionBuild()) return toolDefs;
+  // Retired tools are hidden in every distribution. The public-build predicate
+  // additionally removes private-only source/self-development tools.
   return toolDefs.filter((toolDef) => !isToolHiddenInPublicBuild(String(toolDef?.function?.name || '')));
 }
 
