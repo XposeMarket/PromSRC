@@ -20,7 +20,7 @@ assert.match(watchRunnerSource, /deliveryMode: 'live_steer' \| 'follow_up'/, 'wa
 assert.match(watchRunnerSource, /runInteractiveTurn/, 'post-turn watch delivery must still launch a normal Prometheus follow-up turn');
 const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 assert.match(chatSource, /liveEventsAppliedBeforeFinal = await injectPendingChatSteers\(\)/, 'finalization must drain watch events that arrive during the provider response');
-assert.match(chatSource, /if \(!isSyntheticInternalWatch && shouldCheckBlockedTaskFollowup\(message\)\)/, 'private watch payloads must never enter user blocked-task follow-up routing');
+assert.match(chatSource, /if \(!isSyntheticInternalWatch && (?:!isSupervisionLoop && )?shouldCheckBlockedTaskFollowup\(message\)\)/, 'private watch payloads must never enter user blocked-task follow-up routing, even when additional synthetic-loop guards are present');
 assert.match(chatSource, /runWithInternalWatchTurnContext\(flags\.internalWatchContext/, 'watch policy must cover the entire synthetic turn, including wrapper and preflight paths');
 assert.match(cronSource, /normalizedType === 'one-shot' \? null/, 'one-shot jobs must not expose a cron schedule');
 assert.match(cronSource, /archiveCompletedScheduledJob\(job\)/, 'completed one-shots must be retained');
