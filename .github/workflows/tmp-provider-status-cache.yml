@@ -26,13 +26,14 @@ jobs:
         run: |
           python3 scripts/tmp-scope-provider-status-cache.py
           python3 scripts/tmp-provider-status-keyed-map.py
+          python3 scripts/tmp-provider-status-checking-reset.py
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Provider status cache regression
         run: npx tsx src/gateway/provider-status.regression.ts
       - name: Commit verified changes and remove temporary harness
         run: |
-          rm -f scripts/tmp-scope-provider-status-cache.py scripts/tmp-provider-status-keyed-map.py .github/workflows/tmp-provider-status-cache.yml
+          rm -f scripts/tmp-scope-provider-status-cache.py scripts/tmp-provider-status-keyed-map.py scripts/tmp-provider-status-checking-reset.py .github/workflows/tmp-provider-status-cache.yml
           git config user.name 'prometheus-audit-bot'
           git config user.email 'prometheus-audit-bot@users.noreply.github.com'
           git add -A
