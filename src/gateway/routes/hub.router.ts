@@ -82,6 +82,78 @@ function readAuditLinesCached(): string[] {
   return lines;
 }
 
+interface AuditTimeCache {
+  path: string;
+  size: number;
+  firstBytes: string;
+  earliestTimestamp: string;
+}
+
+let _auditTimeCache: AuditTimeCache | null = null;
+const AUDIT_PREFIX_BYTES = 8 * 1024;
+const AUDIT_INITIAL_SCAN_LIMIT_BYTES = 1024 * 1024;
+const AUDIT_SCAN_CHUNK_BYTES = 64 * 1024;
+
+function readFilePrefix(filePath: string, maxBytes = AUDIT_PREFIX_BYTES): string {
+  let handle: number | null = null;
+  try {
+    const st = fs.statSync(filePath);
+    const length = Math.max(0, Math.min(maxBytes, st.size));
+    if (!length) return '';
+    handle = fs.openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(length);
+    const read = fs.readSync(handle, buffer, 0, length, 0);
+    return buffer.subarray(0, read).toString('utf-8');
+  } catch { return ''; }
+  finally { if (handle != null) { try { fs.closeSync(handle); } catch {} } }
+}
+
+function findFirstAuditTimestamp(filePath: string): string {
+  let handle: number | null = null;
+  try {
+    const st = fs.statSync(filePath);
+    const scanBytes = Math.min(st.size, AUDIT_INITIAL_SCAN_LIMIT_BYTES);
+    if (scanBytes <= 0) return '';
+    handle = fs.openSync(filePath, 'r');
+    let position = 0;
+    let remainder = '';
+    while (position < scanBytes) {
+      const length = Math.min(AUDIT_SCAN_CHUNK_BYTES, scanBytes - position);
+      const buffer = Buffer.allocUnsafe(length);
+      const read = fs.readSync(handle, buffer, 0, length, position);
+      if (read <= 0) break;
+      position += read;
+      const combined = `${remainder}${buffer.subarray(0, read).toString('utf-8')}`;
+      const lines = combined.split('\n');
+      remainder = combined.endsWith('\n') ? '' : (lines.pop() || '');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const timestamp = String(JSON.parse(line)?.timestamp || '').trim();
+          if (timestamp && Number.isFinite(Date.parse(timestamp))) return timestamp;
+        } catch {}
+      }
+    }
+  } catch { return ''; }
+  finally { if (handle != null) { try { fs.closeSync(handle); } catch {} } }
+  return '';
+}
+
+function readAuditEarliestTimestampCached(): string {
+  const filePath = getAuditLogPath();
+  let st: fs.Stats;
+  try { st = fs.statSync(filePath); } catch { _auditTimeCache = null; return ''; }
+  const firstBytes = readFilePrefix(filePath);
+  const cached = _auditTimeCache;
+  if (cached && cached.path === filePath && cached.earliestTimestamp && st.size >= cached.size && firstBytes === cached.firstBytes) {
+    cached.size = st.size;
+    return cached.earliestTimestamp;
+  }
+  const earliestTimestamp = findFirstAuditTimestamp(filePath);
+  _auditTimeCache = { path: filePath, size: st.size, firstBytes, earliestTimestamp };
+  return earliestTimestamp;
+}
+
 /**
  * Latest mtime found by walking `dir` up to `maxDepth` levels.
  * Returns null if dir is unreadable.
@@ -337,13 +409,7 @@ router.get('/api/hub/tokens/activity', (req: Request, res: Response) => {
   try {
     const modelEvents = readModelUsageEvents();
     const observations = readAllToolObservations(100_000);
-    const auditTimestamps: string[] = [];
-    for (const line of readAuditLinesCached()) {
-      try {
-        const e = JSON.parse(line);
-        if (e?.timestamp) auditTimestamps.push(String(e.timestamp));
-      } catch { /* skip malformed */ }
-    }
+    const auditEarliestTimestamp = readAuditEarliestTimestampCached();
     const sessionTimestamps = listSessionSummaries()
       .filter(isUserChatSessionSummary)
       .map((summary: any) => sessionSummaryTimestamp(summary))
@@ -352,7 +418,7 @@ router.get('/api/hub/tokens/activity', (req: Request, res: Response) => {
     const allTimestamps = [
       ...modelEvents.map((e) => String(e.timestamp || '')),
       ...observations.map((obs) => Number(obs.createdAt || 0) > 0 ? new Date(Number(obs.createdAt)).toISOString() : ''),
-      ...auditTimestamps,
+      ...(auditEarliestTimestamp ? [auditEarliestTimestamp] : []),
       ...sessionTimestamps,
     ].filter(Boolean);
     // Keep headline totals lifetime-based, while allowing clients to request a
