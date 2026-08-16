@@ -162,7 +162,7 @@ export function normalizeRealtimeSdp(value: unknown): string {
   return sdp ? `${sdp.replace(/\n/g, '\r\n')}\r\n` : '';
 }
 
-class CodexAppServerBridge {
+export class CodexAppServerBridge {
   private child: ChildProcessWithoutNullStreams | null = null;
   private executable = '';
   private runtimeVersion = '';
@@ -364,9 +364,7 @@ class CodexAppServerBridge {
     }
   }
 
-  private handleProcessEnd(error: Error): void {
-    if (!this.child) return;
-    this.child = null;
+  private clearProcessBoundState(error: Error): void {
     this.cachedStatus = null;
     for (const [id, pending] of this.pending) {
       this.pending.delete(id);
@@ -378,8 +376,23 @@ class CodexAppServerBridge {
       waiter.reject(error);
     }
     this.notificationWaiters.clear();
+    for (const session of this.sessions.values()) {
+      for (const waiter of session.eventWaiters) {
+        clearTimeout(waiter.timer);
+        waiter.resolve([]);
+      }
+      session.eventWaiters.clear();
+    }
+    this.sessions.clear();
+    this.pendingRealtimeEvents.clear();
     for (const pending of this.pendingDynamicToolRequests.values()) clearTimeout(pending.timer);
     this.pendingDynamicToolRequests.clear();
+  }
+
+  private handleProcessEnd(error: Error): void {
+    if (!this.child) return;
+    this.child = null;
+    this.clearProcessBoundState(error);
   }
 
   private write(message: any): void {
@@ -519,60 +532,68 @@ class CodexAppServerBridge {
     const threadId = String(threadStart?.thread?.id || '').trim();
     if (!threadId) throw new Error('Codex app-server did not return a realtime thread ID.');
 
-    const outcomePromise = this.waitForNotification(
-      ['thread/realtime/sdp', 'thread/realtime/error'],
-      (params) => String(params?.threadId || '') === threadId,
-      REALTIME_START_TIMEOUT_MS,
-    );
-    const startedPromise = this.waitForNotification(
-      ['thread/realtime/started'],
-      (params) => String(params?.threadId || '') === threadId,
-      REALTIME_START_TIMEOUT_MS,
-    ).catch(() => null);
+    try {
+      const outcomePromise = this.waitForNotification(
+        ['thread/realtime/sdp', 'thread/realtime/error'],
+        (params) => String(params?.threadId || '') === threadId,
+        REALTIME_START_TIMEOUT_MS,
+      );
+      const startedPromise = this.waitForNotification(
+        ['thread/realtime/started'],
+        (params) => String(params?.threadId || '') === threadId,
+        REALTIME_START_TIMEOUT_MS,
+      ).catch(() => null);
 
-    await this.request('thread/realtime/start', {
-      threadId,
-      // Frameless Bidi v3 uses the original Codex Voice (`v1`) catalog.
-      version: REALTIME_CONVERSATION_VERSION,
-      outputModality: 'audio',
-      voice: resolvedVoice,
-      prompt: input.prompt,
-      transport: { type: 'webrtc', sdp: input.sdp },
-    }, REALTIME_START_TIMEOUT_MS);
+      await this.request('thread/realtime/start', {
+        threadId,
+        // Frameless Bidi v3 uses the original Codex Voice (`v1`) catalog.
+        version: REALTIME_CONVERSATION_VERSION,
+        outputModality: 'audio',
+        voice: resolvedVoice,
+        prompt: input.prompt,
+        transport: { type: 'webrtc', sdp: input.sdp },
+      }, REALTIME_START_TIMEOUT_MS);
 
-    const outcome = await outcomePromise;
-    if (outcome.method === 'thread/realtime/error') {
-      throw new Error(String(outcome.params?.message || 'Codex realtime session failed.'));
+      const outcome = await outcomePromise;
+      if (outcome.method === 'thread/realtime/error') {
+        throw new Error(String(outcome.params?.message || 'Codex realtime session failed.'));
+      }
+      const answerSdp = normalizeRealtimeSdp(outcome.params?.sdp);
+      if (!answerSdp.startsWith('v=')) throw new Error('Codex realtime did not return a valid SDP answer.');
+
+      const started = await Promise.race([
+        startedPromise,
+        new Promise<null>((resolve) => {
+          const timer = setTimeout(() => resolve(null), 500);
+          timer.unref?.();
+        }),
+      ]);
+      const sessionId = randomUUID();
+      const events = this.pendingRealtimeEvents.get(threadId) || [];
+      this.pendingRealtimeEvents.delete(threadId);
+      this.sessions.set(sessionId, {
+        threadId,
+        ownerSessionId: String(input.ownerSessionId || '').trim(),
+        events,
+        eventWaiters: new Set(),
+      });
+      return {
+        sessionId,
+        threadId,
+        sdp: answerSdp,
+        realtimeSessionId: String(started?.params?.realtimeSessionId || '').trim() || undefined,
+        realtimeReady: !!started,
+        voice: resolvedVoice,
+        realtimeVersion: REALTIME_CONVERSATION_VERSION,
+        voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
+      };
+    } catch (error) {
+      // Notifications can arrive before the browser session is materialized.
+      // A failed start has no future owner for that event tail, so do not pin it
+      // by threadId for the lifetime of the gateway.
+      this.pendingRealtimeEvents.delete(threadId);
+      throw error;
     }
-    const answerSdp = normalizeRealtimeSdp(outcome.params?.sdp);
-    if (!answerSdp.startsWith('v=')) throw new Error('Codex realtime did not return a valid SDP answer.');
-
-    const started = await Promise.race([
-      startedPromise,
-      new Promise<null>((resolve) => {
-        const timer = setTimeout(() => resolve(null), 500);
-        timer.unref?.();
-      }),
-    ]);
-    const sessionId = randomUUID();
-    const events = this.pendingRealtimeEvents.get(threadId) || [];
-    this.pendingRealtimeEvents.delete(threadId);
-    this.sessions.set(sessionId, {
-      threadId,
-      ownerSessionId: String(input.ownerSessionId || '').trim(),
-      events,
-      eventWaiters: new Set(),
-    });
-    return {
-      sessionId,
-      threadId,
-      sdp: answerSdp,
-      realtimeSessionId: String(started?.params?.realtimeSessionId || '').trim() || undefined,
-      realtimeReady: !!started,
-      voice: resolvedVoice,
-      realtimeVersion: REALTIME_CONVERSATION_VERSION,
-      voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
-    };
   }
 
   async submitDynamicToolOutput(input: {
@@ -741,7 +762,7 @@ class CodexAppServerBridge {
   shutdown(): void {
     const child = this.child;
     this.child = null;
-    this.cachedStatus = null;
+    this.clearProcessBoundState(new Error('Codex app-server bridge shut down.'));
     if (!child) return;
     try { child.stdin.end(); } catch {}
     try { child.kill(); } catch {}
