@@ -10,7 +10,7 @@ import { createStore, createEditorState } from './store.js';
 import { createEditorLayout } from './layout.js';
 import { applySceneGraphOps } from '../sceneGraph.js';
 import { createViewport } from './preview/viewport.js';
-import { createRenderer, hitTestScene } from './preview/renderer.js';
+import { clearPreviewMediaCache, createRenderer, hitTestScene } from './preview/renderer.js';
 import { createPropertiesPanel } from './properties/panel.js';
 import { createAssetsPanel } from './assets/panel.js';
 import { createHandlesOverlay } from './interactions/handles.js';
@@ -485,6 +485,7 @@ export function createCreativeEditor({ root, scene, api, compositionBridge = nul
     if (_assetsPanel)  { _assetsPanel.dispose();  _assetsPanel  = null; }
     if (_renderer)     { _renderer.dispose();     _renderer     = null; }
     if (_viewport)     { _viewport.dispose();     _viewport     = null; }
+    clearPreviewMediaCache();
     layout.dispose();
     layout = null;
     _history = null;

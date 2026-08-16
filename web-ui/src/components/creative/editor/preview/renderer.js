@@ -12,24 +12,68 @@ import { buildFilter, applyPreEffects, applyPostEffects, applyMask, buildGradien
 import { drawSubtitles } from '../subtitles/panel.js';
 import { resolveElementAtTime as resolveSceneElementAtTime } from '../../sceneGraph.js';
 
-const VIDEO_CACHE = new Map(); // src -> HTMLVideoElement
+const VIDEO_CACHE = new Map(); // src -> HTMLVideoElement, insertion order is LRU order
+const IMG_CACHE = new Map(); // src → HTMLImageElement, insertion order is LRU order
+const VIDEO_CACHE_LIMIT = 10;
+const IMG_CACHE_LIMIT = 64;
 
-const IMG_CACHE = new Map(); // src → HTMLImageElement
+function touchMediaCache(cache, key) {
+  const value = cache.get(key);
+  if (!value) return null;
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function pruneImageCache() {
+  while (IMG_CACHE.size > IMG_CACHE_LIMIT) {
+    const oldest = IMG_CACHE.keys().next().value;
+    if (!oldest) break;
+    IMG_CACHE.delete(oldest);
+  }
+}
+
+function releaseVideo(video) {
+  try { video.pause(); } catch {}
+  try {
+    video.removeAttribute('src');
+    video.load();
+  } catch {}
+}
+
+function pruneVideoCache() {
+  while (VIDEO_CACHE.size > VIDEO_CACHE_LIMIT) {
+    const oldest = VIDEO_CACHE.keys().next().value;
+    if (!oldest) break;
+    const video = VIDEO_CACHE.get(oldest);
+    VIDEO_CACHE.delete(oldest);
+    if (video) releaseVideo(video);
+  }
+}
+
+export function clearPreviewMediaCache() {
+  IMG_CACHE.clear();
+  for (const video of VIDEO_CACHE.values()) releaseVideo(video);
+  VIDEO_CACHE.clear();
+}
 
 function loadImage(src, markDirty) {
   src = normalizeMediaSrc(src);
-  if (IMG_CACHE.has(src)) return IMG_CACHE.get(src);
+  const cached = touchMediaCache(IMG_CACHE, src);
+  if (cached) return cached;
   const img = new Image();
   img.src = src;
   img.addEventListener('load', () => markDirty?.(), { once: true });
   img.addEventListener('error', () => markDirty?.(), { once: true });
   IMG_CACHE.set(src, img);
+  pruneImageCache();
   return img;
 }
 
 function loadVideo(src, markDirty) {
   src = normalizeMediaSrc(src);
-  if (VIDEO_CACHE.has(src)) return VIDEO_CACHE.get(src);
+  const cached = touchMediaCache(VIDEO_CACHE, src);
+  if (cached) return cached;
   const video = document.createElement('video');
   video.preload = 'auto';
   video.crossOrigin = 'anonymous';
@@ -40,6 +84,7 @@ function loadVideo(src, markDirty) {
   video.addEventListener('seeked', () => markDirty?.());
   video.addEventListener('error', () => markDirty?.());
   VIDEO_CACHE.set(src, video);
+  pruneVideoCache();
   return video;
 }
 
