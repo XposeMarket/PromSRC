@@ -10,25 +10,25 @@ import {
 } from './http-providers';
 import type { MemoryEmbeddingPreference, MemoryEmbeddingProvider, MemoryEmbeddingProviderStatus } from './types';
 
-let cachedProviders: MemoryEmbeddingProvider[] | null = null;
-
 export function listMemoryEmbeddingProviders(): MemoryEmbeddingProvider[] {
-  if (!cachedProviders) {
-    cachedProviders = [
-      createOpenAiEmbeddingProvider(),
-      createOpenAiCodexOAuthEmbeddingProvider(),
-      createOllamaEmbeddingProvider(),
-      createLmStudioEmbeddingProvider(),
-      createVoyageEmbeddingProvider(),
-      createJinaEmbeddingProvider(),
-      hashMemoryEmbeddingProvider,
-    ];
-  }
-  return cachedProviders;
+  // Provider factories are intentionally rebuilt from current configuration.
+  // They are lightweight descriptors, while caching them freezes endpoint,
+  // model, and secret-reference choices captured when the gateway first asks
+  // for memory embeddings. Settings changes must take effect without restart.
+  return [
+    createOpenAiEmbeddingProvider(),
+    createOpenAiCodexOAuthEmbeddingProvider(),
+    createOllamaEmbeddingProvider(),
+    createLmStudioEmbeddingProvider(),
+    createVoyageEmbeddingProvider(),
+    createJinaEmbeddingProvider(),
+    hashMemoryEmbeddingProvider,
+  ];
 }
 
 export function resetMemoryEmbeddingProvidersForTests(): void {
-  cachedProviders = null;
+  // Kept as a compatibility no-op for existing tests/callers. Providers no
+  // longer retain configuration-backed state between resolutions.
 }
 
 export function getMemoryEmbeddingPreference(): MemoryEmbeddingPreference {
