@@ -23,16 +23,18 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Apply audited fix
-        run: python3 scripts/tmp-clear-dead-codex-realtime-cache.py
+        run: |
+          python3 scripts/tmp-clear-dead-codex-realtime-cache.py
+          python3 scripts/tmp-fix-realtime-regression-await.py
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Realtime cache cleanup regression
         run: npx tsx src/gateway/realtime/codex-app-server-bridge.regression.ts
       - name: Commit verified changes and remove temporary harness
         run: |
-          rm -f scripts/tmp-clear-dead-codex-realtime-cache.py .github/workflows/tmp-codex-realtime-cache.yml
+          rm -f scripts/tmp-clear-dead-codex-realtime-cache.py scripts/tmp-fix-realtime-regression-await.py .github/workflows/tmp-codex-realtime-cache.yml
           git config user.name 'prometheus-audit-bot'
           git config user.email 'prometheus-audit-bot@users.noreply.github.com'
-          git add src/gateway/realtime/codex-app-server-bridge.ts src/gateway/realtime/codex-app-server-bridge.regression.ts
+          git add -A
           git commit -m 'Clear dead Codex realtime cache state' -m 'Discard pre-session event tails after failed realtime starts and clear all process-bound realtime sessions, waiters, and pending event state on app-server death or shutdown so dead thread IDs cannot survive a worker restart.'
           git push origin HEAD:review/clear-dead-codex-realtime-cache
