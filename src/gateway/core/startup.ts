@@ -193,20 +193,28 @@ function buildTeamCompletionPacket(teamId: string, managerMessage: string, turns
 }
 
 function scheduleStartupProviderWarmup(): void {
-  markProviderStatusChecking(true);
-  const timer = setTimeout(async () => {
+  const probe = async (source: 'startup_probe' | 'periodic_probe') => {
+    markProviderStatusChecking(true);
     try {
       const provider = getProvider();
       const connected = await resolveProviderStatus(() => provider.testConnection());
-      broadcastWS({ type: 'provider_status', providerOnline: connected, source: 'startup_probe' });
-      console.log(`[ProviderStatus] Startup probe ${connected ? 'succeeded' : 'failed'}.`);
+      broadcastWS({ type: 'provider_status', providerOnline: connected, source });
+      if (source === 'startup_probe') console.log(`[ProviderStatus] Startup probe ${connected ? 'succeeded' : 'failed'}.`);
     } catch (err: any) {
       markProviderStatus(false);
-      broadcastWS({ type: 'provider_status', providerOnline: false, source: 'startup_probe' });
-      console.warn('[ProviderStatus] Startup probe failed:', err?.message || err);
+      broadcastWS({ type: 'provider_status', providerOnline: false, source });
+      console.warn(`[ProviderStatus] ${source} failed:`, err?.message || err);
     }
-  }, 750);
+  };
+
+  const timer = setTimeout(() => { void probe('startup_probe'); }, 750);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
+
+  // Poll cheaply so a provider/account/config switch is noticed quickly. The
+  // provider-status TTL still means the actual network probe runs at most once
+  // every five minutes while the identity is unchanged.
+  const refreshTimer = setInterval(() => { void probe('periodic_probe'); }, 30_000);
+  if (typeof (refreshTimer as any).unref === 'function') (refreshTimer as any).unref();
 }
 
 function yieldStartup(): Promise<void> {
