@@ -1,0 +1,40 @@
+name: Temporary Hub Audit Cache Verification
+
+on:
+  push:
+    branches:
+      - review/compact-hub-audit-cache
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Apply audited fix
+        run: python3 scripts/tmp-compact-hub-audit-cache.py
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Hub audit cache contract
+        run: node scripts/test-hub-audit-cache-contract.mjs
+      - name: Hub route regression
+        run: npm run test:hub-goals
+      - name: Commit verified changes and remove temporary harness
+        run: |
+          rm -f scripts/tmp-compact-hub-audit-cache.py .github/workflows/tmp-hub-audit-cache.yml
+          git config user.name 'prometheus-audit-bot'
+          git config user.email 'prometheus-audit-bot@users.noreply.github.com'
+          git add -A
+          git commit -m 'Compact the Hub audit cache' -m 'Stop retaining and reparsing the full append-heavy audit JSONL for token activity range calculation; cache only bounded earliest-timestamp metadata and reuse it across normal append-only growth.'
+          git push origin HEAD:review/compact-hub-audit-cache
