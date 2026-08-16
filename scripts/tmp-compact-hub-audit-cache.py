@@ -2,18 +2,8 @@ from pathlib import Path
 
 p = Path('src/gateway/routes/hub.router.ts')
 text = p.read_text(encoding='utf-8')
-old = r'''function readAuditLines(): string[] {
-  const p = getAuditLogPath();
-  if (!fs.existsSync(p)) return [];
-  return fs.readFileSync(p, 'utf-8').split('\n').filter(l => l.trim());
-}
 
-let _auditCachePath = '';
-let _auditCacheMtimeMs = 0;
-let _auditCacheSize = 0;
-let _auditCacheLines: string[] = [];
-
-function readAuditLinesCached(): string[] {
+anchor = r'''function readAuditLinesCached(): string[] {
   const p = getAuditLogPath();
   let st: fs.Stats;
   try { st = fs.statSync(p); } catch { return []; }
@@ -32,7 +22,10 @@ function readAuditLinesCached(): string[] {
   return lines;
 }
 '''
-new = r'''interface AuditTimeCache {
+if anchor not in text:
+    raise SystemExit('Hub shared audit cache anchor not found')
+helper = anchor + r'''
+interface AuditTimeCache {
   path: string;
   size: number;
   firstBytes: string;
@@ -54,13 +47,8 @@ function readFilePrefix(filePath: string, maxBytes = AUDIT_PREFIX_BYTES): string
     const buffer = Buffer.allocUnsafe(length);
     const read = fs.readSync(handle, buffer, 0, length, 0);
     return buffer.subarray(0, read).toString('utf-8');
-  } catch {
-    return '';
-  } finally {
-    if (handle != null) {
-      try { fs.closeSync(handle); } catch {}
-    }
-  }
+  } catch { return ''; }
+  finally { if (handle != null) { try { fs.closeSync(handle); } catch {} } }
 }
 
 function findFirstAuditTimestamp(filePath: string): string {
@@ -86,43 +74,21 @@ function findFirstAuditTimestamp(filePath: string): string {
         try {
           const timestamp = String(JSON.parse(line)?.timestamp || '').trim();
           if (timestamp && Number.isFinite(Date.parse(timestamp))) return timestamp;
-        } catch { /* skip malformed audit rows */ }
+        } catch {}
       }
     }
-    if (remainder.trim()) {
-      try {
-        const timestamp = String(JSON.parse(remainder)?.timestamp || '').trim();
-        if (timestamp && Number.isFinite(Date.parse(timestamp))) return timestamp;
-      } catch {}
-    }
-  } catch {
-    return '';
-  } finally {
-    if (handle != null) {
-      try { fs.closeSync(handle); } catch {}
-    }
-  }
+  } catch { return ''; }
+  finally { if (handle != null) { try { fs.closeSync(handle); } catch {} } }
   return '';
 }
 
 function readAuditEarliestTimestampCached(): string {
   const filePath = getAuditLogPath();
   let st: fs.Stats;
-  try { st = fs.statSync(filePath); } catch {
-    _auditTimeCache = null;
-    return '';
-  }
+  try { st = fs.statSync(filePath); } catch { _auditTimeCache = null; return ''; }
   const firstBytes = readFilePrefix(filePath);
   const cached = _auditTimeCache;
-  if (
-    cached
-    && cached.path === filePath
-    && cached.earliestTimestamp
-    && st.size >= cached.size
-    && firstBytes === cached.firstBytes
-  ) {
-    // Normal audit growth is append-only. The earliest timestamp cannot change,
-    // so do not reread/split the entire JSONL merely because another row landed.
+  if (cached && cached.path === filePath && cached.earliestTimestamp && st.size >= cached.size && firstBytes === cached.firstBytes) {
     cached.size = st.size;
     return cached.earliestTimestamp;
   }
@@ -131,9 +97,7 @@ function readAuditEarliestTimestampCached(): string {
   return earliestTimestamp;
 }
 '''
-if old not in text:
-    raise SystemExit('Hub raw audit cache anchor not found')
-text = text.replace(old, new, 1)
+text = text.replace(anchor, helper, 1)
 
 old_route = r'''    const modelEvents = readModelUsageEvents();
     const observations = readAllToolObservations(100_000);
@@ -152,7 +116,7 @@ new_route = r'''    const modelEvents = readModelUsageEvents();
     const sessionTimestamps = listSessionSummaries()
 '''
 if old_route not in text:
-    raise SystemExit('Hub audit timestamp parse anchor not found')
+    raise SystemExit('Hub token-activity audit scan anchor not found')
 text = text.replace(old_route, new_route, 1)
 text = text.replace('      ...auditTimestamps,\n', "      ...(auditEarliestTimestamp ? [auditEarliestTimestamp] : []),\n", 1)
 p.write_text(text, encoding='utf-8')
@@ -160,14 +124,13 @@ p.write_text(text, encoding='utf-8')
 reg = Path('scripts/test-hub-audit-cache-contract.mjs')
 reg.write_text(r'''import assert from 'node:assert/strict';
 import fs from 'node:fs';
-
 const source = fs.readFileSync('src/gateway/routes/hub.router.ts', 'utf8');
-assert.doesNotMatch(source, /_auditCacheLines/, 'Hub must not retain the entire audit JSONL as cached strings');
-assert.doesNotMatch(source, /readAuditLinesCached/, 'Hub token activity must not split/parse the full audit log after every append');
-assert.match(source, /readAuditEarliestTimestampCached\(\)/);
-assert.match(source, /st\.size >= cached\.size[\s\S]*?firstBytes === cached\.firstBytes/, 'append-only growth should reuse the compact earliest-time cache');
-assert.match(source, /AUDIT_INITIAL_SCAN_LIMIT_BYTES = 1024 \* 1024/, 'cold-path malformed-row scanning must be bounded');
-assert.match(source, /auditEarliestTimestamp \? \[auditEarliestTimestamp\] : \[\]/, 'Hub range calculation should consume only compact audit time metadata');
+assert.match(source, /function readAuditLinesCached\(\)/, 'rich Skills/Tools Hub views must retain their existing audit-event source');
+const tokenRoute = source.slice(source.indexOf("router.get('/api/hub/tokens/activity'"), source.indexOf("router.get('/api/hub/skills/usage'"));
+assert.doesNotMatch(tokenRoute, /readAuditLinesCached/, 'hot token activity must not read/split the full audit JSONL');
+assert.match(tokenRoute, /readAuditEarliestTimestampCached\(\)/);
+assert.match(source, /st\.size >= cached\.size && firstBytes === cached\.firstBytes/);
+assert.match(source, /AUDIT_INITIAL_SCAN_LIMIT_BYTES = 1024 \* 1024/);
 console.log('Hub audit cache contract regression: ok');
 ''', encoding='utf-8')
-print('Hub audit cache patch applied')
+print('Hub token-activity audit cache patch applied')
