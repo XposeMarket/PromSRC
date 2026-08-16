@@ -64,6 +64,9 @@ jobs:
       - name: Verify layout contract
         run: node scripts/test-desktop-chat-layout-contract.mjs
 
+      - name: Install web UI checker dependency tree
+        run: npm ci --ignore-scripts
+
       - name: Verify generated web UI
         run: npm run check:web-ui
 
