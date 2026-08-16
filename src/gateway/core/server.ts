@@ -98,7 +98,11 @@ function getRawStaticCacheControl(req: http.IncomingMessage, filePath: string): 
   if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
     return 'no-cache';
   }
-  if (pathname.startsWith('/static/') || pathname.startsWith('/vendor/') || pathname.startsWith('/assets/')) {
+  // Generated /static module filenames are stable rather than content-hashed.
+  // Always revalidate them so an app update cannot leave a browser executing
+  // yesterday's JS/CSS under a still-fresh 24-hour HTTP cache entry.
+  if (pathname.startsWith('/static/')) return 'no-cache';
+  if (pathname.startsWith('/vendor/') || pathname.startsWith('/assets/')) {
     return 'public, max-age=86400';
   }
   const ext = path.extname(filePath).toLowerCase();
