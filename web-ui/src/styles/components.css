@@ -1171,6 +1171,10 @@ main {
 #mission-view { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; }
 #chat-view {
   position: relative;
+  /* Main messages and composer are one responsive conversation column. Keep
+     both edges locked together as sidebars/canvases change the center width. */
+  --chat-content-max-width: 860px;
+  --chat-content-inline-gutter: clamp(20px, 4cqw, 44px);
   /* The welcome screen must size against the remaining center column, not the
      browser viewport when the sidebar and context drawer are both open. */
   container-type: inline-size;
@@ -1607,7 +1611,7 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 }
 
 .msg-shell {
-  width: min(860px, calc(100% - 32px));
+  width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter)));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -2638,7 +2642,7 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
-  width: min(860px, calc(100% - 40px));
+  width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter)));
   overflow: visible;
   isolation: isolate;
   background: var(--composer-bg);
