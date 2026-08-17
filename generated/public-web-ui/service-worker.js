@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v291-2026-08-13-mobile-syntax-recovery';
+const VERSION = 'pm-v292-2026-08-15-static-cache-contract';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
@@ -85,7 +85,9 @@ function isBypass(url) {
 async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
-    const res = await fetch(request);
+    // `no-cache` forces HTTP revalidation too. This matters after upgrading
+    // from builds that served stable /static filenames with a 24-hour max-age.
+    const res = await fetch(request, { cache: 'no-cache' });
     if (res && res.ok && (request.method === 'GET')) {
       cache.put(request, res.clone()).catch(() => {});
     }
@@ -151,7 +153,12 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
     return;
   }
-  if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname.startsWith('/src/')) {
+  if (
+    url.pathname === '/'
+    || url.pathname === '/index.html'
+    || url.pathname.startsWith('/src/')
+    || url.pathname.startsWith('/static/')
+  ) {
     event.respondWith(networkFirst(request, STATIC_CACHE).catch(() => {
       if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
         return offlineShellResponse();
