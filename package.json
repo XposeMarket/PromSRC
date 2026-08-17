@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "npm run build:backend && npm run build:web",
-    "build:backend": "tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js",
+    "build:backend": "tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js",
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",
     "build:web": "npm run check:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js",
