@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const source = fs.readFileSync('src/gateway/routes/hub.router.ts', 'utf8');
+assert.match(source, /function readAuditLinesCached\(\)/, 'rich Skills/Tools Hub views must retain their existing audit-event source');
+const tokenRoute = source.slice(source.indexOf("router.get('/api/hub/tokens/activity'"), source.indexOf("router.get('/api/hub/skills/usage'"));
+assert.doesNotMatch(tokenRoute, /readAuditLinesCached/, 'hot token activity must not read/split the full audit JSONL');
+assert.match(tokenRoute, /readAuditEarliestTimestampCached\(\)/);
+assert.match(source, /st\.size >= cached\.size && firstBytes === cached\.firstBytes/);
+assert.match(source, /AUDIT_INITIAL_SCAN_LIMIT_BYTES = 1024 \* 1024/);
+console.log('Hub audit cache contract regression: ok');
