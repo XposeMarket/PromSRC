@@ -253,6 +253,8 @@ workspace/**/*.pyc
 workspace/repos/
 workspace/scratch/
 workspace/games/prometheus-vita/vendor/
+workspace/oss agents/hermes-agent/
+workspace/oss agents/openclaw/
 
 # Personal runtime records stay local. They are not part of PromSRC source
 # synchronization or public releases.
