@@ -9,6 +9,8 @@ const SHUTTER_SELECTOR = '#pm-voice-camera-shutter';
 const ORB_CLASS = 'pm-camera-voice-thinking-orb';
 const HOST_CLASS = 'pm-camera-thinking-orb-host';
 const STYLE_ID = 'pm-mobile-voice-camera-orb-style';
+const VOICE_STATE_SELECTOR = '#pm-thinking-orb-host .pm-thinking-orb-transition, #pm-voice-orb, #pm-voice-mic';
+const VOICE_CAMERA_RELEVANT_SELECTOR = `${SHUTTER_SELECTOR}, #pm-thinking-orb-host, #pm-voice-orb, #pm-voice-mic`;
 
 let activeButton = null;
 let activeHost = null;
@@ -138,6 +140,33 @@ function reconcileVoiceCameraOrb() {
   syncOrbState();
 }
 
+function elementTouchesVoiceCamera(node) {
+  if (!(node instanceof Element)) return false;
+  return node.matches(VOICE_CAMERA_RELEVANT_SELECTOR)
+    || !!node.querySelector(VOICE_CAMERA_RELEVANT_SELECTOR);
+}
+
+function mutationTouchesVoiceCamera(mutation) {
+  if (mutation.type === 'attributes') {
+    const target = mutation.target;
+    return target instanceof Element
+      && (target.matches(VOICE_STATE_SELECTOR) || target.matches(SHUTTER_SELECTOR));
+  }
+  if (mutation.type !== 'childList') return false;
+
+  // A Voice surface can be mounted as one large subtree, so inspect only the
+  // nodes entering/leaving the DOM instead of treating every chat mutation as
+  // an orb event. Also catch React replacing children inside the canonical host.
+  if (mutation.target instanceof Element && mutation.target.matches('#pm-thinking-orb-host')) return true;
+  for (const node of mutation.addedNodes) {
+    if (elementTouchesVoiceCamera(node)) return true;
+  }
+  for (const node of mutation.removedNodes) {
+    if (elementTouchesVoiceCamera(node)) return true;
+  }
+  return false;
+}
+
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   installStyles();
   if (document.readyState === 'loading') {
@@ -147,20 +176,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   }
 
   const observer = new MutationObserver((mutations) => {
-    // Voice pages are rebuilt dynamically. Child-list changes find a newly
-    // rendered shutter and also catch canonical Thinking Orb state transitions;
-    // class changes provide a fallback before that renderer is mounted.
-    const relevant = mutations.some((mutation) => {
-      if (mutation.type === 'childList') return true;
-      const target = mutation.target;
-      return target?.id === 'pm-voice-orb' || target?.id === 'pm-voice-mic';
-    });
-    if (relevant) reconcileVoiceCameraOrb();
+    if (mutations.some(mutationTouchesVoiceCamera)) reconcileVoiceCameraOrb();
   });
   observer.observe(document.documentElement, {
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ['class'],
+    attributeFilter: ['class', 'data-state'],
   });
 }
