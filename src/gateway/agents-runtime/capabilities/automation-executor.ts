@@ -93,6 +93,9 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,
+            modelOverride: args.model ? String(args.model) : undefined,
+            providerOverride: args.provider ? String(args.provider) : undefined,
+            reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
