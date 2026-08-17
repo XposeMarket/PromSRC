@@ -301,10 +301,12 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
 let _usageReadCachePath = '';
 let _usageReadCacheMtimeMs = 0;
 let _usageReadCacheSize = 0;
-let _usageReadCacheEvents: ModelUsageEvent[] = [];
+let _usageReadCacheEventCount = 0;
 let _usageReadCacheRemainder = '';
 let _usageReadCacheInitialized = false;
-const _usageEventsBySession = new Map<string, ModelUsageEvent[]>();
+// The resident index exists only for bounded calibration state. Historical
+// usage remains authoritative in model-usage.jsonl and is materialized only
+// for explicit history queries instead of being mirrored in gateway heap.
 const _usageCalibrationEvents = new Map<string, ModelUsageEvent[]>();
 
 function usageCalibrationKey(provider: string, model: string): string {
@@ -316,13 +318,7 @@ function isCalibrationEvent(event: ModelUsageEvent): boolean {
 }
 
 function indexUsageEvent(event: ModelUsageEvent): void {
-  _usageReadCacheEvents.push(event);
-  const sessionId = String(event.sessionId || '').trim();
-  if (sessionId) {
-    const events = _usageEventsBySession.get(sessionId) || [];
-    events.push(event);
-    _usageEventsBySession.set(sessionId, events);
-  }
+  _usageReadCacheEventCount += 1;
   if (isCalibrationEvent(event)) {
     const key = usageCalibrationKey(event.provider, event.model);
     const events = _usageCalibrationEvents.get(key) || [];
@@ -336,10 +332,9 @@ function resetUsageReadCache(filePath = ''): void {
   _usageReadCachePath = filePath;
   _usageReadCacheMtimeMs = 0;
   _usageReadCacheSize = 0;
-  _usageReadCacheEvents = [];
+  _usageReadCacheEventCount = 0;
   _usageReadCacheRemainder = '';
   _usageReadCacheInitialized = false;
-  _usageEventsBySession.clear();
   _usageCalibrationEvents.clear();
 }
 
@@ -413,10 +408,30 @@ function ensureUsageReadCache(): void {
   _usageReadCacheMtimeMs = st.mtimeMs;
 }
 
+function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
+  const wantedSessionId = String(sessionId || '').trim();
+  const filePath = usageLogPath();
+  let raw = '';
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  const out: ModelUsageEvent[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as ModelUsageEvent;
+      if (wantedSessionId && String(event.sessionId || '').trim() !== wantedSessionId) continue;
+      out.push(event);
+    } catch {
+      // Historical usage queries remain best-effort if telemetry contains a
+      // malformed row; the resident calibration index follows the same rule.
+    }
+  }
+  return out;
+}
+
 export function readModelUsageEvents(): ModelUsageEvent[] {
   try {
     ensureUsageReadCache();
-    return _usageReadCacheEvents;
+    return readHistoricalUsageEvents();
   } catch {
     return [];
   }
@@ -425,7 +440,7 @@ export function readModelUsageEvents(): ModelUsageEvent[] {
 export function readModelUsageEventsForSession(sessionId: string): ModelUsageEvent[] {
   try {
     ensureUsageReadCache();
-    return _usageEventsBySession.get(String(sessionId || '').trim()) || [];
+    return readHistoricalUsageEvents(sessionId);
   } catch {
     return [];
   }
@@ -434,7 +449,7 @@ export function readModelUsageEventsForSession(sessionId: string): ModelUsageEve
 export function warmModelUsageIndex(): { events: number; durationMs: number } {
   const startedAt = Date.now();
   ensureUsageReadCache();
-  return { events: _usageReadCacheEvents.length, durationMs: Date.now() - startedAt };
+  return { events: _usageReadCacheEventCount, durationMs: Date.now() - startedAt };
 }
 
 export function resetModelUsageIndexForTests(): void {
