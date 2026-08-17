@@ -89,7 +89,26 @@ const tinyBudget = buildBrainCapsuleContext(root, 'Galaxy Drift NebulaX', {
   now: new Date('2026-07-18T03:00:00.000Z'),
   maxChars: 500,
 });
-assert.ok(tinyBudget.length <= 700, 'selection must remain bounded even when storage is broad');
+assert.ok(tinyBudget.length <= 500, 'maxChars must bound the entire rendered Brain context packet, including its header');
+
+fs.writeFileSync(path.join(capsuleDir, '02-30-oversized-capsules.json'), JSON.stringify([
+  make({
+    id: 'oversized-context',
+    threadKey: 'project:oversized-context',
+    priority: 'critical',
+    createdAt: '2026-07-18T02:30:00.000Z',
+    summary: `Oversized context ${'detail '.repeat(1200)}`,
+    relevance: { projects: ['Oversized Context'], triggers: ['oversized-context'], surfaces: ['main_chat'] },
+  }),
+]), 'utf8');
+const oversizedBudget = buildBrainCapsuleContextDetails(root, 'oversized-context', {
+  now: new Date('2026-07-18T03:00:00.000Z'),
+  maxChars: 500,
+});
+assert.ok(oversizedBudget.text.length > 0, 'one oversized top-ranked capsule must not suppress the entire Brain context packet');
+assert.ok(oversizedBudget.text.length <= 500, 'oversized capsules must still respect the total packet budget');
+assert.equal(oversizedBudget.selected[0]?.capsule.id, 'oversized-context');
+assert.match(oversizedBudget.text, /project:oversized-context/);
 
 const decision = parseBrainCarryForwardDecision(JSON.stringify({
   targetDate: '2026-07-19',
