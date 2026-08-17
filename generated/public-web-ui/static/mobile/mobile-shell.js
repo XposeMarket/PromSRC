@@ -2226,6 +2226,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
   function _applyRenameKbOffset() {
     var offset = _vv ? Math.max(0, Math.round(window.innerHeight - _vv.height - (_vv.offsetTop || 0))) : 0;
     var isOpen = offset > 90;
+    sheet.style.top = isOpen ? 'auto' : '';
     sheet.style.bottom = isOpen ? (offset + 8) + 'px' : '';
     sheet.style.maxHeight = isOpen ? Math.min((_vv ? _vv.height : window.innerHeight) - 24, 420) + 'px' : '';
     // Scroll doc back to top so iOS doesn't lift the fixed sheet above the keyboard
