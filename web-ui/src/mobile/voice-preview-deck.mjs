@@ -1,6 +1,9 @@
+import './mobile-voice-camera-orb.js';
+
 // Pure gesture math for the Voice preview deck. Keeping this separate from
 // the DOM wiring makes cancellation and the first few pixels of a drag easy
-// to regression-test.
+// to regression-test. The side-effect import above is DOM-safe and only mounts
+// the canonical voice orb when the Voice camera shutter exists in a browser.
 export const VOICE_PREVIEW_DRAG_START_PX = 6;
 export const VOICE_PREVIEW_DISMISS_DISTANCE_PX = 96;
 export const VOICE_PREVIEW_EXIT_MS = 240;
