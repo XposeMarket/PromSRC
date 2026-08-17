@@ -13,6 +13,35 @@ import { API } from './state.js';
 
 const LOCAL_GATEWAY_ORIGIN = 'http://127.0.0.1:18789';
 
+function getMobileGatewayRequestContext() {
+  try {
+    const rawOrigin = String(window.__pmMobileActiveGatewayOrigin || '').trim();
+    if (!rawOrigin) return null;
+    const pageOrigin = String(window.location?.origin || '').trim() || 'http://localhost';
+    const origin = new URL(rawOrigin, pageOrigin).origin;
+    const apiOrigin = new URL(String(API || '').trim() || pageOrigin, pageOrigin).origin;
+    return {
+      gatewayId: String(window.__pmMobileActiveGatewayId || '').trim(),
+      origin,
+      token: String(window.__pmMobileActiveGatewayToken || '').trim(),
+      executionEnabled: window.__pmMobileActiveGatewayExecutionEnabled === true,
+      remote: origin !== apiOrigin,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function assertRemoteMobileGatewayTarget(target) {
+  if (!target?.remote) return;
+  if (target.executionEnabled && target.token) return;
+  const error = new Error(target.token
+    ? 'Remote execution is not enabled for this gateway target. Refresh the gateway connection and try again.'
+    : 'This gateway is not paired on this phone. Reconnect it before sending a request.');
+  error.code = target.token ? 'REMOTE_EXECUTION_NOT_ENABLED' : 'GATEWAY_NOT_PAIRED';
+  throw error;
+}
+
 function buildApiCandidateUrls(path) {
   const rawPath = String(path || '');
   const candidates = [];
@@ -20,6 +49,17 @@ function buildApiCandidateUrls(path) {
     if (!url || candidates.includes(url)) return;
     candidates.push(url);
   };
+
+  // The mobile multi-gateway shell sets an explicit target before loading or
+  // mutating gateway-owned data. Never fall back to this PWA's original API
+  // origin while a different computer is selected: doing so can read or write
+  // the wrong Prometheus instance with the wrong device grant.
+  const mobileTarget = getMobileGatewayRequestContext();
+  if (mobileTarget?.remote && rawPath.startsWith('/api/')) {
+    assertRemoteMobileGatewayTarget(mobileTarget);
+    pushCandidate(mobileTarget.origin.replace(/\/$/, '') + rawPath);
+    return candidates;
+  }
 
   pushCandidate(API + rawPath);
 
@@ -59,7 +99,11 @@ const inFlightGetRequests = new Map();
 function getDedupeKey(path, opts) {
   const method = String(opts?.method || 'GET').toUpperCase();
   if (method !== 'GET' || opts?.signal || opts?.cache === 'no-store' || opts?.dedupe === false) return '';
-  return String(path || '');
+  const target = getMobileGatewayRequestContext();
+  const scope = target?.remote
+    ? `gateway:${target.gatewayId || target.origin}`
+    : 'default';
+  return `${scope}:${String(path || '')}`;
 }
 
 async function apiRequest(path, opts = {}) {
@@ -86,13 +130,22 @@ async function apiRequest(path, opts = {}) {
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
     try {
-      // Attach the paired-device token if the mobile UI has one stored.
-      // Desktop loaders never set this, so the header is omitted there.
+      // Attach the target-scoped paired-device grant when the mobile shell is
+      // pointed at a remote gateway. The legacy device token remains valid only
+      // for this PWA's original/current gateway.
       let pairingHeader = {};
       try {
-        const tok = localStorage.getItem('pm_device_token');
-        if (tok) pairingHeader = { 'X-Pairing-Token': tok };
-      } catch {}
+        const mobileTarget = getMobileGatewayRequestContext();
+        if (mobileTarget?.remote) {
+          assertRemoteMobileGatewayTarget(mobileTarget);
+          pairingHeader = { 'X-Pairing-Token': mobileTarget.token };
+        } else {
+          const tok = localStorage.getItem('pm_device_token');
+          if (tok) pairingHeader = { 'X-Pairing-Token': tok };
+        }
+      } catch (error) {
+        if (error?.code === 'REMOTE_EXECUTION_NOT_ENABLED' || error?.code === 'GATEWAY_NOT_PAIRED') throw error;
+      }
       const mergedHeaders = { 'Content-Type': 'application/json', ...pairingHeader, ...(fetchOpts.headers || {}) };
       const r = await fetch(candidates[index], {
         ...fetchOpts,
