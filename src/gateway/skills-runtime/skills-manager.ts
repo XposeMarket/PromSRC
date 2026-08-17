@@ -25,8 +25,11 @@ import {
   sanitizeSkillId,
   canReadSkillResource,
   validateSkillTriggers,
+  evaluateSkillPromptSignals,
+  validateSkillPromptSignals,
   MAX_SKILL_TRIGGERS,
   type LoadedSkillPackage,
+  type SkillPromptSignals,
   type SkillPermissions,
   type SkillResource,
   type SkillLifecycleState,
@@ -60,6 +63,7 @@ export interface Skill {
   version: string;
   kind: 'simple' | 'bundle';
   triggers: string[];
+  promptSignals?: SkillPromptSignals;
   categories: string[];
   requiredTools: string[];
   requires?: SkillRequires;
@@ -97,6 +101,8 @@ export interface SkillChangeMetadata {
   reason?: string;
   triggerPositivePrompts?: string[];
   triggerNegativePrompts?: string[];
+  promptSignalPositivePrompts?: string[];
+  promptSignalNegativePrompts?: string[];
 }
 
 export interface SkillChangeLedgerEntry {
@@ -322,6 +328,9 @@ export interface SkillRouteMatch {
   implicitEligible: boolean;
   domainConflict: boolean;
   matchedTriggers: string[];
+  promptSignalScore: number;
+  promptSignalEvidence: string[];
+  promptSignalExcluded: boolean;
   matchedDomains: string[];
 }
 
@@ -407,12 +416,24 @@ export function rankSkillMatches(
     if (skill.status === 'blocked' || skill.health.state === 'blocked' || ['blocked', 'quarantined', 'unsupported'].includes(skill.eligibility.status)) continue;
     const explicitMentionScore = explicitSkillMentionScore(skill, text);
     const explicitMention = explicitMentionScore > 0;
+    const promptSignalMatch = evaluateSkillPromptSignals(skill.promptSignals || skill.manifest?.promptSignals, text);
+    const promptSignalRouteScore = promptSignalMatch.matched
+      ? 155 + Math.min(35, promptSignalMatch.score * 3)
+      : 0;
+    const promptSignalEvidence = [
+      ...promptSignalMatch.matchedPhrases.map((phrase) => `phrase: ${phrase}`),
+      ...promptSignalMatch.matchedAllOf.map((group) => `allOf: ${group.join(' + ')}`),
+      ...promptSignalMatch.matchedAnyOf.map((term) => `anyOf: ${term}`),
+    ].slice(0, 8);
+    // A structured policy is authoritative for that skill: once configured,
+    // weak metadata/content overlap must not bypass minScore or noneOf.
+    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention) continue;
     const matchedTriggers = skill.triggers
       .map((trigger) => ({ trigger, score: triggerRouteScore(trigger, text, queryWords) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
     const bestTriggerScore = matchedTriggers[0]?.score || 0;
-    const hasExactTrigger = !!matchedTriggers[0] && exactPhraseInText(matchedTriggers[0].trigger, text);
+    const hasExactTrigger = (!!matchedTriggers[0] && exactPhraseInText(matchedTriggers[0].trigger, text)) || promptSignalMatch.matched;
 
     const skillText = [
       skill.id,
@@ -428,7 +449,7 @@ export function rankSkillMatches(
       !queryDomains.has(domain) && ['coding', 'email', 'creative', 'social', 'documents', 'spreadsheets', 'business'].includes(domain)
     );
 
-    let score = explicitMention ? explicitMentionScore : bestTriggerScore;
+    let score = explicitMention ? explicitMentionScore : Math.max(bestTriggerScore, promptSignalRouteScore);
     const metadataWords = new Set(composerSkillWords(`${skill.id} ${skill.name} ${skill.categories.join(' ')}`));
     const metadataOverlap = Array.from(queryWords).filter((word) => metadataWords.has(word)).length;
     score += Math.min(24, metadataOverlap * 8);
@@ -465,6 +486,9 @@ export function rankSkillMatches(
       implicitEligible,
       domainConflict,
       matchedTriggers: matchedTriggers.slice(0, 3).map((item) => item.trigger),
+      promptSignalScore: promptSignalMatch.score,
+      promptSignalEvidence,
+      promptSignalExcluded: promptSignalMatch.excluded,
       matchedDomains,
     });
   }
@@ -498,7 +522,14 @@ export function evaluateSkillTriggerRouting(
   // its domain, but must not make it fail installation for adjacent requests.
   const failedNegativeDetails = negativePrompts.flatMap((prompt) => {
     const queryWords = composerWordSet(prompt);
-    const score = Math.max(0, ...targetSkill.triggers.map((trigger) => triggerRouteScore(trigger, prompt, queryWords)));
+    const promptSignalMatch = evaluateSkillPromptSignals(targetSkill.promptSignals, prompt);
+    const promptSignalScore = promptSignalMatch.matched
+      ? 155 + Math.min(35, promptSignalMatch.score * 3)
+      : 0;
+    const score = Math.max(
+      promptSignalMatch.excluded ? 0 : promptSignalScore,
+      ...targetSkill.triggers.map((trigger) => triggerRouteScore(trigger, prompt, queryWords)),
+    );
     const confidence: SkillRouteConfidence = score >= 75 ? 'high' : score >= 45 ? 'medium' : 'low';
     if (confidence === 'low') return [];
     return [{ prompt, target: { score, confidence } }];
@@ -650,6 +681,7 @@ export class SkillsManager {
       filePath: skill.filePath,
       promptPath: skill.promptPath,
       triggers: skill.triggers,
+      promptSignals: skill.promptSignals,
       categories: skill.categories,
       requiredTools: skill.requiredTools,
       requires: skill.requires,
@@ -678,7 +710,22 @@ export class SkillsManager {
     const beforeHash = hashSkillDirectory(rootDir);
     const snapshotDir = this.snapshotSkill(existing || null, rootDir, 'manifest-overlay');
     const overlayPath = getSkillOverlayPath(rootDir, skillId);
-    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggers')) {
+    const hasTriggerField = Object.prototype.hasOwnProperty.call(manifest || {}, 'triggers');
+    const hasPromptSignalsField = (
+      Object.prototype.hasOwnProperty.call(manifest || {}, 'promptSignals')
+      && manifest.promptSignals !== undefined
+    ) || (
+      Object.prototype.hasOwnProperty.call(manifest || {}, 'prompt_signals')
+      && manifest.prompt_signals !== undefined
+    ) || (manifest?.metadata && typeof manifest.metadata === 'object' && (
+      (Object.prototype.hasOwnProperty.call(manifest.metadata, 'promptSignals')
+        && (manifest.metadata as Record<string, unknown>).promptSignals !== undefined)
+      || (Object.prototype.hasOwnProperty.call(manifest.metadata, 'prompt_signals')
+        && (manifest.metadata as Record<string, unknown>).prompt_signals !== undefined)
+    ));
+    let nextTriggers = existing?.triggers || [];
+    let nextPromptSignals = existing?.promptSignals;
+    if (hasTriggerField) {
       const validation = validateSkillTriggers(manifest.triggers);
       if (validation.rejected.length || validation.capped.length) {
         const rejected = validation.rejected.map((item) => `"${item.trigger}" (${item.reason})`);
@@ -686,34 +733,52 @@ export class SkillsManager {
         throw new Error(`Invalid skill trigger set: ${[...rejected, ...capped].join(', ')}`);
       }
       manifest = { ...manifest, triggers: validation.triggers };
-      const before = (existing?.triggers || []).join('\n');
-      const after = validation.triggers.join('\n');
-      if (before !== after) {
-        const positivePrompts = (metadata?.triggerPositivePrompts || []).map(String).filter(Boolean);
-        const negativePrompts = (metadata?.triggerNegativePrompts || []).map(String).filter(Boolean);
-        if (!positivePrompts.length || !negativePrompts.length) {
-          throw new Error('Trigger changes require positive and negative prompt evaluations.');
-        }
-        if (!existing) throw new Error('Cannot evaluate trigger routing for a missing skill.');
-        const candidateSkill: Skill = {
-          ...existing,
-          triggers: validation.triggers,
-          implicitInvocation: typeof manifest.implicitInvocation === 'boolean'
-            ? manifest.implicitInvocation
-            : existing.implicitInvocation,
-        };
-        const evaluationSkills = this.getAll().map((skill) => skill.id === existing.id ? candidateSkill : skill);
-        const failedPositive = positivePrompts.filter((prompt) => {
-          const top = rankSkillMatches(evaluationSkills, prompt, { limit: 1 })[0];
-          return top?.id !== existing.id || top.confidence !== 'high';
-        });
-        const failedNegative = negativePrompts.filter((prompt) => {
-          const target = rankSkillMatches(evaluationSkills, prompt, { limit: 8 }).find((match) => match.id === existing.id);
-          return !!target && target.confidence !== 'low';
-        });
-        if (failedPositive.length || failedNegative.length) {
-          throw new Error(`Trigger evaluation failed: ${failedPositive.length} positive prompt(s), ${failedNegative.length} negative prompt(s).`);
-        }
+      nextTriggers = validation.triggers;
+    }
+    if (hasPromptSignalsField) {
+      const validation = validateSkillPromptSignals(manifest);
+      if (validation.rejected.length) {
+        throw new Error(`Invalid skill prompt signals: ${validation.rejected.map((item) => `"${item.signal}" (${item.reason})`).join(', ')}`);
+      }
+      nextPromptSignals = validation.signals;
+      const { prompt_signals: _prompt_signals, ...withoutSnakeCaseSignals } = manifest;
+      manifest = { ...withoutSnakeCaseSignals, promptSignals: validation.signals };
+    }
+    const triggersChanged = hasTriggerField && (existing?.triggers || []).join('\n') !== nextTriggers.join('\n');
+    const promptSignalsChanged = hasPromptSignalsField
+      && JSON.stringify(existing?.promptSignals || null) !== JSON.stringify(nextPromptSignals || null);
+    if (triggersChanged || promptSignalsChanged) {
+      const positivePrompts = [
+        ...(metadata?.triggerPositivePrompts || []),
+        ...(metadata?.promptSignalPositivePrompts || []),
+      ].map(String).filter(Boolean);
+      const negativePrompts = [
+        ...(metadata?.triggerNegativePrompts || []),
+        ...(metadata?.promptSignalNegativePrompts || []),
+      ].map(String).filter(Boolean);
+      if (!positivePrompts.length || !negativePrompts.length) {
+        throw new Error('Trigger or prompt-signal changes require positive and negative prompt evaluations.');
+      }
+      if (!existing) throw new Error('Cannot evaluate trigger routing for a missing skill.');
+      const candidateSkill: Skill = {
+        ...existing,
+        triggers: nextTriggers,
+        promptSignals: nextPromptSignals,
+        implicitInvocation: typeof manifest.implicitInvocation === 'boolean'
+          ? manifest.implicitInvocation
+          : existing.implicitInvocation,
+      };
+      const evaluationSkills = this.getAll().map((skill) => skill.id === existing.id ? candidateSkill : skill);
+      const failedPositive = positivePrompts.filter((prompt) => {
+        const top = rankSkillMatches(evaluationSkills, prompt, { limit: 1 })[0];
+        return top?.id !== existing.id || top.confidence !== 'high';
+      });
+      const failedNegative = negativePrompts.filter((prompt) => {
+        const target = rankSkillMatches(evaluationSkills, prompt, { limit: 8 }).find((match) => match.id === existing.id);
+        return !!target && target.confidence !== 'low';
+      });
+      if (failedPositive.length || failedNegative.length) {
+        throw new Error(`Trigger/prompt-signal evaluation failed: ${failedPositive.length} positive prompt(s), ${failedNegative.length} negative prompt(s).`);
       }
     }
     fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
@@ -752,9 +817,13 @@ export class SkillsManager {
   }
 
   findComposerSkillMatches(messageText: string, limit = 8): string[] {
-    return rankSkillMatches(Array.from(this.skills.values()), messageText, { includeExplicitOnly: true, limit })
+    return this.findComposerSkillMatchesDetailed(messageText, limit)
       .filter((item) => item.confidence !== 'low')
       .map((item) => item.id);
+  }
+
+  findComposerSkillMatchesDetailed(messageText: string, limit = 8): SkillRouteMatch[] {
+    return rankSkillMatches(Array.from(this.skills.values()), messageText, { includeExplicitOnly: true, limit });
   }
 
   resolveRuntimeRouting(messageText: string, options?: { forcedSkillIds?: string[]; excludedSkillIds?: Iterable<string> | string[] }) {
@@ -774,6 +843,7 @@ export class SkillsManager {
     description: string;
     emoji?: string;
     triggers?: string[];
+    promptSignals?: unknown;
     triggerPositivePrompts?: string[];
     triggerNegativePrompts?: string[];
     implicitInvocation?: boolean;
@@ -783,15 +853,18 @@ export class SkillsManager {
     if (!id) throw new Error('Invalid skill ID');
     const triggerValidation = validateSkillTriggers(data.triggers || []);
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
-    if (triggerValidation.triggers.length) {
+    const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
+    if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    if (triggerValidation.triggers.length || promptSignalValidation.signals) {
       const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
       const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
-      if (!positive.length || !negative.length) throw new Error('New skill triggers require positive and negative prompt evaluations.');
+      if (!positive.length || !negative.length) throw new Error('New skill triggers or prompt signals require positive and negative prompt evaluations.');
       const candidate = {
         id,
         name: data.name,
         description: data.description,
         triggers: triggerValidation.triggers,
+        promptSignals: promptSignalValidation.signals,
         categories: [],
         requiredTools: [],
         implicitInvocation: data.implicitInvocation !== false,
@@ -817,6 +890,9 @@ export class SkillsManager {
     if (triggerValidation.triggers.length) {
       lines.push(`triggers: ${triggerValidation.triggers.join(', ')}`);
     }
+    if (promptSignalValidation.signals) {
+      lines.push(`promptSignals: ${JSON.stringify(promptSignalValidation.signals)}`);
+    }
     if (data.implicitInvocation === false) lines.push('implicitInvocation: false');
     lines.push('---');
     const content = lines.join('\n') + '\n\n' + data.instructions;
@@ -839,6 +915,7 @@ export class SkillsManager {
     emoji?: string;
     version?: string;
     triggers?: string[];
+    promptSignals?: unknown;
     categories?: string[];
     requiredTools?: string[];
     permissions?: SkillPermissions;
@@ -855,15 +932,18 @@ export class SkillsManager {
     if (!id) throw new Error('Invalid skill ID');
     const triggerValidation = validateSkillTriggers(data.triggers || []);
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
-    if (triggerValidation.triggers.length) {
+    const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
+    if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    if (triggerValidation.triggers.length || promptSignalValidation.signals) {
       const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
       const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
-      if (!positive.length || !negative.length) throw new Error('New skill triggers require positive and negative prompt evaluations.');
+      if (!positive.length || !negative.length) throw new Error('New skill triggers or prompt signals require positive and negative prompt evaluations.');
       const candidate = {
         id,
         name: data.name,
         description: data.description,
         triggers: triggerValidation.triggers,
+        promptSignals: promptSignalValidation.signals,
         categories: data.categories || [],
         requiredTools: data.requiredTools || [],
         implicitInvocation: data.implicitInvocation !== false,
@@ -899,6 +979,7 @@ export class SkillsManager {
       version: data.version || '1.0.0',
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
+      promptSignals: promptSignalValidation.signals,
       categories: data.categories || [],
       requiredTools: data.requiredTools || [],
       requires: data.requires,
@@ -1359,7 +1440,7 @@ export class SkillsManager {
       ? (
         `\n\n[RELEVANT_SKILL] — one high-confidence read\n` +
         `This is the only implicit skill ranked high enough to read before acting. Read it because its full task scope matches—not merely because one word overlapped.\n` +
-        `- ${mandatoryMatch.id} [score ${mandatoryMatch.score}; matched: ${mandatoryMatch.matchedTriggers.join(', ') || mandatoryMatch.matchedDomains.join(', ') || 'explicit name'}] - ${mandatoryMatch.skill.description.slice(0, 180) || mandatoryMatch.skill.name}`
+        `- ${mandatoryMatch.id} [score ${mandatoryMatch.score}; matched: ${[...mandatoryMatch.promptSignalEvidence, ...mandatoryMatch.matchedTriggers, ...mandatoryMatch.matchedDomains].join(', ') || 'explicit name'}] - ${mandatoryMatch.skill.description.slice(0, 180) || mandatoryMatch.skill.name}`
       )
       : '';
     const advisoryBlock = advisoryMatches.length

@@ -14,6 +14,12 @@ Build a semantic visual system, not a pile of absolute coordinates.
 5. Add accessibility title/description when the artifact is user-facing.
 6. Validate XML, inspect the rendered SVG at target sizes, and check clipping, contrast, font fallback, and responsive scaling.
 
+Prometheus mounts SVG in a transparent inline surface. Leave the root background
+transparent, keep the root responsive with a `viewBox`, and prefer `currentColor`
+or the injected `--prom-*` tokens for fills, strokes, labels, and markers. Internal
+surfaces are allowed when they communicate grouping or state; the host should not
+need an extra panel around the visual.
+
 Do not embed untrusted scripts or external assets without need. Prefer semantic edits over full regeneration when modifying an existing SVG.
 
 Read [detailed-guide.md](references/detailed-guide.md) for layout recipes, marker/filter patterns, annotation styles, and code templates.

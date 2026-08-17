@@ -33,6 +33,18 @@ const prompts = {
   mcp_connector: 'Use connector_list exactly once to inspect local connector status. This is read-only discovery: do not connect, authenticate, send, or mutate anything. Do not ask me any question, call ask_prometheus_questions, wait for approval, or use another tool. After that one tool call, reply with one short summary and finish.',
   subagent_task: `${categoryRequest('agents_and_teams')}use agent_ops exactly once with action="list" to inspect the existing local agent/task registry. This is read-only: do not create, spawn, delegate, update, delete, dispatch, or deploy anything. Do not ask me any question, call ask_prometheus_questions, wait for approval, or use another tool. After the required tool call, reply with one short summary and finish.`,
   core: 'Use the timer tool exactly once with action="list" to report the current local timer registry. This is read-only and must not activate or use any other tool. Do not ask me any question, call ask_prometheus_questions, wait for approval, or use another tool. After that one tool call, reply with one short summary and finish.',
+  prometheus_admin: `${categoryRequest('runtime_admin')}use system_diagnostics exactly once with limit=5 and depth="summary". This is a read-only local Prometheus health snapshot. Do not restart anything, change settings, ask a question, or use another tool. After the required tool call, reply briefly and finish.`,
+  task_control: `${categoryRequest('automation_tasks')}use task_control exactly once with action="list", limit=10, and include_all_sessions=true. This is read-only task discovery. Do not resume, pause, cancel, delete, steer, create, or use another tool. After the required tool call, reply briefly and finish.`,
+  agent_runs: `${categoryRequest('agents_and_teams')}use agent_run_ops exactly once with action="list", limit=10, and detail="compact". This is read-only inspection of existing subagent runs. Do not steer, recover, resume, rerun, pause, cancel, benchmark, or use another tool. After the required tool call, reply briefly and finish.`,
+  thread_ops: `${categoryRequest('automation_sessions')}use prometheus_thread_ops exactly once with action="list", limit=10, state="active", and include_automated=false. This is read-only inspection of Prometheus chat threads. Do not create, send, steer, interrupt, reopen, or use another tool. After the required tool call, reply briefly and finish.`,
+  audit_ops: `${categoryRequest('automation_recovery')}use prometheus_audit_ops exactly once with action="recent_sessions" and limit=10. This is read-only bounded interruption evidence. Do not recover, mutate, or use another tool. After the required tool call, reply briefly and finish.`,
+  request_ops: `${categoryRequest('automation_recovery')}use prometheus_request_ops exactly once with action="list" and limit=10. This is read-only inspection of durable requests. Do not approve, apply, recover, or use another tool. After the required tool call, reply briefly and finish.`,
+  scheduling: `${categoryRequest('automation_scheduling')}use schedule_job exactly once with action="list" and limit=10. This is read-only schedule discovery. Do not create, update, pause, resume, delete, run, or use another tool. After the required tool call, reply briefly and finish.`,
+  memory: `${categoryRequest('advanced_memory')}use memory_provider_status exactly once. This is read-only local memory backend status. Do not refresh, backfill, write, consolidate, or use another tool. After the required tool call, reply briefly and finish.`,
+  skills: `${categoryRequest('skills')}use skill_list exactly once with limit=10 and include_descriptions=false. This is read-only skill discovery. Do not create, import, export, update, audit, or use another tool. After the required tool call, reply briefly and finish.`,
+  models: `${categoryRequest('model_management')}use get_agent_models exactly once. This is read-only model routing inspection. Do not switch or update any model and do not use another tool. After the required tool call, reply briefly and finish.`,
+  integrations: `${categoryRequest('external_apps')}use connection_ops exactly once with action="list". This is read-only local connector discovery. Do not connect, authenticate, repair, disconnect, or use another tool. After the required tool call, reply briefly and finish.`,
+  business: `${categoryRequest('business')}use list_entities exactly once. This is read-only local business-entity discovery. Do not write, update, append, or use another tool. After the required tool call, reply briefly and finish.`,
 };
 
 const toolFilters = {
@@ -44,6 +56,18 @@ const toolFilters = {
   mcp_connector: ['connector_list'],
   subagent_task: ['request_tool_category', 'agent_ops'],
   core: ['timer'],
+  prometheus_admin: ['request_tool_category', 'system_diagnostics'],
+  task_control: ['request_tool_category', 'task_control'],
+  agent_runs: ['request_tool_category', 'agent_run_ops'],
+  thread_ops: ['request_tool_category', 'prometheus_thread_ops'],
+  audit_ops: ['request_tool_category', 'prometheus_audit_ops'],
+  request_ops: ['request_tool_category', 'prometheus_request_ops'],
+  scheduling: ['request_tool_category', 'schedule_job'],
+  memory: ['request_tool_category', 'memory_provider_status'],
+  skills: ['request_tool_category', 'skill_list'],
+  models: ['request_tool_category', 'get_agent_models'],
+  integrations: ['request_tool_category', 'connection_ops'],
+  business: ['request_tool_category', 'list_entities'],
 };
 
 const expectedTools = {
@@ -55,6 +79,18 @@ const expectedTools = {
   mcp_connector: ['connector_list'],
   subagent_task: ['agent_ops'],
   core: ['timer'],
+  prometheus_admin: ['system_diagnostics'],
+  task_control: ['task_control'],
+  agent_runs: ['agent_run_ops'],
+  thread_ops: ['prometheus_thread_ops'],
+  audit_ops: ['prometheus_audit_ops'],
+  request_ops: ['prometheus_request_ops'],
+  scheduling: ['schedule_job'],
+  memory: ['memory_provider_status'],
+  skills: ['skill_list'],
+  models: ['get_agent_models'],
+  integrations: ['connection_ops'],
+  business: ['list_entities'],
 };
 
 function round(value) {
@@ -128,7 +164,7 @@ function safeUsageRows(traceId) {
   return rows;
 }
 
-function extractToolRows(timingRows) {
+function extractToolRows(timingRows, benchmarkFamily) {
   const groups = new Map();
   for (const row of timingRows) {
     if (!row.telemetryId) continue;
@@ -147,7 +183,11 @@ function extractToolRows(timingRows) {
     return {
       telemetryId: row.telemetryId,
       traceId: row.traceId,
-      toolFamily: row.toolFamily || 'other',
+      // The production telemetry taxonomy is intentionally coarser than this
+      // benchmark matrix (for example, models are grouped with subagent_task
+      // and internal admin tools may be "other"). The controlled sample's
+      // requested family is the authoritative attribution for aggregation.
+      toolFamily: benchmarkFamily,
       toolName: row.toolName || 'unknown_tool',
       round: row.round,
       eventCount: row.eventCount,
@@ -195,6 +235,7 @@ async function streamChat(sessionId, family, prompt) {
   let firstTokenAt = null;
   let doneAt = null;
   let terminalSeen = false;
+  let streamError = '';
   const events = [];
   try {
     while (reader) {
@@ -213,6 +254,12 @@ async function streamChat(sessionId, family, prompt) {
         if (type === 'done' || type === 'error') {
           doneAt ||= performance.now();
           terminalSeen = true;
+          if (type === 'error') {
+            const detail = event.error && typeof event.error === 'object'
+              ? event.error.message
+              : event.message || event.error;
+            streamError = String(detail || 'gateway stream error');
+          }
         }
         if (type === 'tool_call' || type === 'tool_progress' || type === 'tool_result' || type === 'latency_mark' || type === 'model_stream_event') {
           const telemetry = event.telemetry && typeof event.telemetry === 'object' ? event.telemetry : {};
@@ -239,6 +286,7 @@ async function streamChat(sessionId, family, prompt) {
     }
     reader?.releaseLock?.();
   }
+  if (streamError) throw new Error(streamError);
   await new Promise((resolve) => setTimeout(resolve, 250));
   const timingRows = safeTimingRows(traceId);
   return {
@@ -250,7 +298,7 @@ async function streamChat(sessionId, family, prompt) {
     clientDoneMs: doneAt === null ? null : round(doneAt - startedAt),
     eventCounts: Object.fromEntries([...new Set(events.map((event) => event.type))].map((type) => [type, events.filter((event) => event.type === type).length])),
     events,
-    tools: extractToolRows(timingRows),
+    tools: extractToolRows(timingRows, family),
     timing: timingRows.filter((row) => !row.label.startsWith('tool.')),
     modelRounds: safeUsageRows(traceId),
   };
@@ -322,12 +370,15 @@ async function runOne(family, sample) {
 
 function aggregate(samples) {
   const rows = samples.filter((sample) => sample.ok);
-  const toolRows = rows.flatMap((sample) => sample.tools || []);
   const byFamily = {};
   for (const family of requestedFamilies) {
     const familySamples = rows.filter((sample) => sample.family === family);
-    const familyTraceIds = new Set(familySamples.flatMap((sample) => (sample.timing || []).map((timing) => timing.traceId).filter(Boolean)));
-    const familyRows = toolRows.filter((row) => familyTraceIds.has(row.traceId) && (row.toolFamily === family || (family === 'mcp_connector' && row.toolFamily === 'mcp_connector')));
+    // The SSE trace and timing-log turn identifiers are intentionally allowed
+    // to differ across gateway transports. The sample already carries the
+    // normalized tool rows, so aggregate directly from those rows instead of
+    // joining on an identifier that can be rewritten by a retry/recovery.
+    const familyRows = familySamples.flatMap((sample) => sample.tools || [])
+      .filter((row) => row.toolFamily === family || (family === 'mcp_connector' && row.toolFamily === 'mcp_connector'));
     byFamily[family] = {
       samples: familySamples.length,
       toolCalls: familyRows.length,
@@ -362,7 +413,7 @@ for (const family of requestedFamilies) {
   }
 }
 
-console.log(JSON.stringify({
+const report = {
   benchmark: 'prometheus-tool-performance',
   capturedAt: new Date().toISOString(),
   conditions: {
@@ -381,4 +432,7 @@ console.log(JSON.stringify({
   },
   aggregate: aggregate(samples),
   samples,
-}, null, 2));
+};
+console.log(JSON.stringify(process.env.PROMETHEUS_TOOL_BENCH_SUMMARY_ONLY === '1'
+  ? { benchmark: report.benchmark, capturedAt: report.capturedAt, conditions: report.conditions, aggregate: report.aggregate }
+  : report, null, 2));

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "verification",
+  "name": "Full-Story Verification",
+  "description": "Verify a complete user story end to end across UI, client/server code, APIs, processes, data, external dependencies, and the final response. Use when the user asks whether a feature actually works or wants full-flow proof; do not use for unit-test-only requests.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "verify this end to end",
+    "verify the whole flow",
+    "test the complete user story",
+    "is this working end to end",
+    "check everything works",
+    "verify the complete user story",
+    "make sure the feature works",
+    "verify the UI to API flow"
+  ],
+  "promptSignals": {
+    "phrases": ["verify this end to end", "verify the whole flow", "test the complete user story", "is this working end to end", "check everything works", "verify the complete user story", "make sure the feature works"],
+    "allOf": [["verify", "flow"], ["verify", "works"], ["check", "everything"], ["test", "complete"], ["test", "end", "end"], ["make", "sure", "works"], ["ui", "api", "flow"]],
+    "anyOf": ["verify", "verification", "end-to-end", "full flow", "complete flow", "actually work", "working", "user story"],
+    "noneOf": ["unit test", "jest", "vitest", "playwright test", "cypress test", "write a test", "test helper"],
+    "minScore": 6
+  },
+  "categories": ["verification", "qa", "browser-testing", "development"],
+  "requiredTools": ["workspace", "shell", "browser_automation", "processes"],
+  "permissions": {"workspaceRead": true, "workspaceWrite": false, "shell": true, "browser": true, "externalSideEffects": false},
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

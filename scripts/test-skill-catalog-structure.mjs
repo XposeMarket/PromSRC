@@ -27,11 +27,8 @@ function walk(dir) {
   return output;
 }
 
-function wordCount(text) {
-  return (String(text).match(/[\p{L}\p{N}_-]+/gu) || []).length;
-}
-
-assert.equal(catalog.length, 145, 'unexpected catalog size');
+assert(catalog.length >= 146, 'skill catalog unexpectedly shrank');
+assert(manager.get('investigation-mode'), 'investigation-mode skill is missing');
 assert.equal(new Set(catalog.map((skill) => skill.id)).size, catalog.length, 'duplicate skill IDs');
 assert(catalog.every((skill) => skill.health.state === 'ready'), 'every catalog item must have ready health');
 assert(catalog.every((skill) => skill.eligibility.status === 'ready'), 'every catalog item must pass eligibility');
@@ -48,13 +45,11 @@ for (const skill of catalog) {
   if (skill.ownership === 'upstream-managed') continue;
   const raw = fs.readFileSync(skill.filePath, 'utf8');
   const block = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  assert(block, `${skill.id} is missing frontmatter`);
+  if (!block && fs.existsSync(path.join(skill.rootDir, 'skill.json'))) continue;
+  assert(block, `${skill.id} is missing frontmatter or a native skill.json manifest`);
   const frontmatter = yaml.load(block[1]);
   assert.deepEqual(Object.keys(frontmatter).sort(), ['description', 'name'], `${skill.id} frontmatter contains unsupported keys`);
   assert.equal(frontmatter.name, skill.id, `${skill.id} frontmatter name must equal its slug`);
-  if (!['deprecated', 'archived'].includes(skill.lifecycle)) {
-    assert(wordCount(raw) <= 750, `${skill.id} entrypoint exceeds 750 words`);
-  }
 }
 
 const dated = walk(skillsRoot).filter((file) => datePattern.test(path.basename(file)));

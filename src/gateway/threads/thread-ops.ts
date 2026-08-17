@@ -8,13 +8,13 @@ import {
   getWorkspace,
   listSessionSummaries,
   renameSession,
-  searchSessionSummaries,
   sessionExists,
   setChatModelRoute,
   setSessionPinned,
   setWorkspace,
   touchSession,
 } from '../session';
+import { searchSessionSummariesInWorker } from './session-search-worker-client.js';
 import { unsettleSessionSafely } from '../session-settlement';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
@@ -548,15 +548,17 @@ export async function executePrometheusThreadOps(
     const query = String(args?.query || args?.q || '').trim();
     if (!query) throw new Error('query is required.');
     const state = normalizeThreadSessionState(args);
+    const search = await searchSessionSummariesInWorker(query, {
+      channel: args?.channel || undefined,
+      state,
+      includeAutomated: args?.include_automated === true,
+      limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
+    });
     return {
       query,
       state,
-      sessions: searchSessionSummaries(query, {
-        channel: args?.channel || undefined,
-        state,
-        includeAutomated: args?.include_automated === true,
-        limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
-      }).map(sessionSummaryWithRuntime),
+      sessions: search.results.map(sessionSummaryWithRuntime),
+      search: search.diagnostics,
     };
   }
 

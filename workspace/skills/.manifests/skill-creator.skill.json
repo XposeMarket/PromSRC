@@ -1,6 +1,6 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Create and revise executable Prometheus workflow skills: concrete fast paths with required tools, exact sequencing, recovery, verification, and artifacts. Use when a user asks to create, update, improve, review, or troubleshoot a skill.",
+  "description": "Create, revise, review, validate, and benchmark Prometheus skills and bundles, including instructions, resources, manifests, tool contracts, recovery paths, verification, and structured prompt routing. Use for explicit skill-authoring requests.",
   "id": "skill-creator"
 }

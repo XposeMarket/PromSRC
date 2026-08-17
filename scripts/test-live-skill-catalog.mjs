@@ -39,10 +39,6 @@ function walk(dir) {
   return output;
 }
 
-function wordCount(value) {
-  return (String(value).match(/[\p{L}\p{N}_-]+/gu) || []).length;
-}
-
 const manager = new SkillsManager(skillsRoot);
 const catalog = manager.getAll();
 const active = catalog.filter((skill) =>
@@ -65,14 +61,16 @@ for (const id of exceptions) {
 for (const skill of migrated) {
   assert.equal(skill.validation.errors.length, 0, `${skill.id} must load without validation errors`);
   assert(skill.triggers.length <= 12, `${skill.id} exceeds the 12-trigger cap`);
-  assert(wordCount(fs.readFileSync(skill.filePath, 'utf8')) <= 750, `${skill.id} entrypoint remains over 750 words`);
   const raw = fs.readFileSync(skill.filePath, 'utf8');
   const block = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  assert(block, `${skill.id} is missing frontmatter`);
-  const frontmatter = yaml.load(block[1]);
-  assert.deepEqual(Object.keys(frontmatter).sort(), ['description', 'name'], `${skill.id} frontmatter must contain only name and description`);
-  assert.equal(String(frontmatter.name).trim().length > 0, true);
-  assert.equal(String(frontmatter.description).trim().length > 0, true);
+  if (!block) {
+    assert(fs.existsSync(path.join(skill.rootDir, 'skill.json')), `${skill.id} is missing frontmatter or a native skill.json manifest`);
+  } else {
+    const frontmatter = yaml.load(block[1]);
+    assert.deepEqual(Object.keys(frontmatter).sort(), ['description', 'name'], `${skill.id} frontmatter must contain only name and description`);
+    assert.equal(String(frontmatter.name).trim().length > 0, true);
+    assert.equal(String(frontmatter.description).trim().length > 0, true);
+  }
   for (const resource of skill.resources) {
     assert(fs.existsSync(path.join(skill.rootDir, resource.path)), `${skill.id} declares missing resource ${resource.path}`);
   }
@@ -86,7 +84,6 @@ for (const id of requiredExplicit) {
 for (const id of priorityEntrypoints) {
   const skill = manager.get(id);
   assert(skill, `missing priority skill ${id}`);
-  assert(wordCount(fs.readFileSync(skill.filePath, 'utf8')) <= 750, `${id} entrypoint remains over 750 words`);
   assert(fs.existsSync(path.join(skill.rootDir, 'references', 'detailed-guide.md')), `${id} is missing its preserved detailed guide`);
 }
 

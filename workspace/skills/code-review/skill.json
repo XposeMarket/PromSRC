@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "code-review",
+  "name": "Code Review",
+  "description": "Perform an evidence-based review of a code change or pull request for correctness, project conventions, regressions, security, performance, and maintainability. Use for review-only work; do not silently modify code or publish comments.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "review this code",
+    "review this diff",
+    "review this pull request",
+    "find bugs in this change",
+    "check this code for issues",
+    "perform a code review",
+    "audit this change",
+    "is this PR safe to merge"
+  ],
+  "promptSignals": {
+    "phrases": ["review this code", "review this diff", "review this pull request", "find bugs in this change", "check this code for issues", "perform a code review", "audit this change"],
+    "allOf": [["review", "code"], ["review", "diff"], ["review", "pull", "request"], ["find", "bugs"], ["check", "issues"], ["safe", "merge"]],
+    "anyOf": ["review", "pull request", "diff", "bugs", "audit", "merge", "regression", "security issue"],
+    "noneOf": ["write a review", "review this résumé", "review my email", "review a movie", "code review checklist only"],
+    "minScore": 4
+  },
+  "categories": ["review", "quality", "development", "security"],
+  "requiredTools": ["workspace", "shell", "agents_and_teams"],
+  "permissions": {"workspaceRead": true, "workspaceWrite": false, "shell": true, "externalSideEffects": false},
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

@@ -246,6 +246,10 @@ async function drainAutomaticQueue(): Promise<void> {
 }
 
 async function warmAutomaticSlot(slot: AutomaticSearchSlot, workspacePath: string): Promise<void> {
+  // A healthy sibling does not mean this slot is warm. Rewarm only the
+  // missing slot so recovery does not repeat an expensive query on every
+  // already-ready worker.
+  if (slot.broker.getStatus().state === 'ready') return;
   await slot.broker.warmup();
   await slot.broker.run<MemorySearchWorkerResult>('memory_search', {
     workspacePath: path.resolve(workspacePath),
@@ -268,15 +272,25 @@ export async function warmAutomaticMemorySearchWorkers(workspacePath: string): P
     await automaticWarmupPromise;
     return;
   }
-  automaticWarmupPromise = Promise.all(automaticSlots.map((slot) => warmAutomaticSlot(slot, resolvedWorkspacePath)))
-    .then(() => undefined)
-    .catch((error) => {
-      for (const slot of automaticSlots) slot.broker.forceKill();
-      throw error;
-    })
-    .finally(() => {
-      automaticWarmupPromise = null;
-    });
+  automaticWarmupPromise = (async () => {
+    const outcomes = await Promise.allSettled(automaticSlots.map((slot) => warmAutomaticSlot(slot, resolvedWorkspacePath)));
+    const failedOutcome = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+    if (failedOutcome) {
+      // Do not tear down a sibling that stayed healthy while one slot failed
+      // its short warmup. The failed slot will be retried by the bounded
+      // rewarm tick below.
+      for (const slot of automaticSlots) {
+        const state = slot.broker.getStatus().state;
+        if (state !== 'ready' && state !== 'busy') slot.broker.forceKill();
+      }
+      throw failedOutcome.reason;
+    }
+  })().finally(() => {
+    automaticWarmupPromise = null;
+    if (!automaticShuttingDown && automaticSlots.some((slot) => slot.broker.getStatus().state !== 'ready')) {
+      scheduleAutomaticMemorySearchWorkerWarmup(resolvedWorkspacePath, 1_000);
+    }
+  });
   await automaticWarmupPromise;
 }
 
@@ -284,7 +298,8 @@ export function scheduleAutomaticMemorySearchWorkerWarmup(workspacePath: string,
   if (!workerEnabled || automaticShuttingDown || automaticWarmupTimer || automaticWarmupPromise) return;
   const resolvedWorkspacePath = String(workspacePath || '').trim();
   if (!resolvedWorkspacePath) return;
-  if (automaticSlots.some((slot) => slot.broker.getStatus().state === 'ready' || slot.broker.getStatus().state === 'busy' || slot.broker.getStatus().state === 'starting')) return;
+  if (automaticSlots.some((slot) => slot.broker.getStatus().state === 'busy' || slot.broker.getStatus().state === 'starting')) return;
+  if (automaticSlots.every((slot) => slot.broker.getStatus().state === 'ready')) return;
   automaticWarmupTimer = setTimeout(() => {
     automaticWarmupTimer = null;
     void warmAutomaticMemorySearchWorkers(resolvedWorkspacePath).catch(() => undefined);

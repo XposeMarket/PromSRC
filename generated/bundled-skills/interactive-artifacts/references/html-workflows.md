@@ -8,10 +8,33 @@ Build live interactive widgets directly in chat using a fenced `html` block. The
 
 ## CRITICAL OUTPUT RULES
 
-- Output a single fenced ` ```html ` block
-- **No file saving.** Inline output only — do not call file tools
-- **No declare_plan.** Read skill → output html block. Done
-- Keep total output under ~200 lines — split into multiple widgets if needed
+- Output a complete fenced ` ```html ` block for the inline visual.
+- **No file saving.** Inline output only — do not call file tools.
+- **No declare_plan.** Read the skill, build the visual, and return the block.
+- There is no arbitrary line-count or widget-complexity ceiling. Keep the
+  experience self-contained and conversation-sized, but a rich fractal lab,
+  simulator, dashboard, lesson, tracker, or mini-game is valid when useful.
+
+## Prometheus host contract
+
+The HTML block runs in a sandboxed iframe with a transparent host surface and an
+auto-growing height. The host injects these tokens:
+
+```css
+--prom-bg --prom-bg-soft --prom-surface --prom-surface-secondary
+--prom-border --prom-border-strong --prom-text --prom-muted
+--prom-accent --prom-accent-strong --prom-success --prom-warning --prom-danger
+```
+
+Use those tokens for internal surfaces and controls. Keep the outermost wrapper
+transparent and responsive; do not create a fake page background or a second outer
+panel. `window.prometheusVisual` and `window.openai.widgetState` are the supported
+local state bridges.
+
+Generated code may not access credentials, Electron/Node, the filesystem, cookies,
+browser permissions, arbitrary iframes, external accounts, or unrestricted network
+resources. Real-world actions must be emitted to registered Prometheus tools and
+checked by runtime policy.
 
 ---
 
@@ -29,16 +52,18 @@ Build live interactive widgets directly in chat using a fenced `html` block. The
 <div style="background:#1e1e2e; font-family:sans-serif;">...</div>
 ```
 
-The renderer injects `background:transparent` — **never set a background on the outermost wrapper**. Inner cards, panels, and components can have their own backgrounds.
+The renderer injects `background:transparent` — **never set a hardcoded background on
+the outermost wrapper**. Inner cards, panels, and components can have intentional
+surfaces, but use `var(--prom-surface)`, semantic accent tokens, or low-opacity
+token-based treatments.
 
-### Colors that work in both dark and light mode
-Use rgba with low opacity for backgrounds — they work in both themes:
+### Colors that work in every Prometheus theme
+Use the injected tokens and inherit text color:
 ```css
-background: rgba(99,102,241,0.1)   /* indigo tint — works everywhere */
-background: rgba(34,211,238,0.1)   /* cyan tint */
-background: rgba(74,222,128,0.1)   /* green tint */
-border: 1px solid rgba(99,102,241,0.3)
-color: inherit                      /* inherits from host theme */
+background: var(--prom-surface)
+background: color-mix(in srgb, var(--prom-accent) 12%, transparent)
+border: 1px solid var(--prom-border)
+color: var(--prom-text)
 ```
 
 For text: use `color: inherit` on containers and specific colors only on emphasis elements.
@@ -201,9 +226,11 @@ upd(5000);
 
 ---
 
-## CDN Libraries (available via jsdelivr/cdnjs)
+## Libraries
 
-Import in a `<script src="...">` tag before using:
+Prefer plain JavaScript and the dedicated Chart.js/Mermaid renderers. Custom HTML
+should not fetch arbitrary remote scripts or data. If a runtime-approved local or
+allowlisted library is explicitly available, import it before using it:
 
 | Library | CDN URL |
 |---|---|
@@ -234,16 +261,17 @@ Import in a `<script src="...">` tag before using:
 **DO:**
 - Keep outer wrapper `background:transparent` — inner panels can have backgrounds
 - Use `color:inherit` on containers so text adapts to dark/light mode
-- Keep scripts simple and self-contained — no external state, no `fetch()` to unknown APIs
+- Keep scripts self-contained — no external state and no `fetch()` to unknown APIs
 - Use `box-sizing:border-box` on inputs and full-width elements
 - Test JS logic mentally before writing — no runtime errors
 
 **DON'T:**
 - Don't use `document.write()`
 - Don't import large libraries when plain JS handles it
-- Don't set hardcoded `color: #1e1e2e` or `color: #cdd6f4` — mode-specific colors break the other theme
+- Don't set hardcoded light/dark text or canvas colors — use the Prometheus tokens
 - Don't use `position:fixed` — the iframe auto-sizes to content height, fixed elements collapse it
-- Don't exceed 200 lines in a single html block — split into multiple widgets
+- Don't put credentials or external-account actions in generated JavaScript; use the
+  Prometheus tool bridge when that capability is explicitly available
 
 ---
 

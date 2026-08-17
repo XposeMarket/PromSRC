@@ -1,5 +1,19 @@
 # 28) Deterministic Skill Routing
 
+## Current update (2026-08-13)
+
+Prometheus now supports a structured prompt-signal policy beside legacy `triggers`:
+
+- `phrases`: exact normalized phrase matches worth four points each.
+- `allOf`: alternative term groups; every term in a matched group contributes two points.
+- `anyOf`: lower-cost individual terms, so generic one-word overlap remains below the default `minScore: 4`.
+- `noneOf`: hard exclusions that suppress implicit routing, including CSS/sticky-layout false positives.
+- `minScore`: bounded threshold, defaulting to 4.
+
+Structured signals are authoritative for a skill. Description, category, and legacy-trigger overlap cannot bypass the policy when a configured signal set does not match. Exact prompt-signal evidence is carried through the canonical API matcher, runtime resolver, Realtime voice candidate context, `skill_list` details, desktop/mobile composer related-skill surfaces, and the Hub trigger-policy summary. Legacy flat triggers remain supported and capped at 12.
+
+The canonical `investigation-mode` skill carries the full frustration/debugging signal policy and the staged logs → workflow → browser → deploy triage playbook. `SKILL.md` frontmatter can also declare nested YAML `metadata.promptSignals`; native and overlay manifests normalize both forms into the same runtime model. Regression coverage lives in `scripts/test-prompt-signal-routing.mjs` and runs with `npm run test:prompt-signal-routing`.
+
 Verified 2026-07-12 against canonical `C:\Users\rafel\PromSRC`.
 
 ## Pre-change inventory

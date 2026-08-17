@@ -9581,11 +9581,6 @@ let pmSelectedComposerSkillIds = [];
 let pmSelectedComposerSkills = [];
 let pmSkillComposerSelectionIndex = 0;
 
-const PM_SKILL_TRIGGER_STOPWORDS = new Set([
-  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
-  'me', 'my', 'our', 'this', 'that', 'please',
-]);
-
 function _pmNormalizeSkillText(value) {
   return String(value || '')
     .toLowerCase()
@@ -9593,31 +9588,6 @@ function _pmNormalizeSkillText(value) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function _pmNormalizeSkillTextLoose(value) {
-  return _pmNormalizeSkillText(value)
-    .split(' ')
-    .filter((word) => word && !PM_SKILL_TRIGGER_STOPWORDS.has(word))
-    .join(' ');
-}
-
-function _pmSkillTriggerMatchesText(trigger, rawText, words) {
-  const normalizedTrigger = _pmNormalizeSkillText(trigger);
-  if (!normalizedTrigger) return false;
-  const normalizedText = _pmNormalizeSkillText(rawText);
-  if (normalizedTrigger.includes(' ')) {
-    if (normalizedText.includes(normalizedTrigger)) return true;
-    const looseTrigger = _pmNormalizeSkillTextLoose(trigger);
-    const looseText = _pmNormalizeSkillTextLoose(rawText);
-    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
-  }
-  return words.some((word) => {
-    const normalizedWord = _pmNormalizeSkillText(word);
-    if (normalizedWord === normalizedTrigger) return true;
-    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
-    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
-  });
 }
 
 // Unified matcher: the pill now uses the SAME backend matcher that surfaces
@@ -9786,9 +9756,19 @@ function _pmComposerSkillMatches(value) {
   const text = String(value || '').toLowerCase().trim();
   if (!text) return [];
   const filterExcluded = (matches) => (Array.isArray(matches) ? matches : []).filter((skill) => !_pmIsSkillExcluded(skill));
-  // Return the cached result for the current query if available.
-  if (text === _pmSkillMatchCacheQuery) return filterExcluded(_pmSkillMatchCacheResult);
+  // Never render a stale response for a newer composer query.
+  if (text !== _pmSkillMatchCacheQuery) return [];
   return filterExcluded(_pmSkillMatchCacheResult);
+}
+
+function _pmSkillMatchEvidence(skill) {
+  const evidence = [
+    ...(Array.isArray(skill?.promptSignalEvidence) ? skill.promptSignalEvidence : []),
+    ...(Array.isArray(skill?.matchedPromptSignals) ? skill.matchedPromptSignals : []),
+    ...(Array.isArray(skill?.matchedTriggers) ? skill.matchedTriggers : []),
+    ...(Array.isArray(skill?.matchedDomains) ? skill.matchedDomains.map((value) => `domain: ${value}`) : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(evidence)].slice(0, 3);
 }
 
 function _pmFetchComposerSkillMatches(value, page) {
@@ -9916,7 +9896,8 @@ function _pmRenderSkillTriggerPill(page, input) {
       <div class="pm-skill-trigger-row">
         ${matches.map((skill) => `
           <button type="button" class="pm-skill-trigger-item${String(skill.id || '') === pmSkillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escapeHtml(skill.id || '')}">
-            ${escapeHtml(skill.name || skill.id || 'Skill')}
+            <span>${escapeHtml(skill.name || skill.id || 'Skill')}</span>
+            <small>${escapeHtml(`${skill.confidence || 'match'}${Number.isFinite(Number(skill.score)) ? ` · ${Math.round(Number(skill.score))}` : ''}`)}</small>
           </button>
         `).join('')}
       </div>
@@ -9925,6 +9906,7 @@ function _pmRenderSkillTriggerPill(page, input) {
           <div class="pm-skill-trigger-desc-copy">
             <strong>${escapeHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
             <span>${escapeHtml(selectedSkill.description || 'No description available.')}</span>
+            <small>${escapeHtml(_pmSkillMatchEvidence(selectedSkill).length ? `Matched: ${_pmSkillMatchEvidence(selectedSkill).join(' · ')}` : 'Matched by the canonical skill router.')}</small>
           </div>
           <button type="button" class="pm-skill-trigger-remove" data-skill-id="${escapeHtml(_pmSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}

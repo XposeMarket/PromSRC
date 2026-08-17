@@ -51,6 +51,17 @@ export function splitCsv(value: any): string[] {
   return raw.split(',').map((v) => v.trim()).filter(Boolean);
 }
 
+function parseOptionalObject(value: any): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = parseJsonLike(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface SkillMetadataAudit {
   id: string;
   name: string;
@@ -60,6 +71,7 @@ export interface SkillMetadataAudit {
   informational: string[];
   description: string;
   triggers: string[];
+  promptSignalCount: number;
   hasManifestOverlay: boolean;
   lifecycle: string;
   compatibilityEntry: boolean;
@@ -78,6 +90,12 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
   const triggers: string[] = Array.isArray(skill?.triggers)
     ? skill.triggers.map((t: any) => String(t || '').trim()).filter(Boolean)
     : [];
+  const promptSignals = skill?.promptSignals || skill?.manifest?.promptSignals || {};
+  const promptSignalCount = [
+    ...(Array.isArray(promptSignals.phrases) ? promptSignals.phrases : []),
+    ...(Array.isArray(promptSignals.allOf) ? promptSignals.allOf : []),
+    ...(Array.isArray(promptSignals.anyOf) ? promptSignals.anyOf : []),
+  ].length;
   const issues: string[] = [];
   const informational: string[] = [];
   const lifecycle = String(skill?.lifecycle || 'active').toLowerCase();
@@ -104,7 +122,9 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     }
   }
 
-  if (triggers.length === 0) {
+  if (triggers.length === 0 && promptSignalCount > 0) {
+    informational.push('structured_prompt_signals');
+  } else if (triggers.length === 0) {
     if (explicitOnly) {
       informational.push('explicit_only_no_triggers');
     } else {
@@ -142,6 +162,7 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     informational,
     description,
     triggers,
+    promptSignalCount,
     hasManifestOverlay: skill?.manifestSource === 'overlay' || !!skill?.overlayPath,
     lifecycle,
     compatibilityEntry,
@@ -208,6 +229,13 @@ export function buildMetadataManifest(skill: any, args: any): Record<string, unk
     const after = deduped.map((t: string) => t.toLowerCase()).join('\n');
     if (deduped.length && before !== after) {
       manifest.triggers = deduped;
+      changed = true;
+    }
+  }
+  if (args.promptSignals !== undefined || args.prompt_signals !== undefined) {
+    const promptSignals = parseOptionalObject(args.promptSignals ?? args.prompt_signals);
+    if (JSON.stringify(promptSignals || null) !== JSON.stringify(skill?.promptSignals || null)) {
+      manifest.promptSignals = promptSignals;
       changed = true;
     }
   }
@@ -426,8 +454,9 @@ export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] 
     skill: match.skill,
     score: match.score,
     confidence: match.confidence === 'low' ? 'weak' : 'strong',
-    matchedTerms: [...match.matchedTriggers, ...match.matchedDomains].slice(0, 8),
+    matchedTerms: [...match.promptSignalEvidence, ...match.matchedTriggers, ...match.matchedDomains].slice(0, 8),
     matchedFields: [
+      ...(match.promptSignalEvidence.length ? ['promptSignals'] : []),
       ...(match.matchedTriggers.length ? ['triggers'] : []),
       ...(match.matchedDomains.length ? ['domain'] : []),
       ...(match.explicitMention ? ['explicit-name'] : []),
@@ -487,7 +516,7 @@ export function formatCompactSkillList(skills: any[], args: any): string {
     retrieval: query ? 'weighted token/alias OR match with weak candidates instead of exact full-query substring matching' : undefined,
     note: query && strongCount === 0 && weakCount > 0
       ? 'No strong matches. Returning weak candidates; try a shorter query or call skill_read on the most plausible candidate.'
-      : `${installedCount - availableSkills.length ? `${installedCount - availableSkills.length} unavailable, quarantined, disabled, or deprecated skill(s) omitted. ` : ''}Compact skill discovery. Natural task queries are matched across id/name/description/triggers/categories/requiredTools. Call skill_read(id) for one relevant skill.`,
+      : `${installedCount - availableSkills.length ? `${installedCount - availableSkills.length} unavailable, quarantined, disabled, or deprecated skill(s) omitted. ` : ''}Compact skill discovery. Natural task queries are matched across structured prompt signals, id/name/description/triggers/categories/requiredTools. Call skill_read(id) for one relevant skill.`,
     skills: rows,
   }, null, 2);
 }
@@ -712,6 +741,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             reason: args.reason ? String(args.reason) : undefined,
             triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
             triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
+            promptSignalPositivePrompts: splitCsv(args.promptSignalPositivePrompts || args.prompt_signal_positive_prompts),
+            promptSignalNegativePrompts: splitCsv(args.promptSignalNegativePrompts || args.prompt_signal_negative_prompts),
           });
           return {
             name, args,
@@ -738,6 +769,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             instructions: scInstructions,
             version: args.version ? String(args.version) : undefined,
             triggers: splitCsv(args.triggers),
+            promptSignals: parseOptionalObject(args.promptSignals ?? args.prompt_signals),
             triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
             triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
             categories: splitCsv(args.categories),
@@ -848,6 +880,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             name: scName,
             description: args.description ? String(args.description).trim() : '',
             triggers: splitCsv(args.triggers),
+            promptSignals: parseOptionalObject(args.promptSignals ?? args.prompt_signals),
             triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
             triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
             implicitInvocation: args.implicitInvocation ?? args.implicit_invocation,
@@ -900,7 +933,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
         const manifest = buildMetadataManifest(skill, args);
         if (!manifest) {
-          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`, error: true };
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, promptSignals, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`, error: true };
         }
         try {
           const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
@@ -910,6 +943,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             reason: args.reason ? String(args.reason) : undefined,
             triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
             triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
+            promptSignalPositivePrompts: splitCsv(args.promptSignalPositivePrompts || args.prompt_signal_positive_prompts),
+            promptSignalNegativePrompts: splitCsv(args.promptSignalNegativePrompts || args.prompt_signal_negative_prompts),
           });
           const after = scoreSkillMetadata(updated);
           return {
@@ -933,7 +968,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             return { name, args, result: 'skill_repair_metadata: apply mode requires confirm:true. Run mode:"preview" first to inspect the proposed patch set.', error: true };
           }
           if (!repairs.length) {
-            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, triggerPositivePrompts?, triggerNegativePrompts?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
+            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, promptSignals?, triggerPositivePrompts?, triggerNegativePrompts?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
           }
           const planned: Array<{ repair: any; skill: any; manifest: Record<string, unknown> }> = [];
           const preflightFailures: any[] = [];
@@ -944,9 +979,15 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             if (!skill) { preflightFailures.push({ id: rid, error: 'not found' }); continue; }
             const manifest = buildMetadataManifest(skill, repair);
             if (!manifest) { preflightFailures.push({ id: rid, error: 'no changes' }); continue; }
-            if (Object.prototype.hasOwnProperty.call(manifest, 'triggers')) {
-              const positive = splitCsv(repair.triggerPositivePrompts || repair.trigger_positive_prompts);
-              const negative = splitCsv(repair.triggerNegativePrompts || repair.trigger_negative_prompts);
+            if (Object.prototype.hasOwnProperty.call(manifest, 'triggers') || Object.prototype.hasOwnProperty.call(manifest, 'promptSignals')) {
+              const positive = [
+                ...splitCsv(repair.triggerPositivePrompts || repair.trigger_positive_prompts),
+                ...splitCsv(repair.promptSignalPositivePrompts || repair.prompt_signal_positive_prompts),
+              ];
+              const negative = [
+                ...splitCsv(repair.triggerNegativePrompts || repair.trigger_negative_prompts),
+                ...splitCsv(repair.promptSignalNegativePrompts || repair.prompt_signal_negative_prompts),
+              ];
               if (!positive.length || !negative.length) {
                 preflightFailures.push({ id: rid, error: 'trigger changes require triggerPositivePrompts and triggerNegativePrompts' });
                 continue;
@@ -973,6 +1014,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
                 reason: args.reason ? String(args.reason) : 'bulk metadata repair',
                 triggerPositivePrompts: splitCsv(repair.triggerPositivePrompts || repair.trigger_positive_prompts),
                 triggerNegativePrompts: splitCsv(repair.triggerNegativePrompts || repair.trigger_negative_prompts),
+                promptSignalPositivePrompts: splitCsv(repair.promptSignalPositivePrompts || repair.prompt_signal_positive_prompts),
+                promptSignalNegativePrompts: splitCsv(repair.promptSignalNegativePrompts || repair.prompt_signal_negative_prompts),
               });
               applied.push({ id: updated.id, fields: Object.keys(manifest), score: scoreSkillMetadata(updated).score });
             } catch (e: any) {

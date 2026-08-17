@@ -7,6 +7,8 @@ Prometheus supports two skill shapes through the shared package-aware runtime in
 
 The normalized runtime model is loaded by `src/gateway/skills-runtime/skill-package.ts` and exposed through `SkillsManager` in `src/gateway/skills-runtime/skills-manager.ts`.
 
+Current routing metadata also supports `promptSignals` with the reference shape `{ phrases, allOf, anyOf, noneOf, minScore }`. This is the authoritative matcher for skills that declare it; legacy `triggers` remain a compact compatibility/discovery field. The `/api/skills/match` response includes score, confidence, matched signal evidence, and the normalized policy so desktop/mobile composer surfaces can render the same decision instead of maintaining a second local matcher. The Hub displays a compact trigger-policy summary.
+
 Bundled skill manifests use `skill.json`. V1 supported fields include:
 
 - `schemaVersion`
@@ -113,7 +115,7 @@ Chat composer skill selection (2026-08-01): desktop and mobile composers use `$`
 2026-07-11 catalog migration:
 
 - the original 123 folders were classified and migrated into a 128-entry catalog with 112 active, 15 deprecated compatibility entries, and 1 archived entry
-- the nine original 2,000+ word entrypoints are below 750 words and retain full detail in stable `references/detailed-guide.md` files
+- the nine original 2,000+ word entrypoints retain their full detail; entrypoint length is not a validity gate, and stable `references/detailed-guide.md` files remain available when selective loading helps
 - canonical `docx`, `pdf`, `spreadsheets`, `interactive-artifacts`, and `execution-mode-routing` skills were added; merged source entries remain triggerless/unroutable compatibility redirects
 - 92 dated resources were consolidated with original path/date/hash evidence in `Brain/skill-curator/catalog-migration-evidence.jsonl`; 32 remain only in dependency-blocked skills that were intentionally not edited
 - `npm run test:skill-catalog` validates all migrated triggers against positive cases and two cross-domain negative cases, resource existence, frontmatter, invocation policy, lifecycle routing, and collision boundaries

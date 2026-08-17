@@ -14,7 +14,8 @@
     "mcp tool unavailable",
     "mcp tool failed",
     "troubleshoot mcp",
-    "mcp timeout"
+    "mcp timeout",
+    "mcp server failed to connect"
   ],
   "categories": [
     "mcp",

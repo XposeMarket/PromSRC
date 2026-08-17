@@ -9,7 +9,7 @@ import {
 } from './schedule-memory';
 import { listInternalWatches } from '../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
-import { listTasks, loadTask, saveTask, updateTaskStatus } from '../tasks/task-store';
+import { listTaskSummaries, loadTask, saveTask, updateTaskStatus } from '../tasks/task-store';
 import { peekPendingEvents } from '../teams/notify-bridge';
 import { getAgents } from '../../config/config';
 import { listManagedTeams } from '../teams/managed-teams';
@@ -332,7 +332,7 @@ function checkExpectedOutputs(job: CronJob): Array<Record<string, any>> {
 }
 
 function linkedTasks(jobId: string, limit = 20): Array<Record<string, any>> {
-  return listTasks()
+  return listTaskSummaries()
     .filter((task) => task.scheduleId === jobId || task.pausedByScheduleId === jobId)
     .slice(0, limit)
     .map((task) => ({
@@ -344,7 +344,9 @@ function linkedTasks(jobId: string, limit = 20): Array<Record<string, any>> {
       startedAt: task.startedAt,
       completedAt: task.completedAt || null,
       finalSummary: task.finalSummary ? String(task.finalSummary).slice(0, 500) : null,
-      lastToolCall: task.lastToolCall || null,
+      // The compact task index intentionally omits the potentially noisy last
+      // tool payload. Callers that need the full record can use task_control.
+      lastToolCall: null,
     }));
 }
 
@@ -801,7 +803,7 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
   const withOutputs = wants('outputs');
 
   const allJobs = scheduler.getJobs();
-  const allTasks = listTasks();
+  const allTasks = listTaskSummaries();
 
   const jobs = allJobs.slice(0, limit).map((job) => ({
     ...summarizeJob(job),

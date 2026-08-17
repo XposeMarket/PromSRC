@@ -8,7 +8,8 @@ import { recordAgentRun } from '../../../scheduler';
 import { appendSubagentChatMessage } from '../subagent-chat-store';
 import {
   appendJournal,
-  listTasks,
+  listTaskSummaries,
+  loadTask,
   saveTask,
 } from '../../tasks/task-store';
 import {
@@ -439,7 +440,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           };
         }
 
-        const activeRun = listTasks({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
+        const activeRun = listTaskSummaries({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
           .filter((task: any) => String(task?.subagentProfile || '') === agentId)
           .sort((a: any, b: any) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
         if (activeRun && args?.force_new_task !== true && args?.forceNewTask !== true) {
@@ -542,9 +543,10 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             });
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId: targetAgentId, message: subagentChatMsg });
           } catch {}
-          const pausedTask = listTasks({ status: ['awaiting_user_input'] })
+          const pausedTaskSummary = listTaskSummaries({ status: ['awaiting_user_input'] })
             .filter((t: any) => t.teamSubagent?.teamId === team.id && t.teamSubagent?.agentId === targetAgentId)
             .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+          const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
           if (pausedTask) {
             pausedTask.status = 'queued';
             pausedTask.pauseReason = undefined;
@@ -629,9 +631,10 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId: fromAgentId, message: subagentChatMsg });
           } catch {}
           if (waitForReply) {
-            const pausedTask = listTasks({ status: ['running', 'queued'] })
+            const pausedTaskSummary = listTaskSummaries({ status: ['running', 'queued'] })
               .filter((t: any) => t.sessionId === sessionId)
               .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+            const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
             if (pausedTask) {
               pausedTask.status = 'awaiting_user_input';
               pausedTask.pauseReason = 'awaiting_user_input';
@@ -729,9 +732,10 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         });
 
         if (waitForReply) {
-          const pausedTask = listTasks({ status: ['running', 'queued'] })
+          const pausedTaskSummary = listTaskSummaries({ status: ['running', 'queued'] })
             .filter((t: any) => t.sessionId === sessionId)
             .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+          const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
           if (pausedTask) {
             pausedTask.status = 'awaiting_user_input';
             pausedTask.pauseReason = 'awaiting_user_input';

@@ -24,6 +24,8 @@ export interface SkillRoutingRankedMatch {
   implicitEligible: boolean;
   domainConflict: boolean;
   matchedTriggers: string[];
+  promptSignalScore?: number;
+  promptSignalEvidence?: string[];
   matchedDomains: string[];
 }
 
@@ -34,6 +36,7 @@ export interface SkillRoutingCandidate {
   confidence: SkillRoutingConfidence;
   instructionChars: number;
   estimatedTokens: number;
+  promptSignalEvidence?: string[];
 }
 
 export interface SkillRoutingReport {
@@ -116,7 +119,15 @@ export function resolveSkillRuntimeRouting(input: {
     if (candidateIds.has(key) || candidates.length >= 3) return;
     candidateIds.add(key);
     const instructionChars = String(match.skill.instructions || '').length;
-    candidates.push({ id: match.id, reason, score: match.score, confidence: match.confidence, instructionChars, estimatedTokens: Math.ceil(instructionChars / 4) });
+    candidates.push({
+      id: match.id,
+      reason,
+      score: match.score,
+      confidence: match.confidence,
+      instructionChars,
+      estimatedTokens: Math.ceil(instructionChars / 4),
+      promptSignalEvidence: match.promptSignalEvidence,
+    });
   };
 
   for (const match of ranked.filter((item) => item.explicitMention && isExplicitSkillInvocation(input.message, item.skill))) addCandidate(match, 'explicit_mention');
@@ -129,9 +140,10 @@ export function resolveSkillRuntimeRouting(input: {
 
   if (!isDefinitionalMention(input.message)) {
     for (const match of ranked) {
-      if (!match.implicitEligible || match.domainConflict || candidateIds.has(match.id.toLowerCase())) continue;
-      const strong = match.confidence === 'high' && (match.matchedTriggers.length > 0 || match.matchedDomains.length >= 2);
-      const plausible = match.confidence === 'medium' && match.score >= 45 && match.matchedTriggers.length > 0;
+      const hasPromptSignal = (match.promptSignalEvidence?.length || 0) > 0;
+      if (!match.implicitEligible || (match.domainConflict && !hasPromptSignal) || candidateIds.has(match.id.toLowerCase())) continue;
+      const strong = match.confidence === 'high' && (hasPromptSignal || match.matchedTriggers.length > 0 || match.matchedDomains.length >= 2);
+      const plausible = match.confidence === 'medium' && match.score >= 45 && (hasPromptSignal || match.matchedTriggers.length > 0);
       if (strong) addCandidate(match, 'strong_trigger_match');
       else if (plausible) addCandidate(match, 'plausible_trigger_match');
     }
@@ -165,7 +177,8 @@ export function buildActiveSkillRoutingContext(input: {
     for (const candidate of input.report.candidates) {
       const skill = byId.get(candidate.id);
       if (!skill) continue;
-      lines.push(`- ${skill.id} [${candidate.reason}; ${candidate.confidence}; score ${candidate.score}] — ${skill.description || skill.name}`);
+      const evidence = candidate.promptSignalEvidence?.length ? `; matched ${candidate.promptSignalEvidence.join(', ')}` : '';
+      lines.push(`- ${skill.id} [${candidate.reason}; ${candidate.confidence}; score ${candidate.score}${evidence}] — ${skill.description || skill.name}`);
     }
     lines.push('Choose based on the complete workflow, not trigger overlap. Call skill_read({"id":"<skill-id>"}) for the one genuinely relevant candidate before acting. An explicitly requested skill should be read unless it is unavailable, excluded, or clearly unrelated to what the user asked.');
   }

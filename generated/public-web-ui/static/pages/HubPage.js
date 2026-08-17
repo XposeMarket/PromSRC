@@ -242,6 +242,14 @@ function renderSkillAddons(skill) {
 function renderSkillCard(s) {
   const isOpen = _expanded.has(s.id);
   const recentChanges = Array.isArray(s.recentChanges) ? s.recentChanges : [];
+  const promptSignals = s.promptSignals || {};
+  const signalSummary = [
+    Array.isArray(promptSignals.phrases) ? `${promptSignals.phrases.length} phrases` : '',
+    Array.isArray(promptSignals.allOf) ? `${promptSignals.allOf.length} allOf` : '',
+    Array.isArray(promptSignals.anyOf) ? `${promptSignals.anyOf.length} anyOf` : '',
+    Array.isArray(promptSignals.noneOf) ? `${promptSignals.noneOf.length} exclusions` : '',
+    promptSignals.minScore !== undefined ? `min ${promptSignals.minScore}` : '',
+  ].filter(Boolean).join(' · ');
   return `
     <div class="hub-skill-card${isOpen ? ' open' : ''}" data-skill-id="${escHtml(s.id)}">
       <div class="hub-skill-card-head" data-action="toggle" data-id="${escHtml(s.id)}">
@@ -255,6 +263,7 @@ function renderSkillCard(s) {
         <div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Version</span><span class="hub-skill-meta-val">${escHtml(s.version || '—')}</span></div>
         <div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Lifecycle</span><span class="hub-skill-meta-val">${escHtml(labelize(s.lifecycle || s.status))}</span></div>
         <div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Ownership</span><span class="hub-skill-meta-val">${escHtml(labelize(s.ownership))}</span></div>
+        ${signalSummary ? `<div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Trigger policy</span><span class="hub-skill-meta-val">${escHtml(signalSummary)}</span></div>` : ''}
         <div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Last used</span><span class="hub-skill-meta-val" title="${escHtml(fmtDate(s.lastUsed))}">${escHtml(relTime(s.lastUsed))}</span></div>
         <div class="hub-skill-meta-row"><span class="hub-skill-meta-label">Last modified</span><span class="hub-skill-meta-val" title="${escHtml(fmtDate(s.lastModified))}">${escHtml(relTime(s.lastModified))}</span></div>
         <div class="hub-skill-card-changes">
@@ -294,6 +303,7 @@ function skillMatchesSearch(s, query) {
     ...(Array.isArray(requires.connectors) ? requires.connectors : []),
     ...(Array.isArray(requires.plugins) ? requires.plugins : []),
     ...(Array.isArray(s.triggers) ? s.triggers : []),
+    JSON.stringify(s.promptSignals || {}),
   ];
   return parts.join(' ').toLowerCase().includes(query);
 }

@@ -34,6 +34,7 @@ router.get('/api/skills', async (req, res) => {
     manifestSource: s.manifestSource,
     resources: s.resources,
     triggers: s.triggers,
+    promptSignals: s.promptSignals,
     requiredTools: s.requiredTools,
     requires: s.requires,
     assignment: s.assignment,
@@ -58,10 +59,10 @@ router.get('/api/skills/match', (req, res) => {
   if (!q) { res.json({ success: true, matches: [] }); return; }
   const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 8));
   const mentionsX = /\b(?:x|twitter|tweet|tweets)\b|(?:x|twitter)\.com/i.test(q);
-  const ids = _sm.findComposerSkillMatches(q, limit * 2);
-  const matches = ids.map((id) => {
-    const s = _sm.get(id);
-    if (!s) return null;
+  const ranked = _sm.findComposerSkillMatchesDetailed(q, limit * 2)
+    .filter((match) => match.confidence !== 'low');
+  const matches = ranked.map((match) => {
+    const s = match.skill;
     const isXSkill = [
       s.id,
       s.name,
@@ -73,8 +74,17 @@ router.get('/api/skills/match', (req, res) => {
       name: s.name,
       description: s.description,
       triggers: s.triggers,
+      promptSignals: s.promptSignals,
       categories: s.categories,
       requiredTools: s.requiredTools,
+      score: match.score,
+      confidence: match.confidence,
+      matchedTriggers: match.matchedTriggers,
+      matchedDomains: match.matchedDomains,
+      promptSignalScore: match.promptSignalScore,
+      promptSignalEvidence: match.promptSignalEvidence,
+      matchedPromptSignals: match.promptSignalEvidence,
+      promptSignalExcluded: match.promptSignalExcluded,
     };
   }).filter(Boolean).slice(0, limit);
   res.json({ success: true, matches });
@@ -88,10 +98,10 @@ router.get('/api/skills/:id', (req, res) => {
 
 router.post('/api/skills', (req, res) => {
   try {
-    const { id, name, description, instructions } = req.body;
+    const { id, name, description, instructions, promptSignals } = req.body;
     if (!name || !instructions) { res.status(400).json({ success: false, error: 'Name and instructions required' }); return; }
     const skillId = id || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const skill = _sm.createSkill({ id: skillId, name, description: description || '', instructions });
+    const skill = _sm.createSkill({ id: skillId, name, description: description || '', instructions, promptSignals });
     res.json({ success: true, skill: { id: skill.id, name: skill.name, description: skill.description } });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err.message });
@@ -121,7 +131,7 @@ router.post('/api/skills/import', async (req, res) => {
 
 router.post('/api/skills/bundle', (req, res) => {
   try {
-    const { id, name, description, instructions, version, triggers, categories, requiredTools, requires, assignment, toolBinding, permissions, resources, overwrite } = req.body || {};
+    const { id, name, description, instructions, version, triggers, promptSignals, categories, requiredTools, requires, assignment, toolBinding, permissions, resources, overwrite } = req.body || {};
     if (!id || !name || !instructions) { res.status(400).json({ success: false, error: 'id, name, and instructions required' }); return; }
     const toArray = (value: any) => Array.isArray(value)
       ? value.map((v) => String(v || '').trim()).filter(Boolean)
@@ -133,6 +143,7 @@ router.post('/api/skills/bundle', (req, res) => {
       instructions: String(instructions),
       version: version ? String(version) : undefined,
       triggers: toArray(triggers),
+      promptSignals,
       categories: toArray(categories),
       requiredTools: toArray(requiredTools),
       requires: requires && typeof requires === 'object' ? requires : undefined,

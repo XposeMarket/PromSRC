@@ -6,10 +6,10 @@ When presenting data with numbers, scores, comparisons, categories, or steps —
 
 | Need | Skill |
 |------|--------|
-| Dashboard / report / interactive widget | `html-interactive` |
+| Dashboard / report / interactive widget | `interactive-artifacts` |
 | Chart (bar, line, pie, …) | `chart-visualizer` |
 | System / architecture diagram | `svg-diagrams` |
 | Flow, sequence, ERD, Gantt | `mermaid-diagrams` |
 | Unsure | This router (`interactive-visuals`) |
 
-`html-interactive` renders live ```html in chat (no file save). Website analyses: build the interactive dashboard, then add a written summary.
+`interactive-artifacts` renders live ```html in chat (no file save). Website analyses: build the interactive dashboard, then add a written summary. Rich local experiences are allowed; use Prometheus theme tokens and the sandbox state bridge.

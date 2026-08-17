@@ -46,6 +46,17 @@ function parseCsv(value: any): string[] {
   return raw.split(',').map((v) => v.trim()).filter(Boolean);
 }
 
+function parseJsonObject(value: any): Record<string, unknown> | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function skillOk(stdout: string, data?: any): ToolResult {
   return { success: true, stdout, ...(data !== undefined ? { data } : {}) };
 }
@@ -83,6 +94,15 @@ function buildMetadataOverlay(skill: any, args: any): Record<string, unknown> | 
   if (args?.removeTriggers !== undefined || args?.remove_triggers !== undefined) {
     const removals = new Set(parseCsv(args.removeTriggers ?? args.remove_triggers).map((trigger: string) => trigger.toLowerCase()));
     if (removals.size) nextTriggers = (nextTriggers || currentTriggers).filter((trigger: string) => !removals.has(trigger.toLowerCase()));
+  }
+
+  if (args?.promptSignals !== undefined || args?.prompt_signals !== undefined) {
+    const rawSignals = args.promptSignals ?? args.prompt_signals;
+    const promptSignals = parseJsonObject(rawSignals) || rawSignals;
+    if (JSON.stringify(promptSignals || null) !== JSON.stringify(skill?.promptSignals || null)) {
+      manifest.promptSignals = promptSignals;
+      changed = true;
+    }
   }
   if (nextTriggers) {
     const seen = new Set<string>();
@@ -238,6 +258,7 @@ export async function executeSkillCreate(
     instructions: string;
     emoji?: string;
     triggers?: string;
+    promptSignals?: unknown;
     triggerPositivePrompts?: string[];
     triggerNegativePrompts?: string[];
     implicitInvocation?: boolean;
@@ -259,6 +280,7 @@ export async function executeSkillCreate(
       description: args.description || '',
       emoji: args.emoji,
       triggers,
+      promptSignals: parseJsonObject(args.promptSignals),
       triggerPositivePrompts: args.triggerPositivePrompts || [],
       triggerNegativePrompts: args.triggerNegativePrompts || [],
       implicitInvocation: args.implicitInvocation,
@@ -280,7 +302,7 @@ export const skillListTool = {
   description: 'Compact skill discovery. Returns skill IDs/names by default; use query to narrow before skill_read(id).',
   execute: (args: any) => executeSkillList(args, getDefaultSkillsManager()),
   schema: {
-    query: 'string (optional) - filter across id/name/description/triggers/categories/requiredTools',
+    query: 'string (optional) - filter across structured prompt signals, id/name/description/triggers/categories/requiredTools',
     limit: 'number (optional) - default 24, hard cap 80',
     include_descriptions: 'boolean (optional) - include short descriptions; default false',
   },
@@ -319,8 +341,9 @@ export const skillCreateTool = {
     instructions: 'string (required) - full markdown instructions for using this skill',
     emoji: 'string (optional)',
     triggers: 'string (optional) - comma-separated keywords for discovery metadata',
-    triggerPositivePrompts: 'string[] (required when triggers are provided)',
-    triggerNegativePrompts: 'string[] (required when triggers are provided)',
+    promptSignals: 'json object (optional) - phrases, allOf, anyOf, noneOf, and minScore routing signals',
+    triggerPositivePrompts: 'string[] (required when triggers or promptSignals are provided)',
+    triggerNegativePrompts: 'string[] (required when triggers or promptSignals are provided)',
     implicitInvocation: 'boolean (optional) - false disables implicit routing',
   },
   jsonSchema: {
@@ -333,6 +356,7 @@ export const skillCreateTool = {
       instructions: { type: 'string' },
       emoji: { type: 'string' },
       triggers: { type: 'string' },
+      promptSignals: { type: 'object' },
       triggerPositivePrompts: { type: 'array', items: { type: 'string' } },
       triggerNegativePrompts: { type: 'array', items: { type: 'string' } },
       implicitInvocation: { type: 'boolean' },
@@ -466,6 +490,8 @@ export const skillManifestWriteTool = {
       const updated = sm.writeManifestOverlay(id, manifest, {
         triggerPositivePrompts: parseCsv(args?.triggerPositivePrompts || args?.trigger_positive_prompts),
         triggerNegativePrompts: parseCsv(args?.triggerNegativePrompts || args?.trigger_negative_prompts),
+        promptSignalPositivePrompts: parseCsv(args?.promptSignalPositivePrompts || args?.prompt_signal_positive_prompts),
+        promptSignalNegativePrompts: parseCsv(args?.promptSignalNegativePrompts || args?.prompt_signal_negative_prompts),
       });
       return skillOk(`Updated manifest overlay for skill "${updated.id}".`, updated);
     } catch (err: any) {
@@ -475,8 +501,10 @@ export const skillManifestWriteTool = {
   schema: {
     id: 'string (required) - installed skill id',
     manifest: 'json object (required) - manifest overlay',
-    triggerPositivePrompts: 'string|string[] (required when triggers change)',
-    triggerNegativePrompts: 'string|string[] (required when triggers change)',
+    triggerPositivePrompts: 'string|string[] (required when triggers or prompt signals change)',
+    triggerNegativePrompts: 'string|string[] (required when triggers or prompt signals change)',
+    promptSignalPositivePrompts: 'string|string[] (optional alias for routing evaluation prompts)',
+    promptSignalNegativePrompts: 'string|string[] (optional alias for routing evaluation prompts)',
   },
   jsonSchema: {
     type: 'object',
@@ -486,6 +514,8 @@ export const skillManifestWriteTool = {
       manifest: { type: 'object' },
       triggerPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       triggerNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      promptSignalPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      promptSignalNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
     },
     additionalProperties: true,
   },
@@ -502,7 +532,7 @@ export const skillUpdateMetadataTool = {
     const skill = sm.get(id);
     if (!skill) return skillErr(`Skill "${id}" not found. Call skill_list to see available IDs.`);
     const manifest = buildMetadataOverlay(skill, args);
-    if (!manifest) return skillErr(`skill_update_metadata: no metadata changes provided for "${id}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`);
+    if (!manifest) return skillErr(`skill_update_metadata: no metadata changes provided for "${id}" (pass description, triggers, promptSignals, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`);
     try {
       const updated = sm.writeManifestOverlay(id, manifest, {
         changeType: args?.changeType || args?.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
@@ -511,6 +541,8 @@ export const skillUpdateMetadataTool = {
         reason: args?.reason ? String(args.reason) : undefined,
         triggerPositivePrompts: parseCsv(args?.triggerPositivePrompts || args?.trigger_positive_prompts),
         triggerNegativePrompts: parseCsv(args?.triggerNegativePrompts || args?.trigger_negative_prompts),
+        promptSignalPositivePrompts: parseCsv(args?.promptSignalPositivePrompts || args?.prompt_signal_positive_prompts),
+        promptSignalNegativePrompts: parseCsv(args?.promptSignalNegativePrompts || args?.prompt_signal_negative_prompts),
       });
       return skillOk(`Updated metadata for skill "${updated.id}". Fields: ${Object.keys(manifest).join(', ')}.`, updated);
     } catch (err: any) {
@@ -522,13 +554,16 @@ export const skillUpdateMetadataTool = {
     triggers: 'string|string[] (optional) - replace all triggers',
     addTriggers: 'string|string[] (optional) - append trigger phrases, preserving existing triggers',
     removeTriggers: 'string|string[] (optional) - remove trigger phrases',
+    promptSignals: 'json object (optional) - replace structured routing signals',
     description: 'string (optional)',
     categories: 'string|string[] (optional)',
     requiredTools: 'string|string[] (optional)',
     lifecycle: 'string (optional)',
     implicitInvocation: 'boolean (optional) - false disables implicit routing',
-    triggerPositivePrompts: 'string|string[] (required when triggers change)',
-    triggerNegativePrompts: 'string|string[] (required when triggers change)',
+    triggerPositivePrompts: 'string|string[] (required when triggers or prompt signals change)',
+    triggerNegativePrompts: 'string|string[] (required when triggers or prompt signals change)',
+    promptSignalPositivePrompts: 'string|string[] (optional alias for routing evaluation prompts)',
+    promptSignalNegativePrompts: 'string|string[] (optional alias for routing evaluation prompts)',
     name: 'string (optional)',
   },
   jsonSchema: {
@@ -542,6 +577,7 @@ export const skillUpdateMetadataTool = {
       add_triggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       removeTriggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       remove_triggers: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      promptSignals: { type: 'object' },
       description: { type: 'string' },
       categories: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       requiredTools: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
@@ -551,6 +587,8 @@ export const skillUpdateMetadataTool = {
       implicit_invocation: { type: 'boolean' },
       triggerPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       triggerNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      promptSignalPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      promptSignalNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       name: { type: 'string' },
     },
     additionalProperties: true,
@@ -577,6 +615,7 @@ export const skillCreateBundleTool = {
         emoji: args?.emoji ? String(args.emoji) : undefined,
         version: args?.version ? String(args.version) : undefined,
         triggers: parseCsv(args?.triggers),
+        promptSignals: parseJsonObject(args?.promptSignals ?? args?.prompt_signals),
         categories: parseCsv(args?.categories),
         requiredTools: parseCsv(args?.requiredTools || args?.required_tools),
         requires: args?.requires && typeof args.requires === 'object' ? args.requires : undefined,
@@ -599,9 +638,10 @@ export const skillCreateBundleTool = {
     name: 'string (required) - human readable name',
     instructions: 'string (required) - full SKILL.md instructions',
     resources: 'json array (optional) - resource objects with path/content/type/description',
+    promptSignals: 'json object (optional) - phrases, allOf, anyOf, noneOf, and minScore routing signals',
     implicitInvocation: 'boolean (optional) - false disables implicit routing',
-    triggerPositivePrompts: 'string|string[] (required when triggers are provided)',
-    triggerNegativePrompts: 'string|string[] (required when triggers are provided)',
+    triggerPositivePrompts: 'string|string[] (required when triggers or promptSignals are provided)',
+    triggerNegativePrompts: 'string|string[] (required when triggers or promptSignals are provided)',
   },
   jsonSchema: {
     type: 'object',
@@ -614,6 +654,7 @@ export const skillCreateBundleTool = {
       emoji: { type: 'string' },
       version: { type: 'string' },
       triggers: { type: 'string' },
+      promptSignals: { type: 'object' },
       categories: { type: 'string' },
       requiredTools: { type: 'string' },
       requires: { type: 'object' },

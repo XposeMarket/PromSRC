@@ -402,6 +402,8 @@ export interface TaskSummary {
   subagentProfile?: string;
   proposalTeamId?: string;
   proposalManagerSessionId?: string;
+  proposalExecutorAgentId?: string;
+  proposalExecutorAgentName?: string;
 }
 
 export interface TaskIndexLookupStats {
@@ -606,6 +608,12 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
     proposalManagerSessionId: typeof input?.proposalManagerSessionId === 'string' && input.proposalManagerSessionId.trim()
       ? input.proposalManagerSessionId.trim()
       : undefined,
+    proposalExecutorAgentId: typeof input?.proposalExecutorAgentId === 'string' && input.proposalExecutorAgentId.trim()
+      ? input.proposalExecutorAgentId.trim()
+      : undefined,
+    proposalExecutorAgentName: typeof input?.proposalExecutorAgentName === 'string' && input.proposalExecutorAgentName.trim()
+      ? input.proposalExecutorAgentName.trim().slice(0, 200)
+      : undefined,
   };
 }
 
@@ -763,6 +771,14 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
     proposalManagerSessionId: typeof task.proposalExecution?.teamExecution?.managerSessionId === 'string'
       && task.proposalExecution.teamExecution.managerSessionId.trim()
       ? task.proposalExecution.teamExecution.managerSessionId.trim()
+      : undefined,
+    proposalExecutorAgentId: typeof task.proposalExecution?.teamExecution?.executorAgentId === 'string'
+      && task.proposalExecution.teamExecution.executorAgentId.trim()
+      ? task.proposalExecution.teamExecution.executorAgentId.trim()
+      : undefined,
+    proposalExecutorAgentName: typeof task.proposalExecution?.teamExecution?.executorAgentName === 'string'
+      && task.proposalExecution.teamExecution.executorAgentName.trim()
+      ? task.proposalExecution.teamExecution.executorAgentName.trim().slice(0, 200)
       : undefined,
   };
 }

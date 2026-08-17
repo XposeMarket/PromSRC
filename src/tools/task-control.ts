@@ -13,7 +13,7 @@
 
 import { ToolResult } from '../types.js';
 import {
-  listTasks,
+  listTaskSummaries,
   createTask,
   loadTask,
   saveTask,
@@ -107,7 +107,7 @@ export const taskControlTool = {
       // LIST tasks
       if (normalizedAction === 'list') {
         try {
-          const allTasks = listTasks();
+          const allTasks = listTaskSummaries();
           let filtered = allTasks;
 
           if (status) {
@@ -124,14 +124,14 @@ export const taskControlTool = {
             data: {
               count: results.length,
               total_available: filtered.length,
-              tasks: results.map((t: TaskRecord) => ({
+              tasks: results.map((t) => ({
                 id: t.id,
                 title: t.title,
                 prompt: t.prompt,
                 status: t.status,
                 startedAt: t.startedAt,
                 lastProgressAt: t.lastProgressAt,
-                stepCount: t.journal?.length || 0,
+                stepCount: Array.isArray(t.plan) ? t.plan.length : 0,
               })),
             },
           };

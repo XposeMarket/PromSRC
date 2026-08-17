@@ -1,11 +1,11 @@
 ---
 name: "social-intel"
-description: "Full playbook for running social analysis and delivering actionable growth coaching."
+description: "Use only when the user explicitly requests social-profile, competitor-account, engagement-pattern, content-opportunity, or cross-platform growth analysis and actionable coaching."
 ---
 
 # Social Media Intelligence
 
-Full playbook for running social analysis and delivering actionable growth coaching.
+Use this playbook for requested social analysis and actionable growth coaching across one account, a competitor, or several platforms.
 
 ---
 

@@ -3,7 +3,7 @@
   "id": "git-workflow",
   "name": "git-workflow",
   "description": "Inspect and operate Git repositories safely: status, diffs, commits, branches, remotes, conflict recovery, submodules, GitHub CLI, and authenticated publication. Use for concrete Git or GitHub operations, not generic coding.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "preserve dirty work",
@@ -13,11 +13,11 @@
     "push to github",
     "sync the repo",
     "make a commit",
-    "push the site",
-    "tag a release",
-    "resolve conflicts",
-    "compare branches",
-    "merge conflict"
+    "prepare a commit",
+    "commit and push",
+    "open a pull request",
+    "clean gone branches",
+    "resolve conflicts"
   ],
   "categories": [
     "git",
@@ -25,6 +25,38 @@
     "version-control",
     "repo-operations"
   ],
+  "promptSignals": {
+    "phrases": [
+      "preserve dirty work",
+      "revert my change",
+      "create a branch",
+      "check the diff",
+      "push to github",
+      "sync the repo",
+      "make a commit",
+      "prepare a commit",
+      "commit and push",
+      "open a pull request",
+      "clean gone branches",
+      "check the git diff",
+      "resolve merge conflicts",
+      "resolve conflicts",
+      "compare branches",
+      "preserve my dirty work"
+    ],
+    "allOf": [
+      ["git", "diff"],
+      ["git", "commit"],
+      ["commit", "push"],
+      ["pull", "request"],
+      ["merge", "conflict"],
+      ["gone", "branch"],
+      ["dirty", "work"]
+    ],
+    "anyOf": ["git", "commit", "branch", "diff", "remote", "push", "pull request", "worktree", "conflict"],
+    "noneOf": ["write a git tutorial", "explain what git is", "generate a changelog"],
+    "minScore": 4
+  },
   "requiredTools": [
     "git_status",
     "git_diff",

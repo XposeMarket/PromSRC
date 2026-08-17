@@ -37,7 +37,7 @@ import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
 import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
 import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../../threads/thread-ops';
 import { executePrometheusRequestOps } from '../../requests/request-ops';
-import { executePrometheusAuditOps } from '../../audit/audit-ops';
+import { executePrometheusAuditOpsInWorker } from '../../audit/audit-ops-worker-client';
 import { getResourceStore } from '../../resources/resource-store';
 
 const AUTOMATION_TOOL_NAMES = new Set([
@@ -951,7 +951,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
 
       case 'prometheus_audit_ops': {
         try {
-          const out = executePrometheusAuditOps(sessionId, args);
+          const out = await executePrometheusAuditOpsInWorker(sessionId, args);
           return { name, args, result: JSON.stringify({ success: true, ...out }, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `prometheus_audit_ops error: ${String(err?.message || err)}`, error: true };

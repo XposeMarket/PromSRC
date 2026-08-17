@@ -36,5 +36,11 @@
     "shell": true,
     "externalSideEffects": true
   },
-  "lifecycle": "active"
+  "lifecycle": "active",
+  "resources": [
+    {
+      "path": "references/supervised-fresh-review-modes.md",
+      "type": "doc"
+    }
+  ]
 }
