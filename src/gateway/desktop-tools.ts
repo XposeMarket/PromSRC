@@ -269,8 +269,15 @@ interface DesktopSessionState {
   lastPacket?: DesktopAdvisorPacket;
 }
 
+interface SessionHistory {
+  prevPacket?: DesktopAdvisorPacket;
+  lastPacket?: DesktopAdvisorPacket;
+}
+
 const sessions = new Map<string, DesktopSessionState>();
+const sessionHistory = new Map<string, SessionHistory>();
 const DESKTOP_PACKET_TTL_MS = 15 * 60 * 1000;
+const DESKTOP_SESSION_CACHE_LIMIT = Math.max(2, Number(process.env.PROMETHEUS_DESKTOP_SESSION_CACHE_LIMIT || 24) || 24);
 const DESKTOP_SCREENSHOT_FRESH_MS = 2 * 60 * 1000;
 const desktopPacketIndex = new Map<string, { sessionId: string; packet: DesktopAdvisorPacket; expiresAt: number }>();
 let desktopActionVersion = 0;
@@ -364,6 +371,29 @@ function registerDesktopPacket(sessionId: string, packet: DesktopAdvisorPacket):
     packet,
     expiresAt: packet.capturedAt + DESKTOP_PACKET_TTL_MS,
   });
+}
+
+function pruneDesktopSessionCaches(now: number = Date.now()): void {
+  for (const [sessionId, state] of sessions.entries()) {
+    const capturedAt = Number(state.lastPacket?.capturedAt || 0);
+    if (!capturedAt || capturedAt + DESKTOP_PACKET_TTL_MS <= now) {
+      sessions.delete(sessionId);
+      sessionHistory.delete(sessionId);
+    }
+  }
+
+  if (sessions.size > DESKTOP_SESSION_CACHE_LIMIT) {
+    const oldest = [...sessions.entries()]
+      .sort((a, b) => Number(a[1].lastPacket?.capturedAt || 0) - Number(b[1].lastPacket?.capturedAt || 0));
+    for (const [sessionId] of oldest.slice(0, sessions.size - DESKTOP_SESSION_CACHE_LIMIT)) {
+      sessions.delete(sessionId);
+      sessionHistory.delete(sessionId);
+    }
+  }
+
+  for (const sessionId of sessionHistory.keys()) {
+    if (!sessions.has(sessionId)) sessionHistory.delete(sessionId);
+  }
 }
 
 function markDesktopStateChanged(): void {
@@ -2355,8 +2385,10 @@ function createDesktopAdvisorPacket(input: {
 }
 
 function storeDesktopPacket(sessionId: string, packet: DesktopAdvisorPacket): void {
+  pruneDesktopSessionCaches(packet.capturedAt);
   sessions.set(sessionId, { lastPacket: packet });
   registerDesktopPacket(sessionId, packet);
+  pruneDesktopSessionCaches(packet.capturedAt);
 }
 
 interface DesktopVerificationSnapshot {
@@ -4797,6 +4829,7 @@ export async function desktopSendToTelegram(
 }
 
 export function getDesktopAdvisorPacket(sessionId: string): DesktopAdvisorPacket | null {
+  pruneDesktopSessionCaches();
   const state = sessions.get(sessionId);
   if (!state?.lastPacket) return null;
   return state.lastPacket;
@@ -5232,12 +5265,6 @@ export async function desktopFindInstalledApp(
   ].join('\n');
 }
 
-interface SessionHistory {
-  prevPacket?: DesktopAdvisorPacket;
-  lastPacket?: DesktopAdvisorPacket;
-}
-
-const sessionHistory = new Map<string, SessionHistory>();
 
 /**
  * Override of sessions.set to also maintain history.
@@ -5247,7 +5274,9 @@ export async function desktopScreenshotWithHistory(
   sessionId: string,
   options?: DesktopScreenshotOptions,
 ): Promise<string> {
-  // Capture previous packet before overwriting
+  // Capture previous packet before overwriting. Expired session images are
+  // discarded first so history never revives a packet past its cache lifetime.
+  pruneDesktopSessionCaches();
   const existing = sessions.get(sessionId);
   if (existing?.lastPacket) {
     sessionHistory.set(sessionId, { prevPacket: existing.lastPacket });
