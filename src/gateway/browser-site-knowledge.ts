@@ -70,7 +70,19 @@ export interface SaveBrowserKnowledgeExtractionSchemaInput {
 }
 
 const CACHE_TTL_MS = 30_000;
+const CACHE_ENTRY_LIMIT = Math.max(16, Number(process.env.PROMETHEUS_BROWSER_SITE_CACHE_LIMIT || 128) || 128);
 const siteKnowledgeCache = new Map<string, { ts: number; data: BrowserSiteKnowledge }>();
+
+function pruneSiteKnowledgeCache(now = Date.now()): void {
+  for (const [hostname, entry] of siteKnowledgeCache.entries()) {
+    if (now - entry.ts >= CACHE_TTL_MS) siteKnowledgeCache.delete(hostname);
+  }
+  if (siteKnowledgeCache.size <= CACHE_ENTRY_LIMIT) return;
+  const oldest = [...siteKnowledgeCache.entries()]
+    .sort((a, b) => a[1].ts - b[1].ts)
+    .slice(0, siteKnowledgeCache.size - CACHE_ENTRY_LIMIT);
+  for (const [hostname] of oldest) siteKnowledgeCache.delete(hostname);
+}
 
 function knowledgeRootDir(): string {
   const dir = path.join(getConfig().getConfigDir(), 'browser-knowledge');
@@ -200,7 +212,10 @@ function saveBrowserSiteKnowledge(site: BrowserSiteKnowledge): void {
   };
   const filePath = knowledgeFilePath(clean);
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
-  siteKnowledgeCache.set(clean, { ts: Date.now(), data: payload });
+  const now = Date.now();
+  pruneSiteKnowledgeCache(now);
+  siteKnowledgeCache.set(clean, { ts: now, data: payload });
+  pruneSiteKnowledgeCache(now);
 }
 
 function matchRecordByName<T extends { name: string; aliases?: string[] }>(records: T[], name: string): T | null {
@@ -279,8 +294,10 @@ export function getBrowserKnowledgeHostnameFromUrl(url: string): string {
 export function loadBrowserSiteKnowledge(hostname: string): BrowserSiteKnowledge {
   const clean = cleanHostname(hostname);
   if (!clean) return { hostname: '', updatedAt: 0, elements: [], itemRoots: [], extractionSchemas: [] };
+  const now = Date.now();
+  pruneSiteKnowledgeCache(now);
   const cached = siteKnowledgeCache.get(clean);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data;
+  if (cached && now - cached.ts < CACHE_TTL_MS) return cached.data;
 
   const filePath = knowledgeFilePath(clean);
   let data: BrowserSiteKnowledge = { hostname: clean, updatedAt: 0, elements: [], itemRoots: [], extractionSchemas: [] };
@@ -299,7 +316,8 @@ export function loadBrowserSiteKnowledge(hostname: string): BrowserSiteKnowledge
     data = { hostname: clean, updatedAt: 0, elements: [], itemRoots: [], extractionSchemas: [] };
   }
 
-  siteKnowledgeCache.set(clean, { ts: Date.now(), data });
+  siteKnowledgeCache.set(clean, { ts: now, data });
+  pruneSiteKnowledgeCache(now);
   return data;
 }
 
