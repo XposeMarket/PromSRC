@@ -820,8 +820,40 @@ export async function loadMobileGatewaySessionGroups(options = {}) {
 }
 
 export async function loadMobileGatewayPinnedSessions({ state = 'active' } = {}) {
-  const page = await loadMobileGatewaySessionPage({ limit: 200, offset: 0, state });
-  return (page.sessions || []).filter((session) => Number(session.pinnedAt || 0) > 0);
+  const safeState = ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active';
+  // Pinned chats cannot be inferred from the ordinary bounded session page.
+  // A pinned thread may be much older than the newest chats, so ask each live
+  // selected gateway to apply its durable pinned filter before pagination.
+  const selected = await _loadOnlineSelectedGatewayEntries();
+  const pages = await Promise.all(selected.map(async (entry) => {
+    try {
+      const params = new URLSearchParams({
+        scope: 'all',
+        includeAutomated: '1',
+        state: safeState,
+        limit: '200',
+        offset: '0',
+        pinned: '1',
+      });
+      const result = await gatewayFetchJson(entry, `/api/sessions?${params.toString()}`);
+      const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+      return sessions
+        .filter((session) => Number(session?.pinnedAt || 0) > 0)
+        .map((session) => ({
+          ...session,
+          targetSessionId: String(session.id || '').trim(),
+          gatewayId: entry.gatewayId,
+          gatewayName: entry.name,
+          id: targetNamespacedId(entry.gatewayId, session.id),
+        }));
+    } catch (error) {
+      console.warn('[mobile gateways] Failed to load pinned sessions', entry?.gatewayId, error);
+      return [];
+    }
+  }));
+  return pages.flat().sort((a, b) =>
+    Number(b.pinnedAt || 0) - Number(a.pinnedAt || 0)
+    || Number(b.lastMessageAt || b.lastActiveAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || 0));
 }
 
 export async function searchMobileGatewaySessions(query, { limit = 100, mode = 'content', state = 'active' } = {}) {
