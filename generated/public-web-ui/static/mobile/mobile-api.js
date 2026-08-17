@@ -950,7 +950,9 @@ export async function loadTeamChatStreamReplay(teamId, after = 0) {
 export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
-  const url = (API || '') + `/api/teams/${encodeURIComponent(teamId)}/chat/stream`;
+  _assertMobileRequestTarget();
+  const token = _mobileRequestToken();
+  const url = _buildUrl(`/api/teams/${encodeURIComponent(teamId)}/chat/stream`);
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[team stream]', name, e); } };
   const toChatStreamError = (err) => {
     if (err?.name === 'AbortError') return err;
@@ -974,7 +976,7 @@ export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
-          ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+          ...(token ? { 'X-Pairing-Token': token } : {}),
         },
         body: JSON.stringify({ message }),
         signal: ctrl.signal,
@@ -1202,7 +1204,9 @@ export async function spawnSubagentTask(agentId, task, timeoutMs = 180000) {
 export function streamSubagentChat(agentId, { message, signal, ...extra }, handlers = {}) {
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
-  const url = (API || '') + `/api/agents/${encodeURIComponent(agentId)}/chat/stream`;
+  _assertMobileRequestTarget();
+  const token = _mobileRequestToken();
+  const url = _buildUrl(`/api/agents/${encodeURIComponent(agentId)}/chat/stream`);
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[subagent stream]', name, e); } };
   let activeRuntimeId = '';
   let streamFinished = false;
@@ -1220,7 +1224,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'text/event-stream',
-          ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+          ...(token ? { 'X-Pairing-Token': token } : {}),
         },
         body: JSON.stringify({ message, timeoutMs: 300000, ...(extra || {}) }),
         signal: ctrl.signal,
