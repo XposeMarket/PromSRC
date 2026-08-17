@@ -34,6 +34,7 @@ const MEMORY_TOOL_NAMES = new Set([
   'memory',
   'memory_browse',
   'memory_write',
+  'memory_update',
   'memory_read',
   'memory_search',
   'memory_read_record',
@@ -64,6 +65,39 @@ function loadBusinessContextSnapshot(workspacePath: string, maxChars: number = 4
   } catch {
     return '';
   }
+}
+
+function normalizeMemoryCategory(value: unknown): string {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+interface MemoryCategorySection {
+  headerStart: number;
+  bodyStart: number;
+  end: number;
+  heading: string;
+}
+
+function findMemoryCategorySection(content: string, category: string): MemoryCategorySection | null {
+  const wanted = normalizeMemoryCategory(category);
+  if (!wanted) return null;
+  const headingRe = /^##[ \t]+(.+?)\s*$/gm;
+  const matches: Array<{ index: number; end: number; heading: string }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = headingRe.exec(content)) !== null) {
+    matches.push({ index: match.index, end: headingRe.lastIndex, heading: String(match[1] || '').trim() });
+  }
+  for (let index = 0; index < matches.length; index += 1) {
+    const current = matches[index];
+    if (normalizeMemoryCategory(current.heading) !== wanted) continue;
+    return {
+      headerStart: current.index,
+      bodyStart: current.end,
+      end: index + 1 < matches.length ? matches[index + 1].index : content.length,
+      heading: current.heading,
+    };
+  }
+  return null;
 }
 
 function resolveMemoryFile(file: any): { key: 'user' | 'memory' | 'soul'; filename: string } {
@@ -111,16 +145,18 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
       const action = String(args?.action || '').trim().toLowerCase();
       const delegateName = action === 'write'
         ? 'memory_write'
-        : action === 'read'
-          ? 'memory_read'
-          : action === 'search'
-            ? 'memory_search'
-            : '';
+        : action === 'update'
+          ? 'memory_update'
+          : action === 'read'
+            ? 'memory_read'
+            : action === 'search'
+              ? 'memory_search'
+              : '';
       if (!delegateName) {
         return {
           name,
           args,
-          result: 'memory: action must be "write", "read", or "search"',
+          result: 'memory: action must be "write", "update", "read", or "search"',
           error: true,
         };
       }
@@ -250,7 +286,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
 
       case 'memory_write': {
         const { filename } = resolveMemoryFile(args.file);
-        const category = String(args.category || '').trim().toLowerCase().replace(/\s+/g, '_');
+        const category = normalizeMemoryCategory(args.category);
         const content = String(args.content || '').trim();
         if (!category) return { name, args, result: 'memory_write: category is required', error: true };
         if (!content) return { name, args, result: 'memory_write: content is required', error: true };
@@ -263,23 +299,63 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         }
         let fileContent = fs.readFileSync(memoryPath, 'utf-8');
         const entry = `- ${content} [${new Date().toISOString().split('T')[0]}]`;
-        const sectionHeader = `## ${category}`;
-        const sectionIdx = fileContent.indexOf(`\n${sectionHeader}`);
-        if (sectionIdx !== -1) {
-          const afterHeader = sectionIdx + sectionHeader.length + 1;
-          const nextSection = fileContent.indexOf('\n## ', afterHeader);
-          const insertAt = nextSection !== -1 ? nextSection : fileContent.length;
-          fileContent = fileContent.slice(0, insertAt) + '\n' + entry + fileContent.slice(insertAt);
+        const section = findMemoryCategorySection(fileContent, category);
+        if (section) {
+          const needsLeadingNewline = section.end > 0 && fileContent[section.end - 1] !== '\n';
+          const prefix = needsLeadingNewline ? '\n' : '';
+          fileContent = fileContent.slice(0, section.end) + prefix + entry + '\n' + fileContent.slice(section.end);
         } else {
+          const sectionHeader = `## ${category}`;
           const closingComment = fileContent.lastIndexOf('\n---');
           const insertAt = closingComment !== -1 ? closingComment : fileContent.length;
-          fileContent = fileContent.slice(0, insertAt) + '\n\n' + sectionHeader + '\n' + entry + fileContent.slice(insertAt);
+          fileContent = fileContent.slice(0, insertAt) + '\n\n' + sectionHeader + '\n' + entry + '\n' + fileContent.slice(insertAt);
         }
         fs.writeFileSync(memoryPath, fileContent, 'utf-8');
         if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         const actor = getRuntimeActorContext(sessionId);
         const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
         return { name, args, result: `Written to ${scope} ${filename} [${category}]: ${content}`, error: false };
+      }
+
+      case 'memory_update': {
+        const { filename } = resolveMemoryFile(args.file);
+        const category = normalizeMemoryCategory(args.category);
+        const previousContent = String(args.previous_content || '').trim();
+        const content = String(args.content || '').trim();
+        if (!category) return { name, args, result: 'memory_update: category is required', error: true };
+        if (!previousContent) return { name, args, result: 'memory_update: previous_content is required', error: true };
+        if (!content) return { name, args, result: 'memory_update: content is required', error: true };
+        let memoryPath = '';
+        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
+        catch (err: any) { return { name, args, result: `memory_update blocked: ${String(err?.message || err)}`, error: true }; }
+        if (!fs.existsSync(memoryPath)) return { name, args, result: `memory_update: ${filename} not found at ${memoryPath}`, error: true };
+
+        const fileContent = fs.readFileSync(memoryPath, 'utf-8');
+        const section = findMemoryCategorySection(fileContent, category);
+        if (!section) return { name, args, result: `memory_update: category ${category} was not found in ${filename}`, error: true };
+        const sectionText = fileContent.slice(section.bodyStart, section.end);
+        const target = `- ${previousContent}`;
+        const lines = sectionText.split(/\r?\n/);
+        const matches = lines.reduce<number[]>((out, line, index) => {
+          if (line.trim() === target) out.push(index);
+          return out;
+        }, []);
+        if (matches.length !== 1) {
+          return {
+            name,
+            args,
+            result: `memory_update: expected exactly one exact bullet match in ${filename} [${section.heading}], found ${matches.length}`,
+            error: true,
+          };
+        }
+        lines[matches[0]] = `- ${content} [${new Date().toISOString().split('T')[0]}]`;
+        const updatedSection = lines.join(sectionText.includes('\r\n') ? '\r\n' : '\n');
+        const updated = fileContent.slice(0, section.bodyStart) + updatedSection + fileContent.slice(section.end);
+        fs.writeFileSync(memoryPath, updated, 'utf-8');
+        if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
+        const actor = getRuntimeActorContext(sessionId);
+        const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
+        return { name, args, result: `Updated ${scope} ${filename} [${section.heading}]: ${previousContent} -> ${content}`, error: false };
       }
 
       case 'memory_read': {
