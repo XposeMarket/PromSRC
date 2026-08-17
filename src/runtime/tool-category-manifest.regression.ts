@@ -11,6 +11,12 @@ import {
   normalizeManifestToolCategory,
 } from './tool-category-manifest';
 import {
+  filterPublicBuildToolDefs,
+  isRetiredModelTool,
+  isToolHiddenInPublicBuild,
+} from './distribution';
+import { rewriteRetiredToolPromptText } from './retired-tool-migrations';
+import {
   getCanonicalToolCategory,
   getLegacyToolCategory,
   getToolCategory,
@@ -43,6 +49,8 @@ function testRepresentativeClassification(): void {
     ['browser_open', 'browser_automation'],
     ['desktop_screenshot', 'desktop_automation'],
     ['talk_to_manager', 'agents_and_teams'],
+    ['team_ops_wrapper', 'agents_and_teams'],
+    ['agent_ops', 'agents_and_teams'],
     ['read_source', 'prometheus_source_read'],
     ['write_source', 'prometheus_source_write'],
     ['memory_graph_snapshot', 'advanced_memory'],
@@ -57,6 +65,8 @@ function testRepresentativeClassification(): void {
     ['connector_list', 'external_apps'],
     ['chat_with_subagent', 'agents_and_teams'],
     ['agent_run_ops', 'agents_and_teams'],
+    // Kept classified for compatibility with persisted historical runs, but it
+    // is retired from every new model-facing tool surface below.
     ['ask_team_coordinator', 'agents_and_teams'],
     ['write_proposal', 'proposal_admin'],
     ['video_compose', 'creative_video'],
@@ -87,6 +97,47 @@ function testRepresentativeClassification(): void {
     assert.equal(classifyToolFromManifest(name), expected, name);
     assert.equal(getLegacyToolCategory(name), expected, `legacy: ${name}`);
     assert.equal(getCanonicalToolCategory(name), expected, `canonical: ${name}`);
+  }
+}
+
+function testRetiredCoordinatorMigration(): void {
+  const previousPublic = process.env.PROMETHEUS_PUBLIC_BUILD;
+  const previousDevTools = process.env.PROMETHEUS_DEV_TOOLS_VISIBLE;
+  try {
+    process.env.PROMETHEUS_PUBLIC_BUILD = '0';
+    process.env.PROMETHEUS_DEV_TOOLS_VISIBLE = '1';
+    assert.equal(isRetiredModelTool('ask_team_coordinator'), true);
+    assert.equal(isToolHiddenInPublicBuild('ask_team_coordinator'), true, 'retired tool must stay hidden even in private/dev mode');
+
+    const defs = filterPublicBuildToolDefs([
+      { function: { name: 'ask_team_coordinator' } },
+      { function: { name: 'team_ops_wrapper' } },
+      { function: { name: 'agent_ops' } },
+    ]);
+    assert.deepEqual(defs.map((item) => item.function.name), ['team_ops_wrapper', 'agent_ops']);
+
+    const legacyCategoryPolicy = [
+      'TEAMS: activate agents_and_teams, then use ask_team_coordinator(goal, context?) for multi-agent team work. spawn_subagent() is for single standalone agent tasks.',
+      'WHEN TO USE EACH:',
+      '  → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles',
+      'TEAM OPS: Do NOT call granular team_manage directly from main chat. Use ask_team_coordinator for normal managed team work; use team_ops_wrapper/team_collab_ops only when you intentionally need lower-level managed-team operations.',
+    ].join('\n');
+    const legacyCorePolicy = [
+      '[TEAMS & AGENTS] Agent/task routes — activate agents_and_teams, then pick the right one:',
+      '  → ask_team_coordinator(goal) — managed multi-agent teams with roles.',
+      'Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.',
+    ].join('\n');
+    const rewritten = rewriteRetiredToolPromptText(`${legacyCategoryPolicy}\n\n${legacyCorePolicy}`);
+    assert.equal(rewritten.includes('ask_team_coordinator'), true, 'replacement explains retirement explicitly');
+    assert.equal(rewritten.includes('use ask_team_coordinator'), false, 'new prompt must never instruct use of retired coordinator');
+    assert.equal(rewritten.includes('There is no meta-coordinator handoff.'), true);
+    assert.equal(rewritten.includes('team_ops_wrapper(action:"manage"'), true);
+    assert.equal(rewritten.includes('Prometheus itself chooses useful roles'), true);
+  } finally {
+    if (previousPublic === undefined) delete process.env.PROMETHEUS_PUBLIC_BUILD;
+    else process.env.PROMETHEUS_PUBLIC_BUILD = previousPublic;
+    if (previousDevTools === undefined) delete process.env.PROMETHEUS_DEV_TOOLS_VISIBLE;
+    else process.env.PROMETHEUS_DEV_TOOLS_VISIBLE = previousDevTools;
   }
 }
 
@@ -139,6 +190,7 @@ function testParityReport(): void {
 
 testRegistryCompleteness();
 testRepresentativeClassification();
+testRetiredCoordinatorMigration();
 testMetadataIsInternalOnly();
 testParityReport();
 testAuthorityAndRollbackModes();
