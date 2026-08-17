@@ -3168,7 +3168,58 @@ const RESOURCE_REFRESH_TOOLS = new Set([
   'download_url',
 ]);
 
+function preflightSpawnSubagentCreateSchema(args: any): ToolResult | null {
+  if (!args?.create_if_missing) return null;
+  const createIfMissing = args.create_if_missing && typeof args.create_if_missing === 'object'
+    ? { ...args.create_if_missing }
+    : {};
+  const fieldErrors: string[] = [];
+  if (!String(createIfMissing.description || '').trim()) fieldErrors.push('create_if_missing.description is required');
+  if (!String(createIfMissing.system_instructions || '').trim()) fieldErrors.push('create_if_missing.system_instructions is required');
+  if (!Array.isArray(createIfMissing.constraints)) fieldErrors.push('create_if_missing.constraints must be an array (use [] when none)');
+  if (!String(createIfMissing.success_criteria || '').trim()) fieldErrors.push('create_if_missing.success_criteria is required');
+  for (const field of ['allowed_tools', 'forbidden_tools', 'mcp_servers', 'skillIds', 'context_refs']) {
+    if (createIfMissing[field] != null && !Array.isArray(createIfMissing[field])) fieldErrors.push(`create_if_missing.${field} must be an array`);
+  }
+  if (!fieldErrors.length) return null;
+
+  let subagentId = String(args?.subagent_id || '').trim();
+  if (!subagentId) {
+    const seed = String(createIfMissing.name || createIfMissing.description || 'disposable_agent')
+      .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'disposable_agent';
+    subagentId = `${seed}_${Date.now().toString(36)}`;
+  }
+  return {
+    name: 'spawn_subagent',
+    args,
+    result: JSON.stringify({ ok: false, code: 'INVALID_CREATE_SCHEMA', generated_subagent_id: subagentId, errors: fieldErrors }, null, 2),
+    error: true,
+  };
+}
+
+function preflightDirectSubagentDelegation(name: string, args: any): ToolResult | null {
+  const isDirectDelegate = name === 'message_subagent'
+    || (name === 'agent_chat_ops' && String(args?.action || '').trim().toLowerCase() === 'delegate');
+  if (!isDirectDelegate) return null;
+  const validation = validateDirectSubagentAssignment(args?.assignment);
+  if (validation.ok) return null;
+  return {
+    name,
+    args,
+    result: JSON.stringify({ ok: false, code: validation.code, error: validation.message }, null, 2),
+    error: true,
+  };
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  // Reject deterministic malformed delegation inputs before generic policy approval.
+  // Valid spawn/delegate operations remain approval-gated exactly as before.
+  if (name === 'spawn_subagent') {
+    const invalidCreateSchema = preflightSpawnSubagentCreateSchema(args);
+    if (invalidCreateSchema) return invalidCreateSchema;
+  }
+  const invalidDelegation = preflightDirectSubagentDelegation(name, args);
+  if (invalidDelegation) return invalidDelegation;
   const executionStartedAt = Date.now();
   const grant = getDevSourceEditGrant(sessionId);
   let prepared: PreparedDevEditMutation[] = [];
