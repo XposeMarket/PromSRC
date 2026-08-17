@@ -4,7 +4,7 @@ import { listDurableRuntimes, listLiveRuntimes } from './live-runtime-registry';
 import { snapshotMainChatGoal } from './main-chat-goals';
 import { listMainChatTimers } from './timers/timer-store';
 import { listInternalWatches } from './internal-watch/internal-watch-store';
-import { listTasks, type TaskRecord } from './tasks/task-store';
+import { listTaskSummaries, type TaskSummary } from './tasks/task-store';
 import { listThreadSupervisions } from './threads/thread-supervision';
 import {
   getSession,
@@ -63,12 +63,12 @@ function isAutomatedSession(sessionId: string, channel?: string): boolean {
   return String(channel || '').toLowerCase() === 'system' || AUTOMATED_SESSION_RE.test(String(sessionId || ''));
 }
 
-function taskMatchesSession(task: TaskRecord, sessionId: string): boolean {
+function taskMatchesSession(task: TaskSummary, sessionId: string): boolean {
   return String(task.sessionId || '') === sessionId
     || String(task.originatingSessionId || '') === sessionId;
 }
 
-function runtimeMatchesSession(runtime: any, sessionId: string, tasks: TaskRecord[]): boolean {
+function runtimeMatchesSession(runtime: any, sessionId: string, tasks: TaskSummary[]): boolean {
   if (String(runtime?.sessionId || '') === sessionId) return true;
   const taskId = String(runtime?.taskId || '').trim();
   if (!taskId) return false;
@@ -146,7 +146,7 @@ export function getSessionSettlementBlockers(
     }
   }
 
-  const tasks = listTasks();
+  const tasks = listTaskSummaries();
   const matchingTasks = tasks.filter((task) => taskMatchesSession(task, targetId));
   for (const task of matchingTasks) {
     if (!TERMINAL_TASK_STATUSES.has(String(task.status || ''))) {

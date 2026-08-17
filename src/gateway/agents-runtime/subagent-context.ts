@@ -8,7 +8,7 @@
 
 import { getAgentById } from '../../config/config.js';
 import { getCronSchedulerInstance } from '../scheduling/cron-scheduler.js';
-import { listTasks } from '../tasks/task-store.js';
+import { listTaskSummaries } from '../tasks/task-store.js';
 
 const ASSIGNED_TASK_STATUSES = [
   'queued',
@@ -47,7 +47,7 @@ export function buildSubagentAssignmentBlock(subagentId: string | undefined | nu
 
   const taskLines: string[] = [];
   try {
-    const tasks = listTasks({ status: [...ASSIGNED_TASK_STATUSES] })
+    const tasks = listTaskSummaries({ status: [...ASSIGNED_TASK_STATUSES] })
       .filter((t) => t.teamSubagent?.agentId === id || (t as any).subagentProfile === id)
       .slice(0, 12);
     for (const t of tasks) {

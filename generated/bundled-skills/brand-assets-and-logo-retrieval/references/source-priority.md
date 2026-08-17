@@ -1,0 +1,1 @@
+Official press kits and company-hosted assets are authority. Third-party databases are discovery fallbacks only and require current official visual cross-check.

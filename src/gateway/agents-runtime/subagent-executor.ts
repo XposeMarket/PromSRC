@@ -373,7 +373,7 @@ import { finalizeDevEditMutation, prepareDevEditMutation, type PreparedDevEditMu
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
 import { classifyCommandTermination } from '../process/command-outcome';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
-import { appendJournal, createTask, findTaskBySessionId, getEvidenceBusSnapshot, getTaskSessionLookupRevision, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus } from '../tasks/task-store';
+import { appendJournal, createTask, findTaskBySessionId, getEvidenceBusSnapshot, getTaskSessionLookupRevision, listTaskSummaries, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus, type TaskSummary } from '../tasks/task-store';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
@@ -1412,7 +1412,7 @@ function parseAgentRunStatusFilter(raw: any): TaskStatus[] | undefined {
   return parsed.length > 0 ? Array.from(new Set(parsed)) : undefined;
 }
 
-function inferAgentRunOwner(task: TaskRecord | null | undefined): { agentId: string; ownerKind: 'standalone' | 'team_member' | 'team_manager'; teamId?: string; agentName?: string } | null {
+function inferAgentRunOwner(task: TaskRecord | TaskSummary | null | undefined): { agentId: string; ownerKind: 'standalone' | 'team_member' | 'team_manager'; teamId?: string; agentName?: string } | null {
   if (!task) return null;
   const standalone = String(task.subagentProfile || '').trim();
   if (standalone) {
@@ -1433,25 +1433,26 @@ function inferAgentRunOwner(task: TaskRecord | null | undefined): { agentId: str
       agentName: String(task.teamSubagent?.agentName || agent?.name || teamMember).trim(),
     };
   }
-  const proposalExecutor = String(task.proposalExecution?.teamExecution?.executorAgentId || '').trim();
+  const proposalExecution = (task as any).proposalExecution?.teamExecution;
+  const proposalExecutor = String((task as any).proposalExecutorAgentId || proposalExecution?.executorAgentId || '').trim();
   if (proposalExecutor) {
     const agent = getAgentById(proposalExecutor) as any;
     return {
       agentId: proposalExecutor,
       ownerKind: 'team_manager',
-      teamId: String(task.proposalExecution?.teamExecution?.teamId || '').trim() || undefined,
-      agentName: String(task.proposalExecution?.teamExecution?.executorAgentName || agent?.name || proposalExecutor).trim(),
+      teamId: String((task as any).proposalTeamId || proposalExecution?.teamId || '').trim() || undefined,
+      agentName: String((task as any).proposalExecutorAgentName || proposalExecution?.executorAgentName || agent?.name || proposalExecutor).trim(),
     };
   }
   return null;
 }
 
-function agentOwnsRunTask(agentId: string, task: TaskRecord | null | undefined): boolean {
+function agentOwnsRunTask(agentId: string, task: TaskRecord | TaskSummary | null | undefined): boolean {
   const owner = inferAgentRunOwner(task);
   return !!owner && String(owner.agentId || '').trim() === String(agentId || '').trim();
 }
 
-function agentRunCanRecover(task: TaskRecord): boolean {
+function agentRunCanRecover(task: TaskRecord | TaskSummary): boolean {
   const status = String(task.status || '').trim();
   if (!['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed'].includes(status)) return false;
   return status !== 'paused' || task.pauseReason !== 'user_pause';
@@ -1478,7 +1479,7 @@ function isTaskRunnerLive(taskId: string): boolean {
   }
 }
 
-function inferAgentRunRunnerState(task: TaskRecord, liveRunnerActive: boolean): string {
+function inferAgentRunRunnerState(task: TaskRecord | TaskSummary, liveRunnerActive: boolean): string {
   const status = String(task.status || '').trim();
   if (liveRunnerActive) return 'live_runner_active';
   if (status === 'running') return 'stale_running_no_live_runner';
@@ -5624,12 +5625,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const limitRaw = Number(args?.limit);
           const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : 20;
           const detail = String(args?.detail || 'compact').trim().toLowerCase();
-          const tasks = listTasks(statuses ? { status: statuses } : undefined)
+          const taskSummaries = listTaskSummaries(statuses ? { status: statuses } : undefined)
             .filter((task) => !!inferAgentRunOwner(task))
             .filter((task) => !agentId || agentOwnsRunTask(agentId, task))
             .filter((task) => !recoverableOnly || agentRunCanRecover(task))
             .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0))
-            .slice(0, limit);
+            .slice(0, limit)
+            .map((summary) => loadTask(summary.id))
+            .filter((task): task is TaskRecord => !!task);
+          const tasks = taskSummaries;
           return {
             name,
             args,
@@ -6322,9 +6326,10 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             });
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId: targetAgentId, message: subagentChatMsg });
           } catch {}
-          const pausedTask = listTasks({ status: ['awaiting_user_input'] })
+          const pausedTaskSummary = listTaskSummaries({ status: ['awaiting_user_input'] })
             .filter((t: any) => t.teamSubagent?.teamId === team.id && t.teamSubagent?.agentId === targetAgentId)
             .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+          const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
           if (pausedTask) {
             pausedTask.status = 'queued';
             pausedTask.pauseReason = undefined;
@@ -6417,9 +6422,10 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId: fromAgentId, message: subagentChatMsg });
           } catch {}
           if (waitForReply) {
-            const pausedTask = listTasks({ status: ['running', 'queued'] })
+            const pausedTaskSummary = listTaskSummaries({ status: ['running', 'queued'] })
               .filter((t: any) => t.sessionId === sessionId)
               .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+            const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
             if (pausedTask) {
               pausedTask.status = 'awaiting_user_input';
               pausedTask.pauseReason = 'awaiting_user_input';
@@ -6517,9 +6523,10 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         });
 
         if (waitForReply) {
-          const pausedTask = listTasks({ status: ['running', 'queued'] })
+          const pausedTaskSummary = listTaskSummaries({ status: ['running', 'queued'] })
             .filter((t: any) => t.sessionId === sessionId)
             .sort((a: any, b: any) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+          const pausedTask = pausedTaskSummary ? loadTask(pausedTaskSummary.id) : null;
           if (pausedTask) {
             pausedTask.status = 'awaiting_user_input';
             pausedTask.pauseReason = 'awaiting_user_input';
@@ -18189,7 +18196,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             };
           }
 
-          const activeRun = listTasks({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
+          const activeRun = listTaskSummaries({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
             .filter((task: any) => String(task?.subagentProfile || '') === agentId)
             .sort((a: any, b: any) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
           if (activeRun && args?.force_new_task !== true && args?.forceNewTask !== true) {

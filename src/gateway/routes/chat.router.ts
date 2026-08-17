@@ -1339,11 +1339,12 @@ import {
   updateTaskRuntimeProgress,
   appendJournal,
   updateResumeContext,
-  listTasks,
+  listTaskSummaries,
   deleteTask,
   mutatePlan,
   getEvidenceBusSnapshot,
   type TaskRecord,
+  type TaskSummary,
   type TaskStatus,
 } from '../tasks/task-store';
 import { clearTaskRunBinding, completeNextOpenTaskStep, getTaskRunBinding, mirrorSessionChatEvent } from '../tasks/task-run-mirror';
@@ -12875,11 +12876,19 @@ function buildVoiceSkillRuntimeGuidance(skill: any): string {
 }
 
 function summarizeVoiceSkill(skill: any): Record<string, any> {
+  const promptSignals = skill?.promptSignals || {};
   return {
     id: skill?.id || '',
     name: skill?.name || skill?.id || '',
     description: compactVoiceText(skill?.description || skill?.instructions || '', 260),
     triggers: Array.isArray(skill?.triggers) ? skill.triggers.slice(0, 8) : [],
+    promptSignals: {
+      phrases: Array.isArray(promptSignals.phrases) ? promptSignals.phrases.slice(0, 8) : [],
+      allOf: Array.isArray(promptSignals.allOf) ? promptSignals.allOf.slice(0, 4) : [],
+      anyOf: Array.isArray(promptSignals.anyOf) ? promptSignals.anyOf.slice(0, 8) : [],
+      noneOf: Array.isArray(promptSignals.noneOf) ? promptSignals.noneOf.slice(0, 8) : [],
+      minScore: promptSignals.minScore,
+    },
     requiredTools: Array.isArray(skill?.requiredTools) ? skill.requiredTools.slice(0, 10) : [],
     status: skill?.status || '',
     eligibility: skill?.eligibility?.status || '',
@@ -12892,12 +12901,17 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
   if (!text || !_skillsManager) return { context: '', skills: [] };
   _skillsManager.scanSkillsIfStale?.();
   const routing = _skillsManager.resolveRuntimeRouting(text);
-  const matched = routing.candidates.map((item: any) => item.id)
+  const matchedCandidates = routing.candidates.slice(0, 5);
+  const matched = matchedCandidates.map((item: any) => item.id)
     .map((id: string) => _skillsManager.get(id))
     .filter(Boolean)
     .slice(0, 5);
   if (!matched.length && !routing.discoveryRecommended) return { context: '', skills: [] };
   const skillLines = matched.map((skill: any) => {
+    const candidate = matchedCandidates.find((item: any) => item.id === skill.id);
+    const matchedSignals = Array.isArray(candidate?.promptSignalEvidence) && candidate.promptSignalEvidence.length
+      ? ` Matched prompt signals: ${candidate.promptSignalEvidence.slice(0, 4).join(', ')}.`
+      : '';
     const triggers = Array.isArray(skill.triggers) && skill.triggers.length
       ? ` Triggers: ${skill.triggers.slice(0, 6).join(', ')}.`
       : '';
@@ -12907,7 +12921,7 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
     const status = skill?.eligibility?.status && skill.eligibility.status !== 'ready'
       ? ` Eligibility: ${skill.eligibility.status}.`
       : '';
-    return `- ${skill.id} [CANDIDATE ONLY] (${skill.name || skill.id}): ${compactVoiceText(skill.description || '', 180)}.${triggers}${required}${status}`;
+    return `- ${skill.id} [CANDIDATE ONLY] (${skill.name || skill.id}): ${compactVoiceText(skill.description || '', 180)}.${matchedSignals}${triggers}${required}${status}`;
   });
   const context = [
     '## Realtime Skill Trigger Update',
@@ -13723,7 +13737,7 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'skill_list',
-        description: 'Canonical compact skill discovery. Natural task-style queries are ranked across id/name/description/triggers/categories/requiredTools with weak candidates instead of brittle exact matching. Descriptions are omitted unless include_descriptions:true is needed.',
+        description: 'Canonical compact skill discovery. Natural task-style queries are ranked across structured prompt signals, id/name/description/triggers/categories/requiredTools with weak candidates instead of brittle exact matching. Descriptions are omitted unless include_descriptions:true is needed.',
         parameters: {
           type: 'object',
           properties: {
@@ -14504,11 +14518,12 @@ function parseVoiceTaskIds(args: Record<string, any>): string[] {
   return Array.from(new Set(ids));
 }
 
-function voiceTaskOwner(task: TaskRecord): { type: string; id: string; label: string } {
+function voiceTaskOwner(task: TaskRecord | TaskSummary): { type: string; id: string; label: string } {
   if (task.voiceDispatch?.workgroupId) return { type: 'voice_worker', id: task.voiceDispatch.workgroupId, label: 'Voice workgroup' };
   if (task.teamSubagent?.agentId) return { type: 'team_member', id: task.teamSubagent.agentId, label: task.teamSubagent.agentName || task.teamSubagent.agentId };
-  const teamExecution = task.proposalExecution?.teamExecution;
-  if (teamExecution?.teamId) return { type: 'team_manager', id: teamExecution.teamId, label: `Team ${teamExecution.teamId}` };
+  const teamExecution = (task as any).proposalExecution?.teamExecution;
+  const proposalTeamId = String(teamExecution?.teamId || (task as any).proposalTeamId || '').trim();
+  if (proposalTeamId) return { type: 'team_manager', id: proposalTeamId, label: `Team ${proposalTeamId}` };
   if (task.subagentProfile) {
     const agent = getAgentById(task.subagentProfile) as any;
     return { type: 'standalone_subagent', id: task.subagentProfile, label: String(agent?.name || task.subagentProfile) };
@@ -14516,7 +14531,7 @@ function voiceTaskOwner(task: TaskRecord): { type: string; id: string; label: st
   return { type: 'prometheus', id: 'main', label: 'Prometheus' };
 }
 
-function voiceTaskSearchScore(task: TaskRecord, query: string): number {
+function voiceTaskSearchScore(task: TaskRecord | TaskSummary, query: string): number {
   const q = String(query || '').toLowerCase().replace(/[^a-z0-9\s_-]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!q) return 1;
   const title = String(task.title || '').toLowerCase();
@@ -14536,7 +14551,7 @@ function listVoiceDirectoryTasks(args: Record<string, any>): TaskRecord[] {
   const statuses = new Set(statusFilter.split(/[\s,]+/).filter(Boolean));
   const ownerType = String(args?.owner_type || args?.ownerType || '').trim();
   const limit = Math.max(1, Math.min(20, Number(args?.limit || 10) || 10));
-  return listTasks()
+  const candidates = listTaskSummaries()
     .map((task) => ({ task, score: voiceTaskSearchScore(task, query) }))
     .filter(({ score }) => !query || score > 0)
     .filter(({ task }) => !statuses.size || statuses.has(String(task.status || '').toLowerCase()))
@@ -14544,7 +14559,9 @@ function listVoiceDirectoryTasks(args: Record<string, any>): TaskRecord[] {
     .filter(({ task }) => !/^run_once_verify_|^task_recovery_|^task_resume_brief_/i.test(String(task.sessionId || '')))
     .sort((a, b) => b.score - a.score || Number(b.task.lastProgressAt || b.task.startedAt || 0) - Number(a.task.lastProgressAt || a.task.startedAt || 0))
     .slice(0, limit)
-    .map(({ task }) => task);
+    .map(({ task }) => loadTask(task.id))
+    .filter((task): task is TaskRecord => !!task);
+  return candidates;
 }
 
 function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, any>): TaskRecord[] {
@@ -14580,7 +14597,7 @@ function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, a
     return (action === 'status' ? fromWorkgroups : unfinished).slice(0, 8);
   }
 
-  const fallback = listTasks()
+  const fallback = listTaskSummaries()
     .filter((task) => (
       task.originatingSessionId === sessionId
       || task.sessionId === sessionId
@@ -14588,7 +14605,9 @@ function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, a
     ))
     .filter((task) => action === 'status' || VOICE_TASK_CONTROL_STATUSES.has(String(task.status || '')))
     .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0));
-  return fallback.slice(0, 3);
+  return fallback.slice(0, 3)
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task);
 }
 
 function summarizeVoiceTaskTargets(tasks: TaskRecord[]): any[] {
@@ -14833,8 +14852,13 @@ async function executeVoiceAgentControl(sessionId: string, args: Record<string, 
     return voiceToolResult(true, `Dispatched new background work to ${agent.name}.`, { agentId, taskId: result.task_id, status: result.status, tracking: 'none', trackingNote: 'The subagent run is not watched unless task_watch is explicitly created.' });
   }
 
-  const ownedTasks = listTasks().filter((task) => voiceTaskOwner(task).type === 'standalone_subagent' && voiceTaskOwner(task).id === agentId);
-  const target = taskId ? loadTask(taskId) : ownedTasks.sort((a, b) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
+  const ownedTasks = taskId ? [] : listTaskSummaries()
+    .filter((task) => voiceTaskOwner(task).type === 'standalone_subagent' && voiceTaskOwner(task).id === agentId)
+    .sort((a, b) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))
+    .slice(0, 20)
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task);
+  const target = taskId ? loadTask(taskId) : ownedTasks[0];
   if (!target || voiceTaskOwner(target).type !== 'standalone_subagent' || (agentId && voiceTaskOwner(target).id !== agentId)) return voiceToolResult(false, 'No matching standalone-subagent run was found.');
   if (action === 'run_status') return voiceToolResult(true, `Loaded ${target.title}.`, { task: summarizeVoiceTaskTargets([target])[0] });
   if (action === 'run_message') {
@@ -15186,7 +15210,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         limit,
         note: truncated
           ? `This is a truncated result, not the complete skill list. Call skill_list again with limit up to 80 or a narrower query to see more.`
-          : `This result is complete for the current query. Natural queries use weighted token/alias matching across skill metadata.`,
+          : `This result is complete for the current query. Natural queries use the canonical structured-signal and metadata matcher.`,
       });
     }
     if (name === 'skill_read' || name === 'voice_skill_read') {
@@ -16379,7 +16403,7 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- voice_ops: quick operations plus legacy task discovery/control, task watches, and standalone-agent control. It is not the Voice delegation path.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
-    '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
+    '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows, structured prompt-signal evidence, and legacy triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and create a thread for non-voice capabilities.',
     '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for live browser UI. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Use a Prometheus thread for uploads/downloads, passwords/payment info, purchases/payments, destructive actions, account settings/security changes, files, or durable external changes.',
     '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Prefer window-scoped selectors and fresh screenshots. Use a Prometheus thread for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
@@ -19371,7 +19395,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
       : '- voice_thread_ops: the first-class Prometheus thread control plane. List/find/search include active and settled threads by default and mark settled state; pass state=active or state=settled to narrow, and use reopen (open/unsettle aliases) to return a settled thread to the active view without changing history. For every new thread choose launch_mode ping, forget, or supervise. Use ping for a detached completion notification, forget when no owner update is wanted, and supervise for a hidden review loop that checks reasoning, tool findings, runtime state, and artifacts while the target works. Default new threads to the current Main Chat route. Use create_many only for genuinely independent work; there are no Voice worker groups.',
     '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
-    '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
+    '- skill_list: canonical skill discovery. Use it to inspect available workflows, structured prompt-signal evidence, legacy triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_browser uses the same Prometheus browser runtime as regular chat. Use action open, snapshot, screenshot, page_text, focused_item, click, vision_click, fill, type, vision_type, press_key, scroll, drag, wait, or close for live browser work. Hand off only for file transfer, credentials, purchases/payments, destructive actions, account settings/security changes, or durable work.',
     '- voice_desktop uses the same Prometheus desktop runtime as regular chat. Use action screenshot, monitors, list_windows, focus_window, window_control, find_app, launch_app, click, drag, scroll, type, type_raw, press_key, wait, get_clipboard, set_clipboard, window_click, window_type, window_press_key, or window_scroll. For window_control include window_action minimize/maximize/restore/close. Use fresh screenshots and the same coordinate/SOM targeting rules as regular Prometheus.',

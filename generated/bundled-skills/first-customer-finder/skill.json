@@ -1,7 +1,21 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Find and qualify evidence-backed potential first customers, early adopters, beta users, design partners, or B2B prospects from recent public pain and buying signals. Defines the ICP, researches original public sources, scores fit, timing, reachability, and evidence quality, drafts personalized openers, and generates a shareable HTML report without sending outreach.",
+  "description": "Find and qualify evidence-backed potential first customers, early adopters, beta users, design partners, or B2B prospects from recent public pain and buying signals. Use when the user needs an ICP, original-source prospect research, fit and timing scores, personalized opener drafts, or a shareable early-customer report without sending outreach.",
+  "triggers": [
+    "find first customers",
+    "first customer research",
+    "potential early adopters",
+    "public buying signals",
+    "identify design partners",
+    "b2b design partners",
+    "beta user prospects",
+    "evidence backed customer discovery",
+    "startup customer prospecting",
+    "potential first customers",
+    "early customer shortlist",
+    "qualify startup prospects"
+  ],
   "categories": [
     "sales",
     "lead-generation",

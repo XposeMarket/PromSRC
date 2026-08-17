@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "feature-development",
+  "name": "Feature Development",
+  "description": "Guide a feature from discovery through clarification, architecture, implementation, review, and verification using Prometheus workspace and agent/team capabilities. Use for a new feature or substantial change; do not use for a one-line edit or a review-only request.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "build a new feature",
+    "develop this feature",
+    "implement this feature",
+    "plan and build this feature",
+    "add a substantial feature",
+    "build this new feature end to end",
+    "feature development workflow",
+    "explore and implement this change"
+  ],
+  "promptSignals": {
+    "phrases": ["build a new feature", "develop this feature", "implement this feature", "plan and build this feature", "add a substantial feature", "build this new feature end to end", "feature development workflow", "explore and implement this change"],
+    "allOf": [["feature", "build"], ["feature", "implement"], ["feature", "plan"], ["explore", "implement"], ["architecture", "feature"], ["discover", "feature"]],
+    "anyOf": ["feature", "implement", "architecture", "discovery", "acceptance criteria", "design options"],
+    "noneOf": ["one-line fix", "review only", "just explain this feature", "write a feature request"],
+    "minScore": 4
+  },
+  "categories": ["development", "planning", "agents", "verification"],
+  "requiredTools": ["workspace", "shell", "agents_and_teams", "browser_automation"],
+  "permissions": {"workspaceRead": true, "workspaceWrite": true, "shell": true, "externalSideEffects": false},
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

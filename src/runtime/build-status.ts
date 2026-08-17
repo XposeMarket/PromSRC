@@ -7,13 +7,14 @@
 //  - PUBLIC builds: surface whether an app update is available, checked against
 //    the public releases repo. This is what end users should ever see.
 
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 import path from 'path';
 import { isPublicDistributionBuild, resolvePrometheusRoot } from './distribution';
 
 const RELEASES_OWNER = 'XposeMarket';
 const RELEASES_REPO = 'prometheus-releases';
 const UPDATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const DEV_REPO_CACHE_TTL_MS = 30 * 1000;
 
 export interface BuildStatus {
   version: string;
@@ -26,6 +27,8 @@ export interface BuildStatus {
 
 let updateCache: { at: number; latestVersion?: string } | null = null;
 let updateRefreshInFlight = false;
+let devRepoCache: { at: number; value?: BuildStatus['repo'] } | null = null;
+let devRepoRefreshInFlight = false;
 
 function currentVersion(): string {
   try {
@@ -52,31 +55,38 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-function readDevRepoStatus(): BuildStatus['repo'] | undefined {
-  try {
-    const cwd = resolvePrometheusRoot();
-    const out = execFileSync('git', ['status', '--porcelain=v1', '-b'], {
-      cwd,
-      timeout: 4000,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const lines = out.split(/\r?\n/).filter(Boolean);
-    let branch: string | undefined;
-    let modified = 0;
-    let untracked = 0;
-    for (const line of lines) {
-      if (line.startsWith('## ')) {
-        branch = line.slice(3).split('...')[0].trim();
-        continue;
-      }
-      if (line.startsWith('??')) untracked++;
-      else modified++;
+function parseDevRepoStatus(out: string): BuildStatus['repo'] | undefined {
+  const lines = String(out || '').split(/\r?\n/).filter(Boolean);
+  let branch: string | undefined;
+  let modified = 0;
+  let untracked = 0;
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      branch = line.slice(3).split('...')[0].trim();
+      continue;
     }
-    return { branch, dirty: modified + untracked > 0, modified, untracked };
-  } catch {
-    return undefined;
+    if (line.startsWith('??')) untracked++;
+    else modified++;
   }
+  return { branch, dirty: modified + untracked > 0, modified, untracked };
+}
+
+function refreshDevRepoStatusInBackground(): void {
+  if (devRepoRefreshInFlight) return;
+  devRepoRefreshInFlight = true;
+  const cwd = resolvePrometheusRoot();
+  execFile('git', ['status', '--porcelain=v1', '-b'], {
+    cwd,
+    timeout: 4000,
+    encoding: 'utf-8',
+    maxBuffer: 1024 * 1024,
+  }, (error, stdout) => {
+    devRepoCache = {
+      at: Date.now(),
+      value: error ? undefined : parseDevRepoStatus(String(stdout || '')),
+    };
+    devRepoRefreshInFlight = false;
+  });
 }
 
 async function fetchLatestRelease(): Promise<string | undefined> {
@@ -126,8 +136,9 @@ export function getBuildStatus(): BuildStatus {
 
   // Dev-only local repo state. Never included in public builds.
   if (!isPublic) {
-    const repo = readDevRepoStatus();
-    if (repo) status.repo = repo;
+    const repoFresh = devRepoCache && (Date.now() - devRepoCache.at) < DEV_REPO_CACHE_TTL_MS;
+    if (!repoFresh) refreshDevRepoStatusInBackground();
+    if (devRepoCache?.value) status.repo = devRepoCache.value;
   }
 
   return status;

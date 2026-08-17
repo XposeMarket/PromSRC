@@ -13,6 +13,14 @@ Render architecture diagrams, system maps, and technical illustrations as live S
 - **No declare_plan.** Read skill → output SVG. Done
 - The frontend renders it as a live scaled widget automatically
 
+## Prometheus theme contract
+
+The host keeps the SVG surface transparent and injects Prometheus design tokens.
+Use `currentColor` or `var(--prom-*)` for the root text, strokes, markers, and
+semantic fills. The color examples below are structural examples only; replace
+their fixed palette with host tokens in generated visuals. Do not add an outer
+background rectangle merely to make the iframe visible.
+
 ---
 
 ## When to Use SVG vs Other Formats
@@ -22,7 +30,7 @@ Render architecture diagrams, system maps, and technical illustrations as live S
 | Data chart (bar, line, pie) | `chart-visualizer` skill |
 | Text-defined flowchart or sequence diagram | `mermaid-diagrams` skill |
 | Architecture with custom layout/spatial positioning | **This skill (SVG)** |
-| Multi-panel interactive dashboard | `html-interactive` skill |
+| Multi-panel interactive dashboard | `interactive-artifacts` skill |
 | Icon or small illustration inline | **This skill (SVG)** |
 
 Use SVG when **you need precise control over position** — exact box placement, specific arrow routing, custom shapes, color-coded regions.
@@ -101,19 +109,19 @@ For colored arrows, define a separate marker per color — the marker stroke doe
 
 ## Color System
 
-Use these consistently. Dark backgrounds, colored borders and labels:
+Use semantic host tokens so the same diagram works in every Prometheus theme:
 
 | Component type | Fill | Border | Label |
 |---|---|---|---|
-| Service / app | `#1e1b4b` | `#6366f1` | `#a5b4fc` |
-| Database | `#0f172a` | `#22d3ee` | `#67e8f9` |
-| Queue / broker | `#1a0a2e` | `#8b5cf6` | `#c4b5fd` |
-| External / 3rd party | `#1c1917` | `#94a3b8` | `#cbd5e1` |
-| User / client | `#0c1a0c` | `#4ade80` | `#86efac` |
-| Warning / error state | `#1f0a0a` | `#f43f5e` | `#fca5a5` |
-| Container boundary | `none` | `#334155` (dashed) | `#64748b` |
+| Service / app | `var(--prom-surface)` | `var(--prom-accent)` | `var(--prom-text)` |
+| Database | `var(--prom-surface-secondary)` | `var(--prom-accent-strong)` | `var(--prom-text)` |
+| Queue / broker | `var(--prom-surface)` | `var(--prom-accent)` | `var(--prom-text)` |
+| External / 3rd party | `transparent` | `var(--prom-border-strong)` | `var(--prom-muted)` |
+| User / client | `var(--prom-surface)` | `var(--prom-success)` | `var(--prom-text)` |
+| Warning / error state | `var(--prom-surface)` | `var(--prom-danger)` | `var(--prom-text)` |
+| Container boundary | `none` | `var(--prom-border)` (dashed) | `var(--prom-muted)` |
 
-Arrow / connector color: `#94a3b8` (neutral gray) unless the connection type matters — use colored arrows sparingly.
+Arrow / connector color: `var(--prom-muted)` unless the connection type matters — use semantic colored arrows sparingly.
 
 ---
 

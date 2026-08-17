@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
-import { listTasks, loadTask } from '../tasks/task-store';
+import { listTaskSummaries, loadTask } from '../tasks/task-store';
 import {
   getActiveInternalWatches,
   updateInternalWatch,
@@ -99,9 +99,12 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
   if (watch.target.type === 'task') {
     const taskId = String(cfg.taskId || cfg.task_id || '').trim();
     if (!taskId) return { exists: false, error: 'task_id_required' };
-    const task = loadTask(taskId) || listTasks()
-      .filter((candidate) => candidate.scheduleId === taskId)
-      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+    const task = loadTask(taskId) || (() => {
+      const candidate = listTaskSummaries()
+        .filter((summary) => summary.scheduleId === taskId)
+        .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+      return candidate ? loadTask(candidate.id) : null;
+    })();
     if (!task) return { exists: false, taskId };
     const plan = Array.isArray(task.plan) ? task.plan : [];
     const currentStepIndex = Number.isFinite(Number(task.currentStepIndex)) ? Number(task.currentStepIndex) : 0;

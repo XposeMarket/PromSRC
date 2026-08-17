@@ -544,6 +544,16 @@ function ensureSessionDir(): void {
   }
 }
 
+/**
+ * Return the durable session directory without exposing the mutable session
+ * cache. Isolated read-only workers use this path to scan histories outside
+ * the gateway event loop.
+ */
+export function getSessionStorageDirectory(): string {
+  ensureSessionDir();
+  return SESSION_DIR;
+}
+
 function sessionIndexPath(): string {
   return resolveConfinedStoragePath(SESSION_DIR, '_index.json', { label: 'session index' });
 }
@@ -1596,7 +1606,18 @@ function readSessionFileForSearch(sessionId: string): Session | null {
 
 export function searchSessionSummaries(
   query: string,
-  options: { channel?: Session['channel']; scope?: SessionListOptions['scope']; state?: SessionListOptions['state']; includeAutomated?: boolean; limit?: number; includeContent?: boolean } = {},
+  options: {
+    channel?: Session['channel'];
+    scope?: SessionListOptions['scope'];
+    state?: SessionListOptions['state'];
+    includeAutomated?: boolean;
+    limit?: number;
+    includeContent?: boolean;
+    maxContentScanFiles?: number;
+    maxContentScanBytes?: number;
+    maxContentFileBytes?: number;
+    maxContentScanMs?: number;
+  } = {},
 ): SessionSearchResult[] {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
@@ -1627,9 +1648,48 @@ export function searchSessionSummaries(
   if (options.includeContent === false) return results;
 
   // Full-message matching is intentionally the second phase. It can involve
-  // large persisted histories, while title matches should remain instant.
-  for (const summary of summaries) {
+  // large persisted histories, while title matches should remain instant. This
+  // synchronous compatibility path is deliberately bounded; heavy callers
+  // such as prometheus_thread_ops use the isolated session-search worker.
+  const maxContentScanFiles = Number.isFinite(Number(options.maxContentScanFiles))
+    ? Math.max(1, Math.min(1000, Math.floor(Number(options.maxContentScanFiles))))
+    : 100;
+  const maxContentScanBytes = Number.isFinite(Number(options.maxContentScanBytes))
+    ? Math.max(1 * 1024 * 1024, Math.min(256 * 1024 * 1024, Math.floor(Number(options.maxContentScanBytes))))
+    : 32 * 1024 * 1024;
+  const maxContentFileBytes = Number.isFinite(Number(options.maxContentFileBytes))
+    ? Math.max(64 * 1024, Math.min(32 * 1024 * 1024, Math.floor(Number(options.maxContentFileBytes))))
+    : 8 * 1024 * 1024;
+  const maxContentScanMs = Number.isFinite(Number(options.maxContentScanMs))
+    ? Math.max(100, Math.min(5000, Math.floor(Number(options.maxContentScanMs))))
+    : 1500;
+  const contentScanStartedAt = Date.now();
+  let contentScanFiles = 0;
+  let contentScanBytes = 0;
+  const contentSearchSummaries = [...summaries].sort((a, b) => (
+    Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0)
+    - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0)
+  ));
+
+  for (const summary of contentSearchSummaries) {
     if (titleMatchedIds.has(summary.id)) continue;
+    if (contentScanFiles >= maxContentScanFiles || contentScanBytes >= maxContentScanBytes) break;
+    if (Date.now() - contentScanStartedAt >= maxContentScanMs) break;
+
+    let fileBytes = 0;
+    try {
+      const filePath = getSessionPath(summary.id);
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) continue;
+      fileBytes = stat.size;
+    } catch {
+      continue;
+    }
+    if (fileBytes > maxContentFileBytes) continue;
+    if (contentScanBytes + fileBytes > maxContentScanBytes) break;
+    contentScanFiles++;
+    contentScanBytes += fileBytes;
+
     const session = readSessionFileForSearch(summary.id);
     const history = Array.isArray(session?.history) ? session.history : [];
     const matchedMessage = history.find((msg) => {

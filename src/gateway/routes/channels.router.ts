@@ -9,7 +9,7 @@ import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../a
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
-import { getEvidenceBusSnapshot, listTasks, loadTask, type TaskRecord } from '../tasks/task-store';
+import { getEvidenceBusSnapshot, listTaskSummaries, loadTask, type TaskRecord, type TaskSummary } from '../tasks/task-store';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1207,11 +1207,15 @@ router.get('/api/agents/history', (req, res) => {
   res.json({ success: true, history: getAgentRunHistory(agentId, limit) });
 });
 
-function agentOwnsTask(agentId: string, task: TaskRecord | null | undefined): boolean {
+function agentOwnsTask(agentId: string, task: TaskRecord | TaskSummary | null | undefined): boolean {
   if (!agentId || !task) return false;
   const standalone = String(task.subagentProfile || '').trim();
   const teamMember = String(task.teamSubagent?.agentId || '').trim();
-  const proposalExecutor = String(task.proposalExecution?.teamExecution?.executorAgentId || '').trim();
+  const proposalExecutor = String(
+    (task as any).proposalExecutorAgentId
+      || (task as any).proposalExecution?.teamExecution?.executorAgentId
+      || '',
+  ).trim();
   return standalone === agentId || teamMember === agentId || proposalExecutor === agentId;
 }
 
@@ -1274,9 +1278,15 @@ router.get('/api/agents/:id/runs', (req, res) => {
     const agent = getAgentById(agentId);
     if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-    const runs = listTasks()
-      .filter((task) => agentOwnsTask(agentId, task))
+    const runs = listTaskSummaries()
+      // Older compact indexes may not yet contain the proposal executor field;
+      // keep those as bounded candidates and verify ownership after loading.
+      .filter((summary) => agentOwnsTask(agentId, summary) || !!summary.proposalTeamId)
       .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0))
+      .slice(0, Math.max(limit, 20))
+      .map((summary) => loadTask(summary.id))
+      .filter((task): task is TaskRecord => !!task)
+      .filter((task) => agentOwnsTask(agentId, task))
       .slice(0, limit)
       .map((task) => summarizeAgentRunTask(agentId, task));
     res.json({ success: true, agentId, runs });

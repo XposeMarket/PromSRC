@@ -16152,11 +16152,6 @@ let selectedComposerSkillIds = [];
 let selectedComposerSkillRefs = [];
 let skillComposerSelectionIndex = 0;
 
-const SKILL_TRIGGER_STOPWORDS = new Set([
-  'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
-  'me', 'my', 'our', 'this', 'that', 'please',
-]);
-
 function normalizeSkillMatchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -16164,66 +16159,6 @@ function normalizeSkillMatchText(value) {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function normalizeSkillMatchTextLoose(value) {
-  return normalizeSkillMatchText(value)
-    .split(' ')
-    .filter((word) => word && !SKILL_TRIGGER_STOPWORDS.has(word))
-    .join(' ');
-}
-
-function skillTriggerMatchesText(trigger, rawText, words) {
-  const normalizedTrigger = normalizeSkillMatchText(trigger);
-  if (!normalizedTrigger) return false;
-  const normalizedText = normalizeSkillMatchText(rawText);
-  if (normalizedTrigger.includes(' ')) {
-    if (normalizedText.includes(normalizedTrigger)) return true;
-    const looseTrigger = normalizeSkillMatchTextLoose(trigger);
-    const looseText = normalizeSkillMatchTextLoose(rawText);
-    return looseTrigger.length >= 4 && looseText.includes(looseTrigger);
-  }
-  return words.some((word) => {
-    const normalizedWord = normalizeSkillMatchText(word);
-    if (normalizedWord === normalizedTrigger) return true;
-    if (normalizedTrigger.length < 5 || normalizedWord.length < 5) return false;
-    return normalizedWord.startsWith(normalizedTrigger) || normalizedTrigger.startsWith(normalizedWord);
-  });
-}
-
-function getSkillTriggerCandidates(skill) {
-  const candidates = [];
-  const addValue = (value) => {
-    if (Array.isArray(value)) {
-      value.forEach(addValue);
-      return;
-    }
-    const text = String(value || '').trim();
-    if (text) candidates.push(text);
-  };
-  addValue(skill?.triggers);
-  addValue(skill?.trigger);
-  addValue(skill?.keywords);
-  addValue(skill?.aliases);
-  addValue(skill?.manifest?.triggers);
-  addValue(skill?.manifest?.trigger);
-  addValue(skill?.manifest?.keywords);
-  addValue(skill?.manifest?.aliases);
-  addValue(skill?.metadata?.triggers);
-  addValue(skill?.metadata?.trigger);
-  addValue(skill?.metadata?.keywords);
-  addValue(skill?.metadata?.aliases);
-  if (!candidates.length) {
-    addValue(skill?.name);
-    addValue(skill?.id);
-  }
-  const seen = new Set();
-  return candidates.filter((candidate) => {
-    const key = normalizeSkillMatchText(candidate);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function getInstalledSkillCache() {
@@ -16358,16 +16293,20 @@ function fetchSkillTriggerMatches(value) {
 }
 
 function getComposerSkillMatches(value) {
-  const text = String(value || '').toLowerCase();
-  const words = text.split(/\W+/).filter((word) => word.length > 2);
+  const text = String(value || '').toLowerCase().trim();
   if (!text.trim()) return [];
-  const cachedMatches = text.trim() === skillMatchCacheQuery ? skillMatchCacheResult : [];
-  const localMatches = getInstalledSkillCache()
-    .filter((skill) => !isSkillTriggerExcluded(skill))
-    .filter((skill) => getSkillTriggerCandidates(skill).some((trigger) => skillTriggerMatchesText(trigger, text, words)))
-    .slice(0, 8);
-  const matches = cachedMatches.length ? cachedMatches : localMatches;
-  return matches.filter((skill) => !isSkillTriggerExcluded(skill)).slice(0, 8);
+  if (text !== skillMatchCacheQuery) return [];
+  return skillMatchCacheResult.filter((skill) => !isSkillTriggerExcluded(skill)).slice(0, 8);
+}
+
+function getSkillMatchEvidence(skill) {
+  const evidence = [
+    ...(Array.isArray(skill?.promptSignalEvidence) ? skill.promptSignalEvidence : []),
+    ...(Array.isArray(skill?.matchedPromptSignals) ? skill.matchedPromptSignals : []),
+    ...(Array.isArray(skill?.matchedTriggers) ? skill.matchedTriggers : []),
+    ...(Array.isArray(skill?.matchedDomains) ? skill.matchedDomains.map((value) => `domain: ${value}`) : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return [...new Set(evidence)].slice(0, 3);
 }
 
 function renderSkillTriggerIcon() {
@@ -16449,6 +16388,7 @@ function renderSkillTriggerPill(value = '') {
         ${matches.map((skill) => `
           <button type="button" class="skill-trigger-item${String(skill.id || '') === skillTriggerSelectedId ? ' active' : ''}" data-skill-id="${escHtml(skill.id || '')}" role="listitem">
             <span class="skill-trigger-item-title">${escHtml(skill.name || skill.id || 'Skill')}</span>
+            <span class="skill-trigger-item-meta">${escHtml(`${skill.confidence || 'match'}${Number.isFinite(Number(skill.score)) ? ` · ${Math.round(Number(skill.score))}` : ''}`)}</span>
           </button>
         `).join('')}
       </div>
@@ -16457,6 +16397,7 @@ function renderSkillTriggerPill(value = '') {
           <div class="skill-trigger-description-copy">
             <strong>${escHtml(selectedSkill.name || selectedSkill.id || 'Skill')}</strong>
             <span>${escHtml(selectedSkill.description || 'No description available.')}</span>
+            <small>${escHtml(getSkillMatchEvidence(selectedSkill).length ? `Matched: ${getSkillMatchEvidence(selectedSkill).join(' · ')}` : 'Matched by the canonical skill router.')}</small>
           </div>
           <button type="button" class="skill-trigger-remove" data-skill-id="${escHtml(getSkillTriggerIdentity(selectedSkill))}">Remove</button>
         ` : '<span>Select a skill to preview its description.</span>'}

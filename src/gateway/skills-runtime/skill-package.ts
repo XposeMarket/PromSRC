@@ -23,6 +23,43 @@ export interface SkillHealth {
 }
 export const MAX_SKILL_TRIGGERS = 12;
 
+/**
+ * Structured prompt routing signals. These deliberately live beside the
+ * legacy `triggers` list: the latter remains a compact discovery index while
+ * prompt signals provide a precise, auditable phrase/term matcher.
+ */
+export interface SkillPromptSignals {
+  phrases: string[];
+  allOf: string[][];
+  anyOf: string[];
+  noneOf: string[];
+  minScore: number;
+}
+
+export interface SkillPromptSignalValidation {
+  signals?: SkillPromptSignals;
+  rejected: Array<{ signal: string; reason: string }>;
+}
+
+export interface SkillPromptSignalMatch {
+  configured: boolean;
+  matched: boolean;
+  excluded: boolean;
+  score: number;
+  minScore: number;
+  matchedPhrases: string[];
+  matchedAllOf: string[][];
+  matchedAnyOf: string[];
+  matchedNoneOf: string[];
+}
+
+const MAX_PROMPT_SIGNAL_PHRASES = 256;
+const MAX_PROMPT_SIGNAL_ALLOF_GROUPS = 128;
+const MAX_PROMPT_SIGNAL_ALLOF_TERMS = 12;
+const MAX_PROMPT_SIGNAL_ANYOF = 256;
+const MAX_PROMPT_SIGNAL_NONEOF = 256;
+const MAX_PROMPT_SIGNAL_LENGTH = 180;
+
 const GENERIC_SINGLE_WORD_TRIGGERS = new Set([
   'agent', 'automation', 'browser', 'code', 'coding', 'creative', 'data', 'desktop', 'document', 'edit',
   'email', 'file', 'help', 'image', 'marketing', 'post', 'project', 'research', 'skill', 'social',
@@ -33,6 +70,185 @@ export interface SkillTriggerValidation {
   triggers: string[];
   rejected: Array<{ trigger: string; reason: string }>;
   capped: string[];
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizePromptSignalText(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function promptSignalArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') return value.split(',');
+  return [];
+}
+
+function normalizePromptSignalList(
+  value: unknown,
+  limit: number,
+  field: string,
+  rejected: SkillPromptSignalValidation['rejected'],
+): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const raw of promptSignalArray(value).slice(0, limit * 2)) {
+    const signal = normalizePromptSignalText(raw);
+    if (!signal) continue;
+    if (signal.length > MAX_PROMPT_SIGNAL_LENGTH) {
+      rejected.push({ signal: String(raw), reason: `${field}_too_long` });
+      continue;
+    }
+    if (seen.has(signal)) continue;
+    seen.add(signal);
+    if (normalized.length >= limit) {
+      rejected.push({ signal: String(raw), reason: `${field}_limit_${limit}` });
+      continue;
+    }
+    normalized.push(signal);
+  }
+  return normalized;
+}
+
+function normalizePromptSignalGroups(
+  value: unknown,
+  rejected: SkillPromptSignalValidation['rejected'],
+): string[][] {
+  const groups: string[][] = [];
+  for (const rawGroup of promptSignalArray(value).slice(0, MAX_PROMPT_SIGNAL_ALLOF_GROUPS * 2)) {
+    const groupValues = Array.isArray(rawGroup) ? rawGroup : [rawGroup];
+    const terms = normalizePromptSignalList(
+      groupValues,
+      MAX_PROMPT_SIGNAL_ALLOF_TERMS,
+      'allOf_term',
+      rejected,
+    );
+    if (!terms.length) continue;
+    if (groups.length >= MAX_PROMPT_SIGNAL_ALLOF_GROUPS) {
+      rejected.push({ signal: JSON.stringify(rawGroup), reason: `allOf_group_limit_${MAX_PROMPT_SIGNAL_ALLOF_GROUPS}` });
+      continue;
+    }
+    groups.push(terms);
+  }
+  return groups;
+}
+
+function promptSignalSource(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) return {};
+  const nested = value.promptSignals || value.prompt_signals;
+  if (isPlainObject(nested)) return nested;
+  const metadata = value.metadata;
+  if (isPlainObject(metadata)) {
+    const metadataSignals = metadata.promptSignals || metadata.prompt_signals;
+    if (isPlainObject(metadataSignals)) return metadataSignals;
+  }
+  const directKeys = ['phrases', 'allOf', 'all_of', 'anyOf', 'any_of', 'noneOf', 'none_of', 'minScore', 'min_score'];
+  return directKeys.some((key) => Object.prototype.hasOwnProperty.call(value, key)) ? value : {};
+}
+
+export function validateSkillPromptSignals(value: unknown): SkillPromptSignalValidation {
+  if (isPlainObject(value)) {
+    const nestedKey = Object.prototype.hasOwnProperty.call(value, 'promptSignals')
+      ? 'promptSignals'
+      : Object.prototype.hasOwnProperty.call(value, 'prompt_signals')
+        ? 'prompt_signals'
+        : '';
+    if (nestedKey && !isPlainObject(value[nestedKey])) {
+      return { signals: undefined, rejected: [{ signal: String(value[nestedKey]), reason: 'promptSignals_must_be_object' }] };
+    }
+    const metadata = value.metadata;
+    if (isPlainObject(metadata)) {
+      const metadataKey = Object.prototype.hasOwnProperty.call(metadata, 'promptSignals')
+        ? 'promptSignals'
+        : Object.prototype.hasOwnProperty.call(metadata, 'prompt_signals')
+          ? 'prompt_signals'
+          : '';
+      if (metadataKey && !isPlainObject(metadata[metadataKey])) {
+        return { signals: undefined, rejected: [{ signal: String(metadata[metadataKey]), reason: 'promptSignals_must_be_object' }] };
+      }
+    }
+  }
+  const source = promptSignalSource(value);
+  if (!Object.keys(source).length) return { signals: undefined, rejected: [] };
+  const rejected: SkillPromptSignalValidation['rejected'] = [];
+  const phrases = normalizePromptSignalList(source.phrases, MAX_PROMPT_SIGNAL_PHRASES, 'phrases', rejected);
+  const allOf = normalizePromptSignalGroups(source.allOf || source.all_of, rejected);
+  const anyOf = normalizePromptSignalList(source.anyOf || source.any_of, MAX_PROMPT_SIGNAL_ANYOF, 'anyOf', rejected);
+  const noneOf = normalizePromptSignalList(source.noneOf || source.none_of, MAX_PROMPT_SIGNAL_NONEOF, 'noneOf', rejected);
+  const rawMinScore = Number(source.minScore ?? source.min_score ?? 4);
+  const minScore = Number.isFinite(rawMinScore)
+    ? Math.max(1, Math.min(100, Math.round(rawMinScore)))
+    : 4;
+  if (source.minScore !== undefined || source.min_score !== undefined) {
+    if (!Number.isFinite(rawMinScore) || rawMinScore < 1 || rawMinScore > 100) {
+      rejected.push({ signal: String(source.minScore ?? source.min_score), reason: 'minScore_clamped_to_1_100' });
+    }
+  }
+  if (!phrases.length && !allOf.length && !anyOf.length && !noneOf.length) {
+    return { signals: undefined, rejected };
+  }
+  return {
+    signals: { phrases, allOf, anyOf, noneOf, minScore },
+    rejected,
+  };
+}
+
+function exactPromptSignalMatch(term: string, normalizedText: string): boolean {
+  const normalizedTerm = normalizePromptSignalText(term);
+  if (!normalizedTerm || !normalizedText) return false;
+  const escaped = normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(normalizedText);
+}
+
+export function evaluateSkillPromptSignals(
+  signals: SkillPromptSignals | undefined,
+  rawText: string,
+): SkillPromptSignalMatch {
+  const normalizedText = normalizePromptSignalText(rawText);
+  const empty: SkillPromptSignalMatch = {
+    configured: false,
+    matched: false,
+    excluded: false,
+    score: 0,
+    minScore: 4,
+    matchedPhrases: [],
+    matchedAllOf: [],
+    matchedAnyOf: [],
+    matchedNoneOf: [],
+  };
+  if (!signals) return empty;
+
+  const matchedPhrases = signals.phrases.filter((phrase) => exactPromptSignalMatch(phrase, normalizedText));
+  const matchedAllOf = signals.allOf.filter((group) =>
+    group.length > 0 && group.every((term) => exactPromptSignalMatch(term, normalizedText))
+  );
+  const matchedAnyOf = signals.anyOf.filter((term) => exactPromptSignalMatch(term, normalizedText));
+  const matchedNoneOf = signals.noneOf.filter((term) => exactPromptSignalMatch(term, normalizedText));
+  // A direct phrase is a strong signal, a conjunction is two points per term,
+  // and anyOf terms are deliberately cheap so minScore can suppress generic
+  // one-word noise. Each allOf group is an alternative conjunction.
+  const score = matchedPhrases.length * 4
+    + matchedAllOf.reduce((sum, group) => sum + group.length * 2, 0)
+    + matchedAnyOf.length;
+  const excluded = matchedNoneOf.length > 0;
+  return {
+    configured: true,
+    matched: !excluded && score >= signals.minScore,
+    excluded,
+    score,
+    minScore: signals.minScore,
+    matchedPhrases,
+    matchedAllOf,
+    matchedAnyOf,
+    matchedNoneOf,
+  };
 }
 
 function triggerQuality(trigger: string): number {
@@ -94,6 +310,7 @@ export interface SkillManifest {
   entrypoint: string;
   prompt?: string;
   triggers: string[];
+  promptSignals?: SkillPromptSignals;
   categories: string[];
   requiredTools: string[];
   requires?: SkillRequires;
@@ -119,6 +336,7 @@ export interface LoadedSkillPackage {
   emoji: string;
   version: string;
   triggers: string[];
+  promptSignals?: SkillPromptSignals;
   categories: string[];
   requiredTools: string[];
   requires?: SkillRequires;
@@ -153,6 +371,7 @@ export interface LoadedSkillPackage {
 
 export interface SkillFrontmatterParse {
   fm: Record<string, string>;
+  data: Record<string, unknown>;
   body: string;
 }
 
@@ -192,12 +411,21 @@ export function sanitizeSkillId(raw: string): string {
 
 export function parseSkillFrontmatter(content: string): SkillFrontmatterParse {
   const raw = content.trim();
-  if (!raw.startsWith('---')) return { fm: {}, body: raw };
+  if (!raw.startsWith('---')) return { fm: {}, data: {}, body: raw };
   const end = raw.indexOf('---', 3);
-  if (end === -1) return { fm: {}, body: raw };
+  if (end === -1) return { fm: {}, data: {}, body: raw };
 
   const fm: Record<string, string> = {};
-  for (const line of raw.slice(3, end).split('\n')) {
+  const source = raw.slice(3, end);
+  let data: Record<string, unknown> = {};
+  try {
+    // js-yaml is already part of the Prometheus toolchain. Keep this loaded
+    // defensively so a minimal runtime can still use scalar frontmatter.
+    const yaml = require('js-yaml') as { load?: (value: string) => unknown };
+    const parsed = yaml.load?.(source);
+    if (isPlainObject(parsed)) data = parsed;
+  } catch {}
+  for (const line of source.split('\n')) {
     const m = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
     if (!m) continue;
     let val = m[2].trim();
@@ -206,7 +434,12 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatterParse {
     }
     fm[m[1].trim()] = val;
   }
-  return { fm, body: raw.slice(end + 3).trim() };
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      fm[key] = String(value);
+    }
+  }
+  return { fm, data, body: raw.slice(end + 3).trim() };
 }
 
 function asStringArray(value: unknown): string[] {
@@ -217,10 +450,6 @@ function asStringArray(value: unknown): string[] {
     return value.split(',').map((v) => v.trim()).filter(Boolean);
   }
   return [];
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function normalizeStatus(value: unknown): 'ready' | 'needs_setup' | 'blocked' {
@@ -441,14 +670,14 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const entryContent = entrypointPath && fs.existsSync(entrypointPath)
     ? fs.readFileSync(entrypointPath, 'utf-8')
     : '';
-  const { fm, body } = parseSkillFrontmatter(entryContent);
+  const { fm, data: frontmatterData, body } = parseSkillFrontmatter(entryContent);
 
   const id = sanitizeSkillId(String(manifestRaw?.id || fm.id || fallbackId || path.basename(rootDir)));
   const name = String(manifestRaw?.name || fm.name || id).trim();
   const description = String(manifestRaw?.description || fm.description || '').trim();
   const emoji = '';
   const version = String(manifestRaw?.version || fm.version || (kind === 'bundle' ? '1.0.0' : '0.0.0')).trim();
-  const triggerValidation = validateSkillTriggers(manifestRaw?.triggers || fm.triggers);
+  const triggerValidation = validateSkillTriggers(manifestRaw?.triggers ?? frontmatterData.triggers ?? fm.triggers);
   const triggers = triggerValidation.triggers;
   if (triggerValidation.rejected.length) {
     warnings.push(`Ignored invalid triggers: ${triggerValidation.rejected.map((item) => `${item.trigger} (${item.reason})`).join(', ')}`);
@@ -456,8 +685,26 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   if (triggerValidation.capped.length) {
     warnings.push(`Trigger cap ${MAX_SKILL_TRIGGERS}: ignored ${triggerValidation.capped.length} lower-specificity trigger(s).`);
   }
-  const categories = asStringArray(manifestRaw?.categories).map((t) => t.toLowerCase());
-  const requiredTools = asStringArray(manifestRaw?.requiredTools || manifestRaw?.required_tools || manifestRaw?.required_tool_categories);
+  const manifestPromptSignalSource = promptSignalSource(manifestRaw);
+  const frontmatterPromptSignalSource = promptSignalSource(frontmatterData);
+  const promptSignalValidation = validateSkillPromptSignals(
+    Object.keys(manifestPromptSignalSource).length ? manifestRaw : frontmatterData,
+  );
+  const promptSignals = promptSignalValidation.signals;
+  if (promptSignalValidation.rejected.length) {
+    warnings.push(`Ignored invalid prompt signals: ${promptSignalValidation.rejected.map((item) => `${item.signal} (${item.reason})`).join(', ')}`);
+  }
+  if (!Object.keys(manifestPromptSignalSource).length && Object.keys(frontmatterPromptSignalSource).length && !promptSignals) {
+    warnings.push('Prompt signals were present in frontmatter but could not be normalized.');
+  }
+  const categories = asStringArray(manifestRaw?.categories ?? frontmatterData.categories).map((t) => t.toLowerCase());
+  const requiredTools = asStringArray(
+    manifestRaw?.requiredTools
+      ?? manifestRaw?.required_tools
+      ?? manifestRaw?.required_tool_categories
+      ?? frontmatterData.requiredTools
+      ?? frontmatterData.required_tools,
+  );
   const requires = normalizeRequires(manifestRaw?.requires || manifestRaw?.requirements);
   const assignment = normalizeAssignment(manifestRaw?.assignment || manifestRaw?.assignments);
   const toolBinding = normalizeToolBinding(manifestRaw?.toolBinding || manifestRaw?.tool_binding, requiredTools);
@@ -522,6 +769,7 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     entrypoint,
     prompt: prompt || undefined,
     triggers,
+    promptSignals,
     categories,
     requiredTools,
     requires,
@@ -547,6 +795,7 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     emoji,
     version,
     triggers,
+    promptSignals,
     categories,
     requiredTools,
     requires,

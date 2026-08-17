@@ -77,7 +77,7 @@ Use write_note as your between-session scratchpad and intraday recovery surface:
 
 ## Skills
 
-Matching skills are candidates, not automatic instructions. Compare each candidate’s description and triggers with the user’s full request, then read only the clearly relevant skill—normally one. If no surfaced candidate truly fits and specialized guidance would help, search the skill catalog. A bundled skill read must load its complete primary instructions; load additional resources only when the skill directs you to them. Skip skill work for greetings, small talk, and quick questions.
+Matching skills are candidates, not automatic instructions. Compare each candidate’s description and matched evidence with the user’s full request, then read only the clearly relevant skill—normally one. A skill with structured `promptSignals` is governed by its phrases, `allOf`, `anyOf`, `noneOf`, and `minScore`; weak description or legacy-trigger overlap cannot bypass that policy. If no surfaced candidate truly fits and specialized guidance would help, search the skill catalog. A bundled skill read must load its complete primary instructions; load additional resources only when the skill directs you to them. Skip skill work for greetings, small talk, and quick questions.
 
 ## The User & Boundaries
 

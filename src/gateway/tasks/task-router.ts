@@ -9,7 +9,7 @@
 import path from 'path';
 import {
   loadTask, saveTask, updateTaskStatus, setTaskStepRunning, appendJournal,
-  updateResumeContext, listTasks, deleteTask, mutatePlan, getEvidenceBusSnapshot,
+  updateResumeContext, listTasks, listTaskSummaries, deleteTask, mutatePlan, getEvidenceBusSnapshot,
   findTaskCandidatesForOwnerSession, findTaskCandidatesForReplySession,
   createTask, type TaskRecord, type TaskStatus,
 } from './task-store';
@@ -128,26 +128,26 @@ function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatu
 export function findBlockedRecoveryTaskForSubagentChat(agentId: string): TaskRecord | null {
   const cleanAgentId = String(agentId || '').trim();
   if (!cleanAgentId) return null;
-  return listTasks({ status: SUBAGENT_CHAT_RECOVERY_STATUSES })
-    .filter((task) => isRecoveryBlockedTask(task))
-    .filter((task) =>
-      !task.teamSubagent
-      && String(task.subagentProfile || '').trim() === cleanAgentId
-    )
-    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+  const candidates = listTaskSummaries({ status: SUBAGENT_CHAT_RECOVERY_STATUSES })
+    .filter((task) => !task.teamSubagent && String(task.subagentProfile || '').trim() === cleanAgentId)
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task)
+    .filter((task) => isRecoveryBlockedTask(task));
+  return candidates[0] || null;
 }
 
 export function findRecoveryTaskForSubagentChat(agentId: string, statuses?: TaskStatus[]): TaskRecord | null {
   if (!statuses) return findBlockedRecoveryTaskForSubagentChat(agentId);
   const cleanAgentId = String(agentId || '').trim();
   if (!cleanAgentId) return null;
-  return listTasks({ status: statuses })
-    .filter((task) => isRecoveryBlockedTask(task))
-    .filter((task) =>
-      !task.teamSubagent
-      && String(task.subagentProfile || '').trim() === cleanAgentId
-    )
-    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+  const candidates = listTaskSummaries({ status: statuses })
+    .filter((task) => !task.teamSubagent && String(task.subagentProfile || '').trim() === cleanAgentId)
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task)
+    .filter((task) => isRecoveryBlockedTask(task));
+  return candidates[0] || null;
 }
 
 export function findRecoveryTaskForTeamChatTarget(
@@ -159,7 +159,11 @@ export function findRecoveryTaskForTeamChatTarget(
   const cleanTeamId = String(teamId || '').trim();
   const cleanTargetId = String(targetId || '').trim();
   if (!cleanTeamId) return null;
-  return listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+  const candidates = listTaskSummaries({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+    .filter((summary) => String(summary.teamSubagent?.teamId || summary.proposalTeamId || '').trim() === cleanTeamId)
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task)
     .filter((task) => isRecoveryBlockedTask(task))
     .filter((task) => {
       const taskTeamId = String(task.teamSubagent?.teamId || task.proposalExecution?.teamExecution?.teamId || '').trim();
@@ -169,8 +173,8 @@ export function findRecoveryTaskForTeamChatTarget(
       }
       if (targetType === 'manager') return !!task.proposalExecution?.teamExecution || !!task.teamSubagent;
       return true;
-    })
-    .sort((a, b) => b.lastProgressAt - a.lastProgressAt)[0] || null;
+    });
+  return candidates[0] || null;
 }
 
 function buildTaskRecoveryCallerContext(task: TaskRecord, objective: 'conversation' | 'resume_brief'): string {
@@ -565,6 +569,19 @@ export function getTaskScopeBuckets(sessionId: string, statuses?: TaskStatus[]) 
   return { all, sessionTasks, channelTasks, channel };
 }
 
+/**
+ * Read-only task scope lookup. Keep list/latest and candidate discovery on the
+ * compact index; mutation paths load only the selected full task record.
+ */
+export function getTaskScopeSummaryBuckets(sessionId: string, statuses?: TaskStatus[]) {
+  const all = listTaskSummaries(statuses ? { status: statuses } : undefined)
+    .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
+  const sessionTasks = all.filter((task) => task.sessionId === sessionId);
+  const channel = inferTaskChannelFromSession(sessionId);
+  const channelTasks = all.filter((task) => task.channel === channel && task.sessionId !== sessionId);
+  return { all, sessionTasks, channelTasks, channel };
+}
+
 export function parseTaskIdFromText(text: string): string | null {
   const m = String(text || '').match(/\b([a-f0-9]{8}-[a-f0-9-]{27,})\b/i);
   return m ? m[1] : null;
@@ -762,7 +779,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
 
   if (action === 'list' || action === 'latest') {
     const statuses = statusFilter || (action === 'list' ? ACTIVE_TASK_STATUSES : undefined);
-    const scope = getTaskScopeBuckets(sessionId, statuses);
+    const scope = getTaskScopeSummaryBuckets(sessionId, statuses);
     const tasks = includeAllSessions
       ? scope.all
       : [...scope.sessionTasks, ...scope.channelTasks];
@@ -772,11 +789,11 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
         success: true,
         action,
         scope: includeAllSessions ? 'all_sessions' : `session+${scope.channel}`,
-        task: latest ? summarizeTaskRecord(latest) : null,
+        task: latest ? summarizeTaskRecord(latest as unknown as TaskRecord) : null,
         message: latest ? `Latest task is "${latest.title}" (${latest.status}).` : 'No tasks found.',
       };
     }
-    const summarized = tasks.slice(0, limit).map(summarizeTaskRecord);
+    const summarized = tasks.slice(0, limit).map((task) => summarizeTaskRecord(task as unknown as TaskRecord));
 
     // Also include scheduled (cron) jobs so the agent can answer questions like
     // "what scheduled tasks do we have" without needing a separate schedule_job(list) call
@@ -908,7 +925,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
           ? ['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed', 'queued', 'complete', 'waiting_subagent']
           // 'running' included so tasks stuck in running state (dead runner) can be resumed
           : ['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed', 'queued', 'running'];
-    const scope = getTaskScopeBuckets(sessionId, preferredStatuses);
+    const scope = getTaskScopeSummaryBuckets(sessionId, preferredStatuses);
     let preferred = [...scope.sessionTasks, ...scope.channelTasks];
     if (preferred.length === 0) {
       preferred = scope.all;
@@ -917,9 +934,16 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       return { task: null as TaskRecord | null, err: 'No matching task found in current scope.' };
     }
     if (preferred.length === 1) {
-      return { task: preferred[0], err: '' };
+      const task = loadTask(preferred[0].id);
+      return task ? { task, err: '' } : { task: null as TaskRecord | null, err: 'Task could not be loaded.' };
     }
-    return { task: null as TaskRecord | null, err: 'AMBIGUOUS', candidates: preferred.slice(0, 3) };
+    return {
+      task: null as TaskRecord | null,
+      err: 'AMBIGUOUS',
+      candidates: preferred.slice(0, 3)
+        .map((summary) => loadTask(summary.id))
+        .filter((task): task is TaskRecord => !!task),
+    };
   };
 
   if (action === 'steer' || action === 'message') {
@@ -1285,9 +1309,12 @@ export async function mirrorTeamManagerProposalResponse(teamId: string, managerM
   const cleanTeamId = String(teamId || '').trim();
   const message = String(managerMessage || '').trim();
   if (!cleanTeamId || !message) return { handled: false };
-  const candidates = listTasks({ status: ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'] })
-    .filter((task) => String(task.proposalExecution?.teamExecution?.teamId || '') === cleanTeamId)
-    .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0));
+  const candidates = listTaskSummaries({ status: ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'] })
+    .filter((summary) => String(summary.proposalTeamId || '') === cleanTeamId)
+    .sort((a, b) => Number(b.lastProgressAt || b.startedAt || 0) - Number(a.lastProgressAt || a.startedAt || 0))
+    .map((summary) => loadTask(summary.id))
+    .filter((task): task is TaskRecord => !!task)
+    .filter((task) => String(task.proposalExecution?.teamExecution?.teamId || '') === cleanTeamId);
   const task = candidates[0];
   if (!task) return { handled: false };
   const proposalId = String(task.proposalExecution?.proposalId || '').trim();

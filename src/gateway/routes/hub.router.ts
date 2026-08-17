@@ -479,6 +479,8 @@ router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
         eligibility: s.eligibility,
         assignment: s.assignment,
         toolBinding: s.toolBinding,
+        triggers: s.triggers,
+        promptSignals: s.promptSignals,
         recentChanges: recentChangesBySkill.get(s.id) || [],
         count: counts.get(s.id) || 0,
         lastUsed: lastMs ? new Date(lastMs).toISOString() : null,

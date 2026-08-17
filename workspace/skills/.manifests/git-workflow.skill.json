@@ -10,12 +10,19 @@
     "push to github",
     "sync the repo",
     "make a commit",
-    "push the site",
-    "tag a release",
-    "resolve conflicts",
-    "compare branches",
-    "merge conflict"
+    "prepare a commit",
+    "commit and push",
+    "open a pull request",
+    "clean gone branches",
+    "resolve conflicts"
   ],
+  "promptSignals": {
+    "phrases": ["preserve dirty work", "revert my change", "create a branch", "check the diff", "push to github", "sync the repo", "make a commit", "prepare a commit", "commit and push", "open a pull request", "clean gone branches", "resolve conflicts", "compare branches", "preserve my dirty work"],
+    "allOf": [["git", "diff"], ["git", "commit"], ["commit", "push"], ["pull", "request"], ["merge", "conflict"], ["gone", "branch"], ["dirty", "work"]],
+    "anyOf": ["git", "commit", "branch", "diff", "remote", "push", "pull request", "worktree", "conflict"],
+    "noneOf": ["write a git tutorial", "explain what git is", "generate a changelog"],
+    "minScore": 4
+  },
   "categories": [
     "git",
     "repo",

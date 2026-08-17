@@ -91,6 +91,10 @@
       "path": "references/no-em-dash-x-copy.md",
       "type": "doc",
       "description": "X content style rule for posts and replies"
+    },
+    {
+      "path": "references/workflows/x-bookmarks-corpus-audit.md",
+      "type": "doc"
     }
   ],
   "implicitInvocation": true,

@@ -3094,6 +3094,15 @@ body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-pop
   font-size: 12px;
   font-weight: 850;
 }
+.skill-trigger-item-meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  text-transform: capitalize;
+}
 .skill-trigger-description {
   width: 100%;
   display: grid;
@@ -3114,6 +3123,10 @@ body.background-agent-detail-active:not(.pm-mobile-active) .chat-new-context-pop
 .skill-trigger-description strong {
   color: var(--text);
   font-size: 12px;
+}
+.skill-trigger-description-copy small {
+  color: var(--muted);
+  font-size: 10px;
 }
 .skill-trigger-remove {
   border: 1px solid color-mix(in srgb, var(--danger, #ef4444) 42%, var(--line));

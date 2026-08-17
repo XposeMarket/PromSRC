@@ -1,7 +1,7 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Full playbook for running social analysis and delivering actionable growth coaching.",
+  "description": "Use only when the user explicitly requests social-profile, competitor-account, engagement-pattern, content-opportunity, or cross-platform growth analysis and actionable coaching.",
   "triggers": [
     "what should i post",
     "analyze this profile",

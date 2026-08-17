@@ -411,6 +411,13 @@ function handleExit(slot: WorkerSlot, child: ChildProcess, code: number | null, 
 function spawnSlot(slot: WorkerSlot): void {
   if (shuttingDown || slot.child || slot.state === 'starting') return;
   slot.state = 'starting';
+  // Recycling replaces the child process, so the per-child job and RSS
+  // counters must start fresh. If completedJobs is carried across a recycle,
+  // the slot remains permanently over the recycle threshold and churns a new
+  // process after every subsequent model call.
+  slot.completedJobs = 0;
+  slot.rssBytes = 0;
+  slot.lastHeartbeatAt = 0;
   let entry: string;
   try {
     entry = resolveWorkerEntry();

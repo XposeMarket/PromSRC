@@ -2,7 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveSkillsRoot } from '../skills/store.js';
-import { loadSkillPackage } from '../gateway/skills-runtime/skill-package.js';
+import {
+  evaluateSkillPromptSignals,
+  loadSkillPackage,
+  type SkillPromptSignals,
+} from '../gateway/skills-runtime/skill-package.js';
 import { readPromptProfileText } from '../gateway/prompt-profile-snapshot.js';
 
 // Prefer config next to the project, fall back to home.
@@ -116,6 +120,7 @@ export interface SkillInfo {
   name?: string;
   description?: string;
   triggers?: string[];
+  promptSignals?: SkillPromptSignals;
   templates?: Array<{ action?: string; label?: string; command?: string }>;
 }
 
@@ -142,6 +147,7 @@ export function loadSkills(): SkillInfo[] {
         name: pkg.name,
         description: pkg.description,
         triggers: Array.isArray(pkg.triggers) ? pkg.triggers : [],
+        promptSignals: pkg.promptSignals,
         templates: Array.isArray((pkg.manifest as any)?.templates) ? (pkg.manifest as any).templates : [],
       });
     }
@@ -218,8 +224,17 @@ export function selectSkillSlugsForMessage(message: string, max = 2): string[] {
     const desc = String(s.description || '').toLowerCase();
     const content = String(s.content || '').toLowerCase();
     const triggers = Array.isArray(s.triggers) ? s.triggers : [];
+    const promptSignalMatch = evaluateSkillPromptSignals(s.promptSignals, query);
+    const explicitSkillMention = [slug, name]
+      .filter(Boolean)
+      .some((value) => normalizeSkillTriggerText(query).includes(normalizeSkillTriggerText(value)));
+    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitSkillMention) continue;
     const templates = Array.isArray(s.templates) ? s.templates : [];
     let score = 0;
+
+    if (promptSignalMatch.matched) {
+      score += 100 + Math.min(40, promptSignalMatch.score * 4);
+    }
 
     if (slug && query.includes(slug)) score += 8;
     if (name && query.includes(name)) score += 6;

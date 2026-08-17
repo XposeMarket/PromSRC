@@ -121,6 +121,25 @@ function getGatewayWorkingDirectory() {
     : APP_ROOT;
 }
 
+function resolveSourceGatewayNode() {
+  const configured = String(process.env.PROMETHEUS_NODE_EXECUTABLE || '').trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  if (process.platform === 'win32') {
+    try {
+      const located = String(execFileSync('where.exe', ['node'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 2_000,
+      }) || '')
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .find((value) => value && fs.existsSync(value));
+      if (located) return located;
+    } catch {}
+  }
+  return 'node';
+}
+
 // ─── User Data Dir ─────────────────────────────────────────────────────────
 const defaultUserDataDir = path.join(app.getPath('appData'), 'Prometheus');
 const configuredUserDataDir = String(
@@ -1719,15 +1738,20 @@ async function startGateway() {
   } else {
     // Do not spawn the Windows .cmd shim with shell:true. Electron would then
     // track only cmd.exe while the real tsx/node gateway became a detached
-    // descendant, which is exactly how ports survived an app close. Run tsx's
-    // JS entrypoint directly under Electron's Node runtime instead.
+    // descendant, which is exactly how ports survived an app close. In source
+    // development, use the normal Node runtime for the gateway child so native
+    // addons (notably better-sqlite3) match the ABI installed by npm. The
+    // gateway remains a separate Electron-owned process and still receives the
+    // sealed vault key over stdin.
     const tsxCli = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
     if (!fs.existsSync(tsxCli)) {
       throw new Error(`The local tsx runtime is missing: ${tsxCli}`);
     }
-    gatewayProcess = spawn(process.execPath, [tsxCli, getGatewayEntryPath()], {
+    const sourceGatewayNode = resolveSourceGatewayNode();
+    writeGatewayLog(`[main] Source gateway runtime: ${sourceGatewayNode}\n`);
+    gatewayProcess = spawn(sourceGatewayNode, [tsxCli, getGatewayEntryPath()], {
       cwd:   getGatewayWorkingDirectory(),
-      env:   { ...gatewayEnv, ELECTRON_RUN_AS_NODE: '1' },
+      env:   { ...gatewayEnv },
       windowsHide: true,
     });
   }

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "code-simplifier",
+  "name": "Code Simplifier",
+  "description": "Simplify recently changed code while preserving exact behavior, project conventions, error semantics, and public contracts. Use after implementation or review when the user asks to simplify or clean up code; do not use for broad rewrites.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "simplify this code",
+    "clean up this code",
+    "make this code clearer",
+    "reduce duplication here",
+    "refactor this without changing behavior",
+    "simplify the changed files",
+    "clean up this PR",
+    "make this less complex"
+  ],
+  "promptSignals": {
+    "phrases": ["simplify this code", "clean up this code", "make this code clearer", "reduce duplication here", "refactor this without changing behavior", "simplify the changed files", "clean up this PR"],
+    "allOf": [["simplify", "code"], ["clean", "up", "code"], ["reduce", "duplication"], ["refactor", "without", "changing"], ["less", "complex"], ["preserve", "behavior"]],
+    "anyOf": ["simplify", "clean up", "refactor", "duplication", "clearer", "less complex", "behavior-preserving"],
+    "noneOf": ["rewrite the whole app", "change the behavior", "optimize runtime performance", "fix the bug", "format the entire repository"],
+    "minScore": 4
+  },
+  "categories": ["refactoring", "quality", "development"],
+  "requiredTools": ["workspace", "shell"],
+  "permissions": {"workspaceRead": true, "workspaceWrite": true, "shell": true, "externalSideEffects": false},
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

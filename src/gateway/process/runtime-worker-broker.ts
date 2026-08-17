@@ -423,4 +423,16 @@ export class RuntimeWorkerBroker {
     try { child.kill(); } catch {}
     try { child.disconnect(); } catch {}
   }
+
+  /**
+   * Keep an idle worker available without letting it keep a short-lived host
+   * process alive. Active broker requests remain referenced by their pending
+   * IPC/timer handles; long-lived gateways already have their server handles.
+   */
+  unref(): void {
+    const child = this.child;
+    if (!child) return;
+    try { child.unref(); } catch {}
+    try { child.channel?.unref?.(); } catch {}
+  }
 }

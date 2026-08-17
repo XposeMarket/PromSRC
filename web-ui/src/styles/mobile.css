@@ -9149,6 +9149,18 @@ html.pm-session-context-open * {
   font-size: 12px;
   font-weight: 900;
 }
+.pm-skill-trigger-item span,
+.pm-skill-trigger-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pm-skill-trigger-item small {
+  margin-top: 2px;
+  color: var(--pm-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
 .pm-skill-trigger-item.active,
 .pm-skill-trigger-item:active {
   border-color: color-mix(in srgb, var(--pm-orange) 34%, transparent);
@@ -9174,6 +9186,10 @@ html.pm-session-context-open * {
 }
 .pm-skill-trigger-desc strong {
   color: var(--pm-text);
+}
+.pm-skill-trigger-desc-copy small {
+  color: var(--pm-muted);
+  font-size: 10px;
 }
 .pm-skill-trigger-remove {
   border: 1px solid color-mix(in srgb, #ef4444 42%, var(--pm-border));
