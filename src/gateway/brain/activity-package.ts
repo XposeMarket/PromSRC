@@ -682,6 +682,17 @@ function appendJsonl(filePath: string, rows: unknown[]): void {
   fs.appendFileSync(filePath, rows.map((row) => `${JSON.stringify(row)}\n`).join(''), 'utf8');
 }
 
+function writeJsonlSnapshot(filePath: string, rows: unknown[]): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, rows.map((row) => `${JSON.stringify(row)}\n`).join(''), 'utf8');
+    fs.renameSync(tmp, filePath);
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort temp cleanup */ }
+  }
+}
+
 function writeActivityArtifacts(state: CollectorState, pkg: ActivityPackage, allEvents: ActivityEvent[]): { packagePath?: string; continuationPaths: string[] } {
   if (!state.options.outputDir) return { continuationPaths: [] };
   const outputDir = state.options.outputDir;
@@ -695,7 +706,7 @@ function writeActivityArtifacts(state: CollectorState, pkg: ActivityPackage, all
     const rows = omitted.slice(index, index + partSize);
     const filePath = path.join(continuationDir, `part-${String(Math.floor(index / partSize) + 1).padStart(4, '0')}.jsonl`);
     try {
-      appendJsonl(filePath, rows);
+      writeJsonlSnapshot(filePath, rows);
       const raw = fs.readFileSync(filePath);
       pkg.eventLedger.continuations.push({ path: path.relative(state.options.workspacePath, filePath).replace(/\\/g, '/'), eventCount: rows.length, sha256: crypto.createHash('sha256').update(raw).digest('hex'), directReadOnly: true });
       continuationPaths.push(filePath);
