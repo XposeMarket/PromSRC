@@ -1,0 +1,317 @@
+/*
+ * Mobile composer stack — runtime surfaces that live directly above the main
+ * mobile composer. This file intentionally loads after mobile.css so every
+ * queue/status/plan/background surface uses the same baked Liquid Glass
+ * material as the current composer/header chrome.
+ *
+ * Keep geometry tied to --pm-composer-stack-base-bottom. The live-height vars
+ * are maintained by the chat runtime and allow surfaces to stack without
+ * detaching from the composer when its height or keyboard offset changes.
+ */
+
+body.pm-mobile-active {
+  --pm-composer-stack-gap: 8px;
+  --pm-composer-stack-inset: var(--pm-mobile-chrome-inset, 22px);
+  --pm-composer-stack-base-bottom: calc(
+    var(--pm-tabbar-h)
+    + env(safe-area-inset-bottom)
+    + var(--pm-composer-live-height, 72px)
+    + var(--pm-composer-stack-gap)
+  );
+}
+
+body.pm-mobile-active.pm-keyboard-open {
+  --pm-composer-stack-base-bottom: calc(
+    var(--pm-keyboard-offset, 0px)
+    + var(--pm-composer-live-height, 72px)
+    + var(--pm-composer-stack-gap)
+  );
+}
+
+/* One neutral material for every compact surface above the composer. */
+body.pm-mobile-active :is(
+  .pm-mobile-goal-pill,
+  .pm-mobile-queued-menu-trigger,
+  .pm-tool-progress-pill,
+  .pm-main-plan-pill,
+  .pm-background-spawn-pill,
+  .pm-chat-connection-status,
+  .pm-scroll-latest
+) {
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
+    rgba(255,255,255,.035);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.32),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 56px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
+}
+
+:root[data-theme="dark"] body.pm-mobile-active :is(
+  .pm-mobile-goal-pill,
+  .pm-mobile-queued-menu-trigger,
+  .pm-tool-progress-pill,
+  .pm-main-plan-pill,
+  .pm-background-spawn-pill,
+  .pm-chat-connection-status,
+  .pm-scroll-latest
+) {
+  border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
+    rgba(255,255,255,.03);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.18),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 56px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .24)),
+    0 1px 4px rgba(0,0,0,.16);
+}
+
+/* Expanded surfaces use the same material, just with a card radius. */
+body.pm-mobile-active :is(
+  .pm-mobile-queued-prompts,
+  .pm-mobile-queued-popover,
+  .pm-main-plan-popover,
+  .pm-background-spawn-lane
+) {
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
+    rgba(255,255,255,.035);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.32),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 56px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
+}
+
+:root[data-theme="dark"] body.pm-mobile-active :is(
+  .pm-mobile-queued-prompts,
+  .pm-mobile-queued-popover,
+  .pm-main-plan-popover,
+  .pm-background-spawn-lane
+) {
+  border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
+    rgba(255,255,255,.03);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.18),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 56px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .24)),
+    0 1px 4px rgba(0,0,0,.16);
+}
+
+/* Queue is a true composer attachment: same left/right inset and one shared
+   gap above the composer. No more 72vw card floating off the left edge. */
+body.pm-mobile-active .pm-mobile-queued-prompts {
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  width: auto;
+  max-width: none;
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  border-radius: 18px;
+}
+
+/* Goal is the first optional layer immediately above the composer. */
+body.pm-mobile-active .pm-mobile-goal-strip {
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  bottom: var(--pm-composer-stack-base-bottom);
+}
+
+/* Tool progress follows queue/goal while remaining content-sized. */
+body.pm-mobile-active .pm-tool-progress-dock {
+  bottom: calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-goal-live-height, 0px)
+    + var(--pm-queued-live-height, 0px)
+  );
+}
+
+/* Plan and background-agent docks occupy the next shared stack level. */
+body.pm-mobile-active :is(.pm-main-plan-dock, .pm-background-spawn-dock) {
+  bottom: calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-goal-live-height, 0px)
+    + var(--pm-queued-live-height, 0px)
+    + var(--pm-tool-progress-live-height, 0px)
+  );
+}
+
+body.pm-mobile-active .pm-background-spawn-dock:not(.is-collapsed) {
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+}
+
+/* Recovery / reconnect status is always the topmost runtime layer. */
+body.pm-mobile-active .pm-chat-connection-status {
+  left: 50%;
+  right: auto;
+  bottom: calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-goal-live-height, 0px)
+    + var(--pm-queued-live-height, 0px)
+    + var(--pm-tool-progress-live-height, 0px)
+    + var(--pm-background-dock-live-height, 0px)
+  );
+  width: max-content;
+  max-width: calc(100vw - var(--pm-composer-stack-inset) - var(--pm-composer-stack-inset));
+  min-height: 34px;
+  margin: 0;
+  padding: 8px 12px;
+  white-space: normal;
+  text-align: center;
+  transform: translate(-50%, 6px);
+}
+
+body.pm-mobile-active .pm-chat-connection-status.visible {
+  transform: translate(-50%, 0);
+}
+
+body.pm-mobile-active .pm-chat-connection-status .pm-chat-connection-text {
+  min-width: 0;
+  max-width: min(72vw, 420px);
+  overflow-wrap: anywhere;
+}
+
+/* When recovery has priority the other docks are hidden. Do not retain their
+   stale measured heights — pin the recovery pill straight to the composer. */
+body.pm-mobile-active .pm-page.pm-chat-status-priority-active .pm-chat-connection-status {
+  bottom: var(--pm-composer-stack-base-bottom);
+}
+
+/* Catch dedicated recovery/reconnect toast variants if a transport path emits
+   one instead of the canonical connection-status element. Keep this scoped to
+   the mobile chat page so unrelated global completion toasts stay where they
+   belong. */
+body.pm-mobile-active .pm-page :is(
+  .pm-mobile-recovery-toast,
+  .pm-mobile-reconnect-toast,
+  .pm-chat-recovery-toast,
+  .pm-chat-reconnect-toast,
+  [class*="recovery"][class*="toast"],
+  [class*="reconnect"][class*="toast"]
+) {
+  position: absolute !important;
+  left: 50% !important;
+  right: auto !important;
+  bottom: var(--pm-composer-stack-base-bottom) !important;
+  width: max-content;
+  max-width: calc(100vw - var(--pm-composer-stack-inset) - var(--pm-composer-stack-inset));
+  margin: 0 !important;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  border-radius: 999px;
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
+    rgba(255,255,255,.035);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 1)) brightness(var(--pm-lg-panel-brightness, .8));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.32),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 56px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
+  transform: translateX(-50%) !important;
+}
+
+/* Plan/background expanded cards no longer paint theme-colored opaque panels. */
+body.pm-mobile-active .pm-main-plan-popover {
+  border-radius: 18px;
+}
+
+body.pm-mobile-active .pm-background-spawn-lane {
+  border-radius: 18px;
+}
+
+/* Small controls on the glass use the same header-button material. */
+body.pm-mobile-active .pm-background-spawn-close {
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.14), rgba(255,255,255,.025) 42%, rgba(255,255,255,.09)),
+    rgba(255,255,255,.04);
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1)) brightness(var(--pm-lg-header-brightness, 1.04));
+  backdrop-filter: blur(var(--pm-lg-header-blur, 1.5px)) saturate(var(--pm-lg-header-saturate, 1)) brightness(var(--pm-lg-header-brightness, 1.04));
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.28),
+    0 8px 22px rgba(0,0,0,.16);
+}
+
+/* Queue menu uses the modern material all the way through. */
+body.pm-mobile-active .pm-mobile-queued-popover {
+  border-radius: 16px;
+}
+
+/* The scroll-to-latest control rides above whatever runtime stack is visible,
+   using the same single gap rather than the historical +38px float. */
+body.pm-mobile-active .pm-scroll-latest {
+  bottom: calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-scroll-latest-stack-height, 0px)
+  );
+}
+
+/* Existing rules contain keyboard-specific bottom declarations. The shared
+   variable above supersedes them, so repeat the stack contract at higher
+   specificity to keep all layers attached during visualViewport changes. */
+body.pm-mobile-active.pm-keyboard-open .pm-mobile-goal-strip {
+  bottom: var(--pm-composer-stack-base-bottom);
+}
+body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+}
+body.pm-mobile-active.pm-keyboard-open .pm-tool-progress-dock {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px));
+}
+body.pm-mobile-active.pm-keyboard-open :is(.pm-main-plan-dock, .pm-background-spawn-dock) {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px));
+}
+body.pm-mobile-active.pm-keyboard-open .pm-chat-connection-status {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px) + var(--pm-background-dock-live-height, 0px));
+}
+body.pm-mobile-active.pm-keyboard-open .pm-page.pm-chat-status-priority-active .pm-chat-connection-status {
+  bottom: var(--pm-composer-stack-base-bottom);
+}
+body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-scroll-latest-stack-height, 0px));
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body.pm-mobile-active :is(
+    .pm-mobile-goal-pill,
+    .pm-mobile-queued-prompts,
+    .pm-mobile-queued-menu-trigger,
+    .pm-mobile-queued-popover,
+    .pm-tool-progress-pill,
+    .pm-main-plan-pill,
+    .pm-main-plan-popover,
+    .pm-background-spawn-pill,
+    .pm-background-spawn-lane,
+    .pm-background-spawn-close,
+    .pm-chat-connection-status,
+    .pm-scroll-latest
+  ) {
+    background: color-mix(in srgb, var(--pm-surface-strong) 86%, transparent);
+  }
+}
