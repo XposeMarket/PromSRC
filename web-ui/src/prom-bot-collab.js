@@ -8,6 +8,7 @@ const MAX_GROUPS = 20;
 const MAX_GROUP_MESSAGES = 300;
 const MAX_GROUP_MEMBERS = 6;
 const MAX_GROUP_STREAMS = 3;
+const MAX_GROUP_HANDOFF_WAVES = 2;
 
 let groups = [];
 let activeGroupId = '';
@@ -15,6 +16,8 @@ let rendererPromise = null;
 let directMentionSignature = '';
 let directMentionAt = 0;
 let chromeObserver = null;
+let chromeObserverTarget = null;
+let chromeBindTimer = 0;
 
 function esc(value) {
   return String(value ?? '')
@@ -378,7 +381,7 @@ async function renderGroupRoom() {
   const sessionId = `prom_bot_group_${group.id}`;
   const historyHtml = stable.length ? renderer.renderHistory(stable, { sessionId, readonly: true, hideSideChatBoundary: true }) : '';
   const liveHtml = live.map((message) => renderer.renderLiveMessage({ ...message, _backgroundAgentLive: true, streaming: true }, { sessionId })).join('');
-  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="side-chat-kicker">Prom Bot group</div><div class="side-chat-title">${esc(group.title)}</div><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · no mention asks the room' })}</section>`;
+  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="side-chat-kicker">Prom Bot group</div><div class="side-chat-title">${esc(group.title)}</div><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
   requestAnimationFrame(() => {
     const messages = document.getElementById('prom-bot-group-messages');
     if (messages) messages.scrollTop = messages.scrollHeight;
@@ -395,10 +398,11 @@ function recentRoomTranscript(group, limit = 12) {
   }).join('\n');
 }
 
-function buildRuntimeGroupMessage(group, senderText, target) {
+function buildRuntimeGroupMessage(group, senderText, target, sourceAgent = null) {
   const members = groupMembers(group);
   const transcript = recentRoomTranscript(group);
-  return `[PROM BOT GROUP ROOM: ${group.title}]\nParticipants: ${members.map((agent) => `${agent.name} (@${mentionHandle(agent)})`).join(', ')}\n\nRecent room transcript:\n${transcript || '(new room)'}\n\nCurrent user message:\n${senderText}\n\nYou are ${target.name}. Reply to this room naturally and in-context. If you need a specific teammate, refer to them by @name in your response. If this message is not relevant to you and you have nothing useful to add, reply with exactly [PASS].`;
+  const sourceLabel = sourceAgent ? `${sourceAgent.name} (@${mentionHandle(sourceAgent)})` : 'the user';
+  return `[PROM BOT GROUP ROOM: ${group.title}]\nParticipants: ${members.map((agent) => `${agent.name} (@${mentionHandle(agent)})`).join(', ')}\n\nRecent room transcript:\n${transcript || '(new room)'}\n\nCurrent room message from ${sourceLabel}:\n${senderText}\n\nYou are ${target.name}. Reply to this room naturally and in-context. If you need a specific teammate, @mention them in your response; Prom Bot will route that mention after you reply, so do not simulate the teammate's answer yourself. If this message is not relevant to you and you have nothing useful to add, reply with exactly [PASS].`;
 }
 
 async function consumeAgentStream(agent, message, onUpdate = null, options = {}) {
@@ -444,16 +448,22 @@ async function consumeAgentStream(agent, message, onUpdate = null, options = {})
   return content.trim();
 }
 
-async function streamGroupReply(group, agent, userText) {
+async function streamGroupReply(group, agent, roomText, sourceAgent = null) {
   const pending = { id: uid('reply'), role: 'assistant', content: '', timestamp: Date.now(), agentId: agent.id, workflowLabel: agent.name, streaming: true };
   group.messages.push(pending);
   await renderGroupRoom();
+  let reply = '';
   try {
-    const reply = await consumeAgentStream(
+    reply = await consumeAgentStream(
       agent,
-      buildRuntimeGroupMessage(group, userText, agent),
+      buildRuntimeGroupMessage(group, roomText, agent, sourceAgent),
       (content) => { pending.content = content; void renderGroupRoom(); },
-      { visibleMessage: `[Prom Bot group · ${group.title}] ${userText}`, source: `prom_bot_group:${group.id}` },
+      {
+        visibleMessage: sourceAgent
+          ? `[Prom Bot group · ${group.title}] ${sourceAgent.name}: ${roomText}`
+          : `[Prom Bot group · ${group.title}] ${roomText}`,
+        source: `prom_bot_group:${group.id}`,
+      },
     );
     if (/^\[PASS\]$/i.test(reply)) {
       group.messages = group.messages.filter((message) => message !== pending);
@@ -470,9 +480,41 @@ async function streamGroupReply(group, agent, userText) {
     pending.streaming = false;
     pending.content = `Error: ${error?.message || String(error)}`;
     pending.timestamp = Date.now();
+    reply = '';
   }
   saveGroups();
   await renderGroupRoom();
+  return { agent, reply, passed: /^\[PASS\]$/i.test(reply) || !reply };
+}
+
+async function runGroupConversation(group, initialTargets, initialText) {
+  const members = groupMembers(group);
+  const visited = new Set();
+  let wave = initialTargets.map((agent) => ({ agent, roomText: initialText, sourceAgent: null }));
+  wave.forEach((entry) => visited.add(entry.agent.id));
+
+  for (let depth = 0; wave.length && depth <= MAX_GROUP_HANDOFF_WAVES; depth += 1) {
+    const results = await mapLimit(wave, MAX_GROUP_STREAMS, (entry) =>
+      streamGroupReply(group, entry.agent, entry.roomText, entry.sourceAgent)
+    );
+    if (depth >= MAX_GROUP_HANDOFF_WAVES) break;
+
+    const next = [];
+    for (const result of results.filter(Boolean)) {
+      if (result.passed || !result.reply) continue;
+      const mentioned = resolveMentions(result.reply, members)
+        .filter((agent) => agent.id !== result.agent.id && !visited.has(agent.id));
+      for (const target of mentioned) {
+        visited.add(target.id);
+        next.push({
+          agent: target,
+          sourceAgent: result.agent,
+          roomText: result.reply,
+        });
+      }
+    }
+    wave = next.slice(0, MAX_GROUP_MEMBERS);
+  }
 }
 
 async function sendGroupMessage() {
@@ -487,7 +529,7 @@ async function sendGroupMessage() {
   const members = groupMembers(group);
   const mentioned = resolveMentions(text, members);
   const targets = mentioned.length ? mentioned : members;
-  await mapLimit(targets, MAX_GROUP_STREAMS, (agent) => streamGroupReply(group, agent, text));
+  await runGroupConversation(group, targets, text);
 }
 
 function groupKeydown(event) {
@@ -650,21 +692,36 @@ function bindSidebarExit() {
   }, true);
 }
 
+function bindChromeObserver() {
+  const section = document.getElementById('prom-bot-sidebar-section');
+  if (!section) return false;
+  if (chromeObserverTarget === section) return true;
+  chromeObserver?.disconnect();
+  chromeObserverTarget = section;
+  chromeObserver = new MutationObserver(() => {
+    const chromeMissing = !document.getElementById(GROUP_LIST_ID)
+      || !document.querySelector('#prom-bot-sidebar-section .prom-bot-group-actions');
+    if (chromeMissing) ensureGroupChrome();
+    bindSidebarExit();
+  });
+  chromeObserver.observe(section, { childList: true, subtree: true });
+  return true;
+}
+
 function initCollaboration() {
   installStyles();
   loadGroups();
   ensureGroupChrome();
   bindSidebarExit();
   bindDirectMentionCapture();
-  chromeObserver = new MutationObserver(() => {
-    const chromeMissing = !document.getElementById(GROUP_LIST_ID)
-      || !document.querySelector('#prom-bot-sidebar-section .prom-bot-group-actions');
-    if (chromeMissing) ensureGroupChrome();
-    bindSidebarExit();
-    const directInput = document.getElementById('subagent-chat-input');
-    if (directInput) bindMentionInput(directInput, () => roster().filter((agent) => agent.id !== String(window.promBotActiveAgentId || '')));
-  });
-  chromeObserver.observe(document.body, { childList: true, subtree: true });
+  if (!bindChromeObserver()) {
+    chromeBindTimer = window.setInterval(() => {
+      if (!bindChromeObserver()) return;
+      clearInterval(chromeBindTimer);
+      chromeBindTimer = 0;
+      ensureGroupChrome();
+    }, 500);
+  }
 }
 
 window.openPromBotGroupCreator = openGroupCreator;
