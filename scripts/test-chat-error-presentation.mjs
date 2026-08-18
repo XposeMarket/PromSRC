@@ -51,6 +51,8 @@ assert.match(goals, /lastVerdict: 'stopped'/, 'user-marked-done goals must be pe
 assert.match(goals, /goal\.lastVerdict === 'stopped'\) return null/, 'stopped goals must not emit completion totals');
 
 console.log('[chat-error-presentation] typed errors, retry coalescing, and neutral goal stops passed');
+console.log('[audit] rebuilding runtime native modules skipped by npm ci --ignore-scripts');
+execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['rebuild', 'node-pty', 'better-sqlite3'], { cwd: root, stdio: 'inherit' });
 console.log('[audit] starting exhaustive direct internal-tool benchmark');
 execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['tsx', 'scripts/benchmark-all-tools-direct.ts'], {
   cwd: root,
