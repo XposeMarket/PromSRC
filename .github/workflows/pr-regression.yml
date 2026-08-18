@@ -33,6 +33,8 @@ jobs:
         run: npm run check:web-ui
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
+      - name: Verify stale mobile chat gateway recovery
+        run: node scripts/test-mobile-stale-gateway-route-recovery.mjs
       - name: Verify mobile chat recovery
         run: node scripts/test-mobile-chat-recovery.mjs
       - name: Verify mobile voice/media contract
