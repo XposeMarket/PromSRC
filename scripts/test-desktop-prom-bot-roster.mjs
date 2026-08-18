@@ -15,13 +15,20 @@ assert.match(source, /\/api\/agents\/\$\{encodeURIComponent\(id\)\}\/runs\?limit
 assert.match(source, /MAX_CONCURRENCY = 4/, 'metadata hydration must stay bounded');
 assert.match(source, /mapLimit\(agents, MAX_CONCURRENCY, hydrateAgent\)/);
 
-// Hermes-style roster affordances.
+// Roster affordances remain, but visual state must reuse ordinary Chat/Priority
+// semantics instead of inventing Bot-only green/gold presence dots.
 assert.match(source, /placeholder = 'Search subagents'/);
 assert.match(source, /textContent = 'Active now'/);
-assert.match(source, /textContent = 'Needs you'/);
-assert.match(source, /className = 'prom-bot-unread-dot'/);
+assert.match(source, /classList\.add\('chat-session-item', 'job-item'\)/);
+assert.match(source, /classList\.toggle\('unread', meta\.unread\)/);
+assert.match(source, /classList\.toggle\('is-working', meta\.active\)/);
+assert.match(source, /className = 'priority-chat-working'/);
+assert.match(source, /classList\.add\('priority-chat-unread'\)/);
+assert.doesNotMatch(source, /prom-bot-unread-dot/);
+assert.doesNotMatch(source, /#36c986/);
 assert.match(source, /className = 'prom-bot-agent-preview'/);
 assert.match(source, /relativeTime\(meta\.latestTs\)/);
+assert.match(source, /status\.textContent = 'needs you'/);
 
 // Unread is a durable local read cursor over canonical agent messages, not a
 // second message store. Opening a bot advances its cursor.
@@ -39,4 +46,4 @@ assert.match(source, /awaiting_command_approval/);
 assert.match(source, /if \(!window\.promBotMode \|\| document\.hidden\) return \[\]/);
 assert.match(source, /REFRESH_MS = 20_000/);
 
-console.log('[test-desktop-prom-bot-roster] passed: search, Active Now, previews, unread and needs-you reuse durable agent state');
+console.log('[test-desktop-prom-bot-roster] passed: durable roster state reuses ordinary Chat/Priority working and unread UI semantics');
