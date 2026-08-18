@@ -629,7 +629,12 @@ function initCollaboration() {
   bindSidebarExit();
   bindDirectMentionCapture();
   chromeObserver = new MutationObserver(() => {
-    ensureGroupChrome();
+    // The group list and room are themselves dynamic. Only reconstruct sidebar
+    // chrome when its owning nodes are actually missing; otherwise our own
+    // renderGroupRows()/room rendering would wake this observer recursively.
+    const chromeMissing = !document.getElementById(GROUP_LIST_ID)
+      || !document.querySelector('#prom-bot-sidebar-section .prom-bot-group-actions');
+    if (chromeMissing) ensureGroupChrome();
     bindSidebarExit();
     const directInput = document.getElementById('subagent-chat-input');
     if (directInput) bindMentionInput(directInput, () => roster().filter((agent) => agent.id !== String(window.promBotActiveAgentId || '')));
