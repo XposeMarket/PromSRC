@@ -182,6 +182,10 @@ async function run() {
   assert.equal(c.resolveMobileSessionGateway('legacy-session', { fallbackToCurrentGateway: true }).gatewayId, current.gatewayId, 'legacy local bindings recover the sole current gateway');
   assert.equal(c.resolveMobileSessionGateway('remote-session', { fallbackToCurrentGateway: true }), null, 'stale remote bindings do not route to the current gateway');
   c.saveGatewayCatalog([mac, desktop]);
+  // Restoring the old fixture identity after testing an identity migration also
+  // means restoring that identity's pairing grant. Production migration
+  // correctly revokes the replaced gateway id/token pair.
+  c.setGatewayToken(mac.gatewayId, 'mac-token');
   c.updateGatewayStatus(mac.gatewayId, { status: 'online' });
 
   const payload = c.encodePairingPayload({ gatewayId: desktop.gatewayId, origin: desktop.origin, challenge: 'one-time-challenge', expiresAt: Date.now() + 30_000, name: desktop.name, platform: desktop.platform, version: desktop.version });
