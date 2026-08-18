@@ -1,0 +1,37 @@
+name: Temporary mobile stale gateway repair
+on:
+  push:
+    branches:
+      - fix/mobile-stale-thread-gateway-recovery
+permissions:
+  contents: write
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply targeted repair
+        run: node scripts/tmp-mobile-stale-gateway-repair.cjs
+      - name: Verify focused contracts
+        run: |
+          node --check web-ui/src/mobile/mobile-gateway-catalog.js
+          node --check generated/public-web-ui/static/mobile/mobile-gateway-catalog.js
+          node --check web-ui/src/mobile/mobile-router.js
+          node --check generated/public-web-ui/static/mobile/mobile-router.js
+          cmp web-ui/src/mobile/mobile-gateway-catalog.js generated/public-web-ui/static/mobile/mobile-gateway-catalog.js
+          cmp web-ui/src/mobile/mobile-router.js generated/public-web-ui/static/mobile/mobile-router.js
+          node scripts/test-mobile-gateway-contract.mjs
+          git diff --check
+      - name: Commit repaired implementation
+        run: |
+          git rm .github/workflows/tmp-mobile-stale-gateway-repair.yml scripts/tmp-mobile-stale-gateway-repair.cjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web-ui/src/mobile/mobile-gateway-catalog.js generated/public-web-ui/static/mobile/mobile-gateway-catalog.js web-ui/src/mobile/mobile-router.js generated/public-web-ui/static/mobile/mobile-router.js scripts/test-mobile-gateway-contract.mjs
+          git commit -m "Repair stale mobile chat gateway bindings"
+          git push origin HEAD:fix/mobile-stale-thread-gateway-recovery
