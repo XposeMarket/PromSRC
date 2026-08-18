@@ -50,6 +50,13 @@ assert.match(memberRoom, /scheduleTeamMemberAutoWake/);
 assert.match(memberRoom, /MESSAGES FOR YOU/);
 assert.doesNotMatch(flow, /Promise\.all\([^)]*subagent|mapLimit\([^)]*team/, 'Team flow must not fan Team members out in the browser');
 
+// UI observation is bounded to the direct Prom Bot host plus the existing Team
+// render hook; live chat/message DOM must not wake a document-wide observer.
+assert.doesNotMatch(flow, /observe\(document\.body/);
+assert.match(flow, /chatViewObserver\.observe\(chatView, \{ childList: true, subtree: false \}\)/);
+assert.match(flow, /groupHostObserver\.observe\(host, \{ childList: true, subtree: false \}\)/);
+assert.match(flow, /window\.renderTeamBoard = wrapped/);
+
 // Prom Bot Group → Managed Team conversion uses the existing Team API, keeps
 // the same Bot membership, imports the conversation as Team context, and does
 // not auto-kickoff work merely because the room was converted.
