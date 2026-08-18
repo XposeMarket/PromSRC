@@ -247,7 +247,6 @@ export function getActiveGatewayId() {
   if (stored && entries.some((entry) => entry.gatewayId === stored)) return stored;
   return entries[0]?.gatewayId || '';
 }
-
 export function setActiveGatewayId(gatewayId) {
   const id = String(gatewayId || '').trim();
   if (!id || !getGateway(id)) return '';
@@ -601,6 +600,7 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
   if (!String(path || '').startsWith('/')) throw new Error('Gateway path must be absolute.');
   const url = `${normalizeGatewayOrigin(entry.origin)}${path}`;
   const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('X-Pairing-Token', token);
   if (!headers.has('Accept')) headers.set('Accept', 'application/json');
   const controller = new AbortController();
