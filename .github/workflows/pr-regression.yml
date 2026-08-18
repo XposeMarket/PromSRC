@@ -37,6 +37,8 @@ jobs:
         run: node scripts/test-desktop-prom-bot-roster.mjs
       - name: Verify desktop Prom Bot collaboration
         run: node scripts/test-desktop-prom-bot-collab.mjs
+      - name: Verify Prom Bot managed Team flow
+        run: node scripts/test-prom-bot-team-flow.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
