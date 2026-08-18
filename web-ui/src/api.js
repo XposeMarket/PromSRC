@@ -40,35 +40,6 @@ function assertRemoteMobileGatewayTarget(target) {
   throw error;
 }
 
-function getMobileGatewayRequestContext() {
-  try {
-    const rawOrigin = String(window.__pmMobileActiveGatewayOrigin || '').trim();
-    if (!rawOrigin) return null;
-    const pageOrigin = String(window.location?.origin || '').trim() || 'http://localhost';
-    const origin = new URL(rawOrigin, pageOrigin).origin;
-    const apiOrigin = new URL(String(API || '').trim() || pageOrigin, pageOrigin).origin;
-    return {
-      gatewayId: String(window.__pmMobileActiveGatewayId || '').trim(),
-      origin,
-      token: String(window.__pmMobileActiveGatewayToken || '').trim(),
-      executionEnabled: window.__pmMobileActiveGatewayExecutionEnabled === true,
-      remote: origin !== apiOrigin,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function assertRemoteMobileGatewayTarget(target) {
-  if (!target?.remote) return;
-  if (target.executionEnabled && target.token) return;
-  const error = new Error(target.token
-    ? 'Remote execution is not enabled for this gateway target. Refresh the gateway connection and try again.'
-    : 'This gateway is not paired on this phone. Reconnect it before sending a request.');
-  error.code = target.token ? 'REMOTE_EXECUTION_NOT_ENABLED' : 'GATEWAY_NOT_PAIRED';
-  throw error;
-}
-
 function buildApiCandidateUrls(path) {
   const rawPath = String(path || '');
   const candidates = [];
