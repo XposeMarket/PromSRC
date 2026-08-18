@@ -3,7 +3,10 @@ const CONVERT_MODAL_ID = 'prom-bot-convert-team-modal';
 const TEAM_CHAT_DECORATION_ID = 'team-prom-bot-routing';
 
 let nativeFetch = null;
-let uiObserver = null;
+let chatViewObserver = null;
+let groupHostObserver = null;
+let observedGroupHost = null;
+let teamRenderHookTimer = 0;
 
 function esc(value) {
   return String(value ?? '')
@@ -254,17 +257,61 @@ function decoratePromBotGroup() {
   else header.appendChild(button);
 }
 
-function decorate() {
-  decorateTeamChat();
+function bindGroupHostObserver() {
+  const host = document.getElementById('prom-bot-group-host');
+  if (host === observedGroupHost) return;
+  groupHostObserver?.disconnect();
+  observedGroupHost = host || null;
+  if (!host) return;
+  groupHostObserver = new MutationObserver(() => queueMicrotask(decoratePromBotGroup));
+  groupHostObserver.observe(host, { childList: true, subtree: false });
   decoratePromBotGroup();
+}
+
+function installChatViewObserver() {
+  const chatView = document.getElementById('chat-view');
+  if (!chatView || chatViewObserver) return;
+  chatViewObserver = new MutationObserver(() => {
+    bindGroupHostObserver();
+    queueMicrotask(decoratePromBotGroup);
+  });
+  // Group hosts are direct children of #chat-view. Do not observe the whole
+  // document or live message subtrees.
+  chatViewObserver.observe(chatView, { childList: true, subtree: false });
+  bindGroupHostObserver();
+}
+
+function installTeamRenderHook() {
+  const attach = () => {
+    const current = window.renderTeamBoard;
+    if (typeof current !== 'function') return false;
+    if (current.__promBotTeamFlowWrapped === true) return true;
+    const wrapped = function(...args) {
+      const result = current.apply(this, args);
+      Promise.resolve(result).finally(() => queueMicrotask(decorateTeamChat));
+      return result;
+    };
+    wrapped.__promBotTeamFlowWrapped = true;
+    window.renderTeamBoard = wrapped;
+    queueMicrotask(decorateTeamChat);
+    return true;
+  };
+  if (attach()) return;
+  if (teamRenderHookTimer) return;
+  teamRenderHookTimer = window.setInterval(() => {
+    if (!attach()) return;
+    clearInterval(teamRenderHookTimer);
+    teamRenderHookTimer = 0;
+  }, 500);
 }
 
 function initTeamPromBotFlow() {
   installStyles();
   installManagedTeamDefaultRoute();
-  decorate();
-  uiObserver = new MutationObserver(() => queueMicrotask(decorate));
-  uiObserver.observe(document.body, { childList: true, subtree: true });
+  installChatViewObserver();
+  installTeamRenderHook();
+  decorateTeamChat();
+  decoratePromBotGroup();
 }
 
 window.insertTeamPromBotMention = insertTeamMention;
