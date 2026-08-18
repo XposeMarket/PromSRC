@@ -73,8 +73,8 @@ function relativeTime(timestamp) {
 }
 
 function runNeedsUser(run) {
-  const status = String(run?.status || '').toLowerCase();
-  const pauseReason = String(run?.pauseReason || run?.pause_reason || '').toLowerCase();
+  const status = String(run?.status || run?.taskStatus || run?.task_status || '').toLowerCase();
+  const pauseReason = String(run?.pauseReason || run?.pause_reason || run?.pauseAnalysis?.reason || '').toLowerCase();
   return NEEDS_YOU_STATUSES.has(status)
     || NEEDS_YOU_STATUSES.has(pauseReason)
     || pauseReason === 'awaiting_command_approval';
@@ -82,7 +82,7 @@ function runNeedsUser(run) {
 
 function runIsActive(run) {
   if (run?.inProgress === true) return true;
-  return ACTIVE_STATUSES.has(String(run?.status || '').toLowerCase());
+  return ACTIVE_STATUSES.has(String(run?.status || run?.taskStatus || run?.task_status || '').toLowerCase());
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -305,7 +305,9 @@ function decorateRows() {
 
 async function hydrateRoster({ force = false } = {}) {
   if (!window.promBotMode || document.hidden) return [];
-  if (hydratePromise && !force) return hydratePromise;
+  // Single-flight regardless of caller intent: focus/timer/list updates may
+  // coincide, but the roster never needs overlapping metadata sweeps.
+  if (hydratePromise) return hydratePromise;
   const agents = collectAgentsFromRows();
   if (!agents.length) return [];
   hydratePromise = (async () => {
@@ -333,6 +335,8 @@ function bindListObserver() {
   if (!list || list === observedList) return;
   listObserver?.disconnect();
   observedList = list;
+  // The base Prom Bot shell replaces this list when the roster changes. Observe
+  // only its direct children so our own preview/badge DOM never wakes hydration.
   listObserver = new MutationObserver(queueHydrate);
   listObserver.observe(list, { childList: true, subtree: false });
   list.addEventListener('click', (event) => {
@@ -341,7 +345,7 @@ function bindListObserver() {
     const meta = metadataByAgent.get(id);
     if (!id || !meta) return;
     const seen = readSeen();
-    seen[id] = Math.max(Number(seen[id] || 0), Number(meta.latestAgentTs || 0), Date.now());
+    seen[id] = Math.max(Number(seen[id] || 0), Number(meta.latestAgentTs || 0));
     writeSeen(seen);
     meta.unread = false;
     decorateRows();
@@ -357,12 +361,10 @@ function startRefreshTimer() {
 
 function initRosterIntelligence() {
   installStyles();
-  const observer = new MutationObserver(() => {
-    ensureToolbar();
-    bindListObserver();
-    if (window.promBotMode) queueHydrate();
-  });
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+  // prom-bot.js is imported before this module. During initial page loading its
+  // DOMContentLoaded listener is registered first, so the shell/list exists by
+  // the time this initializer runs; subsequent roster replacement is captured
+  // by the narrow list observer above.
   ensureToolbar();
   bindListObserver();
   startRefreshTimer();
