@@ -1,5 +1,7 @@
 if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
-  void import('./prom-bot.js').catch((error) => console.warn('[Prom Bot] Desktop shell failed to load:', error));
+  void import('./prom-bot.js')
+    .then(() => import('./prom-bot-roster.js'))
+    .catch((error) => console.warn('[Prom Bot] Desktop shell failed to load:', error));
 }
 
 /**
