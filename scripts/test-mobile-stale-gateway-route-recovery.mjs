@@ -36,7 +36,12 @@ assert.match(
 );
 assert.match(
   repair,
-  /history\.replaceState\([\s\S]*?#mobile\/chat\//,
+  /const repairedHash = '#mobile\/chat\/' \+ encodeURIComponent\(repaired\);/,
+  'route repair must construct the canonical namespaced mobile chat hash',
+);
+assert.match(
+  repair,
+  /history\.replaceState\([^;]*repairedHash\);/,
   'already-open stale routes must be canonicalized in place instead of forcing a new chat',
 );
 assert.doesNotMatch(
