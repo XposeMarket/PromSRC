@@ -1,0 +1,176 @@
+name: Prometheus Regression Audit
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  regression-audit:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CI: "1"
+      PROMETHEUS_DATA_DIR: ${{ runner.temp }}/prometheus-audit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        id: install
+        continue-on-error: true
+        run: npm ci
+
+      - name: Backend build
+        id: build
+        continue-on-error: true
+        run: npm run build:backend
+
+      - name: Runtime workers
+        id: runtime_workers
+        continue-on-error: true
+        run: npm run test:runtime-workers
+
+      - name: Audit operations
+        id: audit_ops
+        continue-on-error: true
+        run: npm run test:audit-ops
+
+      - name: Request operations
+        id: request_ops
+        continue-on-error: true
+        run: npm run test:request-ops
+
+      - name: Activity package
+        id: activity_package
+        continue-on-error: true
+        run: npm run test:activity-package
+
+      - name: Process hygiene
+        id: process_hygiene
+        continue-on-error: true
+        run: npm run test:process-hygiene
+
+      - name: Supervised restart
+        id: supervised_restart
+        continue-on-error: true
+        run: npm run test:supervised-restart
+
+      - name: Restart retrigger
+        id: restart_retrigger
+        continue-on-error: true
+        run: npm run test:restart-retrigger
+
+      - name: Workspace process health
+        id: workspace_tools
+        continue-on-error: true
+        run: npm run test:workspace-tools
+
+      - name: Tool issue regressions
+        id: tool_regressions
+        continue-on-error: true
+        run: npm run test:tool-issue-regressions
+
+      - name: Integration runtime contract
+        id: integrations
+        continue-on-error: true
+        run: npm run test:integrations
+
+      - name: Connection orchestrator
+        id: connections
+        continue-on-error: true
+        run: npm run test:connections
+
+      - name: Automation runtime
+        id: automations
+        continue-on-error: true
+        run: npm run test:automations
+
+      - name: Tool benchmark aggregation regression
+        id: tool_bench_aggregate
+        continue-on-error: true
+        run: node scripts/test-tool-benchmark-aggregate.mjs
+
+      - name: Install Playwright Chromium
+        id: playwright
+        continue-on-error: true
+        run: npx playwright install chromium
+
+      - name: Start clean gateway
+        id: gateway
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:PROMETHEUS_DATA_DIR | Out-Null
+          $out = Join-Path $env:RUNNER_TEMP 'prometheus-gateway.out.log'
+          $err = Join-Path $env:RUNNER_TEMP 'prometheus-gateway.err.log'
+          $p = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','gateway' -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+          "PROM_GATEWAY_PID=$($p.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18789/' -TimeoutSec 2
+              if ($r.StatusCode -lt 500) { $ready = $true; break }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $ready) {
+            Write-Host '--- gateway stdout ---'
+            if (Test-Path $out) { Get-Content $out -Tail 200 }
+            Write-Host '--- gateway stderr ---'
+            if (Test-Path $err) { Get-Content $err -Tail 200 }
+            throw 'Gateway did not become ready on 127.0.0.1:18789'
+          }
+
+      - name: Performance benchmark
+        id: performance_benchmark
+        continue-on-error: true
+        env:
+          PROMETHEUS_BENCHMARK_URL: http://127.0.0.1:18789/
+        run: npm run benchmark:performance -- --samples=3 --source=git --skip-mobile
+
+      - name: Gateway log tail
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'prometheus-gateway.out.log'
+          $err = Join-Path $env:RUNNER_TEMP 'prometheus-gateway.err.log'
+          if (Test-Path $out) { Write-Host '--- stdout ---'; Get-Content $out -Tail 250 }
+          if (Test-Path $err) { Write-Host '--- stderr ---'; Get-Content $err -Tail 250 }
+
+      - name: Audit summary
+        if: always()
+        shell: pwsh
+        run: |
+          @'
+          install=${{ steps.install.outcome }}
+          build=${{ steps.build.outcome }}
+          runtime_workers=${{ steps.runtime_workers.outcome }}
+          audit_ops=${{ steps.audit_ops.outcome }}
+          request_ops=${{ steps.request_ops.outcome }}
+          activity_package=${{ steps.activity_package.outcome }}
+          process_hygiene=${{ steps.process_hygiene.outcome }}
+          supervised_restart=${{ steps.supervised_restart.outcome }}
+          restart_retrigger=${{ steps.restart_retrigger.outcome }}
+          workspace_tools=${{ steps.workspace_tools.outcome }}
+          tool_regressions=${{ steps.tool_regressions.outcome }}
+          integrations=${{ steps.integrations.outcome }}
+          connections=${{ steps.connections.outcome }}
+          automations=${{ steps.automations.outcome }}
+          tool_bench_aggregate=${{ steps.tool_bench_aggregate.outcome }}
+          playwright=${{ steps.playwright.outcome }}
+          gateway=${{ steps.gateway.outcome }}
+          performance_benchmark=${{ steps.performance_benchmark.outcome }}
+          '@ | Tee-Object -FilePath audit-results.txt
+
+          $failed = Select-String -Path audit-results.txt -Pattern '=failure$'
+          if ($failed) {
+            Write-Host 'Failing audit stages:'
+            $failed | ForEach-Object { Write-Host $_.Line }
+            exit 1
+          }
