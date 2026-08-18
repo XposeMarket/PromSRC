@@ -50,3 +50,7 @@ assert.match(goals, /lastVerdict: 'stopped'/, 'user-marked-done goals must be pe
 assert.match(goals, /goal\.lastVerdict === 'stopped'\) return null/, 'stopped goals must not emit completion totals');
 
 console.log('[chat-error-presentation] typed errors, retry coalescing, and neutral goal stops passed');
+
+if (process.env.CI === 'true' || process.env.CI === '1') {
+  await import('./ci-deep-runtime-audit.mjs');
+}
