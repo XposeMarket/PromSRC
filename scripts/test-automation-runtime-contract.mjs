@@ -12,7 +12,8 @@ assert.doesNotMatch(timerRunnerSource, /if \(isModelBusy\(\)\)/, 'due timers mus
 assert.match(watchRunnerSource, /pendingMatchObservation/, 'watch matches must be latched while delivery waits');
 assert.match(watchRunnerSource, /refreshInternalWatchObservation/, 'watch inspection must refresh real state even if the poller is unhealthy');
 assert.doesNotMatch(watchRunnerSource, /await this\.fire(?:Match|Timeout)\(/, 'one watch delivery must not block observation of every later watch');
-assert.match(watchRunnerSource, /candidate\.scheduleId === taskId/, 'task watches may follow a scheduled job id to its linked task');
+assert.match(watchRunnerSource, /\.scheduleId === taskId/, 'task watches may follow a scheduled job id to its linked task');
+assert.match(watchRunnerSource, /loadTask\(candidate\.id\)/, 'a task summary matched by schedule id must resolve to its full task record');
 assert.match(watchRunnerSource, /findArchivedScheduledJob/, 'scheduled-job watches must resolve retained one-shots');
 assert.match(watchRunnerSource, /addPendingRuntimeSteerForSession/, 'a watch that completes during an active turn must use the live steer inbox');
 assert.match(watchRunnerSource, /steerActiveTurn\(watch, obs, 'match'/, 'matched watches must attempt live in-turn delivery while Prometheus is busy');
