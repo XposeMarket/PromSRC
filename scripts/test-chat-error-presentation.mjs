@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,3 +51,27 @@ assert.match(goals, /lastVerdict: 'stopped'/, 'user-marked-done goals must be pe
 assert.match(goals, /goal\.lastVerdict === 'stopped'\) return null/, 'stopped goals must not emit completion totals');
 
 console.log('[chat-error-presentation] typed errors, retry coalescing, and neutral goal stops passed');
+console.log('[audit] rebuilding runtime native modules skipped by npm ci --ignore-scripts');
+execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['rebuild', 'node-pty', 'better-sqlite3'], { cwd: root, stdio: 'inherit' });
+const reportPath = path.join(root, 'benchmark-results', 'direct-tools', 'latest.json');
+try { fs.rmSync(reportPath, { force: true }); } catch {}
+console.log('[audit] starting exhaustive direct internal-tool benchmark');
+let benchmarkExit = 0;
+try {
+  execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['tsx', 'scripts/benchmark-all-tools-direct.ts'], {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, PROMETHEUS_DIRECT_TOOL_BENCH_TIMEOUT_MS: '5000' },
+  });
+} catch (error) {
+  benchmarkExit = Number(error?.status || 1);
+}
+assert.ok(fs.existsSync(reportPath), 'direct-tool benchmark did not write its completion report');
+const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+assert.equal(
+  report?.summary?.runs,
+  report?.summary?.inventory?.total * report?.summary?.samplesPerTool,
+  'direct-tool benchmark exited without executing the full inventory',
+);
+console.log(`[audit] complete benchmark report: ${report.summary.runs}/${report.summary.inventory.total * report.summary.samplesPerTool} rows; hardFailures=${report.summary.hardFailures}; childExit=${benchmarkExit}`);
+if (benchmarkExit !== 0) process.exitCode = benchmarkExit;
