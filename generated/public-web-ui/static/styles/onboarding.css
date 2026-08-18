@@ -97,3 +97,29 @@
 }
 .prom-onb-btn.primary:hover { background: #0a3d8a; }
 .prom-onb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Desktop shell polish. These controls should stay visually neutral whether
+   their panels are open or closed; hover/focus remains the interaction cue. */
+body:not(.pm-mobile-active) .topbar #windowSidebarToggle.panel-toggle-btn,
+body:not(.pm-mobile-active) .topbar #drawerToggle.panel-toggle-btn {
+  background: transparent !important;
+  border-color: var(--line-strong) !important;
+  color: var(--muted) !important;
+  box-shadow: none !important;
+}
+
+body:not(.pm-mobile-active) .topbar #windowSidebarToggle.panel-toggle-btn:hover,
+body:not(.pm-mobile-active) .topbar #windowSidebarToggle.panel-toggle-btn:focus-visible,
+body:not(.pm-mobile-active) .topbar #drawerToggle.panel-toggle-btn:hover,
+body:not(.pm-mobile-active) .topbar #drawerToggle.panel-toggle-btn:focus-visible {
+  background: color-mix(in srgb, var(--text) 7%, transparent) !important;
+  border-color: var(--line-strong) !important;
+  color: var(--text) !important;
+  box-shadow: none !important;
+}
+
+/* Keep the settings navigation clear of Electron window controls on macOS.
+   Use the same modest offset on Windows so the desktop layouts stay aligned. */
+body:not(.pm-mobile-active) #settings-modal .settings-sidebar-top {
+  padding-top: 30px !important;
+}
