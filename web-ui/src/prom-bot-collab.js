@@ -3,6 +3,7 @@ const GROUP_HOST_ID = 'prom-bot-group-host';
 const GROUP_LIST_ID = 'prom-bot-groups-list';
 const GROUP_MODAL_ID = 'prom-bot-group-modal';
 const MENTION_MENU_ID = 'prom-bot-mention-menu';
+const SEEN_KEY = 'prometheus_prom_bot_seen_v1';
 const MAX_GROUPS = 20;
 const MAX_GROUP_MESSAGES = 300;
 const MAX_GROUP_MEMBERS = 6;
@@ -32,7 +33,8 @@ function uid(prefix) {
 function normalizeGroup(input) {
   if (!input || typeof input !== 'object') return null;
   const id = String(input.id || '').trim();
-  const memberIds = Array.from(new Set((Array.isArray(input.memberIds) ? input.memberIds : []).map((item) => String(item || '').trim()).filter(Boolean))).slice(0, MAX_GROUP_MEMBERS);
+  const memberIds = Array.from(new Set((Array.isArray(input.memberIds) ? input.memberIds : [])
+    .map((item) => String(item || '').trim()).filter(Boolean))).slice(0, MAX_GROUP_MEMBERS);
   if (!id || memberIds.length < 2) return null;
   const messages = (Array.isArray(input.messages) ? input.messages : [])
     .filter((message) => message && typeof message === 'object' && !message.streaming)
@@ -70,6 +72,17 @@ function saveGroups() {
     messages: group.messages.filter((message) => !message.streaming).slice(-MAX_GROUP_MESSAGES),
   }));
   try { localStorage.setItem(GROUPS_KEY, JSON.stringify(serializable)); } catch {}
+}
+
+function markDirectSeen(agentId) {
+  const id = String(agentId || '').trim();
+  if (!id) return;
+  try {
+    const seen = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}');
+    const next = seen && typeof seen === 'object' ? seen : {};
+    next[id] = Math.max(Number(next[id] || 0), Date.now());
+    localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+  } catch {}
 }
 
 function roster() {
@@ -147,34 +160,29 @@ function installStyles() {
   style.id = 'prom-bot-collab-styles';
   style.textContent = `
     .prom-bot-group-actions { display:flex; align-items:center; gap:6px; }
-    .prom-bot-new-group { border:1px solid var(--sidebar-icon-border,var(--line)); background:var(--sidebar-item-bg,var(--panel-2)); color:var(--sidebar-text,var(--text)); border-radius:8px; padding:6px 8px; font:inherit; font-size:10px; font-weight:800; cursor:pointer; }
+    .prom-bot-new-group { width:100%; border:1px solid var(--sidebar-icon-border,var(--line)); background:transparent; color:var(--sidebar-text,var(--text)); border-radius:8px; padding:6px 8px; font:inherit; font-size:10px; font-weight:750; text-align:left; cursor:pointer; }
+    .prom-bot-new-group:hover { background:var(--sidebar-item-hover,var(--panel-2)); }
     .prom-bot-groups-list { display:flex; flex-direction:column; gap:2px; }
-    .prom-bot-groups-label { padding:2px 8px 4px; font-size:9px; font-weight:850; letter-spacing:.11em; text-transform:uppercase; color:var(--sidebar-muted,var(--muted)); }
-    .prom-bot-group-row { width:100%; display:grid; grid-template-columns:28px minmax(0,1fr) auto; gap:8px; align-items:center; border:0; border-radius:9px; padding:7px 8px; background:transparent; color:var(--sidebar-text,var(--text)); font:inherit; text-align:left; cursor:pointer; }
-    .prom-bot-group-row:hover,.prom-bot-group-row.active { background:var(--sidebar-item-hover,var(--panel-2)); }
-    .prom-bot-group-icon { width:28px; height:28px; display:grid; place-items:center; border-radius:9px; background:var(--sidebar-icon-bg,var(--panel-2)); border:1px solid var(--sidebar-icon-border,var(--line)); color:var(--pm-gold,var(--brand)); font-size:12px; font-weight:900; }
-    .prom-bot-group-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:850; }
+    .prom-bot-groups-label { padding:3px 8px 4px; font-size:9px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; color:var(--sidebar-muted,var(--muted)); }
+    .prom-bot-group-row.chat-session-item.job-item { width:100%; box-sizing:border-box; display:grid; grid-template-columns:30px minmax(0,1fr) auto; gap:9px; align-items:center; padding:7px 8px; font:inherit; text-align:left; }
+    .prom-bot-group-avatar { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:var(--sidebar-icon-bg,var(--panel-2)); border:1px solid var(--sidebar-icon-border,var(--line)); color:var(--pm-gold,var(--brand)); font-size:11px; font-weight:850; }
+    .prom-bot-group-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:700; }
     .prom-bot-group-meta { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; color:var(--sidebar-muted,var(--muted)); }
     .prom-bot-group-delete { border:0; background:transparent; color:var(--sidebar-muted,var(--muted)); cursor:pointer; border-radius:6px; padding:4px; font-size:13px; }
     #${GROUP_HOST_ID} { position:absolute; inset:0; z-index:14; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--pm-chat-page-bg,var(--bg)); }
     .prom-bot-group-shell { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; }
-    .prom-bot-group-header { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:11px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
-    .prom-bot-group-kicker { color:var(--muted); text-transform:uppercase; letter-spacing:.1em; font-size:9px; font-weight:850; }
-    .prom-bot-group-name { margin-top:2px; font-size:15px; font-weight:900; color:var(--text); }
-    .prom-bot-group-participants { margin-top:3px; font-size:10px; color:var(--muted); }
-    .prom-bot-group-close { border:1px solid var(--line); background:var(--panel-2); color:var(--muted); width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:17px; }
     .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 8px; }
     .prom-bot-group-empty { color:var(--muted); text-align:center; padding:56px 20px; font-size:12px; line-height:1.55; }
     .prom-bot-group-modal { position:fixed; inset:0; z-index:10020; display:grid; place-items:center; background:rgba(0,0,0,.48); backdrop-filter:blur(8px); }
     .prom-bot-group-modal-card { width:min(460px,calc(100vw - 32px)); max-height:min(650px,calc(100vh - 48px)); overflow:auto; border:1px solid var(--line); border-radius:16px; background:var(--panel); color:var(--text); box-shadow:0 28px 90px rgba(0,0,0,.38); padding:16px; }
-    .prom-bot-group-modal-title { font-size:15px; font-weight:900; }
+    .prom-bot-group-modal-title { font-size:15px; font-weight:850; }
     .prom-bot-group-modal-sub { margin-top:4px; font-size:11px; color:var(--muted); }
     .prom-bot-group-title-input { width:100%; box-sizing:border-box; margin-top:12px; border:1px solid var(--line); border-radius:9px; background:var(--panel-2); color:var(--text); padding:8px 10px; font:inherit; }
     .prom-bot-group-picker { display:flex; flex-direction:column; gap:5px; margin-top:10px; }
     .prom-bot-group-choice { display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:9px; padding:8px 9px; background:var(--panel-2); font-size:11px; }
     .prom-bot-group-choice span { flex:1; min-width:0; }
     .prom-bot-group-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
-    .prom-bot-group-modal-actions button { border:1px solid var(--line); border-radius:8px; padding:7px 11px; font:inherit; font-size:11px; font-weight:800; cursor:pointer; background:var(--panel-2); color:var(--text); }
+    .prom-bot-group-modal-actions button { border:1px solid var(--line); border-radius:8px; padding:7px 11px; font:inherit; font-size:11px; font-weight:750; cursor:pointer; background:var(--panel-2); color:var(--text); }
     .prom-bot-group-modal-actions .primary { background:var(--brand); color:#fff; border-color:var(--brand); }
     .prom-bot-mention-menu { position:fixed; z-index:10030; min-width:190px; max-width:280px; border:1px solid var(--line); border-radius:10px; padding:5px; background:var(--panel); box-shadow:0 16px 46px rgba(0,0,0,.28); }
     .prom-bot-mention-option { width:100%; border:0; background:transparent; color:var(--text); border-radius:7px; padding:7px 8px; display:flex; align-items:center; justify-content:space-between; gap:8px; font:inherit; font-size:11px; text-align:left; cursor:pointer; }
@@ -205,7 +213,6 @@ function ensureGroupChrome() {
   const toolbar = document.querySelector('#prom-bot-sidebar-section .prom-bot-roster-toolbar');
   const list = document.getElementById('prom-bot-subagents-list');
   if (!toolbar || !list) return;
-
   let actions = toolbar.querySelector('.prom-bot-group-actions');
   if (!actions) {
     actions = document.createElement('div');
@@ -218,7 +225,6 @@ function ensureGroupChrome() {
     actions.appendChild(button);
     toolbar.appendChild(actions);
   }
-
   let groupsList = document.getElementById(GROUP_LIST_ID);
   if (!groupsList) {
     groupsList = document.createElement('div');
@@ -240,7 +246,6 @@ function renderGroupRows() {
     return !search || `${group.title} ${memberNames}`.toLowerCase().includes(search);
   });
   if (!visible.length) return;
-
   const label = document.createElement('div');
   label.className = 'prom-bot-groups-label';
   label.textContent = 'Groups';
@@ -249,9 +254,9 @@ function renderGroupRows() {
     const members = groupMembers(group);
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = `prom-bot-group-row${group.id === activeGroupId ? ' active' : ''}`;
+    row.className = `prom-bot-group-row chat-session-item job-item${group.id === activeGroupId ? ' active' : ''}`;
     row.dataset.groupId = group.id;
-    row.innerHTML = `<span class="prom-bot-group-icon">${members.length}</span><span><span class="prom-bot-group-title">${esc(group.title)}</span><span class="prom-bot-group-meta">${esc(members.map((member) => member.name).join(', '))}</span></span><span class="prom-bot-group-delete" title="Delete group" aria-label="Delete group">×</span>`;
+    row.innerHTML = `<span class="prom-bot-group-avatar">${members.length}</span><span><span class="prom-bot-group-title">${esc(group.title)}</span><span class="prom-bot-group-meta">${esc(members.map((member) => member.name).join(', '))}</span></span><span class="prom-bot-group-delete" title="Delete group" aria-label="Delete group">×</span>`;
     row.addEventListener('click', (event) => {
       if (event.target instanceof Element && event.target.closest('.prom-bot-group-delete')) {
         event.stopPropagation();
@@ -297,7 +302,8 @@ function closeGroupCreator() {
 function createGroupFromModal() {
   const modal = document.getElementById(GROUP_MODAL_ID);
   if (!modal) return;
-  const selected = Array.from(modal.querySelectorAll('input[type="checkbox"]:checked')).map((input) => String(input.value || '')).filter(Boolean);
+  const selected = Array.from(modal.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => String(input.value || '')).filter(Boolean);
   if (selected.length < 2 || selected.length > MAX_GROUP_MEMBERS) {
     window.showToast?.('Prom Bot groups', `Choose between 2 and ${MAX_GROUP_MEMBERS} bots.`, 'warning');
     return;
@@ -369,9 +375,10 @@ async function renderGroupRoom() {
   const members = groupMembers(group);
   const stable = group.messages.filter((message) => !message.streaming).map(normalizedGroupMessage);
   const live = group.messages.filter((message) => message.streaming).map(normalizedGroupMessage);
-  const historyHtml = stable.length ? renderer.renderHistory(stable, { sessionId: `prom_bot_group_${group.id}`, readonly: true, hideSideChatBoundary: true }) : '';
-  const liveHtml = live.map((message) => renderer.renderLiveMessage({ ...message, _backgroundAgentLive: true, streaming: true }, { sessionId: `prom_bot_group_${group.id}` })).join('');
-  host.innerHTML = `<section class="prom-bot-group-shell"><header class="prom-bot-group-header"><div><div class="prom-bot-group-kicker">Prom Bot group</div><div class="prom-bot-group-name">${esc(group.title)}</div><div class="prom-bot-group-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="prom-bot-group-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@mention a bot · no mention asks the room' })}</section>`;
+  const sessionId = `prom_bot_group_${group.id}`;
+  const historyHtml = stable.length ? renderer.renderHistory(stable, { sessionId, readonly: true, hideSideChatBoundary: true }) : '';
+  const liveHtml = live.map((message) => renderer.renderLiveMessage({ ...message, _backgroundAgentLive: true, streaming: true }, { sessionId })).join('');
+  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="side-chat-kicker">Prom Bot group</div><div class="side-chat-title">${esc(group.title)}</div><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · no mention asks the room' })}</section>`;
   requestAnimationFrame(() => {
     const messages = document.getElementById('prom-bot-group-messages');
     if (messages) messages.scrollTop = messages.scrollHeight;
@@ -381,16 +388,30 @@ async function renderGroupRoom() {
   });
 }
 
-function buildRuntimeGroupMessage(group, senderText, target) {
-  const members = groupMembers(group);
-  return `[Prom Bot group: ${group.title}]\nParticipants: ${members.map((agent) => `${agent.name} (@${mentionHandle(agent)})`).join(', ')}\n\nUser message:\n${senderText}\n\nYou are ${target.name}. Reply to the group naturally. If the message is not relevant to you and you have nothing useful to add, reply with exactly [PASS].`;
+function recentRoomTranscript(group, limit = 12) {
+  return group.messages.filter((message) => !message.streaming).slice(-limit).map((message) => {
+    const actor = message.role === 'user' ? 'User' : (message.workflowLabel || agentById(message.agentId).name || 'Bot');
+    return `${actor}: ${String(message.content || '').replace(/\s+/g, ' ').slice(0, 800)}`;
+  }).join('\n');
 }
 
-async function consumeAgentStream(agent, message, onUpdate = null) {
+function buildRuntimeGroupMessage(group, senderText, target) {
+  const members = groupMembers(group);
+  const transcript = recentRoomTranscript(group);
+  return `[PROM BOT GROUP ROOM: ${group.title}]\nParticipants: ${members.map((agent) => `${agent.name} (@${mentionHandle(agent)})`).join(', ')}\n\nRecent room transcript:\n${transcript || '(new room)'}\n\nCurrent user message:\n${senderText}\n\nYou are ${target.name}. Reply to this room naturally and in-context. If you need a specific teammate, refer to them by @name in your response. If this message is not relevant to you and you have nothing useful to add, reply with exactly [PASS].`;
+}
+
+async function consumeAgentStream(agent, message, onUpdate = null, options = {}) {
   const res = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-    body: JSON.stringify({ message, attachmentPreviews: [], timeoutMs: 300000 }),
+    body: JSON.stringify({
+      message,
+      visibleMessage: String(options.visibleMessage || message),
+      source: String(options.source || 'prom_bot_handoff'),
+      attachmentPreviews: [],
+      timeoutMs: 300000,
+    }),
   });
   if (!res.ok) throw new Error(`${agent.name}: HTTP ${res.status}`);
   if (!res.body) throw new Error(`${agent.name}: no response body`);
@@ -428,10 +449,12 @@ async function streamGroupReply(group, agent, userText) {
   group.messages.push(pending);
   await renderGroupRoom();
   try {
-    const reply = await consumeAgentStream(agent, buildRuntimeGroupMessage(group, userText, agent), (content) => {
-      pending.content = content;
-      void renderGroupRoom();
-    });
+    const reply = await consumeAgentStream(
+      agent,
+      buildRuntimeGroupMessage(group, userText, agent),
+      (content) => { pending.content = content; void renderGroupRoom(); },
+      { visibleMessage: `[Prom Bot group · ${group.title}] ${userText}`, source: `prom_bot_group:${group.id}` },
+    );
     if (/^\[PASS\]$/i.test(reply)) {
       group.messages = group.messages.filter((message) => message !== pending);
     } else {
@@ -440,6 +463,9 @@ async function streamGroupReply(group, agent, userText) {
       pending.timestamp = Date.now();
       group.updatedAt = Date.now();
     }
+    // Group participation is not an unread DM. Keep the direct-chat read cursor
+    // ahead of room-generated traffic until room-specific server threads land.
+    markDirectSeen(agent.id);
   } catch (error) {
     pending.streaming = false;
     pending.content = `Error: ${error?.message || String(error)}`;
@@ -447,7 +473,6 @@ async function streamGroupReply(group, agent, userText) {
   }
   saveGroups();
   await renderGroupRoom();
-  void window.refreshPromBotRosterIntelligence?.({ force: true });
 }
 
 async function sendGroupMessage() {
@@ -567,7 +592,10 @@ async function dispatchDirectMentionHandoff(agent, text, sourceAgent) {
   const sourceLabel = sourceAgent?.name || sourceAgent?.id || 'another Prom Bot';
   const runtimeMessage = `[Prom Bot @mention handoff from ${sourceLabel}]\n${text}\n\nRespond in your direct Prom Bot thread so the user can pick up your reply there.`;
   try {
-    await consumeAgentStream(agent, runtimeMessage);
+    await consumeAgentStream(agent, runtimeMessage, null, {
+      visibleMessage: `[Handoff from ${sourceLabel}] ${text}`,
+      source: 'prom_bot_direct_handoff',
+    });
   } catch (error) {
     console.warn('[Prom Bot] mention handoff failed:', error);
   } finally {
@@ -629,9 +657,6 @@ function initCollaboration() {
   bindSidebarExit();
   bindDirectMentionCapture();
   chromeObserver = new MutationObserver(() => {
-    // The group list and room are themselves dynamic. Only reconstruct sidebar
-    // chrome when its owning nodes are actually missing; otherwise our own
-    // renderGroupRows()/room rendering would wake this observer recursively.
     const chromeMissing = !document.getElementById(GROUP_LIST_ID)
       || !document.querySelector('#prom-bot-sidebar-section .prom-bot-group-actions');
     if (chromeMissing) ensureGroupChrome();
@@ -650,6 +675,13 @@ window.sendPromBotGroupMessage = sendGroupMessage;
 window.handlePromBotGroupKeydown = groupKeydown;
 window.startPromBotGroupVoice = startGroupVoice;
 window.refreshPromBotMentionMenu = refreshMentionMenu;
+window.getPromBotGroups = () => groups.map((group) => ({ ...group, memberIds: [...group.memberIds], messages: group.messages.map((message) => ({ ...message })) }));
+window.getPromBotGroup = (groupId) => {
+  const group = groupById(groupId);
+  return group ? { ...group, memberIds: [...group.memberIds], messages: group.messages.map((message) => ({ ...message })) } : null;
+};
+window.deletePromBotGroup = deleteGroup;
+window.promBotMentionHandle = mentionHandle;
 window.promBotActiveGroupId = '';
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initCollaboration, { once: true });
