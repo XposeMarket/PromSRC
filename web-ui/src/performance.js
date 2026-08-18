@@ -1,3 +1,5 @@
+import './prom-bot.js';
+
 /**
  * Privacy-conscious client performance marks.
  *
