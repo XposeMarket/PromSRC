@@ -117,7 +117,10 @@ async function hydrateAgent(agent) {
   const runs = Array.isArray(runsData?.runs) ? runsData.runs : [];
   const latest = latestMessage(messages);
   const latestTs = Number(latest?.ts || latest?.createdAt || latest?.timestamp || 0);
-  const latestAgentTs = latestTimestamp(messages.filter((message) => message?.role !== 'user'), (message) => message?.ts || message?.createdAt || message?.timestamp);
+  const latestAgentTs = latestTimestamp(
+    messages.filter((message) => message?.role !== 'user'),
+    (message) => message?.ts || message?.createdAt || message?.timestamp,
+  );
   const needsYou = runs.some(runNeedsUser);
   const active = runs.some(runIsActive);
   const seen = readSeen();
@@ -145,20 +148,20 @@ function installStyles() {
     .prom-bot-roster-toolbar { display:flex; flex-direction:column; gap:7px; padding:0 4px 8px; }
     .prom-bot-roster-search { width:100%; box-sizing:border-box; border:1px solid var(--sidebar-icon-border,var(--line)); background:var(--sidebar-search-bg,var(--panel-2)); color:var(--sidebar-text,var(--text)); border-radius:9px; padding:7px 9px; font:inherit; font-size:11px; outline:none; }
     .prom-bot-roster-search:focus { border-color:color-mix(in srgb,var(--pm-gold,var(--brand)) 55%,transparent); box-shadow:0 0 0 2px color-mix(in srgb,var(--pm-gold,var(--brand)) 12%,transparent); }
-    .prom-bot-active-now { display:none; flex-direction:column; gap:5px; }
+    .prom-bot-active-now { display:none; flex-direction:column; gap:4px; }
     .prom-bot-active-now.visible { display:flex; }
-    .prom-bot-active-title { font-size:9px; text-transform:uppercase; letter-spacing:.12em; font-weight:800; color:var(--sidebar-muted,var(--muted)); }
-    .prom-bot-active-pills { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; padding-bottom:1px; }
-    .prom-bot-active-pills::-webkit-scrollbar { display:none; }
-    .prom-bot-active-pill { border:1px solid color-mix(in srgb,#36c986 35%,var(--line)); background:color-mix(in srgb,#36c986 9%,transparent); color:var(--sidebar-text,var(--text)); border-radius:999px; padding:4px 7px; font:inherit; font-size:9px; font-weight:750; white-space:nowrap; cursor:pointer; }
-    .prom-bot-agent-row.prom-bot-unread .prom-bot-agent-name { font-weight:900; }
+    .prom-bot-active-title { padding:0 4px; font-size:9px; text-transform:uppercase; letter-spacing:.12em; font-weight:800; color:var(--sidebar-muted,var(--muted)); }
+    .prom-bot-active-list { display:flex; flex-direction:column; gap:2px; }
+    .prom-bot-active-row.chat-session-item.job-item { width:100%; box-sizing:border-box; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; font:inherit; text-align:left; }
+    .prom-bot-active-row-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; font-weight:700; color:var(--sidebar-text,var(--text)); }
+    .prom-bot-agent-row.chat-session-item.job-item { width:100%; box-sizing:border-box; display:grid; grid-template-columns:30px minmax(0,1fr) auto; align-items:center; gap:9px; padding:7px 8px; }
+    .prom-bot-agent-row.unread .prom-bot-agent-name { font-weight:850; }
     .prom-bot-agent-preview { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; color:var(--sidebar-muted,var(--muted)); opacity:.9; }
-    .prom-bot-agent-badges { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:3px; min-width:44px; }
+    .prom-bot-agent-side { display:flex; min-width:44px; flex-direction:column; align-items:flex-end; justify-content:center; gap:2px; }
     .prom-bot-agent-time { font-size:9px; color:var(--sidebar-muted,var(--muted)); white-space:nowrap; }
-    .prom-bot-agent-signals { display:flex; align-items:center; justify-content:flex-end; gap:4px; min-height:13px; }
-    .prom-bot-needs-you { padding:2px 5px; border-radius:999px; background:color-mix(in srgb,#e8b84a 14%,transparent); border:1px solid color-mix(in srgb,#e8b84a 42%,transparent); color:var(--pm-gold,#e8b84a); font-size:8px; font-weight:850; white-space:nowrap; }
-    .prom-bot-unread-dot { width:6px; height:6px; border-radius:50%; background:var(--pm-gold,var(--brand)); box-shadow:0 0 0 3px color-mix(in srgb,var(--pm-gold,var(--brand)) 12%,transparent); }
-    .prom-bot-agent-state { margin-left:1px; }
+    .prom-bot-agent-status { min-height:11px; font-size:9px; font-weight:700; white-space:nowrap; }
+    .prom-bot-agent-status.priority-chat-unread { text-transform:lowercase; }
+    .prom-bot-agent-state { display:none !important; }
     .prom-bot-roster-no-results { padding:8px 10px 12px; color:var(--sidebar-muted,var(--muted)); font-size:11px; }
   `;
   document.head.appendChild(style);
@@ -198,35 +201,37 @@ function renderActiveNow() {
   host.replaceChildren();
   host.classList.toggle('visible', activeAgents.length > 0);
   if (!activeAgents.length) return;
+
   const title = document.createElement('div');
   title.className = 'prom-bot-active-title';
   title.textContent = 'Active now';
-  const pills = document.createElement('div');
-  pills.className = 'prom-bot-active-pills';
+  const list = document.createElement('div');
+  list.className = 'prom-bot-active-list';
   for (const agent of activeAgents) {
-    const pill = document.createElement('button');
-    pill.type = 'button';
-    pill.className = 'prom-bot-active-pill';
-    pill.textContent = agent.name || agent.id;
-    pill.addEventListener('click', () => document.querySelector(`#${LIST_ID} .prom-bot-agent-row[data-agent-id="${CSS.escape(agent.id)}"]`)?.click());
-    pills.appendChild(pill);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'prom-bot-active-row chat-session-item job-item is-working';
+    const name = document.createElement('span');
+    name.className = 'prom-bot-active-row-name';
+    name.textContent = agent.name || agent.id;
+    const state = document.createElement('span');
+    state.className = 'priority-chat-working';
+    state.textContent = 'working';
+    row.append(name, state);
+    row.addEventListener('click', () => document.querySelector(`#${LIST_ID} .prom-bot-agent-row[data-agent-id="${CSS.escape(agent.id)}"]`)?.click());
+    list.appendChild(row);
   }
-  host.append(title, pills);
+  host.append(title, list);
 }
 
-function ensureBadgeColumn(row) {
-  let badges = row.querySelector('.prom-bot-agent-badges');
-  if (badges) return badges;
-  badges = document.createElement('span');
-  badges.className = 'prom-bot-agent-badges';
-  const state = row.querySelector('.prom-bot-agent-state');
-  if (state) {
-    row.insertBefore(badges, state);
-    badges.appendChild(state);
-  } else {
-    row.appendChild(badges);
-  }
-  return badges;
+function ensureSideColumn(row) {
+  let side = row.querySelector('.prom-bot-agent-side');
+  if (side) return side;
+  side = document.createElement('span');
+  side.className = 'prom-bot-agent-side';
+  row.querySelector('.prom-bot-agent-state')?.remove();
+  row.appendChild(side);
+  return side;
 }
 
 function decorateRows() {
@@ -242,9 +247,12 @@ function decorateRows() {
     const matches = !searchQuery || searchable.includes(searchQuery);
     row.hidden = !matches;
     if (matches) visibleCount += 1;
-    if (!meta) continue;
 
-    row.classList.toggle('prom-bot-unread', meta.unread);
+    row.classList.add('chat-session-item', 'job-item');
+    if (!meta) continue;
+    row.classList.toggle('unread', meta.unread);
+    row.classList.toggle('is-working', meta.active);
+
     const copy = row.querySelector('.prom-bot-agent-copy');
     if (copy) {
       let preview = copy.querySelector('.prom-bot-agent-preview');
@@ -256,37 +264,33 @@ function decorateRows() {
       preview.textContent = meta.preview;
     }
 
-    const badges = ensureBadgeColumn(row);
-    let time = badges.querySelector('.prom-bot-agent-time');
+    const side = ensureSideColumn(row);
+    let time = side.querySelector('.prom-bot-agent-time');
     if (!time) {
       time = document.createElement('span');
       time.className = 'prom-bot-agent-time';
-      badges.prepend(time);
+      side.appendChild(time);
     }
     time.textContent = relativeTime(meta.latestTs);
 
-    let signals = badges.querySelector('.prom-bot-agent-signals');
-    if (!signals) {
-      signals = document.createElement('span');
-      signals.className = 'prom-bot-agent-signals';
-      badges.insertBefore(signals, badges.querySelector('.prom-bot-agent-state'));
+    let status = side.querySelector('.prom-bot-agent-status');
+    if (!status) {
+      status = document.createElement('span');
+      status.className = 'prom-bot-agent-status';
+      side.appendChild(status);
     }
-    signals.replaceChildren();
+    status.className = 'prom-bot-agent-status';
+    status.textContent = '';
     if (meta.needsYou) {
-      const needs = document.createElement('span');
-      needs.className = 'prom-bot-needs-you';
-      needs.textContent = 'Needs you';
-      signals.appendChild(needs);
+      status.classList.add('priority-chat-unread');
+      status.textContent = 'needs you';
+    } else if (meta.active) {
+      status.classList.add('priority-chat-working');
+      status.textContent = 'working';
+    } else if (meta.unread) {
+      status.classList.add('priority-chat-unread');
+      status.textContent = 'unread';
     }
-    if (meta.unread) {
-      const dot = document.createElement('span');
-      dot.className = 'prom-bot-unread-dot';
-      dot.title = 'Unread';
-      signals.appendChild(dot);
-    }
-    const state = badges.querySelector('.prom-bot-agent-state');
-    state?.classList.toggle('working', meta.active);
-    if (state) state.title = meta.active ? 'Working' : 'Ready';
   }
 
   let noResults = document.querySelector(`#${LIST_ID} .prom-bot-roster-no-results`);
@@ -304,9 +308,8 @@ function decorateRows() {
 }
 
 async function hydrateRoster({ force = false } = {}) {
+  void force;
   if (!window.promBotMode || document.hidden) return [];
-  // Single-flight regardless of caller intent: focus/timer/list updates may
-  // coincide, but the roster never needs overlapping metadata sweeps.
   if (hydratePromise) return hydratePromise;
   const agents = collectAgentsFromRows();
   if (!agents.length) return [];
@@ -335,8 +338,6 @@ function bindListObserver() {
   if (!list || list === observedList) return;
   listObserver?.disconnect();
   observedList = list;
-  // The base Prom Bot shell replaces this list when the roster changes. Observe
-  // only its direct children so our own preview/badge DOM never wakes hydration.
   listObserver = new MutationObserver(queueHydrate);
   listObserver.observe(list, { childList: true, subtree: false });
   list.addEventListener('click', (event) => {
@@ -361,10 +362,6 @@ function startRefreshTimer() {
 
 function initRosterIntelligence() {
   installStyles();
-  // prom-bot.js is imported before this module. During initial page loading its
-  // DOMContentLoaded listener is registered first, so the shell/list exists by
-  // the time this initializer runs; subsequent roster replacement is captured
-  // by the narrow list observer above.
   ensureToolbar();
   bindListObserver();
   startRefreshTimer();
