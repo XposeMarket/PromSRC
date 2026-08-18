@@ -22,10 +22,15 @@ import {
   loadMobileGatewaySessionGroups,
   searchMobileGatewaySessions,
   parseTargetNamespacedId,
+  targetNamespacedId,
   bindMobileSessionTarget,
+  getGateway,
+  getMobileSessionTarget,
+  resolveMobileSessionGateway,
   hasAnyGatewayCredential,
   isMobileGatewayCatalogEnabled,
   getPendingGatewayPair,
+  onGatewayCatalogChanged,
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
 
@@ -219,6 +224,35 @@ const TAB_FOR_PAGE = {
   schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null, gateways: null,
 };
 
+function _repairNamespacedChatRoute(page, arg) {
+  if (page !== 'chat' || !arg) return arg;
+  try {
+    const decoded = decodeURIComponent(arg);
+    const parsed = parseTargetNamespacedId(decoded);
+    if (!parsed) return arg;
+    // A currently valid explicit gateway selection is authoritative. Repair is
+    // only for routes whose embedded gateway identity disappeared after the
+    // same computer was re-registered under a replacement identity.
+    if (getGateway(parsed.gatewayId)) return arg;
+    const bound = getMobileSessionTarget(parsed.targetId);
+    if (!bound?.gatewayId) return arg;
+    const recoveredGateway = resolveMobileSessionGateway(parsed.targetId, { fallbackToCurrentGateway: false });
+    if (!recoveredGateway?.gatewayId || recoveredGateway.gatewayId === parsed.gatewayId) return arg;
+
+    // Only an existing persisted session binding is eligible for repair. The
+    // resolver may follow that binding's recorded same-origin replacement, but
+    // it never gets a chance to choose the unrelated active gateway for an
+    // unbound/corrupt route.
+    const repaired = targetNamespacedId(recoveredGateway.gatewayId, parsed.targetId);
+    if (!repaired) return arg;
+    const repairedHash = '#mobile/chat/' + encodeURIComponent(repaired);
+    history.replaceState(null, '', (window.location.pathname || '/') + (window.location.search || '') + repairedHash);
+    return encodeURIComponent(repaired);
+  } catch {
+    return arg;
+  }
+}
+
 function render() {
   const renderGeneration = ++mobileRenderGeneration;
   try {
@@ -261,6 +295,7 @@ function render() {
   }
 
   let { page, arg, extra } = mobileRouteFromLocation();
+  arg = _repairNamespacedChatRoute(page, arg);
   const pairCode = _pairCodeFromUrl();
   const scannerPairCode = page === 'pair' && arg === 'add' ? getPendingGatewayPair() : '';
   const activePairCode = pairCode || scannerPairCode;
@@ -461,13 +496,32 @@ function safeRender() {
 function recoverMobileBootSurface() {
   if (!isMobileRoute()) return;
   const root = document.getElementById('mobile-root');
-  if (!root || root.hidden || !root.querySelector('.pm-app')) {
+  const route = mobileRouteFromLocation();
+  let targetedChat = false;
+  if (route.page === 'chat' && route.arg) {
+    try { targetedChat = Boolean(parseTargetNamespacedId(decodeURIComponent(route.arg))); } catch {}
+  }
+  // iOS can keep a fully rendered page alive while the gateway catalog changes
+  // underneath it. Re-render targeted chats on resume/focus so route repair can
+  // clear a stale unavailable-gateway banner without forcing the user to leave
+  // the thread first.
+  if (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat) {
     safeRender();
   }
   if (getDeviceToken()) {
     try { ensureWSConnected({ timeoutMs: 6000 }); } catch {}
   }
 }
+
+// Same-origin gateway identity replacement can happen while the mobile chat is
+// visible. Repaint immediately; _repairNamespacedChatRoute() will canonicalize
+// the old gateway-id::session-id route using only that session's persisted
+// binding/origin, never the arbitrary active gateway.
+onGatewayCatalogChanged((detail) => {
+  if (detail?.type !== 'gateway_identity_migrated') return;
+  const route = mobileRouteFromLocation();
+  if (route.page === 'chat') safeRender();
+});
 
 window.addEventListener('hashchange', safeRender);
 window.addEventListener('popstate', safeRender);
