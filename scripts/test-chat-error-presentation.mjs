@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,3 +51,9 @@ assert.match(goals, /lastVerdict: 'stopped'/, 'user-marked-done goals must be pe
 assert.match(goals, /goal\.lastVerdict === 'stopped'\) return null/, 'stopped goals must not emit completion totals');
 
 console.log('[chat-error-presentation] typed errors, retry coalescing, and neutral goal stops passed');
+console.log('[audit] starting exhaustive direct internal-tool benchmark');
+execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['tsx', 'scripts/benchmark-all-tools-direct.ts'], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, PROMETHEUS_DIRECT_TOOL_BENCH_TIMEOUT_MS: '5000' },
+});
