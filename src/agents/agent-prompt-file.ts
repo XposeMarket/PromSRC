@@ -27,16 +27,18 @@ function readText(filePath: string): string | null {
  * actual tool/workspace/run policy is enforced structurally by the runtime.
  *
  * This only normalizes the known generated bootstrap template. Explicit user
- * writes and migrated legacy AGENT.md files remain byte-for-byte untouched.
+ * writes, migrated legacy AGENT.md files, and unrelated bootstrap templates
+ * remain byte-for-byte untouched.
  */
 export function normalizeAgentPromptBootstrap(defaultContent: string): string {
-  const raw = String(defaultContent || '').trim();
-  if (!raw) return '';
+  const source = String(defaultContent || '');
+  const raw = source.trim();
+  if (!raw) return source;
 
   const isLegacyGeneratedBootstrap = raw.includes('## Role')
     && raw.includes('## Instructions')
     && raw.includes('- List tools this agent is allowed to use.');
-  if (!isLegacyGeneratedBootstrap) return `${raw}\n`;
+  if (!isLegacyGeneratedBootstrap) return source;
 
   const name = raw.match(/^#\s+(.+)$/m)?.[1]?.trim() || 'Agent';
   const roleMatch = raw.match(/## Role\s*\n([\s\S]*?)(?=\n## Instructions|$)/);
