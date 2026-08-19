@@ -39,6 +39,8 @@ jobs:
         run: node scripts/test-chat-streaming-render-coalescer.mjs
       - name: Verify chat timeline render-state ownership
         run: node scripts/test-chat-timeline-render-state.mjs
+      - name: Verify desktop chat composer component
+        run: node scripts/test-chat-desktop-composer.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
