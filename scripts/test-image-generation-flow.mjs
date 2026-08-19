@@ -90,8 +90,10 @@ assert.match(types, /ImageGenerationProviderCapabilities/, 'provider capabilitie
 assert.match(tool, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'generate_image schema must expose presentation_mode');
 assert.match(defs, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'model-facing tool definitions must expose presentation_mode');
 
-assert.match(registry, /providerSupportsRequest\([\s\S]*?transparency[\s\S]*?maskEditing[\s\S]*?partialStreaming/, 'registry must route by provider capabilities');
-assert.match(registry, /partialImages > 0[\s\S]*partialStreaming/, 'registry must require partial-streaming support only when partial images are requested');
+assert.match(registry, /providerSupportsRequest\([\s\S]*?transparency[\s\S]*?maskEditing[\s\S]*?exactSizes/, 'registry must route by provider capabilities');
+assert.match(registry, /partialStreaming \? requestedPartialImages : 0/, 'registry must degrade partial-image streaming instead of rejecting providers that do not support it');
+assert.doesNotMatch(registry, /does not support partial image streaming/, 'xAI/OpenAI image gen must not hard-fail on preview streaming');
+assert.match(webMedia, /partial_images: args\.partial_images,/, 'workflow media executor must not force partial_images=1');
 assert.match(registry, /exactSizeRequested[\s\S]*exactSizes/, 'registry must reject exact width/height requests for providers without exact-size support');
 assert.match(registry, /Mask editing requires at least one reference image edit target/, 'mask edits must require an edit target');
 assert.match(registry, /normalizeImageSize/, 'registry must validate exact sizes before provider execution');

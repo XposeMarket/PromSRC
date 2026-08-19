@@ -92,7 +92,6 @@ function providerSupportsRequest(provider: ImageGenerationProvider, request: {
   if (request.referenceImages.length && !caps.referenceImages) return `${provider.id} does not support reference image inputs.`;
   if (request.referenceImages.length > caps.maxReferenceImages) return `${provider.id} supports at most ${caps.maxReferenceImages} reference image(s).`;
   if (request.mask && !caps.maskEditing) return `${provider.id} does not support selection/mask editing.`;
-  if (request.partialImages > 0 && !caps.partialStreaming) return `${provider.id} does not support partial image streaming.`;
   if (request.exactSizeRequested && !caps.exactSizes) return `${provider.id} does not support exact width/height image sizes.`;
   return null;
 }
@@ -112,8 +111,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   const quality = normalizeImageQuality(request.quality);
   const presentationMode = normalizeImagePresentationMode(request.presentation_mode);
   const partialImagesRaw = request.partial_images === true ? 1 : Math.floor(Number(request.partial_images));
-  const partialImages = Math.max(0, Math.min(3, Number.isFinite(partialImagesRaw) ? partialImagesRaw : (presentationMode === 'background' ? 1 : 0)));
-  const stream = request.stream === true || partialImages > 0;
+  const requestedPartialImages = Math.max(0, Math.min(3, Number.isFinite(partialImagesRaw) ? partialImagesRaw : (presentationMode === 'background' ? 1 : 0)));
+  const requestedStream = request.stream === true || requestedPartialImages > 0;
   const exactSizeRequested = request.size != null || request.width != null || request.height != null;
   const imageCfg = getImageGenerationConfig();
   const saveToWorkspace = request.save_to_workspace ?? imageCfg.save_to_workspace;
@@ -162,7 +161,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       const provider = PROVIDERS_BY_ID.get(candidateId);
       if (!provider) continue;
       sawKnownProvider = true;
-      const incompatibility = providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages, exactSizeRequested });
+      const incompatibility = providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages: requestedPartialImages, exactSizeRequested });
       if (incompatibility) {
         return buildImageGenerationError({
           provider: provider.id,
@@ -178,6 +177,8 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
       }
       if (await provider.isAvailable()) {
         const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
+        const partialImages = provider.capabilities.partialStreaming ? requestedPartialImages : 0;
+        const stream = provider.capabilities.partialStreaming ? requestedStream : false;
         return provider.generate({
           prompt,
           aspect_ratio: aspectRatio,
@@ -222,9 +223,11 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
   for (const candidateId of buildAutoCandidateIds(request.provider)) {
     const provider = PROVIDERS_BY_ID.get(candidateId);
     if (!provider) continue;
-    if (providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages, exactSizeRequested })) continue;
+    if (providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages: requestedPartialImages, exactSizeRequested })) continue;
     if (await provider.isAvailable()) {
       const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
+      const partialImages = provider.capabilities.partialStreaming ? requestedPartialImages : 0;
+      const stream = provider.capabilities.partialStreaming ? requestedStream : false;
       return provider.generate({
         prompt,
         aspect_ratio: aspectRatio,
