@@ -50,6 +50,7 @@ import { encodeInlineJsString } from '../features/chat/rendering/inline-escape.j
 import { normalizePrometheusQuestionRecord } from '../features/chat/questions/model.js';
 import { renderInlinePrometheusQuestion } from '../features/chat/questions/QuestionCard.js';
 import { applyPrometheusQuestionComposerAnswer, collectPrometheusQuestionAnswers, toggleQuestionOther, toggleQuestionRadio } from '../features/chat/questions/interactions.js';
+import { getMissingPrometheusQuestionAnswers, questionFromEventPayload } from '../features/chat/questions/contracts.js';
 import { cssEscapeValue } from '../features/chat/rendering/css-escape.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
@@ -45626,32 +45627,10 @@ function renderSessionApprovalCard(item) {
 
 // Single_select radios can't be deselected natively. On mousedown, if the radio
 // is already checked, cancel the event and uncheck it so the user can clear it.
-function getMissingPrometheusQuestionAnswers(question, payload) {
-  const answers = Array.isArray(payload?.answers) ? payload.answers : [];
-  return (question?.questions || []).filter((item) => {
-    if (item?.required === false) return false;
-    const answer = answers.find((candidate) => String(candidate?.id || '') === String(item?.id || ''));
-    return !answer || (
-      !(Array.isArray(answer.selected) && answer.selected.length)
-      && !String(answer.text || '').trim()
-      && !String(answer.other || '').trim()
-    );
-  });
-}
-
 function focusPrometheusQuestionComposer() {
   const input = document.getElementById('chat-input');
   if (!input) return;
   try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
-}
-
-function questionFromEventPayload(event = {}, status = '') {
-  const id = String(event.questionId || event.id || event.question?.id || '').trim();
-  const base = event.question && typeof event.question === 'object' ? event.question : {};
-  const question = normalizePrometheusQuestionRecord(base, { ...event, id, status: status || base.status || event.status || 'pending' });
-  if (!question.sessionId) question.sessionId = String(event.sessionId || window.activeChatSessionId || '').trim();
-  if (status) question.status = status;
-  return question;
 }
 
 function upsertInlinePrometheusQuestion(questionInput, options = {}) {
@@ -49097,7 +49076,7 @@ wsEventBus.on('coordinator_progress', (msg) => {
       // Insert into the question's OWN session (upsert handles non-active sessions
       // by marking unread) — do not gate on the currently-focused session, or
       // questions from background tasks / subagents never render.
-      const question = msg.question ? questionFromEventPayload(msg, 'pending') : normalizePrometheusQuestionRecord(await fetchPrometheusQuestionDetailsById(msg.questionId), { ...msg, status: 'pending' });
+      const question = msg.question ? questionFromEventPayload(msg, 'pending', window.activeChatSessionId) : normalizePrometheusQuestionRecord(await fetchPrometheusQuestionDetailsById(msg.questionId), { ...msg, status: 'pending' });
       upsertInlinePrometheusQuestion(question);
       return;
     }
