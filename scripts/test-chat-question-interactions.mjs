@@ -57,11 +57,13 @@ const card = document.querySelector('[data-question-id="question-1"]');
 assert.equal(card.getAttribute('data-question-compose-target'), 'choice::other');
 assert.equal(composerFocused, true, 'Other targeting must focus the main composer');
 
-radioA.checked = true;
-document.getElementById('radio-b').checked = true;
+// LinkeDOM's selector engine keys :checked off the markup attribute rather than
+// later property assignments. Use checked attributes for the collection fixture.
+radioA.setAttribute('checked', '');
+document.getElementById('radio-b').setAttribute('checked', '');
 const multi = card.querySelectorAll('[data-question-id="multi"]');
-multi[0].checked = true;
-multi[1].checked = true;
+multi[0].setAttribute('checked', '');
+multi[1].setAttribute('checked', '');
 const question = {
   id: 'question-1',
   questions: [
