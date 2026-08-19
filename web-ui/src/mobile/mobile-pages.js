@@ -6490,48 +6490,33 @@ function _renderMobileEmailComposerArtifact(a) {
   const id = String(a.id || `email_${Date.now().toString(36)}`).trim();
   const status = String(a.status || a.mode || 'draft').toLowerCase();
   const sent = status === 'sent' || String(a.mode || '').toLowerCase() === 'sent';
-  const readonly = sent ? ' readonly' : '';
-  const disabled = sent ? ' disabled' : '';
-  const open = sent ? '' : ' open';
-  const title = sent ? 'Email sent' : 'Email draft';
   const to = _mobileEmailList(a.to).join(', ');
   const cc = _mobileEmailList(a.cc).join(', ');
   const bcc = _mobileEmailList(a.bcc).join(', ');
   const subject = String(a.subject || '').trim();
-  const body = String(a.body || '').trim();
+  const body = String(a.body || '');
   const attachments = Array.isArray(a.attachments) ? a.attachments.filter(Boolean) : [];
+  const title = sent ? 'Email sent' : (subject || 'New email');
   const sentMeta = [
     a.sentAt ? new Date(a.sentAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '',
     a.messageId ? `Message ${String(a.messageId).slice(0, 18)}` : '',
   ].filter(Boolean).join(' · ');
-  return `<details class="pm-email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-composer-id="${escapeHtml(id)}"${open}>
-    <summary class="pm-email-composer-summary">
-      <span class="pm-email-composer-dot">${sent ? '✓' : '✉'}</span>
-      <span><strong>${escapeHtml(title)}</strong><em>${escapeHtml(subject || '(no subject)')}</em>${sentMeta ? `<small>${escapeHtml(sentMeta)}</small>` : ''}</span>
-    </summary>
-    <div class="pm-email-composer-panel">
-      <label class="pm-email-composer-field"><span>To</span><input type="text" data-email-field="to" value="${escapeHtml(to)}"${readonly} autocomplete="off"></label>
-      <div class="pm-email-composer-two">
-        <label class="pm-email-composer-field"><span>Cc</span><input type="text" data-email-field="cc" value="${escapeHtml(cc)}"${readonly} autocomplete="off"></label>
-        <label class="pm-email-composer-field"><span>Bcc</span><input type="text" data-email-field="bcc" value="${escapeHtml(bcc)}"${readonly} autocomplete="off"></label>
-      </div>
-      <label class="pm-email-composer-field"><span>Subject</span><input type="text" data-email-field="subject" value="${escapeHtml(subject)}"${readonly} autocomplete="off"></label>
-      <textarea class="pm-email-composer-body" data-email-field="body" rows="9"${readonly}>${escapeHtml(body)}</textarea>
-      ${attachments.length ? `<div class="pm-email-composer-attachments">${attachments.map((att) => {
-        const name = String(att?.name || att?.filename || 'Attachment').trim();
-        const size = att?.size ? ` · ${_formatBytes(Number(att.size) || 0)}` : '';
-        return `<span>${ICONS.paperclip}${escapeHtml(name)}${escapeHtml(size)}</span>`;
-      }).join('')}</div>` : ''}
-      <div class="pm-email-composer-actions">
-        ${sent ? `<span class="pm-email-composer-sent">Sent from Gmail</span>` : `<button type="button" class="pm-email-composer-send" data-email-composer-action="send">${ICONS.send}<span>Send</span></button>`}
-        <button type="button" class="pm-email-composer-tool" data-email-composer-action="format" title="Format">Aa</button>
-        <button type="button" class="pm-email-composer-tool" data-email-composer-action="emoji" title="Emoji">☺</button>
-        <button type="button" class="pm-email-composer-tool" data-email-composer-action="attach" title="Attach">${ICONS.paperclip}</button>
-        <button type="button" class="pm-email-composer-tool" data-email-composer-action="image" title="Insert image">${ICONS.image}</button>
-        <button type="button" class="pm-email-composer-tool danger" data-email-composer-action="discard" title="Discard"${disabled}>${ICONS.trash}</button>
-      </div>
-    </div>
-  </details>`;
+  const hidden = (name, value) => `<input type="hidden" data-email-field="${name}" value="${escapeHtml(String(value || ''))}">`;
+  return `<article class="pm-email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-composer-id="${escapeHtml(id)}">
+    ${hidden('to', to)}${hidden('cc', cc)}${hidden('bcc', bcc)}${hidden('subject', subject)}
+    <textarea class="pm-email-composer-body" data-email-field="body" hidden>${escapeHtml(body)}</textarea>
+    <div class="pm-email-composer-kicker">${escapeHtml(title)}</div>
+    <div class="pm-email-composer-preview">${escapeHtml(body || '(empty draft)')}</div>
+    ${attachments.length ? `<div class="pm-email-composer-attachments">${attachments.map((att) => {
+      const name = String(att?.name || att?.filename || 'Attachment').trim();
+      return `<span>${ICONS.paperclip}${escapeHtml(name)}</span>`;
+    }).join('')}</div>` : ''}
+    ${sent ? `<div class="pm-email-composer-sent">Sent${sentMeta ? ' · ' + escapeHtml(sentMeta) : ''}</div>` : `<div class="pm-email-composer-actions">
+      <button type="button" class="pm-email-composer-send" data-email-composer-action="send">Send email</button>
+      <button type="button" class="pm-email-composer-discard" data-email-composer-action="discard">Discard</button>
+    </div>`}
+    <div class="pm-email-composer-notice" hidden></div>
+  </article>`;
 }
 
 function _findMobileEmailComposerArtifact(artifactId) {
