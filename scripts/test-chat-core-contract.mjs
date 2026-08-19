@@ -14,9 +14,11 @@ const pairs = [
   ['web-ui/src/features/chat/core/final-response.js', 'generated/public-web-ui/static/features/chat/core/final-response.js'],
   ['web-ui/src/features/chat/core/error-presentation.js', 'generated/public-web-ui/static/features/chat/core/error-presentation.js'],
   ['web-ui/src/features/chat/core/slash-commands.js', 'generated/public-web-ui/static/features/chat/core/slash-commands.js'],
+  ['web-ui/src/features/chat/core/background-agent-work.js', 'generated/public-web-ui/static/features/chat/core/background-agent-work.js'],
   ['web-ui/src/chat-final-response.js', 'generated/public-web-ui/static/chat-final-response.js'],
   ['web-ui/src/chat-error-presentation.js', 'generated/public-web-ui/static/chat-error-presentation.js'],
   ['web-ui/src/chat-slash-commands.js', 'generated/public-web-ui/static/chat-slash-commands.js'],
+  ['web-ui/src/background-agent-work.js', 'generated/public-web-ui/static/background-agent-work.js'],
 ];
 
 for (const [sourcePath, generatedPath] of pairs) {
@@ -49,10 +51,27 @@ assert.equal(desktopCommands.includes('/models'), false);
 assert.equal(mobileCommands.includes('/models'), true);
 assert.deepEqual(slash.mergeSlashCommandSkillIds('/visual make a chart', ['existing']), ['existing', 'interactive-visuals']);
 
+const background = await importSource('web-ui/src/features/chat/core/background-agent-work.js');
+const normalized = background.normalizeBackgroundAgentWork({
+  id: 'bg-1',
+  sessionId: 'session-1',
+  state: 'completed',
+  result: 'done',
+  processEntries: [{ type: 'tool', content: 'worked' }],
+});
+assert.equal(normalized.id, 'bg-1');
+assert.equal(normalized.sessionId, 'session-1');
+assert.equal(normalized.status, 'completed');
+assert.equal(normalized.events.length, 1);
+assert.equal(background.backgroundAgentPreview('a '.repeat(100), 20).length <= 20, true);
+assert.equal(background.backgroundAgentAgeLabel(Date.now(), Date.now()), 'just now');
+assert.equal(background.resolveBackgroundAgentIdentity('bg-1').name.length > 0, true);
+
 for (const [wrapper, target] of [
   ['web-ui/src/chat-final-response.js', './features/chat/core/final-response.js'],
   ['web-ui/src/chat-error-presentation.js', './features/chat/core/error-presentation.js'],
   ['web-ui/src/chat-slash-commands.js', './features/chat/core/slash-commands.js'],
+  ['web-ui/src/background-agent-work.js', './features/chat/core/background-agent-work.js'],
 ]) {
   const content = fs.readFileSync(path.join(root, wrapper), 'utf8');
   assert.match(content, new RegExp(target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
