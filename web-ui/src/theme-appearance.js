@@ -84,5 +84,4 @@ export function installThemeAppearance(onPaletteChanged) {
   if (typeof document === 'undefined') return;
   const run=()=>{mount();syncControls();};
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',run,{once:true}); else queueMicrotask(run);
-  new MutationObserver(run).observe(document.documentElement,{subtree:true,childList:true});
 }
