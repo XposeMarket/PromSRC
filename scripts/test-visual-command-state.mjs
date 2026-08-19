@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 const root = process.cwd();
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const commandSource = read('web-ui/src/chat-slash-commands.js');
+const commandSource = read('web-ui/src/features/chat/core/slash-commands.js');
 const commandModule = await import(`data:text/javascript;base64,${Buffer.from(commandSource).toString('base64')}`);
 for (const surface of ['desktop', 'mobile']) {
   const visual = commandModule.getChatSlashCommands(surface).find((item) => item.command === '/visual');
