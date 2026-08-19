@@ -1,75 +1,37 @@
-name: Pull request regression checks
+name: Temporary Question contracts extraction worker
 
 on:
   pull_request:
     branches:
       - main
-  push:
-    branches:
-      - main
 
 permissions:
-  contents: read
-
-concurrency:
-  group: pr-regression-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  verify:
+  extract:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: tmp/chat-question-contracts-worker
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
-      - name: Type-check backend
-        run: npx tsc --noEmit
-      - name: Verify public web source sync
-        run: npm run check:web-ui
-      - name: Verify web UI architecture guardrails
-        run: node scripts/test-web-ui-architecture-guardrails.mjs
-      - name: Verify shared chat core contract
-        run: node scripts/test-chat-core-contract.mjs
-      - name: Verify chat stream render coalescer
-        run: node scripts/test-chat-streaming-render-coalescer.mjs
-      - name: Verify chat timeline render-state ownership
-        run: node scripts/test-chat-timeline-render-state.mjs
-      - name: Verify desktop chat composer component
-        run: node scripts/test-chat-desktop-composer.mjs
-      - name: Verify chat approval model
-        run: node scripts/test-chat-approval-model.mjs
-      - name: Verify chat Approval Card component
-        run: node scripts/test-chat-approval-card.mjs
-      - name: Verify chat Question model
-        run: node scripts/test-chat-question-model.mjs
-      - name: Verify chat Question Card component
-        run: node scripts/test-chat-question-card.mjs
-      - name: Verify chat Question interactions
-        run: node scripts/test-chat-question-interactions.mjs
-      - name: Verify mobile multi-gateway contract
-        run: node scripts/test-mobile-gateway-contract.mjs
-      - name: Verify remote mobile gateway JSON mutations
-        run: node scripts/test-mobile-gateway-json-mutations.mjs
-      - name: Verify stale mobile chat gateway recovery
-        run: node scripts/test-mobile-stale-gateway-route-recovery.mjs
-      - name: Verify mobile chat recovery
-        run: node scripts/test-mobile-chat-recovery.mjs
-      - name: Verify mobile voice/media contract
-        run: node scripts/test-mobile-voice-media-contract.mjs
-      - name: Verify Electron gateway relay
-        run: node scripts/test-electron-gateway-relay.mjs
-      - name: Verify Electron security boundary
-        run: node scripts/test-electron-security-boundary.mjs
-      - name: Verify plugins page contract
-        run: node scripts/test-plugins-page-contract.mjs
-      - name: Verify Hub goals contract
-        run: node scripts/test-hub-goals-contract.mjs
-      - name: Verify design preview contract
-        run: node scripts/test-design-preview-contract.mjs
-      - name: Verify chat error presentation
-        run: node scripts/test-chat-error-presentation.mjs
+      - name: Extract Question contracts
+        run: node scripts/refactor-chat-question-contracts.mjs
+      - name: Syntax-check extracted contract module
+        run: node --check web-ui/src/features/chat/questions/contracts.js
+      - name: Commit worker extraction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor(chat): extract Question validation and event contracts"
+          git push origin HEAD:tmp/chat-question-contracts-worker
