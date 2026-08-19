@@ -18,8 +18,6 @@ assert.equal(
 const { window } = parseHTML('<html><body><div id="chat-model-name">Fallback Model</div></body></html>');
 globalThis.window = window;
 globalThis.document = window.document;
-globalThis.navigator = window.navigator;
-globalThis.Event = window.Event;
 
 const mod = await import(`${pathToFileURL(sourcePath).href}?test=${Date.now()}`);
 const markup = mod.renderUnifiedDesktopComposerHtml({
