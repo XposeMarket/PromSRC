@@ -51,6 +51,18 @@ assert.equal(desktopCommands.includes('/models'), false);
 assert.equal(mobileCommands.includes('/models'), true);
 assert.deepEqual(slash.mergeSlashCommandSkillIds('/visual make a chart', ['existing']), ['existing', 'interactive-visuals']);
 
+let backgroundRaw = JSON.stringify([
+  { id: 'bg-cache-1', sessionId: 'session-cache', status: 'running', updatedAt: 1 },
+]);
+globalThis.localStorage = {
+  getItem(key) {
+    return key === 'prometheus_background_agent_work_v1' ? backgroundRaw : null;
+  },
+  setItem(key, value) {
+    if (key === 'prometheus_background_agent_work_v1') backgroundRaw = String(value);
+  },
+};
+
 const background = await importSource('web-ui/src/features/chat/core/background-agent-work.js');
 const normalized = background.normalizeBackgroundAgentWork({
   id: 'bg-1',
@@ -66,6 +78,26 @@ assert.equal(normalized.events.length, 1);
 assert.equal(background.backgroundAgentPreview('a '.repeat(100), 20).length <= 20, true);
 assert.equal(background.backgroundAgentAgeLabel(Date.now(), Date.now()), 'just now');
 assert.equal(background.resolveBackgroundAgentIdentity('bg-1').name.length > 0, true);
+
+const firstRead = background.readBackgroundAgentWork();
+const secondRead = background.readBackgroundAgentWork();
+assert.strictEqual(secondRead, firstRead, 'unchanged serialized background work should reuse the normalized array');
+assert.equal(firstRead[0].id, 'bg-cache-1');
+
+backgroundRaw = JSON.stringify([
+  { id: 'bg-cache-2', sessionId: 'session-cache', status: 'completed', updatedAt: 2 },
+]);
+const changedRead = background.readBackgroundAgentWork();
+assert.notStrictEqual(changedRead, secondRead, 'changed serialized background work must invalidate the cache');
+assert.equal(changedRead[0].id, 'bg-cache-2');
+
+const written = background.writeBackgroundAgentWork([
+  { id: 'bg-cache-3', sessionId: 'session-cache', status: 'completed', updatedAt: 3 },
+]);
+assert.strictEqual(background.readBackgroundAgentWork(), written, 'writes should seed the same normalized cache used by reads');
+assert.equal(written[0].id, 'bg-cache-3');
+
+delete globalThis.localStorage;
 
 for (const [wrapper, target] of [
   ['web-ui/src/chat-final-response.js', './features/chat/core/final-response.js'],
