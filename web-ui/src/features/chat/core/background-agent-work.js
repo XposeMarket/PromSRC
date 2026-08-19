@@ -1,5 +1,8 @@
 const BACKGROUND_AGENT_WORK_KEY = 'prometheus_background_agent_work_v1';
 
+let backgroundAgentWorkCacheRaw = null;
+let backgroundAgentWorkCache = null;
+
 export const BACKGROUND_AGENT_NAMES = [
   'Atlas', 'Athena', 'Apollo', 'Artemis', 'Ares', 'Hermes',
   'Hera', 'Helios', 'Iris', 'Nyx', 'Orion', 'Daphne',
@@ -119,12 +122,23 @@ export function normalizeBackgroundAgentWork(record = {}) {
   };
 }
 
+function cacheBackgroundAgentWork(raw, records) {
+  backgroundAgentWorkCacheRaw = raw;
+  backgroundAgentWorkCache = records;
+  return records;
+}
+
 export function readBackgroundAgentWork() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(BACKGROUND_AGENT_WORK_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.map(normalizeBackgroundAgentWork).filter(Boolean) : [];
+    const raw = localStorage.getItem(BACKGROUND_AGENT_WORK_KEY) || '[]';
+    if (raw === backgroundAgentWorkCacheRaw && Array.isArray(backgroundAgentWorkCache)) {
+      return backgroundAgentWorkCache;
+    }
+    const parsed = JSON.parse(raw);
+    const normalized = Array.isArray(parsed) ? parsed.map(normalizeBackgroundAgentWork).filter(Boolean) : [];
+    return cacheBackgroundAgentWork(raw, normalized);
   } catch {
-    return [];
+    return cacheBackgroundAgentWork(null, []);
   }
 }
 
@@ -135,10 +149,11 @@ export function writeBackgroundAgentWork(records = []) {
       .filter(Boolean)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 80);
-    localStorage.setItem(BACKGROUND_AGENT_WORK_KEY, JSON.stringify(normalized));
-    return normalized;
+    const raw = JSON.stringify(normalized);
+    localStorage.setItem(BACKGROUND_AGENT_WORK_KEY, raw);
+    return cacheBackgroundAgentWork(raw, normalized);
   } catch {
-    return [];
+    return cacheBackgroundAgentWork(null, []);
   }
 }
 
