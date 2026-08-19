@@ -1,0 +1,43 @@
+name: Temporary template-safe Approval Card extraction
+
+on:
+  push:
+    branches:
+      - agent/chat-approval-card
+    paths:
+      - .github/workflows/tmp-chat-approval-card-safe.yml
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chat-approval-card
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Safely extract Approval Card ownership
+        run: node scripts/refactor-chat-approval-card-safe.mjs
+      - name: Syntax-check transformed modules
+        run: |
+          node --check web-ui/src/pages/ChatPage.js
+          node --check web-ui/src/features/chat/approvals/ApprovalCard.js
+          node --check web-ui/src/features/chat/rendering/inline-escape.js
+      - name: Commit safe transformed source
+        run: |
+          rm scripts/refactor-chat-approval-card-safe.mjs
+          rm scripts/refactor-chat-approval-card-ast.mjs || true
+          rm .github/workflows/tmp-chat-approval-card-ast.yml || true
+          rm .github/workflows/tmp-chat-approval-card-ast-commit-first.yml || true
+          rm .github/workflows/tmp-chat-approval-card-safe.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(chat): extract Approval Card component"
+          git push origin HEAD:agent/chat-approval-card
