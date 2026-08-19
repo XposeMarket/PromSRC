@@ -35,6 +35,8 @@ jobs:
         run: node scripts/test-web-ui-architecture-guardrails.mjs
       - name: Verify shared chat core contract
         run: node scripts/test-chat-core-contract.mjs
+      - name: Verify Bot creation contract
+        run: node scripts/test-bot-creation-contract.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
