@@ -41,6 +41,7 @@ import {
   persistBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
+import { flushStreamingRenderFor, scheduleStreamingRenderFor } from '../features/chat/streaming/render-coalescer.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
 
@@ -13996,36 +13997,7 @@ function renderBackgroundAgentSidePaneHtml(record) {
     </section>`;
 }
 
-// ── Streaming render coalescer ──────────────────────────────────────────────
-// During an active turn, token/live-trace appends arrive faster than is useful
-// to repaint. State (streamingAIText, liveTraceEntries) is still updated
-// immediately on every token; only the *visible* render is coalesced to a steady
-// cadence so the final answer streams in a few words at a time (like Telegram's
-// bubble edits) instead of flickering per token. Timers are keyed per session id
-// so a background/non-viewed session can never repaint the foreground — the
-// render fns themselves also guard on visibility. Every finalization path must
-// flush so the complete final answer always lands.
-const STREAM_RENDER_THROTTLE_MS = 180;
-const _streamRenderTimers = new Map(); // sessionId -> timeout handle
 
-function scheduleStreamingRenderFor(sessionId, renderFn) {
-  const key = String(sessionId || '');
-  if (!key || typeof renderFn !== 'function') { try { renderFn?.(); } catch {} return; }
-  if (_streamRenderTimers.has(key)) return; // leading-guard coalesce
-  const handle = setTimeout(() => {
-    _streamRenderTimers.delete(key);
-    try { renderFn(); } catch {}
-  }, STREAM_RENDER_THROTTLE_MS);
-  if (handle && typeof handle.unref === 'function') handle.unref();
-  _streamRenderTimers.set(key, handle);
-}
-
-function flushStreamingRenderFor(sessionId, renderFn) {
-  const key = String(sessionId || '');
-  const handle = _streamRenderTimers.get(key);
-  if (handle) { clearTimeout(handle); _streamRenderTimers.delete(key); }
-  if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
-}
 
 function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const key = String(sessionId || window.activeChatSessionId || 'chat');
