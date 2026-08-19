@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      - name: Install dependencies without package lifecycle scripts
+        run: npm ci --ignore-scripts
       - name: Extract Question interaction helpers
         run: node scripts/refactor-chat-question-interactions.mjs
       - name: Syntax-check extracted modules
