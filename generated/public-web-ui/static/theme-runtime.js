@@ -46,7 +46,7 @@ function syncAfterExistingAppearance(id){
   syncCanonicalTokens();syncControls();
 }
 
-export function applyThemeDefinition(input,{persist=true}={}){
+export function applyThemeDefinition(input,{persist=false}={}){
   const el=root();const theme=normalizeTheme(input);if(!el)return theme;clearRuntime();
   el.setAttribute('data-theme',theme.base);el.setAttribute('data-skin','custom');el.setAttribute('data-theme-id',theme.id);el.setAttribute('data-theme-profile','custom');el.setAttribute('data-theme-engine','v2');
   for(const [property,value] of Object.entries(toLegacyVariables(theme)))set(property,value);
