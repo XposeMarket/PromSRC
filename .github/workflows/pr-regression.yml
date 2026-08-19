@@ -47,6 +47,8 @@ jobs:
         run: node scripts/test-chat-approval-card.mjs
       - name: Verify chat Question model
         run: node scripts/test-chat-question-model.mjs
+      - name: Verify chat Question Card component
+        run: node scripts/test-chat-question-card.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
