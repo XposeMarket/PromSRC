@@ -69,7 +69,8 @@ for (const name of ['cssEscapeValue', ...interactionNames]) {
   assert.equal(nextChat.includes(`function ${name}(`), false, `${name} declaration must move out of ChatPage`);
 }
 for (const name of interactionNames) {
-  assert.ok((nextChat.match(new RegExp(`${name}\\(`, 'g')) || []).length >= 1, `${name} call sites must remain in ChatPage`);
+  const references = nextChat.match(new RegExp(`\\b${name}\\b`, 'g')) || [];
+  assert.ok(references.length >= 2, `${name} must retain at least one page reference in addition to its import`);
 }
 assert.ok((nextChat.match(/cssEscapeValue\(/g) || []).length >= 4, 'shared cssEscapeValue call sites must remain');
 
