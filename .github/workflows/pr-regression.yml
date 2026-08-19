@@ -1,9 +1,9 @@
 name: Temporary Question interaction extraction worker
 
 on:
-  push:
+  pull_request:
     branches:
-      - tmp/chat-question-interactions-worker
+      - main
 
 permissions:
   contents: write
