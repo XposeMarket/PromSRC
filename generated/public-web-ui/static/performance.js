@@ -52,3 +52,11 @@ export function getClientPerformanceEvents() {
 
 window.__PROM_PERF_MARK = markClientPerformance;
 window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
+
+// Bot creation is a desktop shell affordance. performance.js is also imported
+// by the mobile router, so keep the module completely out of the PWA runtime.
+if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+  void import('./bot-create.js').catch((error) => {
+    console.warn('[Bot Create] Desktop creation module failed to load:', error);
+  });
+}
