@@ -1,0 +1,37 @@
+name: Temporary chat timeline render-state extraction
+
+on:
+  push:
+    branches:
+      - agent/chat-timeline-render-state
+    paths:
+      - .github/workflows/tmp-chat-timeline-extract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chat-timeline-render-state
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Extract timeline render-state ownership
+        run: node scripts/refactor-chat-timeline-render-state.mjs
+      - name: Verify extracted module
+        run: node scripts/test-chat-timeline-render-state.mjs
+      - name: Commit transformed source
+        run: |
+          rm scripts/refactor-chat-timeline-render-state.mjs
+          rm .github/workflows/tmp-chat-timeline-extract.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor(chat): extract timeline render state"
+          git push origin HEAD:agent/chat-timeline-render-state
