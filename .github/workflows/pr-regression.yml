@@ -31,6 +31,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Verify public web source sync
         run: npm run check:web-ui
+      - name: Verify theme system contract
+        run: node scripts/test-theme-system-contract.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
