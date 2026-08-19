@@ -1,0 +1,26 @@
+/** Theme System v2 semantic aliases. Existing theme CSS remains authoritative. */
+:root {
+  --prom-color-background: var(--bg);
+  --prom-color-background-soft: var(--bg-soft);
+  --prom-color-surface: var(--panel);
+  --prom-color-surface-strong: var(--panel-2);
+  --prom-color-text: var(--text);
+  --prom-color-text-muted: var(--muted);
+  --prom-color-border: var(--line);
+  --prom-color-border-strong: var(--line-strong);
+  --prom-color-accent: var(--brand);
+  --prom-color-accent-strong: var(--brand-2);
+  --prom-color-success: var(--ok);
+  --prom-color-warning: var(--warn);
+  --prom-color-danger: var(--err);
+  --prom-color-mobile-background: var(--pm-bg, var(--bg));
+  --prom-color-mobile-surface: var(--pm-surface, var(--panel));
+  --prom-color-mobile-text: var(--pm-text, var(--text));
+  --prom-color-mobile-accent: var(--pm-accent, var(--brand));
+}
+#settings-modal .appearance-theme-v2-section.is-disabled .prom-theme-v2-control-row { opacity: .58; }
+#settings-modal .appearance-theme-v2-section .prom-theme-v2-control-row { transition: opacity .15s ease; }
+#settings-modal .prom-theme-v2-contract-note { display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-top:12px;padding:11px 12px;border:1px solid var(--prom-color-border);border-radius:10px;background:color-mix(in srgb,var(--prom-color-accent) 5%,var(--prom-color-surface));color:var(--prom-color-text-muted);font-size:11px;line-height:1.45; }
+#settings-modal .prom-theme-v2-contract-note strong { flex:0 0 auto;color:var(--prom-color-text);font-size:11px; }
+#settings-modal .prom-theme-v2-contract-note span { max-width:560px;text-align:right; }
+@media (max-width:720px){#settings-modal .prom-theme-v2-contract-note{flex-direction:column;gap:4px}#settings-modal .prom-theme-v2-contract-note span{text-align:left}}
