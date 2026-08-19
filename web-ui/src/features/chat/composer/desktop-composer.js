@@ -1,3 +1,5 @@
+import { escHtml, showToast } from '../../../utils.js';
+
 /** Desktop composer rendering/dictation staged verbatim for dependency review. */
 
 export function renderUnifiedDesktopComposerHtml(options = {}) {
