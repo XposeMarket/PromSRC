@@ -7,7 +7,7 @@ import { connectorConnected, connectorHasCredentials, getLiveConnector, notConne
 
 const ID = 'gmail';
 const NAME = 'Gmail';
-const tools = ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_prepare_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'];
+const tools = ['connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_get_thread', 'connector_gmail_prepare_email', 'connector_gmail_send_email', 'connector_gmail_get_profile', 'connector_gmail_list_labels'];
 
 async function withConn(fn: (c: GmailConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -112,6 +112,14 @@ const ext: PrometheusExtensionDefinition = {
         const msg = await c.getMessageParsed(args.message_id);
         return toolOk(`Subject: ${msg.subject}\nFrom: ${msg.from}\nDate: ${msg.date}\n\n${msg.body || msg.snippet}`);
       }),
+    });
+
+    api.registerTool({
+      name: 'connector_gmail_get_thread',
+      description: '[Gmail] Fetch a full Gmail thread by thread ID.',
+      parameters: { type: 'object', required: ['thread_id'], properties: { thread_id: { type: 'string', description: 'Gmail thread ID' } } },
+      connectorId: ID, capability: 'email',
+      execute: (args: any) => withConn(async (c) => toolOk(await c.getThread(args.thread_id))),
     });
 
     api.registerTool({

@@ -51,6 +51,11 @@
       "connector_github_create_issue",
       "connector_github_create_repo",
       "connector_github_list_prs",
+      "connector_github_create_pr",
+      "connector_github_get_pr",
+      "connector_github_list_commits",
+      "connector_github_list_check_runs",
+      "connector_github_get_file",
       "connector_github_search"
     ]
   },
@@ -128,6 +133,7 @@
       { "id": "pull_requests.read", "label": "Read pull requests", "description": "Read pull request metadata.", "risk": "read" },
       { "id": "search.read", "label": "Search GitHub", "description": "Search repositories, code, and issues.", "risk": "read" },
       { "id": "issues.write", "label": "Create or update issues", "description": "State-changing issue operations require explicit approval.", "risk": "write" },
+      { "id": "pull_requests.write", "label": "Create pull requests", "description": "Opening a pull request is a state-changing GitHub mutation and requires explicit approval.", "risk": "write" },
       { "id": "repositories.create", "label": "Create repositories", "description": "Repository creation is a high-impact external mutation.", "risk": "high_impact" }
     ],
     "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
