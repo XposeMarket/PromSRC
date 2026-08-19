@@ -1,5 +1,16 @@
 /** Pure approval normalization and risk classification. */
 
+function getApprovalToolLabel(toolName = '') {
+  const tool = String(toolName || '').trim();
+  if (!tool) return 'action';
+  if (tool === 'desktop_click') return 'desktop click';
+  if (tool === 'desktop_press_key') return 'desktop keypress';
+  if (tool === 'browser_click') return 'browser click';
+  if (tool === 'browser_press_key' || tool === 'browser_key') return 'browser keypress';
+  if (tool === 'run_command') return 'command';
+  return tool.replace(/_/g, ' ');
+}
+
 function summarizeApprovalForHumans(record = {}, fallback = {}) {
   const toolName = String(record.toolName || fallback.toolName || '').trim();
   const approvalKind = String(record.approvalKind || fallback.approvalKind || '').trim();
