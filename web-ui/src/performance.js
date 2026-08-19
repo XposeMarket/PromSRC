@@ -1,3 +1,5 @@
+import './theme-runtime.js';
+
 /**
  * Privacy-conscious client performance marks.
  *
