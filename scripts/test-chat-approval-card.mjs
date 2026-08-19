@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { parseHTML } from 'linkedom';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cardPath = path.join(root, 'web-ui/src/features/chat/approvals/ApprovalCard.js');
@@ -18,6 +19,13 @@ const encoded = escape.encodeInlineJsString('approval"<&');
 assert.match(encoded, /^&quot;/);
 assert.equal(encoded.includes('<'), false);
 assert.equal(encoded.includes('&amp;'), true);
+
+// ApprovalCard imports the shared browser utility module for escHtml. Provide the
+// same minimal DOM globals the component has in production before importing it.
+const { window } = parseHTML('<html><body></body></html>');
+globalThis.window = window;
+globalThis.document = window.document;
+globalThis.Event = window.Event;
 
 const card = await import(`${pathToFileURL(cardPath).href}?test=${Date.now()}`);
 const browserMarkup = card.renderInlineApprovalRequest({
