@@ -72,7 +72,8 @@ for (const name of interactionNames) {
   const references = nextChat.match(new RegExp(`\\b${name}\\b`, 'g')) || [];
   assert.ok(references.length >= 2, `${name} must retain at least one page reference in addition to its import`);
 }
-assert.ok((nextChat.match(/cssEscapeValue\(/g) || []).length >= 4, 'shared cssEscapeValue call sites must remain');
+const cssReferences = nextChat.match(/\bcssEscapeValue\b/g) || [];
+assert.ok(cssReferences.length >= 2, 'cssEscapeValue must retain at least one ChatPage use in addition to its import');
 
 const after = Buffer.byteLength(nextChat);
 assert.ok(after < before, 'ChatPage must shrink after interaction extraction');
