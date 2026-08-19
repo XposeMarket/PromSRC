@@ -41,6 +41,8 @@ jobs:
         run: node scripts/test-chat-timeline-render-state.mjs
       - name: Verify desktop chat composer component
         run: node scripts/test-chat-desktop-composer.mjs
+      - name: Verify chat approval model
+        run: node scripts/test-chat-approval-model.mjs
       - name: Verify mobile multi-gateway contract
         run: node scripts/test-mobile-gateway-contract.mjs
       - name: Verify remote mobile gateway JSON mutations
