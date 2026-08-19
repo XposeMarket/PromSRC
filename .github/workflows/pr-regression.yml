@@ -17,5 +17,5 @@ jobs:
         with:
           ref: tmp/chat-question-interactions-worker
           fetch-depth: 1
-      - name: List Question-related ChatPage functions
-        run: grep -nE '^function .*([Qq]uestion)' web-ui/src/pages/ChatPage.js || true
+      - name: Show Question controller block
+        run: sed -n '45620,45735p' web-ui/src/pages/ChatPage.js
