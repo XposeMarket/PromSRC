@@ -75,6 +75,8 @@ import {
   XAI_LIVE_SEARCH_TOOL_NAME,
 } from '../defs/xai-tools.js';
 import { getValidXApiToken } from '../../../auth/x-api-oauth.js';
+import { validateXApiRequest } from '../x-api-request-policy.js';
+
 
 const DEFAULT_BASE_URL = 'https://api.x.ai/v1';
 const DEFAULT_X_SEARCH_MODEL = 'grok-4.3';
@@ -916,14 +918,15 @@ async function executeXApiTool(name: string, args: any): Promise<{ success: bool
     }
 
     if (name === X_API_REQUEST_TOOL_NAME) {
-      const method = String(args?.method || 'GET').toUpperCase();
-      if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
-        return { success: false, tool: name, error: 'method must be GET, POST, PUT, or DELETE.' };
-      }
-      const path = buildXApiPath(String(args?.path || ''), args?.query || {});
-      const data = await fetchXApi(path, {
-        method,
-        body: method === 'GET' ? undefined : JSON.stringify(args?.body || {}),
+      const request = validateXApiRequest({
+        method: args?.method,
+        path: buildXApiPath(String(args?.path || ''), args?.query || {}),
+        body: args?.body,
+        operationIntent: args?.operation_intent,
+      });
+      const data = await fetchXApi(request.path, {
+        method: request.method,
+        body: request.body === undefined ? undefined : JSON.stringify(request.body),
       });
       return { success: true, tool: name, data };
     }

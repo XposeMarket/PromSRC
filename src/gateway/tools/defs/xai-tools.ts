@@ -12,6 +12,7 @@ export const XAI_LIVE_SEARCH_TOOL_NAME = 'xai_live_search';
 export const X_API_ME_TOOL_NAME = 'x_api_me';
 export const X_API_REQUEST_TOOL_NAME = 'x_api_request';
 export const X_API_GET_POST_TOOL_NAME = 'x_api_get_post';
+
 export const X_API_GET_POSTS_TOOL_NAME = 'x_api_get_posts';
 export const X_API_SEARCH_RECENT_TOOL_NAME = 'x_api_search_recent';
 export const X_API_SEARCH_ALL_TOOL_NAME = 'x_api_search_all';
@@ -211,12 +212,13 @@ function toolDef(name: string, description: string, properties: Record<string, a
 export function getXApiRequestToolDef(): any {
   return toolDef(
     X_API_REQUEST_TOOL_NAME,
-    'Make an authenticated X API v2 request with the X API OAuth 2.0 user-context token. Use for newly-added or less common X API endpoints not covered by a dedicated tool. For write methods, use only when the user explicitly asks.',
+    'Make an authenticated X API v2 request with the X API OAuth 2.0 user-context token. Use for newly-added or less common X API endpoints not covered by a dedicated tool. Mutation requests require operation_intent and the normal approval policy.',
     {
-      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method.' },
+      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method.' },
       path: { type: 'string', description: 'X API path beginning with /, for example /tweets/search/recent. Do not include scheme or host.' },
       query: { type: 'object', description: 'Optional query string parameters.' },
-      body: { type: 'object', description: 'Optional JSON body for POST/PUT/DELETE requests.' },
+      body: { type: 'object', description: 'Optional JSON body for POST/PUT/PATCH/DELETE requests.' },
+      operation_intent: { type: 'string', description: 'Required for mutations. Briefly state the user-authorized operation.' },
     },
     ['method', 'path'],
   );
