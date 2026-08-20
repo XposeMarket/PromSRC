@@ -1,5 +1,6 @@
 import { listExtensionDescriptors } from './registry.js';
 import { getExtensionRuntimeRegistry } from './runtime-registry.js';
+import { getDeclaredExtensionTools } from './tool-contracts.js';
 
 export interface ConsistencyIssue {
   level: 'error' | 'warn';
@@ -34,10 +35,12 @@ export function checkExtensionConsistency(): ConsistencyIssue[] {
     }
   }
 
-  // 2. A tool name may be claimed by at most one connector manifest.
+  // 2. A tool name may be claimed by at most one connector manifest. Both the
+  // modern contracts.tools field and the legacy ownership.tools field resolve
+  // through the same canonical helper used by the connection planner.
   const toolClaim = new Map<string, string>();
   for (const d of listExtensionDescriptors('connector')) {
-    for (const toolName of d.ownership?.tools || []) {
+    for (const toolName of getDeclaredExtensionTools(d)) {
       const owner = toolClaim.get(toolName);
       if (owner && owner !== d.id) {
         issues.push({ level: 'error', code: 'tool_name_collision', message: `tool '${toolName}' claimed by both '${owner}' and '${d.id}'` });
@@ -47,19 +50,19 @@ export function checkExtensionConsistency(): ConsistencyIssue[] {
     }
   }
 
-  // 3. Manifest ownership.tools ↔ registered tools.
-  //    Native connectors MUST register everything they own (hard error).
+  // 3. Declared connector tools ↔ registered tools.
+  //    Native connectors MUST register everything they declare (hard error).
   //    Legacy connectors are warned (their tools may be conditional, e.g. x/xai
   //    tools only register when credentials exist).
   for (const d of listExtensionDescriptors('connector')) {
     const native = Boolean(d.runtime?.entrypoint);
-    for (const toolName of d.ownership?.tools || []) {
+    for (const toolName of getDeclaredExtensionTools(d)) {
       const reg = registeredByName.get(toolName);
       if (!reg) {
         issues.push({
           level: native ? 'error' : 'warn',
           code: 'missing_tool',
-          message: `${d.id}: ownership tool '${toolName}' is not registered${native ? ' (native connector)' : ''}`,
+          message: `${d.id}: declared tool '${toolName}' is not registered${native ? ' (native connector)' : ''}`,
         });
         continue;
       }
@@ -71,8 +74,10 @@ export function checkExtensionConsistency(): ConsistencyIssue[] {
   }
 
   // 3b. Native runtime connector declarations must be exact, not merely
-  // “at least one manifest tool registered”. This catches both stale manifests
-  // and a runtime file that silently registers a tool that was never reviewed.
+  // “at least one manifest tool registered”. This catches stale manifest lists,
+  // stale runtime toolNames arrays, and implemented tools that would otherwise
+  // exist in the runtime registry while remaining hidden from the connection
+  // contract/model surface.
   const runtimeConnectors = new Map(registry.listConnectors().map((connector) => [connector.id, connector]));
   for (const d of listExtensionDescriptors('connector')) {
     if (!d.runtime?.entrypoint) continue;
@@ -81,19 +86,31 @@ export function checkExtensionConsistency(): ConsistencyIssue[] {
       issues.push({ level: 'error', code: 'missing_connector_runtime', message: `${d.id}: native manifest has no registered connector runtime` });
       continue;
     }
-    const manifestTools = new Set((d.ownership?.tools || []).map(String).filter(Boolean));
+    const manifestTools = new Set(getDeclaredExtensionTools(d));
     const runtimeTools = new Set((runtime.toolNames || []).map(String).filter(Boolean));
+    const registeredConnectorTools = registry.listTools()
+      .filter((tool) => String((tool as { connectorId?: string }).connectorId || '').trim() === d.id)
+      .map((tool) => tool.name);
+
     for (const toolName of manifestTools) {
       if (!runtimeTools.has(toolName)) {
-        issues.push({ level: 'error', code: 'runtime_tool_missing_from_connector', message: `${d.id}: manifest tool '${toolName}' is missing from runtime connector toolNames` });
+        issues.push({ level: 'error', code: 'runtime_tool_missing_from_connector', message: `${d.id}: declared tool '${toolName}' is missing from runtime connector toolNames` });
       }
     }
     for (const toolName of runtimeTools) {
       if (!manifestTools.has(toolName)) {
-        issues.push({ level: 'error', code: 'runtime_tool_not_declared', message: `${d.id}: runtime connector declares '${toolName}' but the manifest does not own it` });
+        issues.push({ level: 'error', code: 'runtime_tool_not_declared', message: `${d.id}: runtime connector declares '${toolName}' but the manifest contract does not own it` });
       }
       if (!registeredByName.has(toolName)) {
         issues.push({ level: 'error', code: 'runtime_tool_not_registered', message: `${d.id}: runtime connector declares '${toolName}' but no tool definition is registered` });
+      }
+    }
+    for (const toolName of registeredConnectorTools) {
+      if (!manifestTools.has(toolName)) {
+        issues.push({ level: 'error', code: 'registered_tool_not_declared', message: `${d.id}: implemented tool '${toolName}' is registered at runtime but missing from the manifest contract` });
+      }
+      if (!runtimeTools.has(toolName)) {
+        issues.push({ level: 'error', code: 'registered_tool_missing_from_connector', message: `${d.id}: implemented tool '${toolName}' is registered at runtime but missing from connector toolNames` });
       }
     }
   }
