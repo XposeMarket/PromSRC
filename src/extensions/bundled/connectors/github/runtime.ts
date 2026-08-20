@@ -124,6 +124,8 @@ const ext: PrometheusExtensionDefinition = {
         });
         return toolOk(`Pull request created: #${pr.number} — ${pr.html_url}`);
       }),
+    });
+
 
     api.registerTool({
       name: 'connector_github_merge_pr',
