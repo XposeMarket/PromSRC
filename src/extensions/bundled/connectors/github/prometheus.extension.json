@@ -52,6 +52,7 @@
       "connector_github_create_repo",
       "connector_github_list_prs",
       "connector_github_create_pr",
+      "connector_github_merge_pr",
       "connector_github_get_pr",
       "connector_github_list_commits",
       "connector_github_list_check_runs",
@@ -123,6 +124,20 @@
         "config": {
           "provider": "github",
           "resourceScope": "authenticated account",
+          "registeredTools": [
+            "connector_github_list_repos",
+            "connector_github_list_issues",
+            "connector_github_create_issue",
+            "connector_github_create_repo",
+            "connector_github_list_prs",
+            "connector_github_create_pr",
+            "connector_github_merge_pr",
+            "connector_github_get_pr",
+            "connector_github_list_commits",
+            "connector_github_list_check_runs",
+            "connector_github_get_file",
+            "connector_github_search"
+          ],
           "rollback": "legacy-vault-session-remains-readable"
         }
       }
