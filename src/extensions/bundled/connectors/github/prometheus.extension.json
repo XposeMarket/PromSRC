@@ -136,7 +136,8 @@
             "connector_github_list_commits",
             "connector_github_list_check_runs",
             "connector_github_get_file",
-            "connector_github_search"
+            "connector_github_search",
+            "connector_github_api_request"
           ],
           "rollback": "legacy-vault-session-remains-readable"
         }

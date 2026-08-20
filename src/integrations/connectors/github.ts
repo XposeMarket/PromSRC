@@ -108,14 +108,31 @@ export class GitHubConnector extends OAuthConnector {
   }
 
   private async ghWrite(method: 'POST' | 'PUT' | 'PATCH', path: string, body: any): Promise<any> {
+    return this.ghRequest(method, path, body);
+  }
+
+  /** Complete GitHub REST API escape hatch, constrained to api.github.com. */
+  async ghRequest(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: any): Promise<any> {
+    const normalizedPath = String(path || '').trim();
+    if (!normalizedPath.startsWith('/') || normalizedPath.startsWith('//') || normalizedPath.includes('://')) {
+      throw new Error('GitHub API path must begin with / and stay under api.github.com.');
+    }
     const token = await this.getValidAccessToken();
-    const res = await fetch(`https://api.github.com${path}`, {
+    const res = await fetch(`https://api.github.com${normalizedPath}`, {
       method,
-      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS', Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'Prometheus-CIS',
+        Accept: 'application/vnd.github+json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text().catch(() => '')}`);
-    return res.json();
+    const text = await res.text();
+    let data: any;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${text}`);
+    return data;
   }
 
   async getUser(): Promise<any> {

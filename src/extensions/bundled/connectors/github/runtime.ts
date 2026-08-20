@@ -18,6 +18,7 @@ const tools = [
   'connector_github_list_check_runs',
   'connector_github_get_file',
   'connector_github_search',
+  'connector_github_api_request',
 ];
 
 function gh(): GitHubConnector | undefined {
@@ -219,6 +220,28 @@ const ext: PrometheusExtensionDefinition = {
         }
         const results = await c.searchRepos(args.query, args.per_page || 20);
         return toolOk(results.map((r: any) => `${r.full_name} — ${r.description || 'no description'} (⭐${r.stargazers_count})`).join('\n'));
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_api_request',
+      description: '[GitHub] Call any GitHub REST API endpoint. The path must begin with /. Mutations follow the Default/Lite connector approval policy.',
+      parameters: {
+        type: 'object',
+        required: ['method', 'path'],
+        properties: {
+          method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method.' },
+          path: { type: 'string', description: 'API-relative GitHub path, such as /repos/owner/repo/pulls/42.' },
+          body: { type: 'object', description: 'Optional JSON body for POST, PUT, and PATCH.' },
+        },
+      },
+      connectorId: ID,
+      capability: 'code-hosting',
+      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: true, credentialUse: true, known: true },
+      execute: (args: any) => withConn(async (c) => {
+        const method = String(args.method || '').toUpperCase();
+        const result = await c.ghRequest(method as any, args.path, args.body);
+        return toolOk(result);
       }),
     });
   },
