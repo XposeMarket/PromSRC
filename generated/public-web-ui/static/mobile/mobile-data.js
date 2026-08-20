@@ -8,7 +8,7 @@
 const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
 const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v292-2026-08-15-composer-stack-glass';
 const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
-const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v293-2026-08-19-demo-glass-match';
+const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v294-2026-08-19-demo-glass-corrected';
 
 function ensureMobileComposerStackStyles() {
   if (typeof document === 'undefined') return;
@@ -154,7 +154,7 @@ export const mobileTeams = [
   { id: 'oss-competitive-analysis', name: 'OSS Competitive Analysis', agents: 5, house: 'brown', featured: false },
   { id: 'daily-x-bookmark',          name: 'Daily X Bookmark → Prometheus Feature Pipeline', agents: 4, house: 'blue',  featured: true },
   { id: 'growth-team',              name: 'Growth Team', agents: 6, house: 'brown', featured: false },
-  { id: 'committee',                name: 'Committee', agents: 3, house: 'brown', featured: false },
+  { id: 'committee',                 name: 'Committee', agents: 3, house: 'brown', featured: false },
 ];
 
 export const mobileTeamDetail = {
