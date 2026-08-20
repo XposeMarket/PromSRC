@@ -5,7 +5,19 @@ import { connectorConnected, connectorHasCredentials, getLiveConnector, notConne
 
 const ID = 'github';
 const NAME = 'GitHub';
-const tools = ['connector_github_list_repos', 'connector_github_list_issues', 'connector_github_create_issue', 'connector_github_create_repo', 'connector_github_list_prs', 'connector_github_search'];
+const tools = [
+  'connector_github_list_repos',
+  'connector_github_list_issues',
+  'connector_github_create_issue',
+  'connector_github_create_repo',
+  'connector_github_list_prs',
+  'connector_github_create_pr',
+  'connector_github_get_pr',
+  'connector_github_list_commits',
+  'connector_github_list_check_runs',
+  'connector_github_get_file',
+  'connector_github_search',
+];
 
 function gh(): GitHubConnector | undefined {
   return getLiveConnector<GitHubConnector>(ID);
@@ -81,6 +93,81 @@ const ext: PrometheusExtensionDefinition = {
         const prs = await c.listPRs(args.owner, args.repo, args.state || 'open', args.per_page || 30);
         if (!prs.length) return toolOk('No pull requests found.');
         return toolOk(prs.map((p: any) => `#${p.number} [${p.state}] ${p.title}\n  by ${p.user?.login} | ${p.created_at?.slice(0, 10)} | ${p.draft ? 'DRAFT' : 'ready'}`).join('\n'));
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_create_pr',
+      description: '[GitHub] Create a pull request. Requires approval before execution.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'title', 'head', 'base'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner (username or org)' },
+          repo: { type: 'string', description: 'Repository name' },
+          title: { type: 'string', description: 'Pull request title' },
+          head: { type: 'string', description: 'Head branch, or owner:branch for a fork' },
+          base: { type: 'string', description: 'Base branch to merge into' },
+          body: { type: 'string', description: 'Pull request description (markdown supported)' },
+          draft: { type: 'boolean', description: 'Create as a draft pull request. Defaults to false.' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      execute: (args: any) => withConn(async (c) => {
+        const pr = await c.createPullRequest(args.owner, args.repo, {
+          title: args.title,
+          head: args.head,
+          base: args.base,
+          body: args.body || '',
+          draft: args.draft === true,
+        });
+        return toolOk(`Pull request created: #${pr.number} — ${pr.html_url}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_get_pr',
+      description: '[GitHub] Get a single pull request by number.',
+      parameters: { type: 'object', required: ['owner', 'repo', 'pr_number'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, pr_number: { type: 'number', description: 'Pull request number' } } },
+      connectorId: ID, capability: 'code-hosting',
+      execute: (args: any) => withConn(async (c) => {
+        const pr = await c.getPR(args.owner, args.repo, Number(args.pr_number));
+        return toolOk(`#${pr.number} [${pr.state}] ${pr.title}\n  ${pr.html_url}\n  ${pr.head?.ref} -> ${pr.base?.ref}\n  ${pr.body || ''}`);
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_list_commits',
+      description: '[GitHub] List recent commits for a repository.',
+      parameters: { type: 'object', required: ['owner', 'repo'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, per_page: { type: 'number', description: 'Number of commits (default: 20)' } } },
+      connectorId: ID, capability: 'code-hosting',
+      execute: (args: any) => withConn(async (c) => {
+        const commits = await c.listCommits(args.owner, args.repo, args.per_page || 20);
+        if (!commits.length) return toolOk('No commits found.');
+        return toolOk(commits.map((item: any) => `${item.sha?.slice(0, 7)} ${item.commit?.message?.split('\n')[0] || ''} (${item.commit?.author?.name || item.author?.login || 'unknown'})`).join('\n'));
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_list_check_runs',
+      description: '[GitHub] List check runs for a commit SHA or branch ref.',
+      parameters: { type: 'object', required: ['owner', 'repo', 'ref'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, ref: { type: 'string', description: 'Commit SHA or branch name' }, per_page: { type: 'number', description: 'Number of check runs (default: 30)' } } },
+      connectorId: ID, capability: 'code-hosting',
+      execute: (args: any) => withConn(async (c) => {
+        const runs = await c.listCheckRuns(args.owner, args.repo, args.ref, args.per_page || 30);
+        if (!runs.length) return toolOk('No check runs found.');
+        return toolOk(runs.map((run: any) => `${run.name}: ${run.status}/${run.conclusion || 'pending'} (${run.html_url || run.details_url || ''})`).join('\n'));
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_github_get_file',
+      description: '[GitHub] Read a file from a repository path.',
+      parameters: { type: 'object', required: ['owner', 'repo', 'path'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, path: { type: 'string', description: 'File path in the repository' } } },
+      connectorId: ID, capability: 'code-hosting',
+      execute: (args: any) => withConn(async (c) => {
+        const file = await c.getFileContents(args.owner, args.repo, args.path);
+        return toolOk(`sha: ${file.sha}\n\n${file.content}`);
       }),
     });
 

@@ -151,7 +151,7 @@ export class GitHubConnector extends OAuthConnector {
     return Array.isArray(data?.check_runs) ? data.check_runs : [];
   }
 
-  async createPullRequest(owner: string, repo: string, payload: { title: string; head: string; base: string; body?: string }): Promise<any> {
+  async createPullRequest(owner: string, repo: string, payload: { title: string; head: string; base: string; body?: string; draft?: boolean }): Promise<any> {
     return this.ghPost(`/repos/${owner}/${repo}/pulls`, payload);
   }
 
