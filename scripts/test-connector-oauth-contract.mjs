@@ -21,7 +21,7 @@ assert.equal(descriptor.connection?.strategies[0]?.adapter, 'connector-oauth');
 assert.equal(descriptor.connection?.strategies[0]?.authentication?.pkceRequired, true);
 assert.equal(descriptor.connection?.toolPolicy?.defaultExposure, 'read-only');
 assert.equal(descriptor.connection?.toolPolicy?.unknownTools, 'blocked');
-assert.deepEqual(descriptor.connection?.strategies?.[0]?.configuration?.registeredTools, [
+assert.deepEqual(descriptor.connection?.strategies?.[0]?.config?.registeredTools, [
   'connector_github_list_repos',
   'connector_github_list_issues',
   'connector_github_create_issue',
