@@ -4952,6 +4952,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             ? 'Auto-allowed by Lite terminal permissions.'
             : !needsCommandApproval
             ? 'Auto-allowed workspace terminal command.'
+            : bypassGenericToolApproval
+            ? 'Auto-allowed by Lite permissions.'
             : 'Auto-allowed by main-chat goal autonomous policy.',
         });
       } catch {}
@@ -5108,7 +5110,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     const permissionCandidate = await buildScopedToolPermissionCandidate(name, args, Number(evaluation.riskScore || 0));
     const existingToolGrant = permissionCandidate ? findCommandPermissionGrant(permissionCandidate) : null;
 
-    if (existingToolGrant || isGoalAutonomousApprovalBypass) {
+    if (existingToolGrant || isGoalAutonomousApprovalBypass || bypassGenericToolApproval) {
       try {
         appendAuditEntry({
           timestamp: new Date().toISOString(),

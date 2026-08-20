@@ -104,9 +104,13 @@ export class GitHubConnector extends OAuthConnector {
   }
 
   private async ghPost(path: string, body: any): Promise<any> {
+    return this.ghWrite('POST', path, body);
+  }
+
+  private async ghWrite(method: 'POST' | 'PUT' | 'PATCH', path: string, body: any): Promise<any> {
     const token = await this.getValidAccessToken();
     const res = await fetch(`https://api.github.com${path}`, {
-      method: 'POST',
+      method,
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'Prometheus-CIS', Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -150,6 +154,15 @@ export class GitHubConnector extends OAuthConnector {
     const data = await this.ghGet(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}/check-runs?per_page=${perPage}`);
     return Array.isArray(data?.check_runs) ? data.check_runs : [];
   }
+
+  async mergePullRequest(owner: string, repo: string, prNumber: number, options: { commitTitle?: string; commitMessage?: string; mergeMethod?: 'merge' | 'squash' | 'rebase' } = {}): Promise<any> {
+    return this.ghWrite('PUT', `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
+      commit_title: options.commitTitle,
+      commit_message: options.commitMessage,
+      merge_method: options.mergeMethod || 'merge',
+    });
+  }
+
 
   async createPullRequest(owner: string, repo: string, payload: { title: string; head: string; base: string; body?: string; draft?: boolean }): Promise<any> {
     return this.ghPost(`/repos/${owner}/${repo}/pulls`, payload);

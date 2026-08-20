@@ -12,6 +12,7 @@ const tools = [
   'connector_github_create_repo',
   'connector_github_list_prs',
   'connector_github_create_pr',
+  'connector_github_merge_pr',
   'connector_github_get_pr',
   'connector_github_list_commits',
   'connector_github_list_check_runs',
@@ -123,7 +124,35 @@ const ext: PrometheusExtensionDefinition = {
         });
         return toolOk(`Pull request created: #${pr.number} — ${pr.html_url}`);
       }),
+
+    api.registerTool({
+      name: 'connector_github_merge_pr',
+      description: '[GitHub] Merge a pull request. Requires approval in Default permissions mode; Lite mode executes automatically.',
+      parameters: {
+        type: 'object',
+        required: ['owner', 'repo', 'pr_number'],
+        properties: {
+          owner: { type: 'string', description: 'Repository owner' },
+          repo: { type: 'string', description: 'Repository name' },
+          pr_number: { type: 'number', description: 'Pull request number' },
+          merge_method: { type: 'string', enum: ['merge', 'squash', 'rebase'], description: 'Merge strategy (default: merge)' },
+          commit_title: { type: 'string', description: 'Optional merge commit title' },
+          commit_message: { type: 'string', description: 'Optional merge commit message' },
+        },
+      },
+      connectorId: ID, capability: 'code-hosting',
+      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true },
+      execute: (args: any) => withConn(async (c) => {
+        const result = await c.mergePullRequest(args.owner, args.repo, Number(args.pr_number), {
+          mergeMethod: args.merge_method || 'merge',
+          commitTitle: args.commit_title,
+          commitMessage: args.commit_message,
+        });
+        if (!result.merged) return toolError(`Pull request was not merged: ${result.message || 'GitHub rejected the merge.'}`);
+        return toolOk(`Pull request merged: ${result.sha || 'success'}`);
+      }),
     });
+
 
     api.registerTool({
       name: 'connector_github_get_pr',

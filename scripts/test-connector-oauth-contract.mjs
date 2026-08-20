@@ -21,6 +21,20 @@ assert.equal(descriptor.connection?.strategies[0]?.adapter, 'connector-oauth');
 assert.equal(descriptor.connection?.strategies[0]?.authentication?.pkceRequired, true);
 assert.equal(descriptor.connection?.toolPolicy?.defaultExposure, 'read-only');
 assert.equal(descriptor.connection?.toolPolicy?.unknownTools, 'blocked');
+assert.deepEqual(descriptor.connection?.strategies?.[0]?.configuration?.registeredTools, [
+  'connector_github_list_repos',
+  'connector_github_list_issues',
+  'connector_github_create_issue',
+  'connector_github_create_repo',
+  'connector_github_list_prs',
+  'connector_github_create_pr',
+  'connector_github_merge_pr',
+  'connector_github_get_pr',
+  'connector_github_list_commits',
+  'connector_github_list_check_runs',
+  'connector_github_get_file',
+  'connector_github_search',
+]);
 
 const migratedConnectorIds = ['github', 'gmail', 'google_drive', 'ga4', 'notion', 'slack', 'hubspot', 'salesforce', 'reddit'];
 for (const id of migratedConnectorIds) {
@@ -47,10 +61,12 @@ assert(buildAuthMetadataCandidates('https://auth.example.test/tenant', 'https://
 const classified = classifyConnectorTools([
   'connector_github_list_repos',
   'connector_github_create_issue',
+  'connector_github_merge_pr',
   'connector_unknown_tool',
 ], true);
 assert.deepEqual(classified.exposedTools, ['connector_github_list_repos']);
 assert.equal(classified.tools.find((tool) => tool.name === 'connector_github_create_issue')?.approved, false);
+assert.equal(classified.tools.find((tool) => tool.name === 'connector_github_merge_pr')?.approved, false);
 assert.equal(classified.tools.find((tool) => tool.name === 'connector_unknown_tool')?.risk, 'unknown');
 
 const grants = buildConnectorCapabilityGrants([
