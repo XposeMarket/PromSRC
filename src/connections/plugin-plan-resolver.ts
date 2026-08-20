@@ -1,4 +1,5 @@
 import { getExtensionDescriptor, listExtensionDescriptors } from '../extensions/registry';
+import { getDeclaredExtensionTools } from '../extensions/tool-contracts.js';
 import type { ConnectionCapabilityContract, ConnectionDiscoveryMatch, ConnectionDiscoveryResult, ConnectionPlan, ConnectionStrategy } from './types';
 import type { ConnectionPlanResolver } from './orchestrator';
 
@@ -85,7 +86,7 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
       configuration: {
         ...(item.config || {}),
         providerApp: descriptor?.connection?.providerApp,
-        registeredTools: descriptor?.ownership?.tools || [],
+        registeredTools: getDeclaredExtensionTools(descriptor),
         ...(input.metadata || {}),
       },
       verification: item.verification,
