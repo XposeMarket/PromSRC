@@ -1,93 +1,111 @@
 /*
- * Mobile chat liquid-glass demo match.
+ * Mobile chat Liquid Glass material port.
  *
- * Loaded after mobile.css / mobile-composer-stack.css and scoped to the mobile
- * shell. The visual target is the open-source Liquid Glass demo: a smoked,
- * charcoal interior with a crisp wet rim and essentially no panel blur.
- * The chat composer is the deliberate exception: it keeps the same smoked
- * material but restores backdrop blur so typed text remains legible.
+ * IMPORTANT: geometry remains owned by mobile.css. This file only changes the
+ * material and icon contrast. The reference is XposeMarket/liquid-glass's live
+ * demo: rim 32, strength 20, chroma .7, spec .28, fill .65, blur 0.
+ *
+ * The canvas demo's fill is NOT an opacity. Its compositor blends sampled
+ * backdrop pixels toward rgb(18,22,28) with body = .07 + fill * .55, which is
+ * .4275 at fill .65. The CSS approximation below mirrors that blend instead of
+ * painting a 65%-opaque black slab. The composer is the one intentional
+ * exception: same material, with the demo's baseline 2.5px blur restored.
  */
 
 body.pm-mobile-active {
-  --pm-demo-glass-fill: rgba(10, 12, 16, .66);
-  --pm-demo-glass-fill-strong: rgba(8, 10, 14, .74);
-  --pm-demo-glass-rim: rgba(255, 255, 255, .18);
-  --pm-demo-glass-rim-hot: rgba(255, 255, 255, .30);
-  --pm-demo-glass-floor: rgba(255, 255, 255, .08);
-  --pm-demo-glass-shadow: rgba(0, 0, 0, .36);
-  --pm-demo-glass-icon: #fff;
+  --pm-demo-body: rgba(18, 22, 28, .4275);
+  --pm-demo-edge: rgba(255, 255, 255, .065);
+  --pm-demo-spec-top: rgba(255, 255, 255, .14);
+  --pm-demo-spec-bottom: rgba(255, 255, 255, .055);
+  --pm-demo-shadow: rgba(0, 0, 0, .14);
+  --pm-demo-icon: #fff;
 }
 
-/* Smoked, non-blurred demo material for the floating mobile controls. */
+/*
+ * Reference material. Do NOT target every .pm-icon-btn here: the right-side
+ * pencil + overflow buttons intentionally live inside one shared glass pill.
+ */
 body.pm-mobile-active :is(
-  .pm-header .pm-icon-btn,
+  .pm-header > .pm-icon-btn,
   .pm-header .pm-online,
+  .pm-header-action-cluster,
   .pm-tabbar,
   .pm-tab-indicator,
   .chat-pulse-card
 ) {
-  border: 1px solid var(--pm-demo-glass-rim) !important;
+  border-color: var(--pm-demo-edge) !important;
   background:
     linear-gradient(180deg,
-      rgba(255,255,255,.085) 0%,
-      rgba(255,255,255,.018) 20%,
-      rgba(255,255,255,0) 48%,
-      rgba(255,255,255,.025) 78%,
-      rgba(255,255,255,.055) 100%),
-    var(--pm-demo-glass-fill) !important;
+      rgba(255,255,255,.035) 0%,
+      rgba(255,255,255,.008) 20%,
+      transparent 38%,
+      transparent 74%,
+      rgba(255,255,255,.012) 100%),
+    var(--pm-demo-body) !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   box-shadow:
-    inset 0 1px 0 var(--pm-demo-glass-rim-hot),
-    inset 0 -1px 0 var(--pm-demo-glass-floor),
-    0 8px 26px var(--pm-demo-glass-shadow) !important;
+    inset 0 .75px 0 var(--pm-demo-spec-top),
+    inset 0 -.75px 0 var(--pm-demo-spec-bottom),
+    0 7px 20px var(--pm-demo-shadow) !important;
 }
 
-/* Header buttons should read like ChatGPT's controls: bright, heavier strokes. */
-body.pm-mobile-active .pm-header .pm-icon-btn {
-  color: var(--pm-demo-glass-icon) !important;
+/* The combined new-chat / overflow control must remain ONE pill. */
+body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
+  border: 0 !important;
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
 }
 
-body.pm-mobile-active .pm-header .pm-icon-btn svg {
-  color: var(--pm-demo-glass-icon) !important;
-  stroke: currentColor !important;
-  stroke-width: 2.45 !important;
+/* Bright, heavier ChatGPT-like icon treatment without changing icon size/layout. */
+body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) {
+  color: var(--pm-demo-icon) !important;
+}
+
+body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg {
+  color: var(--pm-demo-icon) !important;
+  stroke: currentColor;
+  stroke-width: 2.4 !important;
   opacity: 1 !important;
 }
 
-body.pm-mobile-active .pm-header .pm-icon-btn :is(line, path, polyline, rect, circle) {
+body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg :is(line, path, polyline, rect, circle) {
   vector-effect: non-scaling-stroke;
 }
 
-/* Keep the model/status pill in the same material family without overpowering text. */
 body.pm-mobile-active .pm-header .pm-online {
-  color: rgba(255,255,255,.94) !important;
+  color: rgba(255,255,255,.96) !important;
 }
 
-/* The tabbar itself is smoked glass; the moving selector is a slightly denser slab. */
-body.pm-mobile-active .pm-tabbar {
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.01) 38%, rgba(255,255,255,.04)),
-    var(--pm-demo-glass-fill-strong) !important;
+/* Keep the existing tab-bar and slider geometry; only swap the material. */
+body.pm-mobile-active .pm-tabbar,
+body.pm-mobile-active .pm-tab-indicator {
+  border-color: rgba(255,255,255,.06) !important;
 }
 
 body.pm-mobile-active .pm-tab-indicator {
   background:
-    linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.018) 48%, rgba(255,255,255,.075)),
-    rgba(22, 24, 28, .78) !important;
-  border-color: rgba(255,255,255,.16) !important;
+    linear-gradient(180deg,
+      rgba(255,255,255,.055),
+      rgba(255,255,255,.008) 30%,
+      transparent 65%,
+      rgba(255,255,255,.018)),
+    rgba(18,22,28,.455) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.30),
-    inset 0 -1px 0 rgba(255,255,255,.09),
-    0 5px 18px rgba(0,0,0,.30) !important;
+    inset 0 .75px 0 rgba(255,255,255,.16),
+    inset 0 -.75px 0 rgba(255,255,255,.06),
+    0 5px 14px rgba(0,0,0,.12) !important;
 }
 
 body.pm-mobile-active .pm-tabbar .pm-tab {
-  color: rgba(255,255,255,.74) !important;
+  color: rgba(255,255,255,.78) !important;
 }
 
 body.pm-mobile-active .pm-tabbar .pm-tab svg {
   stroke-width: 2.35 !important;
+  opacity: 1 !important;
 }
 
 body.pm-mobile-active .pm-tabbar .pm-tab.active,
@@ -96,62 +114,60 @@ body.pm-mobile-active .pm-tabbar .pm-tab-magnify .pm-tab {
   color: #fff !important;
 }
 
-/* Remove the old refractive blur from non-composer glass child layers. */
+/* Non-composer glass follows the live demo's blur: 0. */
 body.pm-mobile-active :is(.pm-header, .pm-tabbar, .chat-pulse-card) .pm-glass-lens {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   filter: none !important;
-  opacity: .28 !important;
-  background:
-    radial-gradient(ellipse at 50% 35%, rgba(255,255,255,.055), transparent 58%),
-    linear-gradient(180deg, rgba(255,255,255,.04), transparent 45%, rgba(255,255,255,.025)) !important;
+  opacity: var(--pm-lg-lens-opacity, .48) !important;
 }
 
-/* Brain / Pulse cards use the same smoked glass instead of opaque outline cards. */
+/* Brain/Pulse cards use the same material; retain their existing size/radius. */
 body.pm-mobile-active .chat-pulse-card {
   color: #fff !important;
-  border-radius: 18px !important;
 }
 
 body.pm-mobile-active .chat-pulse-card:hover,
 body.pm-mobile-active .chat-pulse-card:focus-visible {
-  border-color: rgba(255,255,255,.24) !important;
+  border-color: rgba(255,255,255,.09) !important;
   background:
-    linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.018) 30%, rgba(255,255,255,.045)),
-    rgba(10, 12, 16, .71) !important;
+    linear-gradient(180deg, rgba(255,255,255,.045), transparent 35%, rgba(255,255,255,.014)),
+    rgba(18,22,28,.455) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.34),
-    inset 0 -1px 0 rgba(255,255,255,.09),
-    0 10px 30px rgba(0,0,0,.38) !important;
+    inset 0 .75px 0 rgba(255,255,255,.16),
+    inset 0 -.75px 0 rgba(255,255,255,.06),
+    0 8px 22px rgba(0,0,0,.16) !important;
 }
 
-body.pm-mobile-active .chat-pulse-card-body,
-body.pm-mobile-active .chat-pulse-card-icon {
-  color: rgba(255,255,255,.96) !important;
+body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon) {
+  color: rgba(255,255,255,.97) !important;
 }
 
-/* Composer: same smoked material, but intentionally blurred for input legibility. */
+/*
+ * Composer = the exact same body treatment, but blurred so typed text remains
+ * readable. This is deliberately the only main chat glass surface with blur.
+ */
 body.pm-mobile-active .pm-composer {
-  border: 1px solid rgba(255,255,255,.16) !important;
+  border-color: rgba(255,255,255,.065) !important;
   background:
     linear-gradient(180deg,
-      rgba(255,255,255,.08) 0%,
-      rgba(255,255,255,.015) 24%,
-      rgba(255,255,255,0) 54%,
-      rgba(255,255,255,.045) 100%),
-    rgba(10, 12, 16, .68) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(1.08) brightness(.84) !important;
-  backdrop-filter: blur(16px) saturate(1.08) brightness(.84) !important;
+      rgba(255,255,255,.035),
+      rgba(255,255,255,.008) 20%,
+      transparent 42%,
+      transparent 72%,
+      rgba(255,255,255,.014)),
+    var(--pm-demo-body) !important;
+  -webkit-backdrop-filter: blur(2.5px) saturate(1) !important;
+  backdrop-filter: blur(2.5px) saturate(1) !important;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.25),
-    inset 0 -1px 0 rgba(255,255,255,.075),
-    0 10px 32px rgba(0,0,0,.34) !important;
+    inset 0 .75px 0 var(--pm-demo-spec-top),
+    inset 0 -.75px 0 var(--pm-demo-spec-bottom),
+    0 7px 20px var(--pm-demo-shadow) !important;
 }
 
 body.pm-mobile-active .pm-composer .pm-glass-lens {
-  opacity: .42 !important;
-  -webkit-backdrop-filter: blur(12px) saturate(1.05) brightness(.86) !important;
-  backdrop-filter: blur(12px) saturate(1.05) brightness(.86) !important;
+  -webkit-backdrop-filter: blur(1.7px) saturate(1) !important;
+  backdrop-filter: blur(1.7px) saturate(1) !important;
   filter: none !important;
 }
 
@@ -161,7 +177,7 @@ body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-ic
 
 body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) svg {
   color: #fff !important;
-  stroke: currentColor !important;
+  stroke: currentColor;
   stroke-width: 2.4 !important;
   opacity: 1 !important;
 }
@@ -171,11 +187,17 @@ body.pm-mobile-active .pm-composer :is(textarea, input) {
 }
 
 body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
-  color: rgba(255,255,255,.58) !important;
+  color: rgba(255,255,255,.60) !important;
 }
 
-/* Avoid legacy painted border/lens layers fighting the new single smoked rim. */
-body.pm-mobile-active :is(.pm-header .pm-icon-btn, .pm-header .pm-online, .pm-tabbar, .pm-composer) .pm-glass-border {
-  opacity: .42 !important;
-  border-color: rgba(255,255,255,.16) !important;
+/* Keep legacy border overlays extremely quiet; the demo's highlight is directional. */
+body.pm-mobile-active :is(
+  .pm-header > .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-tabbar,
+  .pm-composer
+) .pm-glass-border {
+  opacity: .18 !important;
+  border-color: rgba(255,255,255,.055) !important;
 }
