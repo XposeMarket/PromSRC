@@ -7,17 +7,28 @@
 // sibling styles directory automatically.
 const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
 const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v292-2026-08-15-composer-stack-glass';
+const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
+const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v293-2026-08-19-demo-glass-match';
 
 function ensureMobileComposerStackStyles() {
   if (typeof document === 'undefined') return;
-  if (document.getElementById(PM_COMPOSER_STACK_STYLE_ID)) return;
   try {
-    const link = document.createElement('link');
-    link.id = PM_COMPOSER_STACK_STYLE_ID;
-    link.rel = 'stylesheet';
-    link.href = new URL(`../styles/mobile-composer-stack.css?v=${PM_COMPOSER_STACK_STYLE_VERSION}`, import.meta.url).href;
-    link.dataset.promMobileComposerStackStyle = '1';
-    document.head.appendChild(link);
+    if (!document.getElementById(PM_COMPOSER_STACK_STYLE_ID)) {
+      const link = document.createElement('link');
+      link.id = PM_COMPOSER_STACK_STYLE_ID;
+      link.rel = 'stylesheet';
+      link.href = new URL(`../styles/mobile-composer-stack.css?v=${PM_COMPOSER_STACK_STYLE_VERSION}`, import.meta.url).href;
+      link.dataset.promMobileComposerStackStyle = '1';
+      document.head.appendChild(link);
+    }
+    if (!document.getElementById(PM_DEMO_GLASS_STYLE_ID)) {
+      const demoGlassLink = document.createElement('link');
+      demoGlassLink.id = PM_DEMO_GLASS_STYLE_ID;
+      demoGlassLink.rel = 'stylesheet';
+      demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}`, import.meta.url).href;
+      demoGlassLink.dataset.promMobileDemoGlassStyle = '1';
+      document.head.appendChild(demoGlassLink);
+    }
   } catch {}
 }
 
