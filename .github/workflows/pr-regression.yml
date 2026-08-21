@@ -31,6 +31,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Verify connector/plugin tool-surface parity
         run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
+      - name: Verify provider-neutral connector policy
+        run: npm run test:connector-tool-capabilities && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
       - name: Verify web UI architecture guardrails
