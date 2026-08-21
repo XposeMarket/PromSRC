@@ -6,12 +6,14 @@
 //          TelegramChannelConfig, DiscordChannelConfig, WhatsAppChannelConfig, ChannelsConfig
 
 import { WebSocketServer } from 'ws';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
 import { enqueueAsyncAppend, enqueueAsyncWrite } from '../../runtime/async-file-queue';
 import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
+import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -39,6 +41,9 @@ let _lastRestartableHeartbeatDriftAt = 0;
 let _lastRestartableHeartbeatDriftMs = 0;
 let _eventLoopStallRestartScheduled = false;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
+const _nodeRuntime = getNodeRuntimeSnapshot();
+const _eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
+_eventLoopDelayMonitor.enable();
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -52,8 +57,51 @@ const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEU
 const stallAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART || '').trim().toLowerCase();
 const EVENT_LOOP_STALL_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(stallAutorestartEnv);
 const EVENT_LOOP_STALL_DIAGNOSTIC_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_DIAGNOSTIC_MS', 5_000);
+const MEMORY_PRESSURE_RSS_BYTES = parseNonNegativeIntEnv(
+  'PROMETHEUS_GATEWAY_MEMORY_PRESSURE_RSS_BYTES',
+  Math.floor(2.5 * 1024 * 1024 * 1024),
+);
 
-function appendEventLoopStallDiagnostic(configDir: string, now: number, heartbeatDriftMs: number, elapsedMs: number): void {
+interface EventLoopMetrics {
+  maxMs: number;
+  meanMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  utilization: number;
+  activeMs: number;
+  idleMs: number;
+}
+
+function finiteMetric(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : 0;
+}
+
+function sampleEventLoopMetrics(): EventLoopMetrics {
+  const histogram = _eventLoopDelayMonitor;
+  const utilization = performance.eventLoopUtilization();
+  const metrics = {
+    maxMs: finiteMetric(histogram.max / 1e6),
+    meanMs: finiteMetric(histogram.mean / 1e6),
+    p50Ms: finiteMetric(histogram.percentile(50) / 1e6),
+    p95Ms: finiteMetric(histogram.percentile(95) / 1e6),
+    p99Ms: finiteMetric(histogram.percentile(99) / 1e6),
+    utilization: finiteMetric(utilization.utilization),
+    activeMs: finiteMetric(utilization.active),
+    idleMs: finiteMetric(utilization.idle),
+  };
+  histogram.reset();
+  return metrics;
+}
+
+function appendEventLoopStallDiagnostic(
+  configDir: string,
+  now: number,
+  heartbeatDriftMs: number,
+  elapsedMs: number,
+  eventLoop: EventLoopMetrics,
+  memory: NodeJS.MemoryUsage,
+): void {
   if (EVENT_LOOP_STALL_DIAGNOSTIC_MS <= 0 || heartbeatDriftMs < EVENT_LOOP_STALL_DIAGNOSTIC_MS) return;
   try {
     const cpu = process.cpuUsage(_lastHeartbeatCpuUsage);
@@ -75,11 +123,18 @@ function appendEventLoopStallDiagnostic(configDir: string, now: number, heartbea
     const record = {
       timestamp: new Date(now).toISOString(),
       pid: process.pid,
+      nodeRuntime: _nodeRuntime,
       heartbeatDriftMs,
       elapsedMs,
       cpuMs,
       eventLoopCpuPercent: elapsedMs > 0 ? Math.round((cpuMs / elapsedMs) * 10_000) / 100 : 0,
-      memory: process.memoryUsage(),
+      memory,
+      eventLoop,
+      memoryPressure: {
+        rssBytes: memory.rss,
+        thresholdBytes: MEMORY_PRESSURE_RSS_BYTES,
+        high: memory.rss >= MEMORY_PRESSURE_RSS_BYTES,
+      },
       modelBusy: _modelBusyCount > 0,
       modelBusyAgeMs: _modelBusySince > 0 ? now - _modelBusySince : 0,
       lastMainSessionId: _lastMainSessionId,
@@ -96,6 +151,25 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
   if (_eventLoopStallRestartScheduled) return;
   _eventLoopStallRestartScheduled = true;
+
+  try {
+    const recoveryEvent = {
+      timestamp: new Date(now).toISOString(),
+      event: 'event_loop_stall_recovery_scheduled',
+      action: 'graceful_restart',
+      pid: process.pid,
+      nodeRuntime: _nodeRuntime,
+      heartbeatDriftMs,
+      thresholdMs: EVENT_LOOP_STALL_RESTART_MS,
+      memory: process.memoryUsage(),
+      modelBusy: _modelBusyCount > 0,
+      lastMainSessionId: _lastMainSessionId,
+    };
+    enqueueAsyncAppend(
+      path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+      JSON.stringify(recoveryEvent) + '\n',
+    );
+  } catch {}
 
   const seconds = Math.round(heartbeatDriftMs / 1000);
   console.error(`[GatewayRuntime] Event loop stalled for ${seconds}s. Scheduling gateway recovery restart...`);
@@ -136,12 +210,20 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       _lastRestartableHeartbeatDriftMs = heartbeatDriftMs;
     }
     const configDir = getConfig().getConfigDir();
-    appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs);
+    const memory = process.memoryUsage();
+    const eventLoop = sampleEventLoopMetrics();
+    appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs, eventLoop, memory);
     _lastHeartbeatCpuUsage = process.cpuUsage();
     _lastHeartbeatAt = now;
-    const memory = process.memoryUsage();
     enqueueAsyncWrite(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
       pid: process.pid,
+      processStartedAt: _nodeRuntime.processStartedAt,
+      nodeVersion: _nodeRuntime.nodeVersion,
+      nodeExecPath: _nodeRuntime.execPath,
+      platform: _nodeRuntime.platform,
+      arch: _nodeRuntime.arch,
+      electronRunAsNode: _nodeRuntime.electronRunAsNode,
+      nodeRuntime: _nodeRuntime,
       timestamp: now,
       reason,
       modelBusy: _modelBusyCount > 0,
@@ -158,6 +240,12 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       eventLoopStallRestartThresholdMs: EVENT_LOOP_STALL_RESTART_MS,
       eventLoopStallAutoRestartEnabled: EVENT_LOOP_STALL_AUTORESTART_ENABLED,
       eventLoopStallRestartScheduled: _eventLoopStallRestartScheduled,
+      eventLoop,
+      memoryPressure: {
+        rssBytes: memory.rss,
+        thresholdBytes: MEMORY_PRESSURE_RSS_BYTES,
+        high: memory.rss >= MEMORY_PRESSURE_RSS_BYTES,
+      },
       memory: {
         rss: memory.rss,
         heapTotal: memory.heapTotal,

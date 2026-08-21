@@ -30,6 +30,8 @@ export interface GatewayProgressLease {
 export interface GatewayProgressLeaseFreshnessOptions {
   now?: number;
   expectedPid?: number;
+  expectedProcessStartedAt?: number;
+  maxProgressAgeMs?: number;
 }
 
 export function isGatewayProgressLeaseFresh(
@@ -39,11 +41,21 @@ export function isGatewayProgressLeaseFresh(
   if (!lease || lease.version !== GATEWAY_PROGRESS_LEASE_VERSION || lease.state !== 'active') return false;
   if (!Number.isInteger(lease.pid) || lease.pid <= 0) return false;
   if (options.expectedPid != null && lease.pid !== options.expectedPid) return false;
+  if (
+    options.expectedProcessStartedAt != null
+    && Number.isFinite(options.expectedProcessStartedAt)
+    && lease.processStartedAt !== Number(options.expectedProcessStartedAt)
+  ) return false;
   if (!lease.leaseId || !lease.runtimeId) return false;
   const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+  const maxProgressAgeMs = Number.isFinite(options.maxProgressAgeMs)
+    ? Math.max(0, Number(options.maxProgressAgeMs))
+    : 120_000;
   return Number.isFinite(lease.lastProgressAt)
     && Number.isFinite(lease.expiresAt)
     && lease.lastProgressAt > 0
+    && lease.lastProgressAt <= now
+    && now - lease.lastProgressAt <= maxProgressAgeMs
     && lease.expiresAt > now;
 }
 

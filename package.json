@@ -2,6 +2,9 @@
   "name": "prometheus",
   "version": "1.0.17",
   "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "engines": {
+    "node": ">=20.20.0 <23"
+  },
   "main": "electron/main.js",
   "bin": {
     "prom": "./bin/prometheus.js"
@@ -92,6 +95,8 @@
     "test:chat-error-presentation": "node scripts/test-chat-error-presentation.mjs",
     "test:mobile-voice-preview-deck": "node scripts/test-mobile-voice-preview-deck.mjs",
     "test:runtime-workers": "tsx src/gateway/process/runtime-worker-broker.regression.ts && tsx src/gateway/memory-index/memory-index.regression.ts",
+    "test:node-runtime": "tsx src/gateway/runtime/node-runtime.regression.ts",
+    "test:gateway-progress-lease": "tsx src/gateway/gateway-progress-lease.regression.ts",
     "test:runtime-admission": "tsx src/gateway/runtime-admission.regression.ts",
     "test:coding-context": "tsx src/gateway/coding/workspace-context.regression.ts && tsx src/gateway/coding/terminal-change-tracker.regression.ts && tsx src/gateway/code-evidence.regression.ts && tsx src/gateway/code-evidence-executor.regression.ts && tsx src/gateway/coding-context-packet.regression.ts",
     "test:visual": "npm run build:backend && node scripts/test-visual-command-state.mjs",
