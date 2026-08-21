@@ -12,7 +12,9 @@ try {
   assert.equal(resolveThoughtCoverageCursor({ lastThoughtWindowEndAt: null, lastThoughtAt: '2026-08-15T12:08:00.000Z' })?.toISOString(), '2026-08-15T12:08:00.000Z');
 
   const capsules = path.join(root, 'capsules.json');
-  assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'missing');
+  const missingCapsules = inspectBrainThoughtCapsuleArtifact(capsules, now);
+  assert.equal(missingCapsules.status, 'invalid', 'a Thought must write its own capsule sidecar; missing output cannot be synthesized as an empty packet set');
+  assert.match(missingCapsules.error || '', /required capsule sidecar is missing/);
   fs.writeFileSync(capsules, '{bad json', 'utf8');
   assert.equal(inspectBrainThoughtCapsuleArtifact(capsules, now).status, 'invalid');
   fs.writeFileSync(capsules, JSON.stringify([{ id: 'broken' }]), 'utf8');
@@ -36,7 +38,6 @@ try {
   assert.equal(inspectBrainCarryForwardArtifact(carry, now, '2026-08-16').status, 'invalid', 'partially malformed carry packets must not silently drop a thread');
 
   const runnerSource = fs.readFileSync(path.join(process.cwd(), 'src/gateway/brain/brain-runner.ts'), 'utf8');
-  assert.match(runnerSource, /capsuleArtifact\.status === 'missing'/);
   assert.match(runnerSource, /carryArtifact\.status === 'missing'/);
   assert.match(runnerSource, /lastThoughtWindowEndAt = windowEnd\.toISOString\(\)/);
 } finally {
