@@ -20,6 +20,7 @@ import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSess
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
+import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -504,6 +505,8 @@ type BgHandleChat = (
   attachments?: any,
   reasoningOptions?: any,
   providerOverride?: string,
+  callerOnToken?: (token: string) => void,
+  runtimeOptions?: { admissionLease?: RuntimeAdmissionLease },
 ) => Promise<string>;
 
 interface EphemeralBgDeps {
@@ -624,12 +627,28 @@ function createBackgroundPrompt(prompt: string): any[] {
 }
 
 function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: string): Promise<void> {
-  return (async () => {
+  let runtimeAdmissionLease: RuntimeAdmissionLease | null = null;
+  const execution = (async () => {
     const abortController = new AbortController();
     const abortSignal = record.abortSignal || { aborted: false };
     abortSignal.signal = abortController.signal;
     record.abortSignal = abortSignal;
     record.abortController = abortController;
+    try {
+      runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
+        lane: 'background',
+        signal: abortController.signal,
+        metadata: { sessionId: 'background_' + record.id, backgroundId: record.id },
+      });
+    } catch (error: any) {
+      record.state = 'failed';
+      record.error = String(error?.message || error || 'Background runtime admission failed');
+      record.completedAt = Date.now();
+      persistBackgroundVoiceWorker(record);
+      queueBackgroundResultForForeground(record);
+      console.warn('[Background Agent] ' + record.id + ' was not admitted: ' + record.error);
+      return;
+    }
     const runtimeSessionId = `background_${record.id}`;
     const runtimeId = registerLiveRuntime({
       kind: 'background_agent',
@@ -762,6 +781,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
             ? { enabled: record.reasoningEffort !== 'none', level: record.reasoningEffort }
             : undefined,
           record.providerId,
+          undefined,
+          { admissionLease: runtimeAdmissionLease || undefined },
         );
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
@@ -832,6 +853,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       finishLiveRuntime(runtimeId);
     }
   })();
+  return execution.finally(() => {
+    runtimeAdmissionLease?.release();
+  });
 }
 
 export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): EphemeralBackgroundStatus {
@@ -872,8 +896,8 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   record.resourceIds = Array.isArray(input?.resourceIds)
     ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
     : undefined;
-  record.promise = startBackgroundExecution(record, prompt);
   _ephemeralBackgroundRuns.set(id, record);
+  record.promise = startBackgroundExecution(record, prompt);
   console.log(`[Background Agent] spawned ${id} (policy=${joinPolicy}, timeoutMs=${timeoutMs})`);
 
   return {

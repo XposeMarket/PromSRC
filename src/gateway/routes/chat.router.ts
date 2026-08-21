@@ -100,6 +100,7 @@ import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
+import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane } from '../runtime-admission';
 import {
   browserOpen,
   browserSnapshot,
@@ -1709,26 +1710,35 @@ import {
 const MAX_TOOL_ROUNDS = getMaxToolRounds();
 
 function resolveEffectiveMaxToolRounds(
-  _baseMax: number,
+  baseMax: number,
   opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string; sessionId: string },
 ): number {
-  // Interactive and explicitly managed workflows remain open-ended. Brain jobs
-  // are autonomous recurring work, so a confused model must not be able to loop
-  // for hundreds of provider calls and then retry again on the next ticker.
-  const readBrainLimit = (name: string, fallback: number): number => {
+  const readToolRoundLimit = (name: string, fallback: number): number => {
     const parsed = Number(process.env[name]);
     return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.floor(parsed)) : fallback;
   };
   if (/^brain_thought_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readBrainLimit('PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS', 32);
+    return readToolRoundLimit('PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS', 32);
   }
   if (/^brain_dream_cleanup_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readBrainLimit('PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS', 32);
+    return readToolRoundLimit('PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS', 32);
   }
   if (/^brain_dream_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readBrainLimit('PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS', 48);
+    return readToolRoundLimit('PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS', 48);
   }
-  return Infinity;
+  if (opts.executionMode === 'interactive') {
+    return readToolRoundLimit('PROMETHEUS_INTERACTIVE_MAX_TOOL_ROUNDS', Number.isFinite(baseMax) ? baseMax : 48);
+  }
+  if (opts.executionMode === 'background_task' || opts.executionMode === 'background_agent') {
+    return readToolRoundLimit('PROMETHEUS_BACKGROUND_MAX_TOOL_ROUNDS', 32);
+  }
+  if (opts.executionMode === 'proposal_execution') {
+    return readToolRoundLimit('PROMETHEUS_PROPOSAL_MAX_TOOL_ROUNDS', 48);
+  }
+  if (opts.executionMode === 'team_manager' || opts.executionMode === 'team_subagent') {
+    return readToolRoundLimit('PROMETHEUS_TEAM_MAX_TOOL_ROUNDS', 32);
+  }
+  return readToolRoundLimit('PROMETHEUS_AUTONOMOUS_MAX_TOOL_ROUNDS', 24);
 }
 
 function isResumableExecutionMode(executionMode: ExecutionMode): boolean {
@@ -1821,6 +1831,12 @@ function storageAwareStatus(error: unknown): number {
 }
 
 type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent';
+
+function runtimeAdmissionLaneForExecutionMode(executionMode: ExecutionMode): RuntimeAdmissionLane {
+  if (executionMode === 'interactive') return 'interactive';
+  if (executionMode === 'background_task' || executionMode === 'background_agent') return 'background';
+  return 'system';
+}
 
 function resolveConfiguredAgentReasoning(
   executionMode: ExecutionMode,
@@ -2499,7 +2515,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; runtimeId?: string; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2507,6 +2523,24 @@ async function handleChat(
     phase: 'handle_chat',
   });
   const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
+  const inheritedAdmissionLease = runtimeOptions?.admissionLease;
+  let ownedAdmissionLease: RuntimeAdmissionLease | null = null;
+  if (inheritedAdmissionLease) {
+    turnTiming.mark('runtime_admission_inherited', {
+      lane: inheritedAdmissionLease.lane,
+      waitMs: inheritedAdmissionLease.waitMs,
+    });
+  } else {
+    ownedAdmissionLease = await gatewayRuntimeAdmission.acquire({
+      lane: runtimeAdmissionLaneForExecutionMode(executionMode),
+      signal: abortSignal?.signal,
+      metadata: { sessionId: String(sessionId), executionMode },
+    });
+    turnTiming.mark('runtime_admission_acquired', {
+      lane: ownedAdmissionLease.lane,
+      waitMs: ownedAdmissionLease.waitMs,
+    });
+  }
   try {
   const htime = (label: string, extra: Record<string, unknown> = {}): number => turnTiming.mark(`handle.${label}`, extra);
   htime('entered');
@@ -6611,13 +6645,19 @@ RULES:
     return steers.length;
   };
 
+  const extendedFileOpRounds = (() => {
+    const configured = Number(process.env.PROMETHEUS_FILE_OP_EXTENDED_MAX_ROUNDS);
+    const extra = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 64;
+    return effectiveMaxToolRounds + Math.max(1, extra);
+  })();
+
   for (let round = 0; ; round++) {
     if (round >= effectiveMaxToolRounds) {
       const allowExtendedFileOpLoop =
         fileOpV2Active
         && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
         && (fileOpOwner === 'secondary' || !!fileOpLastFailureSignature);
-      if (!allowExtendedFileOpLoop) break;
+      if (!allowExtendedFileOpLoop || round >= extendedFileOpRounds) break;
       if (round === effectiveMaxToolRounds) {
         sendSSE('info', {
           message: 'FILE_OP v2: extending execution beyond default step cap for secondary-owned repair convergence.',
@@ -9484,6 +9524,7 @@ RULES:
     // turn's tool/stream boundary has closed; the manager then stops owned
     // targets immediately unless warm mode was explicitly enabled.
     try { desktopBackgroundReleaseSession(sessionId); } catch { /* cleanup is best effort */ }
+    ownedAdmissionLease?.release();
   }
 }
 // Wire chat-helpers and task-router deps moved into initChatRouter() (B6)
@@ -10016,7 +10057,18 @@ async function runInteractiveTurn(
   const preAcquiredTurnLease = flags?.preAcquiredTurnLease;
   const turnLease = preAcquiredTurnLease || await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
   turnTiming.mark('lease_acquired', { waitMs: Date.now() - leaseWaitStartedAt });
+  let runtimeAdmissionLease: RuntimeAdmissionLease | null = null;
   try {
+  const admissionWaitStartedAt = Date.now();
+  runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
+    lane: 'interactive',
+    signal: abortSignal?.signal,
+    metadata: { sessionId: String(sessionId), executionMode: 'interactive' },
+  });
+  turnTiming.mark('runtime_admission_acquired', {
+    waitMs: Date.now() - admissionWaitStartedAt,
+    queueWaitMs: runtimeAdmissionLease.waitMs,
+  });
   // Admission boundary: an explicit chatModelRoute or the current Main Chat
   // default is captured once and stays immutable through this whole turn.
   let turnRouteSnapshot: TurnRouteSnapshot;
@@ -10485,6 +10537,7 @@ async function runInteractiveTurn(
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
         runtimeId: flags?.runtimeId,
+        admissionLease: runtimeAdmissionLease || undefined,
       },
   ));
   turnTiming.mark('handle_chat_done');
@@ -10779,6 +10832,7 @@ async function runInteractiveTurn(
   }
   } finally {
     turnTiming.mark('lease_release');
+    runtimeAdmissionLease?.release();
     // The HTTP admission path acquires atomically before creating a stream;
     // its outer finally owns release so every visible/server state transition
     // is completed together. Other callers retain the original local lease.
