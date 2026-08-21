@@ -103,10 +103,40 @@ const ENTITY_ALIASES: Array<[string, RegExp]> = [
   ['creative', /\bcreative|promo video|image|video\b/i],
 ];
 
+const CONCEPT_GROUPS: Record<string, string[]> = {
+  modify: ['edit', 'editing', 'change', 'changing', 'modify', 'modifying', 'patch', 'update', 'refactor', 'revise', 'rewrite', 'fix'],
+  code: ['code', 'codebase', 'source', 'repo', 'repository'],
+  create: ['create', 'creating', 'add', 'adding', 'make', 'making', 'generate', 'generating'],
+  remove: ['delete', 'deleting', 'remove', 'removing', 'removal', 'erase', 'erasing', 'purge', 'clear'],
+  file: ['file', 'files', 'disk', 'document', 'documents', 'path', 'paths'],
+  search: ['search', 'searching', 'find', 'finding', 'lookup', 'retrieve', 'retrieval'],
+  release: ['release', 'launch', 'ship', 'shipping', 'publish', 'publishing', 'deploy', 'deploying', 'deployment'],
+  app: ['app', 'application', 'program', 'software', 'client'],
+  mobile: ['mobile', 'phone', 'handset'],
+  memory: ['memory', 'remember', 'recall', 'recollection'],
+  schedule: ['schedule', 'scheduled', 'cron', 'recurring', 'reminder', 'remind'],
+  problem: ['bug', 'issue', 'problem', 'error', 'failure', 'failed', 'broken'],
+  agent: ['agent', 'subagent', 'bot', 'worker'],
+  team: ['team', 'group', 'collaboration', 'crew'],
+  approval: ['approval', 'approve', 'approved', 'permission', 'signoff', 'authorize', 'authorization'],
+  blocked: ['blocked', 'blocking', 'stuck', 'waiting', 'pending', 'hold'],
+  legal: ['legal', 'lawyer', 'lawyers', 'attorney', 'attorneys', 'counsel'],
+  storage: ['database', 'db', 'sqlite', 'storage', 'persistence', 'persistent'],
+  concurrency: ['concurrent', 'concurrency', 'simultaneous', 'parallel'],
+  responsive: ['responsive', 'snappy', 'stall', 'stalling', 'freeze', 'frozen', 'latency'],
+  trading: ['trade', 'trading', 'market', 'position', 'positions', 'entry', 'entries', 'scalp', 'scalping'],
+  messaging: ['message', 'messages', 'conversation', 'conversations', 'email', 'mail', 'reply'],
+  browser: ['browser', 'chrome', 'website', 'webpage', 'web'],
+  safety: ['safe', 'safely', 'safeguard', 'safeguards', 'backup', 'preserve', 'protect', 'protection'],
+  sync: ['sync', 'syncing', 'synchronize', 'synchronizing', 'relay'],
+  auth: ['auth', 'authentication', 'oauth', 'login', 'signin', 'credential', 'credentials'],
+};
+
 function normalizeText(value: string): string {
   return String(value || '')
     .toLowerCase()
     .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\bsign\s+off\b/g, ' signoff ')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -121,7 +151,15 @@ function stem(value: string): string {
   return token;
 }
 
-function tokenize(value: string): string[] {
+const CONCEPT_BY_TERM = (() => {
+  const out = new Map<string, string>();
+  for (const [concept, variants] of Object.entries(CONCEPT_GROUPS)) {
+    for (const variant of variants) out.set(stem(variant), `concept_${concept}`);
+  }
+  return out;
+})();
+
+function tokenizeBase(value: string): string[] {
   return Array.from(new Set(
     normalizeText(value)
       .split(' ')
@@ -129,6 +167,20 @@ function tokenize(value: string): string[] {
       .map(stem)
       .filter((token) => token.length >= 3 && !STOP_WORDS.has(token)),
   ));
+}
+
+function tokenize(value: string): string[] {
+  const base = tokenizeBase(value);
+  const expanded = [...base];
+  for (const token of base) {
+    const concept = CONCEPT_BY_TERM.get(token);
+    if (concept) expanded.push(concept);
+  }
+  return Array.from(new Set(expanded));
+}
+
+function isConceptTerm(term: string): boolean {
+  return term.startsWith('concept_');
 }
 
 function slug(value: string): string {
@@ -202,7 +254,10 @@ function finalizeAtom(raw: string, lines: SourceLine[], startIndex: number, endI
     authority: 'durable_memory_file',
     durability: 1,
     status: 'active',
-    terms: tokenize(`${section} ${rawText}`),
+    // Section labels remain available as metadata/tags and as a small positive
+    // disambiguator during scoring, but they are not lexical atom content. A
+    // query such as "project" must not match every bullet in project_memory.
+    terms: tokenize(rawText),
     entities,
     tags: atomTags(section, rawText, kind),
   };
@@ -328,6 +383,25 @@ function scoreAtom(
   return { score, matchedTerms };
 }
 
+function isAmbiguousSingleTermQuery(
+  baseQueryTerms: string[],
+  documentFrequency: Map<string, number>,
+): boolean {
+  if (baseQueryTerms.length !== 1) return false;
+  return (documentFrequency.get(baseQueryTerms[0]) || 0) > 1;
+}
+
+function isRelationAnchorTerm(
+  term: string,
+  queryTerms: Set<string>,
+  documentFrequency: Map<string, number>,
+  rareDocumentFrequency: number,
+): boolean {
+  if (!term || isConceptTerm(term) || queryTerms.has(term)) return false;
+  if (/^20\d{2}(?:\d{2})?(?:\d{2})?$/.test(term)) return false;
+  return (documentFrequency.get(term) || 0) > 0 && (documentFrequency.get(term) || 0) <= rareDocumentFrequency;
+}
+
 export function retrieveMemoryAtoms(
   workspacePath: string,
   query: string,
@@ -340,6 +414,7 @@ export function retrieveMemoryAtoms(
   // Score lexical relevance against the user's query only. Project/other
   // additional context is positive-only supporting context inside scoreAtom
   // (entity/section disambiguation); it must not dilute a direct memory match.
+  const baseQueryTerms = tokenizeBase(queryText);
   const queryTerms = tokenize(queryText);
   if (!queryTerms.length || !snapshot.atoms.length) {
     return {
@@ -357,45 +432,63 @@ export function retrieveMemoryAtoms(
     };
   }
 
-  const scored = snapshot.atoms
+  const scoredAll = snapshot.atoms
     .map((atom) => {
       const result = scoreAtom(atom, queryTerms, queryText, snapshot.termDocumentFrequency, snapshot.atoms.length, additionalContext);
       return { atom, ...result };
     })
-    .filter((entry) => entry.matchedTerms.length > 0 && entry.score >= 0.13)
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
 
-  const direct = scored
+  // A one-word query that occurs in several durable atoms is not enough
+  // evidence to decide which personal fact belongs in the prompt. Specific
+  // one-word identifiers still work when they uniquely identify an atom.
+  const directScored = isAmbiguousSingleTermQuery(baseQueryTerms, snapshot.termDocumentFrequency)
+    ? []
+    : scoredAll.filter((entry) => entry.matchedTerms.length > 0 && entry.score >= 0.13);
+
+  const direct = directScored
     .filter((entry) => entry.score >= 0.16)
     .map((entry) => ({ ...entry, relation: 'direct' as const }));
   const directIds = new Set(direct.map((entry) => entry.atom.id));
-  // Use every direct hit as an expansion anchor. This is deliberately not a
-  // top-four/top-N heuristic: the full MEMORY.md is no longer injected, so
-  // losing a related durable fact merely to save a few prompt tokens is the
-  // wrong tradeoff for the main chat path.
-  const anchorTerms = new Set(direct.flatMap((entry) => entry.matchedTerms));
+
+  // Related recall is a second pass across ALL atoms, not just records that
+  // already matched the query. Rare non-query terms from a direct hit become
+  // anchors, so a query can recall one fact and then bring in a tightly linked
+  // sibling fact (for example, another durable rule about the same project).
+  const queryTermSet = new Set(queryTerms);
+  const rareDocumentFrequency = Math.max(2, Math.ceil(snapshot.atoms.length * 0.06));
+  const anchorTerms = new Set(direct.flatMap((entry) => entry.atom.terms.filter((term) =>
+    isRelationAnchorTerm(term, queryTermSet, snapshot.termDocumentFrequency, rareDocumentFrequency),
+  )));
   const anchorEntities = new Set(direct.flatMap((entry) => entry.atom.entities));
-  const related = scored
+  const related = scoredAll
     .filter((entry) => !directIds.has(entry.atom.id))
     .map((entry) => {
       const sharedTerms = entry.atom.terms.filter((term) => anchorTerms.has(term));
       const sharedEntities = entry.atom.entities.filter((entity) => anchorEntities.has(entity));
       const sameSection = direct.some((hit) => hit.atom.sourceSection === entry.atom.sourceSection);
-      const relationBoost = Math.min(0.18, sharedTerms.length * 0.035 + sharedEntities.length * 0.08 + (sameSection ? 0.03 : 0));
+      const relationReason = sharedEntities.length
+        ? `shared_entity:${sharedEntities[0]}`
+        : sharedTerms.length
+          ? `shared_anchor_term:${sharedTerms[0]}`
+          : undefined;
+      const relationScore = relationReason
+        ? Math.min(
+          0.52,
+          0.18
+            + Math.min(0.20, sharedTerms.length * 0.07)
+            + Math.min(0.18, sharedEntities.length * 0.10)
+            + (sameSection ? 0.03 : 0),
+        )
+        : 0;
       return {
         ...entry,
-        score: Math.min(1, entry.score + relationBoost),
+        score: Math.min(1, relationScore + entry.score * 0.15),
         relation: 'related' as const,
-        relationReason: sharedEntities.length
-          ? `shared_entity:${sharedEntities[0]}`
-          : sharedTerms.length >= 2
-            ? 'shared_decision_family_terms'
-            : sameSection
-              ? 'same_memory_section'
-              : undefined,
+        relationReason,
       };
     })
-    .filter((entry) => entry.relationReason && entry.score >= 0.18)
+    .filter((entry) => entry.relationReason && entry.score >= 0.20)
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
 
   const requestedMaxAtoms = Number(options.maxAtoms);
@@ -426,7 +519,7 @@ export function retrieveMemoryAtoms(
     selected,
     stats: {
       atomCount: snapshot.atoms.length,
-      directCandidates: scored.length,
+      directCandidates: directScored.length,
       selectedCount: selected.length,
       durationMs: Date.now() - startedAt,
       cacheHit,
