@@ -350,7 +350,6 @@ function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
   return detail;
 }
 
-const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
 
 function _mobileSubagentModelParts(agent = {}) {
@@ -35209,8 +35208,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+            <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
     <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
   `;
@@ -40678,8 +40676,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <div class="pm-header-actions">
+            <div class="pm-header-actions">
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>
     </header>
