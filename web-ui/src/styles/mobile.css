@@ -1471,28 +1471,6 @@ body.pm-model-badge-pressing * {
   background: rgba(255,255,255,.14);
   box-shadow: 1px 0 0 rgba(0,0,0,.28);
 }
-.pm-brand {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: .2px;
-}
-.pm-header-hide-brand .pm-brand { display: none; }
-.pm-brand-flame {
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0;
-  color: transparent;
-  background: url('/assets/Prometheus.png') center / contain no-repeat;
-  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--pm-orange) 28%, transparent));
-}
 .pm-brand-logo {
   width: 100%;
   height: 100%;
@@ -2128,7 +2106,6 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border: 1px solid color-mix(in srgb, var(--pm-border, rgba(255,255,255,.18)) 90%, transparent);
   border-radius: 999px;
   background: transparent;
-  color: var(--pm-text-soft, #f6f4f0);
   font: 700 11px/1 var(--pm-font);
   white-space: nowrap;
   cursor: pointer;
@@ -10876,16 +10853,55 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 .pm-mobile-side-composer.pm-composer {
   position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px);
+  left: var(--pm-mobile-chrome-inset, 22px);
+  right: var(--pm-mobile-chrome-inset, 22px);
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px));
   z-index: 2;
+  padding: 3px 7px;
+  border-radius: 999px;
 }
 .pm-keyboard-open .pm-mobile-side-composer.pm-composer {
   bottom: calc(var(--pm-keyboard-offset, 0px) + 8px);
 }
-.pm-mobile-side-composer .pm-composer-row { transform: translateY(0); }
-.pm-mobile-side-composer .pm-composer-input { min-height: 34px; }
+.pm-mobile-side-composer .pm-composer-row,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
+  display: flex;
+  grid-template-columns: none;
+  grid-template-rows: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  transform: none;
+}
+.pm-mobile-side-composer .pm-composer-input-wrap,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap {
+  flex: 1;
+  grid-column: auto;
+  grid-row: auto;
+  width: auto;
+  min-height: 34px;
+  align-self: center;
+  display: flex;
+}
+.pm-mobile-side-composer .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer .pm-composer-row > .pm-send,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  align-self: center;
+  margin: 0;
+  padding: 0;
+  justify-self: auto;
+}
+.pm-mobile-side-composer .pm-composer-row > .pm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pm-mobile-side-composer .pm-composer-input { min-height: 30px; }
 .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-composer {
   display: block;
 }

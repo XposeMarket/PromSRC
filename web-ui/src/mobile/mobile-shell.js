@@ -1184,8 +1184,6 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   _drawerEl = el(`
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
       <div class="pm-drawer-brand">
-        <span class="pm-brand-flame">🔥</span>
-        <span class="pm-drawer-brand-legacy">Prometheus</span>
         <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
@@ -2493,7 +2491,6 @@ export function renderMobileHeader({ title, online = true, leftIcon = 'menu', on
     <header class="pm-header${hideBrand ? ' pm-header-hide-brand' : ''}">
       <button class="pm-icon-btn" data-action="${leftIcon === 'back' ? 'back' : 'menu'}" aria-label="${leftIcon === 'back' ? 'Back' : 'Menu'}">${ICONS[leftIcon]}</button>
       ${modelBadge}
-      <div class="pm-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <div class="pm-header-actions">
         ${headerRightActions}
       </div>
