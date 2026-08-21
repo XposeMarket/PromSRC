@@ -19624,12 +19624,21 @@ function setChatResourcesExpanded(expanded = false) {
 
 function toggleSources(nextOpen = null) {
   const panel = document.getElementById('right-panel');
+  const panelOpen = panel?.classList.contains('open') === true;
   if (nextOpen === false) {
-    if (panel?.classList.contains('open')) toggleRightPanel();
+    if (panelOpen) toggleRightPanel();
     hideSourcesMinimizedPanel();
     return;
   }
-  if (nextOpen === true || !panel?.classList.contains('open')) {
+  if (nextOpen === true || !panelOpen) {
+    // An empty Sources notification still has a compact surface. Do not turn
+    // the absence of source rows into an implicit full-drawer open; the
+    // explicit Open Sources controls below remain the deliberate full-panel
+    // path.
+    if (panel && !panelOpen && sourcePanelMiniItems('all').length === 0) {
+      showSourcesMinimizedPanel();
+      return;
+    }
     openFullSourcePanel();
     return;
   }
