@@ -61,7 +61,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
-  const env = { ...process.env, PROMETHEUS_STORAGE_LAYOUT: 'canonical' };
+  const env: NodeJS.ProcessEnv = { ...process.env, PROMETHEUS_STORAGE_LAYOUT: 'canonical' };
   if (args.appData) env.PROMETHEUS_DATA_DIR = args.appData;
   if (args.runtime) env.PROMETHEUS_RUNTIME_DIR = args.runtime;
   if (args.workspace) env.PROMETHEUS_WORKSPACE_DIR = args.workspace;
