@@ -1087,7 +1087,11 @@ function _drawerGatewayStatusTone(status) {
 }
 
 function _shouldShowMobileGatewayContext() {
-  return isMobileGatewayCatalogEnabled() && loadGatewayCatalog().length > 1;
+  // The computer label disambiguates the unified "All" view. In a selected
+  // computer view it is redundant, so keep the session rows focused on chat.
+  return isMobileGatewayCatalogEnabled()
+    && loadGatewayCatalog().length > 1
+    && getGatewayFilter().mode === 'all';
 }
 
 function _renderDrawerGatewayFilterPanel() {

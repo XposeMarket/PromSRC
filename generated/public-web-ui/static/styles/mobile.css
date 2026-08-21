@@ -2371,6 +2371,21 @@ html.pm-session-context-open * {
   font-weight: 800;
   padding: 4px 2px;
 }
+/* Drawer hierarchy: section labels are easy to scan, while chat titles stay regular. */
+.pm-drawer .pm-drawer-section-title {
+  font-size: 13px;
+  letter-spacing: 1.05px;
+  font-weight: 650;
+}
+.pm-drawer .pm-session-title {
+  font-weight: 400;
+}
+.pm-drawer .pm-session-computer {
+  color: color-mix(in srgb, var(--pm-blue, #4a82d1) 56%, transparent);
+  font-weight: 400;
+}
+
+
 .pm-drawer-session-head,
 .pm-drawer-session-list {
   display: flex;
