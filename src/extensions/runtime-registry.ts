@@ -218,12 +218,36 @@ export class PrometheusExtensionRuntimeRegistry {
     return this.listTools().map(toFunctionTool);
   }
 
+  private connectorIdForTool(tool: RegisteredTool): string {
+    const explicit = String((tool as any).connectorId || '').trim();
+    if (explicit) return explicit;
+    const extension = this.extensions.get(tool.extensionId);
+    const declared = extension?.contracts?.connectors || [];
+    if (declared.length === 1) return String(declared[0]);
+    const owner = this.listConnectors().find((connector) => connector.toolNames?.includes(tool.name));
+    return owner?.id || '';
+  }
+
+  getConnectorIdForTool(name: string): string {
+    const tool = this.tools.get(name);
+    return tool ? this.connectorIdForTool(tool) : '';
+  }
+
+  isToolAvailable(name: string): boolean {
+    const tool = this.tools.get(name);
+    if (!tool) return false;
+    const connectorId = this.connectorIdForTool(tool);
+    if (!connectorId) return true;
+    const exposure = getConnectionToolExposure(connectorId, tool.name);
+    return exposure.managed ? exposure.available : this.isConnectorConnected(connectorId);
+  }
+
   listConnectedConnectorToolDefinitions(): any[] {
     const now = Date.now();
     const connectedById = new Map<string, boolean>();
     return this.listTools()
       .filter((tool) => {
-        const connectorId = String((tool as any).connectorId || '').trim();
+        const connectorId = this.connectorIdForTool(tool);
         if (!connectorId) return true;
         const canonical = getConnectionToolExposure(connectorId, tool.name);
         // Canonical connection records are authoritative for native and
@@ -244,6 +268,17 @@ export class PrometheusExtensionRuntimeRegistry {
 
   getConnector(id: string): (PrometheusConnectorRuntime & { extensionId: string }) | undefined {
     return this.connectors.get(id);
+  }
+
+  isConnectorAvailable(id: string): boolean {
+    const connector = this.connectors.get(id);
+    if (!connector || !this.isConnectorConnected(id)) return false;
+    const toolNames = connector.toolNames?.length
+      ? connector.toolNames
+      : this.listTools()
+        .filter((tool) => this.connectorIdForTool(tool) === id)
+        .map((tool) => tool.name);
+    return toolNames.length === 0 || toolNames.some((name) => this.isToolAvailable(name));
   }
 
   async executeTool(name: string, args: any): Promise<PrometheusToolExecutionResult> {

@@ -32,52 +32,7 @@ const READ_ONLY_TOOLS = new Set([
   'desktop_get_accessibility_tree', 'desktop_get_accessibility_state',
   'desktop_pixel_watch', 'desktop_list_macros', 'desktop_list_apps',
   'desktop_list_windows', 'desktop_get_window_state', 'desktop_locate_text',
-  'connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties',
-  'connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file',
-  'connector_gdrive_search', 'connector_gdrive_api_request', 'connector_github_list_repos', 'connector_github_list_issues',
-  'connector_github_list_prs', 'connector_github_get_pr', 'connector_github_list_commits',
-  'connector_github_list_check_runs', 'connector_github_get_file', 'connector_github_search', 'connector_notion_search',
-  'connector_notion_get_page', 'connector_notion_query_database',
-  'connector_hubspot_list_contacts', 'connector_hubspot_get_contact',
-  'connector_hubspot_search', 'connector_hubspot_list_deals',
-  'connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_get_thread', 'connector_gmail_prepare_email',
-  'connector_gmail_get_profile', 'connector_gmail_list_labels',
-  'connector_slack_list_channels', 'connector_slack_get_history', 'connector_slack_search',
-  'connector_stripe_get_balance', 'connector_stripe_list_customers',
-  'connector_stripe_list_charges', 'connector_stripe_list_products',
-  'connector_reddit_get_posts', 'connector_reddit_search', 'connector_reddit_get_comments',
-  'connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_get_record',
-  'connector_vercel_status', 'connector_vercel_list_teams', 'connector_vercel_list_projects',
-  'connector_vercel_list_deployments', 'connector_vercel_get_deployment',
-  'connector_obsidian_status',
   'connector_list', 'automation_dashboard', 'diagnostic_packet', 'system_diagnostics',
-]);
-
-const CREDENTIAL_READ_ONLY_TOOLS = new Set([
-  'connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties',
-  'connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file',
-  'connector_gdrive_search', 'connector_gdrive_api_request', 'connector_github_list_repos', 'connector_github_list_issues',
-  'connector_github_list_prs', 'connector_github_get_pr', 'connector_github_list_commits', 'connector_github_list_check_runs', 'connector_github_get_file', 'connector_github_search', 'connector_notion_search',
-  'connector_notion_get_page', 'connector_notion_query_database',
-  'connector_hubspot_list_contacts', 'connector_hubspot_get_contact',
-  'connector_hubspot_search', 'connector_hubspot_list_deals',
-  'connector_gmail_list_emails', 'connector_gmail_get_email', 'connector_gmail_prepare_email',
-  'connector_gmail_get_profile', 'connector_gmail_list_labels',
-  'connector_slack_list_channels', 'connector_slack_get_history', 'connector_slack_search',
-  'connector_stripe_get_balance', 'connector_stripe_list_customers',
-  'connector_stripe_list_charges', 'connector_stripe_list_products',
-  'connector_reddit_get_posts', 'connector_reddit_search', 'connector_reddit_get_comments',
-  'connector_salesforce_query', 'connector_salesforce_search', 'connector_salesforce_get_record',
-  'connector_vercel_status', 'connector_vercel_list_teams', 'connector_vercel_list_projects',
-  'connector_vercel_list_deployments', 'connector_vercel_get_deployment', 'connector_vercel_domains', 'connector_obsidian_status',
-  'x_api_me', 'x_api_get_post', 'x_api_get_posts', 'x_api_search_recent', 'x_api_search_all',
-  'x_api_get_bookmarks', 'x_api_get_liked_posts', 'x_api_get_liking_users',
-  'x_api_get_reposted_by', 'x_api_get_reposts_of_me', 'x_api_get_user',
-  'x_api_get_user_by_username', 'x_api_get_user_posts', 'x_api_get_user_mentions',
-  'x_api_get_followers', 'x_api_get_following', 'x_api_get_list',
-  'x_api_get_owned_lists', 'x_api_get_list_posts', 'x_api_search_spaces',
-  'x_api_get_space', 'x_api_get_trends', 'x_api_get_personalized_trends',
-  'x_api_get_dm_events', 'x_api_get_usage',
 ]);
 
 const LOCAL_WRITE_TOOLS = new Set([
@@ -116,25 +71,12 @@ const EXTERNAL_WRITE_TOOLS = new Set([
   'vercel_deploy', 'vercel_env', 'vercel_create', 'vercel_project', 'git_push',
   'open_pr', 'browser_click', 'browser_fill', 'browser_press', 'browser_press_key',
   'browser_submit', 'browser_upload_file', 'browser_click_and_download',
-  'connector_github_create_issue', 'connector_github_create_pr', 'connector_github_merge_pr', 'connector_github_create_repo',
-  'connector_notion_create_page', 'connector_hubspot_create_contact',
-  'connector_gmail_send_email', 'connector_slack_send_message',
-  'connector_reddit_submit_post', 'connector_salesforce_create_record',
-  'connector_vercel_redeploy', 'connector_vercel_env',
-  'connector_obsidian_connect_vault', 'connector_obsidian_sync', 'connector_obsidian_writeback',
   'desktop_click', 'desktop_drag', 'desktop_scroll', 'desktop_type', 'desktop_type_raw',
   'desktop_press_key', 'desktop_window_control', 'desktop_accessibility_action',
   'desktop_replay_macro', 'desktop_click_text', 'desktop_window_click',
   'desktop_window_type', 'desktop_window_press_key', 'desktop_window_scroll',
   'desktop_window_drag', 'desktop_screen', 'desktop_apps', 'desktop_window',
   'desktop_input', 'desktop_macro', 'desktop_background',
-  'x_api_delete_post', 'x_api_create_bookmark', 'x_api_delete_bookmark',
-  'x_api_create_post', 'x_api_like_post', 'x_api_unlike_post', 'x_api_repost',
-  'x_api_unrepost', 'x_api_follow_user', 'x_api_unfollow_user', 'x_api_mute_user',
-  'x_api_unmute_user', 'x_api_block_user', 'x_api_unblock_user', 'x_api_create_list',
-  'x_api_update_list', 'x_api_delete_list', 'x_api_add_list_member',
-  'x_api_remove_list_member', 'x_api_follow_list', 'x_api_unfollow_list',
-  'x_api_pin_list', 'x_api_unpin_list', 'x_api_send_dm',
 ]);
 
 const READ_ONLY: ToolCapabilityMetadata = Object.freeze({
@@ -166,6 +108,75 @@ const UNKNOWN_FAIL_CLOSED: ToolCapabilityMetadata = Object.freeze({
   destructive: true, credentialUse: true, known: false,
 });
 
+const CONNECTOR_READ_OPERATION_TOKENS = new Set([
+  'list', 'get', 'read', 'search', 'query', 'status', 'check', 'fetch', 'retrieve',
+  'find', 'describe', 'inspect', 'show', 'preview', 'report', 'realtime', 'profile',
+  'history', 'comments', 'labels', 'balance', 'properties', 'domains', 'prepare',
+]);
+
+const CONNECTOR_WRITE_OPERATION_TOKENS = new Set([
+  'create', 'update', 'delete', 'remove', 'send', 'post', 'publish', 'submit', 'merge',
+  'redeploy', 'deploy', 'write', 'writeback', 'sync', 'connect', 'disconnect', 'follow',
+  'unfollow', 'block', 'unblock', 'mute', 'unmute', 'like', 'unlike', 'repost', 'unrepost',
+  'pin', 'unpin', 'add', 'set', 'archive', 'move', 'rename', 'approve', 'reject', 'cancel',
+  'env',
+]);
+
+/**
+ * Classify connector tools from their declared/runtime identity and the
+ * operation vocabulary in their name. This is deliberately provider-neutral:
+ * a newly installed connector can participate without being added to a
+ * Prometheus-owned allowlist. Ambiguous names remain fail-closed.
+ */
+export function inferConnectorToolCapabilities(
+  toolName: string,
+  args?: Record<string, any>,
+): ToolCapabilityMetadata | undefined {
+  const name = String(toolName || '').trim().toLowerCase();
+  if (!name) return undefined;
+  const tokens = name.split(/[^a-z0-9]+/).filter(Boolean);
+  const isApiRequest = name.endsWith('_api_request') || (tokens.includes('api') && tokens.includes('request'));
+  if (isApiRequest) {
+    const method = String(args?.method || '').trim().toUpperCase();
+    if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
+    if (method) return EXTERNAL_WRITE;
+    // A connector-specific read-only API wrapper must declare that boundary
+    // explicitly; a generic request without a method is not safe to assume.
+    return undefined;
+  }
+
+  if (tokens.some((token) => CONNECTOR_WRITE_OPERATION_TOKENS.has(token))) return EXTERNAL_WRITE;
+  if (tokens.some((token) => CONNECTOR_READ_OPERATION_TOKENS.has(token))) return CREDENTIAL_READ_ONLY;
+  return undefined;
+}
+
+function resolveRegisteredConnectorToolCapabilities(
+  toolName: string,
+  args?: Record<string, any>,
+): ToolCapabilityMetadata | undefined {
+  try {
+    // Lazy imports avoid a module cycle: the runtime registry itself imports
+    // this policy module for connection-tool risk classification.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { ensurePrometheusExtensionRuntimeLoaded } = require('../extensions/legacy-connector-adapter.js');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { getExtensionRuntimeRegistry } = require('../extensions/runtime-registry.js');
+    ensurePrometheusExtensionRuntimeLoaded();
+    const registry = getExtensionRuntimeRegistry();
+    const tool = registry.getTool(toolName);
+    if (!tool) return undefined;
+    if (tool.sideEffects) return { ...tool.sideEffects, known: tool.sideEffects.known !== false };
+    const extension = registry.getExtension(tool.extensionId);
+    const connectorBacked = Boolean(String(tool.connectorId || '').trim())
+      || extension?.manifest?.kind === 'connector'
+      || (extension?.contracts?.connectors || []).length > 0;
+    if (!connectorBacked) return undefined;
+    return inferConnectorToolCapabilities(toolName, args);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveToolCapabilityMetadata(
   toolName: string,
   declared?: ToolCapabilityMetadata,
@@ -181,12 +192,15 @@ export function resolveToolCapabilityMetadata(
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
     return EXTERNAL_WRITE;
   }
-  if (CREDENTIAL_READ_ONLY_TOOLS.has(name)) return CREDENTIAL_READ_ONLY;
   if (READ_ONLY_TOOLS.has(name)) return READ_ONLY;
   if (LOCAL_WRITE_TOOLS.has(name)) return LOCAL_WRITE;
   if (DESTRUCTIVE_TOOLS.has(name)) return DESTRUCTIVE;
   if (COMMAND_TOOLS.has(name)) return COMMAND;
   if (EXTERNAL_WRITE_TOOLS.has(name)) return EXTERNAL_WRITE;
+  const registeredConnectorCapabilities = resolveRegisteredConnectorToolCapabilities(name, args);
+  if (registeredConnectorCapabilities) return registeredConnectorCapabilities;
+  const inferredConnectorCapabilities = inferConnectorToolCapabilities(name, args);
+  if (inferredConnectorCapabilities) return inferredConnectorCapabilities;
   return UNKNOWN_FAIL_CLOSED;
 }
 

@@ -7,6 +7,9 @@
   "enabledByDefault": true,
   "docsUrl": "https://vercel.com/account/tokens",
   "tags": ["vercel", "deployments", "api key"],
+  "activation": {
+    "aliases": ["deploy", "deployment", "preview", "environment", "env", "project", "projects"]
+  },
   "runtime": {
     "binding": "integrations/connectors/vercel",
     "entrypoint": "./runtime.js"

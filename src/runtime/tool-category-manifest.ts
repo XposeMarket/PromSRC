@@ -69,7 +69,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   automation_recovery: entry('automation_recovery', ['recovery_pack', 'automation_recovery_pack'], 'recover interrupted requests, approvals, and failed runs', 'automation recovery or interrupted work'),
   automation_sessions: entry('automation_sessions', ['session_pack', 'thread_pack'], 'create/send/steer Prometheus sessions and threads', 'Prometheus thread or session operations'),
   runtime_admin: entry('runtime_admin', ['runtime', 'diagnostics'], 'Prometheus runtime diagnostics, incident packets, and controlled gateway restart', 'Prometheus runtime diagnostics or restart'),
-  external_apps: entry('external_apps', ['connectors'], 'connected app wrappers: X/xAI, Vercel, and other connected tools', 'connected application use'),
+  external_apps: entry('external_apps', ['connectors'], 'live tools from connected extension-backed applications', 'connected application use'),
   integration_admin: entry('integration_admin', ['integrations'], 'MCP server setup, webhooks, integration quick setup', 'integration administration'),
   social_intelligence: entry('social_intelligence', [], 'social profile analysis and recommendations', 'social intelligence analysis'),
   proposal_admin: entry('proposal_admin', [], 'create/edit pending proposals before approval', 'proposal creation or administration'),
