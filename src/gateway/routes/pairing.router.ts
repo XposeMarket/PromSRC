@@ -183,6 +183,9 @@ function _safeCatalogSession(session: any): Record<string, unknown> {
     activeRun: session?.activeRun === true,
     messageCount: Number(session?.messageCount || 0) || 0,
     title: String(session?.title || 'New chat').replace(/\s+/g, ' ').trim().slice(0, 240),
+    // The mobile drawer needs the same compact last-message preview as the
+    // local session list. Keep it bounded and text-only; never expose history.
+    preview: String(session?.preview || '').replace(/\s+/g, ' ').trim().slice(0, 240),
     // Preserve only the compact, non-secret provenance needed by the mobile
     // sidebar to render a packaged source mark. Transcript content and source
     // filesystem details remain excluded from this cross-origin catalog.

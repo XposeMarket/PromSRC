@@ -1864,6 +1864,7 @@ function _renderDrawerProjects() {
       '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + '</div>' +
       '</div>'
     : '';
+  _wireDrawerLongPress(_sessLongCallbacks || {});
 }
 
 // Keep the mobile drawer on the same approved local source artwork as the
@@ -1939,10 +1940,14 @@ function _projectButtonHtml(project) {
   const isPinned = _isProjectPinned(project);
   const logo = project?.externalImport ? _mobileImportedSourceLogo({ externalImport: project.externalImport }) : '';
   const activity = Number(project?.updatedAt || project?.createdAt || 0);
+  const latestSession = (Array.isArray(project?.sessions) ? project.sessions : [])
+    .slice()
+    .sort((a, b) => Number(b?.lastMessageAt || b?.updatedAt || b?.createdAt || 0) - Number(a?.lastMessageAt || a?.updatedAt || a?.createdAt || 0))[0];
+  const projectPreview = String(latestSession?.preview || '').trim();
   return `<div class="pm-project-group${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned-project' : ''}" data-project-id="${escapeHtml(id)}">
     <div class="pm-session-row pm-project-row" data-project-toggle="${escapeHtml(id)}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">
       <span class="pm-session-row-top"><span class="pm-session-title-line"><span class="pm-project-folder-icon pm-i" aria-hidden="true">${ICONS.folder}</span>${logo}<span class="pm-session-title">${escapeHtml(title)}</span></span></span>
-      ${activity > 0 ? `<span class="pm-session-subline"><span class="pm-session-gateway">${escapeHtml(`${Array.isArray(project.sessions) ? project.sessions.length : 0} chats`)}</span><time class="pm-session-time">${escapeHtml(timeAgo(activity))}</time></span>` : ''}
+      ${(projectPreview || activity > 0) ? `<span class="pm-session-subline">${projectPreview ? `<span class="pm-session-preview">${escapeHtml(projectPreview)}</span>` : ''}${activity > 0 ? `<time class="pm-session-time">${escapeHtml(timeAgo(activity))}</time>` : ''}</span>` : ''}
     </div>
     ${_projectSessionRows(project)}
   </div>`;

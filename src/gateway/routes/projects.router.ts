@@ -98,6 +98,8 @@ function hydrateProjectSessions(project: any): any {
           createdAt: session.createdAt || stored.createdAt,
           updatedAt: session.lastActiveAt || stored.updatedAt,
           messageCount: session.history?.length || 0,
+          preview: String(session.history?.slice().reverse().find((message: any) => (message?.role === 'user' || message?.role === 'assistant') && String(message?.content || '').trim())?.content || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+          lastMessageAt: Number(session.lastMessageAt || session.lastActiveAt || stored.updatedAt || 0) || undefined,
         };
       } catch {
         return stored;
