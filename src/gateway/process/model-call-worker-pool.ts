@@ -80,6 +80,9 @@ interface Task {
   eventCount: number;
   eventBatches: number;
   eventBytes: number;
+  pendingEvents: ModelCallStreamItem[];
+  pendingTerminal?: Extract<ModelCallWorkerChildMessage, { type: 'result' | 'error' }>;
+  eventDrainScheduled: boolean;
 }
 
 interface WorkerSlot {
@@ -171,6 +174,8 @@ const maxMessageBytes = envInt(
   64 * 1024,
   64 * 1024 * 1024,
 );
+const eventCallbackBatchSize = envInt('PROMETHEUS_MODEL_WORKER_EVENT_CALLBACK_BATCH', 64, 1, 1024);
+const maxPendingEvents = envInt('PROMETHEUS_MODEL_WORKER_MAX_PENDING_EVENTS', 4096, 128, 100_000);
 const recycleAfterJobs = envInt('PROMETHEUS_MODEL_WORKER_RECYCLE_JOBS', 20, 1, 10_000);
 const recycleRssBytes = envInt(
   'PROMETHEUS_MODEL_WORKER_RECYCLE_RSS_BYTES',
@@ -239,19 +244,57 @@ function send(slot: WorkerSlot, message: ModelCallWorkerParentMessage): void {
   slot.child.send(message);
 }
 
-function handleEvents(task: Task, events: ModelCallStreamItem[]): void {
-  if (task.settled) return;
-  for (const event of events) {
-    if (task.callbackError) return;
-    try {
-      if (event.kind === 'token') task.callbacks.onToken?.(event.value);
-      else if (event.kind === 'thinking') task.callbacks.onThinking?.(event.value);
-      else if (event.kind === 'reasoning_summary') task.callbacks.onReasoningSummary?.(event.value);
-      else task.callbacks.onModelEvent?.(event.value);
-    } catch (error: any) {
-      task.callbackError = error instanceof Error ? error : new Error(String(error));
-    }
+function dispatchEvent(task: Task, event: ModelCallStreamItem): void {
+  try {
+    if (event.kind === 'token') task.callbacks.onToken?.(event.value);
+    else if (event.kind === 'thinking') task.callbacks.onThinking?.(event.value);
+    else if (event.kind === 'reasoning_summary') task.callbacks.onReasoningSummary?.(event.value);
+    else task.callbacks.onModelEvent?.(event.value);
+  } catch (error: any) {
+    task.callbackError = error instanceof Error ? error : new Error(String(error));
   }
+}
+
+function scheduleTaskEventDrain(slot: WorkerSlot, task: Task): void {
+  if (task.eventDrainScheduled || task.settled) return;
+  task.eventDrainScheduled = true;
+  setImmediate(() => {
+    task.eventDrainScheduled = false;
+    if (slot.task !== task || task.settled) return;
+    const batch = task.pendingEvents.splice(0, eventCallbackBatchSize);
+    for (const event of batch) {
+      if (task.callbackError) break;
+      dispatchEvent(task, event);
+    }
+    if (task.callbackError) {
+      task.pendingEvents = [];
+      task.pendingTerminal = undefined;
+      cancelActive(slot, task, 'Stream callback failed.');
+      return;
+    }
+    if (task.pendingEvents.length > 0) {
+      scheduleTaskEventDrain(slot, task);
+      return;
+    }
+    const terminal = task.pendingTerminal;
+    task.pendingTerminal = undefined;
+    if (terminal) handleMessage(slot, terminal);
+  });
+}
+
+function queueTaskEvents(slot: WorkerSlot, task: Task, events: ModelCallStreamItem[]): void {
+  if (task.settled) return;
+  if (task.pendingEvents.length + events.length > maxPendingEvents) {
+    failActiveAndKill(slot, new ModelCallWorkerError(
+      'Model stream callback backlog exceeded ' + maxPendingEvents + ' events.',
+      'MODEL_STREAM_BACKPRESSURE',
+      false,
+      task.providerStarted,
+    ));
+    return;
+  }
+  task.pendingEvents.push(...events);
+  scheduleTaskEventDrain(slot, task);
 }
 
 function finishSlotTask(slot: WorkerSlot): void {
@@ -294,6 +337,18 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   }
   const task = slot.task;
   if (!task || ('requestId' in message && message.requestId !== task.id)) return;
+  if (task.settled && (message.type === 'result' || message.type === 'error')) {
+    finishSlotTask(slot);
+    return;
+  }
+  if (
+    (message.type === 'result' || message.type === 'error')
+    && (task.pendingEvents.length > 0 || task.eventDrainScheduled)
+  ) {
+    task.pendingTerminal = message;
+    scheduleTaskEventDrain(slot, task);
+    return;
+  }
   if (message.type === 'started') {
     slot.lastHeartbeatAt = message.at;
     noteWorkerStage(task, 'worker_started', {
@@ -326,12 +381,7 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
       totalEventCount: task.eventCount,
       totalEventBytes: task.eventBytes,
     });
-    handleEvents(task, message.events);
-    if (task.callbackError) cancelActive(slot, task, 'Stream callback failed.');
-    return;
-  }
-  if (task.settled && (message.type === 'result' || message.type === 'error')) {
-    finishSlotTask(slot);
+    queueTaskEvents(slot, task, message.events);
     return;
   }
   if (message.type === 'result') {
@@ -646,6 +696,8 @@ export async function dispatchModelCallWorker(
       eventCount: 0,
       eventBatches: 0,
       eventBytes: 0,
+      pendingEvents: [],
+      eventDrainScheduled: false,
     };
     task.deadlineAt = Date.now() + task.timeoutMs;
     task.timer = setTimeout(() => {
