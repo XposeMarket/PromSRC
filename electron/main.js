@@ -52,6 +52,12 @@ const {
   killGatewayPortOwner,
   killGatewayProcessTree: killManagedGatewayProcessTree,
 } = require('./gateway-process');
+const {
+  appendGatewaySupervisorEvidence,
+  buildGatewaySupervisorEvidence,
+  classifyGatewaySupervisorObservation,
+  readGatewayProgressLease: readSharedGatewayProgressLease,
+} = require('./gateway-supervisor-policy');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 function parseGatewayPort(value) {
@@ -91,6 +97,12 @@ const GATEWAY_HEALTH_INTERVAL_MS = 15_000;
 const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
 const GATEWAY_HEALTH_FAILURE_LIMIT = 2;
 const GATEWAY_BUSY_RECOVERY_GRACE_MS = 45_000;
+const GATEWAY_PROGRESS_MAX_AGE_MS = 120_000;
+const GATEWAY_RECOVERY_WINDOW_MS = 10 * 60_000;
+const GATEWAY_RECOVERY_MAX_ATTEMPTS = 3;
+const GATEWAY_RECOVERY_BASE_DELAY_MS = 5_000;
+const GATEWAY_RECOVERY_MAX_DELAY_MS = 60_000;
+const GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS = 15_000;
 const GATEWAY_QUIT_GRACE_MS = 12_000;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
@@ -308,6 +320,8 @@ let isGatewayRestarting = false;
 let gatewayHealthTimer = null;
 let gatewayHealthCheckInFlight = false;
 let gatewayHealthFailures = 0;
+let gatewayProcessStartedAt = 0;
+const gatewayRecoveryAttempts = [];
 const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -1037,6 +1051,8 @@ async function startGatewayRelay() {
   const relay = createGatewayReverseProxy({
     port: gatewayPort,
     getTargetPort: () => gatewayBackendPort,
+    initialState: 'starting',
+    upstreamTimeoutMs: GATEWAY_RELAY_UPSTREAM_TIMEOUT_MS,
     log: writeGatewayLog,
   });
   try {
@@ -1253,13 +1269,21 @@ function resolveVaultMasterKey() {
 // ─── Gateway ───────────────────────────────────────────────────────────────
 function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
   return new Promise((resolve) => {
+    const backendPort = parseGatewayPort(gatewayBackendPort);
+    if (!backendPort) {
+      resolve(false);
+      return;
+    }
     let settled = false;
     const done = (ok) => {
       if (settled) return;
       settled = true;
       resolve(ok);
     };
-    const req = http.request(`${GATEWAY_URL}/api/health`, {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: backendPort,
+      path: '/api/health',
       // The gateway has a raw HEAD fast path. Avoid making the watchdog wait
       // for a JSON body or any downstream middleware while deciding whether
       // the process is reachable.
@@ -1291,59 +1315,7 @@ function readGatewayRuntimeStatus() {
 }
 
 function readGatewayProgressLease() {
-  try {
-    const leasePath = path.join(USER_DATA_DIR, '.prometheus', 'gateway-progress-lease.json');
-    if (!fs.existsSync(leasePath)) return null;
-    return JSON.parse(fs.readFileSync(leasePath, 'utf-8'));
-  } catch {
-    return null;
-  }
-}
-
-function shouldDeferGatewayHealthRecovery(status, lease, expectedPid) {
-  const now = Date.now();
-  const gatewayPid = Number(expectedPid);
-  const statusPid = Number(status?.pid);
-  // Never use a stale heartbeat written by the gateway process that was just
-  // replaced. The progress lease has the same PID identity guard below.
-  const currentStatus = status
-    && (!gatewayPid || !statusPid || statusPid === gatewayPid)
-    ? status
-    : null;
-
-  if (currentStatus && Number.isFinite(Number(currentStatus.timestamp))) {
-    const heartbeatAgeMs = Math.max(0, now - Number(currentStatus.timestamp));
-    if (heartbeatAgeMs < 20_000) return true;
-    if (!currentStatus.modelBusy) return false;
-    const busyAgeAtHeartbeatMs = Number.isFinite(Number(currentStatus.modelBusyAgeMs))
-      ? Number(currentStatus.modelBusyAgeMs)
-      : 0;
-    const busyAgeFromStartMs = Number.isFinite(Number(currentStatus.modelBusySince))
-      ? Math.max(0, now - Number(currentStatus.modelBusySince))
-      : 0;
-    const effectiveBusyAgeMs = Math.max(
-      busyAgeFromStartMs,
-      busyAgeAtHeartbeatMs + heartbeatAgeMs,
-    );
-    if (effectiveBusyAgeMs < GATEWAY_BUSY_RECOVERY_GRACE_MS) return true;
-  }
-
-  const leasePid = Number(lease?.pid);
-  const lastProgressAt = Number(lease?.lastProgressAt);
-  const expiresAt = Number(lease?.expiresAt);
-  if (
-    lease?.state === 'active'
-    && (!gatewayPid || leasePid === gatewayPid)
-    && lastProgressAt > 0
-    && expiresAt > now
-  ) {
-    // An active provider worker renews this lease every few seconds. The
-    // model-worker pool independently kills a worker after stale heartbeats,
-    // so this cannot keep a dead provider request alive indefinitely.
-    return true;
-  }
-
-  return false;
+  return readSharedGatewayProgressLease(path.join(USER_DATA_DIR, '.prometheus'));
 }
 
 // Electron can still be torn down by a renderer crash, an OS close request,
@@ -1661,31 +1633,159 @@ async function completePendingCanonicalValidation() {
   canonicalUpdatePendingValidation = null;
 }
 
+function pruneGatewayRecoveryAttempts(now = Date.now()) {
+  while (gatewayRecoveryAttempts.length > 0
+    && now - gatewayRecoveryAttempts[0] >= GATEWAY_RECOVERY_WINDOW_MS) {
+    gatewayRecoveryAttempts.shift();
+  }
+}
+
+function markGatewayRecoveryDegraded(reason) {
+  gatewayRelay?.setState('failed');
+  const target = gatewayProcess;
+  if (target && target.exitCode == null && target.signalCode == null) {
+    writeGatewayLog(
+      '[main] Automatic gateway recovery paused after '
+      + GATEWAY_RECOVERY_MAX_ATTEMPTS
+      + ' attempts in '
+      + (GATEWAY_RECOVERY_WINDOW_MS / 60_000)
+      + ' minutes: '
+      + reason
+      + '\n',
+    );
+    killManagedGatewayProcessTree(target);
+    forceCleanupOwnedGatewayPort(target.pid || 0, Number(readGatewayRuntimeStatus()?.pid || 0));
+  } else {
+    writeGatewayLog('[main] Automatic gateway recovery paused: ' + reason + '\n');
+  }
+  gatewayProcess = null;
+  gatewayHealthFailures = 0;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('gateway-degraded', {
+        reason: String(reason).slice(0, 240),
+        retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
+      });
+    }
+  } catch {}
+}
+
+async function requestAutomaticGatewayRecovery(options = {}) {
+  if (isQuitting || isGatewayRestarting) return false;
+  const now = Date.now();
+  pruneGatewayRecoveryAttempts(now);
+  if (gatewayRecoveryAttempts.length >= GATEWAY_RECOVERY_MAX_ATTEMPTS) {
+    markGatewayRecoveryDegraded(options.reason || 'automatic recovery budget exhausted');
+    return false;
+  }
+  const attempt = gatewayRecoveryAttempts.length;
+  const delayMs = Math.min(
+    GATEWAY_RECOVERY_BASE_DELAY_MS * (2 ** attempt),
+    GATEWAY_RECOVERY_MAX_DELAY_MS,
+  );
+  gatewayRecoveryAttempts.push(now);
+  writeGatewayLog(
+    '[main] Scheduling automatic gateway recovery '
+    + (attempt + 1)
+    + '/'
+    + GATEWAY_RECOVERY_MAX_ATTEMPTS
+    + ' in '
+    + delayMs
+    + 'ms: '
+    + (options.reason || 'unknown reason')
+    + '\n',
+  );
+  if (delayMs > 0) await sleep(delayMs);
+  if (isQuitting) return false;
+  await restartGatewayFromElectron({
+    ...options,
+    automaticRecovery: true,
+  });
+  return true;
+}
+
+function observeGatewayHealth(healthOk, durationMs, outcome = healthOk ? 'ok' : 'timeout', statusCode) {
+  const now = Date.now();
+  pruneGatewayRecoveryAttempts(now);
+  const child = gatewayProcess;
+  const childPid = Number(child?.pid) || undefined;
+  const runtimeStatus = readGatewayRuntimeStatus();
+  const progressLease = readGatewayProgressLease();
+  const consecutiveFailures = healthOk ? 0 : gatewayHealthFailures + 1;
+  const portOwnerPids = healthOk
+    ? []
+    : getGatewayPortOwnerPids(gatewayBackendPort || gatewayPort);
+  const decision = classifyGatewaySupervisorObservation({
+    now,
+    healthOk,
+    childPid,
+    childExited: !child || child.exitCode != null || child.signalCode != null,
+    portOwnerPids,
+    consecutiveFailures,
+    failureLimit: GATEWAY_HEALTH_FAILURE_LIMIT,
+    restartEnabled: gatewayRecoveryAttempts.length < GATEWAY_RECOVERY_MAX_ATTEMPTS,
+    heartbeatFreshMs: 20_000,
+    legacyBusyGraceMs: GATEWAY_BUSY_RECOVERY_GRACE_MS,
+    maxProgressAgeMs: GATEWAY_PROGRESS_MAX_AGE_MS,
+    expectedProcessStartedAt: gatewayProcessStartedAt || undefined,
+    runtimeStatus,
+    progressLease,
+  });
+  appendGatewaySupervisorEvidence(
+    path.join(USER_DATA_DIR, '.prometheus'),
+    buildGatewaySupervisorEvidence({
+      now,
+      supervisorPid: process.pid,
+      childPid,
+      portOwnerPids,
+      probe: { healthy: healthOk, durationMs, outcome, statusCode },
+      consecutiveFailures,
+      decision,
+      runtimeStatus,
+      progressLease,
+    }),
+  );
+  return { decision, runtimeStatus, progressLease, consecutiveFailures };
+}
+
 function startGatewayHealthWatchdog() {
   if (gatewayHealthTimer) return;
   gatewayHealthTimer = setInterval(async () => {
     if (isQuitting || isGatewayRestarting || gatewayHealthCheckInFlight || !gatewayProcess) return;
     gatewayHealthCheckInFlight = true;
     try {
-      if (await checkGatewayHealth()) {
+      const startedAt = Date.now();
+      const healthOk = await checkGatewayHealth();
+      const observed = observeGatewayHealth(
+        healthOk,
+        Date.now() - startedAt,
+        healthOk ? 'ok' : 'timeout',
+      );
+      if (healthOk) {
         gatewayHealthFailures = 0;
+        gatewayRelay?.setState('ready');
         return;
       }
-      const status = readGatewayRuntimeStatus();
-      const lease = readGatewayProgressLease();
-      if (shouldDeferGatewayHealthRecovery(status, lease, gatewayProcess.pid)) {
-        gatewayHealthFailures = 0;
-        const phase = lease?.phase ? ` phase=${String(lease.phase).slice(0, 80)}` : '';
-        writeGatewayLog(`[main] Gateway health timed out, but current runtime heartbeat/progress lease is still fresh${phase}; deferring recovery\n`);
-        return;
-      }
-      gatewayHealthFailures += 1;
-      writeGatewayLog(`[main] Gateway health failure ${gatewayHealthFailures}/${GATEWAY_HEALTH_FAILURE_LIMIT}\n`);
-      if (gatewayHealthFailures >= GATEWAY_HEALTH_FAILURE_LIMIT) {
-        gatewayHealthFailures = 0;
-        await restartGatewayFromElectron({
+      gatewayHealthFailures = observed.decision.resetFailures
+        ? 0
+        : observed.consecutiveFailures;
+      writeGatewayLog(
+        '[main] Gateway health failure '
+        + observed.consecutiveFailures
+        + '/'
+        + GATEWAY_HEALTH_FAILURE_LIMIT
+        + '; state='
+        + observed.decision.state
+        + '; action='
+        + observed.decision.action
+        + '; reason='
+        + observed.decision.reasonCode
+        + '\n',
+      );
+      if (observed.decision.action === 'restart' || observed.decision.action === 'relaunch') {
+        await requestAutomaticGatewayRecovery({
           terminateExisting: true,
-          reason: 'health watchdog detected an unresponsive gateway',
+          reason: 'health watchdog: ' + observed.decision.reasonCode,
         });
       }
     } finally {
@@ -1706,9 +1806,10 @@ async function startGateway() {
   writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
   await selectGatewayPort();
-  await startGatewayRelay();
-  synchronizeTailscaleFunnelTarget();
   await selectGatewayBackendPort();
+  await startGatewayRelay();
+  gatewayRelay?.setState('starting');
+  synchronizeTailscaleFunnelTarget();
   writeGatewayLog(`[main] Gateway public port ${gatewayPort} (${GATEWAY_URL}); private backend ${gatewayBackendPort}\n`);
 
   // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
@@ -1720,6 +1821,7 @@ async function startGateway() {
   // to the child over stdin below — the child blocks on that read, so we MUST write
   // a line in both cases (a hex key, or an empty sentinel for the file-fallback path).
   const vaultKeyHex = resolveVaultMasterKey();
+  gatewayProcessStartedAt = Date.now();
 
   const gatewayEnv = {
     ...process.env,
@@ -1738,6 +1840,7 @@ async function startGateway() {
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
     PROMETHEUS_ELECTRON_PID:      String(process.pid),
+    PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(gatewayProcessStartedAt),
     // Keep the gateway's own stall recovery aligned with the Electron
     // watchdog. An unset value should use the production-safe default; an
     // explicit 0/false remains available for diagnostics.
@@ -1823,13 +1926,16 @@ async function startGateway() {
     forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
     if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
-      restartGatewayFromElectron({
+      requestAutomaticGatewayRecovery({
         terminateExisting: true,
-        reason: 'gateway requested restart',
+        reason: 'gateway requested restart (code 42)',
+      }).catch((error) => {
+        writeGatewayLog('[main] Automatic gateway recovery request failed: ' + (error?.message || error) + '\n');
       });
       return;
     }
     if (!isQuitting) {
+      gatewayRelay?.setState('failed');
       const lastOutput = getLastGatewayOutput();
       dialog.showErrorBox(
         'Prometheus — Gateway Crashed',
@@ -1844,8 +1950,10 @@ async function restartGatewayFromElectron(options = {}) {
   if (isGatewayRestarting) return;
   isGatewayRestarting = true;
   const terminateExisting = options.terminateExisting === true;
+  const automaticRecovery = options.automaticRecovery !== false;
   const reason = String(options.reason || 'gateway requested restart');
   writeGatewayLog(`[main] Electron-managed gateway restart requested: ${reason}\n`);
+  gatewayRelay?.beginRestart(reason);
 
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1866,6 +1974,7 @@ async function restartGatewayFromElectron(options = {}) {
     gatewayProcess = null;
     await startGateway();
     await waitForGateway();
+    gatewayRelay?.setState('ready');
     writeGatewayLog('[main] Electron-managed gateway restart complete\n');
 
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1874,12 +1983,21 @@ async function restartGatewayFromElectron(options = {}) {
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     writeGatewayLog(`[main] Electron-managed gateway restart failed: ${message}\n`);
-    if (!isQuitting) {
+    gatewayRelay?.setState('failed');
+    gatewayProcess = null;
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('gateway-degraded', {
+          reason: message.slice(0, 240),
+          retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
+        });
+      }
+    } catch {}
+    if (!automaticRecovery && !isQuitting) {
       dialog.showErrorBox(
         'Prometheus - Gateway Restart Failed',
         `Prometheus could not restart the gateway:\n\n${message}\n\nLog: ${GATEWAY_LOG_PATH}`
       );
-      app.quit();
     }
   } finally {
     isGatewayRestarting = false;
@@ -1904,11 +2022,19 @@ function waitForGateway(retries = MAX_RETRIES) {
 
     const attempt = () => {
       if (settled) return;
-      http.get(GATEWAY_URL, (res) => {
+      const request = http.request({
+        hostname: '127.0.0.1',
+        port: parseGatewayPort(gatewayBackendPort),
+        path: '/api/health',
+        method: 'HEAD',
+        timeout: GATEWAY_HEALTH_TIMEOUT_MS,
+        headers: { Connection: 'close' },
+      }, (res) => {
         res.resume();
         const ready = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
         if (ready) {
           if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
+          gatewayRelay?.setState('ready');
           done(resolve);
           return;
         }
@@ -1920,7 +2046,8 @@ function waitForGateway(retries = MAX_RETRIES) {
             `Gateway did not become ready at ${GATEWAY_URL} after ${(MAX_RETRIES * RETRY_DELAY) / 1000}s`
           )));
         }
-      }).on('error', () => {
+      });
+      request.on('error', () => {
         if (settled) return;
         if (retries-- > 0) {
           setTimeout(attempt, RETRY_DELAY);
@@ -1931,6 +2058,7 @@ function waitForGateway(retries = MAX_RETRIES) {
           )));
         }
       });
+      request.end();
     };
     attempt();
   });

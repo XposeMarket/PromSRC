@@ -38,7 +38,9 @@ function request(port, pathname = '/', headers = {}) {
 }
 
 async function startBackend(port, name) {
+  let requests = 0;
   const backend = http.createServer((req, res) => {
+    requests += 1;
     res.writeHead(200, { 'Content-Type': 'application/json', 'X-Backend': name });
     res.end(JSON.stringify({ ok: true, name, path: req.url }));
   });
@@ -55,7 +57,7 @@ async function startBackend(port, name) {
       resolve();
     });
   });
-  return { backend, wss };
+  return { backend, wss, get requests() { return requests; } };
 }
 
 function closeBackend(bundle) {
@@ -96,16 +98,27 @@ async function run() {
     host: '127.0.0.1',
     port: publicPort,
     getTargetPort: () => targetPort,
+    initialState: 'starting',
   });
 
   try {
     await relay.listen();
+    const starting = await request(publicPort, '/api/health', { Origin: 'https://phone.example' });
+    assert.equal(starting.status, 503, 'the public relay must not probe a backend before it is marked ready');
+    assert.equal(starting.headers['x-prometheus-gateway-state'], 'starting');
+    assert.equal(backend.requests, 0, 'starting state must avoid connection-refused churn');
+
+    relay.setState('ready');
     const initial = await request(publicPort, '/api/health');
     assert.equal(initial.status, 200);
     assert.equal(initial.headers['x-backend'], 'first');
     assert.equal(JSON.parse(initial.body).path, '/api/health');
     assert.equal(await websocketEcho(publicPort), 'echo:hello', 'WebSocket upgrades traverse the relay');
 
+    relay.beginRestart('relay regression replacement');
+    const draining = await request(publicPort, '/api/health');
+    assert.equal(draining.status, 503, 'planned drain returns a controlled response');
+    assert.equal(draining.headers['x-prometheus-gateway-state'], 'restarting');
     await closeBackend(backend);
     backend = null;
     const restarting = await request(publicPort, '/api/health', { Origin: 'https://phone.example' });
@@ -116,6 +129,7 @@ async function run() {
     assert.equal(relay.server.listening, true, 'the public relay never closes during backend replacement');
 
     backend = await startBackend(backendPort, 'replacement');
+    relay.setState('ready');
     const replacement = await request(publicPort, '/api/status');
     assert.equal(replacement.status, 200);
     assert.equal(replacement.headers['x-backend'], 'replacement');

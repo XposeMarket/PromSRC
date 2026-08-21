@@ -14,9 +14,11 @@ import type { TaskState } from '../tasks/task-runner';
 export const activeTasks: Map<string, TaskState> = new Map();
 
 /**
- * Maximum LLM↔tool rounds per handleChat invocation (each round = model reply + tool batch).
- * No cap — the loop ends naturally when the model stops calling tools (or on abort).
+ * Default maximum LLM↔tool rounds per handleChat invocation (each round =
+ * model reply + tool batch). Individual execution modes may override this
+ * through the bounded PROMETHEUS_*_MAX_TOOL_ROUNDS settings.
  */
 export function getMaxToolRounds(): number {
-  return Infinity;
+  const parsed = Number(process.env.PROMETHEUS_INTERACTIVE_MAX_TOOL_ROUNDS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.floor(parsed)) : 48;
 }
