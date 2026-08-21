@@ -2,10 +2,9 @@
  * Stable local relay for the Electron-managed gateway.
  *
  * The public desktop port is what Tailscale Funnel (and paired mobile devices)
- * target.  Keeping that listener in Electron means a gateway-child restart no
- * longer withdraws the Funnel service.  The child itself listens only on a
- * loopback backend port, which this relay forwards HTTP and WebSocket traffic
- * to while it is alive.
+ * target. Keeping that listener in Electron means a gateway-child restart does
+ * not withdraw the Funnel service. The child listens only on a loopback
+ * backend port, which this relay forwards to while it is ready.
  */
 
 const http = require('http');
@@ -21,28 +20,31 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   'upgrade',
 ]);
 
-function createRestartingBody() {
+const RELAY_STATES = new Set(['starting', 'ready', 'restarting', 'failed', 'closed']);
+
+function createRestartingBody(state = 'restarting') {
+  const failed = state === 'failed';
   return JSON.stringify({
-    error: 'Prometheus gateway is restarting. Please retry shortly.',
-    code: 'GATEWAY_RESTARTING',
+    error: failed
+      ? 'Prometheus gateway is unavailable. The desktop supervisor paused automatic recovery.'
+      : 'Prometheus gateway is restarting. Please retry shortly.',
+    code: failed ? 'GATEWAY_UNAVAILABLE' : 'GATEWAY_RESTARTING',
     retryable: true,
   });
 }
 
-function writeRestartingResponse(req, res) {
-  const body = createRestartingBody();
+function writeRestartingResponse(req, res, state = 'restarting') {
+  if (!res || res.destroyed || res.headersSent) return;
+  const body = createRestartingBody(state);
   const origin = String(req.headers.origin || '').trim();
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
-    'Retry-After': '1',
-    'X-Prometheus-Gateway-State': 'restarting',
+    'Retry-After': state === 'failed' ? '10' : '1',
+    'X-Prometheus-Gateway-State': state,
     Connection: 'close',
   };
-  // A remote paired PWA can be mid-preflight while the backend is changing.
-  // This body contains no data, but retaining CORS visibility lets its
-  // transport recognize the short restart window and retry safely.
   if (origin) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers.Vary = 'Origin';
@@ -53,16 +55,16 @@ function writeRestartingResponse(req, res) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
-function writeRestartingUpgrade(socket) {
-  if (socket.destroyed) return;
-  const body = createRestartingBody();
+function writeRestartingUpgrade(socket, state = 'restarting') {
+  if (!socket || socket.destroyed) return;
+  const body = createRestartingBody(state);
   const response = [
     'HTTP/1.1 503 Service Unavailable',
     'Content-Type: application/json; charset=utf-8',
-    `Content-Length: ${Buffer.byteLength(body)}`,
+    'Content-Length: ' + Buffer.byteLength(body),
     'Cache-Control: no-store',
-    'Retry-After: 1',
-    'X-Prometheus-Gateway-State: restarting',
+    'Retry-After: ' + (state === 'failed' ? '10' : '1'),
+    'X-Prometheus-Gateway-State: ' + state,
     'Connection: close',
     '',
     body,
@@ -73,6 +75,11 @@ function writeRestartingUpgrade(socket) {
 function normalizeTargetPort(value) {
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
+}
+
+function normalizeTimeout(value, fallback) {
+  const timeout = Number(value);
+  return Number.isFinite(timeout) && timeout >= 0 ? Math.floor(timeout) : fallback;
 }
 
 function requestHeaders(headers) {
@@ -89,82 +96,184 @@ function createGatewayReverseProxy({
   port,
   targetHost = '127.0.0.1',
   getTargetPort,
+  initialState = 'ready',
+  upstreamTimeoutMs = 15_000,
   log = () => {},
 } = {}) {
   if (typeof getTargetPort !== 'function') throw new Error('Gateway relay requires getTargetPort().');
   if (!normalizeTargetPort(port)) throw new Error('Gateway relay requires a valid public port.');
+  if (!RELAY_STATES.has(initialState)) throw new Error('Unknown gateway relay state: ' + initialState);
+
+  let state = initialState;
+  const responseHeaderTimeoutMs = normalizeTimeout(upstreamTimeoutMs, 15_000);
+  const activeHttp = new Set();
+  const activeUpgrades = new Set();
+  const clientSockets = new Set();
+
+  const canProxy = () => state === 'ready' && !!normalizeTargetPort(getTargetPort());
+  const relayState = () => state;
+  const unavailableState = () => state === 'failed' ? 'failed' : 'restarting';
+
+  function abortActiveUpstreams() {
+    for (const request of Array.from(activeHttp)) {
+      try { request.upstream.destroy(); } catch {}
+      try { request.res.destroy(); } catch {}
+    }
+    for (const upgrade of Array.from(activeUpgrades)) {
+      try { upgrade.closeBoth(); } catch {}
+    }
+  }
+
+  function setState(nextState) {
+    if (!RELAY_STATES.has(nextState)) throw new Error('Unknown gateway relay state: ' + nextState);
+    state = nextState;
+    if (state !== 'ready') abortActiveUpstreams();
+    return state;
+  }
+
+  function beginRestart(reason = 'gateway backend replacement') {
+    log('[relay] Entering restarting state: ' + String(reason).slice(0, 160) + '\n');
+    return setState('restarting');
+  }
 
   const server = http.createServer((req, res) => {
     const targetPort = normalizeTargetPort(getTargetPort());
-    if (!targetPort) {
-      writeRestartingResponse(req, res);
+    if (!canProxy() || !targetPort) {
+      writeRestartingResponse(req, res, state === 'starting' || state === 'restarting' || state === 'failed'
+        ? relayState()
+        : unavailableState());
       return;
     }
 
     let responseStarted = false;
+    let settled = false;
+    let headerTimer = null;
+    const record = { upstream: null, res };
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      if (headerTimer) clearTimeout(headerTimer);
+      activeHttp.delete(record);
+    };
+    const fail = (error) => {
+      cleanup();
+      if (state !== 'ready' || !targetPort) {
+        if (!res.headersSent) writeRestartingResponse(req, res, state);
+        else {
+          try { res.destroy(); } catch {}
+        }
+        return;
+      }
+      log('[relay] Backend HTTP request failed: ' + (error?.code || error?.message || error) + '\n');
+      if (responseStarted || res.headersSent) {
+        try { res.destroy(error); } catch {}
+      } else {
+        writeRestartingResponse(req, res, 'restarting');
+      }
+    };
+
     const upstream = http.request({
       host: targetHost,
       port: targetPort,
       method: req.method,
       path: req.url,
       headers: requestHeaders(req.headers),
-      // Long-running tools and streaming turns must not inherit Node's short
-      // request timeout while crossing this local process boundary.
+      // Long-running tools and streaming turns may stay open after response
+      // headers arrive. The bounded timer below covers only connection and
+      // response-header acquisition, so it cannot cut off a healthy stream.
       timeout: 0,
     }, (upstreamResponse) => {
       responseStarted = true;
+      if (headerTimer) clearTimeout(headerTimer);
       res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
       upstreamResponse.pipe(res);
+      upstreamResponse.once('end', cleanup);
+      upstreamResponse.once('error', fail);
     });
+    record.upstream = upstream;
+    activeHttp.add(record);
+    if (responseHeaderTimeoutMs > 0) {
+      headerTimer = setTimeout(() => {
+        const error = new Error('Gateway relay upstream response headers timed out.');
+        error.code = 'GATEWAY_UPSTREAM_TIMEOUT';
+        upstream.destroy(error);
+      }, responseHeaderTimeoutMs);
+      headerTimer.unref?.();
+    }
 
-    const fail = (error) => {
-      log(`[relay] Backend HTTP request failed: ${error?.code || error?.message || error}\n`);
-      if (responseStarted || res.headersSent) {
-        try { res.destroy(error); } catch {}
-      } else {
-        writeRestartingResponse(req, res);
-      }
-    };
     upstream.once('error', fail);
+    upstream.once('close', cleanup);
     req.once('aborted', () => upstream.destroy());
+    res.once('close', () => {
+      if (!res.writableEnded) upstream.destroy();
+      cleanup();
+    });
     req.pipe(upstream);
   });
 
   server.on('upgrade', (req, socket, head) => {
     const targetPort = normalizeTargetPort(getTargetPort());
-    if (!targetPort) {
-      writeRestartingUpgrade(socket);
+    if (!canProxy() || !targetPort) {
+      writeRestartingUpgrade(socket, state === 'starting' || state === 'restarting' || state === 'failed'
+        ? relayState()
+        : unavailableState());
       return;
     }
 
     let connected = false;
     let closed = false;
+    let connectTimer = null;
     const upstream = net.createConnection({ host: targetHost, port: targetPort });
+    const upgrade = { socket, upstream, closeBoth: null };
+    const cleanup = () => {
+      if (connectTimer) clearTimeout(connectTimer);
+      activeUpgrades.delete(upgrade);
+    };
     const closeBoth = () => {
       if (closed) return;
       closed = true;
+      cleanup();
       try { socket.destroy(); } catch {}
       try { upstream.destroy(); } catch {}
     };
+    upgrade.closeBoth = closeBoth;
+    activeUpgrades.add(upgrade);
     const fail = (error) => {
-      log(`[relay] Backend WebSocket upgrade failed: ${error?.code || error?.message || error}\n`);
-      if (!connected) writeRestartingUpgrade(socket);
+      cleanup();
+      if (!connected) writeRestartingUpgrade(socket, state);
       else closeBoth();
+      if (state === 'ready') {
+        log('[relay] Backend WebSocket upgrade failed: ' + (error?.code || error?.message || error) + '\n');
+      }
     };
+    if (responseHeaderTimeoutMs > 0) {
+      connectTimer = setTimeout(() => {
+        const error = new Error('Gateway relay WebSocket connection timed out.');
+        error.code = 'GATEWAY_UPSTREAM_TIMEOUT';
+        fail(error);
+        try { upstream.destroy(); } catch {}
+      }, responseHeaderTimeoutMs);
+      connectTimer.unref?.();
+    }
 
     upstream.once('error', fail);
     upstream.once('connect', () => {
+      if (connectTimer) clearTimeout(connectTimer);
+      if (state !== 'ready') {
+        closeBoth();
+        return;
+      }
       connected = true;
-      const requestLine = `${req.method || 'GET'} ${req.url || '/'} HTTP/${req.httpVersion || '1.1'}\r\n`;
+      const requestLine = String(req.method || 'GET') + ' ' + String(req.url || '/') + ' HTTP/' + String(req.httpVersion || '1.1') + '\r\n';
       const rawHeaders = Array.isArray(req.rawHeaders) ? req.rawHeaders : [];
       let headerLines = '';
       for (let index = 0; index < rawHeaders.length; index += 2) {
         const name = String(rawHeaders[index] || '');
         const value = String(rawHeaders[index + 1] || '');
-        if (name) headerLines += `${name}: ${value}\r\n`;
+        if (name) headerLines += name + ': ' + value + '\r\n';
       }
       try {
-        upstream.write(`${requestLine}${headerLines}\r\n`);
+        upstream.write(requestLine + headerLines + '\r\n');
         if (head?.length) upstream.write(head);
         socket.pipe(upstream);
         upstream.pipe(socket);
@@ -173,10 +282,17 @@ function createGatewayReverseProxy({
       }
     });
     socket.once('error', closeBoth);
-    socket.once('close', () => { try { upstream.destroy(); } catch {} });
-    upstream.once('close', () => { try { socket.destroy(); } catch {} });
+    socket.once('close', closeBoth);
+    upstream.once('close', () => {
+      cleanup();
+      try { socket.destroy(); } catch {}
+    });
   });
 
+  server.on('connection', (socket) => {
+    clientSockets.add(socket);
+    socket.once('close', () => clientSockets.delete(socket));
+  });
   server.requestTimeout = 0;
   server.timeout = 0;
   server.keepAliveTimeout = 65_000;
@@ -199,7 +315,15 @@ function createGatewayReverseProxy({
         server.listen({ host, port, exclusive: true });
       });
     },
+    getState: relayState,
+    setState,
+    beginRestart,
     close() {
+      setState('closed');
+      abortActiveUpstreams();
+      for (const socket of Array.from(clientSockets)) {
+        try { socket.destroy(); } catch {}
+      }
       return new Promise((resolve) => {
         if (!server.listening) return resolve();
         server.close(() => resolve());

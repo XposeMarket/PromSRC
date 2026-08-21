@@ -63,6 +63,35 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 }
 
 {
+  const decision = classifyGatewaySupervisorObservation(observation({
+    maxProgressAgeMs: 30_000,
+    progressLease: {
+      version: 1,
+      pid: 1234,
+      state: 'active',
+      lastProgressAt: now - 45_000,
+      expiresAt: now + 45_000,
+    },
+  }));
+  assert.equal(decision.state, 'stalled', 'a lease with stale meaningful progress must not grant indefinite immunity');
+  assert.equal(decision.action, 'restart');
+}
+
+{
+  const decision = classifyGatewaySupervisorObservation(observation({
+    progressLease: {
+      version: 1,
+      pid: 1234,
+      state: 'active',
+      lastProgressAt: now + 30_000,
+      expiresAt: now + 90_000,
+    },
+  }));
+  assert.equal(decision.state, 'stalled', 'future-dated progress must not grant restart immunity');
+  assert.equal(decision.action, 'restart');
+}
+
+{
   const firstFailure = classifyGatewaySupervisorObservation(observation({ consecutiveFailures: 1 }));
   const secondFailure = classifyGatewaySupervisorObservation(observation({ consecutiveFailures: 2 }));
   assert.equal(firstFailure.state, 'waiting', 'one timeout must not kill the gateway');
@@ -104,6 +133,19 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
     },
   }));
   assert.equal(decision.state, 'identity_mismatch');
+  assert.equal(decision.action, 'wait');
+}
+
+{
+  const decision = classifyGatewaySupervisorObservation(observation({
+    expectedProcessStartedAt: now - 10_000,
+    runtimeStatus: {
+      pid: 1234,
+      processStartedAt: now - 20_000,
+      timestamp: now - 2_000,
+    },
+  }));
+  assert.equal(decision.state, 'identity_mismatch', 'a status snapshot from another process generation must not authorize a kill');
   assert.equal(decision.action, 'wait');
 }
 
