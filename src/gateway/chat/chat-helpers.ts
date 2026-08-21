@@ -12,7 +12,7 @@
 import path from 'path';
 import fs from 'fs';
 import { getAgentById, getConfig } from '../../config/config';
-import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
@@ -742,12 +742,18 @@ export async function _dispatchToAgent(
 ): Promise<{ task_id: string; agent_id: string; status: string }> {
   const fullPrompt = context ? `${message}\n\n[CONTEXT]\n${context}` : message;
   const agent = getAgentById(agentId);
-  const executorModel = agent
-    ? resolveConfiguredAgentModel(getConfig().getConfig(), agent, {
-      agentType: 'subagent',
-      fallbackToPrimary: false,
-    }).model
-    : '';
+  const executorRouting = agent
+    ? resolveConfiguredAgentRouting(getConfig().getConfig(), agent, {
+        agentType: 'subagent',
+        fallbackToPrimary: true,
+      })
+    : null;
+  if (agent && !executorRouting?.model) {
+    throw new Error(
+      `No model is configured for subagent "${agentId}". `
+      + 'Choose a provider and model in Settings → Agents, or configure the global route in Settings → Models, then retry.',
+    );
+  }
   const task = createTask({
     title: `[Dispatch] ${agentId}: ${message.slice(0, 60)}`,
     prompt: fullPrompt,
@@ -755,7 +761,8 @@ export async function _dispatchToAgent(
     channel: 'web',
     subagentProfile: agentId,
     parentTaskId: undefined,
-    executorProvider: executorModel || undefined,
+    executorProvider: executorRouting?.model || undefined,
+    executorReasoningEffort: executorRouting?.reasoningEffort || undefined,
     plan: [
       { index: 0, description: `Execute dispatched task for agent ${agentId}`, status: 'pending' },
       { index: 1, description: 'Return results', status: 'pending' },

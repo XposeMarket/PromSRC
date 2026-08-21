@@ -63,6 +63,8 @@ export interface ReactOptions {
   includeAgentSystemPrompt?: boolean;
   /** Sub-agent mode: identity comes from the shared runtime contract plus AGENT.md. */
   subagentSystemPromptOnly?: boolean;
+  /** Settings-backed per-agent reasoning override or inherited effort. */
+  reasoningEffort?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 // Detect FINAL: in model response
@@ -691,6 +693,7 @@ export class Reactor {
     const temperature = options.temperature ?? 0.25;
     const label = options.label ? `[${options.label}]` : '[reactor]';
     const formatViolationFuse = Math.max(1, Number(options.formatViolationFuse || 3));
+    const executeThink = options.reasoningEffort ?? EXECUTE_THINK;
 
     // Resolve workspace path — try config, fall back to cwd
     let workspacePath: string;
@@ -774,7 +777,7 @@ export class Reactor {
             temperature,
             num_ctx: EXECUTE_NUM_CTX,
             num_predict: EXECUTE_NUM_PREDICT,
-            think: EXECUTE_THINK,
+            think: executeThink,
             tools: allNativeTools,
           });
           const msg: any = chatOut?.message || {};
@@ -870,7 +873,7 @@ export class Reactor {
       const isFinalStep = nextStepIsFinalOnly;
       const disableThink = nextStepDisableThink;
       const stepPredict = isFinalStep ? Math.min(EXECUTE_NUM_PREDICT, 192) : EXECUTE_NUM_PREDICT;
-      const stepThink = (isFinalStep || disableThink) ? false : EXECUTE_THINK;
+      const stepThink = (isFinalStep || disableThink) ? false : executeThink;
       nextStepIsFinalOnly = false; // reset for this step
       nextStepDisableThink = false; // reset for this step
 
