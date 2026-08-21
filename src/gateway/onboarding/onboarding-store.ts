@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { getPrometheusLayout } from '../../runtime/storage-layout.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -20,6 +21,8 @@ interface OnboardingFile {
 }
 
 function dataDir(): string {
+  const layout = getPrometheusLayout();
+  if (layout.mode === 'canonical') return layout.runtime.root;
   return process.env.PROMETHEUS_DATA_DIR || path.join(os.homedir(), '.prometheus');
 }
 

@@ -20,6 +20,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../config/gateway-port.js';
+import { getConfig } from '../config/config.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
@@ -88,15 +89,13 @@ function getProjectRoot(): string {
 }
 
 function getLifecycleStateRoot(): string {
-  if (process.env.PROMETHEUS_DATA_DIR) return process.env.PROMETHEUS_DATA_DIR;
-  return getProjectRoot();
+  return getConfig().getConfigDir();
 }
 
 function getRestartContextPath(): string {
-  // Use .prometheus dir so it persists across restarts
-  const prometheusDir = path.join(getLifecycleStateRoot(), '.prometheus');
-  if (!fs.existsSync(prometheusDir)) fs.mkdirSync(prometheusDir, { recursive: true });
-  return path.join(prometheusDir, 'restart-context.json');
+  const stateRoot = getLifecycleStateRoot();
+  if (!fs.existsSync(stateRoot)) fs.mkdirSync(stateRoot, { recursive: true });
+  return path.join(stateRoot, 'restart-context.json');
 }
 
 function getGatewayHealthUrl(): string {
