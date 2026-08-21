@@ -33,6 +33,12 @@ import {
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 import {
+  SOURCE_PANEL_SURFACE,
+  normalizeSourcePanelContext,
+  sourcePanelContextIsVisible,
+  sourcePanelResourceBelongsToContext,
+} from '../source-panel-context.js';
+import {
   backgroundAgentAgeLabel,
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
@@ -19392,7 +19398,17 @@ const chatResourcesState = {
   query: '',
   requestToken: 0,
 };
+const initialSourcePanelContext = normalizeSourcePanelContext(
+  window.__prometheusSourcePanelContext
+  || (window.currentMode === 'chat' && window.activeChatSessionId
+    ? { surface: SOURCE_PANEL_SURFACE.MAIN_CHAT, sessionId: window.activeChatSessionId }
+    : {}),
+);
 const sourcePanelState = {
+  surface: initialSourcePanelContext.surface,
+  contextSessionId: initialSourcePanelContext.sessionId,
+  contextAgentId: initialSourcePanelContext.agentId,
+  contextKey: initialSourcePanelContext.key,
   activeSessionId: '',
   tab: 'overview',
   scope: 'thread',
@@ -19448,6 +19464,107 @@ let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
 let canvasPreviewUpdateVersion = 0;
 const canvasFolderExpanded = new Set();
+
+function sourcePanelContext() {
+  return normalizeSourcePanelContext({
+    surface: sourcePanelState.surface,
+    sessionId: sourcePanelState.contextSessionId,
+    agentId: sourcePanelState.contextAgentId,
+  });
+}
+
+function sourcePanelActiveSessionId() {
+  const context = sourcePanelContext();
+  if (context.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return context.sessionId;
+  return String(window.activeChatSessionId || context.sessionId || sourcePanelState.activeSessionId || '').trim();
+}
+
+function sourcePanelContextIsActive() {
+  const context = sourcePanelContext();
+  return sourcePanelContextIsVisible(context, {
+    mode: String(window.currentMode || '').trim(),
+    activeSessionId: sourcePanelState.activeSessionId || context.sessionId,
+  });
+}
+
+function resetSourcePanelContextState() {
+  if (sourcePanelState.workRefreshTimer) clearTimeout(sourcePanelState.workRefreshTimer);
+  if (sourcePanelState.processRefreshTimer) clearTimeout(sourcePanelState.processRefreshTimer);
+  sourcePanelState.workRefreshTimer = null;
+  sourcePanelState.processRefreshTimer = null;
+  sourcePanelState.tab = 'overview';
+  sourcePanelState.scope = 'thread';
+  sourcePanelState.query = '';
+  sourcePanelState.filterOpen = false;
+  sourcePanelState.miniFilter = 'all';
+  sourcePanelState.initialized = false;
+  sourcePanelState.seenResourceKeys = new Set();
+  sourcePanelState.seenEditKeys = new Set();
+  sourcePanelState.project = null;
+  sourcePanelState.projectSessionId = '';
+  sourcePanelState.projectLoaded = false;
+  sourcePanelState.git = null;
+  sourcePanelState.codingContext = null;
+  sourcePanelState.gitSessionId = '';
+  sourcePanelState.gitRoot = '';
+  sourcePanelState.gitScopeKey = '';
+  sourcePanelState.gitLoaded = false;
+  sourcePanelState.gitRemoteData = null;
+  sourcePanelState.gitRemoteKey = '';
+  sourcePanelState.gitRemoteLoading = false;
+  sourcePanelState.processRuns = [];
+  sourcePanelState.processSessionId = '';
+  sourcePanelState.processLoaded = false;
+  sourcePanelState.processRequestToken += 1;
+  sourcePanelState.projectRequestToken += 1;
+  sourcePanelState.gitRequestToken += 1;
+  sourcePanelState.diffRequestToken += 1;
+  sourcePanelState.miniProcessExpanded = false;
+}
+
+function setSourcePanelChatContext(input = {}, options = {}) {
+  const next = normalizeSourcePanelContext(input);
+  const changed = sourcePanelState.contextKey !== next.key;
+  window.__prometheusSourcePanelContext = next;
+  sourcePanelState.surface = next.surface;
+  sourcePanelState.contextSessionId = next.sessionId;
+  sourcePanelState.contextAgentId = next.agentId;
+  sourcePanelState.contextKey = next.key;
+  sourcePanelState.activeSessionId = next.sessionId;
+  if (!changed) {
+    if (next.surface !== SOURCE_PANEL_SURFACE.NONE
+      && options.load !== false
+      && chatResourcesState.sessionId !== next.sessionId) {
+      loadChatResources({ sessionId: next.sessionId, background: true }).catch(() => {});
+    }
+    if (!sourcePanelContextIsActive()) hideSourcesMinimizedPanel({ resetFilter: false });
+    return next;
+  }
+
+  hideSourcesMinimizedPanel({ resetFilter: false });
+  resetSourcePanelContextState();
+  chatResourcesState.requestToken += 1;
+  chatResourcesState.sessionId = '';
+  chatResourcesState.resources = [];
+  chatResourcesState.query = '';
+  chatResourcesState.expanded = false;
+  chatResourcesState.loading = false;
+  renderChatResourcesList();
+  renderSourcePanel();
+  if (next.surface !== SOURCE_PANEL_SURFACE.NONE && options.load !== false) {
+    loadChatResources({ sessionId: next.sessionId }).catch(() => {});
+  }
+  return next;
+}
+
+function ensureMainChatSourcePanelContext(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || window.currentMode !== 'chat') return;
+  const context = sourcePanelContext();
+  if (context.surface !== SOURCE_PANEL_SURFACE.MAIN_CHAT || context.sessionId !== sid) {
+    setSourcePanelChatContext({ surface: SOURCE_PANEL_SURFACE.MAIN_CHAT, sessionId: sid }, { load: false });
+  }
+}
 
 function chatResourceLocatorLabel(resource) {
   const locator = resource?.locator || {};
@@ -19549,8 +19666,13 @@ function renderChatResourcesList(resources = chatResourcesState.resources) {
 }
 
 async function loadChatResources(options = {}) {
-  const sessionId = String(options.sessionId || window.activeChatSessionId || window.agentSessionId || '').trim();
+  const requestedSessionId = String(options.sessionId || '').trim();
+  const sessionId = requestedSessionId
+    || sourcePanelActiveSessionId()
+    || String(window.activeChatSessionId || window.agentSessionId || '').trim();
   if (!sessionId) return;
+  if (window.currentMode === 'chat') ensureMainChatSourcePanelContext(sessionId);
+  if (window.currentMode && !sourcePanelContextIsActive()) return;
   if (chatResourcesState.sessionId && chatResourcesState.sessionId !== sessionId) {
     chatResourcesState.query = '';
     chatResourcesState.resources = [];
@@ -19994,7 +20116,7 @@ function renderSourcePanelProcesses(data, { mini = false } = {}) {
   </section>`;
 }
 
-function sourcePanelBrowserItems(sessionId = window.activeChatSessionId || window.agentSessionId || sourcePanelState.activeSessionId) {
+function sourcePanelBrowserItems(sessionId = sourcePanelActiveSessionId()) {
   const browserState = typeof getBrowserCanvasState === 'function'
     ? getBrowserCanvasState()
     : (window.browserCanvasState || {});
@@ -20049,20 +20171,24 @@ function renderSourcePanelBrowser(data, { mini = false } = {}) {
   </section>`;
 }
 
-function sourcePanelData(sessionId = window.activeChatSessionId || sourcePanelState.activeSessionId) {
-  const resourceItems = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : []).map(sourcePanelResourceItem);
+function sourcePanelData(sessionId = sourcePanelActiveSessionId()) {
+  const context = sourcePanelContext();
+  const isSubagentChat = context.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT;
+  const resourceItems = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : [])
+    .filter((resource) => sourcePanelResourceBelongsToContext(resource, context))
+    .map(sourcePanelResourceItem);
   const links = resourceItems.filter((item) => item.bucket === 'links' && sourcePanelMatchesItem(item));
   const files = resourceItems.filter((item) => item.bucket !== 'links');
   const inputs = files.filter((item) => item.bucket === 'inputs' && sourcePanelMatchesItem(item));
   const outputs = files.filter((item) => item.bucket === 'outputs' && sourcePanelMatchesItem(item));
-  const edits = sourcePanelEditItems(sessionId).filter((item) => sourcePanelMatchesItem(item));
-  const workspaceFiles = sourcePanelWorkspaceFiles().filter((item) => sourcePanelMatchesItem(item));
+  const edits = isSubagentChat ? [] : sourcePanelEditItems(sessionId).filter((item) => sourcePanelMatchesItem(item));
+  const workspaceFiles = isSubagentChat ? [] : sourcePanelWorkspaceFiles().filter((item) => sourcePanelMatchesItem(item));
   const recent = [...resourceItems.filter((item) => sourcePanelMatchesItem(item)), ...edits, ...workspaceFiles]
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
-  data.processes = sourcePanelProcessItems(sessionId);
-  data.environment = sourcePanelEnvironmentItems(data);
-  data.browserItems = sourcePanelBrowserItems(sessionId);
+  const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: isSubagentChat ? [] : sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
+  data.processes = isSubagentChat ? [] : sourcePanelProcessItems(sessionId);
+  data.environment = isSubagentChat ? [] : sourcePanelEnvironmentItems(data);
+  data.browserItems = isSubagentChat ? [] : sourcePanelBrowserItems(sessionId);
   return data;
 }
 
@@ -20157,6 +20283,13 @@ function sourcePanelCountMarkup(label, value, glyph) {
 }
 
 function renderSourcePanelOverview(data) {
+  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) {
+    return `<section class="source-panel-section source-panel-project-context">
+      <h3 class="source-panel-section-title">Subagent chat sources</h3>
+      <p class="source-panel-subtitle">Only sources produced by this subagent’s chat and tool activity appear here.</p>
+    </section>
+    <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 8).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}</section>`;
+  }
   const project = sourcePanelState.project || {};
   const context = sourcePanelState.codingContext || {};
   const repository = sourcePanelSnapshot();
@@ -20330,6 +20463,7 @@ function renderSourcePanelGit(data) {
 }
 
 function sourcePanelScopeMarkup() {
+  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return '';
   const scope = sourcePanelState.scope === 'project' ? 'project' : 'thread';
   return `<div class="source-panel-scope-row"><span>Scope</span><div class="source-panel-scope-toggle" role="group" aria-label="Source scope"><button type="button" class="${scope === 'thread' ? 'is-active' : ''}" onclick="setSourcePanelScope('thread')">Thread</button><button type="button" class="${scope === 'project' ? 'is-active' : ''}" onclick="setSourcePanelScope('project')">Project</button></div></div>`;
 }
@@ -20344,9 +20478,13 @@ function setSourcePanelScope(scope = 'thread') {
 function renderSourcePanel() {
   const body = document.getElementById('source-panel-body');
   if (!body) return;
+  const subagentChatSurface = sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT;
+  if (subagentChatSurface) sourcePanelState.tab = 'overview';
   const tab = ['overview', 'work', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
   sourcePanelState.tab = tab;
   document.querySelectorAll('[data-source-tab]').forEach((button) => {
+    const isOverview = button.getAttribute('data-source-tab') === 'overview';
+    button.hidden = subagentChatSurface && !isOverview;
     const active = button.getAttribute('data-source-tab') === tab;
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-selected', active ? 'true' : 'false');
@@ -20362,6 +20500,7 @@ function renderSourcePanel() {
 }
 
 function setSourcePanelTab(tab = 'overview') {
+  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) tab = 'overview';
   sourcePanelState.tab = ['overview', 'work', 'files', 'git'].includes(tab) ? tab : 'overview';
   renderSourcePanel();
   if (sourcePanelState.tab === 'git') {
@@ -20619,6 +20758,7 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.processRequestToken += 1;
     sourcePanelState.miniProcessExpanded = false;
   }
+  if (sourcePanelState.surface === SOURCE_PANEL_SURFACE.SUBAGENT_CHAT) return;
   if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
   else {
     const scopeKey = sourcePanelGitScopeKey(sid);
@@ -21113,7 +21253,7 @@ function syncSourcesMinimizedLayout(open) {
 function showSourcesMinimizedPanel() {
   const panel = document.getElementById('sources-minimized-panel');
   const rightPanel = document.getElementById('right-panel');
-  if (!panel || rightPanel?.classList.contains('open')) return;
+  if (!panel || rightPanel?.classList.contains('open') || !sourcePanelContextIsActive()) return;
   if (!sourcePanelMiniItems('all').length) sourcePanelState.miniFilter = 'all';
   if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
   renderSourcesMinimizedPanel();
@@ -21138,6 +21278,7 @@ function hideSourcesMinimizedPanel(options = {}) {
 }
 
 function openFullSourcePanel() {
+  if (!sourcePanelContextIsActive()) return;
   hideSourcesMinimizedPanel({ resetFilter: false });
   const panel = document.getElementById('right-panel');
   if (panel && !panel.classList.contains('open')) toggleRightPanel();
@@ -21145,7 +21286,11 @@ function openFullSourcePanel() {
 }
 
 function refreshSourcePanel() {
-  const sid = sourcePanelState.activeSessionId || window.activeChatSessionId || window.agentSessionId;
+  if (!sourcePanelContextIsActive()) {
+    hideSourcesMinimizedPanel({ resetFilter: false });
+    return;
+  }
+  const sid = sourcePanelActiveSessionId();
   if (sid) {
     loadChatResources({ sessionId: sid, background: true }).catch(() => {});
     loadSourcePanelProject(sid).catch(() => {});
@@ -21166,7 +21311,7 @@ function initSourcePanelEdgeReveal() {
     if (event.pointerType && event.pointerType !== 'mouse') return cancel();
     const atRightEdge = event.clientX >= window.innerWidth - 10;
     const rightPanel = document.getElementById('right-panel');
-    if (!atRightEdge || rightPanel?.classList.contains('open')) return cancel();
+    if (!atRightEdge || rightPanel?.classList.contains('open') || !sourcePanelContextIsActive()) return cancel();
     if (revealTimer) return;
     revealTimer = setTimeout(() => {
       revealTimer = null;
@@ -46921,6 +47066,7 @@ window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
 window.toggleCanvas = toggleCanvas;
 window.toggleSources = toggleSources;
+window.setSourcePanelChatContext = setSourcePanelChatContext;
 window.loadChatResources = loadChatResources;
 window.filterChatResources = filterChatResources;
 window.setChatResourcesExpanded = setChatResourcesExpanded;

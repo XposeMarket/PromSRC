@@ -14,6 +14,7 @@ import { formatModelWithReasoning } from '../model-display.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderReasoningSelector, wireReasoningSelector } from '../components/reasoning-selector.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
+import { SOURCE_PANEL_SURFACE, subagentChatSessionId } from '../source-panel-context.js';
 import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
@@ -68,7 +69,30 @@ function subagentChatJsArg(value) {
 }
 
 function getSubagentChatSessionId(agentId) {
-  return `subagent_chat_${String(agentId || '').trim()}`;
+  return subagentChatSessionId(agentId);
+}
+
+function syncSubagentSourcePanelContext(agentId = activeSubagentId, options = {}) {
+  const id = String(agentId || '').trim();
+  const context = id && subagentDetailTab === 'chat'
+    ? { surface: SOURCE_PANEL_SURFACE.SUBAGENT_CHAT, agentId: id, sessionId: getSubagentChatSessionId(id) }
+    : { surface: SOURCE_PANEL_SURFACE.NONE };
+  window.__prometheusSourcePanelContext = context;
+  if (typeof window.setSourcePanelChatContext === 'function') {
+    window.setSourcePanelChatContext(context, options);
+  }
+}
+
+function refreshSubagentSourcePanelFromEvent(agentId, event = {}) {
+  const id = String(agentId || '').trim();
+  const sessionId = getSubagentChatSessionId(id);
+  const eventSessionId = String(event.sessionId || event.sourceSessionId || '').trim();
+  if (!id || !sessionId || (eventSessionId && eventSessionId !== sessionId)) return;
+  if (activeSubagentId !== id || subagentDetailTab !== 'chat') return;
+  syncSubagentSourcePanelContext(id, { load: false });
+  if (typeof window.loadChatResources === 'function') {
+    window.loadChatResources({ sessionId, background: true }).catch(() => {});
+  }
 }
 
 function normalizeSubagentChatApproval(input = {}, fallback = {}) {
@@ -803,6 +827,7 @@ function renderSubagentsCanvas() {
 async function openSubagentDetail(agentId) {
   activeSubagentId = agentId;
   subagentDetailTab = getSubagentStreamingState(agentId) ? 'chat' : 'overview';
+  syncSubagentSourcePanelContext(agentId);
   subagentRuns = [];
   activeSubagentRunId = '';
   subagentRunDetails = {};
@@ -843,6 +868,7 @@ async function openSubagentDetail(agentId) {
 function closeSubagentDetail() {
   stopSubagentPolling();
   activeSubagentId = null;
+  syncSubagentSourcePanelContext();
   syncActiveSubagentStreamingState();
 
   const board = document.getElementById('subagent-board');
@@ -1946,6 +1972,7 @@ function renderSubagentUnifiedDesktopChat(agent) {
 function closeUnifiedSubagentChat(agentId) {
   if (!agentId || activeSubagentId !== agentId) return;
   subagentDetailTab = 'overview';
+  syncSubagentSourcePanelContext(agentId);
   closeSubagentReasoningPopover({ restoreFocus: false });
   renderSubagentBoard(agentId);
 }
@@ -2020,6 +2047,7 @@ function renderSubagentTabContent(agent) {
 
 async function switchSubagentTab(tab, agentId) {
   subagentDetailTab = tab;
+  syncSubagentSourcePanelContext(agentId);
   if (!subagentsData.find(a => a.id === agentId)) return;
 
   if (tab === 'memory') {
@@ -3012,6 +3040,11 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             break;
           }
 
+          case 'resources_changed': {
+            refreshSubagentSourcePanelFromEvent(agentId, event);
+            break;
+          }
+
           case 'tool_call': {
             const action = String(event.action || '').trim();
             if (!action) break;
@@ -3594,6 +3627,7 @@ function stopSubagentPolling() {
 function subagentsPageActivate() {
   stopSubagentPolling();
   activeSubagentId = null;
+  syncSubagentSourcePanelContext();
 
   // Reset canvas to full width (in case detail panel was open)
   const canvasWrap = document.getElementById('subagents-canvas-wrap');
@@ -3703,6 +3737,10 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
       const activeIndex = Number(event.activeIndex || -1);
       const activeText = String(activeIndex >= 0 ? items[activeIndex]?.text || '' : '').trim();
       if (activeText) pushSubagentProgressLine(activeText, streamState);
+      break;
+    }
+    case 'resources_changed': {
+      refreshSubagentSourcePanelFromEvent(agentId, event);
       break;
     }
     case 'tool_call': {

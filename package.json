@@ -73,6 +73,7 @@
     "test:x-api-request-policy": "tsx src/gateway/tools/x-api-request-policy.regression.ts",
     "test:connector-oauth": "npm run build:backend && node scripts/test-connector-oauth-contract.mjs",
     "test:agents": "npm run build:backend && node scripts/test-agent-runtime-contract.mjs",
+    "test:subagent-sources-scope": "node scripts/test-subagent-sources-scope.mjs",
     "test:automations": "npm run build:backend && node scripts/test-automation-runtime-contract.mjs && tsx src/gateway/internal-watch/internal-watch-restart-recovery.regression.ts && tsx src/gateway/internal-watch/internal-watch-policy.regression.ts",
     "test:reasoning-capabilities": "npm run build:backend && node scripts/test-reasoning-capabilities.mjs",
     "test:p6-subagents-runs-proposals-ui": "node scripts/test-p6-subagents-runs-proposals-ui.mjs",
