@@ -4,7 +4,7 @@ Observed 2026-05-15 during a simple voice/browser test to open `https://x.com/ho
 
 - First `browser_open({ url: "https://x.com/home", observe: "screenshot" })` failed with `browserContext.newPage: Target page, context or browser has been closed`.
 - `browser_doctor` was run.
-- A second `browser_open` failed with `Chrome launched but did not respond on port 9222 after 15s. Close the Chrome window using profile C:\\Users\\rafel\\.prometheus\\chrome-debug-profile and try again.`
+- A second `browser_open` failed with `Chrome launched but did not respond on port 9222 after 15s. Close the Chrome window using profile <user-home>\\.prometheus\\chrome-debug-profile and try again.`
 - When the user said to try once more, a later single `browser_open` succeeded and returned "Browser opened" before the turn was interrupted.
 
 ## Practical guidance

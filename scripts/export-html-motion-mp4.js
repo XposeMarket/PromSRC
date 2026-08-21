@@ -9,14 +9,24 @@ function readMeta(html, name, fallback) {
 }
 
 function ffmpegCommand() {
-  const candidates = [
-    'ffmpeg',
-    'C:\\Users\\rafel\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1-full_build\\bin\\ffmpeg.exe',
-  ];
-  return candidates.find((candidate) => {
-    if (candidate === 'ffmpeg') return true;
-    return fs.existsSync(candidate);
-  });
+  const localAppData = process.env.LOCALAPPDATA;
+  const wingetPackages = localAppData ? path.join(localAppData, 'Microsoft', 'WinGet', 'Packages') : '';
+  const candidates = ['ffmpeg'];
+
+  if (wingetPackages && fs.existsSync(wingetPackages)) {
+    try {
+      for (const entry of fs.readdirSync(wingetPackages, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^Gyan\.FFmpeg_/i.test(entry.name)) continue;
+        const packageRoot = path.join(wingetPackages, entry.name);
+        for (const buildName of fs.readdirSync(packageRoot)) {
+          const candidate = path.join(packageRoot, buildName, 'bin', 'ffmpeg.exe');
+          if (fs.existsSync(candidate)) candidates.push(candidate);
+        }
+      }
+    } catch {}
+  }
+
+  return candidates.find((candidate) => candidate === 'ffmpeg' || fs.existsSync(candidate));
 }
 
 function browserExecutablePath() {

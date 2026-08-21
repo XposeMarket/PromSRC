@@ -9,7 +9,7 @@ assert.equal(
 );
 assert.equal(
   sourceRead,
-  equivalentFailedReadSignature('read_file', { filename: 'C:\\Users\\rafel\\PromSRC\\src\\gateway\\routes\\chat.router.ts' }),
+  equivalentFailedReadSignature('read_file', { filename: 'C:\\Users\\example-user\\PromSRC\\src\\gateway\\routes\\chat.router.ts' }),
   'absolute and source-relative spellings must be equivalent',
 );
 assert.notEqual(

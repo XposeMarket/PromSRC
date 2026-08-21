@@ -4,6 +4,9 @@
 
 # --- DOCKER / ENV ---
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # --- SECRETS & CONFIG (NEVER COMMIT) ---
 .localclaw/config.json
@@ -125,7 +128,7 @@ desktop.ini
 /tmp/
 
 # --- PERSONAL WORKSPACE SYNC ---
-# Workspace contents are intentionally Git-visible for Raul's own sync.
+# Workspace contents are intentionally Git-visible for private workspace synchronization.
 # The public Electron package excludes workspace via electron-builder-public.yml.
 !workspace/
 !workspace/**
@@ -165,7 +168,7 @@ workspace/tmp/
 workspace/creative-projects/
 workspace/generated/**
 
-# Raul's self docs are intentionally tracked in full.
+# Private self docs are intentionally tracked in full.
 !workspace/self/
 !workspace/self/**
 
