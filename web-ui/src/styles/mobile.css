@@ -18228,3 +18228,34 @@ body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active svg {
   color: #111;
 }
+
+
+/* Final mobile navigation/filter contrast contract. These selectors intentionally
+   sit at the end of the bundle so skin-specific drawer rules cannot tint them. */
+body.pm-mobile-active .pm-drawer .pm-drawer-item,
+body.pm-mobile-active .pm-drawer .pm-drawer-item .pm-flex,
+body.pm-mobile-active .pm-drawer .pm-drawer-item .pm-icon,
+body.pm-mobile-active .pm-drawer .pm-drawer-item .pm-chev,
+body.pm-mobile-active .pm-drawer .pm-drawer-item svg,
+body.pm-mobile-active .pm-drawer .pm-drawer-section-title,
+body.pm-mobile-active .pm-drawer .pm-drawer-pinned-section .pm-drawer-section-title,
+body.pm-mobile-active .pm-drawer .pm-drawer-project-section .pm-drawer-section-title {
+  color: #fff !important;
+}
+
+body.pm-mobile-active .pm-drawer .pm-drawer-item svg {
+  stroke: currentColor !important;
+  fill: currentColor;
+}
+
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill.is-active,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-label,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-icon,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill.is-active svg {
+  color: #111 !important;
+  -webkit-text-fill-color: #111 !important;
+}
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill.is-active svg {
+  stroke: #111 !important;
+  fill: none !important;
+}
