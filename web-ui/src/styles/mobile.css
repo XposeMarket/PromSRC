@@ -18031,6 +18031,21 @@ body.pm-mobile-active .pm-ctx-popover {
   box-shadow: none !important;
 }
 
+/* Keep project cards prominent while giving regular chat session titles a lighter hierarchy. */
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+
+
 /* The drawer search is an icon-only control until the user asks for it. */
 body.pm-mobile-active .pm-drawer-search-toggle,
 body.pm-mobile-active .pm-theme-toggle {
