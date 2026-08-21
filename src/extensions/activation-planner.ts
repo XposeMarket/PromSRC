@@ -209,7 +209,10 @@ function isConnectionAdministrationRequest(message: string): boolean {
 
 function isConnectedExtension(
   extension: PrometheusExtensionRuntimeRecord,
-  registry: { getConnector?: (id: string) => { isConnected?: () => boolean } | undefined },
+  registry: {
+    getConnector?: (id: string) => { isConnected?: () => boolean } | undefined;
+    isConnectorAvailable?: (id: string) => boolean;
+  },
   connectedExtensionIds?: ReadonlySet<string>,
 ): boolean {
   const kind = extensionKind(extension);
@@ -218,7 +221,10 @@ function isConnectedExtension(
     ? extension.contracts.connectors
     : [extension.id];
   return connectorIds.some((id) => {
-    try { return registry.getConnector?.(id)?.isConnected?.() === true; } catch { return false; }
+    try {
+      if (registry.isConnectorAvailable) return registry.isConnectorAvailable(id) === true;
+      return registry.getConnector?.(id)?.isConnected?.() === true;
+    } catch { return false; }
   });
 }
 
@@ -235,6 +241,7 @@ export function planMessageExtensionActivation(params: {
   registry?: {
     listExtensions(): PrometheusExtensionRuntimeRecord[];
     getConnector?: (id: string) => { isConnected?: () => boolean } | undefined;
+    isConnectorAvailable?: (id: string) => boolean;
   };
   connectedExtensionIds?: ReadonlySet<string>;
 }): MessageExtensionActivationPlan {
