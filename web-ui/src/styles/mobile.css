@@ -17798,11 +17798,13 @@ body.pm-mobile-active .pm-drawer .pm-session-title {
 body.pm-mobile-active .pm-drawer :is(.pm-drawer-section-title, .pm-session-gateway, .pm-session-state) {
   color: var(--pm-p1-gold, #d6b75e) !important;
 }
-body.pm-mobile-active .pm-drawer .pm-session-computer {
-  color: #3d8bff !important;
+body.pm-mobile-active .pm-drawer .pm-session-computer,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill-label {
+  color: #fff !important;
 }
 :root[data-skin="blue"] body.pm-mobile-active .pm-drawer .pm-session-computer {
-  color: #aeb9ca !important;
+  color: #fff !important;
 }
 body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {

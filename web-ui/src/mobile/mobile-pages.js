@@ -10043,7 +10043,7 @@ function _pmRefreshSlashChrome(page, input) {
   if (!pmActiveSlashCommand) {
     chip.hidden = true;
     chip.querySelector('.pm-command-chip-token').textContent = '';
-    input.placeholder = 'Type a message...';
+    input.placeholder = window.__pmMobileComposerPlaceholder || 'Type a message...';
     return;
   }
   chip.hidden = false;
@@ -10644,6 +10644,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     bindMobileSessionTarget(requestedSession, gatewayTarget.gatewayId, { started: true });
   }
   setMobileActiveGatewayTarget(gatewayTarget);
+  try {
+    window.__pmMobileComposerPlaceholder = requestedSession === MOBILE_CHAT_SESSION_ID
+      ? 'Send Prometheus a message'
+      : `Work on ${gatewayTarget?.name || 'this computer'}`;
+  } catch {}
   try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
   // A gateway paired before direct execution was enabled can still have a
   // cached read-only descriptor in localStorage. Refresh remote capability
@@ -10873,7 +10878,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
-          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? `Work on ${gatewayTarget?.name || 'this gateway'}` : `Message ${gatewayTarget?.name || 'this chat'}…`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
