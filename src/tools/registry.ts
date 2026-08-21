@@ -340,12 +340,10 @@ class ToolRegistry {
       const extensionRegistry = getExtensionRuntimeRegistry();
       for (const extensionTool of extensionRegistry.listTools()) {
         const name = extensionTool.name;
-        const extensionTrust = extensionRegistry.getExtension(extensionTool.extensionId)?.trustLevel;
-        const capabilities = extensionTool.sideEffects
-          ? resolveToolCapabilityMetadata(name, extensionTool.sideEffects)
-          : extensionTrust === 'bundled'
-            ? resolveToolCapabilityMetadata(name)
-            : resolveToolCapabilityMetadata('__unclassified_extension_tool__');
+        // The shared resolver first honors explicit extension metadata, then
+        // derives conservative connector capabilities from the live registry
+        // and operation name. Unknown plugin tools still fail closed.
+        const capabilities = resolveToolCapabilityMetadata(name, extensionTool.sideEffects);
         this.registerSafe({
           name,
           description: extensionTool.description,

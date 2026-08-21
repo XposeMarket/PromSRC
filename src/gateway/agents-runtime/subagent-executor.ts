@@ -20561,7 +20561,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         // ── connector_* tools: dispatch to connector handlers ─────────────
         if (name.startsWith('connector_') && name !== 'connector_list') {
           ensurePrometheusExtensionRuntimeLoaded();
-          const connResult = await getExtensionRuntimeRegistry().executeTool(name, args);
+          const extensionRegistry = getExtensionRuntimeRegistry();
+          if (!extensionRegistry.isToolAvailable(name)) {
+            return { name, args, result: `Connector tool "${name}" is not available for a connected extension. Connect or enable the connector before use.`, error: true };
+          }
+          const connResult = await extensionRegistry.executeTool(name, args);
           return { name, args, ...connResult };
         }
 
@@ -20569,8 +20573,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         // xai_live_search, are advertised by the runtime registry and should
         // execute through the same extension boundary.
         ensurePrometheusExtensionRuntimeLoaded();
-        if (getExtensionRuntimeRegistry().getTool(name)) {
-          const extensionResult = await getExtensionRuntimeRegistry().executeTool(name, args);
+        const extensionRegistry = getExtensionRuntimeRegistry();
+        if (extensionRegistry.getTool(name)) {
+          if (!extensionRegistry.isToolAvailable(name)) {
+            return { name, args, result: `Extension tool "${name}" is not available for a connected extension. Connect or enable the connector before use.`, error: true };
+          }
+          const extensionResult = await extensionRegistry.executeTool(name, args);
           return { name, args, ...extensionResult };
         }
 

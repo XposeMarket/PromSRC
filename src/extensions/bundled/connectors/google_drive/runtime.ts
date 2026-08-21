@@ -72,6 +72,7 @@ const ext: PrometheusExtensionDefinition = {
       description: '[Google Drive] Read a provider-native Google Drive API v3 endpoint. Read-only GET requests are restricted to /drive/v3/.',
       parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string', description: 'Relative Google Drive API v3 path, for example /drive/v3/files' }, query: { type: 'object', description: 'Optional query parameters. Values must be strings, numbers, or booleans.' } } },
       connectorId: ID, capability: 'drive',
+      sideEffects: { readOnly: true, localWrite: false, externalWrite: false, destructive: false, credentialUse: true, known: true },
       execute: (args: any) => withConn(async (c) => {
         const request = validateGoogleDriveGetRequest({ path: args.path, query: args.query });
         return toolOk(await c.requestDriveGet(request.path, request.query));

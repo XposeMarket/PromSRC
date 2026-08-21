@@ -7,7 +7,6 @@ import type { ToolResult } from '../../tool-builder';
 import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
 import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
-import { isManagedConnectorToolAvailable } from '../../../connections/tool-surface';
 
 const PLATFORM_TOOL_NAMES = new Set([
   'mcp_server_manage',
@@ -474,9 +473,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
       // Route through the extension registry (native connectors own execution).
       ensurePrometheusExtensionRuntimeLoaded();
       const registry = getExtensionRuntimeRegistry();
-      const extensionTool = registry.getTool(name) as any;
-      const connectorId = String(extensionTool?.connectorId || '').trim();
-      if (connectorId && !isManagedConnectorToolAvailable(connectorId, name)) {
+      if (!registry.isToolAvailable(name)) {
         return { name, args, result: `Connector tool "${name}" is not enabled for this connection. Enable it in Plugins → connection details before use.`, error: true };
       }
       const connResult = await registry.executeTool(name, args);
