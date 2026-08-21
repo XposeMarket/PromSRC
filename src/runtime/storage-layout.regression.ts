@@ -37,6 +37,7 @@ function run(): void {
   assert.equal(canonical.runtime.root, path.join(data, 'runtime'));
   assert.equal(canonical.runtime.config, path.join(data, 'runtime', 'config'));
   assert.equal(canonical.runtime.sessions, path.join(data, 'runtime', 'sessions'));
+  assert.equal(canonical.runtime.agents, path.join(data, 'runtime', 'agents'));
   assert.equal(canonical.runtime.audit, path.join(data, 'runtime', 'audit'));
   assert.equal(canonical.workspace.root, path.join(data, 'workspace'));
   assert.equal(canonical.workspace.skills, path.join(data, 'workspace', 'skills'));
