@@ -56,6 +56,7 @@ import {
   createProposal,
   loadProposal,
   markProposalExecuting,
+  markProposalFailed,
   markProposalRepairing,
   type Proposal,
   type ProposalAffectedFile,
@@ -66,6 +67,10 @@ import {
   promoteDevSrcSelfEditWorkspace,
 } from '../proposals/dev-src-self-edit.js';
 import type { ProposalRepairContext } from '../proposals/repair-context.js';
+import {
+  compactProposalError,
+  normalizeProposalExecutorResponse,
+} from '../proposals/proposal-execution.js';
 // task-self-healer / synthesis round removed — lastResultSummary is delivered directly
 import { runWithWorkspace } from '../../tools/workspace-context';
 import {
@@ -645,6 +650,21 @@ export class BackgroundTaskRunner {
       } else {
         await this._run();
       }
+    } catch (err: any) {
+      const failure = compactProposalError(err, 'Proposal executor stopped unexpectedly.');
+      const failedTask = updateTaskStatus(taskId, 'failed', { finalSummary: failure });
+      const proposalId = String(failedTask?.proposalExecution?.proposalId || task?.proposalExecution?.proposalId || '').trim();
+      if (proposalId) {
+        const failedProposal = markProposalFailed(proposalId, failure);
+        this._broadcast('proposal_failed', {
+          proposalId,
+          taskId,
+          sessionId: task?.sessionId,
+          error: failedProposal?.executionResult || failure,
+        });
+      }
+      this._broadcast('task_failed', { taskId, reason: failure });
+      throw err;
     } finally {
       finishLiveRuntime(runtimeId);
       this.runtimeId = undefined;
@@ -1426,7 +1446,7 @@ export class BackgroundTaskRunner {
     reasoningEffortOverride?: string,
   ): Promise<
     | { ok: true; result: { type: string; text: string; thinking?: string } }
-    | { ok: false; reason: string; detail: string }
+    | { ok: false; reason: string; detail: string; terminal?: boolean }
   > {
     const MAX_TRANSPORT_RETRIES = 2;
     const RETRY_DELAY_MS = 4000;
@@ -1480,7 +1500,7 @@ export class BackgroundTaskRunner {
             allowedWorkPaths: task.agentAllowedWorkPaths || [actorExecutionRoot, identityRoot],
           });
         }
-        attemptResult = await this._withRoundTimeout(
+        const rawAttemptResult = await this._withRoundTimeout(
           this.handleChat(
             prompt,
             sessionId,
@@ -1501,6 +1521,18 @@ export class BackgroundTaskRunner {
           abortSignal,
           (ping) => { pingInactivityTimeout = ping; },
         );
+        const normalizedAttemptResult = normalizeProposalExecutorResponse(rawAttemptResult);
+        if (!normalizedAttemptResult.ok) {
+          const detail = compactProposalError(normalizedAttemptResult.error, 'Executor returned an invalid response.');
+          appendJournal(task.id, { type: 'error', content: detail });
+          return {
+            ok: false,
+            reason: 'Proposal executor returned an invalid response.',
+            detail,
+            terminal: true,
+          };
+        }
+        attemptResult = normalizedAttemptResult.response;
       } catch (retryErr: any) {
         const errMsg = String(retryErr?.message || retryErr || 'unknown');
         appendJournal(task.id, { type: 'error', content: `Attempt ${attempt + 1} threw: ${errMsg.slice(0, 200)}` });
@@ -1543,7 +1575,12 @@ export class BackgroundTaskRunner {
 
       if (text.startsWith('Error:')) {
         appendJournal(task.id, { type: 'error', content: `Model returned error: ${text.slice(0, 200)}` });
-        return { ok: false, reason: `Task paused — model returned an unrecoverable error at step ${task.currentStepIndex + 1}.`, detail: text.slice(0, 600) };
+        return {
+          ok: false,
+          reason: `Task stopped — executor returned an error at step ${task.currentStepIndex + 1}.`,
+          detail: compactProposalError(text, 'Executor returned an error.'),
+          terminal: true,
+        };
       }
 
       return { ok: true, result: attemptResult };
@@ -2274,9 +2311,31 @@ export class BackgroundTaskRunner {
         taskProviderOverride,
 	        task.teamSubagent ? 'team_subagent' : task.subagentProfile ? 'background_agent' : isProposalLikeSourceSession ? 'proposal_execution' : 'background_task',
 	        liveTask.executorReasoningEffort,
-	      );
+      );
 
       if (!roundOutcome.ok) {
+        if (roundOutcome.terminal && isProposalLikeSourceSessionId(sourceSessionId)) {
+          const failure = compactProposalError(
+            `${roundOutcome.reason} ${roundOutcome.detail}`,
+            'Proposal executor returned an invalid response.',
+          );
+          const failedTask = updateTaskStatus(taskId, 'failed', { finalSummary: failure });
+          const proposalId = String(liveTask.proposalExecution?.proposalId || '').trim();
+          if (proposalId) {
+            const failedProposal = markProposalFailed(proposalId, failure);
+            this._broadcast('proposal_failed', {
+              proposalId,
+              taskId,
+              sessionId: sourceSessionId,
+              error: failedProposal?.executionResult || failure,
+            });
+          }
+          appendJournal(taskId, { type: 'error', content: failure });
+          this._broadcast('task_failed', { taskId, reason: failure });
+          notifyTaskWebPush(failedTask || task, 'failed', failure);
+          flushSession(sessionId);
+          return;
+        }
         await this._pauseForAssistance(task, roundOutcome.reason, roundOutcome.detail);
         return;
       }

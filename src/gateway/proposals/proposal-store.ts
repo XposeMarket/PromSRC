@@ -21,6 +21,7 @@ import {
   type ProposalRepairContext,
   normalizeProposalRepairContext,
 } from './repair-context.js';
+import { compactProposalError } from './proposal-execution.js';
 
 // ─── Optional broadcast hook ──────────────────────────────────────────────────
 // Set by proposals.router.ts after the WS server is up.
@@ -526,6 +527,12 @@ function appendProposalStatusAudit(
   });
 }
 
+function boundedProposalResult(value: unknown, fallback: string, maxChars = 1000): string {
+  const result = String(value ?? '').trim();
+  if (!result) return fallback;
+  return result.slice(0, maxChars);
+}
+
 // ─── CRUD ──────────────────────────────────────────────────────────────────────
 
 export function createProposal(
@@ -692,6 +699,12 @@ export function approveProposal(id: string, notes?: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
 
+  // Approval is a one-way decision. Replaying the same request must not reset
+  // timestamps/snapshots or create another execution handoff.
+  if (p.status !== 'pending') {
+    return ['approved', 'executing', 'repairing', 'executed'].includes(p.status) ? p : null;
+  }
+
   const approvedAt = Date.now();
   p.status = 'approved';
   p.decidedAt = approvedAt;
@@ -718,6 +731,7 @@ export function denyProposal(id: string, notes?: string): Proposal | null {
 export function markProposalExecuting(id: string, taskId: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
+  if (p.status === 'executed' || p.status === 'failed') return p;
   p.status = 'executing';
   p.executorTaskId = taskId;
   saveProposal(p);
@@ -739,21 +753,39 @@ export function markProposalRepairing(id: string, reason: string, taskId?: strin
 export function markProposalExecuted(id: string, result: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
+  if (p.status === 'executed' || p.status === 'failed') return p;
   p.status = 'executed';
   p.executedAt = Date.now();
-  p.executionResult = result.slice(0, 1000);
+  p.executionResult = boundedProposalResult(result, 'Proposal execution completed.');
   saveProposal(p);
   appendProposalStatusAudit(p, `Proposal executed: ${p.executionResult}`, { result: p.executionResult });
+  try {
+    _broadcast?.({
+      type: 'proposal_executed',
+      proposalId: p.id,
+      title: p.title,
+      executionResult: p.executionResult,
+    });
+  } catch { /* broadcast is best-effort */ }
   return p;
 }
 
 export function markProposalFailed(id: string, reason: string): Proposal | null {
   const p = loadProposal(id);
   if (!p) return null;
+  if (p.status === 'executed' || p.status === 'failed') return p;
   p.status = 'failed';
-  p.executionResult = reason.slice(0, 500);
+  p.executionResult = compactProposalError(reason, 'Proposal executor failed.');
   saveProposal(p);
   appendProposalStatusAudit(p, `Proposal failed: ${p.executionResult}`, { reason: p.executionResult });
+  try {
+    _broadcast?.({
+      type: 'proposal_failed',
+      proposalId: p.id,
+      title: p.title,
+      executionResult: p.executionResult,
+    });
+  } catch { /* broadcast is best-effort */ }
   return p;
 }
 

@@ -1205,6 +1205,18 @@ export function updateTaskStatus(
   if (status === 'complete' || status === 'failed') task.completedAt = Date.now();
   task.lastProgressAt = Date.now();
   saveTask(task);
+  if (status === 'failed') {
+    const proposalId = String(task.proposalExecution?.proposalId || '').trim();
+    if (proposalId) {
+      try {
+        const { markProposalFailed } = require('../proposals/proposal-store.js') as typeof import('../proposals/proposal-store.js');
+        markProposalFailed(proposalId, task.finalSummary || 'Proposal executor failed.');
+      } catch {
+        // Proposal persistence is best-effort here; the proposal runner also
+        // records terminal failures at its own boundary.
+      }
+    }
+  }
   return task;
 }
 

@@ -35,6 +35,7 @@ import {
   prepareDevSrcRepairWorkspace,
   proposalUsesDevSrcSelfEditMode,
 } from '../proposals/dev-src-self-edit.js';
+import { compactProposalError } from '../proposals/proposal-execution.js';
 
 const router = Router();
 const PROPOSAL_ACTIVE_TASK_STATUSES = new Set<TaskStatus>(['queued', 'running', 'waiting_subagent']);
@@ -136,6 +137,35 @@ export interface ApproveProposalActionResult {
   dispatched: boolean;
   taskId?: string;
   sessionId?: string;
+  idempotent?: boolean;
+}
+
+const IDEMPOTENT_APPROVAL_STATUSES = new Set<ProposalStatus>(['approved', 'executing', 'repairing', 'executed']);
+const proposalApprovalInFlight = new Map<string, Promise<ApproveProposalActionResult>>();
+
+function proposalHasExecutionPlan(proposal: any): boolean {
+  return !!(proposal?.executorPrompt || (proposal?.affectedFiles?.length && proposal?.details));
+}
+
+function compactProposalState(proposal: any): Record<string, any> | undefined {
+  if (!proposal) return undefined;
+  return {
+    id: proposal.id,
+    title: proposal.title,
+    status: proposal.status,
+    updatedAt: proposal.updatedAt,
+    decidedAt: proposal.decidedAt,
+    executedAt: proposal.executedAt,
+    executorTaskId: proposal.executorTaskId,
+    executionResult: proposal.executionResult,
+  };
+}
+
+function proposalActionError(statusCode: number, message: string, proposal?: any): Error & { statusCode: number; proposal?: any } {
+  const error: any = new Error(compactProposalError(message, 'Proposal approval failed.'));
+  error.statusCode = statusCode;
+  if (proposal) error.proposal = compactProposalState(proposal);
+  return error;
 }
 
 function proposalLifecycleAuditArgs(proposal: any, extra: Record<string, any> = {}): Record<string, any> {
@@ -528,8 +558,8 @@ router.post('/api/proposals/:id/approve', async (req: Request, res: Response) =>
   } catch (err: any) {
     res.status(err?.statusCode || 500).json({
       success: false,
-      error: err?.message || 'Failed to approve proposal',
-      proposal: err?.proposal,
+      error: compactProposalError(err, 'Failed to approve proposal'),
+      proposal: compactProposalState(err?.proposal),
     });
   }
 });
@@ -538,23 +568,83 @@ export async function approveProposalAction(
   proposalId: string,
   opts: ApproveProposalActionOptions = {},
 ): Promise<ApproveProposalActionResult> {
+  const existingRequest = proposalApprovalInFlight.get(proposalId);
+  if (existingRequest) return existingRequest;
+
+  const request = approveProposalActionOnce(proposalId, opts);
+  proposalApprovalInFlight.set(proposalId, request);
+  request.then(
+    () => { if (proposalApprovalInFlight.get(proposalId) === request) proposalApprovalInFlight.delete(proposalId); },
+    () => { if (proposalApprovalInFlight.get(proposalId) === request) proposalApprovalInFlight.delete(proposalId); },
+  );
+  return request;
+}
+
+async function approveProposalActionOnce(
+  proposalId: string,
+  opts: ApproveProposalActionOptions = {},
+): Promise<ApproveProposalActionResult> {
   const existing = loadProposal(proposalId);
   if (!existing) {
-    const err: any = new Error('Proposal not found');
-    err.statusCode = 404;
-    throw err;
+    throw proposalActionError(404, 'Proposal not found');
   }
   if (isPublicDistributionBuild() && proposalTouchesInternalCode(existing)) {
-    const err: any = new Error('Internal code proposals are not available in the public distribution build.');
-    err.statusCode = 403;
-    throw err;
+    throw proposalActionError(403, 'Internal code proposals are not available in the public distribution build.', existing);
+  }
+
+  // A repeated click/callback is successful but must never dispatch a second
+  // executor for an already-running or terminal proposal. The one recoverable
+  // state is approved-without-task, which can happen if the process stopped
+  // between persistence and handoff; retrying that handoff is safe.
+  if (existing.status !== 'pending') {
+    if (!IDEMPOTENT_APPROVAL_STATUSES.has(existing.status)) {
+      throw proposalActionError(409, `Proposal is ${existing.status} and cannot be approved again.`, existing);
+    }
+
+    const canRecoverHandoff = existing.status === 'approved'
+      && !existing.executorTaskId
+      && proposalHasExecutionPlan(existing);
+    if (!canRecoverHandoff) {
+      return {
+        proposal: existing,
+        dispatched: existing.status === 'executing' || existing.status === 'repairing' || !!existing.executorTaskId,
+        taskId: existing.executorTaskId,
+        sessionId: existing.executorTaskId ? `proposal_${existing.id}` : undefined,
+        idempotent: true,
+      };
+    }
+
+    try {
+      const dispatchResult = await dispatchApprovedProposal(existing, opts.dispatch);
+      return {
+        proposal: loadProposal(existing.id) || existing,
+        dispatched: true,
+        taskId: dispatchResult.taskId,
+        sessionId: dispatchResult.sessionId,
+        idempotent: true,
+      };
+    } catch (err: any) {
+      throw proposalActionError(
+        502,
+        `Proposal was already approved, but executor handoff failed: ${compactProposalError(err, 'executor handoff failed')}`,
+        loadProposal(existing.id) || existing,
+      );
+    }
   }
 
   const proposal = approveProposal(proposalId, opts.notes);
   if (!proposal) {
-    const err: any = new Error('Proposal not found');
-    err.statusCode = 404;
-    throw err;
+    const latest = loadProposal(proposalId);
+    if (latest && IDEMPOTENT_APPROVAL_STATUSES.has(latest.status)) {
+      return {
+        proposal: latest,
+        dispatched: latest.status === 'executing' || latest.status === 'repairing' || !!latest.executorTaskId,
+        taskId: latest.executorTaskId,
+        sessionId: latest.executorTaskId ? `proposal_${latest.id}` : undefined,
+        idempotent: true,
+      };
+    }
+    throw proposalActionError(409, 'Proposal is no longer pending.', latest || existing);
   }
 
   appendAuditEntry({
@@ -574,17 +664,19 @@ export async function approveProposalAction(
   // Trigger if executorPrompt is set OR if proposal has affectedFiles + details (AI-generated proposals
   // put the full implementation plan in `details` and don't set executorPrompt explicitly). Wait only
   // until the executor task is created, so approval clicks cannot silently succeed without a real task.
-  const hasExecutionPlan = !!(proposal.executorPrompt || (proposal.affectedFiles?.length && proposal.details));
+  const hasExecutionPlan = proposalHasExecutionPlan(proposal);
   if (hasExecutionPlan) {
     try {
       dispatchResult = await dispatchApprovedProposal(proposal, opts.dispatch);
     } catch (err: any) {
-      console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, err?.message);
-      _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: err?.message });
-      const wrapped: any = new Error(`Proposal approved, but executor dispatch failed: ${err?.message || 'Unknown error'}`);
-      wrapped.statusCode = 500;
-      wrapped.proposal = loadProposal(proposal.id) || proposal;
-      throw wrapped;
+      const reason = compactProposalError(err, 'Unknown executor handoff error');
+      console.error(`[Proposals] Dispatch failed for ${proposal.id}:`, reason);
+      _broadcastFn?.({ type: 'proposal_dispatch_error', proposalId: proposal.id, error: reason });
+      throw proposalActionError(
+        502,
+        `Proposal approved, but executor dispatch failed: ${reason}`,
+        loadProposal(proposal.id) || proposal,
+      );
     }
   }
 
@@ -593,6 +685,7 @@ export async function approveProposalAction(
     dispatched: Boolean(dispatchResult),
     taskId: dispatchResult?.taskId,
     sessionId: dispatchResult?.sessionId,
+    idempotent: false,
   };
 }
 
@@ -921,6 +1014,9 @@ export async function dispatchApprovedProposal(
             teamExecution: teamExecution ? { ...teamExecution } : undefined,
 		      },
 		    });
+		    if (!task || !String(task.id || '').trim()) {
+		      throw new Error('Executor task was not created.');
+		    }
 	    // Mark proposal as executing with the REAL background task id.
 	    markProposalExecuting(proposalId, task.id);
       appendAuditEntry({
