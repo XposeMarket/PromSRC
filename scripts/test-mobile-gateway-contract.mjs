@@ -71,6 +71,8 @@ function assertContractFiles() {
   assert.match(identity, /paired-device-direct/);
   assert.match(identity, /chat\.write/);
   assert.match(pairing, /api\/mobile\/gateway\/catalog/);
+  assert.match(pairing, /resolveGatewayPort/, 'pairing must honor the effective per-instance gateway port');
+  assert.match(pairing, /_resolveRemoteAccess/, 'pairing must reconcile the saved remote origin with the live Funnel route');
   assert.match(pairing, /x-pairing-device-fingerprint/);
   assert.match(pairing, /consumePendingRequestToken/);
   assert.match(pairing, /api\/pairing\/me\/revoke/);
