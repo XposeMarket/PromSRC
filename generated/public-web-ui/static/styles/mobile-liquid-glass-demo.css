@@ -27,6 +27,7 @@ body.pm-mobile-active {
  */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-tabbar,
@@ -51,7 +52,8 @@ body.pm-mobile-active :is(
 }
 
 /* The combined new-chat / overflow control must remain ONE pill. */
-body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
+body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn),
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host > :is(button, .pm-icon-btn) {
   border: 0 !important;
   background: transparent !important;
   -webkit-backdrop-filter: none !important;
@@ -193,6 +195,7 @@ body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
 /* Keep legacy border overlays extremely quiet; the demo's highlight is directional. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-tabbar,
