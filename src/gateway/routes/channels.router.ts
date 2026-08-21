@@ -5,7 +5,7 @@ import { getConfig, getAgents, getAgentById, ensureAgentWorkspace, resolveAgentW
 import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig } from '../comms/broadcaster';
 import { listManagedTeams, getManagedTeam } from '../teams/managed-teams';
 import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
-import { inferAgentModelDefaultType, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { inferAgentModelDefaultType, resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
@@ -753,8 +753,9 @@ function findLastCronRunAt(agentId: string): number | null {
   return hit ? hit.finishedAt : null;
 }
 
-function resolveEffectiveAgentModel(cfg: any, agent: any, isManager: boolean, isTeamMember: boolean): { model: string; source: string } {
-  return resolveConfiguredAgentModel(cfg, agent, {
+function resolveEffectiveAgentModel(cfg: any, agent: any, isManager: boolean, isTeamMember: boolean): { model: string; source: string; reasoningEffort?: string; reasoningSource?: string; providerId?: string; modelName?: string } {
+  return resolveConfiguredAgentRouting(cfg, agent, {
+    agentType: inferAgentModelDefaultType(agent, { isManager, isTeamMember }),
     isManager,
     isTeamMember,
     fallbackToPrimary: true,
@@ -1004,7 +1005,9 @@ async function runSubagentChatTurn(
         undefined,
         abortSignal,
         callerContext,
-        undefined,
+        effectiveModel.reasoningEffort
+          ? { enabled: effectiveModel.reasoningEffort !== 'none', level: effectiveModel.reasoningEffort as any }
+          : undefined,
         Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
         undefined,
         effectiveModel.model || undefined,
@@ -1195,6 +1198,8 @@ router.get('/api/agents', (_req, res) => {
       teamEmoji: teamInfo?.teamEmoji || null,
       effectiveModel: effectiveModel.model,
       effectiveModelSource: effectiveModel.source,
+      effectiveReasoningEffort: effectiveModel.reasoningEffort || '',
+      effectiveReasoningSource: effectiveModel.reasoningSource || '',
     };
   });
   const defaultAgent = agents.find((a) => a.id === 'main') || agents.find((a) => a.default) || agents[0] || null;

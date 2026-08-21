@@ -1859,9 +1859,19 @@ function resolveConfiguredAgentReasoning(
             : ['main_chat'];
   const activeRef = `${String(providerId || '').trim()}/${String(model || '').trim()}`.toLowerCase();
   const matching = candidates.find((key) => String(defaults[key] || '').trim().toLowerCase() === activeRef && reasoning[key]);
-  const key = matching || candidates.find((candidate) => reasoning[candidate]);
-  if (!key) return undefined;
-  return normalizeReasoningEffort(String(providerId || ''), String(model || ''), reasoning[key]);
+  if (matching) {
+    return normalizeReasoningEffort(String(providerId || ''), String(model || ''), reasoning[matching]);
+  }
+
+  // A subagent with no explicit reasoning override inherits the selected
+  // provider's Settings value. Never borrow a reasoning value from an
+  // unrelated execution-mode default just because it happens to exist.
+  const providerReasoning = providerId
+    ? String(cfg?.llm?.providers?.[providerId]?.reasoning_effort || '').trim()
+    : '';
+  return providerReasoning
+    ? normalizeReasoningEffort(String(providerId || ''), String(model || ''), providerReasoning)
+    : undefined;
 }
 type ReasoningOptions = {
   enabled?: boolean;

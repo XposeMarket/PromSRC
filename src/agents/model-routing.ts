@@ -1,8 +1,18 @@
 import { isKnownProviderId } from '../providers/provider-registry.js';
+import { normalizeReasoningEffort } from '../providers/reasoning-capabilities.js';
 
 export type ProviderModelRef = {
   providerId: string;
   model: string;
+};
+
+export type ResolvedAgentRouting = {
+  model: string;
+  source: string;
+  reasoningEffort?: string;
+  reasoningSource?: string;
+  providerId?: string;
+  modelName?: string;
 };
 
 const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
@@ -48,8 +58,16 @@ export function parseProviderModelRef(ref?: string): ProviderModelRef | null {
 export function getPrimaryModelRef(cfg: any): string {
   const provider = String(cfg?.llm?.provider || '').trim();
   const providerModel = provider ? String(cfg?.llm?.providers?.[provider]?.model || '').trim() : '';
+  if (provider && providerModel) return `${provider}/${normalizeProviderModel(provider, providerModel)}`;
+
+  // `agent_model_defaults.main_chat` is the durable Settings route mirror.
+  // Older installs can have this value even when llm.providers[provider].model
+  // has not been backfilled yet, so it must participate in global inheritance.
+  const mainChatDefault = String(cfg?.agent_model_defaults?.main_chat || '').trim();
+  if (parseProviderModelRef(mainChatDefault)) return mainChatDefault;
+
   const model = providerModel || String(cfg?.models?.primary || '').trim();
-  return provider && model ? `${provider}/${model}` : model;
+  return provider && model ? `${provider}/${normalizeProviderModel(provider, model)}` : model;
 }
 
 export function inferAgentModelDefaultType(
@@ -122,4 +140,85 @@ export function resolveConfiguredAgentModel(
   }
 
   return { model: getPrimaryModelRef(cfg), source: 'primary' };
+}
+
+function resolveModelRoute(cfg: any, modelRef: string): ProviderModelRef | null {
+  const parsed = parseProviderModelRef(modelRef);
+  if (parsed) return parsed;
+  const model = String(modelRef || '').trim();
+  const provider = String(cfg?.llm?.provider || '').trim();
+  return provider && model
+    ? { providerId: provider, model: normalizeProviderModel(provider, model) }
+    : null;
+}
+
+function routeMatches(left: string, right: string): boolean {
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
+}
+
+/**
+ * Resolve the complete route used by a subagent, including inherited
+ * reasoning. Empty agent fields intentionally remain inheritance-only; this
+ * function never turns an inherited Settings route into a per-agent override.
+ */
+export function resolveConfiguredAgentRouting(
+  cfg: any,
+  agent: any,
+  opts?: {
+    explicitModel?: string;
+    explicitReasoning?: string;
+    agentType?: string;
+    isManager?: boolean;
+    isTeamMember?: boolean;
+    fallbackToPrimary?: boolean;
+  },
+): ResolvedAgentRouting {
+  const modelResolution = resolveConfiguredAgentModel(cfg, agent, opts);
+  const model = String(modelResolution.model || '').trim();
+  const route = resolveModelRoute(cfg, model);
+  const providerId = route?.providerId || '';
+  const modelName = route?.model || '';
+  const explicitReasoning = String(opts?.explicitReasoning ?? agent?.reasoning_effort ?? '').trim().toLowerCase();
+
+  if (explicitReasoning && providerId && modelName) {
+    const normalized = normalizeReasoningEffort(providerId, modelName, explicitReasoning);
+    if (normalized) {
+      return {
+        ...modelResolution,
+        reasoningEffort: normalized,
+        reasoningSource: 'agent_override',
+        providerId,
+        modelName,
+      };
+    }
+  }
+
+  const defaults = cfg?.agent_model_defaults || {};
+  const reasoning = cfg?.agent_model_default_reasoning || {};
+  const defaultKeys = Array.from(new Set([
+    ...getAgentModelDefaultKeys(agent, opts),
+    'main_chat',
+  ]));
+  const activeRoute = providerId && modelName ? `${providerId}/${modelName}` : '';
+  const matchingKey = activeRoute
+    ? defaultKeys.find((key) => routeMatches(defaults[key], activeRoute) && String(reasoning[key] || '').trim())
+    : undefined;
+  const configuredReasoning = matchingKey
+    ? String(reasoning[matchingKey] || '').trim().toLowerCase()
+    : providerId
+      ? String(cfg?.llm?.providers?.[providerId]?.reasoning_effort || '').trim().toLowerCase()
+      : '';
+  const normalizedInherited = providerId && modelName && configuredReasoning
+    ? normalizeReasoningEffort(providerId, modelName, configuredReasoning)
+    : undefined;
+
+  return {
+    ...modelResolution,
+    ...(normalizedInherited ? {
+      reasoningEffort: normalizedInherited,
+      reasoningSource: matchingKey ? `agent_model_default_reasoning.${matchingKey}` : `llm.providers.${providerId}`,
+    } : {}),
+    ...(providerId ? { providerId } : {}),
+    ...(modelName ? { modelName } : {}),
+  };
 }
