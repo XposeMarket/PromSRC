@@ -39,6 +39,13 @@ import { requirePairingAdmin } from '../pairing/pairing-admin-auth';
 import { getGatewayDescriptor } from '../gateway-identity';
 import { listSessionSummaries, searchSessionSummaries } from '../session';
 import { listTaskSummaries } from '../tasks/task-store';
+import { resolveGatewayPort } from '../../config/gateway-port';
+import {
+  findFunnelRouteForPort,
+  formatFunnelOrigin,
+  parseFunnelRoutes,
+  type FunnelRoute,
+} from './funnel-routing';
 
 export const router: Router = Router();
 const MOBILE_GATEWAY_CATALOG_ENABLED = process.env.PROMETHEUS_MOBILE_GATEWAY_CATALOG !== '0';
@@ -101,7 +108,7 @@ async function _resolvePairingOrigin(req: any, overrideOrigin: string): Promise<
   const { hostname, port } = _splitHostHeader(hostHeader);
   const fallbackPort = preferHttps
     ? String(httpsCfg.port)
-    : (port || String(cfg?.gateway?.port || 18789));
+    : (port || String(_gatewayPort()));
   const fallbackHost = hostname
     ? `${hostname.includes(':') ? `[${hostname}]` : hostname}:${fallbackPort}`
     : `localhost:${fallbackPort}`;
@@ -116,19 +123,13 @@ async function _resolvePairingOrigin(req: any, overrideOrigin: string): Promise<
   // Remote access: when enabled with a valid public URL (e.g. Tailscale Funnel),
   // use it as the pairing origin so the phone can reach the gateway off-LAN.
   // The local LAN URL is still returned in `lanOrigins` for visibility.
-  const ra = cfg?.gateway?.remoteAccess;
-  if (ra && ra.enabled && typeof ra.publicUrl === 'string') {
-    const publicUrl = ra.publicUrl.trim();
-    const mode = String(ra.mode || 'tailscale-funnel');
-    // A saved Funnel URL is not proof that Funnel is currently serving. If
-    // Tailscale was turned off, fall back to the LAN origin instead of putting
-    // a dead *.ts.net address in the QR code.
-    const remoteActive = publicUrl && _originLooksSafe(publicUrl)
-      ? mode !== 'tailscale-funnel' || await _isFunnelActiveOnPort(_gatewayPort())
-      : false;
-    if (remoteActive) {
-      return { origin: publicUrl.replace(/\/+$/, ''), bindHost, lanOrigins, remoteAccessActive: true };
-    }
+  const remoteAccess = await _resolveRemoteAccess();
+  // A saved Funnel URL is not proof that Funnel is currently serving. If
+  // Tailscale was turned off, fall back to the LAN origin instead of putting
+  // a dead *.ts.net address in the QR code. When another Funnel HTTPS port
+  // serves this gateway, use that live port instead of the stale saved origin.
+  if (remoteAccess.active) {
+    return { origin: remoteAccess.publicUrl.replace(/\/+$/, ''), bindHost, lanOrigins, remoteAccessActive: true };
   }
 
   const isWildcard = bindHost === '0.0.0.0' || bindHost === '::';
@@ -312,6 +313,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
 
     const cfg = getConfig().getConfig() as any;
     const ra = cfg?.gateway?.remoteAccess;
+    const remoteAccess = await _resolveRemoteAccess();
     res.json({
       success: true,
       challengeId: challenge.id,
@@ -322,7 +324,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
       lanOrigins: pairingOrigin.lanOrigins,
       warning: pairingOrigin.warning,
       remoteAccess: pairingOrigin.remoteAccessActive
-        ? { active: true, mode: String(ra.mode || 'custom'), publicUrl: String(ra.publicUrl).trim() }
+        ? { active: true, mode: String(ra?.mode || 'custom'), publicUrl: remoteAccess.publicUrl }
         : { active: false },
       expiresAt: challenge.expiresAt,
       gateway,
@@ -517,17 +519,40 @@ function _runTailscaleCli(args: string[], timeoutMs: number = 4000): Promise<{ c
   });
 }
 
-function _publicRemoteAccess() {
+async function _resolveRemoteAccess(): Promise<{
+  enabled: boolean;
+  mode: string;
+  publicUrl: string;
+  active: boolean;
+}> {
   const cfg = getConfig().getConfig() as any;
   const ra = (cfg?.gateway?.remoteAccess && typeof cfg.gateway.remoteAccess === 'object')
     ? cfg.gateway.remoteAccess
     : { enabled: false, mode: 'tailscale-funnel', publicUrl: '' };
   const publicUrl = String(ra.publicUrl || '').trim();
+  const mode = String(ra.mode || 'tailscale-funnel');
+  if (!ra.enabled || !publicUrl || !_originLooksSafe(publicUrl)) {
+    return { enabled: !!ra.enabled, mode, publicUrl, active: false };
+  }
+  if (mode !== 'tailscale-funnel') {
+    return { enabled: true, mode, publicUrl, active: true };
+  }
+  const route = findFunnelRouteForPort(await _getFunnelRoutes(), _gatewayPort());
   return {
-    enabled: !!ra.enabled,
-    mode: String(ra.mode || 'tailscale-funnel'),
-    publicUrl,
-    valid: !!publicUrl && _originLooksSafe(publicUrl),
+    enabled: true,
+    mode,
+    publicUrl: route ? formatFunnelOrigin(publicUrl, route.httpsPort) : publicUrl,
+    active: !!route,
+  };
+}
+
+async function _publicRemoteAccess() {
+  const resolved = await _resolveRemoteAccess();
+  return {
+    enabled: resolved.enabled,
+    mode: resolved.mode,
+    publicUrl: resolved.publicUrl,
+    valid: !!resolved.publicUrl && _originLooksSafe(resolved.publicUrl),
   };
 }
 
@@ -555,51 +580,16 @@ function _funnelHttpsPortIsExplicit(): boolean {
   }
 }
 
-type FunnelRoute = { httpsPort: number; targetPorts: number[] };
-
-function _parseFunnelRoutes(raw: string): FunnelRoute[] {
-  try {
-    const parsed = JSON.parse(raw) as any;
-    const routes: FunnelRoute[] = [];
-    for (const [endpoint, service] of Object.entries(parsed?.Web || {})) {
-      const endpointPort = Number(String(endpoint).match(/:(\d+)$/)?.[1] || 443);
-      if (![443, 8443, 10000].includes(endpointPort)) continue;
-      const targetPorts = new Set<number>();
-      for (const handler of Object.values((service as any)?.Handlers || {})) {
-        const matches = String((handler as any)?.Proxy || '').matchAll(/127\.0\.0\.1:(\d+)/g);
-        for (const match of matches) targetPorts.add(Number(match[1]));
-      }
-      if (targetPorts.size) routes.push({ httpsPort: endpointPort, targetPorts: [...targetPorts] });
-    }
-    if (routes.length) return routes;
-  } catch {}
-
-  const routes: FunnelRoute[] = [];
-  let httpsPort = 443;
-  for (const line of String(raw || '').split(/\r?\n/)) {
-    const endpoint = line.match(/https:\/\/[^\s(]+/i)?.[0];
-    if (endpoint) {
-      try {
-        const parsed = new URL(endpoint);
-        httpsPort = Number(parsed.port || 443);
-      } catch {}
-    }
-    const target = line.match(/127\.0\.0\.1:(\d+)/);
-    if (target) routes.push({ httpsPort, targetPorts: [Number(target[1])] });
-  }
-  return routes;
-}
-
 async function _getFunnelRoutes(): Promise<FunnelRoute[]> {
   const result = await _runTailscaleCli(['funnel', 'status', '--json'], 5000);
   if (result.code !== 0 && !result.stdout) return [];
-  return _parseFunnelRoutes(result.stdout);
+  return parseFunnelRoutes(result.stdout);
 }
 
 async function _resolveFunnelHttpsPort(localPort: number): Promise<number> {
   const configured = _funnelHttpsPort();
   const routes = await _getFunnelRoutes();
-  const active = routes.find(route => route.targetPorts.includes(localPort));
+  const active = findFunnelRouteForPort(routes, localPort);
   if (active) return active.httpsPort;
 
   const configuredOwner = routes.find(route => route.httpsPort === configured);
@@ -619,11 +609,11 @@ function _funnelTargetCommand(localPort: number, httpsPort: number): string[] {
   return ['funnel', '--bg', `--https=${httpsPort}`, String(localPort)];
 }
 
-router.get('/api/pairing/remote-access', requirePairingAdmin, (_req, res) => {
-  res.json({ success: true, remoteAccess: _publicRemoteAccess() });
+router.get('/api/pairing/remote-access', requirePairingAdmin, async (_req, res) => {
+  res.json({ success: true, remoteAccess: await _publicRemoteAccess() });
 });
 
-router.put('/api/pairing/remote-access', requirePairingAdmin, (req, res) => {
+router.put('/api/pairing/remote-access', requirePairingAdmin, async (req, res) => {
   try {
     const body = req.body || {};
     const enabled = !!body.enabled;
@@ -646,7 +636,7 @@ router.put('/api/pairing/remote-access', requirePairingAdmin, (req, res) => {
     const gateway = { ...(current.gateway || {}) };
     gateway.remoteAccess = { enabled, mode, publicUrl };
     cfgMgr.updateConfig({ gateway } as any);
-    res.json({ success: true, remoteAccess: _publicRemoteAccess() });
+    res.json({ success: true, remoteAccess: await _publicRemoteAccess() });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
   }
@@ -697,11 +687,11 @@ router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, re
 
   const funnel = await _runTailscaleCli(['funnel', 'status', '--json']);
   if (funnel.code === 0 && funnel.stdout) out.raw = funnel.stdout.slice(0, 2000);
-  const funnelRoutes = _parseFunnelRoutes(funnel.stdout);
+  const funnelRoutes = parseFunnelRoutes(funnel.stdout);
   out.funnelPorts = [...new Set(funnelRoutes.flatMap(route => route.targetPorts))];
   out.funnelHttpsPorts = [...new Set(funnelRoutes.map(route => route.httpsPort))];
   const localPort = _gatewayPort();
-  const activeRoute = funnelRoutes.find(route => route.targetPorts.includes(localPort));
+  const activeRoute = findFunnelRouteForPort(funnelRoutes, localPort);
   out.funnelActive = !!activeRoute;
   const availableHttpsPort = [443, 8443, 10000].find((port) => (
     !funnelRoutes.some(route => route.httpsPort === port)
@@ -723,12 +713,27 @@ router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, re
 
 function _gatewayPort(): number {
   const cfg = getConfig().getConfig() as any;
-  return Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || cfg?.gateway?.port || process.env.GATEWAY_PORT || 18789);
+  const publicPort = Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || 0);
+  return publicPort || resolveGatewayPort(cfg);
 }
 
 async function _isFunnelActiveOnPort(port: number, httpsPort = _funnelHttpsPort()): Promise<boolean> {
   const routes = await _getFunnelRoutes();
-  return routes.some(route => route.httpsPort === httpsPort && route.targetPorts.includes(port));
+  return findFunnelRouteForPort(routes, port)?.httpsPort === httpsPort;
+}
+
+function _persistFunnelOrigin(httpsPort: number): void {
+  try {
+    const cfgMgr = getConfig();
+    const current = cfgMgr.getConfig() as any;
+    const gateway = { ...(current.gateway || {}) };
+    const remoteAccess = { ...(gateway.remoteAccess || {}) };
+    const publicUrl = String(remoteAccess.publicUrl || '').trim();
+    const corrected = formatFunnelOrigin(publicUrl, httpsPort);
+    if (!publicUrl || corrected === publicUrl) return;
+    gateway.remoteAccess = { ...remoteAccess, publicUrl: corrected };
+    cfgMgr.updateConfig({ gateway } as any);
+  } catch {}
 }
 
 // Enable funnel for the gateway port.
@@ -797,12 +802,14 @@ export async function ensureTailscaleFunnel(opts: { logPrefix?: string } = {}): 
   }
   const active = await _isFunnelActiveOnPort(port, httpsPort);
   if (active) {
+    _persistFunnelOrigin(httpsPort);
     console.log(`${log} Funnel already active on HTTPS ${httpsPort} → ${port}.`);
     return;
   }
   console.log(`${log} Funnel not active — enabling HTTPS ${httpsPort} → ${port}…`);
   const result = await _runTailscaleCli(_funnelTargetCommand(port, httpsPort), 12000);
   if (result.code === 0 || result.code === -2) {
+    if (await _isFunnelActiveOnPort(port, httpsPort)) _persistFunnelOrigin(httpsPort);
     console.log(`${log} Funnel enable command sent.`);
   } else {
     const err = (result.stderr || result.stdout || '').trim();

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { getConfig } from '../../config/config';
+import { resolveGatewayPort } from '../../config/gateway-port';
 import {
   getGatewayRequestIp,
   isLoopbackAddress,
@@ -124,7 +125,7 @@ export function getPairingAdminPolicy(): PairingAdminPolicy {
     gatewayToken: resolveGatewayAuthToken(),
     electronManaged: String(process.env.PROMETHEUS_ELECTRON_MANAGED || '').trim() === '1',
     gatewayHost: String(gateway.host || '127.0.0.1').trim(),
-    gatewayPort: Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || gateway.port || process.env.GATEWAY_PORT || 18789),
+    gatewayPort: Number(process.env.PROMETHEUS_GATEWAY_PUBLIC_PORT || 0) || resolveGatewayPort(gateway),
     httpsEnabled: !!https.enabled,
     httpsPort: Number(https.port || 0),
   };

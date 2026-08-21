@@ -94,6 +94,7 @@
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
+    "test:funnel-routing": "tsx src/gateway/routes/funnel-routing.regression.ts",
     "test:mobile-voice-media": "node scripts/test-mobile-voice-media-contract.mjs",
     "test:design-preview": "node scripts/test-design-preview-contract.mjs",
     "test:chat-error-presentation": "node scripts/test-chat-error-presentation.mjs",
