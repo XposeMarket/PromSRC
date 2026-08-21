@@ -20,6 +20,7 @@ import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommand
 import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
 import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
 import { renderUnifiedDiffMarkup } from '../components/coding-diff.js';
+import { buildSourcePanelEnvironmentState } from '../source-panel-environment.mjs';
 import {
   appendCommandTerminalChunkToDom,
   applyCommandProcessEvent,
@@ -19408,9 +19409,12 @@ const sourcePanelState = {
   gitRoot: '',
   gitScopeKey: '',
   gitLoaded: false,
+  gitLoading: false,
+  gitError: '',
   gitRemoteData: null,
   gitRemoteKey: '',
   gitRemoteLoading: false,
+  gitRemoteRequestToken: 0,
   workRefreshTimer: null,
   processRuns: [],
   processSessionId: '',
@@ -19815,6 +19819,10 @@ function sourcePanelSnapshot() {
     || null;
 }
 
+function sourcePanelRootKey(value) {
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
+}
+
 function sourcePanelRemoteRoot() {
   const roots = Array.isArray(sourcePanelState.codingContext?.roots) ? sourcePanelState.codingContext.roots : [];
   return roots.find((item) => item?.repository?.vcs?.kind === 'git' && item?.repository?.remoteUrl)
@@ -19878,43 +19886,28 @@ function sourcePanelCountLabel(value) {
 }
 
 function sourcePanelEnvironmentItems(data = {}) {
-  const context = sourcePanelState.codingContext || {};
-  const roots = Array.isArray(context.roots) ? context.roots : [];
-  const rootItem = roots.find((item) => item?.repository?.vcs?.kind === 'git') || roots[0] || {};
-  const repository = rootItem.repository || sourcePanelSnapshot() || {};
-  const files = Array.isArray(rootItem.files) && rootItem.files.length
-    ? rootItem.files
-    : (Array.isArray(data.workspaceFiles) ? data.workspaceFiles : []);
-  const insertions = files.reduce((total, file) => total + Math.max(0, Number(file?.insertions) || 0), 0);
-  const deletions = files.reduce((total, file) => total + Math.max(0, Number(file?.deletions) || 0), 0);
-  const changedCount = files.length;
-  const changes = changedCount
-    ? `${insertions ? `+${sourcePanelCountLabel(insertions)}` : '0'} ${deletions ? `-${sourcePanelCountLabel(deletions)}` : '0'}`
-    : '—';
-  const branch = String(repository.branch || repository.defaultBranch || 'main').trim() || 'main';
-  const aheadBehind = [
-    Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '',
-    Number(repository.behind) ? `↓${Number(repository.behind)}` : '',
-  ].filter(Boolean).join(' ');
-  const root = String(rootItem.root || context.root || sourcePanelWorkspaceRoot() || '').trim();
-  const remoteRoot = sourcePanelRemoteRoot();
-  const remoteData = sourcePanelState.gitRemoteData;
-  const remoteLoading = sourcePanelState.gitRemoteLoading && remoteRoot?.root === root;
-  const remoteAvailable = Boolean(repository.remoteUrl || repository.vcs?.remoteConnected || repository.remoteConnected);
-  const pullRequestValue = remoteLoading
-    ? 'loading'
-    : remoteAvailable && remoteData?.root === root
-      ? `${Number(remoteData.prs?.length || 0)} open`
-      : 'unavailable';
-  const gitAction = "openFullSourcePanel(); setSourcePanelTab('git')";
-  const codingAction = root ? `openCodingWorkspace(${encodeInlineJsString(root)})` : gitAction;
+  const state = buildSourcePanelEnvironmentState({
+    context: sourcePanelState.codingContext,
+    loaded: sourcePanelState.gitLoaded,
+    loading: sourcePanelState.gitLoading,
+    error: sourcePanelState.gitError,
+    remoteData: sourcePanelState.gitRemoteData,
+    remoteLoading: sourcePanelState.gitRemoteLoading,
+    fallbackFiles: data.workspaceFiles,
+  });
+  if (!state.visible) return [];
+  const changes = state.changedCount
+    ? `${state.insertions ? `+${sourcePanelCountLabel(state.insertions)}` : '0'} ${state.deletions ? `-${sourcePanelCountLabel(state.deletions)}` : '0'}`
+    : state.changesValue;
+  const gitAction = state.repositoryReady ? "openFullSourcePanel(); setSourcePanelTab('git')" : '';
+  const codingAction = state.root ? `openCodingWorkspace(${encodeInlineJsString(state.root)})` : '';
   return [
-    { glyph: '⊞', label: 'Changes', value: changes, valueClass: changedCount ? 'is-negative' : 'is-positive' },
-    { glyph: '▱', label: 'Local', value: '', chevron: true, action: gitAction },
-    { glyph: '⑂', label: branch, value: aheadBehind, chevron: true, action: gitAction },
-    { glyph: '⇧', label: 'Commit or push', value: '', action: codingAction },
-    { glyph: '◉', label: 'Pull request status', value: pullRequestValue, valueClass: pullRequestValue === 'unavailable' ? 'is-muted' : '' },
-    { glyph: '↗', label: 'Compare branch', value: '', action: gitAction },
+    { glyph: '⊞', label: 'Changes', value: changes, valueClass: state.changedCount ? 'is-negative' : state.contextStatus === 'ready' ? 'is-positive' : 'is-muted' },
+    { glyph: '▱', label: 'Local', value: state.localValue, valueClass: state.repositoryStatus === 'dirty' ? 'is-negative' : state.repositoryStatus === 'clean' ? 'is-positive' : 'is-muted', chevron: Boolean(gitAction), action: gitAction },
+    { glyph: '⑂', label: state.branchLabel, value: state.branchValue, valueClass: state.contextStatus === 'ready' && state.repositoryReady ? '' : 'is-muted', chevron: Boolean(gitAction), action: gitAction },
+    { glyph: '⇧', label: 'Commit or push', value: state.repositoryReady ? '' : state.interactionValue, valueClass: state.repositoryReady ? '' : 'is-muted', action: codingAction },
+    { glyph: '◉', label: 'Pull request status', value: state.remoteValue, valueClass: ['unavailable', 'error', 'empty'].includes(state.remoteStatus) ? 'is-muted' : '' },
+    { glyph: '↗', label: 'Compare branch', value: state.repositoryReady ? '' : state.interactionValue, valueClass: state.repositoryReady ? '' : 'is-muted', action: gitAction },
   ];
 }
 
@@ -19930,18 +19923,9 @@ function sourcePanelEnvironmentRowMarkup(item, { mini = false } = {}) {
   </${tag}>`;
 }
 
-function sourcePanelHasFileActivity(data = {}) {
-  return Boolean(
-    (Array.isArray(data.workspaceFiles) && data.workspaceFiles.length)
-    || (Array.isArray(data.edits) && data.edits.length)
-    || (Array.isArray(data.inputs) && data.inputs.length)
-    || (Array.isArray(data.outputs) && data.outputs.length),
-  );
-}
-
 function renderSourcePanelEnvironment(data, { mini = false } = {}) {
-  if (!sourcePanelHasFileActivity(data)) return '';
   const rows = sourcePanelEnvironmentItems(data).map((item) => sourcePanelEnvironmentRowMarkup(item, { mini })).join('');
+  if (!rows) return '';
   return `<section class="source-panel-section source-panel-environment-section${mini ? ' source-panel-section--mini' : ''}">
     <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Environment</h3>${mini ? '<button class="source-panel-section-add" type="button" aria-label="Open environment" title="Open environment" onclick="openFullSourcePanel(); setSourcePanelTab(\'git\')">＋</button>' : ''}</div>
     <div class="source-panel-environment-card">${rows}</div>
@@ -20165,7 +20149,7 @@ function renderSourcePanelOverview(data) {
   const fileCount = Number(context.counts?.files || data.workspaceFiles.length || data.inputs.length + data.outputs.length + data.edits.length);
   const commitCount = repository && Number.isFinite(Number(repository.commitCount)) ? Number(repository.commitCount) : '—';
   const remoteData = sourcePanelState.gitRemoteData;
-  const prCount = remoteData && remoteData.root && remoteData.root === sourcePanelRemoteRoot()?.root ? Number(remoteData.prs?.length || 0) : '—';
+  const prCount = remoteData && remoteData.root && sourcePanelRootKey(remoteData.root) === sourcePanelRootKey(sourcePanelRemoteRoot()?.root) ? Number(remoteData.prs?.length || 0) : '—';
   return `<section class="source-panel-section source-panel-project-context">
     <h3 class="source-panel-section-title">Project context</h3>
     <p class="source-panel-project-name">${escHtml(projectName)}</p>
@@ -20285,9 +20269,10 @@ function sourcePanelInfoRow(glyph, label, value, action = '') {
 
 function sourcePanelRemoteReviewMarkup(root) {
   const remote = sourcePanelState.gitRemoteData;
-  if (!remote || String(remote.root || '') !== String(root || '')) return sourcePanelState.gitRemoteLoading ? '<section class="source-panel-section"><div class="source-panel-empty">Loading remote review data…</div></section>' : '';
+  if (!remote || sourcePanelRootKey(remote.root) !== sourcePanelRootKey(root)) return sourcePanelState.gitRemoteLoading ? '<section class="source-panel-section"><div class="source-panel-empty">Loading remote review data…</div></section>' : '';
   if (sourcePanelRemoteRoot()?.repository?.provider && sourcePanelRemoteRoot().repository.provider !== 'GitHub') return '<section class="source-panel-section"><h3 class="source-panel-section-title">Remote review</h3><div class="source-panel-empty">Remote review actions are currently available for GitHub-linked repositories.</div></section>';
   if (sourcePanelState.gitRemoteLoading) return '<section class="source-panel-section"><div class="source-panel-empty">Loading remote review data…</div></section>';
+  if (remote.error) return `<section class="source-panel-section"><h3 class="source-panel-section-title">Remote review</h3><div class="source-panel-empty">Remote review unavailable: ${escHtml(remote.error)}</div><button class="source-panel-link-button" type="button" onclick="refreshSourcePanel()">↻ Retry remote review</button></section>`;
   if (!remote.connected) return '<section class="source-panel-section"><h3 class="source-panel-section-title">Remote review</h3><div class="source-panel-empty">Connect GitHub to load pull requests and checks. Local Git stays available.</div></section>';
   const prs = Array.isArray(remote.prs) ? remote.prs : [];
   const checks = Array.isArray(remote.checks) ? remote.checks : [];
@@ -20297,6 +20282,12 @@ function sourcePanelRemoteReviewMarkup(root) {
 }
 
 function renderSourcePanelGit(data) {
+  if (sourcePanelState.gitLoading || !sourcePanelState.gitLoaded) {
+    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Environment</h3><div class="source-panel-empty">Loading workspace and Git status…</div></section>`;
+  }
+  if (sourcePanelState.gitError) {
+    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Environment unavailable</h3><div class="source-panel-empty">${escHtml(sourcePanelState.gitError)}</div><button class="source-panel-link-button" type="button" onclick="refreshSourcePanel()">↻ Retry workspace</button></section>`;
+  }
   const context = sourcePanelState.codingContext || {};
   const roots = Array.isArray(context.roots) ? context.roots : [];
   const repositories = roots.filter((item) => item?.repository?.vcs?.kind === 'git');
@@ -20308,8 +20299,15 @@ function renderSourcePanelGit(data) {
     const repoTitle = repository.repoFullName || repository.name || rootItem.label || 'Local repository';
     const files = Array.isArray(rootItem.files) ? rootItem.files : [];
     const dirtyCount = files.length;
+    const isDirty = Boolean(
+      dirtyCount
+      || repository.dirtyFiles?.length
+      || repository.stagedFiles
+      || repository.unstagedFiles
+      || repository.untrackedFiles,
+    );
     const aheadBehind = [Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '', Number(repository.behind) ? `↓${Number(repository.behind)}` : ''].filter(Boolean).join(' ');
-    const branch = repository.branch || repository.defaultBranch || 'main';
+    const branch = repository.branch || 'detached';
     const repoUrl = repository.htmlUrl || '';
     const activity = Array.isArray(repository.commits) ? repository.commits : [];
     return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3>
@@ -20317,7 +20315,7 @@ function renderSourcePanelGit(data) {
     </section>
     <section class="source-panel-section"><h3 class="source-panel-section-title">Status</h3><div class="source-panel-environment-card">
       ${sourcePanelGitEnvRow('⊞', 'Changed', dirtyCount, dirtyCount ? 'is-negative' : 'is-positive')}
-      ${sourcePanelGitEnvRow('▱', 'Worktree', repository.statusText ? 'Dirty' : 'Clean')}
+      ${sourcePanelGitEnvRow('▱', 'Worktree', isDirty ? 'Dirty' : 'Clean')}
       ${sourcePanelGitEnvRow('⑂', branch, aheadBehind || 'up to date', aheadBehind ? 'is-positive' : '')}
       ${sourcePanelGitEnvRow('⇧', 'Staged', files.filter((file) => file.staged).length)}
       ${sourcePanelGitEnvRow('＋', 'Untracked', files.filter((file) => file.untracked).length)}
@@ -20336,8 +20334,6 @@ function sourcePanelScopeMarkup() {
 
 function setSourcePanelScope(scope = 'thread') {
   sourcePanelState.scope = scope === 'project' ? 'project' : 'thread';
-  sourcePanelState.gitLoaded = false;
-  renderSourcePanel();
   loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId).catch(() => {});
 }
 
@@ -20524,10 +20520,14 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   sourcePanelState.gitScopeKey = scopeKey;
   sourcePanelState.git = null;
   sourcePanelState.codingContext = null;
+  sourcePanelState.gitLoading = true;
+  sourcePanelState.gitError = '';
   sourcePanelState.gitRemoteData = null;
   sourcePanelState.gitRemoteKey = '';
   sourcePanelState.gitRemoteLoading = false;
+  sourcePanelState.gitRemoteRequestToken += 1;
   sourcePanelState.gitLoaded = false;
+  renderSourcePanel();
   try {
     const params = new URLSearchParams({ sessionId: sid, scope: sourcePanelState.scope === 'project' ? 'project' : 'thread' });
     if (filePaths.length) params.set('paths', filePaths.map((value) => encodeURIComponent(value)).join('|'));
@@ -20537,33 +20537,40 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
     const primary = data?.roots?.[0];
     sourcePanelState.git = primary?.repository ? { root: primary.root, repository: primary.repository } : null;
     sourcePanelState.gitRoot = String(primary?.root || data?.root || '').trim();
-  } catch {
+  } catch (error) {
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.git = null;
     sourcePanelState.codingContext = null;
     sourcePanelState.gitRoot = '';
+    sourcePanelState.gitError = error?.message || 'Workspace context could not be loaded.';
   }
+  if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
   sourcePanelState.gitLoaded = true;
+  sourcePanelState.gitLoading = false;
   renderSourcePanel();
-  if (sourcePanelState.tab === 'git') loadSourcePanelRemoteData(sid).catch(() => {});
+  loadSourcePanelRemoteData(sid).catch(() => {});
 }
 
 async function loadSourcePanelRemoteData(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== sourcePanelState.activeSessionId || !sourcePanelState.gitLoaded) return;
+  const token = ++sourcePanelState.gitRemoteRequestToken;
   const rootItem = sourcePanelRemoteRoot();
   const repository = rootItem?.repository || {};
   const root = String(rootItem?.root || '').trim();
-  const key = [sourcePanelState.scope, root, repository.branch || ''].join('|');
+  const key = [sourcePanelState.scope, root, repository.branch || '', repository.repoFullName || ''].join('|');
   if (!root || !repository.remoteUrl || repository.provider !== 'GitHub') {
     sourcePanelState.gitRemoteData = { root, connected: false, prs: [], checks: [] };
     sourcePanelState.gitRemoteKey = key;
     sourcePanelState.gitRemoteLoading = false;
+    sourcePanelState.gitRemoteRequestToken = token;
     renderSourcePanel();
     return;
   }
   if (sourcePanelState.gitRemoteKey === key && sourcePanelState.gitRemoteData) return;
   sourcePanelState.gitRemoteLoading = true;
+  sourcePanelState.gitRemoteData = null;
+  sourcePanelState.gitRemoteKey = key;
   renderSourcePanel();
   try {
     const baseParams = new URLSearchParams({ root, sessionId: sid });
@@ -20572,7 +20579,7 @@ async function loadSourcePanelRemoteData(sessionId = sourcePanelState.activeSess
       api(`/api/coding/prs?${baseParams.toString()}`, { timeoutMs: 12000, dedupe: false }),
       api(`/api/coding/checks?${checkParams.toString()}`, { timeoutMs: 12000, dedupe: false }),
     ]);
-    if (sid !== sourcePanelState.activeSessionId) return;
+    if (token !== sourcePanelState.gitRemoteRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.gitRemoteData = {
       root,
       connected: prs?.connected === true || checks?.connected === true,
@@ -20582,11 +20589,11 @@ async function loadSourcePanelRemoteData(sessionId = sourcePanelState.activeSess
     };
     sourcePanelState.gitRemoteKey = key;
   } catch (error) {
-    if (sid !== sourcePanelState.activeSessionId) return;
+    if (token !== sourcePanelState.gitRemoteRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.gitRemoteData = { root, connected: false, prs: [], checks: [], error: error?.message || 'Remote review data unavailable.' };
     sourcePanelState.gitRemoteKey = key;
   } finally {
-    if (sid === sourcePanelState.activeSessionId) {
+    if (token === sourcePanelState.gitRemoteRequestToken && sid === sourcePanelState.activeSessionId) {
       sourcePanelState.gitRemoteLoading = false;
       renderSourcePanel();
     }
@@ -20610,9 +20617,12 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.gitRoot = '';
     sourcePanelState.gitScopeKey = '';
     sourcePanelState.gitLoaded = false;
+    sourcePanelState.gitLoading = false;
+    sourcePanelState.gitError = '';
     sourcePanelState.gitRemoteData = null;
     sourcePanelState.gitRemoteKey = '';
     sourcePanelState.gitRemoteLoading = false;
+    sourcePanelState.gitRemoteRequestToken += 1;
     sourcePanelState.processRuns = [];
     sourcePanelState.processSessionId = '';
     sourcePanelState.processLoaded = false;
@@ -43456,6 +43466,7 @@ function toggleRightPanel() {
     hideSourcesMinimizedPanel({ resetFilter: false });
     ensureSourcePanelContext(window.activeChatSessionId || window.agentSessionId);
     if (chatResourcesState.sessionId) loadChatResources({ sessionId: chatResourcesState.sessionId, background: true }).catch(() => {});
+    refreshSourcePanel();
   }
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
   syncHeaderCanvasChrome();
