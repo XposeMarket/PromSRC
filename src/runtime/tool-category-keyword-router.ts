@@ -189,21 +189,35 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
     && (action || /\b(?:request|run|task|job|work|thread|proposal|approval)\b/.test(text));
   if (recoveryIntent && !meaningQuestion) addAutomationAliases(categories, 'automation_recovery');
 
+  const conversationReference = /\b(?:other|another|previous|prior|old|that|this|our|my|full)\s+(?:prometheus\s+)?(?:chat|chats|conversation|conversations|thread|threads|session|sessions)\b/.test(text)
+    || /\b(?:chat|conversation|thread|session)\s+where\b/.test(text)
+    || /\b(?:our|the)\s+(?:discussion|conversation)\s+about\b/.test(text);
+  const sessionLookupAction = /\b(?:create|start|send|message|steer|interrupt|rename|pin|follow|find|read|inspect|continue|ask|look|check|show|go|pick up)\b/.test(text);
+  const sessionLookupIntent = conversationReference
+    && (action || sessionLookupAction || /\b(?:what did we talk|what happened|where did we leave off|find our|look through|go into|pick up|continue where we left off)\b/.test(text));
   const sessionIntent = /\b(?:prometheus|main chat|chat)\b/.test(text)
     && /\b(?:thread|session|conversation)\b/.test(text)
     && /\b(?:create|start|send|message|steer|interrupt|rename|pin|follow|find|read|inspect|continue|ask)\b/.test(text);
   const directSessionTool = /\b(?:prometheus_thread_ops|prometheus_request_ops|prometheus_audit_ops)\b/.test(text);
-  if ((sessionIntent || directSessionTool) && !meaningQuestion) addAutomationAliases(categories, 'automation_sessions');
+  if ((sessionIntent || sessionLookupIntent || directSessionTool)
+    && (!meaningQuestion || sessionLookupIntent)) addAutomationAliases(categories, 'automation_sessions');
 
   if (/\b(?:diagnostic packet|system diagnostics|runtime diagnostics|gateway restart|restart prometheus|restart the gateway|runtime admin|diagnostic_packet|system_diagnostics|gateway_restart)\b/.test(text)
     && !meaningQuestion) add(categories, 'runtime_admin');
 
-  const serviceName = /\b(?:gmail|google drive|github|slack|notion|hubspot|salesforce|stripe|vercel|airtable|outlook|calendar|supabase|reddit|x\.com|twitter)\b/.test(text);
-  const connectionAction = /\b(?:connect|configure|authorize|authenticate|oauth|webhook|integration|integrate|setup|set up|add service|install connector)\b/.test(text);
-  if ((connectionAction && (serviceName || /\b(?:mcp|connector|service|api|webhook)\b/.test(text))) && !meaningQuestion) add(categories, 'integration_admin');
-  const externalAction = /\b(?:search|read|list|send|post|publish|update|create|delete|inspect|use|check)\b/.test(text);
-  if ((serviceName || /\b(?:connected app|connected apps|external app|external apps|connector_list|list connectors)\b/.test(text))
-    && externalAction && !connectionAction && !meaningQuestion) add(categories, 'external_apps');
+  const serviceName = /\b(?:gmail|google drive|github|slack|notion|hubspot|salesforce|stripe|vercel|airtable|outlook|calendar|supabase|reddit|x\.com|twitter|apple messages|messages app|mac messages|imessage)\b/.test(text);
+  const connectorReference = /\b(?:connected app|connected apps|connected account|connected service|external app|external apps|connector|plugin|connector_list|list connectors)\b/.test(text);
+  const connectionAction = /\b(?:connect|configure|authorize|authenticate|oauth|webhook|integration|integrate|setup|set up|add service|install (?:the )?(?:connector|plugin))\b/.test(text);
+  if ((connectionAction && (serviceName || /\b(?:mcp|connector|plugin|service|api|webhook)\b/.test(text))) && !meaningQuestion) add(categories, 'integration_admin');
+  const externalAction = /\b(?:search|read|list|send|post|publish|update|create|delete|inspect|use|check|find|show|open|review|query|comment|merge|archive)\b/.test(text);
+  const externalResourceReference = /\b(?:my|the|this|that)\s+(?:inbox|email|emails|calendar|calendar event|deployment|deployments|issue|issues|commit|commits|pr|pull request)\b/.test(text);
+  const sessionTopicLookup = /\b(?:chat|conversation|thread|session|discussion)\s+(?:where|about|regarding|on)\b/.test(text)
+    || /\b(?:our|the)\s+discussion\s+about\b/.test(text);
+  const bareExternalReference = /^(?:my|our|the|this|that)\s+(?:github|gmail|google drive|slack|notion|hubspot|salesforce|stripe|vercel|airtable|outlook|calendar|supabase|reddit|x\.com|twitter|apple messages|messages app|mac messages|imessage|inbox|pr|pull request)\s*[?!.]?$/.test(text);
+  const sessionLookupWithoutExternalTarget = sessionLookupIntent && sessionTopicLookup && !externalResourceReference;
+  if ((serviceName || connectorReference || externalResourceReference)
+    && (externalAction || bareExternalReference)
+    && !connectionAction && !meaningQuestion && !sessionLookupWithoutExternalTarget) add(categories, 'external_apps');
 
   const mcpDynamic = /(?:\bmcp__|\b(?:mcp tool|connected mcp tool|call an mcp|list mcp tools|mcp server tool|mcp_server_tools|mcp_server_manage)\b)/.test(text);
   if (mcpDynamic && !/\b(?:connect|configure|authorize|setup|set up)\b/.test(text)) add(categories, 'mcp_server_tools');
