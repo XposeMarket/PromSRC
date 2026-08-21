@@ -1887,7 +1887,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 0;
   min-width: 0;
-  color: rgba(34,26,20,.68);
+  color: #fff !important;
   font-size: 10px; font-weight: 800;
   cursor: pointer;
   padding: 4px 2px;
@@ -1910,7 +1910,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pm-tab.active { color: rgba(34,26,20,.68); }
+.pm-tab.active { color: #fff !important; }
 /* The real magnify is now the spatial lens layer (.pm-tab-magnify), which
    enlarges only the icon pixels physically under the glass. Keep just a gentle
    resting lift on the selected icon so it reads as "raised", and DON'T binary
@@ -2026,8 +2026,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-shadow: 0 1px 2px rgba(0,0,0,.5);
 }
 
-:root[data-theme="dark"] .pm-tab { color: rgba(242,238,231,.66); text-shadow: 0 1px 2px rgba(0,0,0,.34); }
-:root[data-theme="dark"] .pm-tab.active { color: rgba(242,238,231,.66); }
+:root[data-theme="dark"] .pm-tab { color: #fff !important; text-shadow: 0 1px 2px rgba(0,0,0,.34); }
+:root[data-theme="dark"] .pm-tab.active { color: #fff !important; }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .pm-tabbar {
@@ -18030,6 +18030,21 @@ body.pm-mobile-active .pm-ctx-popover {
   border-color: transparent !important;
   box-shadow: none !important;
 }
+
+/* Keep project cards prominent while giving regular chat session titles a lighter hierarchy. */
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+
 
 /* The drawer search is an icon-only control until the user asks for it. */
 body.pm-mobile-active .pm-drawer-search-toggle,
