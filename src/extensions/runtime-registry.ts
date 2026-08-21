@@ -270,6 +270,17 @@ export class PrometheusExtensionRuntimeRegistry {
     return this.connectors.get(id);
   }
 
+  isConnectorAvailable(id: string): boolean {
+    const connector = this.connectors.get(id);
+    if (!connector || !this.isConnectorConnected(id)) return false;
+    const toolNames = connector.toolNames?.length
+      ? connector.toolNames
+      : this.listTools()
+        .filter((tool) => this.connectorIdForTool(tool) === id)
+        .map((tool) => tool.name);
+    return toolNames.length === 0 || toolNames.some((name) => this.isToolAvailable(name));
+  }
+
   async executeTool(name: string, args: any): Promise<PrometheusToolExecutionResult> {
     const tool = this.tools.get(name);
     if (!tool) {

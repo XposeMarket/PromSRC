@@ -59,9 +59,11 @@ implicitRegistry.registerTool('manifest-extension', {
 });
 assert.equal(implicitRegistry.listConnectedConnectorToolDefinitions().length, 0, 'manifest-owned tools must honor connector status without connectorId');
 assert.equal(implicitRegistry.isToolAvailable('manifest_list_records'), false, 'execution must honor manifest-owned connector status without connectorId');
+assert.equal(implicitRegistry.isConnectorAvailable('manifest-connector'), false, 'connector availability must include the live connection state');
 implicitConnected = true;
 implicitRegistry.invalidateConnectorState('manifest-connector');
 assert.equal(implicitRegistry.listConnectedConnectorToolDefinitions().length, 1, 'manifest-owned tools should appear once the connector is connected');
 assert.equal(implicitRegistry.isToolAvailable('manifest_list_records'), true, 'execution should allow manifest-owned tools once connected');
+assert.equal(implicitRegistry.isConnectorAvailable('manifest-connector'), true);
 
 console.log('extension runtime registry performance regression passed');
