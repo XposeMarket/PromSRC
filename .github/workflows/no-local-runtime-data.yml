@@ -1,0 +1,22 @@
+name: No local runtime data
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  local-data-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject tracked Prometheus local data
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden='^(workspace/|\.prometheus/|\.localclaw/(sessions|logs|memory|tasks|jobs|ocr-cache|heartbeat|cron/runs)/)'
+          if git ls-files | grep -E "$forbidden"; then
+            echo "::error::Prometheus user/runtime data is tracked by Git. Keep source and machine-local state separate."
+            exit 1
+          fi
+          echo "No tracked Prometheus local runtime data found."
