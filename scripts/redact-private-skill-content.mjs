@@ -37,19 +37,25 @@ const textExtensions = new Set([
   '.md', '.markdown', '.txt', '.json', '.jsonl', '.yaml', '.yml', '.js', '.mjs', '.ts', '.tsx', '.py', '.ps1', '.sh',
 ]);
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const replacements = [
-  [/Frederick Roof Repair/g, 'the client organization'],
-  [/Xpose Market/g, 'the organization'],
-  [/XposeMarket/g, 'the organization'],
-  [/Raul(?:'s|’s)/g, "the user's"],
-  [/\bRaul\b/g, 'the user'],
-  [/desktop_send_to_telegram/g, 'desktop_delivery_tool'],
-  [/browser_send_to_telegram/g, 'browser_delivery_tool'],
-  [/\bTelegram\b/gi, 'the configured messaging channel'],
-  [/D:\\Prometheus/gi, '<prometheus-workspace>'],
-  [/\/d\/Prometheus/gi, '<prometheus-workspace>'],
-  [/C:\\Users\\rafel/gi, '<user-home>'],
+  [/[A-Za-z]:\\Users\\[^\\/\r\n]+/gi, '<user-home>'],
+  [/\/Users\/[^/\s]+/g, '<user-home>'],
+  [/\/home\/[^/\s]+/g, '<user-home>'],
+  [/[A-Za-z]:\\Prometheus/gi, '<prometheus-workspace>'],
+  [/\/[A-Za-z]\/Prometheus/gi, '<prometheus-workspace>'],
 ];
+
+const privateMarkers = (process.env.PROM_REPO_PRIVATE_MARKERS || '')
+  .split(/[,\n]/)
+  .map((value) => value.trim())
+  .filter(Boolean);
+for (const marker of privateMarkers) {
+  replacements.push([new RegExp(escapeRegExp(marker), 'gi'), '<private-marker>']);
+}
 
 function walk(dir) {
   const output = [];

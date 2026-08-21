@@ -15,7 +15,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-supervisor-restart-'));
 try {
   assert.equal(requiresSupervisorRestartForFiles(['src/gateway/lifecycle.ts']), false);
   assert.equal(requiresSupervisorRestartForFiles(['src/cli/index.ts']), true);
-  assert.equal(requiresSupervisorRestartForFiles(['C:\\Users\\rafel\\PromSRC\\src\\cli\\gateway-supervisor-policy.ts']), true);
+  assert.equal(requiresSupervisorRestartForFiles(['C:\\Users\\example-user\\PromSRC\\src\\cli\\gateway-supervisor-policy.ts']), true);
   assert.equal(requiresSupervisorRestartForFiles(['src/runtime/supervisor-restart-request.ts']), true);
   assert.equal(requiresSupervisorRestartForFiles(['bin/prometheus.js']), true);
   assert.equal(resolveGatewayRestartScope({ affectedFiles: ['src/gateway/lifecycle.ts'] }), 'gateway');
