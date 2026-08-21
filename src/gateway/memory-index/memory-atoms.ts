@@ -374,12 +374,18 @@ function scoreAtom(
   const weightedQuery = queryTerms.reduce((sum, term) => sum + termWeight(term, documentFrequency, totalAtoms), 0);
   const weightedMatched = matchedTerms.reduce((sum, term) => sum + termWeight(term, documentFrequency, totalAtoms), 0);
   const lexical = weightedQuery ? weightedMatched / weightedQuery : 0;
+  const queryConceptTerms = queryTerms.filter(isConceptTerm);
+  const matchedConceptTerms = matchedTerms.filter(isConceptTerm);
+  const semanticBridge = queryConceptTerms.length > 0 && matchedConceptTerms.length >= 2
+    ? matchedConceptTerms.length / queryConceptTerms.length
+    : 0;
   const entityMatches = atom.entities.filter((entity) => contextTerms.has(stem(entity))).length;
   const exactPhrase = normalizeText(atom.rawText).includes(normalizeText(queryText)) && normalizeText(queryText).length >= 12;
   const sectionMatch = tokenize(atom.sourceSection).some((term) => contextTerms.has(term));
   const score = Math.min(
     1,
     lexical * 0.72
+      + semanticBridge * 0.18
       + Math.min(0.18, entityMatches * 0.09)
       + (exactPhrase ? 0.16 : 0)
       + (sectionMatch ? 0.04 : 0),
