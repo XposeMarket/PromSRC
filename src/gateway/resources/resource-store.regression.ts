@@ -26,6 +26,7 @@ try {
   assert.equal(first.created, true);
   assert.equal(first.versionCreated, true);
   assert.ok(first.resource.id.startsWith('res_'));
+  assert.equal(store.listThreadResources('thread_a')[0]?.threadId, 'thread_a');
 
   const same = store.attach({
     threadId: 'thread_a',
@@ -68,6 +69,7 @@ try {
   store.copyThreadResources('thread_a', 'thread_b', { inheritedBy: 'fork', actor: 'test' });
   assert.equal(store.listThreadResources('thread_b').length, 1);
   assert.equal(store.listThreadResources('thread_b')[0]?.id, first.resource.id);
+  assert.equal(store.listThreadResources('thread_b')[0]?.threadId, 'thread_b');
 
   store.detach('thread_a', first.resource.id, 'test');
   assert.equal(store.listThreadResources('thread_a').length, 0);

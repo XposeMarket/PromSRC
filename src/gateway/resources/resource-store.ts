@@ -126,6 +126,7 @@ interface ResourceState {
 
 export interface ResourceSummary {
   id: string;
+  threadId?: string;
   kind: ResourceKind;
   title: string;
   mimeType?: string;
@@ -1228,6 +1229,7 @@ export class ResourceStore {
   private toSummary(resource: ResourceRecord, version?: ResourceVersion, link?: ThreadResourceLink, state?: ResourceState): ResourceSummary {
     return {
       id: resource.id,
+      threadId: link?.threadId,
       kind: resource.kind,
       title: redactResourceText(resource.title),
       mimeType: resource.mimeType,

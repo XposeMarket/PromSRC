@@ -17,6 +17,11 @@ import {
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v266-2026-08-11-new-project-popover';
 import { formatModelWithReasoning } from '../model-display.js';
 import {
+  SOURCE_PANEL_SURFACE,
+  sourcePanelResourceBelongsToContext,
+  subagentChatSessionId,
+} from '../source-panel-context.js';
+import {
   backgroundAgentAgeLabel,
   backgroundAgentPreview,
   backgroundAgentWorkForSession,
@@ -350,7 +355,6 @@ function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
   return detail;
 }
 
-const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
 
 function _mobileSubagentModelParts(agent = {}) {
@@ -9484,6 +9488,7 @@ const mobileSourceState = {
   history: false,
   resources: [],
   loading: false,
+  requestToken: 0,
 };
 
 function _mobileSourceLocator(resource) {
@@ -9497,13 +9502,16 @@ function _renderMobileSourceList(root = document) {
   const mode = root?.querySelector?.('#pm-mobile-sources-mode');
   if (!list) return;
   const resources = Array.isArray(mobileSourceState.resources) ? mobileSourceState.resources : [];
-  const linkedWork = !mobileSourceState.history
+  const isSubagentChat = String(mobileSourceState.sessionId || '').startsWith('subagent_chat_');
+  const linkedWork = !mobileSourceState.history && !isSubagentChat
     ? backgroundAgentWorkForSession(mobileSourceState.sessionId || __pmChat.activeSessionId)
     : [];
   if (count) count.textContent = resources.length ? String(resources.length) : '';
-  if (mode) mode.textContent = mobileSourceState.history ? 'Browser history' : 'Attached to this chat';
+  if (mode) mode.textContent = mobileSourceState.history
+    ? 'Browser history'
+    : (isSubagentChat ? 'Subagent chat sources' : 'Attached to this chat');
   if (!resources.length && !linkedWork.length) {
-    list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">${mobileSourceState.history ? 'No Browser history yet.' : 'No Sources attached yet.'}</div>`;
+    list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">${mobileSourceState.history ? 'No Browser history yet.' : (isSubagentChat ? 'No sources from this subagent yet.' : 'No Sources attached yet.')}</div>`;
     return;
   }
   const workMarkup = linkedWork.length
@@ -9531,23 +9539,46 @@ function _renderMobileSourceList(root = document) {
 async function _loadMobileSources(root = document, options = {}) {
   const sid = String(options.sessionId || __pmChat.activeSessionId || '').trim();
   if (!sid) return;
+  const history = options.history === true;
+  const requestToken = ++mobileSourceState.requestToken;
+  if (mobileSourceState.sessionId !== sid || mobileSourceState.history !== history) {
+    mobileSourceState.resources = [];
+  }
   mobileSourceState.sessionId = sid;
-  mobileSourceState.history = options.history === true;
+  mobileSourceState.history = history;
   mobileSourceState.loading = true;
   const list = root?.querySelector?.('#pm-mobile-sources-list');
   if (list && !mobileSourceState.resources.length) list.innerHTML = '<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">Loading Sources…</div>';
   try {
-    const data = mobileSourceState.history
+    const data = history
       ? await loadMobileBrowserHistory(options.query || '', sid)
       : await loadMobileChatResources(sid, options.query || '');
-    mobileSourceState.resources = Array.isArray(data?.resources) ? data.resources : [];
+    if (requestToken !== mobileSourceState.requestToken
+      || mobileSourceState.sessionId !== sid
+      || mobileSourceState.history !== history) return;
+    mobileSourceState.resources = (Array.isArray(data?.resources) ? data.resources : [])
+      .filter((resource) => sourcePanelResourceBelongsToContext(resource, {
+        surface: SOURCE_PANEL_SURFACE.MAIN_CHAT,
+        sessionId: sid,
+      }));
     _renderMobileSourceList(root);
   } catch (error) {
+    if (requestToken !== mobileSourceState.requestToken
+      || mobileSourceState.sessionId !== sid
+      || mobileSourceState.history !== history) return;
     mobileSourceState.resources = [];
     if (list) list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">Sources unavailable: ${escapeHtml(error?.message || 'request failed')}</div>`;
   } finally {
-    mobileSourceState.loading = false;
+    if (requestToken === mobileSourceState.requestToken) mobileSourceState.loading = false;
   }
+}
+
+function _refreshMobileSourcesForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || mobileSourceState.history || mobileSourceState.sessionId !== sid) return;
+  const popover = document.getElementById('pm-mobile-sources-popover');
+  if (!popover || popover.hidden) return;
+  _loadMobileSources(popover.closest('.pm-page') || document, { sessionId: sid, history: false }).catch(() => {});
 }
 
 function _closeMobileSources(root = document) {
@@ -9561,7 +9592,10 @@ function _openMobileSources(root = document, options = {}) {
   const popover = root?.querySelector?.('#pm-mobile-sources-popover');
   if (!popover) return;
   popover.hidden = false;
-  _loadMobileSources(root, { sessionId: __pmChat.activeSessionId, history: options.history === true });
+  _loadMobileSources(root, {
+    sessionId: options.sessionId || __pmChat.activeSessionId,
+    history: options.history === true,
+  });
 }
 
 function _scrollChat(bodyEl) {
@@ -10044,7 +10078,7 @@ function _pmRefreshSlashChrome(page, input) {
   if (!pmActiveSlashCommand) {
     chip.hidden = true;
     chip.querySelector('.pm-command-chip-token').textContent = '';
-    input.placeholder = 'Type a message...';
+    input.placeholder = window.__pmMobileComposerPlaceholder || 'Type a message...';
     return;
   }
   chip.hidden = false;
@@ -10645,6 +10679,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     bindMobileSessionTarget(requestedSession, gatewayTarget.gatewayId, { started: true });
   }
   setMobileActiveGatewayTarget(gatewayTarget);
+  try {
+    window.__pmMobileComposerPlaceholder = requestedSession === MOBILE_CHAT_SESSION_ID
+      ? 'Send Prometheus a message'
+      : `Work on ${gatewayTarget?.name || 'this computer'}`;
+  } catch {}
   try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
   // A gateway paired before direct execution was enabled can still have a
   // cached read-only descriptor in localStorage. Refresh remote capability
@@ -10835,7 +10874,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
         <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
           <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.monitor}</span>
-          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong><small>Connected computer</small></span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong></span>
           <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
         </button>
         <button type="button" class="pm-new-chat-context-row" id="pm-new-chat-project" aria-label="Current directed chat" aria-expanded="false">
@@ -10874,7 +10913,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
-          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
@@ -35209,8 +35248,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+            <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
     <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
   `;
@@ -36280,6 +36318,10 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       if (!activeText) return false;
       message._progress = activeText.slice(0, 140);
       return true;
+    }
+    case 'resources_changed': {
+      _refreshMobileSourcesForSession(evt.sessionId || evt.sourceSessionId || '');
+      return false;
     }
     case 'coding_context_packet': {
       const status = String(evt.status || 'omitted');
@@ -40678,8 +40720,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <div class="pm-header-actions">
+            <div class="pm-header-actions">
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>
     </header>
@@ -40866,7 +40907,7 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   // document scroller, so opt out before the async history renders.
   document.body.classList.add('pm-mobile-subagent-chat-locked');
   setMobileSubagentReasoningContext(null);
-  const sessionId = `subagent_chat_${agentId}`;
+  const sessionId = subagentChatSessionId(agentId);
   let agentRef = null;
   const header = renderMobileHeader({
     title: 'Subagent',
@@ -40874,11 +40915,19 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
     leftIcon: 'back',
     hideTitle: true,
     hideBrand: true,
+    rightActions: `<button type="button" class="pm-icon-btn" id="pm-subagent-sources-button" aria-label="Sources">${ICONS.layers}</button>`,
   });
   page.innerHTML = `
     ${header}
     ${renderMobileContextChip()}
     <div class="pm-body pm-subagent-chat-body" id="pm-subagent-chat-body"><div class="pm-card" style="text-align:center;padding:24px;color:var(--pm-muted);">Loading chat…</div></div>
+    <div id="pm-mobile-sources-popover" class="pm-mobile-sources-popover" hidden role="dialog" aria-modal="true" aria-label="Subagent chat sources">
+      <button type="button" id="pm-mobile-sources-scrim" class="pm-mobile-sources-popover-scrim" aria-label="Close Sources"></button>
+      <section class="pm-mobile-sources-panel">
+        <div class="pm-mobile-sources-header"><div><strong>Sources <span id="pm-mobile-sources-count"></span></strong><div id="pm-mobile-sources-mode">Subagent chat sources</div></div><button type="button" id="pm-mobile-sources-close" class="pm-mobile-sources-close" aria-label="Close Sources">×</button></div>
+        <div id="pm-mobile-sources-list" class="pm-mobile-sources-list"><div class="pm-mobile-sources-empty">Sources produced by this subagent appear here.</div></div>
+      </section>
+    </div>
   `;
   // Seed the shared model-badge slot with Name/Model Effort for this subagent.
   // Main chat keeps using refreshMobileModelBadge; subagent chat owns this label.
@@ -40891,6 +40940,21 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
     badgeBtn.title = 'Subagent model';
   }
   wireHeaderActions(page, { onBack: () => navigate?.(`#mobile/subagents/${encodeURIComponent(agentId)}`) });
+  page.querySelector('#pm-subagent-sources-button')?.addEventListener('click', () => {
+    _openMobileSources(page, { sessionId });
+  });
+  page.querySelector('#pm-mobile-sources-close')?.addEventListener('click', () => _closeMobileSources(page));
+  page.querySelector('#pm-mobile-sources-scrim')?.addEventListener('click', () => _closeMobileSources(page));
+  page.querySelector('#pm-mobile-sources-list')?.addEventListener('click', async (event) => {
+    const detachButton = event.target?.closest?.('[data-mobile-source-detach]');
+    if (!detachButton) return;
+    try {
+      await detachMobileResource(sessionId, detachButton.getAttribute('data-mobile-source-detach') || '');
+      await _loadMobileSources(page, { sessionId, history: false });
+    } catch (error) {
+      pmToast(error?.message || 'Source operation failed', 'error');
+    }
+  });
   wireMobileContextWindow(page, {
     getSessionId: () => sessionId,
     getProvider: () => _mobileSubagentModelParts(agentRef || {}).provider,
@@ -41404,6 +41468,7 @@ async function _renderSubagentHeartbeatTab(slot, agentId) {
 }
 
 async function _renderSubagentChatTab(slot, agent, attachStream) {
+  const agentSessionId = subagentChatSessionId(agent.id);
   slot.innerHTML = `
     <div class="pm-sa-chat-shell" id="pm-sa-chat-card">
       <div class="pm-sa-chat-scrollport">
@@ -41443,7 +41508,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     const approval = _normalizeMobileApproval(approvalInput);
     const sid = String(approval.sessionId || approval.sourceSessionId || '').trim();
     return !!approval.id && (
-      sid === `subagent_chat_${agent.id}`
+      sid === agentSessionId
       || String(approval.agentId || '').trim() === String(agent.id)
     );
   };
