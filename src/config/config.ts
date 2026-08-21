@@ -1,967 +1,198 @@
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import { AgentDefinition, PrometheusConfig } from '../types.js';
-import { getVault, scrubSecrets } from '../security/vault.js';
+import type { AgentDefinition, PrometheusConfig } from '../types.js';
+import { getVault } from '../security/vault.js';
 import { getConfigErrors } from './config-schema.js';
 import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
 import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
 import { seedLegacyMainChatRoute } from './main-chat-route.js';
-import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from './gateway-port.js';
+import { getPrometheusLayout, standaloneSubagentWorkspace } from '../runtime/storage-layout.js';
 
-function migrateLegacyDir(legacyDir: string, targetDir: string): void {
-  try {
-    if (!fs.existsSync(legacyDir)) return;
-    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-    const marker = path.join(targetDir, '.migrated-from-localclaw');
-    if (fs.existsSync(marker)) return;
-
-    // One-time migration: preserve existing users by carrying over all legacy data,
-    // including config, credentials, skills, logs, and state files.
-    fs.cpSync(legacyDir, targetDir, { recursive: true, force: true });
-    fs.writeFileSync(marker, new Date().toISOString(), 'utf-8');
-    console.log(`[Config] Migrated legacy data: ${legacyDir} -> ${targetDir}`);
-  } catch (err: any) {
-    console.warn(`[Config] Legacy migration failed (${legacyDir} -> ${targetDir}): ${String(err?.message || err)}`);
-  }
-}
-
-function migrateLegacyData(): void {
-  const projectLegacy = path.join(__dirname, '..', '..', '.localclaw');
-  const projectTarget = path.join(__dirname, '..', '..', '.prometheus');
-  const homeLegacy = path.join(os.homedir(), '.localclaw');
-  const homeTarget = path.join(os.homedir(), '.prometheus');
-
-  if (process.env.PROMETHEUS_DATA_DIR) {
-    const dataRoot = process.env.PROMETHEUS_DATA_DIR;
-    migrateLegacyDir(path.join(dataRoot, '.localclaw'), path.join(dataRoot, '.prometheus'));
-    return;
-  }
-
-  // Prefer project-local migration when this repo has (or previously had)
-  // project-scoped state; otherwise migrate home-scoped state.
-  const hasProjectScopedState = fs.existsSync(projectLegacy) || fs.existsSync(projectTarget) ||
-    false;
-  if (hasProjectScopedState) {
-    migrateLegacyDir(projectLegacy, projectTarget);
-    return;
-  }
-
-  migrateLegacyDir(homeLegacy, homeTarget);
-}
-
-migrateLegacyData();
-
-// ── Config & workspace directory resolution ──────────────────────────────────
-// Priority:
-//   1. PROMETHEUS_DATA_DIR env var  (set by Docker / CI)
-//   2. .prometheus/ next to the project root
-//   3. ~/.prometheus in the user's home directory
-// The gateway port additionally accepts the per-process
-// PROMETHEUS_GATEWAY_PORT override, which wins over config.json.
-const PROJECT_CONFIG_NEW = path.join(__dirname, '..', '..', '.prometheus');
-const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
-const HOME_CONFIG    = path.join(os.homedir(), '.prometheus');
-const CONFIG_DIR =
-  process.env.PROMETHEUS_DATA_DIR
-    ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
-    : fs.existsSync(PROJECT_CONFIG_NEW)
-      ? PROJECT_CONFIG_NEW
-      : HOME_CONFIG;
-
-// Exposed as a plain const so early importers (e.g. the extension loader, which
-// runs while config.ts is still mid-initialization) can resolve the data dir
-// without depending on the ConfigManager singleton being constructed yet.
-export function getResolvedConfigDir(): string {
-  return CONFIG_DIR;
-}
-
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-
-// Workspace: env var → config-dir-relative default (cross-platform safe)
-const WORKSPACE_DIR =
-  process.env.PROMETHEUS_WORKSPACE_DIR ??
-  path.join(CONFIG_DIR, '..', 'workspace');
-
-export const DEFAULT_CONFIG: PrometheusConfig = {
-  version: '1.0.2',
-  gateway: {
-    port: getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
-    // Mobile pairing is a LAN feature. Bind the gateway to IPv4 interfaces by
-    // default so a phone on the same Wi-Fi can reach the origin in the QR.
-    // Gateway auth and paired-device tokens still protect API access.
-    host: process.env.GATEWAY_HOST ?? '0.0.0.0',
-    https: {
-      enabled: process.env.GATEWAY_HTTPS_ENABLED === '1' || process.env.GATEWAY_HTTPS_ENABLED === 'true',
-      port: process.env.GATEWAY_HTTPS_PORT ? parseInt(process.env.GATEWAY_HTTPS_PORT, 10) : 18790,
-      pfxPath: process.env.GATEWAY_HTTPS_PFX_PATH,
-      passphrase: process.env.GATEWAY_HTTPS_PFX_PASSPHRASE,
-      keyPath: process.env.GATEWAY_HTTPS_KEY_PATH,
-      certPath: process.env.GATEWAY_HTTPS_CERT_PATH,
-    },
-    auth: {
-      enabled: true,
-      token: undefined
-    },
-    remoteAccess: {
-      enabled: false,
-      mode: 'tailscale-funnel' as const,
-      publicUrl: '',
-    }
-  },
-  ollama: {
-    endpoint: process.env.OLLAMA_HOST ?? 'http://localhost:11434',
-    timeout: 120,
-    concurrency: {
-      llm_workers: 1,
-      tool_workers: 3
-    }
-  },
-  // ── Provider config – built from env vars so Docker works out of the box.
-  // Any values in config.json will override these at load time.
-  llm: {
-    provider: (process.env.PROMETHEUS_PROVIDER as any) ?? 'ollama',
-    providers: {
-      ollama: {
-        endpoint: process.env.OLLAMA_HOST ?? 'http://localhost:11434',
-        model:    'qwen3:4b',
-      },
-      lm_studio: {
-        endpoint: process.env.LM_STUDIO_ENDPOINT ?? 'http://localhost:1234',
-        model:    process.env.LM_STUDIO_MODEL    ?? '',
-        api_key:  process.env.LM_STUDIO_API_KEY  ?? undefined,
-      },
-      llama_cpp: {
-        endpoint: process.env.LLAMA_CPP_ENDPOINT ?? 'http://localhost:8080',
-        model:    process.env.LLAMA_CPP_MODEL    ?? '',
-      },
-      openai: {
-        // Supports inline value OR env: reference
-        api_key: process.env.OPENAI_API_KEY ? `env:OPENAI_API_KEY` : '',
-        model:   process.env.OPENAI_MODEL   ?? 'gpt-5.5',
-      },
-      openai_codex: {
-        model: process.env.CODEX_MODEL ?? 'gpt-5.5',
-        reasoning_effort: process.env.CODEX_REASONING_EFFORT ?? 'low',
-      },
-      xai: {
-        api_key: process.env.XAI_API_KEY ? `env:XAI_API_KEY` : '',
-        endpoint: process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
-        model: process.env.XAI_MODEL ?? 'grok-4.3',
-      },
-    },
-  } as any,
-  models: {
-    primary: 'qwen3:4b',
-    roles: {
-      manager: 'qwen3:4b',
-      executor: 'qwen3:4b',
-      verifier: 'qwen3:4b'
-    }
-  },
-  image_generation: {
-    provider: process.env.PROMETHEUS_IMAGE_PROVIDER ?? 'auto',
-    model: process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
-    save_to_workspace: process.env.PROMETHEUS_IMAGE_SAVE_TO_WORKSPACE !== '0',
-    default_output_dir: process.env.PROMETHEUS_IMAGE_OUTPUT_DIR ?? 'generated/images',
-    providers: {
-      openai: {
-        model: process.env.OPENAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
-      },
-      openai_codex: {
-        model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
-      },
-      xai: {
-        model: process.env.XAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'grok-imagine-image-quality',
-        endpoint: process.env.XAI_IMAGE_ENDPOINT ?? process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
-        resolution: process.env.XAI_IMAGE_RESOLUTION ?? '1k',
-      },
-    },
-  },
-  video_generation: {
-    provider: process.env.PROMETHEUS_VIDEO_PROVIDER ?? 'auto',
-    model: process.env.PROMETHEUS_VIDEO_MODEL ?? process.env.XAI_VIDEO_MODEL ?? 'grok-imagine-video',
-    save_to_workspace: process.env.PROMETHEUS_VIDEO_SAVE_TO_WORKSPACE !== '0',
-    default_output_dir: process.env.PROMETHEUS_VIDEO_OUTPUT_DIR ?? 'generated/videos',
-    duration: process.env.PROMETHEUS_VIDEO_DURATION ? Number(process.env.PROMETHEUS_VIDEO_DURATION) : 6,
-    resolution: process.env.PROMETHEUS_VIDEO_RESOLUTION ?? '480p',
-    providers: {
-      xai: {
-        model: process.env.XAI_VIDEO_MODEL ?? process.env.PROMETHEUS_VIDEO_MODEL ?? 'grok-imagine-video',
-        endpoint: process.env.XAI_VIDEO_ENDPOINT ?? process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
-        resolution: process.env.XAI_VIDEO_RESOLUTION ?? process.env.PROMETHEUS_VIDEO_RESOLUTION ?? '480p',
-        duration: process.env.XAI_VIDEO_DURATION ? Number(process.env.XAI_VIDEO_DURATION) : undefined,
-      },
-    },
-  },
-  tools: {
-    enabled: ['shell', 'read', 'write', 'edit', 'search'],
-    // Native Prometheus workspace/file tools are the safe default. The
-    // Security settings toggle can switch model-facing file work to terminal
-    // commands without changing terminal permissions or path boundaries.
-    workspace_mode: 'prometheus',
-    permissions: {
-      shell: {
-        workspace_only: true,
-        confirm_destructive: true,
-        blocked_patterns: [
-          'rm -rf /',
-          'del C:\\Windows',
-          'format',
-          'diskpart',
-          'bcdedit',
-          'cipher /w',
-          'vssadmin delete shadows',
-          'wmic shadowcopy delete',
-          'shutdown',
-          'restart-computer',
-          'stop-computer',
-          'logoff',
-          'runas',
-          'start-process -verb runas',
-          'set-mppreference -disablerealtimemonitoring',
-          'netsh advfirewall set allprofiles state off',
-          'reg delete hklm',
-          'reg delete hkcr',
-          'reg delete hku',
-        ],
-        allowed_windows_read_commands: [
-          'ipconfig',
-          'ping',
-          'tracert',
-          'nslookup',
-          'netstat',
-          'tasklist',
-          'systeminfo',
-          'driverquery',
-          'get-process',
-          'get-service',
-          'get-computerinfo',
-          'get-ciminstance',
-          'get-winevent',
-          'get-eventlog',
-          'test-netconnection',
-          'resolve-dnsname',
-          'get-netadapter',
-          'get-netipaddress',
-          'get-pnpdevice',
-          'get-psdrive',
-          'get-volume',
-          'get-disk',
-          'get-partition',
-          'chkdsk',
-          'sc',
-          'schtasks',
-        ],
-        allowed_windows_system_commands: [
-          'powercfg',
-          'taskkill',
-          'start-process',
-          'stop-process',
-          'restart-service',
-          'start-service',
-          'stop-service',
-          'start-scheduledtask',
-          'enable-scheduledtask',
-          'disable-scheduledtask',
-          'winget',
-          'displayswitch.exe',
-          'displayswitch',
-          'control',
-          'rundll32',
-          'set-clipboard',
-          'get-clipboard',
-          'reg',
-        ],
-        allowed_custom_commands: [],
-        allowed_commands: [
-          'hyperframes*',
-          'npx hyperframes*',
-          'npx --yes hyperframes*',
-          'npx -y hyperframes*',
-          'node scripts/run-hyperframes.js*',
-          'node ../../scripts/run-hyperframes.js*',
-          'npm run dev',
-          'npm run check',
-          'npm run lint',
-          'npm run validate',
-          'npm run inspect',
-          'npm run render',
-          'npm run publish',
-        ],
-        approval_mode: 'default'
-      },
-      files: {
-        allowed_paths: [WORKSPACE_DIR],
-        blocked_paths: ['/etc', '/System', 'C:\\Windows', '/usr', '/bin']
-      },
-      browser: {
-        profile: 'automation',
-        headless: false
-      }
-    }
-  },
-  skills: {
-    directory: path.join(WORKSPACE_DIR, 'skills'),
-    registries: ['https://clawhub.ai'],
-    auto_update: false
-  },
-  memory: {
-    provider: 'chromadb',
-    path: path.join(CONFIG_DIR, 'memory'),
-    embedding_model: 'nomic-embed-text',
-    embeddings: {
-      provider: process.env.PROMETHEUS_MEMORY_EMBEDDING_PROVIDER || 'auto',
-      auto_backfill: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS !== '0',
-      auto_backfill_limit: process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT
-        ? Math.max(0, Math.min(2000, Number(process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDING_LIMIT) || 250))
-        : 250,
-      providers: {
-        ollama: {
-          endpoint: process.env.OLLAMA_HOST ?? 'http://localhost:11434',
-          embedding_model: process.env.OLLAMA_EMBEDDING_MODEL ?? 'nomic-embed-text',
-        },
-        lmstudio: {
-          endpoint: process.env.LM_STUDIO_ENDPOINT ?? 'http://localhost:1234/v1',
-          embedding_model: process.env.LM_STUDIO_EMBEDDING_MODEL ?? 'text-embedding-nomic-embed-text-v1.5',
-          api_key: process.env.LM_STUDIO_API_KEY || undefined,
-        },
-        openai: {
-          api_key: process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY' : '',
-          embedding_model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
-        },
-        openai_codex_oauth: {
-          embedding_model: process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small',
-        },
-      },
-    },
-  },
-  memory_options: {
-    auto_confirm: true,
-    audit: true,
-    truncate_length: 1000
-  },
-  heartbeat: {
-    enabled: true,
-    interval_minutes: 30,
-    workspace_file: 'HEARTBEAT.md'
-  },
-  workspace: {
-    path: WORKSPACE_DIR
-  },
-  agents: [] as AgentDefinition[],
-  agent_model_defaults: {},
-  agent_model_default_reasoning: {},
-  agent_model_default_speed: {},
-  agent_model_default_accounts: {},
-  agent_model_default_templates: [],
-  active_agent_model_default_template: '',
-  default_agent_model_template: '',
-  voice: {},
-  session: {
-    maxMessages: 120,
-    compactionThreshold: 0.7,
-    memoryFlushThreshold: 0.75,
-    compactionMinMessages: 20,
-    rollingCompactionEnabled: true,
-    rollingCompactionMessageCount: 20,
-    rollingCompactionToolTurns: 5,
-    rollingCompactionSummaryMaxWords: 900,
-    rollingCompactionModel: '',
-    autoSettleAfterDays: 0,
-    autoSettleAfterMs: 0,
-    mainChatGoals: {
-      enabled: true,
-      autoResumeOnRestart: true,
-      summaryEveryTurns: 5,
-      summaryMaxWords: 450,
-      compactionModel: '',
-      maxConsecutiveRuntimeFailures: 3,
-      maxIterations: 100,
-      maxNoProgressTurns: 8,
-      permissions: {
-        approvalMode: 'never',
-        hardDenyEnabled: true,
-        recordDeniedActions: true,
-        denyDestructiveGit: true,
-        denyRemoteScriptExecution: true,
-        denyDesktopCredentialEntry: true,
-      },
-    },
-  },
-  channels: {
-    telegram: {
-      enabled: false,
-      botToken: '',
-      allowedUserIds: [],
-      streamMode: 'full',
-      personas: {},
-      teamRooms: {},
-    },
-    discord: {
-      enabled: false,
-      botToken: '',
-      applicationId: '',
-      guildId: '',
-      channelId: '',
-      webhookUrl: '',
-    },
-    whatsapp: {
-      enabled: false,
-      accessToken: '',
-      phoneNumberId: '',
-      businessAccountId: '',
-      verifyToken: '',
-      webhookSecret: '',
-      testRecipient: '',
-    },
-  },
-  orchestration: {
-    enabled: false,
-    secondary: {
-      provider: '',
-      model: '',
-    },
-    triggers: {
-      consecutive_failures: 2,
-      stagnation_rounds: 3,
-      loop_detection: true,
-      risky_files_threshold: 6,
-      risky_tool_ops_threshold: 220,
-      no_progress_seconds: 90,
-    },
-    preflight: {
-      mode: 'complex_only',
-      allow_secondary_chat: false,
-    },
-    limits: {
-      assist_cooldown_rounds: 3,
-      max_assists_per_turn: 3,
-      max_assists_per_session: 18,
-      telemetry_history_limit: 100,
-    },
-    browser: {
-      max_advisor_calls_per_turn: 5,
-      max_collected_items: 80,
-      max_forced_retries: 0,
-      min_feed_items_before_answer: 12,
-    },
-    preempt: {
-      enabled: false,
-      stall_threshold_seconds: 45,
-      max_preempts_per_turn: 1,
-      max_preempts_per_session: 3,
-      restart_mode: process.platform === 'win32' ? 'inherit_console' : 'detached_hidden',
-    },
-    file_ops: {
-      enabled: true,
-      primary_create_max_lines: 80,
-      primary_create_max_chars: 3500,
-      primary_edit_max_lines: 12,
-      primary_edit_max_chars: 800,
-      primary_edit_max_files: 1,
-      verify_create_always: true,
-      verify_large_payload_lines: 25,
-      verify_large_payload_chars: 1200,
-      watchdog_no_progress_cycles: 3,
-      checkpointing_enabled: true,
-    },
-    // true = full Claude Cowork-style free-form parallel spawn
-    subagent_mode: false,
-  },
-  hooks: {
-    enabled: false,
-    token: '',
-    path: '/hooks',
-  },
-
-  // Agent Builder integration — off by default.
-  // Set enabled: true in your config.json when Agent Builder is running.
-  agent_builder: {
-    enabled: false,
-    url: 'http://localhost:3005',
-  },
-
-  creative_editor: {
-    enabled: true,
-  },
-};
-
-// Detect Windows-style absolute paths (e.g. D:\Prometheus\workspace) on non-Windows OS.
-// Returns true if the path looks like a Windows drive path and we are NOT on Windows.
-function isStaleWindowsPath(p: string): boolean {
-  if (process.platform === 'win32') return false;
-  return /^[A-Za-z]:[\\]/.test(String(p || ''));
-}
-
-// A persisted macOS/Linux path is not meaningful on Windows. Treat the common
-// home/system roots as stale instead of resolving (for example) "/Users/alice"
-// under the current drive. The inverse Windows-on-Unix case is handled above.
-function isStalePosixPath(p: string): boolean {
-  if (process.platform !== 'win32') return false;
-  return /^\/(?:users|home|private|var|opt)(?:\/|$)/i.test(String(p || '').replace(/\\/g, '/'));
-}
-
-function expandHomePath(rawPath: string): string {
-  const value = String(rawPath || '').trim();
-  if (value === '~') return os.homedir();
-  if (/^~[\\/]/.test(value)) return path.join(os.homedir(), value.slice(2));
-  return value;
-}
+const STORAGE_LAYOUT = getPrometheusLayout();
 
 /**
- * Configuration is durable, while cwd is not: packaged Electron, a terminal
- * install, and a fresh checkout all have different working directories. Make
- * every persisted filesystem path absolute against the stable config directory
- * and reject paths clearly copied from a different operating system.
+ * Keep the pre-v2 ConfigManager available as an exact compatibility backend.
+ * In canonical mode we load it only to reuse its mature default-config surface.
+ * A temporary inert DATA_DIR prevents the classic module's old `.localclaw`
+ * import shim from touching the source checkout while its constants initialize.
  */
-function resolvePortableConfigPath(rawPath: unknown, fallback: string): string {
-  const raw = expandHomePath(String(rawPath || '').trim().replace(/^file:\/\//i, ''));
-  if (!raw || isStaleWindowsPath(raw) || isStalePosixPath(raw)) return path.resolve(fallback);
-  return path.resolve(path.isAbsolute(raw) ? raw : path.join(CONFIG_DIR, raw));
+function loadClassicConfigModule(): typeof import('./config-classic') {
+  if (STORAGE_LAYOUT.mode === 'legacy') {
+    return require('./config-classic.js') as typeof import('./config-classic');
+  }
+
+  const previousDataDir = process.env.PROMETHEUS_DATA_DIR;
+  const inertDataRoot = path.join(STORAGE_LAYOUT.runtime.migrations, '.classic-defaults');
+  process.env.PROMETHEUS_DATA_DIR = inertDataRoot;
+  try {
+    return require('./config-classic.js') as typeof import('./config-classic');
+  } finally {
+    if (previousDataDir === undefined) delete process.env.PROMETHEUS_DATA_DIR;
+    else process.env.PROMETHEUS_DATA_DIR = previousDataDir;
+  }
 }
 
-// Replace a stale Windows path with a sensible cross-platform fallback.
-// workspace → WORKSPACE_DIR, skills → WORKSPACE_DIR/skills, memory → CONFIG_DIR/memory,
-// everything else → WORKSPACE_DIR (safe catch-all).
-function resolveStaleWindowsPath(p: string): string {
-  const lp = String(p || '').toLowerCase().replace(/\\/g, '/');
-  if (lp.includes('skill')) return path.join(WORKSPACE_DIR, 'skills');
-  if (lp.includes('memory')) return path.join(CONFIG_DIR, 'memory');
-  return WORKSPACE_DIR;
+const classic = loadClassicConfigModule();
+
+const CANONICAL_CONFIG_ROOT = STORAGE_LAYOUT.runtime.root;
+const CANONICAL_CONFIG_FILE = path.join(STORAGE_LAYOUT.runtime.config, 'config.json');
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
-function normalizeRuntimePathsInConfig(config: PrometheusConfig): PrometheusConfig {
-  const workspacePath = resolvePortableConfigPath(config?.workspace?.path, WORKSPACE_DIR);
-  const skillsPath = resolvePortableConfigPath(config?.skills?.directory, path.join(workspacePath, 'skills'));
-  const memoryPath = resolvePortableConfigPath(config?.memory?.path, path.join(CONFIG_DIR, 'memory'));
-  const filePermissions = (config as any)?.tools?.permissions?.files || {};
-  const rawAllowedPaths = Array.isArray(filePermissions.allowed_paths)
-    ? filePermissions.allowed_paths.map((candidate: unknown) => resolvePortableConfigPath(candidate, workspacePath))
-    : [];
-  const allowedPaths = normalizeConfiguredPathList(rawAllowedPaths, {
-    ensureIncludes: [workspacePath],
-    fallback: [workspacePath],
-  });
-  const rawBlockedPaths = Array.isArray(filePermissions.blocked_paths)
-    ? filePermissions.blocked_paths.map((candidate: unknown) => resolvePortableConfigPath(candidate, workspacePath))
-    : [];
-  const blockedPaths = normalizeConfiguredPathList(rawBlockedPaths);
-
-  return {
-    ...config,
-    workspace: { ...(config.workspace || {}), path: workspacePath },
-    skills: { ...(config.skills || {}), directory: skillsPath },
-    memory: { ...(config.memory || {}), path: memoryPath },
-    tools: {
-      ...(config.tools || {}),
-      permissions: {
-        ...((config.tools as any)?.permissions || {}),
-        files: {
-          ...filePermissions,
-          allowed_paths: normalizeConfiguredPathList(allowedPaths, {
-            ensureIncludes: [workspacePath],
-            fallback: [workspacePath],
-          }),
-          blocked_paths: normalizeConfiguredPathList(blockedPaths),
-        },
-      },
-    },
-  } as PrometheusConfig;
+function isObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function normalizeLegacyPathsInConfig(loaded: any): any {
-  const out = { ...(loaded || {}) };
-  if (out?.gateway && typeof out.gateway === 'object') {
-    const gateway = { ...out.gateway };
-    const auth = gateway.auth && typeof gateway.auth === 'object'
-      ? { ...gateway.auth }
-      : {};
-    const legacyToken = typeof gateway.auth_token === 'string'
-      ? gateway.auth_token.trim()
-      : '';
-    if (!auth.token && legacyToken) auth.token = legacyToken;
-    if (typeof auth.enabled !== 'boolean') auth.enabled = true;
-    gateway.auth = auth;
-    delete gateway.auth_token;
-    out.gateway = gateway;
+/** Arrays replace rather than concatenate; object branches merge recursively. */
+function deepMerge<T>(base: T, overlay: any): T {
+  if (!isObject(base) || !isObject(overlay)) return clone((overlay === undefined ? base : overlay) as T);
+  const result: Record<string, any> = clone(base as any);
+  for (const [key, value] of Object.entries(overlay)) {
+    if (value === undefined) continue;
+    if (isObject(value) && isObject(result[key])) result[key] = deepMerge(result[key], value);
+    else result[key] = clone(value);
   }
-
-  // ── .localclaw → .prometheus migration ──────────────────────────────────
-  const skillsDir = String(out?.skills?.directory || '');
-  if (skillsDir && skillsDir.includes('.localclaw')) {
-    out.skills = { ...(out.skills || {}), directory: path.join(WORKSPACE_DIR, 'skills') };
-  }
-
-  const memoryPath = String(out?.memory?.path || '');
-  if (memoryPath && memoryPath.includes('.localclaw')) {
-    out.memory = { ...(out.memory || {}), path: path.join(CONFIG_DIR, 'memory') };
-  }
-
-  // ── Stale Windows paths on macOS/Linux ──────────────────────────────────
-  // Any path stored as e.g. "D:\Prometheus\workspace" on a non-Windows host
-  // is silently replaced with the correct cross-platform default so startup
-  // never crashes trying to open a path that can't exist on this OS.
-  if (out?.workspace?.path && isStaleWindowsPath(out.workspace.path)) {
-    console.log(`[Config] Replacing stale Windows workspace path "${out.workspace.path}" → "${WORKSPACE_DIR}"`);
-    out.workspace = { ...(out.workspace || {}), path: WORKSPACE_DIR };
-  }
-
-  if (out?.skills?.directory && isStaleWindowsPath(out.skills.directory)) {
-    const fixed = path.join(WORKSPACE_DIR, 'skills');
-    console.log(`[Config] Replacing stale Windows skills path "${out.skills.directory}" → "${fixed}"`);
-    out.skills = { ...(out.skills || {}), directory: fixed };
-  }
-
-  if (out?.memory?.path && isStaleWindowsPath(out.memory.path)) {
-    const fixed = path.join(CONFIG_DIR, 'memory');
-    console.log(`[Config] Replacing stale Windows memory path "${out.memory.path}" → "${fixed}"`);
-    out.memory = { ...(out.memory || {}), path: fixed };
-  }
-
-  // tools.permissions.files allowed/blocked paths
-  if (out?.tools?.permissions?.files) {
-    const currentAllowed = Array.isArray(out.tools.permissions.files.allowed_paths)
-      ? out.tools.permissions.files.allowed_paths.map(
-          (p: string) => resolvePortableConfigPath(isStaleWindowsPath(p) ? WORKSPACE_DIR : p, WORKSPACE_DIR),
-        )
-      : [];
-    out.tools.permissions.files.allowed_paths = normalizeConfiguredPathList(currentAllowed, {
-      ensureIncludes: [WORKSPACE_DIR],
-      fallback: [WORKSPACE_DIR],
-    });
-
-    const currentBlocked = Array.isArray(out.tools.permissions.files.blocked_paths)
-      ? out.tools.permissions.files.blocked_paths.map(
-          (p: string) => resolvePortableConfigPath(
-            isStaleWindowsPath(p) ? resolveStaleWindowsPath(p) : p,
-            WORKSPACE_DIR,
-          ),
-        )
-      : [];
-    out.tools.permissions.files.blocked_paths = normalizeConfiguredPathList(currentBlocked);
-  }
-
-  // agents — fix per-agent workspace paths
-  if (Array.isArray(out?.agents)) {
-    out.agents = out.agents.map((agent: any) => {
-      if (agent?.workspace && isStaleWindowsPath(agent.workspace)) {
-        return { ...agent, workspace: path.join(WORKSPACE_DIR, '.prometheus', 'subagents', agent.id) };
-      }
-      return agent;
-    });
-  }
-
-  // ── Env-var path enforcement (all platforms, including Windows) ───────────
-  // When the app runs with explicit env vars (always the case in Electron),
-  // those env vars are the authoritative source of truth — even on Windows.
-  // This prevents stale paths from a previous install on a different drive or
-  // user account from silently persisting in a saved config.json.
-  if (process.env.PROMETHEUS_WORKSPACE_DIR) {
-    const runtimeWs = path.resolve(WORKSPACE_DIR);
-    if (out?.workspace?.path && path.resolve(out.workspace.path) !== runtimeWs) {
-      console.log(`[Config] Overriding workspace path "${out.workspace.path}" → "${WORKSPACE_DIR}" (PROMETHEUS_WORKSPACE_DIR)`);
-      out.workspace = { ...(out.workspace || {}), path: WORKSPACE_DIR };
-    }
-    // Keep the runtime workspace root present in the allowlist, but preserve
-    // additional user-configured external paths from Settings > Security.
-    if (out?.tools?.permissions?.files) {
-      out.tools.permissions.files.allowed_paths = normalizeConfiguredPathList(
-        out.tools.permissions.files.allowed_paths,
-        { ensureIncludes: [runtimeWs], fallback: [runtimeWs] },
-      );
-    }
-  }
-
-  if (process.env.PROMETHEUS_DATA_DIR) {
-    const expectedSkillsDir = path.join(CONFIG_DIR, 'skills');
-    const expectedMemoryPath = path.join(CONFIG_DIR, 'memory');
-    if (out?.skills?.directory &&
-        path.resolve(out.skills.directory) !== path.resolve(expectedSkillsDir)) {
-      console.log(`[Config] Overriding skills path "${out.skills.directory}" → "${expectedSkillsDir}" (PROMETHEUS_DATA_DIR)`);
-      out.skills = { ...(out.skills || {}), directory: expectedSkillsDir };
-    }
-    if (out?.memory?.path &&
-        path.resolve(out.memory.path) !== path.resolve(expectedMemoryPath)) {
-      console.log(`[Config] Overriding memory path "${out.memory.path}" → "${expectedMemoryPath}" (PROMETHEUS_DATA_DIR)`);
-      out.memory = { ...(out.memory || {}), path: expectedMemoryPath };
-    }
-    // Fix agent workspaces that point outside the current runtime workspace
-    if (Array.isArray(out?.agents)) {
-      const runtimeWs = path.resolve(WORKSPACE_DIR);
-      out.agents = out.agents.map((agent: any) => {
-        if (agent?.workspace && !path.resolve(agent.workspace).startsWith(runtimeWs)) {
-          return { ...agent, workspace: path.join(WORKSPACE_DIR, '.prometheus', 'subagents', agent.id) };
-        }
-        return agent;
-      });
-    }
-  }
-
-  // ── Ollama endpoint self-correction ──────────────────────────────────────
-  // If the stored Ollama endpoint is pointing at the gateway port (common
-  // misconfiguration when config was copied from a different machine), reset
-  // it to the standard Ollama default. Works on any OS.
-  const OLLAMA_DEFAULT = process.env.OLLAMA_HOST || 'http://localhost:11434';
-  const gatewayPort = String(out?.gateway?.port || DEFAULT_GATEWAY_PORT);
-  const fixOllamaEndpoint = (ep: string): string => {
-    if (!ep) return OLLAMA_DEFAULT;
-    // If it's pointing at the gateway port, it's wrong
-    if (ep.includes(`:${gatewayPort}`) || ep.endsWith(`:${DEFAULT_GATEWAY_PORT}`) || ep.endsWith(':3000')) {
-      console.log(`[Config] Correcting misconfigured Ollama endpoint "${ep}" → "${OLLAMA_DEFAULT}"`);
-      return OLLAMA_DEFAULT;
-    }
-    return ep;
-  };
-  if (out?.ollama?.endpoint) {
-    out.ollama = { ...out.ollama, endpoint: fixOllamaEndpoint(out.ollama.endpoint) };
-  }
-  if (out?.llm?.providers?.ollama?.endpoint) {
-    out.llm = {
-      ...out.llm,
-      providers: {
-        ...out.llm.providers,
-        ollama: {
-          ...out.llm.providers.ollama,
-          endpoint: fixOllamaEndpoint(out.llm.providers.ollama.endpoint),
-        },
-      },
-    };
-  }
-
-  return out;
+  return result as T;
 }
 
-function normalizeConfiguredPathList(
-  paths: unknown,
-  opts: { ensureIncludes?: string[]; fallback?: string[] } = {},
-): string[] {
-  const seen = new Set<string>();
+function normalizePathList(values: unknown, required: string[] = []): string[] {
   const out: string[] = [];
-
-  const addPath = (value: unknown) => {
-    if (typeof value !== 'string') return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const resolved = path.resolve(trimmed);
+  const seen = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value !== 'string' || !value.trim()) return;
+    const resolved = path.resolve(value.trim());
     const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) return;
     seen.add(key);
     out.push(resolved);
   };
-
-  if (Array.isArray(paths)) {
-    for (const entry of paths) addPath(entry);
-  }
-  for (const required of opts.ensureIncludes || []) addPath(required);
-
-  if (out.length === 0) {
-    for (const fallback of opts.fallback || []) addPath(fallback);
-  }
-
+  if (Array.isArray(values)) values.forEach(add);
+  required.forEach(add);
   return out;
 }
 
-// ─── Secret fields that must never live in config.json plaintext ─────────────
-// Format: [ dotted.path.in.config, vault key name ]
-// On saveConfig(), any of these found as plain strings are moved to the vault
-// and replaced with a "vault:<key>" reference.
+function canonicalizeConfigPaths(config: PrometheusConfig): PrometheusConfig {
+  const next: any = clone(config);
+  const workspaceRoot = path.resolve(process.env.PROMETHEUS_WORKSPACE_DIR || STORAGE_LAYOUT.workspace.root);
+
+  next.workspace = { ...(next.workspace || {}), path: workspaceRoot };
+  next.skills = { ...(next.skills || {}), directory: path.join(workspaceRoot, 'skills') };
+  next.memory = { ...(next.memory || {}), path: STORAGE_LAYOUT.runtime.memoryIndex };
+
+  next.tools = next.tools || {};
+  next.tools.permissions = next.tools.permissions || {};
+  next.tools.permissions.files = next.tools.permissions.files || {};
+  next.tools.permissions.files.allowed_paths = normalizePathList(
+    next.tools.permissions.files.allowed_paths,
+    [workspaceRoot],
+  );
+  next.tools.permissions.files.blocked_paths = normalizePathList(next.tools.permissions.files.blocked_paths);
+
+  if (Array.isArray(next.agents)) {
+    next.agents = next.agents.map((agent: any) => ({
+      ...agent,
+      ...(agent?.workspace ? { workspace: path.resolve(agent.workspace) } : {}),
+      ...(agent?.executionWorkspace ? { executionWorkspace: path.resolve(agent.executionWorkspace) } : {}),
+      ...(Array.isArray(agent?.allowedWorkPaths)
+        ? { allowedWorkPaths: normalizePathList(agent.allowedWorkPaths) }
+        : {}),
+    }));
+  }
+
+  return next as PrometheusConfig;
+}
+
+function canonicalDefaults(): PrometheusConfig {
+  const defaults = canonicalizeConfigPaths(clone(classic.DEFAULT_CONFIG));
+  return defaults;
+}
+
+export const DEFAULT_CONFIG: PrometheusConfig = STORAGE_LAYOUT.mode === 'canonical'
+  ? canonicalDefaults()
+  : classic.DEFAULT_CONFIG;
+
 const SECRET_FIELD_MAP: Array<[string[], string]> = [
-  [['gateway', 'auth', 'token'],                  'gateway.auth_token'],
-  [['channels', 'telegram', 'botToken'],          'channels.telegram.botToken'],
-  [['channels', 'discord', 'botToken'],           'channels.discord.botToken'],
-  [['channels', 'whatsapp', 'accessToken'],       'channels.whatsapp.accessToken'],
-  [['channels', 'whatsapp', 'webhookSecret'],     'channels.whatsapp.webhookSecret'],
-  [['search', 'tinyfish_api_key'],                'search.tinyfish_api_key'],
-  [['search', 'tavily_api_key'],                  'search.tavily_api_key'],
-  [['search', 'google_api_key'],                  'search.google_api_key'],
-  [['search', 'google_cx'],                       'search.google_cx'],
-  [['search', 'brave_api_key'],                   'search.brave_api_key'],
+  [['gateway', 'auth', 'token'], 'gateway.auth_token'],
+  [['channels', 'telegram', 'botToken'], 'channels.telegram.botToken'],
+  [['channels', 'discord', 'botToken'], 'channels.discord.botToken'],
+  [['channels', 'whatsapp', 'accessToken'], 'channels.whatsapp.accessToken'],
+  [['channels', 'whatsapp', 'webhookSecret'], 'channels.whatsapp.webhookSecret'],
+  [['search', 'tinyfish_api_key'], 'search.tinyfish_api_key'],
+  [['search', 'tavily_api_key'], 'search.tavily_api_key'],
+  [['search', 'google_api_key'], 'search.google_api_key'],
+  [['search', 'google_cx'], 'search.google_cx'],
+  [['search', 'brave_api_key'], 'search.brave_api_key'],
   ...listProviderSecretFieldPaths().map(([providerId, field]) => (
     [['llm', 'providers', providerId, field], `llm.${providerId}.${field}`] as [string[], string]
   )),
-  [['hooks', 'token'],                             'hooks.token'],
-  [['hooks', 'providers', 'github', 'secret'],     'hooks.providers.github.secret'],
-  [['hooks', 'providers', 'stripe', 'secret'],     'hooks.providers.stripe.secret'],
-  [['hooks', 'providers', 'slack', 'secret'],      'hooks.providers.slack.secret'],
+  [['hooks', 'token'], 'hooks.token'],
+  [['hooks', 'providers', 'github', 'secret'], 'hooks.providers.github.secret'],
+  [['hooks', 'providers', 'stripe', 'secret'], 'hooks.providers.stripe.secret'],
+  [['hooks', 'providers', 'slack', 'secret'], 'hooks.providers.slack.secret'],
 ];
 
 function deepGet(obj: any, keys: string[]): string | undefined {
-  let cur = obj;
-  for (const k of keys) {
-    if (cur == null || typeof cur !== 'object') return undefined;
-    cur = cur[k];
+  let current = obj;
+  for (const key of keys) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = current[key];
   }
-  return typeof cur === 'string' ? cur : undefined;
+  return typeof current === 'string' ? current : undefined;
 }
 
 function deepSet(obj: any, keys: string[], value: string): void {
-  let cur = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    if (cur[keys[i]] == null) cur[keys[i]] = {};
-    cur = cur[keys[i]];
+  let current = obj;
+  for (let i = 0; i < keys.length - 1; i += 1) {
+    if (!isObject(current[keys[i]])) current[keys[i]] = {};
+    current = current[keys[i]];
   }
-  cur[keys[keys.length - 1]] = value;
+  current[keys[keys.length - 1]] = value;
 }
 
-/**
- * Scan the config object for plaintext secrets.
- * Any found are stored in the vault and replaced with a "vault:<key>" reference.
- * Returns a safe copy of the config suitable for writing to disk.
- */
-function migrateSecretsToVault(config: any, configDir: string): any {
-  const copy = JSON.parse(JSON.stringify(config)); // deep clone
-  const vault = getVault(configDir);
-
+function migrateSecretsToCanonicalVault(config: PrometheusConfig): PrometheusConfig {
+  const copy = clone(config) as any;
+  const vault = getVault(CANONICAL_CONFIG_ROOT);
   for (const [fieldPath, vaultKey] of SECRET_FIELD_MAP) {
     const value = deepGet(copy, fieldPath);
-    if (!value) continue;
-    // Skip if already a vault reference or env: reference
-    if (value.startsWith('vault:') || value.startsWith('env:')) continue;
-    // Skip masked placeholder from UI
-    if (value === '••••••••') continue;
-    // It's a real plaintext secret — move it to vault
+    if (!value || value.startsWith('vault:') || value.startsWith('env:') || value === '••••••••') continue;
     vault.set(vaultKey, value, 'config:migrate');
     deepSet(copy, fieldPath, `vault:${vaultKey}`);
   }
-
-  return copy;
+  return copy as PrometheusConfig;
 }
 
-export class ConfigManager {
+class CanonicalConfigManager {
   private config: PrometheusConfig;
 
   constructor() {
     this.config = this.loadConfig();
-    // Older installs only persisted llm.provider/provider.model. Seed the
-    // main-chat mirror once from that already-live route without guessing a
-    // provider or overriding a user-selected template.
     const legacyMainChatPatch = seedLegacyMainChatRoute(this.config);
     if (legacyMainChatPatch) {
-      this.config = { ...this.config, ...legacyMainChatPatch };
+      this.config = canonicalizeConfigPaths({ ...this.config, ...legacyMainChatPatch } as PrometheusConfig);
       this.saveConfig();
     }
   }
 
   private loadConfig(): PrometheusConfig {
     try {
-      if (fs.existsSync(CONFIG_FILE)) {
-        const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-        const loadedRaw = JSON.parse(data);
-        const loaded = normalizeLegacyPathsInConfig(loadedRaw);
-
-        // Deep-merge the llm.providers block so env-var defaults for
-        // providers not present in config.json are preserved.
-        const mergedLlm = loaded.llm
-          ? {
-              ...DEFAULT_CONFIG.llm,
-              ...loaded.llm,
-              providers: {
-                ...(DEFAULT_CONFIG.llm as any)?.providers,
-                ...loaded.llm.providers,
-              },
-            }
-          : DEFAULT_CONFIG.llm;
-
-        const mergedImageGeneration = loaded.image_generation
-          ? {
-              ...(DEFAULT_CONFIG.image_generation || {}),
-              ...loaded.image_generation,
-              providers: {
-                ...((DEFAULT_CONFIG.image_generation as any)?.providers || {}),
-                ...((loaded.image_generation as any)?.providers || {}),
-              },
-            }
-          : DEFAULT_CONFIG.image_generation;
-
-        const mergedVideoGeneration = loaded.video_generation
-          ? {
-              ...(DEFAULT_CONFIG.video_generation || {}),
-              ...loaded.video_generation,
-              providers: {
-                ...((DEFAULT_CONFIG.video_generation as any)?.providers || {}),
-                ...((loaded.video_generation as any)?.providers || {}),
-              },
-            }
-          : DEFAULT_CONFIG.video_generation;
-
-        const mergedChannels = {
-          ...(DEFAULT_CONFIG.channels || {}),
-          ...(loaded.channels || {}),
-          telegram: {
-            ...((DEFAULT_CONFIG.channels as any)?.telegram || {}),
-            ...((loaded.channels as any)?.telegram || {}),
-            ...(loaded.telegram || {}),
-          },
-        };
-
-        const mergedTools = loaded.tools
-          ? {
-              ...(DEFAULT_CONFIG.tools || {}),
-              ...loaded.tools,
-              permissions: {
-                ...((DEFAULT_CONFIG.tools as any)?.permissions || {}),
-                ...((loaded.tools as any)?.permissions || {}),
-                shell: {
-                  ...((DEFAULT_CONFIG.tools as any)?.permissions?.shell || {}),
-                  ...((loaded.tools as any)?.permissions?.shell || {}),
-                },
-              },
-            }
-          : DEFAULT_CONFIG.tools;
-
-        const mergedSession = loaded.session
-          ? {
-              ...(DEFAULT_CONFIG.session || {}),
-              ...loaded.session,
-              mainChatGoals: {
-                ...((DEFAULT_CONFIG.session as any)?.mainChatGoals || {}),
-                ...((loaded.session as any)?.mainChatGoals || {}),
-                permissions: {
-                  ...((DEFAULT_CONFIG.session as any)?.mainChatGoals?.permissions || {}),
-                  ...((loaded.session as any)?.mainChatGoals?.permissions || {}),
-                },
-              },
-            }
-          : DEFAULT_CONFIG.session;
-
-        const runtimeGatewayPort = getRuntimeGatewayPort();
-        const merged: PrometheusConfig = {
-          ...DEFAULT_CONFIG,
-          ...loaded,
-          gateway: {
-            ...DEFAULT_CONFIG.gateway,
-            ...(loaded.gateway || {}),
-            ...(runtimeGatewayPort ? { port: runtimeGatewayPort } : {}),
-          },
-          llm: mergedLlm,
-          image_generation: mergedImageGeneration,
-          video_generation: mergedVideoGeneration,
-          channels: mergedChannels as any,
-          telegram: (mergedChannels as any).telegram,
-          tools: mergedTools,
-          session: mergedSession as any,
-        };
-
-        const normalized = normalizeRuntimePathsInConfig(merged);
-
-
-        // Zod validation — warn on bad fields but never crash startup
-        const errors = getConfigErrors(normalized);
-        if (errors.length > 0) {
-          console.warn('[Config] Validation warnings (non-fatal):');
-          errors.forEach(e => console.warn('  ⚠️', e));
+      if (fs.existsSync(CANONICAL_CONFIG_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(CANONICAL_CONFIG_FILE, 'utf-8'));
+        const merged = canonicalizeConfigPaths(deepMerge(canonicalDefaults(), parsed));
+        const errors = getConfigErrors(merged);
+        if (errors.length) {
+          console.warn('[Config:v2] Validation warnings (non-fatal):');
+          errors.forEach((error) => console.warn('  ⚠️', error));
         }
-
-        return normalized;
+        return merged;
       }
     } catch (error) {
-      console.warn('Failed to load config, using defaults:', error);
+      console.warn('[Config:v2] Failed to load canonical config, using defaults:', error);
     }
-    return normalizeRuntimePathsInConfig(DEFAULT_CONFIG);
+    return canonicalDefaults();
   }
 
   public getConfig(): PrometheusConfig {
@@ -969,38 +200,27 @@ export class ConfigManager {
   }
 
   public updateConfig(updates: Partial<PrometheusConfig>): void {
-    this.config = { ...this.config, ...updates };
+    this.config = canonicalizeConfigPaths(deepMerge(this.config, updates));
     this.saveConfig();
   }
+
   public reloadConfig(): void {
     this.config = this.loadConfig();
   }
 
   public saveConfig(): void {
-    try {
-      if (!fs.existsSync(CONFIG_DIR)) {
-        fs.mkdirSync(CONFIG_DIR, { recursive: true });
-      }
-      // Before writing, migrate any plaintext secrets to the vault
-      // so they are never stored in config.json going forward.
-      const sanitized = migrateSecretsToVault(this.config, CONFIG_DIR);
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(sanitized, null, 2));
-    } catch (error) {
-      console.error('Failed to save config:', error);
-      throw error;
-    }
+    fs.mkdirSync(STORAGE_LAYOUT.runtime.config, { recursive: true });
+    const sanitized = migrateSecretsToCanonicalVault(this.config);
+    const tmp = `${CANONICAL_CONFIG_FILE}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(sanitized, null, 2), 'utf-8');
+    fs.renameSync(tmp, CANONICAL_CONFIG_FILE);
   }
 
-  /**
-   * Resolve a config value that may be a vault reference.
-   * Values stored as "vault:<key>" are decrypted on demand.
-   * Plain strings are returned as-is.
-   */
   public resolveSecret(value: string | undefined): string | undefined {
     if (!value) return value;
+    if (value.startsWith('env:')) return process.env[value.slice(4)] || undefined;
     if (value.startsWith('vault:')) {
-      const vaultKey = value.slice(6);
-      const secret = getVault(CONFIG_DIR).get(vaultKey, 'config:resolve');
+      const secret = getVault(CANONICAL_CONFIG_ROOT).get(value.slice(6), 'config:resolve');
       return secret ? secret.expose() : undefined;
     }
     return value;
@@ -1008,28 +228,25 @@ export class ConfigManager {
 
   public ensureDirectories(): void {
     const dirs = [
-      CONFIG_DIR,
+      STORAGE_LAYOUT.runtime.root,
+      STORAGE_LAYOUT.runtime.config,
+      STORAGE_LAYOUT.runtime.sessions,
+      STORAGE_LAYOUT.runtime.diagnostics,
+      path.join(STORAGE_LAYOUT.runtime.diagnostics, 'logs'),
+      path.join(STORAGE_LAYOUT.runtime.cache, 'images'),
+      STORAGE_LAYOUT.runtime.memoryIndex,
       this.config.workspace.path,
       this.config.skills.directory,
-      this.config.memory.path,
-      path.join(CONFIG_DIR, 'sessions'),
-      path.join(CONFIG_DIR, 'logs'),
-      path.join(CONFIG_DIR, 'cache', 'images')
     ];
-
-    for (const dir of dirs) {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-    }
-
-    if (isPublicDistributionBuild()) {
-      ensurePublicWorkspaceScaffold(this.config.workspace.path);
-    }
+    for (const dir of dirs) fs.mkdirSync(dir, { recursive: true });
+    if (isPublicDistributionBuild()) ensurePublicWorkspaceScaffold(this.config.workspace.path);
   }
 
   public getConfigDir(): string {
-    return CONFIG_DIR;
+    // Existing stores append their own names (`sessions`, `resources`, `vault`,
+    // `tasks`, ...). Returning the runtime root therefore moves those stores to
+    // the clean v2 tree without each subsystem inventing its own app-data root.
+    return STORAGE_LAYOUT.runtime.root;
   }
 
   public getWorkspacePath(): string {
@@ -1037,34 +254,51 @@ export class ConfigManager {
   }
 
   public getDatabasePath(): string {
-    return path.join(CONFIG_DIR, 'jobs.db');
+    return path.join(STORAGE_LAYOUT.runtime.root, 'jobs.db');
   }
 }
 
-// Singleton instance
+export class ConfigManager {
+  private readonly impl: CanonicalConfigManager | InstanceType<typeof classic.ConfigManager>;
+
+  constructor() {
+    this.impl = STORAGE_LAYOUT.mode === 'canonical'
+      ? new CanonicalConfigManager()
+      : new classic.ConfigManager();
+  }
+
+  public getConfig(): PrometheusConfig { return this.impl.getConfig(); }
+  public updateConfig(updates: Partial<PrometheusConfig>): void { this.impl.updateConfig(updates); }
+  public reloadConfig(): void { this.impl.reloadConfig(); }
+  public saveConfig(): void { this.impl.saveConfig(); }
+  public resolveSecret(value: string | undefined): string | undefined { return this.impl.resolveSecret(value); }
+  public ensureDirectories(): void { this.impl.ensureDirectories(); }
+  public getConfigDir(): string { return this.impl.getConfigDir(); }
+  public getWorkspacePath(): string { return this.impl.getWorkspacePath(); }
+  public getDatabasePath(): string { return this.impl.getDatabasePath(); }
+}
+
 let configInstance: ConfigManager | null = null;
 
 export function getConfig(): ConfigManager {
-  if (!configInstance) {
-    configInstance = new ConfigManager();
-  }
+  if (!configInstance) configInstance = new ConfigManager();
   return configInstance;
 }
 
-/**
- * Returns the resolved workspace path for a given agent definition.
- * If the agent has an explicit workspace, use it.
- * Otherwise derive from configDir/agents/<id>/workspace.
- */
-export function resolveAgentWorkspace(agent: AgentDefinition): string {
-  if (agent.workspace) return agent.workspace;
-  return path.join(CONFIG_DIR, 'agents', agent.id, 'workspace');
+export function getResolvedConfigDir(): string {
+  return STORAGE_LAYOUT.mode === 'canonical'
+    ? STORAGE_LAYOUT.runtime.root
+    : classic.getResolvedConfigDir();
 }
 
-/**
- * Returns all configured agents. If none are defined, returns a synthetic
- * "main" agent using the global workspace path - backward-compatible.
- */
+export function resolveAgentWorkspace(agent: AgentDefinition): string {
+  if (agent.workspace) return path.resolve(agent.workspace);
+  if (STORAGE_LAYOUT.mode === 'canonical') {
+    return standaloneSubagentWorkspace(STORAGE_LAYOUT, agent.id);
+  }
+  return classic.resolveAgentWorkspace(agent);
+}
+
 export function getAgents(): AgentDefinition[] {
   const cfg = getConfig().getConfig();
   const defined = Array.isArray(cfg.agents) ? cfg.agents : [];
@@ -1076,87 +310,65 @@ export function getAgents(): AgentDefinition[] {
     workspace: cfg.workspace.path,
   };
   if (defined.length === 0) return [syntheticMain];
-  if (defined.some(a => a.id === 'main')) return defined;
-  // Backward compatibility: if config has explicit subagents but no main,
-  // expose a synthetic main agent first so UI and APIs always have it.
+  if (defined.some((agent) => agent.id === 'main')) return defined;
   return [syntheticMain, ...defined];
 }
 
-/**
- * Returns the default agent (the one that handles user chat).
- */
 export function getDefaultAgent(): AgentDefinition {
   const agents = getAgents();
-  return agents.find(a => a.default) ?? agents[0];
+  return agents.find((agent) => agent.default) ?? agents[0];
 }
 
-/**
- * Returns a specific agent by ID, or null if not found.
- */
 export function getAgentById(id: string): AgentDefinition | null {
-  return getAgents().find(a => a.id === id) ?? null;
+  return getAgents().find((agent) => agent.id === id) ?? null;
 }
 
-/**
- * Ensures the workspace directory exists for an agent.
- * Also bootstraps missing AGENT.md with a role template if the
- * workspace is brand new.
- */
 export function ensureAgentWorkspace(agent: AgentDefinition): string {
-  const ws = resolveAgentWorkspace(agent);
-  if (!fs.existsSync(ws)) {
-    fs.mkdirSync(ws, { recursive: true });
-  }
+  if (STORAGE_LAYOUT.mode === 'legacy') return classic.ensureAgentWorkspace(agent);
 
-  // Bootstrap or migrate the canonical per-agent identity prompt.
-  ensureAgentPromptFile(ws, [
-      `# ${agent.name}`,
-      '',
-      '## Role',
-      agent.description ?? 'No description set. Update this file to define your role.',
-      '',
-      '## Instructions',
-      '- Describe what this agent should do here.',
-      '- Be specific about output format expected by the orchestrator.',
-      '- List tools this agent is allowed to use.',
-      '',
-      '## Output Format',
-      'Return a concise summary of what was accomplished.',
-    ].join('\n'));
+  const workspace = resolveAgentWorkspace(agent);
+  fs.mkdirSync(workspace, { recursive: true });
 
-  const memoryMd = path.join(ws, 'MEMORY.md');
-  if (!fs.existsSync(memoryMd)) {
-    fs.writeFileSync(memoryMd, [
+  ensureAgentPromptFile(workspace, [
+    `# ${agent.name}`,
+    '',
+    '## Role',
+    agent.description ?? 'No description set. Update this file to define your role.',
+    '',
+    '## Instructions',
+    '- Describe what this agent should do here.',
+    '- Keep durable role-specific context in this workspace.',
+    '- Treat external execution workspaces as separate from this identity workspace.',
+    '',
+    '## Output Format',
+    'Return a concise summary of what was accomplished.',
+  ].join('\n'));
+
+  const memory = path.join(workspace, 'MEMORY.md');
+  if (!fs.existsSync(memory)) {
+    fs.writeFileSync(memory, [
       `# MEMORY.md - ${agent.name}`,
       '',
       'Durable personal memory for this agent.',
       '',
       'Store role-specific lessons, decisions, corrections, preferences, and open threads that should survive future runs.',
-      'Do not copy main-user memory or unrelated shared-team truth into this file.',
+      'Do not copy main-user memory or unrelated team truth into this private file.',
+      '',
     ].join('\n'), 'utf-8');
   }
 
-  // Bootstrap HEARTBEAT.md so scheduler/heartbeat systems always have a file target.
-  const heartbeatMd = path.join(ws, 'HEARTBEAT.md');
-  if (!fs.existsSync(heartbeatMd)) {
-    fs.writeFileSync(heartbeatMd, [
+  const heartbeat = path.join(workspace, 'HEARTBEAT.md');
+  if (!fs.existsSync(heartbeat)) {
+    fs.writeFileSync(heartbeat, [
       `# HEARTBEAT.md - ${agent.name}`,
       '',
       '## What to do when woken by the scheduler',
+      '- Edit this file to define autonomous tasks for this agent.',
+      '- Persist durable outputs to the appropriate workspace.',
+      '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else.',
       '',
-      'Edit this file to define autonomous tasks for this agent.',
-      '',
-      '## Example Tasks',
-      '- Check for new trends in [topic] and write a brief to workspace/reports/',
-      '- Post a draft to workspace/drafts/ for human review',
-      '- Record any task-specific output in this agent workspace when appropriate',
-      '',
-      '## Rules',
-      '- Always write outputs to files, never just respond in chat',
-      '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
-      '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
-      '- Keep runs under 5 minutes',
     ].join('\n'), 'utf-8');
   }
-  return ws;
+
+  return workspace;
 }
