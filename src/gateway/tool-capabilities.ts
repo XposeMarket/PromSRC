@@ -34,7 +34,7 @@ const READ_ONLY_TOOLS = new Set([
   'desktop_list_windows', 'desktop_get_window_state', 'desktop_locate_text',
   'connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties',
   'connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file',
-  'connector_gdrive_search', 'connector_github_list_repos', 'connector_github_list_issues',
+  'connector_gdrive_search', 'connector_gdrive_api_request', 'connector_github_list_repos', 'connector_github_list_issues',
   'connector_github_list_prs', 'connector_github_get_pr', 'connector_github_list_commits',
   'connector_github_list_check_runs', 'connector_github_get_file', 'connector_github_search', 'connector_notion_search',
   'connector_notion_get_page', 'connector_notion_query_database',
@@ -56,7 +56,7 @@ const READ_ONLY_TOOLS = new Set([
 const CREDENTIAL_READ_ONLY_TOOLS = new Set([
   'connector_ga4_run_report', 'connector_ga4_realtime_users', 'connector_ga4_list_properties',
   'connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file',
-  'connector_gdrive_search', 'connector_github_list_repos', 'connector_github_list_issues',
+  'connector_gdrive_search', 'connector_gdrive_api_request', 'connector_github_list_repos', 'connector_github_list_issues',
   'connector_github_list_prs', 'connector_github_get_pr', 'connector_github_list_commits', 'connector_github_list_check_runs', 'connector_github_get_file', 'connector_github_search', 'connector_notion_search',
   'connector_notion_get_page', 'connector_notion_query_database',
   'connector_hubspot_list_contacts', 'connector_hubspot_get_contact',

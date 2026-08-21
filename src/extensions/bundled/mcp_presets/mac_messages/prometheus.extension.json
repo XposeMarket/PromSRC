@@ -1,0 +1,27 @@
+{
+  "id": "mac-messages",
+  "kind": "mcp_preset",
+  "name": "Apple Messages",
+  "description": "MCP bridge for reading, searching, and sending messages through Messages.app on a signed-in Mac.",
+  "category": "Messaging",
+  "enabledByDefault": true,
+  "docsUrl": "https://github.com/carterlasalle/mac_messages_mcp",
+  "tags": ["mcp", "messaging", "imessage", "macos", "apple"],
+  "runtime": {
+    "binding": "gateway/mcp-presets/mac-messages"
+  },
+  "ui": {
+    "color": "#111827"
+  },
+  "ownership": {
+    "capabilities": ["mcp", "messaging", "chat_history", "notifications"]
+  },
+  "setup": {
+    "authType": "none"
+  },
+  "mcpPreset": {
+    "transport": "stdio",
+    "command": "uvx",
+    "args": ["mac-messages-mcp"]
+  }
+}

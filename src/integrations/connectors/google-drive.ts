@@ -63,6 +63,11 @@ export class GoogleDriveConnector extends OAuthConnector {
     return res.json();
   }
 
+  async requestDriveGet(path: string, params: Record<string, string> = {}): Promise<any> {
+    return this.driveGet(path, params);
+  }
+
+
   async listFiles(query = '', pageSize = 20): Promise<any[]> {
     const params: Record<string, string> = { pageSize: String(pageSize), fields: 'files(id,name,mimeType,modifiedTime,size,webViewLink,parents)' };
     if (query) params.q = query;

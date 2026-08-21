@@ -2,10 +2,11 @@
 import type { GoogleDriveConnector } from '../../../../integrations/connectors/google-drive.js';
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition, PrometheusToolExecutionResult } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
+import { validateGoogleDriveGetRequest } from '../../../../gateway/tools/google-drive-request-policy.js';
 
 const ID = 'google_drive';
 const NAME = 'Google Drive';
-const tools = ['connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file', 'connector_gdrive_search'];
+const tools = ['connector_gdrive_list_files', 'connector_gdrive_get_file', 'connector_gdrive_read_file', 'connector_gdrive_search', 'connector_gdrive_api_request'];
 
 async function withConn(fn: (c: GoogleDriveConnector) => Promise<PrometheusToolExecutionResult>): Promise<PrometheusToolExecutionResult> {
   if (!connectorConnected(ID)) return notConnected(NAME);
@@ -63,6 +64,17 @@ const ext: PrometheusExtensionDefinition = {
         const files = await c.searchFiles(args.query, args.page_size || 20);
         if (!files.length) return toolOk('No files found matching that query.');
         return toolOk(files.map((f: any) => `${f.id}: ${f.name} (${f.mimeType?.split('.').pop()}, ${f.webViewLink})`).join('\n'));
+      }),
+    });
+
+    api.registerTool({
+      name: 'connector_gdrive_api_request',
+      description: '[Google Drive] Read a provider-native Google Drive API v3 endpoint. Read-only GET requests are restricted to /drive/v3/.',
+      parameters: { type: 'object', required: ['path'], properties: { path: { type: 'string', description: 'Relative Google Drive API v3 path, for example /drive/v3/files' }, query: { type: 'object', description: 'Optional query parameters. Values must be strings, numbers, or booleans.' } } },
+      connectorId: ID, capability: 'drive',
+      execute: (args: any) => withConn(async (c) => {
+        const request = validateGoogleDriveGetRequest({ path: args.path, query: args.query });
+        return toolOk(await c.requestDriveGet(request.path, request.query));
       }),
     });
   },

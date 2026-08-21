@@ -45,7 +45,8 @@
       "connector_gdrive_list_files",
       "connector_gdrive_get_file",
       "connector_gdrive_read_file",
-      "connector_gdrive_search"
+      "connector_gdrive_search",
+      "connector_gdrive_api_request"
     ]
   },
   "setup": {
