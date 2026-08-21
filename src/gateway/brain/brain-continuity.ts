@@ -49,11 +49,25 @@ export interface BrainCarryForwardDecisionFile {
 const CAPSULE_DIR = path.join('Brain', 'context-capsules');
 const CARRY_START = '<!-- BRAIN_CARRY_FORWARD_START -->';
 const CARRY_END = '<!-- BRAIN_CARRY_FORWARD_END -->';
+const CAPSULE_KINDS = new Set(['active_work', 'decision', 'correction', 'blocker', 'time_sensitive', 'opportunity']);
+const CAPSULE_PRIORITIES = new Set<BrainContinuityPriority>(['critical', 'high', 'normal', 'low']);
+const CAPSULE_STATUSES = new Set<BrainContinuityStatus>(['active', 'in_progress', 'blocked', 'dormant', 'resolved']);
+const MATCH_STOP_WORDS = new Set([
+  'about', 'after', 'again', 'also', 'and', 'are', 'because', 'been', 'before', 'being', 'but', 'can', 'could',
+  'did', 'does', 'for', 'from', 'had', 'has', 'have', 'how', 'into', 'its', 'just', 'like', 'more', 'not', 'now',
+  'our', 'out', 'please', 'should', 'some', 'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this',
+  'those', 'through', 'too', 'was', 'were', 'what', 'when', 'where', 'which', 'while', 'who', 'why', 'will', 'with',
+  'would', 'you', 'your',
+]);
 
 function asStrings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((entry) => String(entry || '').trim()).filter(Boolean)
     : [];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
 function validIso(value: unknown): value is string {
@@ -63,25 +77,30 @@ function validIso(value: unknown): value is string {
 function parseCapsule(value: unknown): BrainThoughtCapsule | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as Record<string, unknown>;
-  const relevance = row.relevance && typeof row.relevance === 'object'
-    ? row.relevance as Record<string, unknown>
-    : {};
-  const priority = String(row.priority || 'normal') as BrainContinuityPriority;
-  const status = String(row.status || 'active') as BrainContinuityStatus;
+  if (!row.relevance || typeof row.relevance !== 'object' || Array.isArray(row.relevance)) return null;
+  const relevance = row.relevance as Record<string, unknown>;
+  const kind = String(row.kind || '').trim();
+  const priority = String(row.priority || '') as BrainContinuityPriority;
+  const status = String(row.status || '') as BrainContinuityStatus;
   if (!String(row.id || '').trim() || !String(row.threadKey || '').trim()) return null;
+  if (!CAPSULE_KINDS.has(kind) || !CAPSULE_PRIORITIES.has(priority) || !CAPSULE_STATUSES.has(status)) return null;
   if (!validIso(row.createdAt) || !validIso(row.expiresAt) || !validIso(row.lastValidatedAt)) return null;
   if (!String(row.summary || '').trim()) return null;
+  if (typeof row.nextUsefulAction !== 'string' || typeof row.verificationRequired !== 'boolean') return null;
+  if (!isStringArray(row.facts) || !isStringArray(row.evidence)) return null;
+  if (!isStringArray(relevance.projects) || !isStringArray(relevance.triggers) || !isStringArray(relevance.surfaces)) return null;
+  if (row.supersedes !== undefined && !isStringArray(row.supersedes)) return null;
   return {
     id: String(row.id).trim(),
     threadKey: String(row.threadKey).trim(),
-    kind: String(row.kind || 'active_work').trim(),
-    priority: ['critical', 'high', 'normal', 'low'].includes(priority) ? priority : 'normal',
-    status: ['active', 'in_progress', 'blocked', 'dormant', 'resolved'].includes(status) ? status : 'active',
+    kind,
+    priority,
+    status,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     summary: String(row.summary).trim(),
     facts: asStrings(row.facts),
-    nextUsefulAction: String(row.nextUsefulAction || '').trim(),
+    nextUsefulAction: row.nextUsefulAction.trim(),
     relevance: {
       projects: asStrings(relevance.projects),
       triggers: asStrings(relevance.triggers),
@@ -89,7 +108,7 @@ function parseCapsule(value: unknown): BrainThoughtCapsule | null {
     },
     evidence: asStrings(row.evidence),
     lastValidatedAt: row.lastValidatedAt,
-    verificationRequired: row.verificationRequired !== false,
+    verificationRequired: row.verificationRequired,
     supersedes: asStrings(row.supersedes),
   };
 }
@@ -141,7 +160,8 @@ export function loadActiveBrainThoughtCapsules(workspacePath: string, now = new 
 }
 
 function normalizeTerms(value: string): Set<string> {
-  return new Set(value.toLowerCase().match(/[a-z0-9][a-z0-9_-]{2,}/g) || []);
+  const terms = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]{2,}/g) || [];
+  return new Set(terms.filter((term) => !MATCH_STOP_WORDS.has(term)));
 }
 
 function capsuleScore(capsule: BrainThoughtCapsule, messageTerms: Set<string>): number {
