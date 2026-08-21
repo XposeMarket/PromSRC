@@ -40,6 +40,9 @@ async function main(): Promise<void> {
     assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 10_999, expectedPid: 4242 }), true);
     assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 11_000, expectedPid: 4242 }), false);
     assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 2_000, expectedPid: 9999 }), false);
+    assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 2_000, expectedPid: 4242, expectedProcessStartedAt: 500 }), true);
+    assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 2_000, expectedPid: 4242, expectedProcessStartedAt: 501 }), false);
+    assert.equal(isGatewayProgressLeaseFresh(persisted, { now: 2_001, expectedPid: 4242, maxProgressAgeMs: 500 }), false);
 
     const beforeHeartbeat = store.snapshot();
     now = 2_000;

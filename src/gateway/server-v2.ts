@@ -77,6 +77,7 @@ import { setShutdownHooks } from './lifecycle';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
+import { assertSupportedNodeRuntime } from './runtime/node-runtime';
 import {
   createTask, loadTask, saveTask, updateTaskStatus, setTaskStepRunning,
   updateTaskRuntimeProgress, appendJournal, updateResumeContext,
@@ -222,6 +223,7 @@ import { setNotifyBroadcastFn } from './teams/notify-bridge';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
+assertSupportedNodeRuntime('gateway');
 const configManager = getConfig();
 const config = configManager.getConfig();
 const CONFIG_DIR_PATH = configManager.getConfigDir();
