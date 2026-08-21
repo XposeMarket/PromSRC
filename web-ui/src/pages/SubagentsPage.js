@@ -1918,7 +1918,7 @@ function renderSubagentUnifiedDesktopChat(agent) {
         <div class="side-chat-title">${escHtml(agent.name || agent.id)}</div>
         <div class="unified-agent-chat-participants">Direct channel · tool activity and reasoning summaries stream live</div>
       </div>
-      <button class="side-chat-close" type="button" onclick="closeUnifiedSubagentChat('${escHtml(agent.id)}')" title="Return to overview" aria-label="Return to overview">×</button>
+      <button class="side-chat-close" type="button" onclick="closeUnifiedSubagentChat(${agentArg})" title="Return to overview" aria-label="Return to overview">×</button>
     </header>
     <div class="unified-agent-chat-messages" id="subagent-chat-messages">
       ${subagentUnifiedDesktopHistory(agent)}
@@ -1931,7 +1931,7 @@ function renderSubagentUnifiedDesktopChat(agent) {
       composerClass: 'unified-agent-chat-composer subagent-panel-chat-composer',
       placeholder: busy ? `Queue a message for ${agent.name || agent.id}...` : `Message ${agent.name || agent.id}...`,
       attachAction: 'openSubagentChatFilePicker()',
-      voiceAction: `startSubagentDesktopVoice(${agentArg})`,
+      voiceAction: "toggleUnifiedDesktopComposerDictation('subagent-chat-input', this)",
       sendAction: busy ? `abortSubagentChat(${agentArg})` : `sendSubagentChat(${agentArg})`,
       fileInputOnChange: `onSubagentChatFilesChosen(${agentArg}, this)`,
       inputAttributes: `onpaste="handleSubagentChatPaste(event, ${agentArg})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${agentArg});}"`,
@@ -1945,6 +1945,7 @@ function renderSubagentUnifiedDesktopChat(agent) {
 
 function closeUnifiedSubagentChat(agentId) {
   if (!agentId || activeSubagentId !== agentId) return;
+  captureSubagentChatDraft();
   subagentDetailTab = 'overview';
   closeSubagentReasoningPopover({ restoreFocus: false });
   renderSubagentBoard(agentId);
@@ -1963,8 +1964,16 @@ function renderSubagentBoard(agentId) {
   const chatDraftSelection = captureSubagentChatDraft();
   const chatScrollSnapshot = getSubagentChatScrollSnapshot();
   closeSubagentReasoningPopover({ restoreFocus: false });
+  const isChat = subagentDetailTab === 'chat';
 
-  header.innerHTML = `
+  // The unified chat header owns the in-chat identity and exit control. Keep
+  // the board header for Overview/Memory/Runs/Heartbeat, but never stack it
+  // above the chat surface.
+  header.hidden = isChat;
+  header.setAttribute('aria-hidden', String(isChat));
+  header.style.display = isChat ? 'none' : 'flex';
+
+  header.innerHTML = isChat ? '' : `
     <div style="display:flex;align-items:center;gap:12px;min-width:0">
       <div style="width:36px;height:36px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${emoji}</div>
       <div style="min-width:0">
@@ -1977,7 +1986,7 @@ function renderSubagentBoard(agentId) {
       <button onclick="closeSubagentDetail()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">✕</button>
     </div>`;
 
-  body.innerHTML = subagentDetailTab === 'chat'
+  body.innerHTML = isChat
     ? `<div id="subagent-tab-content" class="unified-agent-chat-tab-content" style="flex:1;min-height:0;overflow:hidden;padding:0">${renderSubagentUnifiedDesktopChat(agent)}</div>`
     : `
       <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
@@ -2523,87 +2532,10 @@ function renderSubagentRunsTab(agent) {
 }
 
 function renderSubagentChatTab(agent) {
-  const liveStream = getSubagentStreamingState(agent.id);
-  const isSending = !!(liveStream && liveStream.completed !== true);
-  const queuedCount = getSubagentChatQueue(agent.id).length;
-  const emoji = agentEmoji(agent);
-  const approvalsHtml = renderSubagentChatApprovals(agent.id);
-  const renderedMessages = subagentChatHistory.map(m => {
-    const isUser = m.role === 'user';
-    const rawSource = String(m.metadata?.source || '');
-    const isDirectUserMessage = isUser && (!rawSource || rawSource === 'subagent_chat');
-    const label = isDirectUserMessage
-      ? 'You'
-      : isUser && rawSource === 'schedule'
-        ? 'Scheduled task'
-        : isUser && (rawSource.includes('team') || rawSource === 'talk_to_subagent')
-          ? 'Manager'
-          : isUser
-            ? 'Prometheus'
-            : (m.role === 'system' ? 'System' : escHtml(agent.name||agent.id));
-    const source = rawSource === 'schedule' ? 'scheduled' : rawSource && rawSource !== 'subagent_chat' ? rawSource.replace(/_/g, ' ') : '';
-    const stepCount = m.steps || m.metadata?.stepCount;
-    const durationSec = m.duration || (m.metadata?.durationMs ? Math.round(m.metadata.durationMs / 1000) : 0);
-    const processHtml = !isUser ? renderSubagentProcessPill(m.metadata?.processEntries || [], 'sa_msg_proc') : '';
-    const attachments = Array.isArray(m.metadata?.attachmentPreviews) ? m.metadata.attachmentPreviews : [];
-    const visibleContent = stripSubagentUploadNote(m.content, attachments);
-    const contentHtml = isUser
-      ? `<div class="msg-content">${!isDirectUserMessage ? `<div style="font-size:11px;font-weight:800;margin-bottom:6px;opacity:0.78">${label}${source ? ` · ${source}` : ''}</div>` : ''}${renderSubagentAttachmentPreviews(attachments, agent.id, m.id)}${visibleContent ? escHtml(visibleContent) : ''}</div>`
-      : `<div class="msg-content markdown-body">${renderMd(m.content)}</div>`;
-    const workHtml = !isUser ? renderSubagentWorkTimer(m, durationSec) : '';
-    const traceDrawerHtml = !isUser ? renderSubagentTraceDrawer(m) : '';
-    const metaHtml = stepCount ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">${stepCount} steps${durationSec ? ` · ${formatSubagentElapsedSeconds(durationSec)}` : ''}</div>` : '';
-    return `
-      <div class="msg ${isUser ? 'user' : 'ai'}">
-        ${!isUser ? `<div class="msg-avatar" style="background:${agentColor(agent.id)};border-color:${agentColor(agent.id)};font-size:15px">${agentEmoji(agent)}</div>` : ''}
-        <div class="msg-body">
-          ${!isUser ? `<div class="msg-role">${label} · <span style="font-weight:400;opacity:0.75">${timeAgo(m.ts)}${source ? ` · ${source}` : ''}</span></div>` : ''}
-          ${workHtml}
-          ${traceDrawerHtml}
-          ${contentHtml}
-          ${processHtml}
-          ${metaHtml}
-        </div>
-      </div>`;
-  }).join('');
-  return `
-    <div id="subagent-chat-tab-shell" class="panel-chat-shell subagent-panel-chat-shell" style="position:relative;display:flex;flex-direction:column;height:100%;gap:0">
-      <div id="subagent-chat-messages" class="subagent-panel-chat-messages" style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;gap:18px;overflow-y:auto;padding:16px 0 8px">
-        ${subagentChatHistory.length === 0 && !approvalsHtml ? `
-          <div style="text-align:center;color:var(--muted);padding:32px 16px;font-size:13px">
-            <div style="font-size:32px;margin-bottom:10px">${emoji}</div>
-            <div style="font-weight:700;margin-bottom:6px">Chat with ${escHtml(agent.name||agent.id)}</div>
-            <div style="font-size:12px;line-height:1.5">Send a message to interact directly with this agent. Each message spawns the agent with the full conversation as context.</div>
-          </div>` : ''}
-        ${renderedMessages}
-        ${liveStream ? renderSubagentStreamingBubble(agent) : ''}
-        ${approvalsHtml}
-      </div>
-      <div class="chat-input-area panel-chat-composer subagent-panel-chat-composer" style="flex-shrink:0">
-        <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
-        <div id="subagent-chat-composer" style="display:flex;flex-direction:column;gap:6px">
-          <div id="subagent-chat-file-staging" class="chat-file-staging" style="display:none"></div>
-          <div class="chat-input-row">
-            <button type="button" class="chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            </button>
-            <button type="button" id="subagent-chat-voice-button" class="chat-voice-btn" title="Start voice mode" aria-label="Start voice mode" onclick="startSubagentDesktopVoice(${subagentChatJsArg(agent.id)})">
-              <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-            </button>
-            <div class="chat-composer-input-wrap">
-              <textarea id="subagent-chat-input" rows="1" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" class="chat-textarea" autocomplete="off" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
-            </div>
-            <button id="subagent-chat-send-button" class="send-btn" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" title="${isSending ? 'Stop' : 'Send'}">
-              ${isSending ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>' : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>'}
-            </button>
-          </div>
-          <div class="agent-toggle" style="display:flex;align-items:center;gap:8px;margin:0">
-            <div class="chat-hint" style="margin:0;flex:1">Enter to send · Shift+Enter for newline <span id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline' : 'none'};margin-left:8px;color:var(--brand);font-weight:700">${queuedCount} queued</span></div>
-            ${renderSubagentReasoningTrigger(agent)}
-          </div>
-        </div>
-      </div>
-    </div>`;
+  // Keep every desktop subagent chat on the same renderer used by the main
+  // chat, including message history, attachments, dictation, queue state,
+  // stop/send controls, and model/reasoning footer treatment.
+  return renderSubagentUnifiedDesktopChat(agent);
 }
 
 async function reloadSubagentRuns(agentId) {

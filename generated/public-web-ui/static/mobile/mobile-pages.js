@@ -350,7 +350,6 @@ function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
   return detail;
 }
 
-const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
 
 function _mobileSubagentModelParts(agent = {}) {
@@ -10044,7 +10043,7 @@ function _pmRefreshSlashChrome(page, input) {
   if (!pmActiveSlashCommand) {
     chip.hidden = true;
     chip.querySelector('.pm-command-chip-token').textContent = '';
-    input.placeholder = 'Type a message...';
+    input.placeholder = window.__pmMobileComposerPlaceholder || 'Type a message...';
     return;
   }
   chip.hidden = false;
@@ -10645,6 +10644,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     bindMobileSessionTarget(requestedSession, gatewayTarget.gatewayId, { started: true });
   }
   setMobileActiveGatewayTarget(gatewayTarget);
+  try {
+    window.__pmMobileComposerPlaceholder = requestedSession === MOBILE_CHAT_SESSION_ID
+      ? 'Send Prometheus a message'
+      : `Work on ${gatewayTarget?.name || 'this computer'}`;
+  } catch {}
   try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
   // A gateway paired before direct execution was enabled can still have a
   // cached read-only descriptor in localStorage. Refresh remote capability
@@ -10835,7 +10839,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
         <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
           <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.monitor}</span>
-          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong><small>Connected computer</small></span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong></span>
           <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
         </button>
         <button type="button" class="pm-new-chat-context-row" id="pm-new-chat-project" aria-label="Current directed chat" aria-expanded="false">
@@ -10874,7 +10878,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
-          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
@@ -35209,8 +35213,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+            <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
     <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
   `;
@@ -40678,8 +40681,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <div class="pm-header-actions">
+            <div class="pm-header-actions">
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>
     </header>

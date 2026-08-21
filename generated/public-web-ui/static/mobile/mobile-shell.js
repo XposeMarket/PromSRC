@@ -1184,8 +1184,6 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   _drawerEl = el(`
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
       <div class="pm-drawer-brand">
-        <span class="pm-brand-flame">🔥</span>
-        <span class="pm-drawer-brand-legacy">Prometheus</span>
         <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
@@ -1513,6 +1511,7 @@ let _sessLongPressTimer = null;
 let _sessLongFired = false;
 let _sessLongTargetId = null;
 let _sessLongTargetTitle = null;
+let _sessLongTargetType = 'session';
 let _sessLongStartX = 0;
 let _sessLongStartY = 0;
 let _sessLongCallbacks = null;
@@ -1525,10 +1524,10 @@ function _wireDrawerLongPress(callbacks) {
   // Resolve a session button from either the button itself or the haptic overlay host.
   var _resolveSessionButton = function(node) {
     if (!node || !node.closest) return null;
-    var btn = node.closest('[data-session-id]');
+    var btn = node.closest('[data-session-id], [data-project-toggle]');
     if (btn) return btn;
     var host = node.closest('.pm-haptic-host');
-    if (host) return host.querySelector('[data-session-id]');
+    if (host) return host.querySelector('[data-session-id], [data-project-toggle]');
     return null;
   };
 
@@ -1545,7 +1544,8 @@ function _wireDrawerLongPress(callbacks) {
     // The class is removed immediately for scrolling/taps and stays during the menu.
     document.documentElement.classList.add('pm-session-long-press-pending');
     _sessLongFired = false;
-    _sessLongTargetId = sessionBtn.getAttribute('data-session-id');
+    _sessLongTargetId = sessionBtn.getAttribute('data-session-id') || sessionBtn.getAttribute('data-project-toggle');
+    _sessLongTargetType = sessionBtn.hasAttribute('data-project-toggle') ? 'project' : 'session';
     _sessLongTargetTitle = (sessionBtn.querySelector('.pm-session-title') || {}).textContent || '';
     _sessLongStartX = e.clientX;
     _sessLongStartY = e.clientY;
@@ -1559,7 +1559,7 @@ function _wireDrawerLongPress(callbacks) {
       document.documentElement.classList.remove('pm-session-long-press-pending');
       sessionBtn.classList.add('pm-session-long-pressed');
       setTimeout(function() { sessionBtn.classList.remove('pm-session-long-pressed'); }, 300);
-      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {}, sessionBtn.getBoundingClientRect());
+      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {}, sessionBtn.getBoundingClientRect(), _sessLongTargetType);
       document.documentElement.classList.add('pm-session-context-open');
     }, _SESS_LONG_PRESS_MS);
   };
@@ -1864,6 +1864,7 @@ function _renderDrawerProjects() {
       '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + '</div>' +
       '</div>'
     : '';
+  _wireDrawerLongPress(_sessLongCallbacks || {});
 }
 
 // Keep the mobile drawer on the same approved local source artwork as the
@@ -1939,10 +1940,14 @@ function _projectButtonHtml(project) {
   const isPinned = _isProjectPinned(project);
   const logo = project?.externalImport ? _mobileImportedSourceLogo({ externalImport: project.externalImport }) : '';
   const activity = Number(project?.updatedAt || project?.createdAt || 0);
+  const latestSession = (Array.isArray(project?.sessions) ? project.sessions : [])
+    .slice()
+    .sort((a, b) => Number(b?.lastMessageAt || b?.updatedAt || b?.createdAt || 0) - Number(a?.lastMessageAt || a?.updatedAt || a?.createdAt || 0))[0];
+  const projectPreview = String(latestSession?.preview || '').trim();
   return `<div class="pm-project-group${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned-project' : ''}" data-project-id="${escapeHtml(id)}">
     <div class="pm-session-row pm-project-row" data-project-toggle="${escapeHtml(id)}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">
-      <span class="pm-session-row-top"><span class="pm-session-title-line"><span class="pm-project-folder-icon pm-i" aria-hidden="true">${ICONS.folder}</span>${logo}<span class="pm-session-title">${escapeHtml(title)}</span></span><button class="pm-project-pin" type="button" data-project-pin="${escapeHtml(id)}" aria-label="${isPinned ? 'Unpin' : 'Pin'} project">${ICONS.pin}</button></span>
-      ${activity > 0 ? `<span class="pm-session-subline"><span class="pm-session-gateway">${escapeHtml(`${Array.isArray(project.sessions) ? project.sessions.length : 0} chats`)}</span><time class="pm-session-time">${escapeHtml(timeAgo(activity))}</time></span>` : ''}
+      <span class="pm-session-row-top"><span class="pm-session-title-line"><span class="pm-project-folder-icon pm-i" aria-hidden="true">${ICONS.folder}</span>${logo}<span class="pm-session-title">${escapeHtml(title)}</span></span></span>
+      ${(projectPreview || activity > 0) ? `<span class="pm-session-subline">${projectPreview ? `<span class="pm-session-preview">${escapeHtml(projectPreview)}</span>` : ''}${activity > 0 ? `<time class="pm-session-time">${escapeHtml(timeAgo(activity))}</time>` : ''}</span>` : ''}
     </div>
     ${_projectSessionRows(project)}
   </div>`;
@@ -1969,10 +1974,8 @@ function _sessionButtonHtml(session, options = {}) {
     : '';
   const showGatewayContext = _shouldShowMobileGatewayContext();
   const showGatewayName = showGatewayContext && session?.gatewayName;
-  const secondaryText = String(showGatewayName || roomRoster || visiblePreview || '').trim();
-  const secondaryClass = showGatewayName
-    ? 'pm-session-gateway pm-session-computer'
-    : roomRoster ? 'pm-session-gateway' : 'pm-session-preview';
+  const secondaryText = String(roomRoster || visiblePreview || '').trim();
+  const secondaryClass = roomRoster ? 'pm-session-gateway' : 'pm-session-preview';
   // Origin channel (Desktop / Telegram / Mobile) is intentionally not shown
   // in the sessions list — keep title, state, roster, and preview only.
   return `
@@ -2002,7 +2005,6 @@ function _searchResultButtonHtml(session, query) {
   return `
     <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}${importedClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title-line">${sourceLogo}<span class="pm-session-title">${escapeHtml(title)}</span></span>${state.stateLabel}</span>
-      ${_shouldShowMobileGatewayContext() && session?.gatewayName ? `<span class="pm-session-gateway pm-session-computer">${escapeHtml(session.gatewayName)}</span>` : ''}
       ${projectLabel ? `<span class="pm-search-meta">${projectLabel}</span>` : ''}
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
       ${timestamp ? `<time class="pm-session-time" datetime="${new Date(Number(session.lastMessageAt || session.lastActiveAt || session.createdAt)).toISOString()}">${escapeHtml(timestamp)}</time>` : ''}
@@ -2031,11 +2033,13 @@ function _closeSessionSheetImmediate() {
   document.getElementById('pm-sess-sheet') && document.getElementById('pm-sess-sheet').remove();
 }
 
-function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect = null) {
+function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect = null, itemType = 'session') {
   _closeSessionSheetImmediate();
-  const pinned = _isPinned(sessionId);
-  const cachedSession = _findCachedDrawerSession(sessionId);
-  const settled = _drawerSessionView === 'settled' || cachedSession?.settled === true || Number(cachedSession?.settledAt || 0) > 0;
+  const isProject = itemType === 'project';
+  const project = isProject ? _drawerProjects.find((item) => String(item?.id || '') === String(sessionId)) : null;
+  const pinned = isProject ? _isProjectPinned(project) : _isPinned(sessionId);
+  const cachedSession = isProject ? null : _findCachedDrawerSession(sessionId);
+  const settled = isProject ? project?.settled === true || Number(project?.settledAt || 0) > 0 : _drawerSessionView === 'settled' || cachedSession?.settled === true || Number(cachedSession?.settledAt || 0) > 0;
   const cb = callbacks || {};
 
   const scrim = document.createElement('div');
@@ -2050,6 +2054,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
   sheet.setAttribute('aria-label', 'Chat options');
 
   const pinLabel = pinned ? 'Unpin from top' : 'Pin to top';
+  const itemLabel = isProject ? 'Project' : 'Chat';
   const titleSafe = escapeHtml(sessionTitle || 'Chat');
   const pinIconSvg = ICONS.pin;
   const trashIconSvg = ICONS.trash;
@@ -2083,7 +2088,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
         '</button>' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
-          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete chat</span>' +
+          '<span class="pm-msheet-row-label pm-sess-delete-label">Delete ' + itemLabel.toLowerCase() + '</span>' +
         '</button>' +
       '</div>' +
     '</div>';
@@ -2104,7 +2109,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
   if (renameBtn) renameBtn.addEventListener('click', function() {
     pmHaptic(10);
     _closeSessionSheetImmediate();
-    _openSessionRenameSheet(sessionId, sessionTitle, cb);
+    _openSessionRenameSheet(sessionId, sessionTitle, cb, itemType);
   });
 
   var pinBtn = sheet.querySelector('[data-sess-action="pin"]');
@@ -2112,7 +2117,9 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
     pmHaptic(10);
     pinBtn.disabled = true;
     try {
-      var nowPinned = await _togglePin(sessionId);
+      var nowPinned = isProject
+        ? await _toggleProjectPin(project)
+        : await _togglePin(sessionId);
       close();
       if (_drawerEl && _drawerCallbacks) {
         _resetDrawerPageState();
@@ -2148,10 +2155,12 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
     pmHaptic(10);
     settleBtn.disabled = true;
     var run = function(confirmPinned) {
-      return _mobileSessionRequest(sessionId, settled ? '/unsettle' : '/settle', {
-        method: 'POST',
-        body: JSON.stringify(settled ? {} : { confirmPinned: confirmPinned === true }),
-      });
+      return itemType === 'project'
+        ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId), { method: 'PATCH', body: JSON.stringify({ settled: !settled }) })
+        : _mobileSessionRequest(sessionId, settled ? '/unsettle' : '/settle', {
+          method: 'POST',
+          body: JSON.stringify(settled ? {} : { confirmPinned: confirmPinned === true }),
+        });
     };
     try {
       await run(false);
@@ -2189,11 +2198,11 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
   if (deleteBtn) deleteBtn.addEventListener('click', function() {
     pmHaptic(10);
     _closeSessionSheetImmediate();
-    _openSessionDeleteConfirmSheet(sessionId, sessionTitle, cb);
+    _openSessionDeleteConfirmSheet(sessionId, sessionTitle, cb, itemType);
   });
 }
 
-function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
+function _openSessionRenameSheet(sessionId, currentTitle, callbacks, itemType = 'session') {
   _closeSessionSheetImmediate();
   var cb = callbacks || {};
 
@@ -2211,7 +2220,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
     '<div class="pm-msheet-head">' +
-      '<div class="pm-msheet-title">Rename Chat</div>' +
+      '<div class="pm-msheet-title">Rename ' + (itemType === 'project' ? 'Project' : 'Chat') + '</div>' +
       '<button type="button" class="pm-msheet-close" aria-label="Close">&times;</button>' +
     '</div>' +
     '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
@@ -2282,10 +2291,9 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
     var saveBtn = document.getElementById('pm-sess-rename-save');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving\u2026'; }
     try {
-      await _mobileSessionRequest(sessionId, '', {
-        method: 'PATCH',
-        body: JSON.stringify({ title: newTitle }),
-      });
+      await (itemType === 'project'
+        ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId), { method: 'PATCH', body: JSON.stringify({ name: newTitle }) })
+        : _mobileSessionRequest(sessionId, '', { method: 'PATCH', body: JSON.stringify({ title: newTitle }) }));
       pmHaptic(10);
       close();
       if (_drawerEl && _drawerCallbacks) {
@@ -2293,7 +2301,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
         _renderDrawerSessions(_drawerCallbacks).catch(function() {});
       }
       try { window.dispatchEvent(new CustomEvent('pm-session-renamed', { detail: { sessionId: sessionId, title: newTitle } })); } catch(e) {}
-      try { if (window.pmToast) window.pmToast('Chat renamed', 'success'); } catch(e) {}
+      try { if (window.pmToast) window.pmToast((itemType === 'project' ? 'Project' : 'Chat') + ' renamed', 'success'); } catch(e) {}
     } catch(err) {
       try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not rename chat', 'error'); } catch(e) {}
       if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
@@ -2307,7 +2315,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
   });
 }
 
-function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks) {
+function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, itemType = 'session') {
   _closeSessionSheetImmediate();
   var cb = callbacks || {};
 
@@ -2359,7 +2367,9 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks) {
     var lbl = confirmBtn.querySelector('.pm-msheet-row-label');
     if (lbl) lbl.textContent = 'Deleting\u2026';
     try {
-      await _mobileSessionRequest(sessionId, '', { method: 'DELETE' });
+      await (itemType === 'project'
+         ? mobileGatewayFetch('/api/projects/' + encodeURIComponent(sessionId), { method: 'DELETE' })
+         : _mobileSessionRequest(sessionId, '', { method: 'DELETE' }));
       pmHaptic(14);
       // Remove from pin list
       _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));
@@ -2486,7 +2496,6 @@ export function renderMobileHeader({ title, online = true, leftIcon = 'menu', on
     <header class="pm-header${hideBrand ? ' pm-header-hide-brand' : ''}">
       <button class="pm-icon-btn" data-action="${leftIcon === 'back' ? 'back' : 'menu'}" aria-label="${leftIcon === 'back' ? 'Back' : 'Menu'}">${ICONS[leftIcon]}</button>
       ${modelBadge}
-      <div class="pm-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
       <div class="pm-header-actions">
         ${headerRightActions}
       </div>

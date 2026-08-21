@@ -1471,28 +1471,6 @@ body.pm-model-badge-pressing * {
   background: rgba(255,255,255,.14);
   box-shadow: 1px 0 0 rgba(0,0,0,.28);
 }
-.pm-brand {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: .2px;
-}
-.pm-header-hide-brand .pm-brand { display: none; }
-.pm-brand-flame {
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0;
-  color: transparent;
-  background: url('/assets/Prometheus.png') center / contain no-repeat;
-  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--pm-orange) 28%, transparent));
-}
 .pm-brand-logo {
   width: 100%;
   height: 100%;
@@ -1909,7 +1887,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 0;
   min-width: 0;
-  color: rgba(34,26,20,.68);
+  color: #fff !important;
   font-size: 10px; font-weight: 800;
   cursor: pointer;
   padding: 4px 2px;
@@ -1932,7 +1910,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pm-tab.active { color: rgba(34,26,20,.68); }
+.pm-tab.active { color: #fff !important; }
 /* The real magnify is now the spatial lens layer (.pm-tab-magnify), which
    enlarges only the icon pixels physically under the glass. Keep just a gentle
    resting lift on the selected icon so it reads as "raised", and DON'T binary
@@ -2048,8 +2026,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-shadow: 0 1px 2px rgba(0,0,0,.5);
 }
 
-:root[data-theme="dark"] .pm-tab { color: rgba(242,238,231,.66); text-shadow: 0 1px 2px rgba(0,0,0,.34); }
-:root[data-theme="dark"] .pm-tab.active { color: rgba(242,238,231,.66); }
+:root[data-theme="dark"] .pm-tab { color: #fff !important; text-shadow: 0 1px 2px rgba(0,0,0,.34); }
+:root[data-theme="dark"] .pm-tab.active { color: #fff !important; }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .pm-tabbar {
@@ -2128,7 +2106,6 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border: 1px solid color-mix(in srgb, var(--pm-border, rgba(255,255,255,.18)) 90%, transparent);
   border-radius: 999px;
   background: transparent;
-  color: var(--pm-text-soft, #f6f4f0);
   font: 700 11px/1 var(--pm-font);
   white-space: nowrap;
   cursor: pointer;
@@ -2364,8 +2341,8 @@ html.pm-session-context-open * {
   margin: 6px 0 2px;
 }
 .pm-drawer-section-title {
-  font-size: 11px;
-  letter-spacing: 1.2px;
+  font-size: 13px;
+  letter-spacing: 1.05px;
   text-transform: uppercase;
   color: rgba(246,244,240,.58);
   font-weight: 800;
@@ -10876,16 +10853,55 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 .pm-mobile-side-composer.pm-composer {
   position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px);
+  left: var(--pm-mobile-chrome-inset, 22px);
+  right: var(--pm-mobile-chrome-inset, 22px);
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px));
   z-index: 2;
+  padding: 3px 7px;
+  border-radius: 999px;
 }
 .pm-keyboard-open .pm-mobile-side-composer.pm-composer {
   bottom: calc(var(--pm-keyboard-offset, 0px) + 8px);
 }
-.pm-mobile-side-composer .pm-composer-row { transform: translateY(0); }
-.pm-mobile-side-composer .pm-composer-input { min-height: 34px; }
+.pm-mobile-side-composer .pm-composer-row,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
+  display: flex;
+  grid-template-columns: none;
+  grid-template-rows: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  transform: none;
+}
+.pm-mobile-side-composer .pm-composer-input-wrap,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap {
+  flex: 1;
+  grid-column: auto;
+  grid-row: auto;
+  width: auto;
+  min-height: 34px;
+  align-self: center;
+  display: flex;
+}
+.pm-mobile-side-composer .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer .pm-composer-row > .pm-send,
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  align-self: center;
+  margin: 0;
+  padding: 0;
+  justify-self: auto;
+}
+.pm-mobile-side-composer .pm-composer-row > .pm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pm-mobile-side-composer .pm-composer-input { min-height: 30px; }
 .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-composer {
   display: block;
 }
@@ -17782,11 +17798,13 @@ body.pm-mobile-active .pm-drawer .pm-session-title {
 body.pm-mobile-active .pm-drawer :is(.pm-drawer-section-title, .pm-session-gateway, .pm-session-state) {
   color: var(--pm-p1-gold, #d6b75e) !important;
 }
-body.pm-mobile-active .pm-drawer .pm-session-computer {
-  color: #3d8bff !important;
+body.pm-mobile-active .pm-drawer .pm-session-computer,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill,
+body.pm-mobile-active .pm-drawer .pm-drawer-gateway-pill-label {
+  color: #fff !important;
 }
 :root[data-skin="blue"] body.pm-mobile-active .pm-drawer .pm-session-computer {
-  color: #aeb9ca !important;
+  color: #fff !important;
 }
 body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
@@ -18013,6 +18031,21 @@ body.pm-mobile-active .pm-ctx-popover {
   box-shadow: none !important;
 }
 
+/* Keep project cards prominent while giving regular chat session titles a lighter hierarchy. */
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
+  font-weight: 650;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
+  font-weight: 750;
+}
+
+
 /* The drawer search is an icon-only control until the user asks for it. */
 body.pm-mobile-active .pm-drawer-search-toggle,
 body.pm-mobile-active .pm-theme-toggle {
@@ -18172,4 +18205,26 @@ body.pm-mobile-active :where(
 ) {
   border-width: 0 !important;
   border-color: transparent !important;
+}
+
+
+/* Keep mobile page-tab labels/icons neutral white across every theme. */
+body.pm-mobile-active .pm-tab,
+body.pm-mobile-active .pm-tab.active,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab.active {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.28);
+}
+body.pm-mobile-active .pm-tab svg,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab svg {
+  color: #fff;
+}
+
+/* Selected computer filters need dark content against their white pill. */
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-label,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-icon,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active svg {
+  color: #111;
 }
