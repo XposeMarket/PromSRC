@@ -41,6 +41,10 @@ import {
   persistBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
+import { flushStreamingRenderFor, scheduleStreamingRenderFor } from '../features/chat/streaming/render-coalescer.js';
+import { captureApprovalDetailsState, captureProcessPanelScroll, captureQuestionDraftState, restoreApprovalDetailsState, restoreProcessPanelScroll, restoreQuestionDraftState } from '../features/chat/timeline/render-state.js';
+import { renderUnifiedDesktopComposerHtml, toggleUnifiedDesktopComposerDictation } from '../features/chat/composer/desktop-composer.js';
+import { getApprovalRiskLevel, normalizeChatApprovalRecord } from '../features/chat/approvals/model.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
 
@@ -13683,121 +13687,9 @@ function renderUnifiedDesktopLiveMessageHtml(message, options = {}) {
   });
 }
 
-function renderUnifiedDesktopComposerHtml(options = {}) {
-  const inputId = String(options.inputId || 'unified-chat-input').trim();
-  const fileInputId = String(options.fileInputId || `${inputId}-file-input`).trim();
-  const stagingId = String(options.stagingId || '').trim();
-  const sendButtonId = String(options.sendButtonId || `${inputId}-send-button`).trim();
-  const placeholder = String(options.placeholder || 'Send a message').trim();
-  const composerClass = String(options.composerClass || '').trim();
-  const inputClass = String(options.inputClass || 'chat-textarea').trim();
-  const inputAttributes = String(options.inputAttributes || '').trim();
-  const inputStyle = String(options.inputStyle || '').trim();
-  const inputWrapClass = String(options.inputWrapClass || '').trim();
-  const inputWrapStyle = String(options.inputWrapStyle || '').trim();
-  const extraTopMarkup = String(options.extraTopMarkup || '');
-  const extraInputMarkup = String(options.extraInputMarkup || '');
-  const footerExtraMarkup = String(options.footerExtraMarkup || '');
-  const fileInputOnChange = String(options.fileInputOnChange || '').trim();
-  const attachAction = String(options.attachAction || `document.getElementById('${fileInputId}')?.click()`).trim();
-  const voiceAction = String(options.voiceAction || '').trim();
-  const sendAction = String(options.sendAction || '').trim();
-  const footerHint = String(options.footerHint || '').trim();
-  const modelName = String(options.modelName || document.getElementById('chat-model-name')?.textContent || 'your model').trim();
-  const queueBadgeId = String(options.queueBadgeId || '').trim();
-  const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
-  const busy = options.busy === true;
-  const attachButton = `<button class="chat-attach-btn" type="button" onclick="${attachAction}" title="Attach file(s)" aria-label="Attach file(s)">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-  </button>`;
-  const voiceButton = `<button class="chat-voice-btn" type="button"${voiceAction ? ` onclick="${voiceAction}"` : ''} title="Dictate message" aria-label="Dictate message">
-    <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-  </button>`;
-  const sendIcon = busy
-    ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>'
-    : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>';
-  const queueBadge = queueBadgeId
-    ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
-    : '';
-  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1">
-    ${extraTopMarkup}
-    ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
-    <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
-    <div class="chat-input-row">
-      ${attachButton}
-      ${voiceButton}
-      <div class="chat-composer-input-wrap ${escHtml(inputWrapClass)}"${inputWrapStyle ? ` style="${inputWrapStyle}"` : ''}>
-        ${extraInputMarkup}
-        <textarea id="${escHtml(inputId)}" class="${escHtml(inputClass)}" rows="1" placeholder="${escHtml(placeholder)}" autocomplete="off"${inputStyle ? ` style="${inputStyle}"` : ''}${inputAttributes ? ` ${inputAttributes}` : ''}></textarea>
-      </div>
-      <button id="${escHtml(sendButtonId)}" class="send-btn" type="button" onclick="${sendAction}" title="${busy ? 'Stop' : 'Send'}" aria-label="${busy ? 'Stop' : 'Send'}">${sendIcon}</button>
-    </div>
-    <div class="agent-toggle unified-desktop-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
-      <div class="chat-hint" style="margin:0;flex:1">${escHtml(footerHint)}${queueBadge}</div>
-      ${footerExtraMarkup}
-      <div class="chat-model-switcher-wrap">
-        <button type="button" class="unified-chat-model-label" title="Chat model" aria-label="Chat model">
-          <span>${escHtml(modelName)}</span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-      </div>
-    </div>
-  </div>`;
-}
 
-function toggleUnifiedDesktopComposerDictation(inputId, button = null) {
-  const input = document.getElementById(String(inputId || '').trim());
-  if (!input) return;
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    showToast('Speech unavailable', 'This browser does not expose speech dictation.', 'error');
-    return;
-  }
-  const states = window.__promUnifiedDesktopDictationStates || (window.__promUnifiedDesktopDictationStates = {});
-  const key = String(inputId || '').trim();
-  const existing = states[key];
-  if (existing?.recognition) {
-    existing.active = false;
-    try { existing.recognition.stop(); } catch {}
-    delete states[key];
-    button?.classList.remove('recording', 'active');
-    return;
-  }
-  const recognition = new SpeechRecognition();
-  const state = { recognition, active: true };
-  states[key] = state;
-  recognition.lang = navigator.language || 'en-US';
-  recognition.interimResults = false;
-  recognition.continuous = false;
-  button?.classList.add('recording', 'active');
-  recognition.onresult = (event) => {
-    const transcript = Array.from(event.results || [])
-      .map((result) => String(result?.[0]?.transcript || ''))
-      .join(' ')
-      .trim();
-    if (!transcript || !state.active) return;
-    const current = String(input.value || '').trimEnd();
-    input.value = `${current}${current ? ' ' : ''}${transcript}`;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
-  };
-  recognition.onerror = (event) => {
-    if (!state.active) return;
-    const error = String(event?.error || 'unknown');
-    if (!['no-speech', 'aborted'].includes(error)) showToast('Dictation error', error === 'not-allowed' ? 'Microphone permission was denied.' : 'Could not transcribe that recording.', 'error');
-  };
-  recognition.onend = () => {
-    if (states[key] === state) delete states[key];
-    button?.classList.remove('recording', 'active');
-  };
-  try {
-    recognition.start();
-  } catch (err) {
-    delete states[key];
-    button?.classList.remove('recording', 'active');
-    showToast('Dictation unavailable', err?.message || 'Could not start dictation.', 'error');
-  }
-}
+
+
 
 function renderSessionThinkingBodyHtml(sessionId) {
   const st = getSessionStreamState(sessionId) || {};
@@ -13996,36 +13888,7 @@ function renderBackgroundAgentSidePaneHtml(record) {
     </section>`;
 }
 
-// ── Streaming render coalescer ──────────────────────────────────────────────
-// During an active turn, token/live-trace appends arrive faster than is useful
-// to repaint. State (streamingAIText, liveTraceEntries) is still updated
-// immediately on every token; only the *visible* render is coalesced to a steady
-// cadence so the final answer streams in a few words at a time (like Telegram's
-// bubble edits) instead of flickering per token. Timers are keyed per session id
-// so a background/non-viewed session can never repaint the foreground — the
-// render fns themselves also guard on visibility. Every finalization path must
-// flush so the complete final answer always lands.
-const STREAM_RENDER_THROTTLE_MS = 180;
-const _streamRenderTimers = new Map(); // sessionId -> timeout handle
 
-function scheduleStreamingRenderFor(sessionId, renderFn) {
-  const key = String(sessionId || '');
-  if (!key || typeof renderFn !== 'function') { try { renderFn?.(); } catch {} return; }
-  if (_streamRenderTimers.has(key)) return; // leading-guard coalesce
-  const handle = setTimeout(() => {
-    _streamRenderTimers.delete(key);
-    try { renderFn(); } catch {}
-  }, STREAM_RENDER_THROTTLE_MS);
-  if (handle && typeof handle.unref === 'function') handle.unref();
-  _streamRenderTimers.set(key, handle);
-}
-
-function flushStreamingRenderFor(sessionId, renderFn) {
-  const key = String(sessionId || '');
-  const handle = _streamRenderTimers.get(key);
-  if (handle) { clearTimeout(handle); _streamRenderTimers.delete(key); }
-  if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
-}
 
 function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const key = String(sessionId || window.activeChatSessionId || 'chat');
@@ -14061,114 +13924,14 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
 // innerHTML rebuild, so streaming re-renders don't yank the user's scroll or
 // snap an open process log back to the top. Panels that were scrolled to the
 // bottom keep following; panels the user scrolled up in keep their position.
-function captureProcessPanelScroll() {
-  const map = {};
-  try {
-    document.querySelectorAll('#current-turn-process, [id^="proc_msg_"], [id^="proc_"]').forEach((el) => {
-      if (!el || !el.id) return;
-      if (el.style && el.style.display === 'none') return;
-      const atBottom = (el.scrollHeight - (el.scrollTop + el.clientHeight)) <= 24;
-      map[el.id] = { scrollTop: el.scrollTop, atBottom };
-    });
-  } catch {}
-  return map;
-}
-function restoreProcessPanelScroll(map) {
-  if (!map) return;
-  try {
-    Object.keys(map).forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.scrollTop = map[id].atBottom ? el.scrollHeight : map[id].scrollTop;
-    });
-  } catch {}
-}
+
+
 
 // Preserve in-progress answers in pending Prometheus question cards across the
 // full innerHTML rebuild — otherwise a streaming re-render wipes the user's
 // selections/typed text a few seconds after they tap an option.
-function captureQuestionDraftState() {
-  const out = {};
-  try {
-    document.querySelectorAll('[data-question-id]').forEach((card) => {
-      // Only the card root carries data-question-id with a child input structure.
-      const qid = card.getAttribute('data-question-id');
-      if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
-      const state = { checked: [], texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-question-compose-target') || '', focus: null };
-      card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
-        state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
-      });
-      card.querySelectorAll('[data-question-text]').forEach((el) => { state.texts[el.getAttribute('data-question-text')] = el.value || ''; });
-      card.querySelectorAll('[data-question-other]').forEach((el) => { state.others[el.getAttribute('data-question-other')] = { value: el.value || '', hidden: el.hasAttribute('hidden') }; });
-      const gen = card.querySelector('[data-question-general-other="1"]');
-      if (gen) state.general = gen.value || '';
-      // Preserve which textbox is focused + caret position, so streaming
-      // re-renders don't steal focus / interrupt typing.
-      try {
-        const active = document.activeElement;
-        if (active && card.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
-          let kind = '', key = '';
-          if (active.hasAttribute('data-question-general-other')) { kind = 'general'; }
-          else if (active.hasAttribute('data-question-text')) { kind = 'text'; key = active.getAttribute('data-question-text') || ''; }
-          else if (active.hasAttribute('data-question-other')) { kind = 'other'; key = active.getAttribute('data-question-other') || ''; }
-          if (kind) {
-            state.focus = {
-              kind,
-              key,
-              selStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
-              selEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
-            };
-          }
-        }
-      } catch {}
-      out[qid] = state;
-    });
-  } catch {}
-  return out;
-}
-function restoreQuestionDraftState(map) {
-  if (!map) return;
-  try {
-    Object.keys(map).forEach((qid) => {
-      const sel = (window.CSS && CSS.escape) ? CSS.escape(qid) : qid;
-      const card = document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
-      if (!card) return;
-      const state = map[qid];
-      if (state.composeTarget) card.setAttribute('data-question-compose-target', state.composeTarget);
-      const want = new Set(state.checked || []);
-      card.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((el) => {
-        if (want.has(`${el.getAttribute('data-question-id') || ''}::${el.value}`)) el.checked = true;
-      });
-      Object.entries(state.texts || {}).forEach(([id, val]) => {
-        const el = card.querySelector(`[data-question-text="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
-        if (el) el.value = val;
-      });
-      Object.entries(state.others || {}).forEach(([id, info]) => {
-        const el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
-        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
-      });
-      const gen = card.querySelector('[data-question-general-other="1"]');
-      if (gen) gen.value = state.general || '';
-      // Re-focus the textbox the user was typing in and restore the caret,
-      // so a streaming re-render mid-keystroke doesn't drop focus.
-      try {
-        if (state.focus && state.focus.kind) {
-          let el = null;
-          if (state.focus.kind === 'general') el = gen;
-          else if (state.focus.kind === 'text') el = card.querySelector(`[data-question-text="${(window.CSS && CSS.escape) ? CSS.escape(state.focus.key) : state.focus.key}"]`);
-          else if (state.focus.kind === 'other') el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(state.focus.key) : state.focus.key}"]`);
-          if (el && !el.hasAttribute('hidden') && document.activeElement !== el) {
-            el.focus({ preventScroll: true });
-            const len = el.value ? el.value.length : 0;
-            const s = state.focus.selStart == null ? len : Math.min(state.focus.selStart, len);
-            const e = state.focus.selEnd == null ? len : Math.min(state.focus.selEnd, len);
-            if (typeof el.setSelectionRange === 'function') el.setSelectionRange(s, e);
-          }
-        }
-      } catch {}
-    });
-  } catch {}
-}
+
+
 
 function captureApprovalProcessState() {
   const out = {};
@@ -14202,38 +13965,9 @@ function restoreApprovalProcessState(map) {
   } catch {}
 }
 
-function captureApprovalDetailsState() {
-  const out = {};
-  try {
-    document.querySelectorAll('.chat-approval-card[data-approval-id]').forEach((card) => {
-      const approvalId = String(card.getAttribute('data-approval-id') || '').trim();
-      if (!approvalId) return;
-      card.querySelectorAll('details.chat-approval-technical').forEach((details) => {
-        const label = String(details.querySelector('summary')?.textContent || '').trim();
-        if (!label) return;
-        out[`${approvalId}::${label}`] = details.open === true;
-      });
-    });
-  } catch {}
-  return out;
-}
 
-function restoreApprovalDetailsState(map) {
-  if (!map) return;
-  try {
-    document.querySelectorAll('.chat-approval-card[data-approval-id]').forEach((card) => {
-      const approvalId = String(card.getAttribute('data-approval-id') || '').trim();
-      if (!approvalId) return;
-      card.querySelectorAll('details.chat-approval-technical').forEach((details) => {
-        const label = String(details.querySelector('summary')?.textContent || '').trim();
-        const key = `${approvalId}::${label}`;
-        if (!Object.prototype.hasOwnProperty.call(map, key)) return;
-        if (map[key]) details.setAttribute('open', '');
-        else details.removeAttribute('open');
-      });
-    });
-  } catch {}
-}
+
+
 
 function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
@@ -45834,103 +45568,11 @@ const SESSION_APPROVAL_RISK_COLORS = {
   high: { bg: '#fff4ec', border: '#fdc9a8', badge: '#ffe3d0', text: '#b35d14', strongText: '#7c2d12' },
 };
 
-function getApprovalRiskLevel(score) {
-  if (score >= 7) return 'high';
-  if (score >= 4) return 'medium';
-  return 'low';
-}
 
-function getApprovalToolLabel(toolName = '') {
-  const tool = String(toolName || '').trim();
-  if (!tool) return 'action';
-  if (tool === 'desktop_click') return 'desktop click';
-  if (tool === 'desktop_press_key') return 'desktop keypress';
-  if (tool === 'browser_click') return 'browser click';
-  if (tool === 'browser_press_key' || tool === 'browser_key') return 'browser keypress';
-  if (tool === 'run_command') return 'command';
-  return tool.replace(/_/g, ' ');
-}
 
-function summarizeApprovalForHumans(record = {}, fallback = {}) {
-  const toolName = String(record.toolName || fallback.toolName || '').trim();
-  const approvalKind = String(record.approvalKind || fallback.approvalKind || '').trim();
-  const status = String(record.status || fallback.status || 'pending').trim().toLowerCase();
-  const args = record.toolArgs && typeof record.toolArgs === 'object' ? record.toolArgs : {};
-  const finalAction = record.finalAction || fallback.finalAction || null;
-  const devSourceEdit = record.devSourceEdit || fallback.devSourceEdit || null;
-  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
-  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
 
-  if (approvalKind === 'elevated_command') {
-    const command = String(args.command || record.command || '').trim();
-    return {
-      title: 'Administrator command',
-      summary: 'Run this exact command with Windows administrator privileges after your one-shot approval.',
-      detail: command,
-    };
-  }
 
-  if (isFinalAction) {
-    const target = String(finalAction?.targetLabel || args.target_label || 'final action').trim();
-    const summary = String(finalAction?.summary || record.reason || fallback.summary || '').trim();
-    return {
-      title: status === 'pending' ? `Ready to ${String(finalAction?.actionKind || args.action_kind || 'continue')}` : 'Final action',
-      summary: summary || `Approve ${target}.`,
-      detail: target,
-    };
-  }
 
-  if (isDevSource) {
-    const files = Array.isArray(devSourceEdit?.allowedFiles) ? devSourceEdit.allowedFiles : [];
-    return {
-      title: 'Dev source edit',
-      summary: String(record.reason || fallback.summary || 'Approve a scoped source edit.').trim(),
-      detail: files.length ? `${files.length} file${files.length === 1 ? '' : 's'} requested` : '',
-    };
-  }
-
-  if (toolName === 'run_command') {
-    const command = String(args.command || record.command || '').trim();
-    const boundary = record.commandBoundary || fallback.commandBoundary || null;
-    const boundaryScope = String(boundary?.scope || '').trim();
-    return {
-      title: boundaryScope && boundaryScope !== 'workspace' ? 'Outside-workspace command' : 'Command approval',
-      summary: boundaryScope && boundaryScope !== 'workspace'
-        ? `Run a command that may change ${boundaryScope.replace(/_/g, ' ')} state.`
-        : (command ? `Run command${args.cwd ? ` in ${args.cwd}` : ''}` : 'Run a command.'),
-      detail: command,
-    };
-  }
-
-  if (toolName.startsWith('desktop_')) {
-    const windowLabel = String(args.window_name || args.app || '').trim();
-    const target = args.element != null
-      ? `element ${args.element}`
-      : Number.isFinite(Number(args.x)) && Number.isFinite(Number(args.y))
-        ? `point ${Number(args.x)}, ${Number(args.y)}`
-        : '';
-    return {
-      title: status === 'pending' ? 'Desktop action' : 'Desktop action',
-      summary: `${status === 'pending' ? 'Approve' : 'Review'} ${getApprovalToolLabel(toolName)}${windowLabel ? ` in ${windowLabel}` : ''}.`,
-      detail: target,
-    };
-  }
-
-  if (toolName.startsWith('browser_')) {
-    const target = args.element || args.selector || (args.ref != null ? `ref ${args.ref}` : '');
-    return {
-      title: status === 'pending' ? 'Browser action' : 'Browser action',
-      summary: `${status === 'pending' ? 'Approve' : 'Review'} ${getApprovalToolLabel(toolName)}.`,
-      detail: String(target || '').trim(),
-    };
-  }
-
-  return {
-    title: toolName ? `${getApprovalToolLabel(toolName)} approval` : 'Approval required',
-    summary: String(record.reason || fallback.reason || record.summary || fallback.summary || record.action || '').trim(),
-    detail: '',
-  };
-}
 
 function renderSessionApprovalCard(item) {
   const risk = getApprovalRiskLevel(item.riskScore ?? 0);
@@ -45980,41 +45622,7 @@ function renderSessionApprovalCard(item) {
   </div>`;
 }
 
-function normalizeChatApprovalRecord(record = {}, fallback = {}) {
-  const id = String(record.id || record.approvalId || fallback.id || fallback.approvalId || '').trim();
-  const toolName = String(record.toolName || fallback.toolName || '').trim();
-  const approvalKind = String(record.approvalKind || fallback.approvalKind || '').trim();
-  const action = String(record.action || fallback.action || fallback.summary || record.summary || '').trim();
-  const command = String(record.command || record.toolArgs?.command || fallback.command || '').trim();
-  const status = String(record.status || fallback.status || 'pending').trim().toLowerCase();
-  const sessionId = String(record.sourceSessionId || record.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
-  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
-  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
-  const human = summarizeApprovalForHumans(record, fallback);
-  const pathAccess = record.pathAccess || fallback.pathAccess || null;
-  return {
-    id,
-    sessionId,
-    toolName,
-    approvalKind,
-    title: isDevSource ? 'Dev source edit approval' : (isFinalAction ? 'Final action approval' : human.title),
-    action,
-    command,
-    reason: String(record.reason || fallback.reason || record.summary || fallback.summary || '').trim(),
-    summary: human.summary || String(record.summary || fallback.summary || action || '').trim(),
-    humanDetail: human.detail || '',
-    riskScore: Number.isFinite(Number(record.riskScore)) ? Number(record.riskScore) : Number(fallback.riskScore || 0),
-    affectedSystems: Array.isArray(record.affectedSystems) ? record.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
-    scopedAction: String(record.scopedAction || fallback.scopedAction || '').trim(),
-    scopedTarget: String(record.scopedTarget || fallback.scopedTarget || '').trim(),
-    commandBoundary: record.commandBoundary || fallback.commandBoundary || null,
-    pathAccess,
-    devSourceEdit: record.devSourceEdit || fallback.devSourceEdit || null,
-    finalAction: record.finalAction || fallback.finalAction || null,
-    oneShot: record.oneShot === true || fallback.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
-    status: status || 'pending',
-  };
-}
+
 
 function renderInlineApprovalRequest(item) {
   if (!item || !item.id) return '';
