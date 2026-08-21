@@ -11,17 +11,16 @@
  * Behaviour:
  *   - The agent's `model` field is stored as "provider/model" (matches
  *     the Settings agent edit form). Saved via PATCH /api/agents/:id/model.
- *   - Reasoning controls (OpenAI / OpenAI Codex / Anthropic / Perplexity
- *     effort, Anthropic thinking toggle + legacy budget) live in the global
- *     `llm.providers.{provider}.*` config. They're shared across every
- *     agent using that provider; we label them as such. Saved via
- *     POST /api/settings/provider.
+ *   - Reasoning controls use the selected model's supported effort levels.
+ *     They inherit the Settings route by default and save as an explicit
+ *     per-agent override via PATCH /api/agents/:id/model.
  */
 
 import { api } from '../api.js';
 import { escHtml, bgtToast } from '../utils.js';
-import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, hasLoadedCredentialedModelProviderIds, isCredentialedModelProviderId } from './model-provider-credentials.js';
+import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems } from './model-provider-credentials.js';
 import { formatModelDisplayName } from '../model-display.js';
+import { effortOptions, formatReasoningSelectorLabel } from '../reasoning-capabilities.js';
 
 // ── Built-in fallbacks (mirror SettingsPage) ────────────────────────────────
 const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini', 'xai'];
@@ -46,14 +45,6 @@ const BUILTIN_STATIC_MODELS = {
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   xai:          ['grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
 };
-
-const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
-const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high'];
-const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
-const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
-const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
-const ANTHROPIC_BUDGETS = [2048, 5000, 10000, 16000, 24000, 32000];
 
 function _providerSortRank(id) {
   const idx = BUILTIN_PROVIDER_IDS.indexOf(id);
@@ -134,6 +125,9 @@ function _parseAgentModel(raw) {
 
 function _providerOptionsHtml(currentProvider) {
   const items = filterCredentialedProviderCatalogItems(_catalogCache || []);
+  if (currentProvider && !items.some((item) => item.id === currentProvider)) {
+    items.unshift({ id: currentProvider, name: `${currentProvider} (not connected)` });
+  }
   const opts = [`<option value="">— Use global default —</option>`];
   for (const p of items) {
     const label = p.name || BUILTIN_LABELS[p.id] || p.id;
@@ -147,68 +141,27 @@ function _modelOptionsHtml(provider, currentModel) {
   const list = _getModelsForProvider(provider);
   const merged = Array.from(new Set([currentModel, ...list])).filter(Boolean);
   if (merged.length === 0) {
-    return `<option value="">— enter a model id below —</option>`;
+    return `<option value="">${provider ? '— no models available —' : '— Use global default —'}</option>`;
   }
   return merged.map((m) => `<option value="${escHtml(m)}" ${m===currentModel?'selected':''}>${escHtml(formatModelDisplayName(m, provider))}</option>`).join('');
 }
 
-function _reasoningRowHtml(prefix, agentId, provider, providerConfig, model = '') {
-  if (!provider) return '';
-  if (REASONING_EFFORT_PROVIDERS.has(provider)) {
-    const opts = provider === 'openai_codex'
-      ? CODEX_EFFORT_OPTIONS
-      : (provider === 'xai'
-        ? (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || providerConfig?.model || '').trim()) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS)
-        : EFFORT_OPTIONS);
-    const cur = String(providerConfig?.reasoning_effort || '').trim();
-    const labelFor = (o) => {
-      if (!o) return provider === 'xai' ? 'provider default' : '— none —';
-      if (o === 'xhigh') return 'extra high';
-      return o;
-    };
-    return `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Reasoning effort</label>
-        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-          ${opts.map((o) => `<option value="${o}" ${o===cur?'selected':''}>${escHtml(labelFor(o))}</option>`).join('')}
-        </select>
-        <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','${provider}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
-      </div>
-      <div style="font-size:10px;color:var(--muted);margin-top:3px">Shared with all <strong>${escHtml(provider)}</strong> agents.</div>`;
-  }
-  if (provider === 'anthropic') {
-    const ext = providerConfig?.extended_thinking === true;
-    const fast = providerConfig?.fast_mode === true;
-    const budget = parseInt(providerConfig?.thinking_budget || '10000', 10);
-    const effort = String(providerConfig?.reasoning_effort || '').trim();
-    return `
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Thinking effort</label>
-        <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-          ${ANTHROPIC_EFFORT_OPTIONS.map((o) => `<option value="${o}" ${o===effort?'selected':''}>${o === 'xhigh' ? 'extra high' : (o || 'provider default')}</option>`).join('')}
-        </select>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Extended thinking</label>
-        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
-          <input type="checkbox" id="${prefix}-extthink-${escHtml(agentId)}" ${ext?'checked':''} style="width:14px;height:14px" />
-          Enabled
-        </label>
-        <select id="${prefix}-budget-${escHtml(agentId)}" style="flex:1;min-width:140px;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-          ${ANTHROPIC_BUDGETS.map((b) => `<option value="${b}" ${b===budget?'selected':''}>legacy ${b.toLocaleString()} tokens</option>`).join('')}
-        </select>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-        <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:120px">Fast mode</label>
-        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
-          <input type="checkbox" id="${prefix}-fastmode-${escHtml(agentId)}" ${fast?'checked':''} style="width:14px;height:14px" />
-          Faster output (Opus 4.6/4.7/4.8)
-        </label>
-        <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}','anthropic')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
-      </div>
-      <div style="font-size:10px;color:var(--muted);margin-top:3px;margin-left:128px">Shared with all <strong>anthropic</strong> agents.</div>`;
-  }
-  return '';
+function _reasoningRowHtml(prefix, agentId, provider, model, currentEffort = '', inheritedEffort = '') {
+  if (!provider || !model) return '<div style="font-size:10px;color:var(--muted);margin-top:7px">No adjustable reasoning levels for the selected model.</div>';
+  const opts = effortOptions(provider, model, true);
+  if (opts.length <= 1) return `<div style="font-size:10px;color:var(--muted);margin-top:7px">No adjustable reasoning levels for ${escHtml(formatModelDisplayName(model, provider))}.</div>`;
+  const cur = String(currentEffort || '').trim().toLowerCase();
+  const inherited = String(inheritedEffort || '').trim().toLowerCase();
+  const selected = cur || inherited;
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Reasoning</label>
+      <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
+        ${opts.map((o) => `<option value="${escHtml(o)}" ${o===selected?'selected':''}>${escHtml(o ? formatReasoningSelectorLabel(o, provider) : '— Use provider default —')}${!cur && o === inherited ? ' (inherited)' : ''}</option>`).join('')}
+      </select>
+      <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:3px">${cur ? 'Explicit per-agent override.' : 'Inherited from Settings; choose provider default to clear the override.'}</div>`;
 }
 
 // ── Public render ───────────────────────────────────────────────────────────
@@ -216,14 +169,15 @@ function _reasoningRowHtml(prefix, agentId, provider, providerConfig, model = ''
 export function renderAgentModelPicker(agent, prefix) {
   const id = agent.id;
   const parsed = _parseAgentModel(agent.model);
-  const credentialIdsLoaded = hasLoadedCredentialedModelProviderIds();
-  const canUseProvider = !parsed.provider || !credentialIdsLoaded || isCredentialedModelProviderId(parsed.provider);
-  const provider = canUseProvider ? parsed.provider : '';
-  const model = canUseProvider ? parsed.model : '';
+  const provider = parsed.provider;
+  const model = parsed.model;
   const eff = String(agent.effectiveModel || '').trim();
   const effSrc = String(agent.effectiveModelSource || '').trim();
-  const llm = _llmCache || { providers: {} };
-  const providerConfig = (llm.providers || {})[provider] || {};
+  const effectiveParsed = _parseAgentModel(eff);
+  const reasoningProvider = provider || effectiveParsed.provider;
+  const reasoningModel = model || effectiveParsed.model;
+  const inheritedReasoning = String(agent.effectiveReasoningEffort || '').trim();
+  const agentReasoning = String(agent.reasoning_effort || '').trim();
   const item = _getCatalogItem(provider);
   const accent = item?.ui?.color || 'var(--brand)';
   return `
@@ -246,15 +200,14 @@ export function renderAgentModelPicker(agent, prefix) {
 
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Model</label>
-        <select id="${prefix}-modelselect-${escHtml(id)}" onchange="document.getElementById('${prefix}-modelcustom-${escHtml(id)}').value=this.value" style="flex:1 1 155px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace">
+        <select id="${prefix}-modelselect-${escHtml(id)}" style="flex:1 1 155px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace">
           ${_modelOptionsHtml(provider, model)}
         </select>
-        <input id="${prefix}-modelcustom-${escHtml(id)}" type="text" placeholder="custom model id" value="${escHtml(model)}" style="flex:1 1 155px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text);font-family:'IBM Plex Mono',monospace" />
         <button onclick="agentModelPickerSaveModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer;flex:0 0 auto">Save</button>
         <button onclick="agentModelPickerClearModel('${prefix}','${escHtml(id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:7px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;flex:0 0 auto">Clear</button>
       </div>
 
-      <div id="${prefix}-reasoning-${escHtml(id)}">${_reasoningRowHtml(prefix, id, provider, providerConfig, model)}</div>
+      <div id="${prefix}-reasoning-${escHtml(id)}">${_reasoningRowHtml(prefix, id, reasoningProvider, reasoningModel, agentReasoning, inheritedReasoning)}</div>
     </div>`;
 }
 
@@ -282,15 +235,11 @@ export async function agentModelPickerHydrate(prefix, agent) {
 window.agentModelPickerOnProviderChange = function (prefix, agentId) {
   const provSel = document.getElementById(`${prefix}-provider-${agentId}`);
   const provider = provSel?.value || '';
-  const customEl = document.getElementById(`${prefix}-modelcustom-${agentId}`);
-  const currentCustom = customEl?.value || '';
   const mdlSel = document.getElementById(`${prefix}-modelselect-${agentId}`);
-  if (mdlSel) mdlSel.innerHTML = _modelOptionsHtml(provider, currentCustom);
+  if (mdlSel) mdlSel.innerHTML = _modelOptionsHtml(provider, '');
   const reasoningEl = document.getElementById(`${prefix}-reasoning-${agentId}`);
   if (reasoningEl) {
-    const llm = _llmCache || { providers: {} };
-    const modelEl = document.getElementById(`${prefix}-model-${agentId}`);
-    reasoningEl.innerHTML = _reasoningRowHtml(prefix, agentId, provider, (llm.providers || {})[provider] || {}, modelEl?.value || '');
+    reasoningEl.innerHTML = _reasoningRowHtml(prefix, agentId, provider, mdlSel?.value || '', '', '');
   }
 };
 
@@ -316,9 +265,9 @@ window.agentModelPickerRefreshLiveModels = async function (prefix, agentId) {
     const list = Array.isArray(data?.models) ? data.models.map((m) => (typeof m === 'string' ? m : (m?.name || String(m)))) : [];
     if (list.length) {
       _liveModelCache[provider] = list;
-      const customEl = document.getElementById(`${prefix}-modelcustom-${agentId}`);
       const mdlSel = document.getElementById(`${prefix}-modelselect-${agentId}`);
-      if (mdlSel) mdlSel.innerHTML = _modelOptionsHtml(provider, customEl?.value || '');
+      const selectedModel = mdlSel?.value || '';
+      if (mdlSel) mdlSel.innerHTML = _modelOptionsHtml(provider, selectedModel);
       if (status) status.textContent = `Loaded ${list.length} live model(s).`;
     } else {
       if (status) status.textContent = data?.error ? `Error: ${data.error}` : 'No models returned. Provider may need credentials.';
@@ -337,12 +286,11 @@ function _findCachedAgentRefresher(prefix, agentId) {
 
 window.agentModelPickerSaveModel = async function (prefix, agentId) {
   const provSel = document.getElementById(`${prefix}-provider-${agentId}`);
-  const customEl = document.getElementById(`${prefix}-modelcustom-${agentId}`);
   const selectEl = document.getElementById(`${prefix}-modelselect-${agentId}`);
   const status = document.getElementById(`${prefix}-status-${agentId}`);
   const provider = (provSel?.value || '').trim();
-  const mdl = (customEl?.value || selectEl?.value || '').trim();
-  if (provider && !mdl) { if (status) status.textContent = 'Pick or type a model.'; return; }
+  const mdl = (selectEl?.value || '').trim();
+  if (provider && !mdl) { if (status) status.textContent = 'Pick a model from the dropdown.'; return; }
   const fullModel = provider ? (mdl ? `${provider}/${mdl}` : '') : mdl;
   if (status) status.textContent = 'Saving…';
   try {
@@ -376,35 +324,20 @@ window.agentModelPickerClearModel = async function (prefix, agentId) {
   }
 };
 
-window.agentModelPickerSaveReasoning = async function (prefix, agentId, provider) {
+window.agentModelPickerSaveReasoning = async function (prefix, agentId) {
   const status = document.getElementById(`${prefix}-status-${agentId}`);
-  if (status) status.textContent = 'Saving provider config…';
-  const providerPatch = {};
-  if (REASONING_EFFORT_PROVIDERS.has(provider)) {
-    const sel = document.getElementById(`${prefix}-effort-${agentId}`);
-    providerPatch.reasoning_effort = (sel?.value || '').trim();
-  } else if (provider === 'anthropic') {
-    const sel = document.getElementById(`${prefix}-effort-${agentId}`);
-    const extEl = document.getElementById(`${prefix}-extthink-${agentId}`);
-    const budgetEl = document.getElementById(`${prefix}-budget-${agentId}`);
-    const fastEl = document.getElementById(`${prefix}-fastmode-${agentId}`);
-    providerPatch.reasoning_effort = (sel?.value || '').trim();
-    providerPatch.extended_thinking = !!(extEl && extEl.checked);
-    providerPatch.thinking_budget = parseInt(budgetEl?.value || '10000', 10);
-    providerPatch.fast_mode = !!(fastEl && fastEl.checked);
-  }
+  if (status) status.textContent = 'Saving reasoning override…';
+  const sel = document.getElementById(`${prefix}-effort-${agentId}`);
+  const reasoningEffort = (sel?.value || '').trim();
   try {
-    await _fetchLlm(true);
-    const existing = (_llmCache?.providers || {})[provider] || {};
-    const merged = { ...existing, ...providerPatch };
-    await api('/api/settings/provider', {
-      method: 'POST',
+    await api(`/api/agents/${encodeURIComponent(agentId)}/model`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ llm: { provider, providers: { [provider]: merged } } }),
+      body: JSON.stringify({ reasoning_effort: reasoningEffort }),
     });
-    await _fetchLlm(true);
-    if (status) status.textContent = 'Provider config saved.';
-    bgtToast('Provider updated', `${provider} reasoning settings saved`);
+    if (status) status.textContent = reasoningEffort ? 'Reasoning override saved.' : 'Reasoning cleared (using Settings default).';
+    bgtToast('Reasoning updated', reasoningEffort ? `${agentId} → ${reasoningEffort}` : `${agentId} now uses the Settings default`);
+    _findCachedAgentRefresher(prefix, agentId);
   } catch (err) {
     if (status) status.textContent = `Error: ${err?.message || err}`;
   }

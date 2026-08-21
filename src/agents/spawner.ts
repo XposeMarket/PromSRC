@@ -4,7 +4,7 @@ import { getOllamaClient } from './ollama-client.js';
 import path from 'path';
 import { buildProviderById } from '../providers/factory.js';
 import { parseAgentModelString, ProviderReactorClient } from './provider-reactor.js';
-import { resolveConfiguredAgentModel } from './model-routing.js';
+import { parseProviderModelRef, resolveConfiguredAgentRouting } from './model-routing.js';
 import { Reactor } from './reactor.js';
 import { createTask, updateTaskStatus, appendJournal, mutatePlan } from '../gateway/tasks/task-store.js';
 import { runWithWorkspace } from '../tools/workspace-context.js';
@@ -97,6 +97,7 @@ interface ResolvedProvider {
   providerId: string;
   model: string;
   isOllama: boolean;
+  reasoningEffort?: string;
 }
 
 function inferSpawnAgentType(agent: any, explicitAgentType?: string): string {
@@ -132,62 +133,40 @@ function inferSpawnAgentType(agent: any, explicitAgentType?: string): string {
  * running the Reactor, and release it when done.
  */
 function resolveAgentProvider(agent: any, agentType?: string): ResolvedProvider {
-  // Step 1: explicit "provider/model" on the agent definition
-  const parsed = parseAgentModelString(agent.model);
+  const { getConfig } = require('../config/config');
+  const cfg = getConfig().getConfig() as any;
+  const inferredType = inferSpawnAgentType(agent, agentType);
+  const routing = resolveConfiguredAgentRouting(cfg, agent, {
+    agentType: inferredType,
+    fallbackToPrimary: true,
+  });
+  const modelRef = String(routing.model || '').trim();
+  const parsedProviderRef = parseProviderModelRef(modelRef);
+  const parsed = parseAgentModelString(modelRef)
+    || (routing.providerId && modelRef
+      ? { provider: routing.providerId, model: modelRef }
+      : parsedProviderRef
+        ? { provider: parsedProviderRef.providerId, model: parsedProviderRef.model }
+        : null);
 
-  if (parsed) {
-    // Explicit "provider/model" format — build that provider directly
-    const provider = buildProviderById(parsed.provider);
-    const isOllama = parsed.provider === 'ollama';
-    const client = isOllama
-      ? getOllamaClient() // Ollama still uses the global client (single connection)
-      : new ProviderReactorClient(provider, parsed.model);
-    return { client, providerId: parsed.provider, model: parsed.model, isOllama };
+  if (!parsed) {
+    throw new Error(
+      `No model is configured for subagent "${String(agent?.id || 'unknown').trim()}". `
+      + 'Choose a provider and model in Settings → Agents, or configure the global route in Settings → Models, then retry.',
+    );
   }
 
-  // Step 2: bare model name (no provider prefix) on agent — keep existing behaviour
-  if (agent.model) {
-    const globalClient = getOllamaClient();
-    const globalProviderId = (globalClient as any).provider?.id ?? 'ollama';
-    const isOllama = globalProviderId === 'ollama';
-    return { client: globalClient, providerId: globalProviderId, model: agent.model, isOllama };
-  }
-
-  // Step 3: check agent_model_defaults for this agent type
-  try {
-    const { getConfig } = require('../config/config');
-    const cfg = getConfig().getConfig() as any;
-    const inferredType = inferSpawnAgentType(agent, agentType);
-    const resolvedDefault = resolveConfiguredAgentModel(cfg, agent, {
-      agentType: inferredType,
-      fallbackToPrimary: false,
-    });
-    const defaultModel = String(resolvedDefault.model || '').trim();
-
-    if (defaultModel) {
-      const defaultParsed = parseAgentModelString(defaultModel);
-      if (defaultParsed) {
-        const provider = buildProviderById(defaultParsed.provider);
-        const isOllama = defaultParsed.provider === 'ollama';
-        const client = isOllama
-          ? getOllamaClient()
-          : new ProviderReactorClient(provider, defaultParsed.model);
-        return { client, providerId: defaultParsed.provider, model: defaultParsed.model, isOllama };
-      }
-    }
-  } catch {
-    // getConfig unavailable at this call site — fall through to global primary
-  }
-
-  // Step 4: global primary provider + global model (original fallback)
-  const globalClient = getOllamaClient();
-  const globalProviderId = (globalClient as any).provider?.id ?? 'ollama';
-  const isOllama = globalProviderId === 'ollama';
+  const provider = buildProviderById(parsed.provider);
+  const isOllama = parsed.provider === 'ollama';
+  const client = isOllama
+    ? getOllamaClient() // Ollama still uses the global client (single connection)
+    : new ProviderReactorClient(provider, parsed.model);
   return {
-    client: globalClient,
-    providerId: globalProviderId,
-    model: '', // will be resolved by getModelForRole inside OllamaClient
+    client,
+    providerId: parsed.provider,
+    model: parsed.model,
     isOllama,
+    reasoningEffort: routing.reasoningEffort,
   };
 }
 
@@ -318,7 +297,19 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   const taskMessage = selfLearnSuffix ? `${taskMessageBase}${selfLearnSuffix}` : taskMessageBase;
 
   const resolvedAgentType = inferSpawnAgentType(agent, options.agentType);
-  const resolved = resolveAgentProvider(agent, resolvedAgentType);
+  let resolved: ResolvedProvider;
+  try {
+    resolved = resolveAgentProvider(agent, resolvedAgentType);
+  } catch (err: any) {
+    return {
+      agentId: agent.id,
+      agentName: agent.name,
+      success: false,
+      result: '',
+      error: String(err?.message || err),
+      durationMs: Date.now() - startMs,
+    };
+  }
   const label = `[agent:${agent.id}@${resolved.providerId}]`;
 
   console.log(`${label} Spawning — provider=${resolved.providerId} isOllama=${resolved.isOllama} model=${resolved.model || '(global)'} agentType=${resolvedAgentType}`);
@@ -367,6 +358,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
         systemPromptWorkspacePath: identityWorkspace,
         maxSteps,
         toolProfile: agentToolProfile,
+        reasoningEffort: resolved.reasoningEffort as any,
         onStep: (step) => {
           stepCount++;
           options.onStep?.(step);

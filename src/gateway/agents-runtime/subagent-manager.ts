@@ -16,7 +16,7 @@ import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/conf
 import { appendSubagentChatMessage } from './subagent-chat-store';
 import type { AgentIdentity, AgentPersonality } from '../../types.js';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
-import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 export interface SubagentDefinition {
@@ -394,10 +394,16 @@ export class SubagentManager {
     });
     const agentWorkspace = executionWorkspace;
     const agentDefinition = getAgentById(definition.id);
-    const executorModel = resolveConfiguredAgentModel(getConfig().getConfig(), agentDefinition || definition, {
+    const executorRouting = resolveConfiguredAgentRouting(getConfig().getConfig(), agentDefinition || definition, {
       agentType: 'subagent',
-      fallbackToPrimary: false,
-    }).model;
+      fallbackToPrimary: true,
+    });
+    if (!executorRouting.model) {
+      throw new Error(
+        `No model is configured for subagent "${definition.id}". `
+        + 'Choose a provider and model in Settings → Agents, or configure the global route in Settings → Models, then retry.',
+      );
+    }
     const parentTask = loadTask(parentTaskId);
     const parentTaskLink = parentTask ? parentTaskId : undefined;
     const originatingSessionId = parentTask ? undefined : parentTaskId;
@@ -415,8 +421,8 @@ export class SubagentManager {
       suppressOriginDelivery: request.delivery_mode === 'task_panel_only',
       agentWorkspace,
       agentAllowedWorkPaths: allowedWorkPaths,
-      executorProvider: executorModel || undefined,
-      executorReasoningEffort: agentDefinition?.reasoning_effort || definition.reasoning_effort || undefined,
+      executorProvider: executorRouting.model,
+      executorReasoningEffort: executorRouting.reasoningEffort || undefined,
       plan: this.buildDefaultPlan(definition),
     });
 
