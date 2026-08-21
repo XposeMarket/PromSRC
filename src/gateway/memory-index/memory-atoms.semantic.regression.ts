@@ -85,8 +85,17 @@ try {
   const sectionOnly = retrieveMemoryAtoms(workspacePath, 'project');
   assert.equal(sectionOnly.selected.length, 0, 'a generic section-name noun must not recall every atom in that section');
 
-  const ambiguousRelease = retrieveMemoryAtoms(workspacePath, 'release');
-  assert.equal(ambiguousRelease.selected.length, 0, 'an ambiguous one-word topic must not flood prompt context');
+  for (const query of ['release', 'launch']) {
+    assert.equal(retrieveMemoryAtoms(workspacePath, query).selected.length, 0, `ambiguous one-word topic must not flood prompt context: ${query}`);
+  }
+
+  const launchPlan = retrieveMemoryAtoms(workspacePath, 'What is the launch plan?');
+  assert.ok(matchContaining(launchPlan, 'Mercury launch remains blocked'), 'a specific multiword launch query should recall the literal launch atom');
+  assert.equal(
+    Boolean(matchContaining(launchPlan, 'Atlas release credentials')),
+    false,
+    'concept expansion must not turn a weak release synonym into an unrelated direct memory',
+  );
 
   const uniqueSpecific = retrieveMemoryAtoms(workspacePath, 'SQLite');
   assert.ok(matchContaining(uniqueSpecific, 'SQLite WAL mode'), 'a unique specific one-word query should still recall its atom');
@@ -100,11 +109,12 @@ try {
   assert.ok(relatedLaunch, 'a directly recalled atom should expand to a genuinely related sibling even when that sibling has no query-term overlap');
   assert.match(String(relatedLaunch?.relationReason || ''), /shared_(?:anchor_)?term|shared_entity/);
 
+  const atlasResult = retrieveMemoryAtoms(workspacePath, 'When changing the Atlas codebase, what safeguards do I follow?');
+  assert.ok(atlasResult.selected.length > 0 && atlasResult.selected.length < parsed.length, 'normal recall must select a strict subset of the durable corpus');
   const atlasContext = buildMemoryAtomReferenceContext(workspacePath, 'When changing the Atlas codebase, what safeguards do I follow?');
   assert.match(atlasContext, /\[MEMORY_REFERENCE\]/);
   assert.match(atlasContext, /Atlas desktop client source edits/);
   assert.doesNotMatch(atlasContext, /ORANGE_SENTINEL/, 'irrelevant atoms must stay out of the prompt reference');
-  assert.ok(atlasContext.length < fixture.length, 'selective memory reference should be smaller than the complete source fixture');
 
   const bounded = retrieveMemoryAtoms(workspacePath, 'Atlas source release credentials', { maxAtoms: 1 });
   assert.equal(bounded.selected.length, 1, 'explicit small-surface callers must be able to enforce an atom cap');
