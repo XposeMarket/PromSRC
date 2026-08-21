@@ -6,6 +6,7 @@ function connector(params: {
   name: string;
   tools: string[];
   capabilities?: string[];
+  aliases?: string[];
 }) {
   return {
     id: params.id,
@@ -14,6 +15,7 @@ function connector(params: {
       kind: 'connector',
       name: params.name,
       tags: [params.id],
+      activation: { aliases: params.aliases || [] },
       ownership: { tools: params.tools, capabilities: params.capabilities || [] },
     },
     contracts: {
@@ -33,6 +35,7 @@ const github = connector({
     'connector_github_list_commits',
   ],
   capabilities: ['repositories', 'pull_requests', 'issues'],
+  aliases: ['git', 'pull request', 'pr', 'commit', 'push', 'merge'],
 });
 const vercel = connector({
   id: 'vercel',
@@ -43,6 +46,7 @@ const vercel = connector({
     'connector_vercel_env',
   ],
   capabilities: ['deployments', 'hosting', 'projects', 'environment'],
+  aliases: ['deploy', 'deployment', 'preview', 'environment', 'env', 'project', 'projects'],
 });
 const futurePlugin = connector({
   id: 'future_crm',
@@ -66,6 +70,12 @@ const githubPlan = planMessageExtensionActivation({
 });
 assert.deepEqual(githubPlan.categories, ['external_apps']);
 assert.equal(githubPlan.entries.some((entry) => entry.extensionId === 'github'), true);
+
+const githubPushPlan = planMessageExtensionActivation({
+  message: 'Push the latest commit to the repository.',
+  registry: fakeRegistry(['github']),
+});
+assert.deepEqual(githubPushPlan.categories, ['external_apps']);
 
 const disconnectedGitHubPlan = planMessageExtensionActivation({
   message: 'Look into my GitHub connector tools.',
