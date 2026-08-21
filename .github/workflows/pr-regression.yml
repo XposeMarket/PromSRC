@@ -34,7 +34,7 @@ jobs:
       - name: Verify natural-language tool activation
         run: npm run test:extension-activation && npm run test:tool-category-routing
       - name: Verify provider-neutral connector policy
-        run: npm run test:connector-tool-capabilities && npx tsx src/extensions/runtime-registry.performance.regression.ts
+        run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
       - name: Verify web UI architecture guardrails

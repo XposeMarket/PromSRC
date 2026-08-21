@@ -92,6 +92,7 @@ function hydrateProjectSessions(project: any): any {
           : firstUserMsg?.content
           ? String(firstUserMsg.content).slice(0, 60)
           : (stored.title || 'New chat');
+        const lastHistoryMessage = session.history?.[session.history.length - 1];
         return {
           ...stored,
           title,
@@ -99,7 +100,7 @@ function hydrateProjectSessions(project: any): any {
           updatedAt: session.lastActiveAt || stored.updatedAt,
           messageCount: session.history?.length || 0,
           preview: String(session.history?.slice().reverse().find((message: any) => (message?.role === 'user' || message?.role === 'assistant') && String(message?.content || '').trim())?.content || '').replace(/\s+/g, ' ').trim().slice(0, 240),
-          lastMessageAt: Number(session.lastMessageAt || session.lastActiveAt || stored.updatedAt || 0) || undefined,
+          lastMessageAt: Number(lastHistoryMessage?.timestamp || session.lastActiveAt || stored.updatedAt || 0) || undefined,
         };
       } catch {
         return stored;

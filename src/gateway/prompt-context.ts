@@ -42,6 +42,7 @@ import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js'
 import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
 import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
+import { planMessageExtensionActivation } from '../extensions/activation-planner.js';
 
 function buildPromptRuntimeHostContext(workspacePath: string): string {
   const gpu = readCachedGpuInfo();
@@ -1220,7 +1221,7 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   runtime_admin: `RUNTIME ADMIN: diagnostic_packet builds a bounded incident/evidence packet, system_diagnostics reports Prometheus runtime health and configuration state, and gateway_restart performs a controlled gateway restart. Use for runtime diagnosis, incident recovery, or an explicitly requested restart. Treat restart as a consequential operation: verify the target and preserve/review the recovery checkpoint before reporting success.`,
 
-  external_apps: `EXTERNAL APPS: activate external_apps for connector_list and the live tool definitions exposed by connected extension runtimes. connector_list inventories installed connectors, connection status, and registered tools from the runtime registry. Use the connected connector's native tools or wrappers; do not assume a provider is installed or connected, and do not invent a provider-specific tool list.`,
+  external_apps: `EXTERNAL APPS: activate external_apps for connector_list and wrapper-first connected app tools. connector_list inventories available connectors and connection status. For X/Twitter and xAI/Grok use x_search_ops, x_posts, x_users, x_lists, x_dm, and x_admin. For Vercel use vercel_ops. Other connected app tools may still appear directly from their connectors. Check connector_list first when connection status matters.`,
 
   social_intelligence: `SOCIAL INTELLIGENCE: social_intel(platform, handle, mode?) analyzes social profiles and persists structured findings under entities/social. Use for profile metrics, engagement analysis, growth trajectory, and content recommendations.`,
 
@@ -1364,6 +1365,13 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
 
 function buildToolCategoryMatchContext(messageText: string, activatedCategories: Set<string>): string {
   const detected = detectToolCategories(messageText);
+  try {
+    const extensionPlan = planMessageExtensionActivation({ message: messageText });
+    for (const category of extensionPlan.categories) detected.add(category);
+  } catch {
+    // Prompt construction must remain available if an optional extension
+    // runtime is unavailable; the pure keyword router remains the fallback.
+  }
   const allowed = new Set(getRuntimeAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
   const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
   const lines: string[] = [];

@@ -1,3 +1,5 @@
+import type { PromptSignalConfig } from '../runtime/prompt-signal-matcher.js';
+
 export type ExtensionKind = 'provider' | 'connector' | 'mcp_preset' | 'integration';
 export type ExtensionTrustLevel = 'core' | 'bundled' | 'local' | 'third_party' | 'marketplace';
 
@@ -87,6 +89,8 @@ export type ExtensionDescriptor = {
     whenToolsRequested?: string[];
     whenCapabilityRequested?: string[];
     whenConnected?: boolean;
+    aliases?: string[];
+    message?: PromptSignalConfig;
   };
   contracts?: {
     tools?: string[];

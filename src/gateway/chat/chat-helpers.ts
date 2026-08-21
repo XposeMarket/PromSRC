@@ -89,6 +89,8 @@ import {
   type SkillWindow,
 } from '../prompt-context';
 import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
+import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
+import { planMessageExtensionActivation } from '../../extensions/activation-planner.js';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
 import type { TurnTimingRecorder } from './turn-timing';
 import {
@@ -669,20 +671,32 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   // still activate required tool categories in the same session.
   void historyLength; // retained for call-site compatibility
   const cats = detectToolCategories(message);
-  const runtimeCategories = new Set<string>(getRuntimeToolCategoryIds());
-  const autoActivatable = [
-    'browser_automation', 'desktop_automation', 'workspace_write', 'advanced_memory',
-    'media_assets', 'media_generation', 'automation_scheduling', 'automation_tasks',
-    'automation_recovery', 'automation_sessions', 'runtime_admin', 'external_apps',
-    'integration_admin', 'agents_and_teams', 'proposal_admin', 'mcp_server_tools',
-    'composite_tools', 'creative_basic', 'creative_image', 'creative_video',
-    'creative_hyperframes', 'creative_quality', 'skills', 'model_management', 'business',
-    'prometheus_source_read', 'prometheus_source_write',
-  ];
-  for (const toolCategory of autoActivatable) {
-    if (cats.has(toolCategory) && runtimeCategories.has(toolCategory)) {
-      activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
+  let connectedExtensionIds: Set<string> | undefined;
+  try {
+    connectedExtensionIds = new Set(
+      getMCPManager().getAllTools().map((tool: any) => String(tool?.serverId || '').trim()).filter(Boolean),
+    );
+  } catch {
+    connectedExtensionIds = undefined;
+  }
+  const extensionPlan = planMessageExtensionActivation({ message, connectedExtensionIds });
+  for (const category of extensionPlan.categories) cats.add(category);
+  if (cats.has('external_apps') && !extensionPlan.categories.includes('external_apps')) {
+    const genericConnectorRequest = /\b(?:connected app|connected apps|connected account|connected service|external app|external apps|connector|plugin|connector_list|list connectors)\b/i.test(message);
+    if (!genericConnectorRequest || !extensionPlan.hasConnectedExtension || extensionPlan.blockedExtensionIds.length > 0) {
+      // A provider-specific mention must not fall through to another connected
+      // provider's tool surface, and a generic request cannot expose an empty
+      // or disconnected connector set.
+      cats.delete('external_apps');
     }
+  }
+  const runtimeCategories = new Set<string>(getRuntimeToolCategoryIds());
+  const normalizedDetectedCategories = new Set<string>();
+  for (const detected of cats) {
+    normalizedDetectedCategories.add(normalizeManifestToolCategory(detected) || detected);
+  }
+  for (const toolCategory of runtimeCategories) {
+    if (normalizedDetectedCategories.has(toolCategory)) activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
   }
 }
 
