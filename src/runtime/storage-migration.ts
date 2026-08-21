@@ -70,6 +70,10 @@ function pathInside(root: string, candidate: string): boolean {
   return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function digestBuffer(value: Buffer | string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
 function fileHash(filePath: string): string {
   const hash = crypto.createHash('sha256');
   const fd = fs.openSync(filePath, 'r');
@@ -211,7 +215,6 @@ function runtimeDirectoryTarget(layout: PrometheusLayout, entryName: string): st
 }
 
 function runtimeFileTarget(layout: PrometheusLayout, entryName: string): string {
-  if (entryName === 'config.json') return path.join(layout.runtime.config, 'config.json');
   if (entryName === 'managed-teams.json') return path.join(layout.runtime.teams, entryName);
   if (/^(?:connections?|connection-|attempt|activity|secure-input)/i.test(entryName)) {
     return path.join(layout.runtime.connections, entryName);
@@ -238,37 +241,6 @@ function migrateLegacyAgentWorkspaces(
   }
 }
 
-function migrateConfigRoot(sourceConfigRoot: string, layout: PrometheusLayout, acc: MigrationAccumulator): void {
-  if (!fs.existsSync(sourceConfigRoot) || samePath(sourceConfigRoot, layout.runtime.root) || samePath(sourceConfigRoot, layout.runtime.config)) return;
-  for (const entry of fs.readdirSync(sourceConfigRoot, { withFileTypes: true })) {
-    const source = path.join(sourceConfigRoot, entry.name);
-    if (entry.isSymbolicLink()) {
-      acc.skippedSymlinks.push(source);
-      continue;
-    }
-    if (entry.isDirectory()) {
-      if (entry.name === 'skills') {
-        copyTreeVerified(source, layout.workspace.skills, acc);
-        continue;
-      }
-      if (entry.name === 'agents') {
-        migrateLegacyAgentWorkspaces(sourceConfigRoot, layout, acc);
-        // Preserve any non-workspace agent metadata for forensic rollback.
-        copyTreeVerified(source, path.join(layout.runtime.config, 'legacy-root', 'agents'), acc);
-        continue;
-      }
-      if (entry.name === '.clawhub') {
-        copyTreeVerified(source, path.join(layout.runtime.config, '.clawhub'), acc);
-        continue;
-      }
-      const mapped = runtimeDirectoryTarget(layout, entry.name);
-      copyTreeVerified(source, mapped || path.join(layout.runtime.config, 'legacy-root', entry.name), acc);
-      continue;
-    }
-    if (entry.isFile()) copyFileVerified(source, runtimeFileTarget(layout, entry.name), acc);
-  }
-}
-
 function mapLegacyStoragePath(
   raw: unknown,
   sourceConfigRoot: string,
@@ -284,9 +256,12 @@ function mapLegacyStoragePath(
     return path.join(layout.workspace.root, path.relative(sourceWorkspaceRoot, resolved));
   }
 
-  const legacyAgentMatch = path.relative(path.join(sourceConfigRoot, 'agents'), resolved).split(path.sep);
-  if (legacyAgentMatch.length >= 3 && legacyAgentMatch[1] === 'workspace' && !legacyAgentMatch[0].startsWith('..')) {
-    return path.join(standaloneSubagentWorkspace(layout, legacyAgentMatch[0]), ...legacyAgentMatch.slice(2));
+  const legacyAgentsRoot = path.join(sourceConfigRoot, 'agents');
+  if (pathInside(legacyAgentsRoot, resolved)) {
+    const parts = path.relative(legacyAgentsRoot, resolved).split(path.sep);
+    if (parts.length >= 2 && parts[1] === 'workspace') {
+      return path.join(standaloneSubagentWorkspace(layout, parts[0]), ...parts.slice(2));
+    }
   }
 
   const legacySkills = path.join(sourceConfigRoot, 'skills');
@@ -344,27 +319,107 @@ export function rewriteMigratedConfigPaths(
   return next;
 }
 
-function rewriteCopiedConfig(
+function writeContentVerified(
+  sourceLabel: string,
+  target: string,
+  content: string,
+  acc: MigrationAccumulator,
+): boolean {
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const expectedHash = digestBuffer(content);
+    const expectedBytes = Buffer.byteLength(content, 'utf-8');
+
+    if (fs.existsSync(target)) {
+      const targetStat = fs.lstatSync(target);
+      if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+        acc.conflicts.push({ source: sourceLabel, target, sourceHash: expectedHash, reason: 'type_mismatch' });
+        return false;
+      }
+      const targetHash = fileHash(target);
+      if (targetHash !== expectedHash) {
+        acc.conflicts.push({ source: sourceLabel, target, sourceHash: expectedHash, targetHash, reason: 'different_file' });
+        return false;
+      }
+      acc.identical.push({ source: sourceLabel, target, hash: expectedHash, bytes: expectedBytes });
+      return true;
+    }
+
+    const temp = `${target}.${process.pid}.${Date.now()}.migration.tmp`;
+    fs.writeFileSync(temp, content, 'utf-8');
+    fs.renameSync(temp, target);
+    const targetHash = fileHash(target);
+    if (targetHash !== expectedHash) {
+      try { fs.rmSync(target, { force: true }); } catch {}
+      throw new Error(`verification hash mismatch (${expectedHash} != ${targetHash})`);
+    }
+    acc.copied.push({ source: sourceLabel, target, hash: expectedHash, bytes: expectedBytes });
+    return true;
+  } catch (error: any) {
+    acc.errors.push({ source: sourceLabel, target, message: String(error?.message || error) });
+    return false;
+  }
+}
+
+function migrateConfigJson(
   sourceConfigRoot: string,
   sourceWorkspaceRoot: string,
   layout: PrometheusLayout,
   acc: MigrationAccumulator,
 ): boolean {
-  const sourceConfig = path.join(sourceConfigRoot, 'config.json');
-  const targetConfig = path.join(layout.runtime.config, 'config.json');
-  if (!fs.existsSync(sourceConfig) || !fs.existsSync(targetConfig)) return false;
-  if (acc.conflicts.some((conflict) => samePath(conflict.target, targetConfig))) return false;
+  const source = path.join(sourceConfigRoot, 'config.json');
+  if (!fs.existsSync(source)) return false;
   try {
-    const raw = JSON.parse(fs.readFileSync(sourceConfig, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(source, 'utf-8'));
     const rewritten = rewriteMigratedConfigPaths(raw, sourceConfigRoot, sourceWorkspaceRoot, layout);
-    const temp = `${targetConfig}.${process.pid}.${Date.now()}.migration.tmp`;
-    fs.writeFileSync(temp, `${JSON.stringify(rewritten, null, 2)}\n`, 'utf-8');
-    fs.renameSync(temp, targetConfig);
-    return true;
+    return writeContentVerified(source, path.join(layout.runtime.config, 'config.json'), `${JSON.stringify(rewritten, null, 2)}\n`, acc);
   } catch (error: any) {
-    acc.errors.push({ source: sourceConfig, target: targetConfig, message: `config rewrite failed: ${String(error?.message || error)}` });
+    acc.errors.push({ source, target: path.join(layout.runtime.config, 'config.json'), message: `config migration failed: ${String(error?.message || error)}` });
     return false;
   }
+}
+
+function migrateConfigRoot(
+  sourceConfigRoot: string,
+  sourceWorkspaceRoot: string,
+  layout: PrometheusLayout,
+  acc: MigrationAccumulator,
+): boolean {
+  if (!fs.existsSync(sourceConfigRoot) || samePath(sourceConfigRoot, layout.runtime.root) || samePath(sourceConfigRoot, layout.runtime.config)) return false;
+  let rewrittenConfig = false;
+  for (const entry of fs.readdirSync(sourceConfigRoot, { withFileTypes: true })) {
+    const source = path.join(sourceConfigRoot, entry.name);
+    if (entry.isSymbolicLink()) {
+      acc.skippedSymlinks.push(source);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (entry.name === 'skills') {
+        copyTreeVerified(source, layout.workspace.skills, acc);
+        continue;
+      }
+      if (entry.name === 'agents') {
+        migrateLegacyAgentWorkspaces(sourceConfigRoot, layout, acc);
+        // Preserve non-workspace agent metadata for rollback/forensics.
+        copyTreeVerified(source, path.join(layout.runtime.config, 'legacy-root', 'agents'), acc);
+        continue;
+      }
+      if (entry.name === '.clawhub') {
+        copyTreeVerified(source, path.join(layout.runtime.config, '.clawhub'), acc);
+        continue;
+      }
+      const mapped = runtimeDirectoryTarget(layout, entry.name);
+      copyTreeVerified(source, mapped || path.join(layout.runtime.config, 'legacy-root', entry.name), acc);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (entry.name === 'config.json') {
+      rewrittenConfig = migrateConfigJson(sourceConfigRoot, sourceWorkspaceRoot, layout, acc) || rewrittenConfig;
+      continue;
+    }
+    copyFileVerified(source, runtimeFileTarget(layout, entry.name), acc);
+  }
+  return rewrittenConfig;
 }
 
 function writeManifest(filePath: string, manifest: StorageMigrationManifest): void {
@@ -412,12 +467,11 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
 
   // Canonical copies. Existing identical files are accepted; different files are
   // conflicts and are never overwritten.
-  migrateConfigRoot(sourceConfigRoot, layout, acc);
+  const rewrittenConfig = migrateConfigRoot(sourceConfigRoot, sourceWorkspaceRoot, layout, acc);
   if (fs.existsSync(sourceWorkspaceRoot) && !samePath(sourceWorkspaceRoot, layout.workspace.root)) {
     copyTreeVerified(sourceWorkspaceRoot, layout.workspace.root, acc);
   }
 
-  const rewrittenConfig = rewriteCopiedConfig(sourceConfigRoot, sourceWorkspaceRoot, layout, acc);
   const readyToActivate = acc.conflicts.length === 0 && acc.errors.length === 0 && acc.skippedSymlinks.length === 0;
   const manifest: StorageMigrationManifest = {
     version: 1,
