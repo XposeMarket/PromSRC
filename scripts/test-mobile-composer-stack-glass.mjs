@@ -4,8 +4,12 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(path, 'utf8');
 const css = read('web-ui/src/styles/mobile-composer-stack.css');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile-composer-stack.css');
+const mobileCss = read('web-ui/src/styles/mobile.css');
+const generatedMobileCss = read('generated/public-web-ui/static/styles/mobile.css');
 const data = read('web-ui/src/mobile/mobile-data.js');
 const generatedData = read('generated/public-web-ui/static/mobile/mobile-data.js');
+const pages = read('web-ui/src/mobile/mobile-pages.js');
+const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
 
 assert.equal(generatedCss, css, 'generated composer-stack CSS must mirror source exactly');
 assert.equal(generatedData, data, 'generated mobile-data loader must mirror source exactly');
@@ -66,5 +70,37 @@ assert.match(
 assert.match(css, /\[class\*="recovery"\]\[class\*="toast"\]/, 'dedicated recovery toast variants must be composer anchored');
 assert.match(css, /\[class\*="reconnect"\]\[class\*="toast"\]/, 'dedicated reconnect toast variants must be composer anchored');
 assert.match(css, /body\.pm-mobile-active\.pm-keyboard-open[\s\S]*?--pm-composer-stack-base-bottom/, 'keyboard-open mode must redefine the shared base instead of detaching individual overlays');
+
+assert.match(
+  mobileCss,
+  /\.pm-background-spawn-dock\.has-many\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;/,
+  'many-agent mobile docks must stack vertically inside a readable scroll region',
+);
+assert.match(
+  mobileCss,
+  /\.pm-background-spawn-dock\.has-many \.pm-background-spawn-lane\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/,
+  'many-agent lanes must use the available mobile width instead of fixed horizontal cards',
+);
+for (const generatedRule of [
+  /\.pm-background-spawn-dock\.has-many\s*\{[\s\S]*?flex-direction:\s*column;[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;/,
+  /\.pm-background-spawn-dock\.has-many \.pm-background-spawn-lane\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/,
+]) {
+  assert.match(generatedMobileCss, generatedRule, 'generated mobile CSS must carry the background-dock mobile geometry');
+}
+assert.match(
+  css,
+  /body\.pm-mobile-active \.pm-background-spawn-dock\.is-open\s*\{[\s\S]*?position:\s*relative;[\s\S]*?margin:[\s\S]*?--pm-composer-stack-base-bottom[\s\S]*?--pm-tool-progress-live-height[\s\S]*?transform:\s*none;/,
+  'expanded background docks must participate in normal page flow above the composer stack',
+);
+assert.match(
+  pages,
+  /const backgroundDockInFlow = backgroundSpawnDock\?\.classList\?\.contains\('is-open'\) === true;[\s\S]*?const overlayDockHeight = backgroundDockInFlow \? 0 : dockHeight;/,
+  'chat geometry must avoid double-counting an in-flow expanded background dock',
+);
+assert.match(
+  generatedPages,
+  /const backgroundDockInFlow = backgroundSpawnDock\?\.classList\?\.contains\('is-open'\) === true;[\s\S]*?const overlayDockHeight = backgroundDockInFlow \? 0 : dockHeight;/,
+  'generated chat geometry must keep the in-flow background dock contract',
+);
 
 console.log('[test-mobile-composer-stack-glass] passed: modern liquid glass and composer-locked runtime stack');
