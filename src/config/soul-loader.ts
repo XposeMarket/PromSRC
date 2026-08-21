@@ -8,15 +8,19 @@ import {
   type SkillPromptSignals,
 } from '../gateway/skills-runtime/skill-package.js';
 import { readPromptProfileText } from '../gateway/prompt-profile-snapshot.js';
+import { getPrometheusLayout } from '../runtime/storage-layout.js';
 
 // Prefer config next to the project, fall back to home.
 // In packaged Electron runtime PROMETHEUS_DATA_DIR is set by main.js and takes priority
 // so user data is read from %APPDATA%\Prometheus rather than the resources directory.
 const PROJECT_CONFIG_NEW = path.join(process.cwd(), '.prometheus');
 const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
-const CONFIG_DIR = process.env.PROMETHEUS_DATA_DIR
-  ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
-  : fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');
+const STORAGE_LAYOUT = getPrometheusLayout();
+const CONFIG_DIR = STORAGE_LAYOUT.mode === 'canonical'
+  ? STORAGE_LAYOUT.runtime.config
+  : process.env.PROMETHEUS_DATA_DIR
+    ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+    : fs.existsSync(PROJECT_CONFIG) ? PROJECT_CONFIG : path.join(os.homedir(), '.prometheus');
 const SOUL_PATHS = [
   path.join(CONFIG_DIR, 'soul.md'),
   path.join(process.cwd(), 'src', 'config', 'soul.md'),

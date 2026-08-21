@@ -98,11 +98,11 @@ function getGatewayUrl(host = '127.0.0.1'): string {
 }
 
 function getGatewayStateRoot(): string {
-  return process.env.PROMETHEUS_DATA_DIR || resolveInstallRoot();
+  return getConfig().getConfigDir();
 }
 
 function getPairingAdminTokenPath(): string {
-  return path.join(getGatewayStateRoot(), '.prometheus', 'pairing-admin-token');
+  return path.join(getGatewayStateRoot(), 'pairing-admin-token');
 }
 
 function ensureManualPairingAdminCredential(): { token: string; path: string; generated: boolean; persisted: boolean } | null {

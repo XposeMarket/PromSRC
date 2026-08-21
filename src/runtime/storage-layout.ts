@@ -11,6 +11,7 @@ export interface PrometheusRuntimePaths {
   config: string;
   sessions: string;
   agentChats: string;
+  agents: string;
   toolObservations: string;
   resources: string;
   projects: string;
@@ -114,6 +115,7 @@ function buildRuntimePaths(root: string): PrometheusRuntimePaths {
     config: path.join(root, 'config'),
     sessions: path.join(root, 'sessions'),
     agentChats: path.join(root, 'agent-chats'),
+    agents: path.join(root, 'agents'),
     toolObservations: path.join(root, 'tool-observations'),
     resources: path.join(root, 'resources'),
     projects: path.join(root, 'projects'),
