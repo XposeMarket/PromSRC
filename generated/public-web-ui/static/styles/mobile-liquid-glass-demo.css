@@ -1,73 +1,186 @@
 /*
- * Mobile chat Liquid Glass material port.
+ * Mobile chat Liquid Glass material.
  *
- * IMPORTANT: geometry remains owned by mobile.css. This file only changes the
- * material and icon contrast. The reference is XposeMarket/liquid-glass's live
- * demo: rim 32, strength 20, chroma .7, spec .28, fill .65, blur 0.
+ * This is the DOM fallback for the reference liquid-glass compositor. It keeps
+ * the same optical rules instead of painting a generic frosted panel:
  *
- * The canvas demo's fill is NOT an opacity. Its compositor blends sampled
- * backdrop pixels toward rgb(18,22,28) with body = .07 + fill * .55, which is
- * .4275 at fill .65. The CSS approximation below mirrors that blend instead of
- * painting a 65%-opaque black slab. The composer is the one intentional
- * exception: same material, with the demo's baseline 2.5px blur restored.
+ *   - a dark, low-opacity sampled-backdrop approximation;
+ *   - blur shared by the body and rim (2.5px reference baseline);
+ *   - refraction/chroma cues confined to a narrow edge band;
+ *   - warm-white top and bottom tangent highlights;
+ *   - no broad white fill, glow halo, or continuous heavy outline.
+ *
+ * Geometry and interaction remain owned by mobile.css. This file only supplies
+ * the optical material layer for the existing mobile surfaces.
  */
 
 body.pm-mobile-active {
-  --pm-demo-body: rgba(18, 22, 28, .4275);
-  --pm-demo-edge: rgba(255, 255, 255, .065);
-  --pm-demo-spec-top: rgba(255, 255, 255, .14);
-  --pm-demo-spec-bottom: rgba(255, 255, 255, .055);
-  --pm-demo-shadow: rgba(0, 0, 0, .14);
-  --pm-demo-icon: #fff;
+  /* The canvas compositor's fill=.65 blends the sampled backdrop toward
+     rgb(18,22,28) with body=.4275. Keep that dark sampled-body approximation. */
+  --pm-lg-demo-body: rgba(18, 22, 28, .4275);
+  --pm-lg-demo-body-dark: rgba(7, 10, 14, .48);
+  --pm-lg-demo-rim: rgba(255, 255, 255, .17);
+  --pm-lg-demo-hair-top: rgba(255, 252, 245, .30);
+  --pm-lg-demo-hair-bottom: rgba(245, 239, 228, .13);
+  --pm-lg-demo-shadow: rgba(0, 0, 0, .22);
+  --pm-lg-demo-chroma-blue: rgba(124, 198, 255, .18);
+  --pm-lg-demo-chroma-warm: rgba(225, 187, 133, .15);
+  --pm-lg-demo-text: rgba(255, 255, 255, .96);
 }
 
 /*
- * Reference material. Do NOT target every .pm-icon-btn here: the right-side
- * pencil + overflow buttons intentionally live inside one shared glass pill.
+ * Shared material primitives. The masked ring is the CSS equivalent of the
+ * compositor's SDF rim: the center stays clear while refraction/chroma lives
+ * only near the boundary. The hairline fades at the rounded caps.
  */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-tabbar,
   .pm-tab-indicator,
-  .chat-pulse-card
+  .pm-composer,
+  .chat-pulse-card,
+  .pm-reasoning-track,
+  .pm-drawer,
+  .pm-drawer-search-toggle,
+  .pm-theme-toggle
 ) {
-  border-color: var(--pm-demo-edge) !important;
+  position: relative;
+  isolation: isolate;
+  border-color: transparent !important;
   background:
     linear-gradient(180deg,
-      rgba(255,255,255,.035) 0%,
-      rgba(255,255,255,.008) 20%,
-      transparent 38%,
-      transparent 74%,
-      rgba(255,255,255,.012) 100%),
-    var(--pm-demo-body) !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+      rgba(255, 255, 255, .028) 0%,
+      rgba(255, 255, 255, .006) 19%,
+      transparent 41%,
+      transparent 72%,
+      rgba(255, 255, 255, .012) 100%),
+    var(--pm-lg-demo-body) !important;
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.03) !important;
+  backdrop-filter: blur(2.5px) saturate(1.03) !important;
   box-shadow:
-    inset 0 .75px 0 var(--pm-demo-spec-top),
-    inset 0 -.75px 0 var(--pm-demo-spec-bottom),
-    0 7px 20px var(--pm-demo-shadow) !important;
+    0 7px 20px var(--pm-lg-demo-shadow),
+    inset 0 1px 0 rgba(255, 252, 245, .08),
+    inset 0 -1px 0 rgba(245, 239, 228, .06) !important;
 }
 
-/* The combined new-chat / overflow control must remain ONE pill. */
+body.pm-mobile-active :is(
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-tabbar,
+  .pm-tab-indicator,
+  .pm-composer,
+  .chat-pulse-card,
+  .pm-reasoning-track,
+  .pm-drawer,
+  .pm-drawer-search-toggle,
+  .pm-theme-toggle
+)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    linear-gradient(180deg,
+      var(--pm-lg-demo-chroma-blue) 0%,
+      rgba(255, 255, 255, .04) 20%,
+      transparent 42%,
+      transparent 64%,
+      rgba(255, 255, 255, .035) 80%,
+      var(--pm-lg-demo-chroma-warm) 100%),
+    linear-gradient(90deg,
+      rgba(112, 188, 255, .12),
+      transparent 20%,
+      transparent 80%,
+      rgba(232, 194, 142, .12));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: .72;
+  filter: blur(.15px);
+}
+
+body.pm-mobile-active :is(
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-tabbar,
+  .pm-tab-indicator,
+  .pm-composer,
+  .chat-pulse-card,
+  .pm-reasoning-track,
+  .pm-drawer,
+  .pm-drawer-search-toggle,
+  .pm-theme-toggle
+)::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg,
+      var(--pm-lg-demo-hair-top) 0,
+      rgba(255, 252, 245, .06) 1.2px,
+      transparent 12%,
+      transparent 86%,
+      rgba(245, 239, 228, .035) calc(100% - 1.5px),
+      var(--pm-lg-demo-hair-bottom) 100%);
+  -webkit-mask: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+  mask: linear-gradient(90deg, transparent 0, #000 8%, #000 92%, transparent 100%);
+  opacity: .88;
+}
+
+/* Existing glass helper spans are retained for markup compatibility, but the
+   material belongs to the surface itself. Do not stack a second opaque lens. */
+body.pm-mobile-active :is(.pm-glass-lens, .pm-glass-border) {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  mask: none !important;
+  -webkit-mask: none !important;
+  opacity: 0 !important;
+}
+
+/* Header: hamburger, model badge, and the shared new-chat/overflow pill. */
+body.pm-mobile-active :is(
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster
+) {
+  color: var(--pm-lg-demo-text) !important;
+}
+
 body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
   border: 0 !important;
   background: transparent !important;
+  box-shadow: none !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  box-shadow: none !important;
-}
-
-/* Bright, heavier ChatGPT-like icon treatment without changing icon size/layout. */
-body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) {
-  color: var(--pm-demo-icon) !important;
 }
 
 body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg {
-  color: var(--pm-demo-icon) !important;
+  color: currentColor !important;
   stroke: currentColor;
-  stroke-width: 2.4 !important;
+  stroke-width: 2.35 !important;
   opacity: 1 !important;
 }
 
@@ -75,36 +188,76 @@ body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster but
   vector-effect: non-scaling-stroke;
 }
 
-body.pm-mobile-active .pm-header .pm-online {
-  color: rgba(255,255,255,.96) !important;
+body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button):active {
+  background: rgba(255, 255, 255, .06) !important;
 }
 
-/* Keep the existing tab-bar and slider geometry; only swap the material. */
-body.pm-mobile-active .pm-tabbar,
-body.pm-mobile-active .pm-tab-indicator {
-  border-color: rgba(255,255,255,.06) !important;
-}
-
-body.pm-mobile-active .pm-tab-indicator {
+/* Bottom navigation and its moving glass indicator. Keep all existing geometry. */
+body.pm-mobile-active .pm-tabbar {
   background:
     linear-gradient(180deg,
-      rgba(255,255,255,.055),
-      rgba(255,255,255,.008) 30%,
-      transparent 65%,
-      rgba(255,255,255,.018)),
-    rgba(18,22,28,.455) !important;
+      rgba(255, 255, 255, .026),
+      rgba(255, 255, 255, .005) 22%,
+      transparent 45%,
+      transparent 75%,
+      rgba(255, 255, 255, .014)),
+    var(--pm-lg-demo-body-dark) !important;
+}
+
+body.pm-mobile-active .pm-tabbar::before {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 245, .12), transparent 16%, transparent 84%, rgba(245, 239, 228, .055)),
+    linear-gradient(90deg, rgba(124, 198, 255, .08), transparent 20%, transparent 80%, rgba(225, 187, 133, .08));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  padding: 1px;
+  opacity: .65;
+  filter: none;
+  mix-blend-mode: normal;
+}
+
+body.pm-mobile-active .pm-tabbar::after {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 252, 245, .20) 0,
+      rgba(255, 252, 245, .045) 1.2px,
+      transparent 16%,
+      transparent 84%,
+      rgba(245, 239, 228, .035) calc(100% - 1.2px),
+      rgba(245, 239, 228, .10) 100%);
+  -webkit-mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  opacity: .86;
+}
+
+body.pm-mobile-active .pm-tab-indicator {
+  border-color: transparent !important;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, .035),
+      rgba(255, 255, 255, .006) 23%,
+      transparent 47%,
+      transparent 75%,
+      rgba(255, 255, 255, .016)),
+    rgba(8, 12, 17, .43) !important;
   box-shadow:
-    inset 0 .75px 0 rgba(255,255,255,.16),
-    inset 0 -.75px 0 rgba(255,255,255,.06),
-    0 5px 14px rgba(0,0,0,.12) !important;
+    0 5px 14px rgba(0, 0, 0, .16),
+    inset 0 1px 0 rgba(255, 252, 245, .15),
+    inset 0 -1px 0 rgba(245, 239, 228, .08) !important;
 }
 
 body.pm-mobile-active .pm-tabbar .pm-tab {
-  color: rgba(255,255,255,.78) !important;
+  color: rgba(255, 255, 255, .76) !important;
 }
 
 body.pm-mobile-active .pm-tabbar .pm-tab svg {
-  stroke-width: 2.35 !important;
+  stroke-width: 2.3 !important;
   opacity: 1 !important;
 }
 
@@ -114,61 +267,121 @@ body.pm-mobile-active .pm-tabbar .pm-tab-magnify .pm-tab {
   color: #fff !important;
 }
 
-/* Non-composer glass follows the live demo's blur: 0. */
-body.pm-mobile-active :is(.pm-header, .pm-tabbar, .chat-pulse-card) .pm-glass-lens {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  filter: none !important;
-  opacity: var(--pm-lg-lens-opacity, .48) !important;
-}
-
-/* Brain/Pulse cards use the same material; retain their existing size/radius. */
+/* Brain/Pulse starter cards: same dark slab and restrained tangent light. */
 body.pm-mobile-active .chat-pulse-card {
-  color: #fff !important;
-}
-
-body.pm-mobile-active .chat-pulse-card:hover,
-body.pm-mobile-active .chat-pulse-card:focus-visible {
-  border-color: rgba(255,255,255,.09) !important;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.045), transparent 35%, rgba(255,255,255,.014)),
-    rgba(18,22,28,.455) !important;
-  box-shadow:
-    inset 0 .75px 0 rgba(255,255,255,.16),
-    inset 0 -.75px 0 rgba(255,255,255,.06),
-    0 8px 22px rgba(0,0,0,.16) !important;
-}
-
-body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon) {
-  color: rgba(255,255,255,.97) !important;
-}
-
-/*
- * Composer = the exact same body treatment, but blurred so typed text remains
- * readable. This is deliberately the only main chat glass surface with blur.
- */
-body.pm-mobile-active .pm-composer {
-  border-color: rgba(255,255,255,.065) !important;
+  color: var(--pm-lg-demo-text) !important;
   background:
     linear-gradient(180deg,
-      rgba(255,255,255,.035),
-      rgba(255,255,255,.008) 20%,
+      rgba(255, 255, 255, .026),
+      rgba(255, 255, 255, .006) 20%,
       transparent 42%,
-      transparent 72%,
-      rgba(255,255,255,.014)),
-    var(--pm-demo-body) !important;
-  -webkit-backdrop-filter: blur(2.5px) saturate(1) !important;
-  backdrop-filter: blur(2.5px) saturate(1) !important;
-  box-shadow:
-    inset 0 .75px 0 var(--pm-demo-spec-top),
-    inset 0 -.75px 0 var(--pm-demo-spec-bottom),
-    0 7px 20px var(--pm-demo-shadow) !important;
+      transparent 74%,
+      rgba(255, 255, 255, .014)),
+    var(--pm-lg-demo-body) !important;
 }
 
-body.pm-mobile-active .pm-composer .pm-glass-lens {
-  -webkit-backdrop-filter: blur(1.7px) saturate(1) !important;
-  backdrop-filter: blur(1.7px) saturate(1) !important;
-  filter: none !important;
+body.pm-mobile-active .chat-pulse-card:is(:hover, :focus-visible, :active) {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, .045),
+      rgba(255, 255, 255, .008) 22%,
+      transparent 45%,
+      transparent 74%,
+      rgba(255, 255, 255, .018)),
+    rgba(10, 14, 19, .43) !important;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, .20),
+    inset 0 1px 0 rgba(255, 252, 245, .15),
+    inset 0 -1px 0 rgba(245, 239, 228, .07) !important;
+}
+
+body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon, .chat-pulse-card-title) {
+  color: rgba(255, 255, 255, .96) !important;
+}
+
+/* Reasoning sheet: the track is another pill, not a bright acrylic slider. */
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
+  border-color: transparent !important;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, .032),
+      rgba(255, 255, 255, .006) 21%,
+      transparent 45%,
+      transparent 75%,
+      rgba(255, 255, 255, .014)),
+    rgba(8, 12, 17, .48) !important;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, .22),
+    inset 0 1px 0 rgba(255, 252, 245, .16),
+    inset 0 -1px 0 rgba(245, 239, 228, .08) !important;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 252, 245, .15),
+      rgba(255, 255, 255, .025) 23%,
+      transparent 52%,
+      rgba(245, 239, 228, .06)),
+    rgba(18, 23, 29, .56) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 252, 245, .17),
+    inset 0 -1px 0 rgba(245, 239, 228, .08),
+    0 4px 12px rgba(0, 0, 0, .13) !important;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
+  background:
+    linear-gradient(180deg, rgba(255, 252, 245, .92), rgba(221, 218, 210, .64)) !important;
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, .22),
+    inset 0 1px 0 rgba(255, 255, 255, .92),
+    inset 0 -1px 0 rgba(80, 78, 73, .18) !important;
+}
+
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
+  background: rgba(255, 252, 245, .34);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .28);
+}
+
+/* The drawer is the expanded version of the same material, not a new surface. */
+body.pm-mobile-active .pm-drawer {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, .024),
+      transparent 20%,
+      transparent 78%,
+      rgba(255, 255, 255, .012)),
+    rgba(7, 10, 14, .82) !important;
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.02) !important;
+  backdrop-filter: blur(2.5px) saturate(1.02) !important;
+  box-shadow:
+    18px 0 48px rgba(0, 0, 0, .32),
+    inset -1px 0 0 rgba(255, 252, 245, .08) !important;
+}
+
+body.pm-mobile-active :is(.pm-drawer-search-toggle, .pm-theme-toggle) {
+  background: rgba(10, 14, 19, .44) !important;
+  color: rgba(255, 255, 255, .94) !important;
+}
+
+/* Composer: shared blur/rim, while preserving its existing expanded geometry and
+   overflow behavior for popovers. */
+body.pm-mobile-active .pm-composer {
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, .032),
+      rgba(255, 255, 255, .006) 20%,
+      transparent 42%,
+      transparent 73%,
+      rgba(255, 255, 255, .014)),
+    var(--pm-lg-demo-body-dark) !important;
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.03) !important;
+  backdrop-filter: blur(2.5px) saturate(1.03) !important;
+  box-shadow:
+    0 7px 20px rgba(0, 0, 0, .24),
+    inset 0 1px 0 rgba(255, 252, 245, .17),
+    inset 0 -1px 0 rgba(245, 239, 228, .08) !important;
 }
 
 body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) {
@@ -176,9 +389,9 @@ body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-ic
 }
 
 body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) svg {
-  color: #fff !important;
+  color: currentColor !important;
   stroke: currentColor;
-  stroke-width: 2.4 !important;
+  stroke-width: 2.35 !important;
   opacity: 1 !important;
 }
 
@@ -187,17 +400,12 @@ body.pm-mobile-active .pm-composer :is(textarea, input) {
 }
 
 body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
-  color: rgba(255,255,255,.60) !important;
+  color: rgba(255, 255, 255, .58) !important;
 }
 
-/* Keep legacy border overlays extremely quiet; the demo's highlight is directional. */
-body.pm-mobile-active :is(
-  .pm-header > .pm-icon-btn,
-  .pm-header .pm-online,
-  .pm-header-action-cluster,
-  .pm-tabbar,
-  .pm-composer
-) .pm-glass-border {
-  opacity: .18 !important;
-  border-color: rgba(255,255,255,.055) !important;
+/* Keep the material quiet when motion is reduced. */
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active :is(.pm-tabbar, .pm-tab-indicator, .pm-composer, .chat-pulse-card) {
+    transition-duration: 0.01ms !important;
+  }
 }
