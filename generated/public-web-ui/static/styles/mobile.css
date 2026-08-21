@@ -7876,15 +7876,17 @@ html.pm-session-context-open * {
     opacity var(--pm-motion-fade-duration, 220ms) ease;
 }
 .pm-background-spawn-dock.has-many {
-  flex-direction: row;
+  flex-direction: column;
   align-items: stretch;
-  max-height: none;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
+  max-height: min(58vh, 520px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 .pm-background-spawn-dock.has-many .pm-background-spawn-lane {
-  flex: 0 0 min(68vw, 260px);
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
 }
 .pm-keyboard-open .pm-background-spawn-dock {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px) + 18px);

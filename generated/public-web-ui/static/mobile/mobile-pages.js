@@ -13593,13 +13593,20 @@ void main() {
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
+      // Open background docks are normal-flow sections on mobile. Their box
+      // already reduces the chat viewport, so do not add the same height to
+      // the chat's bottom padding a second time. Keep the measured height in
+      // the stack variables so fixed controls can still clear the glass.
+      const backgroundDockInFlow = backgroundSpawnDock?.classList?.contains('is-open') === true;
+      const overlayDockHeight = backgroundDockInFlow ? 0 : dockHeight;
       const planDockHeight = mainPlanDock && !mainPlanDock.hidden
         ? Math.ceil(mainPlanDock.getBoundingClientRect?.().height || 0)
         : 0;
-      const runtimeDockHeight = Math.max(dockHeight, planDockHeight);
+      const runtimeDockHeight = Math.max(overlayDockHeight, planDockHeight);
+      const runtimeSurfaceHeight = Math.max(dockHeight, planDockHeight);
       page?.style?.setProperty?.('--pm-background-dock-live-height', `${dockHeight}px`);
       page?.style?.setProperty?.('--pm-main-plan-live-height', `${planDockHeight}px`);
-      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + toolProgressHeight + runtimeDockHeight + connectionHeight}px`);
+      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + toolProgressHeight + runtimeSurfaceHeight + connectionHeight}px`);
       const hasExpandedSurface = goalStrip?.dataset?.expanded === 'true'
         || mainPlanDock?.classList?.contains('is-open')
         || backgroundSpawnDock?.classList?.contains('is-open');

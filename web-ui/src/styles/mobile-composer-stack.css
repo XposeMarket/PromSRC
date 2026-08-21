@@ -162,6 +162,53 @@ body.pm-mobile-active .pm-background-spawn-dock:not(.is-collapsed) {
   right: var(--pm-composer-stack-inset);
 }
 
+/* An expanded background dock is a real page-flow section. The collapsed
+   count pill remains a floating control, but opening it reserves its own
+   vertical space so the chat history and fixed composer never sit beneath a
+   glass card. Keep the optional queue/goal/tool layers in the same stack gap. */
+body.pm-mobile-active .pm-background-spawn-dock.is-open {
+  position: relative;
+  inset: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  align-self: stretch;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  margin: 0 var(--pm-composer-stack-inset) calc(
+    var(--pm-composer-stack-base-bottom)
+    + var(--pm-goal-live-height, 0px)
+    + var(--pm-queued-live-height, 0px)
+    + var(--pm-tool-progress-live-height, 0px)
+  );
+  overflow-x: hidden;
+  overflow-y: auto;
+  transform: none;
+}
+
+body.pm-mobile-active .pm-background-spawn-dock.is-open.has-many {
+  flex-direction: column;
+  align-items: stretch;
+  max-height: min(58vh, 520px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+body.pm-mobile-active .pm-background-spawn-dock.is-open .pm-background-spawn-lane {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+body.pm-mobile-active .pm-background-spawn-dock.is-open .pm-background-spawn-main :is(strong, em) {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+}
+
 /* Recovery / reconnect status is always the topmost runtime layer. */
 body.pm-mobile-active .pm-chat-connection-status {
   left: 50%;
