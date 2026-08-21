@@ -2,6 +2,7 @@ import type { LoadedExtensionDescriptor } from './types.js';
 import type { ConnectionAdapter } from '../connections/types.js';
 import type { ConnectionToolClassifier } from '../connections/tool-classifier.js';
 import type { ConnectionVerifier } from '../connections/verification-service.js';
+import type { PromptSignalConfig } from '../runtime/prompt-signal-matcher.js';
 
 export type PrometheusExtensionTrustLevel =
   | 'core'
@@ -30,6 +31,10 @@ export interface PrometheusExtensionActivation {
   whenToolsRequested?: string[];
   whenCapabilityRequested?: string[];
   whenConnected?: boolean;
+  /** Optional aliases used by the natural-language activation planner. */
+  aliases?: string[];
+  /** Skill-style message signals: phrases, allOf, anyOf, and noneOf. */
+  message?: PromptSignalConfig;
 }
 
 export interface PrometheusExtensionContracts {
