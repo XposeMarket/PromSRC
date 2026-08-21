@@ -353,7 +353,11 @@ export function warmMemoryAtomSnapshot(workspacePath: string): number {
 
 function termWeight(term: string, documentFrequency: Map<string, number>, totalAtoms: number): number {
   const df = documentFrequency.get(term) || 0;
-  return Math.max(0.15, Math.log((totalAtoms + 1) / (df + 1)) + 0.2);
+  const weight = Math.max(0.15, Math.log((totalAtoms + 1) / (df + 1)) + 0.2);
+  // Concept terms exist to bridge paraphrases, not to outrank literal evidence.
+  // Keeping them weaker than concrete tokens prevents one loose synonym from
+  // turning every fact in a broad concept family into a direct match.
+  return isConceptTerm(term) ? weight * 0.65 : weight;
 }
 
 function scoreAtom(
@@ -385,10 +389,14 @@ function scoreAtom(
 
 function isAmbiguousSingleTermQuery(
   baseQueryTerms: string[],
+  expandedQueryTerms: string[],
   documentFrequency: Map<string, number>,
 ): boolean {
   if (baseQueryTerms.length !== 1) return false;
-  return (documentFrequency.get(baseQueryTerms[0]) || 0) > 1;
+  // A literal token can be unique while its semantic concept is broad (for
+  // example "launch" when many memories concern release/deploy/publish). Treat
+  // that as ambiguous too; unique names without a concept alias remain usable.
+  return expandedQueryTerms.some((term) => (documentFrequency.get(term) || 0) > 1);
 }
 
 function isRelationAnchorTerm(
@@ -439,10 +447,10 @@ export function retrieveMemoryAtoms(
     })
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
 
-  // A one-word query that occurs in several durable atoms is not enough
+  // A one-word query that occurs across a durable topic family is not enough
   // evidence to decide which personal fact belongs in the prompt. Specific
   // one-word identifiers still work when they uniquely identify an atom.
-  const directScored = isAmbiguousSingleTermQuery(baseQueryTerms, snapshot.termDocumentFrequency)
+  const directScored = isAmbiguousSingleTermQuery(baseQueryTerms, queryTerms, snapshot.termDocumentFrequency)
     ? []
     : scoredAll.filter((entry) => entry.matchedTerms.length > 0 && entry.score >= 0.13);
 
@@ -461,12 +469,13 @@ export function retrieveMemoryAtoms(
     isRelationAnchorTerm(term, queryTermSet, snapshot.termDocumentFrequency, rareDocumentFrequency),
   )));
   const anchorEntities = new Set(direct.flatMap((entry) => entry.atom.entities));
+  const directSections = new Set(direct.map((entry) => entry.atom.sourceSection));
   const related = scoredAll
     .filter((entry) => !directIds.has(entry.atom.id))
     .map((entry) => {
       const sharedTerms = entry.atom.terms.filter((term) => anchorTerms.has(term));
       const sharedEntities = entry.atom.entities.filter((entity) => anchorEntities.has(entity));
-      const sameSection = direct.some((hit) => hit.atom.sourceSection === entry.atom.sourceSection);
+      const sameSection = directSections.has(entry.atom.sourceSection);
       const relationReason = sharedEntities.length
         ? `shared_entity:${sharedEntities[0]}`
         : sharedTerms.length
