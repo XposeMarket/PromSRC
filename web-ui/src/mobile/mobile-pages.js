@@ -10835,7 +10835,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
         <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
           <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.monitor}</span>
-          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong><small>Connected computer</small></span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong></span>
           <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
         </button>
         <button type="button" class="pm-new-chat-context-row" id="pm-new-chat-project" aria-label="Current directed chat" aria-expanded="false">
@@ -10874,7 +10874,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
-          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? `Work on ${gatewayTarget?.name || 'this gateway'}` : `Message ${gatewayTarget?.name || 'this chat'}…`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
