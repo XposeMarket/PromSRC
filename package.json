@@ -89,6 +89,7 @@
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
+    "test:background-agent-steering": "tsx src/gateway/tasks/background-agent-stream.regression.ts && node scripts/test-background-agent-side-chat-contract.mjs",
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
     "test:mobile-voice-media": "node scripts/test-mobile-voice-media-contract.mjs",
     "test:design-preview": "node scripts/test-design-preview-contract.mjs",

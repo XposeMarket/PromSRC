@@ -34,7 +34,7 @@ import {
   streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession, createMobileProject, createMobileProjectChatSession,
   resolveMobileVoiceRoom, appendMobileVoiceRoomTranscript,
   loadGatewayStatus, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay, reconcileMobileChatTurn,
-  loadMobileBackgroundStatuses, loadMobileBackgroundStatus,
+  loadMobileBackgroundStatuses, loadMobileBackgroundStatus, loadMobileBackgroundStreamReplay, sendMobileBackgroundSteer,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
   createVoiceInterruptionEvent, streamVoiceAgentInputMobile,
@@ -350,7 +350,6 @@ function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
   return detail;
 }
 
-const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
 
 function _mobileSubagentModelParts(agent = {}) {
@@ -10044,7 +10043,7 @@ function _pmRefreshSlashChrome(page, input) {
   if (!pmActiveSlashCommand) {
     chip.hidden = true;
     chip.querySelector('.pm-command-chip-token').textContent = '';
-    input.placeholder = 'Type a message...';
+    input.placeholder = window.__pmMobileComposerPlaceholder || 'Type a message...';
     return;
   }
   chip.hidden = false;
@@ -10645,6 +10644,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     bindMobileSessionTarget(requestedSession, gatewayTarget.gatewayId, { started: true });
   }
   setMobileActiveGatewayTarget(gatewayTarget);
+  try {
+    window.__pmMobileComposerPlaceholder = requestedSession === MOBILE_CHAT_SESSION_ID
+      ? 'Send Prometheus a message'
+      : `Work on ${gatewayTarget?.name || 'this computer'}`;
+  } catch {}
   try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
   // A gateway paired before direct execution was enabled can still have a
   // cached read-only descriptor in localStorage. Refresh remote capability
@@ -10835,7 +10839,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
         <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
           <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.monitor}</span>
-          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong><small>Connected computer</small></span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong></span>
           <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
         </button>
         <button type="button" class="pm-new-chat-context-row" id="pm-new-chat-project" aria-label="Current directed chat" aria-expanded="false">
@@ -10874,7 +10878,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
         <input id="pm-photo-input" class="pm-native-file-input" type="file" multiple accept="image/*" />
         <div class="pm-composer-input-wrap" id="pm-composer-input-wrap">
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
-          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="Type a message…" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
+          <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
@@ -13803,6 +13807,9 @@ void main() {
       error: String(lane.error || '').trim(),
       fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
       events: processEntries,
+      steerMessages: Array.isArray(lane.steerMessages) ? lane.steerMessages : [],
+      streamId: lane.streamId || '',
+      lastSeq: Number(lane.lastSeq || 0) || 0,
       message: lane.message || null,
     };
   }
@@ -13864,6 +13871,39 @@ void main() {
     backgroundDetailPollTimer = null;
   }
 
+  function _applyMobileBackgroundStreamReplay(lane, replay) {
+    if (!lane || !replay) return false;
+    const stream = replay.stream || null;
+    const streamId = String(stream?.streamId || '').trim();
+    if (streamId && lane.streamId && lane.streamId !== streamId) {
+      lane.lastSeq = 0;
+      lane.message.processEntries = [];
+      lane.message.liveTraceEntries = [];
+    }
+    if (streamId) lane.streamId = streamId;
+    let changed = false;
+    (Array.isArray(replay.events) ? replay.events : [])
+      .slice()
+      .sort((a, b) => Number(a?.seq || 0) - Number(b?.seq || 0))
+      .forEach((frame) => {
+        const seq = Math.max(0, Math.floor(Number(frame?.seq || 0)) || 0);
+        if (seq && seq <= Number(lane.lastSeq || 0)) return;
+        const data = frame?.data && typeof frame.data === 'object' ? frame.data : {};
+        changed = _pushMobileBackgroundSpawnEvent({
+          ...data,
+          bgId: lane.id,
+          backgroundId: lane.id,
+          sessionId: lane.sessionId,
+          spawnerSessionId: lane.sessionId,
+          eventType: frame.type,
+          streamId: frame.streamId || streamId,
+          seq,
+          at: frame.at,
+        }, lane.sessionId) || changed;
+      });
+    return changed;
+  }
+
   function _mergeMobileBackgroundAgentSessionSnapshot(lane, session) {
     if (!lane?.message || !session || typeof session !== 'object') return false;
     const entries = (Array.isArray(session.processLog) ? session.processLog : [])
@@ -13902,15 +13942,18 @@ void main() {
     if (!lane) return;
     backgroundDetailPollInFlight = true;
     try {
-      const [statusResponse, session] = await Promise.all([
+      const currentLane = _mobileBackgroundSpawnLanes()[cleanId];
+      const [statusResponse, replay, session] = await Promise.all([
         loadMobileBackgroundStatus(cleanId).catch(() => null),
-        lane.bgSessionId
-          ? loadMobileChatSession(lane.bgSessionId, { force: true, historyLimit: 24, processLimit: 160, fullProcess: false }).catch(() => null)
+        loadMobileBackgroundStreamReplay(cleanId, currentLane?.lastSeq || 0).catch(() => null),
+        currentLane?.bgSessionId
+          ? loadMobileChatSession(currentLane.bgSessionId, { force: true, historyLimit: 24, processLimit: 160, fullProcess: false }).catch(() => null)
           : Promise.resolve(null),
       ]);
       const status = statusResponse?.status || statusResponse;
       if (status) _applyMobileBackgroundSpawnStatus(status, requestedSession);
       const refreshedLane = _mobileBackgroundSpawnLanes()[cleanId];
+      if (refreshedLane && replay) _applyMobileBackgroundStreamReplay(refreshedLane, replay);
       if (refreshedLane && session) _mergeMobileBackgroundAgentSessionSnapshot(refreshedLane, session);
       const refreshedRecord = _mobileBackgroundAgentDetailRecord(cleanId);
       if (refreshedRecord) {
@@ -13947,7 +13990,7 @@ void main() {
       const status = String(record.status || 'running').toLowerCase();
       sideSubtitleEl.textContent = `Background work · ${status === 'in_progress' ? 'running' : status}`;
     }
-    sideInput?.setAttribute('placeholder', 'Continue in side chat');
+    sideInput?.setAttribute('placeholder', `Steer ${record.agentName || 'agent'} directly`);
     sideSheet?.removeAttribute('inert');
     sideSheet?.setAttribute('aria-hidden', 'false');
     sideSheet?.classList.add('open');
@@ -13968,11 +14011,20 @@ void main() {
       const running = ['queued', 'running', 'in_progress'].includes(status);
       const agentName = String(backgroundRecord.agentName || 'Background agent');
       const message = _mobileBackgroundAgentDetailMessage(backgroundRecord);
-      setInnerHTMLPreservingVisuals(sideThreadEl, _renderMobileAgentChatBubble(message, {
+      const steerHistory = (Array.isArray(backgroundRecord.steerMessages) ? backgroundRecord.steerMessages : [])
+        .map((steer) => ({
+          role: 'user',
+          content: String(steer?.content || '').trim(),
+          timestamp: Number(steer?.timestamp || Date.now()) || Date.now(),
+          channelLabel: 'steer',
+        }))
+        .filter((steer) => steer.content);
+      const historyHtml = steerHistory.map((steer, index) => _renderChatMessageHtml(steer, index)).join('');
+      setInnerHTMLPreservingVisuals(sideThreadEl, `${historyHtml}${_renderMobileAgentChatBubble(message, {
         sender: agentName,
         live: running,
         keepLiveTraceVisible: true,
-      }));
+      })}`);
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
         .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
@@ -14260,19 +14312,54 @@ void main() {
     const link = sideState.link;
     const sideId = String(link?.id || '').trim();
     const msg = String(text || sideInput?.value || '').trim();
+    const backgroundId = String(sideState.backgroundAgentId || '').trim();
+    if (backgroundId) {
+      if (!msg) return;
+      try {
+        await sendMobileBackgroundSteer(backgroundId, msg);
+        const steer = {
+          id: `background_steer_${backgroundId}_${Date.now()}`,
+          role: 'user',
+          content: msg,
+          timestamp: Date.now(),
+          channelLabel: 'steer',
+          workflowGroupId: `chat_steer_background_${backgroundId}`,
+          workflowPart: 'interruption',
+        };
+        const lane = _mobileBackgroundSpawnLanes()[backgroundId];
+        if (lane) {
+          if (!lane.steerMessages.some((item) => item.content === msg && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000)) {
+            lane.steerMessages.push(steer);
+            lane.steerMessages = lane.steerMessages.slice(-80);
+            lane.updatedAt = Date.now();
+            persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+          }
+        } else {
+          const stored = _mobileBackgroundAgentDetailRecord(backgroundId);
+          if (stored) {
+            persistBackgroundAgentWork({
+              ...stored,
+              steerMessages: [...(stored.steerMessages || []), steer].slice(-80),
+              updatedAt: Date.now(),
+            });
+          }
+        }
+        if (sideInput) {
+          sideInput.value = '';
+          resizeSideInput();
+        }
+        renderMobileSideSheet();
+      } catch (error) {
+        pmToast(`Could not steer ${_mobileBackgroundAgentDetailRecord(backgroundId)?.agentName || 'background agent'}: ${String(error?.message || error || 'The live agent is no longer available.')}`, 'error');
+      }
+      return;
+    }
     if (sideState.busy && !msg) {
       try { sideState.abort?.abort?.(); } catch {}
       return;
     }
     if (!msg || sideState.busy) return;
-    // A background-agent result is a read-only work record, not a chat session.
-    // Keep the visible composer useful by handing its first follow-up to the
-    // same real side-chat flow used by /side. This also swaps the detail
-    // renderer for the normal message/tool-stream renderer before sending.
     if (!sideId) {
-      if (sideState.backgroundAgentId) {
-        await openMobileSideChat(msg);
-      }
       return;
     }
     if (sideInput) {
@@ -35209,8 +35296,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
+            <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
     </header>
     <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
   `;
@@ -35545,10 +35631,14 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null, includ
   const clean = String(text || '').trim();
   if (!message || !clean) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
-  const key = `${type}:${clean}`.slice(0, 260);
+  const streamId = String(extra?.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(extra?.seq || 0)) || 0);
+  const key = streamId && seq ? `stream:${streamId}:${seq}` : `${type}:${clean}`.slice(0, 260);
   if (message.processEntries.some((entry) => String(entry?._key || '') === key)) return;
   message.processEntries.push({
     _key: key,
+    ...(streamId ? { streamId } : {}),
+    ...(seq ? { seq } : {}),
     type,
     text: clean.length > 420 ? `${clean.slice(0, 420)}...` : clean,
     extra,
@@ -36726,6 +36816,7 @@ function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmCha
   lane.status = rawState === 'queued' || rawState === 'in_progress' ? 'running' : (rawState || 'running');
   lane.message.streaming = true;
   lane.message._done = false;
+  if (status.stream?.streamId) lane.streamId = String(status.stream.streamId);
   lane.updatedAt = Date.now();
   _linkMobilePendingApprovalsToBackgroundLanes(sid);
   return true;
@@ -36859,6 +36950,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     // the durable lane error.
     error: existing.error || '',
     approvalRequest: existing.approvalRequest || null,
+    steerMessages: Array.isArray(existing.steerMessages) ? existing.steerMessages : [],
+    streamId: String(msg.streamId || msg.stream?.streamId || existing.streamId || '').trim(),
+    lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || 0)) || 0),
   };
   lanes[id] = lane;
   if (lane.message) {
@@ -36889,6 +36983,9 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
     events: Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [],
+    steerMessages: Array.isArray(lane.steerMessages) ? lane.steerMessages : [],
+    streamId: lane.streamId,
+    lastSeq: lane.lastSeq,
   };
 }
 
@@ -36898,6 +36995,9 @@ function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
   return {
     ...msg,
     type: eventType,
+    streamId: String(msg.streamId || msg.data?.streamId || '').trim(),
+    seq: Math.max(0, Math.floor(Number(msg.seq || msg.data?.seq || 0)) || 0),
+    at: Number(msg.at || msg.data?.at || 0) || undefined,
     action: msg.action || msg.name || msg.toolName || '',
     name: msg.name || msg.action || msg.toolName || '',
     actor: msg.actor || 'Background Agent',
@@ -37012,6 +37112,17 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   const evt = _normalizeMobileBackgroundSpawnEvent(msg);
   if (!lane || !evt) return false;
+  if (evt.streamId) {
+    if (lane.streamId && lane.streamId !== evt.streamId) {
+      lane.streamId = evt.streamId;
+      lane.lastSeq = 0;
+      lane.message.processEntries = [];
+      lane.message.liveTraceEntries = [];
+    } else {
+      lane.streamId = evt.streamId;
+    }
+    if (evt.seq && evt.seq <= Number(lane.lastSeq || 0)) return false;
+  }
   const hasPendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
   lane.status = lane.status === 'completed' || lane.status === 'failed'
     ? lane.status
@@ -37053,7 +37164,26 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
       laneChanged = true;
     }
   }
-  const changed = _applyMobileAgentStreamEvent(lane.message, evt, lane.agentName || 'Background agent');
+  let changed = false;
+  if (evt.type === 'user_message') {
+    const content = String(evt.message || evt.text || evt.data?.message || '').trim();
+    const eventId = String(evt.eventId || evt.id || '').trim();
+    if (content && !lane.steerMessages.some((item) => (eventId && item.id === eventId) || item.content === content && Math.abs(Number(item.timestamp || 0) - Number(evt.at || Date.now())) < 5000)) {
+      lane.steerMessages.push({
+        id: eventId || `background_steer_${lane.id}_${evt.seq || Date.now()}`,
+        role: 'user',
+        content,
+        timestamp: Number(evt.at || Date.now()) || Date.now(),
+        channelLabel: 'steer',
+        workflowGroupId: `chat_steer_background_${lane.id}`,
+        workflowPart: 'interruption',
+      });
+      lane.steerMessages = lane.steerMessages.slice(-80);
+      changed = true;
+    }
+  } else {
+    changed = _applyMobileAgentStreamEvent(lane.message, evt, lane.agentName || 'Background agent');
+  }
   if (lane.message?.approvalRequest && !lane.approvalRequest) {
     lane.approvalRequest = {
       ...lane.message.approvalRequest,
@@ -37072,6 +37202,7 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   }
   if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
   lane.updatedAt = Date.now();
+  if (evt.streamId && evt.seq) lane.lastSeq = evt.seq;
   persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
   if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
   return changed || laneChanged;
@@ -40678,8 +40809,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   page.innerHTML = `
     <header class="pm-header">
       <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <div class="pm-header-actions">
+            <div class="pm-header-actions">
         <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
       </div>
     </header>

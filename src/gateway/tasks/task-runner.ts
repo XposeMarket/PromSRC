@@ -21,6 +21,15 @@ import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../sessi
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
+import {
+  appendBackgroundAgentStreamEvent,
+  backgroundAgentStreamSummary,
+  createBackgroundAgentStream,
+  finishBackgroundAgentStream,
+  replayBackgroundAgentStream,
+  type BackgroundAgentStreamFrame,
+  type BackgroundAgentStreamState,
+} from './background-agent-stream';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -87,6 +96,7 @@ export interface EphemeralBackgroundStatus {
   reasoningEffort?: string;
   /** Stable snake_case field exposed to tool callers and benchmark runners. */
   executor_reasoning_effort?: string;
+  stream?: Record<string, any> | null;
   startedAt: number;
   completedAt?: number;
   result?: string;
@@ -437,6 +447,7 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promptPreview?: string;
   fileChanges?: any;
   resourceIds?: string[];
+  backgroundStream: BackgroundAgentStreamState;
 }
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
@@ -737,6 +748,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
 
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
+        const frame = appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
         if (spawnerSessionId) {
           const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
           broadcastWS({
@@ -753,6 +765,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
             task: prompt,
             prompt,
             taskPrompt: prompt,
+            streamId: frame.streamId,
+            seq: frame.seq,
+            at: frame.at,
+            data: frame.data,
           });
         }
         // Capture tool calls for the result summary returned to main agent on join
@@ -791,6 +807,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.error = 'Aborted by operator.';
           record.state = 'failed';
           record.completedAt = Date.now();
+          finishBackgroundAgentStream(record.backgroundStream);
           persistBackgroundVoiceWorker(record);
           if (spawnerSessionId) {
             broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
@@ -805,6 +822,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.result = (finalText || 'Background task completed with no textual output.') + toolSummary;
         record.state = 'completed';
         record.completedAt = Date.now();
+        finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} completed`);
@@ -816,6 +834,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
         record.completedAt = Date.now();
+        finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
@@ -841,11 +860,13 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.result = text || 'Background task completed with no textual output.';
       record.state = 'completed';
       record.completedAt = Date.now();
+      finishBackgroundAgentStream(record.backgroundStream);
       console.log(`[Background Agent] ${record.id} completed (fallback — no handleChat wired)`);
     } catch (err: any) {
       record.error = String(err?.message || err || 'Background execution failed');
       record.state = 'failed';
       record.completedAt = Date.now();
+      finishBackgroundAgentStream(record.backgroundStream);
       console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
     } finally {
       persistBackgroundVoiceWorker(record);
@@ -890,6 +911,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     model: resolvedRouting.model,
     modelSource: resolvedRouting.source,
     reasoningEffort: resolvedRouting.reasoningEffort,
+    backgroundStream: createBackgroundAgentStream(),
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
@@ -916,6 +938,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     modelSource: record.modelSource,
     reasoningEffort: record.reasoningEffort,
     executor_reasoning_effort: record.reasoningEffort,
+    stream: backgroundAgentStreamSummary(record.backgroundStream),
     startedAt: record.startedAt,
   };
 }
@@ -939,6 +962,7 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     modelSource: rec.modelSource,
     reasoningEffort: rec.reasoningEffort,
     executor_reasoning_effort: rec.reasoningEffort,
+    stream: backgroundAgentStreamSummary(rec.backgroundStream),
     startedAt: rec.startedAt,
     completedAt: rec.completedAt,
     result: rec.result,
@@ -948,6 +972,22 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
 }
 
 export const backgroundProgress = backgroundStatus;
+
+export function backgroundAgentStreamReplay(backgroundId: string, after = 0): {
+  id: string;
+  state: EphemeralBackgroundState;
+  stream: Record<string, any> | null;
+  events: BackgroundAgentStreamFrame[];
+} | null {
+  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+  if (!rec) return null;
+  return {
+    id: rec.id,
+    state: rec.state,
+    stream: backgroundAgentStreamSummary(rec.backgroundStream),
+    events: replayBackgroundAgentStream(rec.backgroundStream, after),
+  };
+}
 
 export function listBackgroundStatuses(): EphemeralBackgroundStatus[] {
   return Array.from(_ephemeralBackgroundRuns.values())
@@ -979,6 +1019,35 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
     clientRequestId: `background_agent_steer:${rec.id}:${Date.now()}`,
     contextSummary: `Live guidance for one-shot background agent ${rec.id}.`,
   });
+  if (queued.ok && queued.event) {
+    const frame = appendBackgroundAgentStreamEvent(rec.backgroundStream, 'user_message', {
+      role: 'user',
+      message: queued.event.message,
+      text: queued.event.message,
+      steer: true,
+      eventId: queued.event.id,
+      source: queued.event.source,
+      kind: queued.event.kind,
+    });
+    const spawnerSessionId = String(rec.spawnerSessionId || '').trim();
+    if (spawnerSessionId && _bgDeps?.broadcastWS) {
+      _bgDeps.broadcastWS({
+        ...backgroundVoiceDispatchMetadata(rec),
+        type: 'bg_agent_event',
+        sessionId: spawnerSessionId,
+        spawnerSessionId,
+        bgSessionId: `background_${rec.id}`,
+        backgroundSessionId: `background_${rec.id}`,
+        bgId: rec.id,
+        eventType: 'user_message',
+        actor: 'User',
+        streamId: frame.streamId,
+        seq: frame.seq,
+        at: frame.at,
+        data: frame.data,
+      });
+    }
+  }
   return {
     id: rec.id,
     state: rec.state,
@@ -999,6 +1068,7 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
   rec.state = 'failed';
   rec.error = 'Aborted by operator.';
   rec.completedAt = Date.now();
+  finishBackgroundAgentStream(rec.backgroundStream);
   persistBackgroundVoiceWorker(rec);
   return { ok: true, status: statusFromRecord(rec) };
 }
@@ -1054,6 +1124,7 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     modelSource: rec.modelSource,
     reasoningEffort: rec.reasoningEffort,
     executor_reasoning_effort: rec.reasoningEffort,
+    stream: backgroundAgentStreamSummary(rec.backgroundStream),
     startedAt: rec.startedAt,
     completedAt: rec.completedAt,
     result: rec.result,
