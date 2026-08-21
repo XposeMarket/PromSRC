@@ -13,8 +13,8 @@ import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
 import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
-import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter.js';
+import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry.js';
 import {
   arePrometheusDevToolsVisible,
   getPublicBuildAllowedCategories,

@@ -11,6 +11,9 @@
     "code",
     "oauth"
   ],
+  "activation": {
+    "aliases": ["git", "pull request", "pr", "commit", "push", "merge", "repository", "issue"]
+  },
   "runtime": {
     "binding": "integrations/connectors/github",
     "entrypoint": "./runtime.js"

@@ -62,6 +62,16 @@ export const ExtensionDescriptorSchema = z.object({
       whenToolsRequested: z.array(z.string()).optional(),
       whenCapabilityRequested: z.array(z.string()).optional(),
       whenConnected: z.boolean().optional(),
+      aliases: z.array(z.string()).optional(),
+      message: z
+        .object({
+          phrases: z.array(z.string()).optional(),
+          allOf: z.array(z.array(z.string())).optional(),
+          anyOf: z.array(z.string()).optional(),
+          noneOf: z.array(z.string()).optional(),
+          minScore: z.number().optional(),
+        })
+        .optional(),
     })
     .optional(),
   contracts: z

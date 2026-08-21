@@ -42,6 +42,7 @@ import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js'
 import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
 import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
+import { planMessageExtensionActivation } from '../extensions/activation-planner.js';
 
 function buildPromptRuntimeHostContext(workspacePath: string): string {
   const gpu = readCachedGpuInfo();
@@ -1364,6 +1365,13 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
 
 function buildToolCategoryMatchContext(messageText: string, activatedCategories: Set<string>): string {
   const detected = detectToolCategories(messageText);
+  try {
+    const extensionPlan = planMessageExtensionActivation({ message: messageText });
+    for (const category of extensionPlan.categories) detected.add(category);
+  } catch {
+    // Prompt construction must remain available if an optional extension
+    // runtime is unavailable; the pure keyword router remains the fallback.
+  }
   const allowed = new Set(getRuntimeAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
   const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
   const lines: string[] = [];
