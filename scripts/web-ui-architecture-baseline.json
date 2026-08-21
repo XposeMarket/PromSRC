@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "capturedFrom": "c2c51978d80a5c1c922b418dabf92aa32a618374",
+  "capturedFrom": "cca8943f7f1cf11f5a057751775c2d4994a99ff0",
   "maxNewModuleBytes": 400000,
   "legacySurfaces": {
-    "web-ui/src/pages/ChatPage.js": 2424866,
-    "web-ui/src/mobile/mobile-pages.js": 1987275,
-    "web-ui/src/styles/mobile.css": 586774,
+    "web-ui/src/pages/ChatPage.js": 2433160,
+    "web-ui/src/mobile/mobile-pages.js": 1991568,
+    "web-ui/src/styles/mobile.css": 590593,
     "web-ui/index.html": 564863
   }
 }
