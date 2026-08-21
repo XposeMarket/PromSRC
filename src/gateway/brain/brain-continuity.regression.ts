@@ -31,6 +31,7 @@ const make = (overrides: Record<string, unknown> = {}) => ({
   evidence: ['games/mobile-space-explorer/'],
   lastValidatedAt: '2026-07-18T01:00:00.000Z',
   verificationRequired: true,
+  supersedes: [],
   ...overrides,
 });
 
@@ -42,6 +43,11 @@ const many = Array.from({ length: 18 }, (_, index) => make({
 }));
 assert.equal(parseBrainThoughtCapsules(JSON.stringify(many)).length, 18, 'capture must not impose an item-count cap');
 assert.deepEqual(parseBrainThoughtCapsules('{bad json'), []);
+assert.deepEqual(parseBrainThoughtCapsules(JSON.stringify([make({ kind: 'guess' })])), [], 'unknown capsule kinds must be rejected');
+assert.deepEqual(parseBrainThoughtCapsules(JSON.stringify([make({ priority: 'urgent' })])), [], 'unknown priorities must be rejected');
+assert.deepEqual(parseBrainThoughtCapsules(JSON.stringify([make({ status: 'pending' })])), [], 'unknown statuses must be rejected');
+assert.deepEqual(parseBrainThoughtCapsules(JSON.stringify([make({ relevance: { projects: 'Galaxy Drift', triggers: [], surfaces: [] } })])), [], 'malformed relevance arrays must be rejected');
+assert.deepEqual(parseBrainThoughtCapsules(JSON.stringify([make({ verificationRequired: 'yes' })])), [], 'verificationRequired must remain boolean');
 
 fs.writeFileSync(path.join(capsuleDir, '01-00-capsules.json'), JSON.stringify([
   make(),
@@ -84,6 +90,13 @@ const gameDetails = buildBrainCapsuleContextDetails(root, 'lets continue the Gal
 assert.equal(gameDetails.relatedCount, 1, 'context telemetry should count the selected related Thought capsule');
 assert.equal(gameDetails.fallbackCount, 0);
 assert.equal(gameDetails.text, gameContext, 'telemetry and prompt builders must share the exact rendered packet');
+
+const unrelatedContext = buildBrainCapsuleContextDetails(root, 'can you check this and tell me about dinner?', {
+  now: new Date('2026-07-18T03:00:00.000Z'),
+  maxChars: 1200,
+});
+assert.equal(unrelatedContext.text, '', 'common stop words must not trigger unrelated Thought capsules');
+assert.equal(unrelatedContext.relatedCount, 0);
 
 const tinyBudget = buildBrainCapsuleContext(root, 'Galaxy Drift NebulaX', {
   now: new Date('2026-07-18T03:00:00.000Z'),
