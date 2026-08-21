@@ -9,11 +9,12 @@
 
 import fs from 'fs';
 import path from 'path';
+import { getPrometheusLayout } from './runtime/storage-layout.js';
 
-const _prometheusBase = process.env.PROMETHEUS_DATA_DIR
-  ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
-  : path.join(process.cwd(), '.prometheus');
-const historyPath = path.join(_prometheusBase, 'agents', 'run-history.json');
+const layout = getPrometheusLayout();
+const historyPath = layout.mode === 'canonical'
+  ? path.join(layout.runtime.agents, 'run-history.json')
+  : path.join(layout.legacy.activeConfig, 'agents', 'run-history.json');
 const MAX_HISTORY = 300;
 
 export interface AgentRunHistoryEntry {
