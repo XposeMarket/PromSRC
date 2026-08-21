@@ -32,6 +32,7 @@ jobs:
       - name: Verify atomic durable-memory retrieval and lifecycle
         run: |
           npx tsx src/gateway/memory-index/memory-atoms.semantic.regression.ts
+          npx tsx src/gateway/memory-index/memory-atoms.regression.ts
           npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
       - name: Verify connector/plugin tool-surface parity
         run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
