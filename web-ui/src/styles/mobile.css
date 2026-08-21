@@ -18206,3 +18206,25 @@ body.pm-mobile-active :where(
   border-width: 0 !important;
   border-color: transparent !important;
 }
+
+
+/* Keep mobile page-tab labels/icons neutral white across every theme. */
+body.pm-mobile-active .pm-tab,
+body.pm-mobile-active .pm-tab.active,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab.active {
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.28);
+}
+body.pm-mobile-active .pm-tab svg,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab svg {
+  color: #fff;
+}
+
+/* Selected computer filters need dark content against their white pill. */
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-label,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-icon,
+body.pm-mobile-active .pm-drawer-gateway-pill.is-active svg {
+  color: #111;
+}
