@@ -25,8 +25,16 @@ const ambiguous = resolveToolCapabilityMetadata('connector_future_custom_action'
 assert.equal(ambiguous.known, false, 'ambiguous future connector tools must fail closed');
 assert.equal(ambiguous.destructive, true);
 
+const unrelatedReadish = resolveToolCapabilityMetadata('future_list_records', undefined, {});
+assert.equal(unrelatedReadish.known, false, 'unregistered non-connector tools must not inherit connector read inference from their names');
+assert.equal(unrelatedReadish.destructive, true);
+assert.equal(unrelatedReadish.externalWrite, true);
+
+const unrelatedStatus = resolveToolCapabilityMetadata('future_status_snapshot', undefined, {});
+assert.equal(unrelatedStatus.known, false, 'unregistered status-like tools outside the connector namespace must fail closed');
+
 const declaredReadOnlyApi = resolveToolCapabilityMetadata('connector_gdrive_api_request', undefined, {});
 assert.equal(declaredReadOnlyApi.known, true, 'connector-specific API boundaries may declare safe methods explicitly');
 assert.equal(declaredReadOnlyApi.readOnly, true);
 
-console.log('[connector-tool-capabilities.regression] provider-neutral read/write inference, API method boundaries, explicit declarations, and fail-closed unknowns passed');
+console.log('[connector-tool-capabilities.regression] provider-neutral read/write inference, connector namespace boundaries, API method boundaries, explicit declarations, and fail-closed unknowns passed');

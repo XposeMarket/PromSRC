@@ -286,8 +286,12 @@ export class PrometheusExtensionRuntimeRegistry {
     if (!tool) {
       return { result: `Extension tool not found: ${name}`, error: true };
     }
+    if (!this.isToolAvailable(name)) {
+      return { result: `Extension tool "${name}" is not available for an enabled connection. Connect or enable the owning connector before use.`, error: true };
+    }
     const extension = this.extensions.get(tool.extensionId);
-    const connectorScope = String((tool as any).connectorId || tool.extensionId);
+    const connectorId = this.connectorIdForTool(tool);
+    const connectorScope = connectorId || tool.extensionId;
     try {
       const result = await tool.execute(args || {}, {
       extensionId: tool.extensionId,

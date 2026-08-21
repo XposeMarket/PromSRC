@@ -199,8 +199,14 @@ export function resolveToolCapabilityMetadata(
   if (EXTERNAL_WRITE_TOOLS.has(name)) return EXTERNAL_WRITE;
   const registeredConnectorCapabilities = resolveRegisteredConnectorToolCapabilities(name, args);
   if (registeredConnectorCapabilities) return registeredConnectorCapabilities;
-  const inferredConnectorCapabilities = inferConnectorToolCapabilities(name, args);
-  if (inferredConnectorCapabilities) return inferredConnectorCapabilities;
+  // Only apply name-only connector inference to the explicit connector namespace.
+  // Registered connector tools with provider-specific/custom names are handled
+  // above from runtime ownership metadata. Unrelated future tools must not be
+  // downgraded to read-only merely because their names contain "list" or "status".
+  if (/^connector(?:_|$)/i.test(name)) {
+    const inferredConnectorCapabilities = inferConnectorToolCapabilities(name, args);
+    if (inferredConnectorCapabilities) return inferredConnectorCapabilities;
+  }
   return UNKNOWN_FAIL_CLOSED;
 }
 
