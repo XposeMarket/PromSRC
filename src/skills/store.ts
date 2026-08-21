@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { getPrometheusLayout } from '../runtime/storage-layout.js';
 
 function safeReadDirs(dir: string): string[] {
   try {
@@ -44,24 +45,33 @@ function copyLegacySkillsIfNeeded(projectRoot: string, legacyRoot: string): void
       }
     }
   } catch {
-    // best-effort migration only
+    // best-effort legacy migration only
   }
 }
 
-function getPrometheusConfigBase(): string {
-  // In packaged Electron, PROMETHEUS_DATA_DIR is set by main.js to %APPDATA%\Prometheus.
-  // Fall back to cwd-relative for dev/non-Electron usage.
+function getLegacyPrometheusConfigBase(): string {
+  // Preserve the pre-layout-v2 behavior exactly while legacy mode remains the
+  // default: Electron/Docker use DATA_DIR/.prometheus and source runs use the
+  // checkout-local .prometheus directory.
   return process.env.PROMETHEUS_DATA_DIR
     ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
     : path.join(process.cwd(), '.prometheus');
 }
 
 export function resolveSkillsRoot(): string {
-  const projectRoot = path.join(getPrometheusConfigBase(), 'skills');
-  const legacyRoot = path.join(os.homedir(), '.prometheus', 'skills');
-  fs.mkdirSync(projectRoot, { recursive: true });
-  copyLegacySkillsIfNeeded(projectRoot, legacyRoot);
-  return projectRoot;
+  const layout = getPrometheusLayout();
+  const root = layout.mode === 'canonical'
+    ? layout.workspace.skills
+    : path.join(getLegacyPrometheusConfigBase(), 'skills');
+
+  fs.mkdirSync(root, { recursive: true });
+
+  // Layout-v2 migration owns canonical copies. Keep the old best-effort home
+  // import only in legacy mode so startup never races the verified migration.
+  if (layout.mode === 'legacy') {
+    copyLegacySkillsIfNeeded(root, path.join(os.homedir(), '.prometheus', 'skills'));
+  }
+  return root;
 }
 
 export function resolveSkillDir(skillId: string): string {
@@ -69,7 +79,11 @@ export function resolveSkillDir(skillId: string): string {
 }
 
 export function resolveSkillLockFile(): string {
-  return path.join(getPrometheusConfigBase(), '.clawhub', 'lock.json');
+  const layout = getPrometheusLayout();
+  if (layout.mode === 'canonical') {
+    return path.join(layout.runtime.config, '.clawhub', 'lock.json');
+  }
+  return path.join(getLegacyPrometheusConfigBase(), '.clawhub', 'lock.json');
 }
 
 export function ensureSkillsRoot(): string {
