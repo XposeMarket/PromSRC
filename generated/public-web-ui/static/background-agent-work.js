@@ -8,6 +8,7 @@ export {
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
+  mergeBackgroundAgentEvents,
   normalizeBackgroundAgentWork,
   persistBackgroundAgentWork,
   readBackgroundAgentWork,
