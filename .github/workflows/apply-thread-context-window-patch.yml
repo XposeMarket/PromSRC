@@ -54,7 +54,18 @@ jobs:
           PY
           node --check scripts/apply-thread-context-window-patch.mjs
       - name: Apply patch
-        run: node scripts/apply-thread-context-window-patch.mjs
+        shell: bash
+        run: |
+          set +e
+          node scripts/apply-thread-context-window-patch.mjs
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo '--- current inContextRows source ---'
+            grep -n -B 8 -A 30 "inContextRows" src/gateway/routes/chat.router.ts || true
+            echo '--- partial patch diff ---'
+            git diff -- src/runtime/prompt-manifest.ts src/providers/model-usage.ts src/agents/ollama-client.ts src/gateway/routes/chat.router.ts || true
+            exit "$status"
+          fi
       - name: Remove one-shot patch machinery
         run: |
           rm scripts/apply-thread-context-window-patch.mjs
