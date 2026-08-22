@@ -13,17 +13,28 @@ import { OpenAICompatAdapter } from './openai-compat-adapter';
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/openai';
 
-// Gemini models exposed through the OpenAI-compat surface.
-// Order: flagship reasoning → fast → legacy.
+// Stable/current text models exposed through the OpenAI-compatible surface.
+// Live model discovery remains authoritative; this list is only the fallback.
 export const GEMINI_MODELS = [
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-pro-preview',
   'gemini-2.5-pro',
   'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-pro',
-  'gemini-1.5-flash',
 ];
+
+function normalizeGeminiOptions<T extends ChatOptions | GenerateOptions>(model: string, options?: T): T {
+  const next = { ...(options || {}) } as T;
+  // Gemini 3 reasoning is optimized around temperature 1.0. Prometheus's
+  // shared OpenAI-compatible adapter otherwise supplies 0.25 by default.
+  if (/^gemini-3(?:\.|-)/i.test(String(model || '')) && next.temperature === undefined) {
+    next.temperature = 1;
+  }
+  return next;
+}
 
 export class GeminiAdapter implements LLMProvider {
   readonly id = 'gemini' as const;
@@ -31,22 +42,24 @@ export class GeminiAdapter implements LLMProvider {
 
   constructor(apiKey: string) {
     this.inner = new OpenAICompatAdapter({
-      endpoint:   GEMINI_ENDPOINT,
+      endpoint: GEMINI_ENDPOINT,
       apiKey,
       providerId: 'gemini' as any,
+      staticModels: GEMINI_MODELS,
+      supportsReasoningEffort: true,
     });
   }
 
   chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
-    return this.inner.chat(messages, model, options);
+    return this.inner.chat(messages, model, normalizeGeminiOptions(model, options));
   }
 
   generate(prompt: string, model: string, options?: GenerateOptions): Promise<GenerateResult> {
-    return this.inner.generate(prompt, model, options);
+    return this.inner.generate(prompt, model, normalizeGeminiOptions(model, options));
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    // Prefer the live list; fall back to the static set if listing fails.
+    // Prefer Google's live list; fall back to the current known set if listing fails.
     const live = await this.inner.listModels();
     if (live && live.length) return live;
     return GEMINI_MODELS.map(name => ({ name }));
