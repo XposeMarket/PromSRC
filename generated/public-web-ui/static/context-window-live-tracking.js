@@ -183,11 +183,6 @@ function stateKey(surface, sessionId) {
   return `${surface}:${String(sessionId || '').trim()}`;
 }
 
-function currentStateForSurface(surface) {
-  const activeId = activeSessionIdForSurface(surface);
-  return activeId ? liveBySession.get(stateKey(surface, activeId)) || null : null;
-}
-
 function ensureSurfaceState(surface) {
   const sessionId = activeSessionIdForSurface(surface);
   if (!sessionId) return null;
@@ -246,26 +241,50 @@ function refreshPressure(state, force = false) {
   return state.pressurePromise;
 }
 
+function copyPressureState(target, source) {
+  if (!source) return;
+  target.pressureTokens = source.pressureTokens;
+  target.pressureWindowTokens = source.pressureWindowTokens;
+  target.pressureTriggerTokens = source.pressureTriggerTokens;
+  target.pressureFetchedAt = source.pressureFetchedAt;
+  target.pendingCompaction = source.pendingCompaction;
+}
+
 function startLive(sessionId, surface, clientRequestId = '') {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
   const key = stateKey(surface, sid);
+  const requestId = String(clientRequestId || '').trim();
   const previous = liveBySession.get(key);
+  const conflictingRequest = !!(
+    previous?.active
+    && requestId
+    && previous.clientRequestId
+    && previous.clientRequestId !== requestId
+  );
+  const startsNewTurn = !previous?.active;
   let state = previous;
-  if (!state || state.active || (clientRequestId && state.clientRequestId && state.clientRequestId !== clientRequestId)) {
-    state = makeState(sid, surface, clientRequestId);
-    if (previous) {
-      state.pressureTokens = previous.pressureTokens;
-      state.pressureWindowTokens = previous.pressureWindowTokens;
-      state.pressureTriggerTokens = previous.pressureTriggerTokens;
-      state.pressureFetchedAt = previous.pressureFetchedAt;
-    }
+
+  if (!state || conflictingRequest) {
+    state = makeState(sid, surface, requestId);
+    copyPressureState(state, previous);
     liveBySession.set(key, state);
+  } else if (startsNewTurn) {
+    // Reuse passive pressure state, but reset only per-turn telemetry. Tool
+    // result events during the same active request must accumulate rather than
+    // replacing this object on every result.
+    state.clientRequestId = requestId;
+    state.baselineTokens = 0;
+    state.liveToolTokens = 0;
+    state.seenToolResults.clear();
+  } else if (requestId && !state.clientRequestId) {
+    state.clientRequestId = requestId;
   }
+
+  const beganTurn = !state.active;
   state.active = true;
-  if (clientRequestId) state.clientRequestId = clientRequestId;
   captureAuthoritative(state);
-  void refreshPressure(state, true);
+  if (beganTurn || conflictingRequest) void refreshPressure(state, true);
   return state;
 }
 
