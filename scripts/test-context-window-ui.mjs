@@ -5,36 +5,63 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
-const page = read('web-ui/src/pages/ChatPage.js');
-const router = read('src/gateway/routes/chat.router.ts');
-const mobile = read('web-ui/src/mobile/mobile-context-window.js');
+const pressureModel = read('src/gateway/context/context-window-pressure.ts');
+const pressureRouter = read('src/gateway/routes/context-window-pressure.router.ts');
+const processesRouter = read('src/gateway/routes/processes.router.ts');
 const performance = read('web-ui/src/performance.js');
 const generatedPerformance = read('generated/public-web-ui/static/performance.js');
 const live = read('web-ui/src/context-window-live-tracking.js');
 const generatedLive = read('generated/public-web-ui/static/context-window-live-tracking.js');
 
-assert.match(router, /deriveContextWindowUsage\(currentStateTokens, contextLimitTokens\)/, 'the API must derive one authoritative context usage contract');
-assert.match(router, /router\.get\('\/api\/sessions\/:id\/context-window'/, 'the same contract must be available for every session id, including agent/subagent sessions');
-assert.match(router, /contextUsage,\s*\n\s*nextCallEstimateTokens/, 'the API must expose the authoritative contract to every session consumer');
-assert.match(page, /function getChatContextWindowUsage\(/, 'desktop must retain the authoritative context-window contract');
-assert.doesNotMatch(page, /currentStateTokens:\s*Math\.max\(0, Number\(currentState\.currentStateTokens[^\n]+\+ liveTokens/, 'desktop live tool payloads must not mutate the authoritative numerator');
-assert.doesNotMatch(page, /id: 'live_tool_results'/, 'desktop live tool payloads must not enter the authoritative breakdown');
-assert.match(mobile, /function _applyLiveOverlay\(data\) \{\s*\/\/ Live tool events schedule an authoritative server refresh; do not add\s*\/\/ speculative tokens to the bar or breakdown between snapshots\.\s*return data;/s, 'mobile authoritative snapshots must remain unmodified');
-assert.match(router, /id: 'total_thread_tokens', label: 'Total thread tokens'/, 'stored/lifetime thread usage must remain a separate out-of-band metric');
+// The visible meter is thread-level active context pressure. It is deliberately
+// sourced from the same persisted estimate / rolling-summary boundary used by
+// session compaction, not from a per-turn or fixed recent-message slice.
+assert.match(pressureRouter, /router\.get\('\/api\/sessions\/:id\/context-pressure'/, 'the thread-context pressure endpoint must exist');
+assert.match(pressureRouter, /contextTokenEstimate: session\.contextTokenEstimate/, 'thread pressure must use the persisted session active-context estimate');
+assert.match(pressureRouter, /latestContextSummary: session\.latestContextSummary/, 'thread pressure must honor the rolling compaction summary');
+assert.match(pressureRouter, /contextStartIndex: session\.contextStartIndex/, 'thread pressure must honor the compaction checkpoint');
+assert.match(pressureRouter, /calibrationFactor: calibration\.factor/, 'thread pressure must use provider/model calibration');
+assert.match(pressureRouter, /effectiveCompactionTriggerTokens/, 'the API must expose the effective compaction trigger');
+assert.match(processesRouter, /router\.use\(contextWindowPressureRouter\)/, 'the authenticated gateway must mount the pressure endpoint');
 
-assert.match(performance, /import '\.\/context-window-live-tracking\.js';/, 'desktop/mobile entry must load the shared live estimator');
-assert.match(performance, /new CustomEvent\('prometheus:client-performance-mark', \{ detail: entry \}\)/, 'only scrubbed telemetry may be published to the estimator');
+// If an older session lacks the persisted estimate, reconstruction must still
+// use the entire active transcript (or summary + everything since checkpoint).
+assert.match(pressureModel, /history\.reduce\(\(total, message\) => total \+ estimateSessionMessageTokens\(message\), 0\)/, 'uncompacted fallback must count the full active session history');
+assert.match(pressureModel, /const activeHistory = history\.slice\(start\)/, 'compacted fallback must count every message after the summary checkpoint');
+assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persistedEstimate >= 0\)/, 'persisted session pressure should remain authoritative when available');
+
+assert.match(performance, /import '\.\/context-window-live-tracking\.js';/, 'desktop/mobile entry must load the shared context meter');
+assert.match(performance, /new CustomEvent\('prometheus:client-performance-mark', \{ detail: entry \}\)/, 'only scrubbed telemetry may be published to the live estimator');
 assert.equal(performance, generatedPerformance, 'performance source/generated mirrors must stay byte-identical');
 assert.equal(live, generatedLive, 'live-context source/generated mirrors must stay byte-identical');
 
-assert.match(live, /const SEMANTIC_LABEL = 'Active context';/, 'the gauge must describe active next-call context');
-assert.match(live, /Next model-call context · stored thread tracked separately/, 'the UI must explain active context versus stored thread usage');
-assert.doesNotMatch(live, /SEMANTIC_LABEL = 'Thread context'|Whole thread · prior dynamic context/, 'the live estimator must never relabel the authoritative gauge as whole-thread usage');
-assert.match(live, /Math\.max\(state\.authoritativeTokens, state\.baselineTokens \+ state\.liveToolTokens\)/, 'the live estimate must be monotonic and reconcile against authoritative snapshots');
-assert.match(live, /\+\$\{formatTokens\(unreflectedTokens\)\} live est/, 'unreflected current-turn tokens must be explicitly labeled as an estimate');
-assert.match(live, /chat_tool_result_received/, 'desktop tool-result telemetry must feed the estimator');
-assert.match(live, /__pmMobileContextStreamEvent/, 'mobile tool-result telemetry must feed the same estimator');
-assert.match(live, /refreshChatContextWindow\?\.\(\{ force: true \}\)/, 'desktop must reconcile with a fresh authoritative snapshot after settle');
-assert.match(live, /__pmMobileRefreshContextWindow\?\.\(\{ sessionId: state\.sessionId \}\)/, 'mobile must reconcile with a fresh authoritative snapshot after settle');
+assert.match(live, /const SEMANTIC_LABEL = 'Context window';/, 'the visible gauge must remain the context-window meter');
+assert.match(live, /Effective context pressure · compaction starts before the hard limit/, 'the UI must explain why compaction can occur before 100%');
+assert.match(live, /\/context-pressure`/, 'desktop and mobile must refresh persisted thread pressure');
+assert.match(live, /Math\.max\(state\.authoritativeTokens, state\.pressureTokens\)/, 'a bounded model slice may never pull the gauge below full active-thread pressure');
+assert.match(live, /Math\.max\(authoritativePressure, liveProjection\)/, 'unpersisted current-turn tool pressure must layer on top of the thread baseline');
+assert.match(live, /model slice \$\{formatTokens\(state\.authoritativeTokens\)\}/, 'the smaller next-call/model slice must be secondary information when it differs');
+assert.match(live, /compaction at \$\{formatTokens\(state\.pressureTriggerTokens\)\}/, 'the tooltip must expose the compaction trigger');
 
-console.log('context-window UI contract: ok');
+// Starting or settling a new turn may reset only per-turn telemetry. The thread
+// pressure itself must persist until an authoritative session refresh or real
+// context compaction changes it.
+const newTurnBlock = live.match(/else if \(startsNewTurn\) \{([\s\S]*?)\n  \} else if \(requestId/);
+assert.ok(newTurnBlock, 'the new-turn state transition must remain explicit');
+assert.match(newTurnBlock[1], /state\.baselineTokens = 0;/, 'new turns should clear the old per-turn baseline');
+assert.match(newTurnBlock[1], /state\.liveToolTokens = 0;/, 'new turns should clear only unpersisted live tool tokens');
+assert.doesNotMatch(newTurnBlock[1], /pressureTokens\s*=\s*0|pressureWindowTokens\s*=\s*0|pressureTriggerTokens\s*=\s*0/, 'new turns must never reset thread-level pressure');
+
+const settleBlock = live.match(/function settleLive\([\s\S]*?\n\}/)?.[0] || '';
+assert.match(settleBlock, /state\.liveToolTokens = 0;/, 'turn settle should clear per-turn live telemetry');
+assert.doesNotMatch(settleBlock, /pressureTokens\s*=\s*0|pressureWindowTokens\s*=\s*0|pressureTriggerTokens\s*=\s*0/, 'turn settle must never reset thread-level pressure');
+assert.match(settleBlock, /requestAuthoritativeRefresh\(state\)/, 'turn settle must reconcile the persistent thread pressure with the server');
+
+assert.match(live, /context_compaction/, 'compaction events must update thread pressure immediately');
+assert.match(live, /chat_tool_result_received/, 'desktop tool-result telemetry must feed the current-turn projection');
+assert.match(live, /__pmMobileContextStreamEvent/, 'mobile tool-result telemetry must feed the same projection');
+assert.match(live, /import\('\.\/mobile\/mobile-api\.js'\)/, 'mobile pressure reads must preserve remote gateway routing and pairing credentials');
+assert.match(live, /refreshChatContextWindow\?\.\(\{ force: true \}\)/, 'desktop must reconcile with a fresh server snapshot after settle');
+assert.match(live, /__pmMobileRefreshContextWindow\?\.\(\{ sessionId: state\.sessionId \}\)/, 'mobile must reconcile with a fresh server snapshot after settle');
+
+console.log('context-window full-thread UI contract: ok');
