@@ -25,7 +25,7 @@ function ensureMobileComposerStackStyles() {
       const demoGlassLink = document.createElement('link');
       demoGlassLink.id = PM_DEMO_GLASS_STYLE_ID;
       demoGlassLink.rel = 'stylesheet';
-      demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}`, import.meta.url).href;
+      demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}&drawer-tabs=white-v1`, import.meta.url).href;
       demoGlassLink.dataset.promMobileDemoGlassStyle = '1';
       document.head.appendChild(demoGlassLink);
     }
