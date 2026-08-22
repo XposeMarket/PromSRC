@@ -135,17 +135,16 @@ body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
     drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
 }
 
-/* Header/model/action pills and the tab slider use their existing edge layer as
- * the same rim-only backdrop lens. This keeps each slab independent without
- * inserting wrapper elements or changing any hitbox/size. Reset the older
- * composite-mask shorthand before applying the one-image radial lens mask. */
+/* Header/model/action pills use their existing edge layer as the same rim-only
+ * backdrop lens. The moving tab slider does not have a pre-existing edge pseudo
+ * in mobile.css, so it keeps the same independent slab/hairline/chroma material
+ * directly on .pm-tab-indicator instead of inventing a new pseudo-element. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header-actions > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
-  .pm-completion-toast,
-  .pm-tab-indicator
+  .pm-completion-toast
 )::after {
   border-color: transparent !important;
   background: transparent !important;
