@@ -29,6 +29,10 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify proposal approval durability
+        run: |
+          npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts
+          node scripts/test-proposal-approval-flow-ui.mjs
       - name: Verify hybrid atomic durable-memory retrieval
         run: |
           npx tsx src/gateway/memory-index/memory-atoms-hybrid.regression.ts

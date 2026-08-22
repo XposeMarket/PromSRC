@@ -144,7 +144,7 @@ async function apiRequest(path, opts = {}) {
       });
       if (!r.ok) {
         const body = await r.text().catch(() => '');
-        throw new Error(`API ${r.status}: ${body}`);
+        throw new Error(`API ${r.status}: ${getApiErrorMessage(body)}`);
       }
       return r.json();
     } catch (err) {
@@ -158,6 +158,24 @@ async function apiRequest(path, opts = {}) {
   }
 
   throw lastError || new Error('Request failed');
+}
+
+/** Keep failed API responses actionable without leaking whole JSON payloads. */
+export function getApiErrorMessage(body, fallback = 'Request failed') {
+  let message = String(body || '').trim();
+  if (message) {
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed && typeof parsed === 'object') {
+        message = String(parsed.error || parsed.message || parsed.detail || '').trim();
+      }
+    } catch {
+      // The server may have returned a plain-text error.
+    }
+  }
+  message = message.replace(/\s+/g, ' ').trim();
+  if (!message) return fallback;
+  return message.length > 500 ? `${message.slice(0, 499).trimEnd()}…` : message;
 }
 
 /**
