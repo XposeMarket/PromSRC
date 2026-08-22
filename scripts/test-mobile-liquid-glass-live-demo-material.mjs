@@ -115,8 +115,8 @@ const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mob
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
 assert.match(sourceData, /initMobileHamburgerLiquidGlass/,
   'mobile-data wrapper must initialize the hamburger exact-canvas prototype');
-assert.match(sourceData, /pm-v300-2026-08-22-exact-canvas-hamburger/,
-  'hamburger prototype module cache key must be versioned');
+assert.match(sourceData, /pm-v301-2026-08-22-cropped-hamburger/,
+  'hamburger prototype module cache key must be versioned for the cropped output fix');
 
 // Pin the exact XposeMarket/liquid-glass source. Git blob identity makes this
 // stronger than checking a few constants: any renderer edit will fail this gate.
@@ -154,12 +154,22 @@ assert.match(bridgeSource, /import\('\/vendor\/html2canvas\/html2canvas\.esm\.js
   'DOM capture adapter must be lazy-loaded so a capture failure cannot break mobile boot');
 assert.match(bridgeSource, /const dpr = Math\.min\(window\.devicePixelRatio \|\| 1, 2\);/,
   'hamburger bridge must keep the demo DPR cap of 2');
-assert.match(bridgeSource, /TARGET_SELECTOR = '\.pm-header > \.pm-icon-btn\[data-action="menu"\]';/,
-  'prototype must target only the hamburger menu button');
+assert.match(bridgeSource, /\.pm-icon-btn\[data-action="menu"\]/,
+  'prototype must target the real data-action hamburger');
+assert.match(bridgeSource, /\.pm-icon-btn\[aria-label="Menu"\]/,
+  'prototype must retain an aria-label Menu fallback');
+assert.match(bridgeSource, /\.pm-icon-btn\[aria-label="Open menu"\]/,
+  'prototype must retain an aria-label Open menu fallback');
 assert.match(bridgeSource, /const scene = await html2canvas\(app,/,
   'bridge must rasterize the live DOM backdrop into a Canvas scene');
-assert.match(bridgeSource, /renderLiquidGlass\(\{[\s\S]*?sceneCtx,[\s\S]*?glassCtx,[\s\S]*?spec: DEMO_SPEC,/,
-  'bridge must feed captured pixels into the exact renderer');
+assert.match(bridgeSource, /const rendered = document\.createElement\('canvas'\);/,
+  'padded canonical compositor output must stay offscreen');
+assert.match(bridgeSource, /renderLiquidGlass\(\{[\s\S]*?sceneCtx,[\s\S]*?glassCtx:\s*renderedCtx,[\s\S]*?spec: DEMO_SPEC,/,
+  'bridge must feed captured pixels into the exact renderer without changing optics');
+assert.match(bridgeSource, /visibleCtx\.drawImage\([\s\S]*?rendered,[\s\S]*?cropX,[\s\S]*?cropY,[\s\S]*?buttonWidth,[\s\S]*?buttonHeight/,
+  'visible hamburger canvas must receive only the cropped physical button rectangle');
+assert.doesNotMatch(bridgeSource, /canvas\.style\.(?:left|top|width|height)\s*=/,
+  'visible canvas must never be positioned as the padded capture surface');
 assert.match(bridgeSource, /document\.getElementById\('mobile-root'\)/,
   'mutation observation must stay inside the mobile root so html2canvas clone work cannot self-trigger forever');
 assert.doesNotMatch(bridgeSource, /feDisplacementMap|mask-composite|-webkit-mask-composite|url\(#/,
@@ -169,12 +179,16 @@ const hamburgerCssSource = fs.readFileSync('web-ui/src/styles/mobile-hamburger-l
 const hamburgerCssGenerated = fs.readFileSync('generated/public-web-ui/static/styles/mobile-hamburger-liquid-glass.css', 'utf8');
 assert.equal(hamburgerCssGenerated, hamburgerCssSource,
   'generated hamburger integration CSS must mirror source exactly');
-assert.match(hamburgerCssSource, /\.pm-icon-btn\[data-action="menu"\]::after\s*\{[\s\S]*?content:\s*none !important;/,
+assert.match(hamburgerCssSource, /body\.pm-mobile-active \.pm-header\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
+  'mobile header/safe-area strip must remain transparent and completely blur-free');
+assert.match(hamburgerCssSource, /::after\s*\{[\s\S]*?content:\s*none !important;/,
   'hamburger must disable the previous pseudo/backdrop approximation');
-assert.match(hamburgerCssSource, /data-pm-liquid-glass-ready="1"\]\s*\{[\s\S]*?background:\s*transparent !important;/,
+assert.match(hamburgerCssSource, /overflow:\s*hidden !important;/,
+  'hamburger must hard-clip compositor pixels to the real button bounds');
+assert.match(hamburgerCssSource, /\.pm-hamburger-liquid-glass-canvas[\s\S]*?inset:\s*0 !important;[\s\S]*?width:\s*100% !important;[\s\S]*?height:\s*100% !important;/,
+  'visible exact-renderer canvas must fill only the hamburger button');
+assert.match(hamburgerCssSource, /data-pm-liquid-glass-ready="1"\][\s\S]*?background:\s*transparent !important;/,
   'once a real frame exists, the canvas must become the hamburger material');
-assert.match(hamburgerCssSource, /\.pm-hamburger-liquid-glass-canvas/,
-  'hamburger integration CSS must expose the exact renderer output canvas');
 
 const gatewayApp = fs.readFileSync('src/gateway/core/app.ts', 'utf8');
 assert.match(gatewayApp, /app\.use\('\/vendor\/html2canvas', express\.static\(html2CanvasDistPath/,
@@ -182,4 +196,4 @@ assert.match(gatewayApp, /app\.use\('\/vendor\/html2canvas', express\.static\(ht
 assert.ok(fs.existsSync('node_modules/html2canvas/dist/html2canvas.esm.js'),
   'html2canvas DOM capture adapter must be installed by npm ci');
 
-console.log('mobile liquid glass keeps the shared material stable and pins the hamburger to the exact Canvas compositor');
+console.log('mobile liquid glass keeps the header clear and clips exact hamburger refraction to the real button');
