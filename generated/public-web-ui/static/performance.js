@@ -2,6 +2,8 @@ import './features/chat/multi-chat-workspace-v2.js';
 import './context-window-live-tracking.js';
 
 if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+  void import('./features/chat/desktop-turn-file-diff.js')
+    .catch((error) => console.warn('[Turn Diff] Desktop file diff bridge failed to load:', error));
   void import('./prom-bot.js')
     .then(() => import('./prom-bot-roster.js'))
     .then(() => import('./prom-bot-collab.js'))
