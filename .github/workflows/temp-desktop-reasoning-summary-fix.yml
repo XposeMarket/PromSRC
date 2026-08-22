@@ -1,4 +1,5 @@
 name: Temporary desktop reasoning summary parity patch
+# Refreshed after review against current main so the self-patch runs on the current PR head.
 
 on:
   pull_request:
