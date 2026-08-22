@@ -3,8 +3,8 @@
   "capturedFrom": "cca8943f7f1cf11f5a057751775c2d4994a99ff0",
   "maxNewModuleBytes": 400000,
   "legacySurfaces": {
-    "web-ui/src/pages/ChatPage.js": 2433160,
-    "web-ui/src/mobile/mobile-pages.js": 2007952,
+    "web-ui/src/pages/ChatPage.js": 2437262,
+    "web-ui/src/mobile/mobile-pages.js": 2013738,
     "web-ui/src/styles/mobile.css": 590593,
     "web-ui/index.html": 564863
   }

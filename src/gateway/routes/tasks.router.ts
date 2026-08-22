@@ -550,6 +550,14 @@ router.get('/api/background/:id/progress', (req, res) => {
   res.json({ success: true, status });
 });
 
+router.get('/api/background/:id/stream', (req, res) => {
+  const { backgroundAgentStreamReplay } = getTaskRunnerRuntime();
+  const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
+  const replay = backgroundAgentStreamReplay(String(req.params.id || ''), after);
+  if (!replay) { res.status(404).json({ success: false, error: 'Background task not found' }); return; }
+  res.json({ success: true, ...replay });
+});
+
 router.post('/api/background/:id/join', async (req, res) => {
   const { backgroundJoin } = getTaskRunnerRuntime();
   const joinPolicy = String(req.body?.join_policy || req.body?.joinPolicy || '').trim();

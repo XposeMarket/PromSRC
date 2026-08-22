@@ -46,6 +46,7 @@ import {
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   persistBackgroundAgentWork,
+  mergeBackgroundAgentEvents,
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
 installToolActivityExpansionPersistence();
@@ -644,6 +645,7 @@ function rememberBackgroundAgentSteer(backgroundId, text) {
   if (!steer) return false;
   const lane = ensureBackgroundSpawnDockMap().get(id);
   if (lane) {
+    if (lane.steerMessages?.some((item) => item.content === steer.content && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000)) return true;
     lane.steerMessages = [
       ...(Array.isArray(lane.steerMessages) ? lane.steerMessages : []),
       steer,
@@ -13714,6 +13716,15 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const queueBadgeId = String(options.queueBadgeId || '').trim();
   const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
   const busy = options.busy === true;
+  const mainComposerParity = options.mainComposerParity !== false;
+  const parityTopMarkup = mainComposerParity ? `
+    <div class="main-goal-strip" data-composer-goal-strip="${escHtml(inputId)}" style="display:none"></div>
+    <div class="queued-prompts-panel" data-composer-queue-panel="${escHtml(inputId)}" style="display:none"><div class="queued-prompts-list" data-composer-queue-list="${escHtml(inputId)}"></div></div>
+    <div class="chat-composer-attachment-stack" data-composer-attachment-stack="${escHtml(inputId)}"><div class="chat-file-staging" data-composer-file-staging="${escHtml(inputId)}" style="display:none"></div></div>
+  ` : '';
+  const parityInputMarkup = mainComposerParity
+    ? `<div class="chat-composer-rich-preview" data-composer-rich-preview="${escHtml(inputId)}" aria-hidden="true" hidden></div>`
+    : '';
   const attachButton = `<button class="chat-attach-btn" type="button" onclick="${attachAction}" title="Attach file(s)" aria-label="Attach file(s)">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
   </button>`;
@@ -13726,21 +13737,21 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const queueBadge = queueBadgeId
     ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
     : '';
-  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1">
-    ${extraTopMarkup}
+  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}">
+    ${parityTopMarkup}${extraTopMarkup}
     ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
     <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
     <div class="chat-input-row">
       ${attachButton}
       ${voiceButton}
       <div class="chat-composer-input-wrap ${escHtml(inputWrapClass)}"${inputWrapStyle ? ` style="${inputWrapStyle}"` : ''}>
-        ${extraInputMarkup}
+        ${parityInputMarkup}${extraInputMarkup}
         <textarea id="${escHtml(inputId)}" class="${escHtml(inputClass)}" rows="1" placeholder="${escHtml(placeholder)}" autocomplete="off"${inputStyle ? ` style="${inputStyle}"` : ''}${inputAttributes ? ` ${inputAttributes}` : ''}></textarea>
       </div>
       <button id="${escHtml(sendButtonId)}" class="send-btn" type="button" onclick="${sendAction}" title="${busy ? 'Stop' : 'Send'}" aria-label="${busy ? 'Stop' : 'Send'}">${sendIcon}</button>
     </div>
     <div class="agent-toggle unified-desktop-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
-      <div class="chat-hint" style="margin:0;flex:1">${escHtml(footerHint)}${queueBadge}</div>
+      <div class="chat-hint" style="margin:0;flex:1"><span class="token-count-badge" data-composer-token-count="${escHtml(inputId)}"></span>${escHtml(footerHint)}${queueBadge}</div>
       ${footerExtraMarkup}
       <div class="chat-model-switcher-wrap">
         <button type="button" class="unified-chat-model-label" title="Chat model" aria-label="Chat model">
@@ -18786,6 +18797,8 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
+    streamId: lane.streamId,
+    lastSeq: lane.lastSeq,
     steerMessages: lane.steerMessages,
   };
 }
@@ -18852,6 +18865,8 @@ function upsertBackgroundSpawnLane(msg = {}) {
     fileChanges: msg.fileChanges || existing.fileChanges || null,
     plan: existing.plan || null,
     steerMessages: Array.isArray(existing.steerMessages) ? existing.steerMessages : [],
+    streamId: String(msg.streamId || msg.data?.streamId || existing.streamId || '').trim(),
+    lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || 0)) || 0),
   };
   lanes.set(id, lane);
   return lane;
@@ -18951,6 +18966,20 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
 }
 
 function backgroundSpawnProcessEntryFromEvent(msg = {}) {
+  const entry = backgroundSpawnProcessEntryFromEventLegacy(msg);
+  if (!entry) return null;
+  const streamId = String(msg.streamId || msg.data?.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(msg.seq || msg.data?.seq || 0)) || 0);
+  return {
+    ...entry,
+    ...(streamId ? { streamId } : {}),
+    ...(seq ? { seq } : {}),
+    ...(msg.id || msg.eventId ? { id: String(msg.id || msg.eventId) } : {}),
+    ...(msg.at ? { at: Number(msg.at) || Date.now() } : {}),
+  };
+}
+
+function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
   const eventType = String(msg.eventType || msg.type || '').trim();
   const ts = new Date().toLocaleTimeString();
   const action = String(msg.action || msg.name || msg.toolName || '').trim();
@@ -19064,15 +19093,25 @@ function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
   if (!lane) return;
+  const streamId = String(msg.streamId || msg.data?.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(msg.seq || msg.data?.seq || 0)) || 0);
+  if (streamId) {
+    if (lane.streamId && lane.streamId !== streamId) lane.lastSeq = 0;
+    lane.streamId = streamId;
+    if (seq && seq <= Number(lane.lastSeq || 0)) return;
+  }
   lane.status = lane.status === 'completed' || lane.status === 'failed' ? lane.status : 'running';
   if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
   updateBackgroundSpawnPlanFromEvent(lane, msg);
+  if (String(msg.eventType || msg.type || '').trim().toLowerCase() === 'user_message') {
+    const userText = String(msg.message || msg.text || msg.data?.message || '').trim();
+    if (userText) rememberBackgroundAgentSteer(lane.id, userText);
+  }
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
-    const prev = lane.events[lane.events.length - 1];
-    if (!prev || prev.type !== entry.type || prev.content !== entry.content) lane.events.push(entry);
-    if (lane.events.length > 160) lane.events.splice(0, lane.events.length - 160);
+    lane.events = mergeBackgroundAgentEvents(lane.events, [entry]);
   }
+  if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
   if (typeof renderSourcePanel === 'function') renderSourcePanel();
   renderBackgroundSpawnDock();
@@ -19159,12 +19198,51 @@ function openBackgroundAgentDetail(id) {
   if (!cleanId || !backgroundSpawnDetailRecord(cleanId)) return;
   window.sideChatSplitOpen = false;
   window.backgroundAgentDetailId = cleanId;
+  refreshBackgroundAgentStream(cleanId);
+  if (backgroundAgentStreamPollTimer) clearInterval(backgroundAgentStreamPollTimer);
+  backgroundAgentStreamPollTimer = setInterval(() => {
+    if (String(window.backgroundAgentDetailId || '') === cleanId) refreshBackgroundAgentStream(cleanId);
+  }, 2200);
   updateSideChatChrome();
   renderChatMessages();
 }
 
+let backgroundAgentStreamPollTimer = null;
+
+async function refreshBackgroundAgentStream(backgroundId) {
+  const id = String(backgroundId || '').trim();
+  const lane = id ? ensureBackgroundSpawnDockMap().get(id) : null;
+  if (!id || !lane) return;
+  try {
+    const replay = await api(`/api/background/${encodeURIComponent(id)}/stream?after=${encodeURIComponent(String(lane.lastSeq || 0))}`);
+    const stream = replay?.stream || null;
+    if (stream?.streamId && lane.streamId && stream.streamId !== lane.streamId) lane.lastSeq = 0;
+    if (stream?.streamId) lane.streamId = String(stream.streamId);
+    (Array.isArray(replay?.events) ? replay.events : []).forEach((frame) => {
+      pushBackgroundSpawnEvent({
+        ...(frame.data || {}),
+        bgId: id,
+        backgroundId: id,
+        sessionId: lane.sessionId,
+        eventType: frame.type,
+        streamId: frame.streamId || stream?.streamId,
+        seq: frame.seq,
+        at: frame.at,
+      });
+    });
+    if (stream?.active === false && backgroundAgentStreamPollTimer) {
+      clearInterval(backgroundAgentStreamPollTimer);
+      backgroundAgentStreamPollTimer = null;
+    }
+  } catch {
+    // WebSocket delivery remains the fast path; replay is best effort.
+  }
+}
+
 function closeBackgroundAgentDetail() {
   if (!String(window.backgroundAgentDetailId || '').trim()) return;
+  if (backgroundAgentStreamPollTimer) clearInterval(backgroundAgentStreamPollTimer);
+  backgroundAgentStreamPollTimer = null;
   window.backgroundAgentDetailId = '';
   updateSideChatChrome();
   renderChatMessages();
