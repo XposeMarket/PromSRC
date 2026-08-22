@@ -206,6 +206,16 @@ assert.match(
   /const canPreserveLocalTimeline = hasLocalLiveHistory && !localRunIdentityConflicts/,
   'recovery must recognize a richer local timeline that belongs to the active turn',
 );
+assert.match(pages, /mobileRecoveryOwners/, 'mobile recovery ownership must survive page rerenders within a tab');
+assert.match(pages, /const isMobileRecoveryOwner = \(\) => !mobileRecoveryDisposed[\s\S]{0,160}mobileRecoveryOwners/, 'a stale page recovery must stop mutating the current chat');
+assert.match(pages, /function scheduleMobileRunRecovery\([\s\S]{0,260}if \(!isMobileRecoveryOwner\(\)\) return;/, 'a stale page recovery must not replace the current page timer');
+assert.match(pages, /const startingWasBusy = startingRun\.busy === true \|\| !!remembered/, 'recovery must detect a new run that started while an older recovery request was awaiting');
+assert.match(pages, /function _adoptMobileActiveRunState/, 'a tab observing another tab must adopt the server run identity before replay');
+assert.match(pages, /const rememberedBusyRun = _readMobileActiveRun\(busySessionId\)/, 'composer admission must honor an active run remembered by another tab');
+assert.match(pages, /const requeueRejectedAdmission = \(\) =>/, 'a duplicate-tab admission race must return the speculative prompt to the queue');
+assert.match(pages, /const queueKey = String\(clientRequestId \|\| ''\)\.trim\(\)/, 'duplicate-tab queue dedupe must use request identity rather than prompt text');
+assert.match(pages, /const canonicalStreamAdopted = aiTurn && aiTurn\._pmAdmissionPending !== true/, 'a late canonical stream must protect its adopted assistant trace from 409 cleanup');
+assert.doesNotMatch(pages, /title: 'Restoring active request'/, 'duplicate-tab admission must not render a second restoring assistant bubble');
 assert.match(
   pages,
   /let shouldResetForReplay = !canPreserveLocalTimeline\s*&& \(fullRefresh \|\| isColdReopen \|\| force \|\| !hasLocalLiveHistory\)/,
@@ -228,9 +238,19 @@ assert.match(
 );
 assert.match(
   pages,
-  /_clearMobileLiveRunForSession\(requestedSession\);[\s\S]{0,240}const history = Array\.isArray\(session\?\.history\)/,
-  'inactive run recovery must clear the cached streaming turn before merging persisted history',
+  /const replay = await loadMobileChatStreamReplay\(requestedSession, 0\)/,
+  'inactive recovery must request the canonical stream replay before deciding what to clear',
 );
+const inactiveReplayIndex = pages.indexOf('const replay = await loadMobileChatStreamReplay(requestedSession, 0)');
+const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requestedSession);', inactiveReplayIndex);
+assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
+assert.match(
+  pages,
+  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn && status\?\.recovered !== true\)\)/,
+  'a transient inactive read must preserve the visible turn while another tab or the gateway may still be working',
+);
+assert.match(pages, /const recoveryStartedAt = Number\([\s\S]{0,260}localAiTurn\?\.timestamp/, 'inactive recovery must scope durable-history completion to the recovered turn boundary');
+assert.match(router, /stream: reconciliation\.stream \? \{[\s\S]{0,300}lastSeq:/, 'run status must expose the canonical stream cursor for cross-tab recovery');
 assert.match(pages, /addEventListener\('pageshow', runRecoveryOnReturn\)/, 'bfcache/app resume must trigger recovery');
 assert.match(pages, /_saveMobileThreadCache\(requestedSession, _activeMobileThread\(\)\)/, 'recovered live trace must survive a hard reload');
 assert.match(
