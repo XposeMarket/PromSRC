@@ -7,6 +7,7 @@ import {
 
 const TELEMETRY_LIMIT = 120;
 const MENU_ID = 'prometheus-link-context-menu';
+const CHAT_TRANSCRIPT_SELECTOR = '#chat-messages';
 let installed = false;
 let activeMenuAnchor = null;
 
@@ -73,7 +74,12 @@ function getAnchor(target) {
   return anchor;
 }
 
+function isChatTranscriptAnchor(anchor) {
+  return !!anchor?.closest?.(CHAT_TRANSCRIPT_SELECTOR);
+}
+
 function linkOptions(anchor) {
+  const chatTranscript = isChatTranscriptAnchor(anchor);
   return {
     rawUrl: anchor?.getAttribute?.('href') || '',
     baseUrl: document.baseURI || window.location.href,
@@ -81,8 +87,10 @@ function linkOptions(anchor) {
     gatewayOrigin: 'http://127.0.0.1:18789',
     download: !!anchor?.hasAttribute?.('download'),
     allowExplicitSafeFlow: anchor?.hasAttribute?.('onclick') === true,
-    explicitExternal: String(anchor?.dataset?.prometheusLinkMode || '').trim().toLowerCase() === 'external'
-      || anchor?.dataset?.prometheusExternal === 'true',
+    explicitExternal: !chatTranscript && (
+      String(anchor?.dataset?.prometheusLinkMode || '').trim().toLowerCase() === 'external'
+      || anchor?.dataset?.prometheusExternal === 'true'
+    ),
   };
 }
 
@@ -143,6 +151,7 @@ export async function openPrometheusBrowserLink(rawUrl, options = {}) {
     scheme: normalized.scheme,
     host: normalized.host,
     target: options.target || '',
+    modifier: options.modifier === true,
   });
 
   if (typeof window.openPrometheusBrowserLink === 'function' && window.openPrometheusBrowserLink !== openPrometheusBrowserLink) {
@@ -265,9 +274,12 @@ function showLinkMenu(anchor, x, y) {
 }
 
 function handleClick(event) {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (event.defaultPrevented || event.button !== 0) return;
   const anchor = getAnchor(event.target);
   if (!anchor) return;
+  const chatTranscript = isChatTranscriptAnchor(anchor);
+  const modifier = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+  if (modifier && !chatTranscript) return;
   const decision = classifyAnchor(anchor);
   if (decision.kind === 'passthrough' || decision.kind === 'internal' || decision.kind === 'ignored') return;
   if (decision.kind === 'blocked') {
@@ -277,9 +289,16 @@ function handleClick(event) {
     return;
   }
   event.preventDefault();
-  const promise = decision.reason === 'explicit_external'
-    ? openPrometheusExternalLink(decision.url, { target: anchor.target || '_blank', source: 'anchor' })
-    : openPrometheusBrowserLink(decision.url, { target: anchor.target || '', source: 'anchor' });
+  const promise = chatTranscript
+    ? openPrometheusBrowserLink(decision.url, {
+        target: anchor.target || '',
+        source: 'chat-link',
+        reason: 'chat_transcript_link',
+        modifier,
+      })
+    : decision.reason === 'explicit_external'
+      ? openPrometheusExternalLink(decision.url, { target: anchor.target || '_blank', source: 'anchor' })
+      : openPrometheusBrowserLink(decision.url, { target: anchor.target || '', source: 'anchor' });
   Promise.resolve(promise).catch(() => {});
 }
 
@@ -304,9 +323,18 @@ function handleKeydown(event) {
   if (!anchor) return;
   const decision = classifyAnchor(anchor);
   if (decision.kind !== 'external') return;
+  const chatTranscript = isChatTranscriptAnchor(anchor);
   if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault();
-    Promise.resolve(openPrometheusExternalLink(decision.url, { target: anchor.target || '_blank', source: 'keyboard' })).catch(() => {});
+    const promise = chatTranscript
+      ? openPrometheusBrowserLink(decision.url, {
+          target: anchor.target || '',
+          source: 'chat-link',
+          reason: 'chat_transcript_link',
+          modifier: true,
+        })
+      : openPrometheusExternalLink(decision.url, { target: anchor.target || '_blank', source: 'keyboard' });
+    Promise.resolve(promise).catch(() => {});
   } else if ((event.key === 'ContextMenu' || event.key === 'Apps' || (event.key === 'F10' && event.shiftKey)) && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault();
     const rect = anchor.getBoundingClientRect();

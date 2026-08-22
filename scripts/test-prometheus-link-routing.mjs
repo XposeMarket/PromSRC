@@ -33,15 +33,29 @@ assert.equal(policy.choosePrometheusBrowserLane({ electron: true, inhouseAvailab
 assert.equal(policy.choosePrometheusBrowserLane({ electron: true, inhouseAvailable: false }), 'prometheus');
 
 const routerSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'link-router.js'), 'utf8');
-const chatSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'pages', 'ChatPage.js'), 'utf8');
+const generatedRouterSource = fs.readFileSync(path.join(root, 'generated', 'public-web-ui', 'static', 'link-router.js'), 'utf8');
 const gatewaySource = fs.readFileSync(path.join(root, 'src', 'gateway', 'core', 'server.ts'), 'utf8');
 const browserSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'browser-tools.ts'), 'utf8');
+
+assert.equal(generatedRouterSource, routerSource, 'generated link router must remain byte-identical to source');
 assert.match(routerSource, /Open externally/);
 assert.match(routerSource, /type: 'browser:link_open'/);
-assert.match(routerSource, /metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey/);
 assert.match(routerSource, /allowExplicitSafeFlow/);
 assert.match(routerSource, /event\.key === 'Escape'/);
-assert.match(chatSource, /window\.openPrometheusBrowserLink = openPrometheusBrowserLink/);
+assert.match(routerSource, /const CHAT_TRANSCRIPT_SELECTOR = '#chat-messages'/);
+assert.match(routerSource, /function isChatTranscriptAnchor\(anchor\)[\s\S]{0,120}anchor\?\.closest\?\.\(CHAT_TRANSCRIPT_SELECTOR\)/);
+assert.match(routerSource, /const chatTranscript = isChatTranscriptAnchor\(anchor\)/);
+assert.match(routerSource, /const modifier = event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey/);
+assert.match(routerSource, /if \(modifier && !chatTranscript\) return/);
+assert.match(routerSource, /explicitExternal: !chatTranscript && \(/, 'chat links must ignore per-anchor external-open hints');
+assert.match(routerSource, /const promise = chatTranscript[\s\S]{0,360}openPrometheusBrowserLink\(decision\.url,[\s\S]{0,220}source: 'chat-link',[\s\S]{0,160}reason: 'chat_transcript_link',[\s\S]{0,120}modifier,/,
+  'ordinary and modifier-click chat links must route through the Prometheus Browser');
+assert.match(routerSource, /const chatTranscript = isChatTranscriptAnchor\(anchor\);[\s\S]{0,420}event\.key === 'Enter' && event\.shiftKey[\s\S]{0,420}openPrometheusBrowserLink\(decision\.url,[\s\S]{0,220}reason: 'chat_transcript_link'[\s\S]{0,160}modifier: true/,
+  'Shift+Enter on a chat link must remain inside the Prometheus Browser');
+assert.match(routerSource, /\['Open externally', \(\) => openPrometheusExternalLink\(anchor\.href/,
+  'the explicit context-menu Open externally escape hatch must remain available');
+assert.match(routerSource, /modifier: options\.modifier === true/,
+  'chat modifier routing must be represented in link telemetry');
 assert.match(gatewaySource, /msg\?\.type === 'browser:link_open'/);
 assert.match(browserSource, /::prometheus-link/);
 assert.match(browserSource, /target === 'user'/);
