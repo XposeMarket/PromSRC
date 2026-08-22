@@ -1,6 +1,6 @@
 const PERF_EVENT = 'prometheus:client-performance-mark';
-const SEMANTIC_LABEL = 'Active context';
-const SEMANTIC_HELP = 'Next model call · stored thread tracked separately';
+const SEMANTIC_LABEL = 'Thread context';
+const SEMANTIC_HELP = 'Whole thread · prior dynamic context is deduplicated';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
 const MAINTENANCE_INTERVAL_MS = 500;
 
@@ -267,7 +267,7 @@ function renderLiveEstimate(state) {
   } else {
     elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
   }
-  if (elements.button) elements.button.title = `Active context: ${formatTokens(estimatedTokens)} / ${formatTokens(state.windowTokens)} tokens — live estimate`;
+  if (elements.button) elements.button.title = `Thread context: ${formatTokens(estimatedTokens)} / ${formatTokens(state.windowTokens)} tokens — live estimate`;
   ensureSemanticNote(state.surface, elements);
   const liveCopy = elements.root.querySelector('[data-context-window-live-copy]');
   if (liveCopy) {
