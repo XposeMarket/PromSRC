@@ -51,5 +51,7 @@ assert.match(live, /__pmMobileContextStreamEvent/, 'mobile tool-result telemetry
 assert.match(live, /import\('\.\/mobile\/mobile-api\.js'\)/, 'mobile pressure reads must preserve remote gateway routing and pairing credentials');
 assert.match(live, /refreshChatContextWindow\?\.\(\{ force: true \}\)/, 'desktop must reconcile with a fresh detailed snapshot after settle');
 assert.match(live, /__pmMobileRefreshContextWindow\?\.\(\{ sessionId: state\.sessionId \}\)/, 'mobile must reconcile with a fresh detailed snapshot after settle');
+assert.doesNotMatch(live, /!state \|\| state\.active \|\|/, 'an active turn must not replace its live state on every tool result');
+assert.match(live, /Tool\s*\n\s*\/\/ result events during the same active request must accumulate/, 'live tool-result estimates must accumulate within one active request');
 
 console.log('context-window UI contract: ok');
