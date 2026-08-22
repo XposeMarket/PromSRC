@@ -1,3 +1,11 @@
+if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+  void import('./prom-bot.js')
+    .then(() => import('./prom-bot-roster.js'))
+    .then(() => import('./prom-bot-collab.js'))
+    .then(() => import('./team-prom-bot-flow.js'))
+    .catch((error) => console.warn('[Prom Bot] Desktop shell failed to load:', error));
+}
+
 /**
  * Privacy-conscious client performance marks.
  *
@@ -52,3 +60,13 @@ export function getClientPerformanceEvents() {
 
 window.__PROM_PERF_MARK = markClientPerformance;
 window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
+
+// Bot creation is a desktop shell affordance. performance.js is also imported
+// by the mobile router, so keep these modules completely out of the PWA runtime.
+if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+  void import('./bot-create.js')
+    .then(() => import('./bot-create-settings-bridge.js'))
+    .catch((error) => {
+      console.warn('[Bot Create] Desktop creation module failed to load:', error);
+    });
+}
