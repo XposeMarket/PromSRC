@@ -29,8 +29,19 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify hybrid atomic durable-memory retrieval
+        run: |
+          npx tsx src/gateway/memory-index/memory-atoms-hybrid.regression.ts
+          npx tsx src/gateway/memory-index/memory-atoms-real-corpus.stress.ts
+          npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
+      - name: Verify proposal approval durability
+        run: npm run test:proposal-approval-flow
       - name: Verify connector/plugin tool-surface parity
         run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
+      - name: Verify natural-language tool activation
+        run: npm run test:extension-activation && npm run test:tool-category-routing
+      - name: Verify provider-neutral connector policy
+        run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
       - name: Verify web UI architecture guardrails
