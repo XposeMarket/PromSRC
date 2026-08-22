@@ -90,6 +90,12 @@ async function main(): Promise<void> {
       outputDir: path.join(workspacePath, 'Brain', 'activity-packages', '2026-08-01', 'isolated'),
     });
     assert.equal(isolated.package.packageId, pkg.packageId, 'child-process activity assembly must remain deterministic');
+    assert.ok(isolated.packagePath, 'child-process activity assembly must hand back the package artifact path');
+    assert.equal(
+      JSON.parse(fs.readFileSync(isolated.packagePath!, 'utf8')).packageId,
+      pkg.packageId,
+      'the worker result should be read from the persisted package artifact',
+    );
     assert.equal(getBrainActivityWorkerStatus().isolation, 'child_process');
     assert(Number(getBrainActivityWorkerStatus().broker.pid || 0) > 0, 'activity assembly must run in a child process');
     assert(pkg.unresolvedWork.some((item) => item.id === 'id:task-1'), 'running task should be listed as unresolved');

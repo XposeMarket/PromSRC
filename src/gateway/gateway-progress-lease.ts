@@ -236,6 +236,18 @@ export class RuntimeProgressLeaseStore {
     };
   }
 
+  /**
+   * A gateway process can inherit a lease file left by a prior PID before it
+   * registers its first runtime. Replace that stale identity with an idle
+   * snapshot at boot so supervision never mistakes the previous process for
+   * the current owner.
+   */
+  resetForProcess(): GatewayProgressLease {
+    this.active.clear();
+    this.queueCurrentSnapshot();
+    return this.snapshot();
+  }
+
   private queueCurrentSnapshot(): void {
     this.pending = this.snapshot();
     if (this.writeActive || this.writeTimer) return;
@@ -321,6 +333,10 @@ export function finishRuntimeProgressLease(runtimeId: string): void {
 
 export function getRuntimeProgressLeaseSnapshot(): GatewayProgressLease {
   return getProductionStore().snapshot();
+}
+
+export function initializeRuntimeProgressLease(): GatewayProgressLease {
+  return getProductionStore().resetForProcess();
 }
 
 export async function flushRuntimeProgressLease(): Promise<void> {

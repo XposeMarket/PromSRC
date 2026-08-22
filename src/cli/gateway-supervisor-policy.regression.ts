@@ -151,6 +151,21 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 
 {
   const decision = classifyGatewaySupervisorObservation(observation({
+    expectedProcessStartedAt: now - 10_000,
+    // This is an old status snapshot from a prior gateway generation. Its
+    // heartbeat is already stale, so it must not block recovery forever.
+    runtimeStatus: {
+      pid: 1234,
+      processStartedAt: now - 20_000,
+      timestamp: now - 60_000,
+    },
+  }));
+  assert.equal(decision.state, 'stalled', 'expired status identity must not create a permanent mismatch wait');
+  assert.equal(decision.action, 'restart');
+}
+
+{
+  const decision = classifyGatewaySupervisorObservation(observation({
     portOwnerPids: [],
     runtimeStatus: null,
   }));

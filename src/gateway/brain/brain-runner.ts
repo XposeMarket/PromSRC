@@ -53,7 +53,7 @@ import {
   updateLiveRuntimeCheckpoint,
   listLiveRuntimes,
 } from '../live-runtime-registry';
-import { isModelBusy } from '../comms/broadcaster';
+import { isModelBusy, setModelBusy } from '../comms/broadcaster';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config';
 import { listBrowserSessions } from '../browser-tools';
@@ -78,6 +78,8 @@ import {
   beginBrainJobUsage,
   finishBrainJobUsage,
   getBrainUsageSnapshot,
+  type BrainJobKind,
+  type BrainJobUsageHandle,
   type BrainJobUsageRecord,
   type BrainUsageSummary,
 } from './brain-usage.js';
@@ -101,6 +103,20 @@ const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier
 interface BrainRunOptions {
   /** Explicit manual runs may opt into sharing the provider pool. */
   allowForeground?: boolean;
+}
+
+interface ActiveBrainRun {
+  job: BrainJobKind;
+  runId: string;
+  date: string;
+  sessionId: string;
+  runtimeId: string;
+  startedAt: number;
+  usageHandle: BrainJobUsageHandle;
+  abortSignal: { aborted: boolean; reason?: string };
+  shutdownFinalized: boolean;
+  usageFinished: boolean;
+  modelBusyHeld: boolean;
 }
 
 function hasActiveForegroundWork(): boolean {
@@ -465,6 +481,8 @@ export class BrainRunner {
   private thoughtRunning = false;
   private dreamRunning   = false;
   private dreamCleanupRunning = false;
+  private shuttingDown = false;
+  private activeRun: ActiveBrainRun | null = null;
 
   constructor(deps: BrainRunnerDeps) {
     this.deps = deps;
@@ -487,7 +505,7 @@ export class BrainRunner {
     const cadenceDueMs = lastThought
       ? Math.max(lastThought.getTime() + THOUGHT_INTERVAL_MS, now.getTime())
       : now.getTime();
-    const failedRetryDueMs = (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted') && state.lastThoughtAttemptAt
+    const failedRetryDueMs = (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt
       ? new Date(state.lastThoughtAttemptAt).getTime() + THOUGHT_RETRY_BACKOFF_MS
       : 0;
     const nextThoughtMs = Math.max(cadenceDueMs, Number.isFinite(failedRetryDueMs) ? failedRetryDueMs : 0);
@@ -581,6 +599,7 @@ export class BrainRunner {
 
   start(): void {
     if (this.ticker) return;
+    this.shuttingDown = false;
     ensureBrainDirs();
     markGatewayStarted();
 
@@ -599,11 +618,94 @@ export class BrainRunner {
     console.log('[BrainRunner] Started — checking every 15 min for thought/dream eligibility');
   }
 
-  stop(): void {
+  stop(reason = 'gateway_shutdown'): void {
     if (this.ticker) {
       clearInterval(this.ticker);
       this.ticker = null;
     }
+    this.shuttingDown = true;
+    this._finalizeActiveRunForShutdown(reason);
+  }
+
+  private _beginActiveRun(input: Omit<ActiveBrainRun, 'shutdownFinalized' | 'usageFinished' | 'modelBusyHeld'>): void {
+    this.activeRun = {
+      ...input,
+      shutdownFinalized: false,
+      usageFinished: false,
+      modelBusyHeld: true,
+    };
+    setModelBusy(true);
+  }
+
+  /**
+   * Shutdown hooks run after the live-runtime registry has marked the runtime
+   * interrupted, but before child workers and the process are torn down. Keep
+   * Brain state truthful at that boundary; otherwise the later model/artifact
+   * finalizer is never reached and the state remains stuck at `idle`.
+   */
+  private _finalizeActiveRunForShutdown(reason: string): void {
+    const active = this.activeRun;
+    if (!active || active.shutdownFinalized) return;
+    active.shutdownFinalized = true;
+    const normalizedReason = String(reason || 'gateway_shutdown').slice(0, 160);
+    if (!active.abortSignal.aborted) active.abortSignal.aborted = true;
+    active.abortSignal.reason = normalizedReason;
+
+    const error = brainRunOutcomeError(
+      active.job === 'dream_cleanup' ? 'dream cleanup' : active.job,
+      'aborted',
+      '',
+      normalizedReason,
+    );
+    try {
+      const state = loadLatestState();
+      const attemptAt = new Date(active.startedAt).toISOString();
+      if (active.job === 'thought') {
+        state.lastThoughtAttemptAt = attemptAt;
+        state.lastThoughtStatus = 'aborted';
+        state.lastThoughtError = error;
+      } else if (active.job === 'dream') {
+        state.lastDreamAttemptAt = attemptAt;
+        state.lastDreamAttemptDate = active.date;
+        state.lastDreamStatus = 'aborted';
+        state.lastDreamError = error;
+      } else {
+        state.lastDreamCleanupAttemptAt = attemptAt;
+        state.lastDreamCleanupAttemptDate = active.date;
+        state.lastDreamCleanupStatus = 'aborted';
+        state.lastDreamCleanupError = error;
+      }
+      saveLatestState(state);
+    } catch (stateError: any) {
+      console.warn('[BrainRunner] Could not persist shutdown interruption state:', stateError?.message || stateError);
+    }
+
+    if (!active.usageFinished) {
+      active.usageFinished = true;
+      try {
+        finishBrainJobUsage(active.usageHandle, { outcome: 'aborted', error });
+      } catch (usageError: any) {
+        console.warn('[BrainRunner] Could not persist shutdown interruption usage:', usageError?.message || usageError);
+      }
+    }
+    if (active.modelBusyHeld) {
+      active.modelBusyHeld = false;
+      setModelBusy(false);
+    }
+    console.warn(`[BrainRunner] ${active.job} run ${active.runId} marked aborted before gateway shutdown (${normalizedReason}).`);
+  }
+
+  /** Returns true when shutdown already finalized this run. */
+  private _releaseActiveRun(runtimeId: string): boolean {
+    const active = this.activeRun;
+    if (!active || active.runtimeId !== runtimeId) return false;
+    const shutdownFinalized = active.shutdownFinalized;
+    if (active.modelBusyHeld) {
+      active.modelBusyHeld = false;
+      setModelBusy(false);
+    }
+    this.activeRun = null;
+    return shutdownFinalized;
   }
 
   // ─── Tick ─────────────────────────────────────────────────────────────────
@@ -795,7 +897,10 @@ export class BrainRunner {
   ): { windowStart: Date; windowEnd: Date } | null {
     // Don't run thoughts if dream is imminent or already ran today
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
-    if ((state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted') && state.lastThoughtAttemptAt) {
+    // `idle` with a recent attempt means the previous gateway disappeared
+    // before its finalizer could run. Treat it as unsettled and wait through
+    // the same backoff used for explicit failures/aborts.
+    if ((state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt) {
       const lastAttemptMs = new Date(state.lastThoughtAttemptAt).getTime();
       if (Number.isFinite(lastAttemptMs)) {
         const elapsedSinceAttempt = now.getTime() - lastAttemptMs;
@@ -904,6 +1009,7 @@ export class BrainRunner {
     thoughtNumber: number,
     options: BrainRunOptions = {},
   ): Promise<boolean> {
+    if (this.shuttingDown) return false;
     if (this.thoughtRunning) return false;
     if (!options.allowForeground && hasActiveForegroundWork()) {
       console.log('[BrainRunner] Foreground chat became active; deferring Thought');
@@ -929,6 +1035,16 @@ export class BrainRunner {
       sessionId,
       source: 'system',
       detail: `Window ${fmtUtc(windowStart)} -> ${fmtUtc(windowEnd)}`,
+      abortSignal,
+    });
+    this._beginActiveRun({
+      job: 'thought',
+      runId,
+      date: dateStr,
+      sessionId,
+      runtimeId,
+      startedAt: runStartedAt,
+      usageHandle,
       abortSignal,
     });
 
@@ -1106,6 +1222,7 @@ export class BrainRunner {
       this.thoughtRunning = false;
     }
 
+    if (this._releaseActiveRun(runtimeId)) return false;
     const wasAborted = abortSignal.aborted;
 
     addMessage(
@@ -1253,6 +1370,7 @@ export class BrainRunner {
     thoughtCount: number,
     options: BrainRunOptions = {},
   ): Promise<boolean> {
+    if (this.shuttingDown) return false;
     if (this.dreamRunning) return false;
     if (!options.allowForeground && hasActiveForegroundWork()) {
       console.log('[BrainRunner] Foreground chat became active; deferring Dream');
@@ -1279,6 +1397,16 @@ export class BrainRunner {
       sessionId,
       source: 'system',
       detail: `Nightly synthesis for ${dateStr}`,
+      abortSignal,
+    });
+    this._beginActiveRun({
+      job: 'dream',
+      runId,
+      date: dateStr,
+      sessionId,
+      runtimeId,
+      startedAt: runStartedAt,
+      usageHandle,
       abortSignal,
     });
 
@@ -1422,6 +1550,7 @@ export class BrainRunner {
 	      this.dreamRunning = false;
 	    }
 
+    if (this._releaseActiveRun(runtimeId)) return false;
     const wasAborted = abortSignal.aborted;
 
     addMessage(
@@ -1615,6 +1744,7 @@ export class BrainRunner {
   // ─── Thought prompt ───────────────────────────────────────────────────────
 
   private async _runDreamCleanup(dateStr: string, options: BrainRunOptions = {}): Promise<boolean> {
+    if (this.shuttingDown) return false;
     if (this.dreamCleanupRunning || this.dreamRunning) return false;
     if (!options.allowForeground && hasActiveForegroundWork()) {
       console.log('[BrainRunner] Foreground chat became active; deferring Dream cleanup');
@@ -1641,6 +1771,16 @@ export class BrainRunner {
       sessionId,
       source: 'system',
       detail: `Second-pass memory solidifier for ${dateStr}`,
+      abortSignal,
+    });
+    this._beginActiveRun({
+      job: 'dream_cleanup',
+      runId,
+      date: dateStr,
+      sessionId,
+      runtimeId,
+      startedAt: runStartedAt,
+      usageHandle,
       abortSignal,
     });
 
@@ -1744,6 +1884,7 @@ export class BrainRunner {
       this.dreamCleanupRunning = false;
     }
 
+    if (this._releaseActiveRun(runtimeId)) return false;
     const wasAborted = abortSignal.aborted;
 
     addMessage(
