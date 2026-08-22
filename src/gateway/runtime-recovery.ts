@@ -200,6 +200,9 @@ function buildCheckpointText(
       return [
         '[Hot restart checkpoint: planned by this chat]',
         'Gateway restart successful. Prometheus is back online.',
+        'This is a continuation of the same in-flight turn, not a fresh user request.',
+        'Use the preserved process/tool context below as authoritative progress. Do not repeat steps already recorded as completed or successful.',
+        'The gateway restart that resumed this turn is already complete. Do not call gateway_restart or repeat the original restart step unless new post-recovery work genuinely requires another restart.',
         '',
         ...processPacket,
       ].join('\n');
@@ -823,5 +826,3 @@ export function recoverInterruptedRuntimes(opts: {
     crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
   };
 }
-
-
