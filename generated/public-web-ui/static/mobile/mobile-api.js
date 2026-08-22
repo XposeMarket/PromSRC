@@ -2018,6 +2018,29 @@ export async function loadMobileBackgroundStatus(backgroundId) {
   return mfetch(`/api/background/${encodeURIComponent(id)}/status`);
 }
 
+export async function loadMobileBackgroundStreamReplay(backgroundId, after = 0) {
+  const id = String(backgroundId || '').trim();
+  if (!id) return null;
+  const seq = Math.max(0, Math.floor(Number(after || 0)) || 0);
+  const qs = seq ? `?after=${encodeURIComponent(seq)}` : '';
+  return mfetch(`/api/background/${encodeURIComponent(id)}/stream${qs}`);
+}
+
+export async function sendMobileBackgroundSteer(backgroundId, message) {
+  const id = String(backgroundId || '').trim();
+  const text = String(message || '').trim();
+  if (!id || !text) return null;
+  return mfetch('/api/background-agents/steer', {
+    method: 'POST',
+    body: JSON.stringify({
+      backgroundId: id,
+      message: text,
+      source: 'web_background_agent_chat',
+      kind: 'constraint',
+    }),
+  });
+}
+
 export async function loadGatewayStatus(opts = {}) {
   const timeoutMs = Math.max(5000, Math.floor(Number(opts.timeoutMs || 30000) || 30000));
   return mfetch('/api/status', { method: 'GET', timeoutMs });

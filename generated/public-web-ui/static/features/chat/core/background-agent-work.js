@@ -61,16 +61,25 @@ export function resolveBackgroundAgentIdentity(id, options = {}) {
   return { name, color };
 }
 
-function normalizeBackgroundAgentEvent(event = {}) {
-  const content = String(event.content || event.text || event.message || '').trim();
-  if (!content && !event.type) return null;
-  const extra = event.extra && typeof event.extra === 'object' ? event.extra : null;
+export function normalizeBackgroundAgentEvent(event = {}) {
+  const data = event.data && typeof event.data === 'object' ? event.data : {};
+  const source = { ...data, ...event };
+  const content = String(source.content || source.text || source.message || source.reply || source.result || '').trim();
+  if (!content && !source.type && !source.eventType) return null;
+  const streamId = String(source.streamId || data.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(source.seq || data.seq || 0)) || 0);
+  const eventId = String(source.id || source.eventId || data.eventId || (streamId && seq ? `background_trace_${streamId}_${seq}` : '')).trim();
+  const extra = source.extra && typeof source.extra === 'object' ? source.extra : data;
   return {
-    ts: String(event.ts || event.time || '').trim(),
-    type: String(event.type || 'info').trim(),
-    actor: String(event.actor || '').trim(),
+    id: eventId || undefined,
+    seq: seq || undefined,
+    streamId: streamId || undefined,
+    at: Number(source.at || data.at || 0) || undefined,
+    ts: String(source.ts || source.time || '').trim(),
+    type: String(source.type || source.eventType || 'info').trim(),
+    actor: String(source.actor || '').trim(),
     content,
-    ...(extra ? { extra } : {}),
+    ...(extra && Object.keys(extra).length ? { extra } : {}),
   };
 }
 
@@ -98,6 +107,10 @@ export function normalizeBackgroundAgentWork(record = {}) {
   const updatedAt = Number(record.updatedAt || record.completedAt || record.workEndedAt || Date.now()) || Date.now();
   const terminal = ['completed', 'failed', 'timed_out'].includes(status);
   const completedAt = Number(record.completedAt || record.workEndedAt || 0) || (terminal ? updatedAt : 0);
+  const stream = record.stream && typeof record.stream === 'object' ? record.stream : {};
+  const events = (Array.isArray(record.events) ? record.events : Array.isArray(record.processEntries) ? record.processEntries : [])
+    .map(normalizeBackgroundAgentEvent)
+    .filter(Boolean);
   return {
     id,
     sessionId,
@@ -111,15 +124,53 @@ export function normalizeBackgroundAgentWork(record = {}) {
     result: String(record.result || '').trim(),
     error: String(record.error || '').trim(),
     fileChanges: record.fileChanges || null,
-    events: (Array.isArray(record.events) ? record.events : Array.isArray(record.processEntries) ? record.processEntries : [])
-      .map(normalizeBackgroundAgentEvent)
-      .filter(Boolean)
-      .slice(-240),
+    streamId: String(record.streamId || stream.streamId || '').trim(),
+    lastSeq: Math.max(0, Math.floor(Number(record.lastSeq || stream.lastSeq || 0)) || 0),
+    events: mergeBackgroundAgentEvents([], events),
     steerMessages: (Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : [])
       .map(normalizeBackgroundAgentSteer)
       .filter(Boolean)
       .slice(-80),
   };
+}
+
+function backgroundAgentEventKey(event = {}) {
+  const streamId = String(event.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(event.seq || 0)) || 0);
+  if (streamId && seq) return `stream:${streamId}:${seq}`;
+  const id = String(event.id || '').trim();
+  if (id) return `id:${id}`;
+  return [
+    String(event.ts || event.at || ''),
+    String(event.type || ''),
+    String(event.actor || ''),
+    String(event.content || ''),
+  ].join('|');
+}
+
+export function mergeBackgroundAgentEvents(existing = [], incoming = []) {
+  const byKey = new Map();
+  const add = (event) => {
+    const normalized = normalizeBackgroundAgentEvent(event);
+    if (!normalized) return;
+    const key = backgroundAgentEventKey(normalized);
+    const previous = byKey.get(key);
+    byKey.set(key, previous ? { ...previous, ...normalized, extra: { ...(previous.extra || {}), ...(normalized.extra || {}) } } : normalized);
+  };
+  (Array.isArray(existing) ? existing : []).forEach(add);
+  (Array.isArray(incoming) ? incoming : []).forEach(add);
+  return Array.from(byKey.values())
+    .sort((a, b) => {
+      const aStream = String(a.streamId || '');
+      const bStream = String(b.streamId || '');
+      if (aStream && aStream === bStream && Number(a.seq || 0) !== Number(b.seq || 0)) return Number(a.seq || 0) - Number(b.seq || 0);
+      if (aStream && !bStream) return -1;
+      if (!aStream && bStream) return 1;
+      const aAt = Number(a.at || 0) || Date.parse(a.ts || '') || 0;
+      const bAt = Number(b.at || 0) || Date.parse(b.ts || '') || 0;
+      return aAt - bAt;
+    })
+    .slice(-1200);
 }
 
 function cacheBackgroundAgentWork(raw, records) {
@@ -166,8 +217,10 @@ export function persistBackgroundAgentWork(record = {}) {
     records[index] = {
       ...records[index],
       ...normalized,
-      events: normalized.events.length ? normalized.events : records[index].events,
+      events: mergeBackgroundAgentEvents(records[index].events, normalized.events),
       steerMessages: normalized.steerMessages.length ? normalized.steerMessages : records[index].steerMessages,
+      streamId: normalized.streamId || records[index].streamId,
+      lastSeq: Math.max(Number(records[index].lastSeq || 0), Number(normalized.lastSeq || 0)),
     };
   } else records.push(normalized);
   writeBackgroundAgentWork(records);
