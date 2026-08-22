@@ -22,6 +22,7 @@ import {
   type DesktopAppLaunchRequest,
   type HelperResponse,
 } from './desktop-backend.js';
+import type { DesktopDeliveryTarget } from './desktop-cowork-delivery.js';
 import type { DesktopMonitorInfo } from './desktop-tools.js';
 
 function resolveHelperPath(): string {
@@ -49,6 +50,14 @@ function resolveHelperPath(): string {
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+}
+
+function requireTargetPid(target: DesktopDeliveryTarget, method: string): number {
+  const pid = Number(target?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new DesktopUnsupportedError('darwin', method, 'Background co-work delivery requires a positive target pid.');
+  }
+  return pid;
 }
 
 export class DarwinBackend implements DesktopBackend {
@@ -159,50 +168,34 @@ export class DarwinBackend implements DesktopBackend {
     return { png, bounds: r.bounds, devicePixelRatio: r.devicePixelRatio };
   }
 
-  async movePointer(x: number, y: number): Promise<void> {
-    await this.call('movePointer', { x, y });
-  }
-  async click(button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
-    await this.call('click', { button, repeat, modifiers });
-  }
-  async scroll(deltaX: number, deltaY: number): Promise<void> {
-    await this.call('scroll', { deltaX, deltaY });
-  }
-  async drag(fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
-    await this.call('drag', { fromX, fromY, toX, toY, steps });
-  }
+  // Foreground compatibility lane.
+  async movePointer(x: number, y: number): Promise<void> { await this.call('movePointer', { x, y }); }
+  async click(button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> { await this.call('click', { button, repeat, modifiers }); }
+  async scroll(deltaX: number, deltaY: number): Promise<void> { await this.call('scroll', { deltaX, deltaY }); }
+  async drag(fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> { await this.call('drag', { fromX, fromY, toX, toY, steps }); }
 
-  /** Hermes-style host co-work click. This does not move the real cursor or
-   * raise/focus the target app because the helper posts directly to the pid. */
-  async clickTargeted(pid: number, x: number, y: number, button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
-    if (!Number.isFinite(pid) || pid <= 0) throw new Error('clickTargeted requires a positive pid.');
+  // Background co-work lane. All OS backends expose the same target-first shape.
+  async clickTargeted(target: DesktopDeliveryTarget, x: number, y: number, button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
+    const pid = requireTargetPid(target, 'clickTargeted');
     await this.call('click', { pid, x, y, button, repeat, modifiers });
   }
-
-  async scrollTargeted(pid: number, deltaX: number, deltaY: number): Promise<void> {
-    if (!Number.isFinite(pid) || pid <= 0) throw new Error('scrollTargeted requires a positive pid.');
+  async scrollTargeted(target: DesktopDeliveryTarget, _x: number, _y: number, deltaX: number, deltaY: number): Promise<void> {
+    const pid = requireTargetPid(target, 'scrollTargeted');
     await this.call('scroll', { pid, deltaX, deltaY });
   }
-
-  async dragTargeted(pid: number, fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
-    if (!Number.isFinite(pid) || pid <= 0) throw new Error('dragTargeted requires a positive pid.');
+  async dragTargeted(target: DesktopDeliveryTarget, fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
+    const pid = requireTargetPid(target, 'dragTargeted');
     await this.call('drag', { pid, fromX, fromY, toX, toY, steps });
   }
 
-  async typeText(text: string): Promise<void> {
-    await this.call('typeText', { text });
-  }
-  async pressKey(key: DesktopCanonicalKey): Promise<void> {
-    await this.call('pressKey', { key: key.key, modifiers: key.modifiers });
-  }
-
-  async typeTextTargeted(pid: number, text: string): Promise<void> {
-    if (!Number.isFinite(pid) || pid <= 0) throw new Error('typeTextTargeted requires a positive pid.');
+  async typeText(text: string): Promise<void> { await this.call('typeText', { text }); }
+  async pressKey(key: DesktopCanonicalKey): Promise<void> { await this.call('pressKey', { key: key.key, modifiers: key.modifiers }); }
+  async typeTextTargeted(target: DesktopDeliveryTarget, text: string): Promise<void> {
+    const pid = requireTargetPid(target, 'typeTextTargeted');
     await this.call('typeText', { pid, text });
   }
-
-  async pressKeyTargeted(pid: number, key: DesktopCanonicalKey): Promise<void> {
-    if (!Number.isFinite(pid) || pid <= 0) throw new Error('pressKeyTargeted requires a positive pid.');
+  async pressKeyTargeted(target: DesktopDeliveryTarget, key: DesktopCanonicalKey): Promise<void> {
+    const pid = requireTargetPid(target, 'pressKeyTargeted');
     await this.call('pressKey', { pid, key: key.key, modifiers: key.modifiers });
   }
 
@@ -210,37 +203,22 @@ export class DarwinBackend implements DesktopBackend {
     const r = await this.call<{ text: string }>('getClipboard');
     return r.text ?? '';
   }
-  async setClipboard(text: string): Promise<void> {
-    await this.call('setClipboard', { text });
-  }
-
+  async setClipboard(text: string): Promise<void> { await this.call('setClipboard', { text }); }
   async focusWindow(handle: number): Promise<boolean> {
     const r = await this.call<{ ok: boolean }>('focusWindow', { handle });
     return r.ok === true;
   }
-  async windowControl(handle: number, action: DesktopWindowAction): Promise<void> {
-    await this.call('windowControl', { handle, action });
-  }
+  async windowControl(handle: number, action: DesktopWindowAction): Promise<void> { await this.call('windowControl', { handle, action }); }
   async launchApp(request: DesktopAppLaunchRequest): Promise<void> {
-    await this.call('launchApp', {
-      name: request.name ?? '',
-      path: request.path ?? '',
-      bundleId: request.bundleId ?? '',
-    });
+    await this.call('launchApp', { name: request.name ?? '', path: request.path ?? '', bundleId: request.bundleId ?? '' });
   }
-
   async getAccessibilityTree(opts: { windowName?: string; depth: number; maxNodes: number }): Promise<string> {
     const r = await this.call<{ tree: string }>('getAccessibilityTree', {
-      windowName: opts.windowName ?? '',
-      depth: opts.depth,
-      maxNodes: opts.maxNodes,
+      windowName: opts.windowName ?? '', depth: opts.depth, maxNodes: opts.maxNodes,
     });
     return r.tree ?? '';
   }
-
-  async checkPermissions(): Promise<DesktopPermissionStatus[]> {
-    return this.call<DesktopPermissionStatus[]>('checkPermissions');
-  }
+  async checkPermissions(): Promise<DesktopPermissionStatus[]> { return this.call<DesktopPermissionStatus[]>('checkPermissions'); }
 
   dispose(): void {
     if (this.proc && !this.proc.killed) {
