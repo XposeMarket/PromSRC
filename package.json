@@ -55,6 +55,7 @@
     "test:electron-browser-profile": "node scripts/test-electron-browser-profile.mjs",
     "test:canonical-updater": "npm run build:backend && node scripts/test-canonical-updater.mjs",
     "test:link-routing": "node scripts/test-prometheus-link-routing.mjs",
+    "test:web-ui-refresh-loop": "node scripts/test-web-ui-refresh-loop.mjs",
     "test:plugins-page": "node scripts/test-plugins-page-contract.mjs",
     "test:hub-goals": "node scripts/test-hub-goals-contract.mjs",
     "test:turn-safety": "npm run build:backend && node scripts/test-turn-safety.mjs",
