@@ -1,8 +1,9 @@
 const PERF_EVENT = 'prometheus:client-performance-mark';
-const SEMANTIC_LABEL = 'Active context';
-const SEMANTIC_HELP = 'Next model-call context · stored thread tracked separately';
+const SEMANTIC_LABEL = 'Context window';
+const SEMANTIC_HELP = 'Effective context pressure · compaction starts before the hard limit';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
 const MAINTENANCE_INTERVAL_MS = 500;
+const PRESSURE_REFRESH_MS = 2000;
 
 const liveBySession = new Map();
 let maintenanceTimer = 0;
@@ -68,6 +69,10 @@ function activeMobileSessionId() {
   }
 }
 
+function activeSessionIdForSurface(surface) {
+  return surface === 'mobile' ? activeMobileSessionId() : activeDesktopSessionId();
+}
+
 function sessionForClientRequest(clientRequestId) {
   const requestId = String(clientRequestId || '').trim();
   if (!requestId) return '';
@@ -112,7 +117,17 @@ function replaceHeadText(head) {
   if (!String(head.textContent || '').startsWith(SEMANTIC_LABEL)) head.prepend(document.createTextNode(SEMANTIC_LABEL));
 }
 
-function ensureSemanticNote(surface, elements) {
+function semanticCopyForState(state) {
+  const trigger = numeric(state?.pressureTriggerTokens);
+  const windowTokens = numeric(state?.windowTokens || state?.pressureWindowTokens);
+  if (trigger > 0 && windowTokens > 0) {
+    const percent = Math.round((trigger / windowTokens) * 100);
+    return `Effective context pressure · compaction at ${formatTokens(trigger)} (${percent}%)`;
+  }
+  return SEMANTIC_HELP;
+}
+
+function ensureSemanticNote(surface, elements, state = null) {
   if (!elements.root) return;
   let note = elements.root.querySelector('[data-context-window-semantic-note]');
   if (!note) {
@@ -124,7 +139,8 @@ function ensureSemanticNote(surface, elements) {
     else elements.root.appendChild(note);
   }
   const copy = note.querySelector('[data-context-window-semantic-copy]');
-  if (copy && copy.textContent !== SEMANTIC_HELP) copy.textContent = SEMANTIC_HELP;
+  const semanticCopy = semanticCopyForState(state);
+  if (copy && copy.textContent !== semanticCopy) copy.textContent = semanticCopy;
   elements.root.setAttribute('aria-label', SEMANTIC_LABEL);
   elements.button?.setAttribute('aria-label', SEMANTIC_LABEL);
   if (surface === 'mobile' && !String(elements.button?.title || '')) elements.button?.setAttribute('title', SEMANTIC_LABEL);
@@ -147,11 +163,17 @@ function makeState(sessionId, surface, clientRequestId = '') {
     sessionId: String(sessionId || '').trim(),
     surface,
     clientRequestId: String(clientRequestId || '').trim(),
-    active: true,
+    active: false,
     baselineTokens: 0,
     authoritativeTokens: 0,
     windowTokens: 0,
     liveToolTokens: 0,
+    pressureTokens: 0,
+    pressureWindowTokens: 0,
+    pressureTriggerTokens: 0,
+    pressureFetchedAt: 0,
+    pressurePromise: null,
+    pendingCompaction: false,
     lastRenderedText: '',
     seenToolResults: new Set(),
   };
@@ -162,12 +184,20 @@ function stateKey(surface, sessionId) {
 }
 
 function currentStateForSurface(surface) {
-  if (surface === 'desktop') {
-    const activeId = activeDesktopSessionId();
-    return activeId ? liveBySession.get(stateKey(surface, activeId)) || null : null;
-  }
-  const activeId = activeMobileSessionId();
+  const activeId = activeSessionIdForSurface(surface);
   return activeId ? liveBySession.get(stateKey(surface, activeId)) || null : null;
+}
+
+function ensureSurfaceState(surface) {
+  const sessionId = activeSessionIdForSurface(surface);
+  if (!sessionId) return null;
+  const key = stateKey(surface, sessionId);
+  let state = liveBySession.get(key);
+  if (!state) {
+    state = makeState(sessionId, surface);
+    liveBySession.set(key, state);
+  }
+  return state;
 }
 
 function captureAuthoritative(state, elements = surfaceElements(state.surface)) {
@@ -181,18 +211,61 @@ function captureAuthoritative(state, elements = surfaceElements(state.surface)) 
   if (state.baselineTokens <= 0) state.baselineTokens = usage.current;
 }
 
+async function fetchPressure(surface, sessionId) {
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/context-pressure`;
+  if (surface === 'mobile') {
+    const mobileApi = await import('./mobile/mobile-api.js');
+    return mobileApi.mobileGatewayFetch(path, { timeoutMs: 6000 });
+  }
+  const response = await fetch(path, { cache: 'no-store', credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`Context pressure HTTP ${response.status}`);
+  return response.json();
+}
+
+function refreshPressure(state, force = false) {
+  if (!state?.sessionId) return Promise.resolve(null);
+  if (state.pressurePromise) return state.pressurePromise;
+  if (!force && state.pressureFetchedAt > 0 && Date.now() - state.pressureFetchedAt < PRESSURE_REFRESH_MS) {
+    return Promise.resolve(null);
+  }
+
+  state.pressurePromise = fetchPressure(state.surface, state.sessionId)
+    .then((data) => {
+      if (!data || data.success === false) return null;
+      state.pressureFetchedAt = Date.now();
+      state.pressureTokens = numeric(data.pressureTokens);
+      state.pressureWindowTokens = numeric(data.contextWindowTokens);
+      state.pressureTriggerTokens = numeric(data.effectiveCompactionTriggerTokens || data.compactionTriggerTokens);
+      state.pendingCompaction = data.pendingCompaction === true || data.atOrPastCompactionTrigger === true;
+      if (state.pressureWindowTokens > 0 && state.windowTokens <= 0) state.windowTokens = state.pressureWindowTokens;
+      renderLiveEstimate(state);
+      return data;
+    })
+    .catch(() => null)
+    .finally(() => { state.pressurePromise = null; });
+  return state.pressurePromise;
+}
+
 function startLive(sessionId, surface, clientRequestId = '') {
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
   const key = stateKey(surface, sid);
-  let state = liveBySession.get(key);
-  if (!state || !state.active || (clientRequestId && state.clientRequestId && state.clientRequestId !== clientRequestId)) {
+  const previous = liveBySession.get(key);
+  let state = previous;
+  if (!state || state.active || (clientRequestId && state.clientRequestId && state.clientRequestId !== clientRequestId)) {
     state = makeState(sid, surface, clientRequestId);
+    if (previous) {
+      state.pressureTokens = previous.pressureTokens;
+      state.pressureWindowTokens = previous.pressureWindowTokens;
+      state.pressureTriggerTokens = previous.pressureTriggerTokens;
+      state.pressureFetchedAt = previous.pressureFetchedAt;
+    }
     liveBySession.set(key, state);
-  } else if (clientRequestId) {
-    state.clientRequestId = clientRequestId;
   }
+  state.active = true;
+  if (clientRequestId) state.clientRequestId = clientRequestId;
   captureAuthoritative(state);
+  void refreshPressure(state, true);
   return state;
 }
 
@@ -217,36 +290,79 @@ function recordToolTokens(sessionId, surface, details = {}, explicitTokens = 0) 
   renderLiveEstimate(state);
 }
 
+function recordCompactionEvent(sessionId, surface, evt = {}) {
+  const sid = String(sessionId || activeSessionIdForSurface(surface) || '').trim();
+  if (!sid) return;
+  const state = ensureSurfaceState(surface) || startLive(sid, surface);
+  if (!state || state.sessionId !== sid) return;
+  const action = String(evt?.action || evt?.tool || evt?.name || '').trim();
+  if (action !== 'context_compaction') return;
+  const phase = String(evt?.args?.phase || evt?.extra?.phase || '').trim();
+  const before = numeric(evt?.args?.projected_tokens || evt?.extra?.projected_tokens || evt?.extra?.projected_tokens_before);
+  const after = numeric(evt?.extra?.projected_tokens_after);
+  const trigger = numeric(evt?.args?.trigger_tokens || evt?.extra?.trigger_tokens || evt?.extra?.input_budget_tokens);
+  if (before > 0) state.pressureTokens = Math.max(state.pressureTokens, before);
+  if (after > 0) state.pressureTokens = after;
+  if (trigger > 0) state.pressureTriggerTokens = trigger;
+  state.pendingCompaction = phase === 'start' || (!after && evt?.type === 'tool_call');
+  renderLiveEstimate(state);
+  if (evt?.type === 'tool_result') void refreshPressure(state, true);
+}
+
 function stateIsVisible(state) {
   if (state.surface === 'mobile') return activeMobileSessionId() === state.sessionId && !!document.getElementById('pm-ctx-popover');
   return activeDesktopSessionId() === state.sessionId;
 }
 
 function renderLiveEstimate(state) {
-  if (!state?.active || !stateIsVisible(state)) return;
+  if (!state || !stateIsVisible(state)) return;
   const elements = surfaceElements(state.surface);
   if (!elements.root || !elements.total) return;
   captureAuthoritative(state, elements);
-  if (state.baselineTokens <= 0 || state.windowTokens <= 0) return;
 
-  // The server remains authoritative. This is only a monotonic, current-turn
-  // projection until the next /context-window snapshot reflects the tool data.
-  const estimatedTokens = Math.max(state.authoritativeTokens, state.baselineTokens + state.liveToolTokens);
-  const unreflectedTokens = Math.max(0, estimatedTokens - state.authoritativeTokens);
-  if (unreflectedTokens <= 0) return;
-  const percent = Math.max(0, Math.min(100, (estimatedTokens / state.windowTokens) * 100));
-  const label = `~${formatTokens(estimatedTokens)} / ${formatTokens(state.windowTokens)} (${Math.round(percent)}%)`;
+  const windowTokens = numeric(state.windowTokens || state.pressureWindowTokens);
+  if (windowTokens <= 0) return;
+  const liveProjection = state.active && state.baselineTokens > 0
+    ? state.baselineTokens + state.liveToolTokens
+    : 0;
+  const authoritativePressure = Math.max(state.authoritativeTokens, state.pressureTokens);
+  const estimatedTokens = Math.max(authoritativePressure, liveProjection);
+  if (estimatedTokens <= 0) return;
+
+  const unreflectedTokens = Math.max(0, liveProjection - authoritativePressure);
+  const percent = Math.max(0, Math.min(100, (estimatedTokens / windowTokens) * 100));
+  const isLiveEstimate = unreflectedTokens > 0;
+  const label = `${isLiveEstimate ? '~' : ''}${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} (${Math.round((estimatedTokens / windowTokens) * 100)}%)`;
   state.lastRenderedText = label;
   elements.total.textContent = label;
   if (elements.fill) elements.fill.style.width = `${percent.toFixed(1)}%`;
   if (state.surface === 'mobile') elements.ring?.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
   else elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-  if (elements.button) elements.button.title = `Active context: ${formatTokens(estimatedTokens)} / ${formatTokens(state.windowTokens)} tokens — live estimate`;
-  ensureSemanticNote(state.surface, elements);
+
+  const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
+  if (state.authoritativeTokens > 0 && state.pressureTokens > state.authoritativeTokens) {
+    titleParts.push(`current model slice ${formatTokens(state.authoritativeTokens)}`);
+  }
+  if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
+  if (isLiveEstimate) titleParts.push('live estimate');
+  if (elements.button) elements.button.title = titleParts.join(' · ');
+
+  ensureSemanticNote(state.surface, elements, state);
   const liveCopy = elements.root.querySelector('[data-context-window-live-copy]');
   if (liveCopy) {
-    liveCopy.hidden = false;
-    liveCopy.textContent = `+${formatTokens(unreflectedTokens)} live est`;
+    if (isLiveEstimate) {
+      liveCopy.hidden = false;
+      liveCopy.textContent = `+${formatTokens(unreflectedTokens)} live est`;
+    } else if (state.pressureTokens > state.authoritativeTokens && state.authoritativeTokens > 0) {
+      liveCopy.hidden = false;
+      liveCopy.textContent = `model slice ${formatTokens(state.authoritativeTokens)}`;
+    } else if (state.pendingCompaction) {
+      liveCopy.hidden = false;
+      liveCopy.textContent = 'compacting';
+    } else {
+      liveCopy.hidden = true;
+      liveCopy.textContent = '';
+    }
   }
 }
 
@@ -255,10 +371,14 @@ function semanticPass() {
   for (const surface of ['desktop', 'mobile']) {
     const elements = surfaceElements(surface);
     if (!elements.root) continue;
+    const state = ensureSurfaceState(surface);
     replaceHeadText(elements.head);
-    ensureSemanticNote(surface, elements);
-    const state = currentStateForSurface(surface);
-    if (state?.active) renderLiveEstimate(state);
+    ensureSemanticNote(surface, elements, state);
+    if (state) {
+      captureAuthoritative(state, elements);
+      void refreshPressure(state);
+      renderLiveEstimate(state);
+    }
   }
 }
 
@@ -270,6 +390,7 @@ function requestAuthoritativeRefresh(state) {
       } else {
         try { window.refreshChatContextWindow?.({ force: true }); } catch {}
       }
+      void refreshPressure(state, true);
       semanticPass();
     }, delay);
   }
@@ -282,14 +403,11 @@ function settleLive(sessionId, surface, clientRequestId = '') {
   if (!state) return;
   if (clientRequestId && state.clientRequestId && clientRequestId !== state.clientRequestId) return;
   state.active = false;
-  const elements = surfaceElements(surface);
-  const liveCopy = elements.root?.querySelector('[data-context-window-live-copy]');
-  if (liveCopy) {
-    liveCopy.hidden = true;
-    liveCopy.textContent = '';
-  }
+  state.clientRequestId = '';
+  state.liveToolTokens = 0;
+  state.baselineTokens = 0;
+  state.seenToolResults.clear();
   requestAuthoritativeRefresh(state);
-  setTimeout(() => liveBySession.delete(stateKey(surface, sid)), 8000);
 }
 
 function onPerformanceMark(event) {
@@ -319,8 +437,9 @@ function wrapMobileHook(name, after) {
 function installMobileHookWrappers() {
   wrapMobileHook('__pmMobileContextTurnStart', (detail = {}) => startLive(String(detail?.sessionId || activeMobileSessionId()).trim(), 'mobile'));
   wrapMobileHook('__pmMobileContextStreamEvent', (evt = {}, detail = {}) => {
-    if (String(evt?.type || '') !== 'tool_result') return;
     const sessionId = String(detail?.sessionId || evt?.sessionId || activeMobileSessionId()).trim();
+    recordCompactionEvent(sessionId, 'mobile', evt);
+    if (String(evt?.type || '') !== 'tool_result') return;
     const telemetry = evt?.extra?.telemetry || evt?.telemetry || {};
     recordToolTokens(sessionId, 'mobile', { ...evt, ...telemetry }, telemetry.resultTokens || telemetry.result_tokens);
   });
