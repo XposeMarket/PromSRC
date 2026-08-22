@@ -275,7 +275,7 @@ function shouldUseHybridAtomicMemory(
   const normalized = String(messageText || '').replace(/[^a-z0-9!?\s']/gi, ' ').replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
   if (/^(?:hi|hey|hello|yo|sup)(?:\s+prometheus)?[!?.,\s]*$/i.test(normalized)) return false;
-  if (/^(?:thanks|thank you|thx|ty|ok|okay|got it|sounds good|great|perfect|nice|cool|alright|all right)(?:\s+[^!?]*)?[!?.,\s]*$/i.test(normalized)) return false;
+  if (/^(?:thanks(?:\s+(?:so much|a lot))?|thank you(?:\s+(?:so much|very much))?|thx|ty|ok(?:ay)?|got it|sounds good|great|perfect|nice|cool|alright|all right)[!?.,\s]*$/i.test(normalized)) return false;
   return true;
 }
 
