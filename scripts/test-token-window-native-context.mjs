@@ -30,6 +30,8 @@ assert.match(chat, /if \(round === 0[\s\S]{0,1400}maybeRunMidWorkflowCompaction\
   'the first provider call must run the token-budget compaction preflight');
 assert.doesNotMatch(chat, /midWorkflowCompactionsThisTurn\s*<\s*3\s*&&\s*messages\.length\s*>\s*3/,
   'mid-workflow compaction must not require an arbitrary message count');
+assert.doesNotMatch(chat, /rollingCompactionEnabled\s*===\s*false[^\n]*compacted:\s*false/,
+  'legacy rolling-compaction settings must not disable hard model-call token-window safety');
 
 // The rolling summary must cover all active conversation being retired, not
 // only an arbitrary last-N message tail. The compactor itself can use the
@@ -39,7 +41,7 @@ assert.doesNotMatch(chat, /nonSystemMessages\.slice\(-18\)/,
   'token-triggered compaction must not summarize only the last 18 messages');
 assert.match(chat, /numCtx:\s*profile\.contextWindowTokens/,
   'the compactor should use the live model hard context window for summary input');
-assert.match(session, /contextSummaryUpdatedAt\s*=\s*Date\.now\(\);[\s\S]{0,220}contextTokenEstimate\s*=\s*estimateActiveContextTokens\(session\)/,
+assert.match(session, /contextSummaryUpdatedAt\s*=\s*Date\.now\(\);[\s\S]{0,260}contextTokenEstimate\s*=\s*estimateActiveContextTokens\(session\)/,
   'recording compaction must immediately recalculate persisted active-context pressure');
 
 // Context diagnostics are a complete active-prompt view, not a user-message
