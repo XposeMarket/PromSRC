@@ -18411,6 +18411,14 @@ router.get('/api/mobile/chat/runs/:sessionId', requireSafeSessionParam, (req, re
       recovered: reconciliation.recovered,
       recovery: reconciliation.recovered ? 'start_fresh' : (active ? 'resume_or_interrupt' : 'none'),
       sessionId,
+      stream: reconciliation.stream ? {
+        streamId: reconciliation.stream.streamId,
+        active: reconciliation.stream.active,
+        startedAt: reconciliation.stream.startedAt,
+        updatedAt: reconciliation.stream.updatedAt,
+        firstSeq: reconciliation.stream.events[0]?.seq || 0,
+        lastSeq: reconciliation.stream.events[reconciliation.stream.events.length - 1]?.seq || 0,
+      } : null,
       historyLength: history.length,
       lastActiveAt: Number(session?.lastActiveAt || 0) || null,
       latestAssistant: latestAssistant ? {

@@ -588,6 +588,8 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   renderedMessageLimits: {},
   historyPagination: {},
   resolvedQuestionIds: {},
+  mobileRecoveryOwners: {},
+  mobileRecoveryUncertainSince: {},
 });
 
 if (!__pmChat.mainChatGoals || typeof __pmChat.mainChatGoals !== 'object') __pmChat.mainChatGoals = {};
@@ -597,6 +599,8 @@ __pmChat.mainChatGoals = { ..._readMobileGoalCache(), ...__pmChat.mainChatGoals 
 if (!__pmChat.goalDetailsOpen || typeof __pmChat.goalDetailsOpen !== 'object') __pmChat.goalDetailsOpen = {};
 if (!__pmChat.toolProgressBySession || typeof __pmChat.toolProgressBySession !== 'object') __pmChat.toolProgressBySession = {};
 if (!__pmChat.resolvedQuestionIds || typeof __pmChat.resolvedQuestionIds !== 'object') __pmChat.resolvedQuestionIds = {};
+if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== 'object') __pmChat.mobileRecoveryOwners = {};
+if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
 
 function _mobileGoalTimestampMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -1186,6 +1190,54 @@ function _markMobileSessionRunning(sessionId, running) {
   if (!(__pmChat.drawerRunSessionIds instanceof Set)) __pmChat.drawerRunSessionIds = new Set();
   if (running) __pmChat.drawerRunSessionIds.add(sid);
   else __pmChat.drawerRunSessionIds.delete(sid);
+}
+
+// A mobile tab can observe a turn admitted by another tab.  Make the server's
+// identity the local source of truth before replaying it; otherwise the
+// observer keeps its speculative clientRequestId and noteChatStreamSeq rejects
+// every legitimate replay frame as "foreign".
+function _adoptMobileActiveRunState(sessionId, { run = null, stream = null, fallback = null } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const current = __pmChat.activeRuns?.[sid] && typeof __pmChat.activeRuns[sid] === 'object'
+    ? __pmChat.activeRuns[sid]
+    : {};
+  const remembered = fallback || _readMobileActiveRun(sid) || {};
+  const runtimeId = String(run?.id || run?.runtimeId || run?.runId || current.runtimeId || remembered.runtimeId || '').trim();
+  const streamId = String(stream?.streamId || current.streamId || remembered.streamId || '').trim();
+  const clientRequestId = String(run?.clientRequestId || current.clientRequestId || remembered.clientRequestId || '').trim();
+  const startedAt = Number(run?.startedAt || current.startedAt || remembered.startedAt || 0) || 0;
+  const lastSeq = Math.max(
+    Number(current.lastSeq || 0) || 0,
+    Number(remembered.lastSeq || 0) || 0,
+    Number(stream?.lastSeq || 0) || 0,
+  );
+  const next = {
+    ...current,
+    busy: true,
+    startedAt,
+    runtimeId,
+    streamId,
+    clientRequestId,
+    lastSeq,
+  };
+  if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+  __pmChat.activeRuns[sid] = next;
+  _markMobileSessionRunning(sid, true);
+  if (clientRequestId) {
+    if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
+    __pmChat.sentClientRequestIds[sid] = clientRequestId;
+  }
+  _rememberMobileActiveRun(sid, {
+    startedAt: startedAt || undefined,
+    disconnected: false,
+    runtimeId,
+    streamId,
+    clientRequestId,
+    lastSeq,
+  });
+  delete __pmChat.mobileRecoveryUncertainSince[sid];
+  return next;
 }
 
 function _getMobileRunningSessionIds() {
@@ -2280,7 +2332,19 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
   const item = queue[index] || {};
   const message = String(item.message || '').trim();
   if (!message) return;
-  if (!__pmChat.activeRuns?.[sid]?.busy) {
+  let localRun = __pmChat.activeRuns?.[sid] || null;
+  if (!localRun?.busy) {
+    const rememberedRun = _readMobileActiveRun(sid);
+    if (rememberedRun) {
+      localRun = _adoptMobileActiveRunState(sid, { fallback: rememberedRun });
+    } else {
+      const status = await loadMobileChatRunStatus(sid).catch(() => null);
+      if (status?.active === true) {
+        localRun = _adoptMobileActiveRunState(sid, { run: status.run || status.activeRun || null, stream: status.stream || null });
+      }
+    }
+  }
+  if (!localRun?.busy) {
     pmToast('No active run to steer. This prompt will run normally when the chat is idle.', 'info');
     return;
   }
@@ -2302,7 +2366,13 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     _appendMobileQueuedSteerTurn(sid, message, result || {});
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
-    pmToast(`Steer failed: ${err?.message || err}`, 'error');
+    const errorText = String(err?.message || err || '');
+    if (/no active steerable chat turn/i.test(errorText)) {
+      try { window.__pmMobileRecoverActiveChatRun?.(sid, { force: true, fullRefresh: false }); } catch {}
+      pmToast('Prometheus is reconnecting the active turn. The queued prompt was kept.', 'info');
+      return;
+    }
+    pmToast(`Steer failed: ${errorText}`, 'error');
   }
 }
 
@@ -12883,6 +12953,10 @@ void main() {
   renderPendingAttachments();
 
   function scheduleMobileRunRecovery(delay = 2500, { force = false, fullRefresh = false } = {}) {
+    // A page that has been replaced can still finish an old promise and call
+    // this helper. It must not cancel or replace the current page's recovery
+    // timer for the same session.
+    if (!isMobileRecoveryOwner()) return;
     const sid = String(requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
     const remembered = _readMobileActiveRun(sid);
     const busy = !!(__pmChat.activeRuns?.[sid]?.busy || __pmChat.drawerRunSessionIds?.has?.(sid));
@@ -13096,6 +13170,12 @@ void main() {
     _restoreMobileVoiceWorkgroupsForSession(requestedSession).catch(() => {});
   }
 
+  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobileRecoveryDisposed = false;
+  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
+  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
+    && __pmChat.activeSessionId === requestedSession
+    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
   let mobileRecoveryInFlight = null;
   let mobileRecoveryInFlightOptions = null;
   let queuedMobileRecovery = null;
@@ -13109,6 +13189,7 @@ void main() {
   }
 
   async function refreshMobileRunRecovery(options = {}) {
+    if (!isMobileRecoveryOwner()) return null;
     const requestedOptions = mergeMobileRecoveryOptions(null, options);
     if (mobileRecoveryInFlight) {
       const current = mobileRecoveryInFlightOptions || {};
@@ -13129,7 +13210,7 @@ void main() {
       mobileRecoveryInFlightOptions = null;
       const queued = queuedMobileRecovery;
       queuedMobileRecovery = null;
-      if (queued && __pmChat.activeSessionId === requestedSession) {
+      if (queued && isMobileRecoveryOwner()) {
         setTimeout(() => refreshMobileRunRecovery(queued), 0);
       }
     }
@@ -13137,6 +13218,27 @@ void main() {
 
   async function _performMobileRunRecovery({ silent = false, force = false, fullRefresh = false } = {}) {
     const remembered = _readMobileActiveRun(requestedSession);
+    const startingRun = __pmChat.activeRuns?.[requestedSession] || {};
+    const recoveryIdentity = {
+      clientRequestId: String(startingRun.clientRequestId || remembered?.clientRequestId || '').trim(),
+      runtimeId: String(startingRun.runtimeId || remembered?.runtimeId || '').trim(),
+      startedAt: Number(startingRun.startedAt || remembered?.startedAt || 0) || 0,
+    };
+    const startingWasBusy = startingRun.busy === true || !!remembered;
+    const isCurrentRecoveryTarget = () => {
+      if (!isMobileRecoveryOwner()) return false;
+      const current = __pmChat.activeRuns?.[requestedSession] || {};
+      const currentRemembered = _readMobileActiveRun(requestedSession) || {};
+      const currentClientRequestId = String(current.clientRequestId || currentRemembered.clientRequestId || '').trim();
+      const currentRuntimeId = String(current.runtimeId || currentRemembered.runtimeId || '').trim();
+      const currentStartedAt = Number(current.startedAt || currentRemembered.startedAt || 0) || 0;
+      if (!startingWasBusy && current.busy === true) return false;
+      if (recoveryIdentity.clientRequestId && currentClientRequestId && recoveryIdentity.clientRequestId !== currentClientRequestId) return false;
+      if (!recoveryIdentity.clientRequestId && recoveryIdentity.runtimeId && currentRuntimeId && recoveryIdentity.runtimeId !== currentRuntimeId) return false;
+      if (!recoveryIdentity.clientRequestId && !recoveryIdentity.runtimeId
+        && recoveryIdentity.startedAt > 0 && currentStartedAt > recoveryIdentity.startedAt + 1000) return false;
+      return true;
+    };
     try {
       // ── Parallel batch 1: run-status + session history (independent) ──────────
       const [status, prefetchedSession, backgroundStatusResponse] = await Promise.all([
@@ -13145,6 +13247,7 @@ void main() {
         loadMobileBackgroundStatuses(requestedSession).catch(() => null),
       ]);
       const recoveredBackgroundStatuses = Array.isArray(backgroundStatusResponse?.statuses) ? backgroundStatusResponse.statuses : [];
+      if (!isCurrentRecoveryTarget()) return;
       if (!force && !remembered && !status?.active) return;
       // Draft new-chat session has no server-side history — skip even when force=true
       if (requestedSession === MOBILE_CHAT_SESSION_ID && !remembered && !status?.active) return;
@@ -13185,6 +13288,7 @@ void main() {
           _reconcileMobilePendingApprovals({ retry: true }).catch(() => []),
           loadMobileQuestions('pending').catch(() => []),
         ]);
+        if (!isCurrentRecoveryTarget()) return;
         (Array.isArray(pendingApprovals) ? pendingApprovals : [])
           .filter((approval) => {
             const sid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
@@ -13224,7 +13328,7 @@ void main() {
         finalizeMobileLiveAiTurn(aiTurn);
         return;
       }
-      if (status?.active && _mobileHistoryHasCompletedTurnSince(recoveredSessionHistory, runStartedAt, { activeRunKind })) {
+      if (status?.active && runStartedAt > 0 && _mobileHistoryHasCompletedTurnSince(recoveredSessionHistory, runStartedAt, { activeRunKind })) {
         const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(
           requestedSession,
@@ -13240,6 +13344,19 @@ void main() {
         return;
       }
       if (status?.active) {
+        const serverRecoveryClientRequestId = String(
+          status?.run?.clientRequestId
+          || status?.activeRun?.clientRequestId
+          || recoveryClientRequestId
+          || '',
+        ).trim();
+        if (serverRecoveryClientRequestId) recoveryIdentity.clientRequestId = serverRecoveryClientRequestId;
+        _adoptMobileActiveRunState(requestedSession, {
+          run: status?.run || status?.activeRun || null,
+          stream: status?.stream || null,
+          fallback: remembered,
+        });
+        delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
         let hasLocalLiveHistory = !!(aiTurn?.streaming && (
           String(aiTurn.body?.text || aiTurn.content || '').trim()
           || (Array.isArray(aiTurn.processEntries) && aiTurn.processEntries.length)
@@ -13286,6 +13403,11 @@ void main() {
         const runtimeIdentityConflicts = !!statusRuntimeId && !!localRuntimeId
           && statusRuntimeId !== localRuntimeId && !sameClientRequest && clearlyNewerRuntime;
         const localRunIdentityConflicts = clientRequestConflicts || runtimeIdentityConflicts;
+        if (recoveryClientRequestId && aiTurn && String(aiTurn._clientRequestId || '').trim() !== recoveryClientRequestId) {
+          if (aiTurn._pmAdmissionPending === true || aiTurn._pmRejectedAdmission === true || !String(aiTurn._clientRequestId || '').trim()) {
+            aiTurn._clientRequestId = recoveryClientRequestId;
+          }
+        }
         // Recovery is monotonic: a visible/cache-restored timeline belonging to
         // this runtime is richer than a checkpoint or partial replay until the
         // server proves otherwise. Foregrounding the app must never erase it.
@@ -13323,6 +13445,7 @@ void main() {
         let replayAfter = shouldResetForReplay ? 0 : rememberedLastSeq;
         let replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => null);
         let events = Array.isArray(replay?.events) ? replay.events : [];
+        if (!isCurrentRecoveryTarget()) return;
         const replayStreamId = String(replay?.stream?.streamId || '').trim();
         const rememberedStreamId = String(__pmChat.activeRuns?.[requestedSession]?.streamId || remembered?.streamId || '').trim();
         if (!shouldResetForReplay && replayStreamId && rememberedStreamId && replayStreamId !== rememberedStreamId) {
@@ -13337,6 +13460,7 @@ void main() {
           _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: replayStreamId });
           replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => replay);
           events = Array.isArray(replay?.events) ? replay.events : [];
+          if (!isCurrentRecoveryTarget()) return;
         }
         const firstSeq = Math.max(0, Math.floor(Number(replay?.stream?.firstSeq || 0)) || 0);
         const replayGap = !shouldResetForReplay
@@ -13354,6 +13478,7 @@ void main() {
           _rememberMobileActiveRun(requestedSession, { lastSeq: 0, streamId: '' });
           replay = await loadMobileChatStreamReplay(requestedSession, replayAfter).catch(() => replay);
           events = Array.isArray(replay?.events) ? replay.events : [];
+          if (!isCurrentRecoveryTarget()) return;
         }
         if (shouldResetForReplay && events.length) {
           _resetMobileLiveAiTurnForReplay(aiTurn, {
@@ -13367,6 +13492,7 @@ void main() {
         aiTurn._pmRecoveryReplay = true;
         try {
           for (const frame of events) {
+            if (!isCurrentRecoveryTarget()) return;
             const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
             if (applied === 'done' || applied === 'error') {
               terminal = applied;
@@ -13377,8 +13503,10 @@ void main() {
           delete aiTurn._pmRecoveryReplay;
         }
         _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
+        if (!isCurrentRecoveryTarget()) return;
         if (terminal) {
           await recoverBackgroundDock(events);
+          if (!isCurrentRecoveryTarget()) return;
           finalizeMobileLiveAiTurn(aiTurn);
           return;
         }
@@ -13397,6 +13525,7 @@ void main() {
           ),
         });
         await recoverBackgroundDock(events);
+        if (!isCurrentRecoveryTarget()) return;
         renderThreadNow();
         // Preserve the complete in-progress trace across an immediate hard
         // reload (service-worker takeover) or an iOS process eviction.
@@ -13406,29 +13535,127 @@ void main() {
       }
 
       const replay = await loadMobileChatStreamReplay(requestedSession, 0).catch(() => null);
-      await recoverBackgroundDock(Array.isArray(replay?.events) ? replay.events : []);
+      if (!isCurrentRecoveryTarget()) return;
+      const replayEvents = Array.isArray(replay?.events) ? replay.events : [];
+      await recoverBackgroundDock(replayEvents);
+      if (!isCurrentRecoveryTarget()) return;
       const session = await loadMobileChatSession(requestedSession).catch(() => null);
+      if (!isCurrentRecoveryTarget()) return;
       _rememberMobileSessionGoal(session, requestedSession);
       _renderMobileGoalPill(goalStrip, requestedSession);
-      // Run-status is the authority for live activity. Remove the cached
-      // streaming turn before merging persisted history; otherwise the merge
-      // intentionally preserves that "pending" local turn and the phone can
-      // stay stuck showing tool progress after a supervisor restart.
-      _clearMobileLiveRunForSession(requestedSession);
       const history = Array.isArray(session?.history) ? session.history : [];
+      const localThread = Array.isArray(__pmChat.threads?.[requestedSession])
+        ? __pmChat.threads[requestedSession]
+        : [];
+      const inactiveRecoveryClientRequestId = String(
+        status?.run?.clientRequestId
+        || status?.activeRun?.clientRequestId
+        || remembered?.clientRequestId
+        || '',
+      ).trim();
+      let localAiTurn = _findMobileRecoverableAssistantTurn(localThread, inactiveRecoveryClientRequestId)
+        || (_findLatestAssistantTurn(localThread)?.streaming === true ? _findLatestAssistantTurn(localThread) : null);
+      const replayStillActive = replay?.active === true || replay?.stream?.active === true;
+      if (!isCurrentRecoveryTarget()) return;
+      if (localAiTurn && replayEvents.length) {
+        _adoptMobileActiveRunState(requestedSession, {
+          run: status?.run || status?.activeRun || null,
+          stream: replay?.stream || null,
+          fallback: remembered,
+        });
+        let terminal = '';
+        localAiTurn._pmRecoveryReplay = true;
+        try {
+          for (const frame of replayEvents) {
+            if (!isCurrentRecoveryTarget()) return;
+            const applied = applyMobileChatStreamEvent(localAiTurn, replayFrameToEvent(frame));
+            if (applied === 'done' || applied === 'error') {
+              terminal = applied;
+              break;
+            }
+          }
+        } finally {
+          delete localAiTurn._pmRecoveryReplay;
+        }
+        _mergeMobileWorkflowTraceFromProcessEntries(localAiTurn);
+        if (terminal || localAiTurn._pmFinalReceived) {
+          if (!isCurrentRecoveryTarget()) return;
+          finalizeMobileLiveAiTurn(localAiTurn);
+          delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
+          const queue = _getMobileQueuedPrompts(requestedSession);
+          if (queue.length) {
+            const next = queue.shift();
+            _renderMobileQueuedPromptsPanel(requestedSession);
+            setTimeout(() => window.__pmMobileSendMessage?.(next.message, {
+              fromQueue: true,
+              attachments: Array.isArray(next.files) ? next.files : [],
+              excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [],
+              selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [],
+              selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [],
+            }), 0);
+          }
+          return;
+        }
+      }
+      const recoveryStartedAt = Number(
+        remembered?.startedAt
+        || replay?.stream?.startedAt
+        || localAiTurn?.workStartedAt
+        || localAiTurn?.timestamp
+        || 0,
+      ) || 0;
+      const completedDurableTurn = recoveryStartedAt > 0
+        && _mobileHistoryHasCompletedTurnSince(history, recoveryStartedAt, {});
+      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn && status?.recovered !== true)) {
+        if (!isCurrentRecoveryTarget()) return;
+        _adoptMobileActiveRunState(requestedSession, {
+          run: status?.run || status?.activeRun || null,
+          stream: replay?.stream || null,
+          fallback: remembered,
+        });
+        _rememberMobileActiveRun(requestedSession, { disconnected: true });
+        setChatConnectionStatus(true, 'Reconnecting to Prometheus');
+        setBusy(true);
+        renderThreadNow();
+        const uncertainSince = Number(__pmChat.mobileRecoveryUncertainSince[requestedSession] || 0) || Date.now();
+        __pmChat.mobileRecoveryUncertainSince[requestedSession] = uncertainSince;
+        const graceElapsed = Date.now() - uncertainSince >= 15_000;
+        if (!graceElapsed || replayStillActive) {
+          scheduleMobileRunRecovery(2000, { force: true, fullRefresh: false });
+          return;
+        }
+        if (localAiTurn?.streaming) {
+          _appendMobileProcess(localAiTurn, 'warn', 'The live connection ended before a terminal frame. The visible tool trace was preserved; you can continue from here.');
+          finalizeMobileLiveAiTurn(localAiTurn);
+        }
+        delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
+        return;
+      }
+      // Run-status/replay are now authoritative: only remove the cached
+      // streaming turn after a terminal replay or durable history proves that
+      // the active request is over. A single false inactive read must never
+      // erase a richer tool trace while another tab is still working.
+      if (!isCurrentRecoveryTarget()) return;
+      _clearMobileLiveRunForSession(requestedSession);
       if (history.length) {
-        const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
         if (!silent) pmToast('Recovered latest mobile chat result.', 'success');
       }
+      delete __pmChat.mobileRecoveryUncertainSince[requestedSession];
       setBusy(false);
       const queue = _getMobileQueuedPrompts(requestedSession);
       if (queue.length) {
         const next = queue.shift();
         _renderMobileQueuedPromptsPanel(requestedSession);
-        setTimeout(() => sendMessage(next.message, { fromQueue: true, attachments: Array.isArray(next.files) ? next.files : [], excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [], selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [], selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [] }), 0);
+        setTimeout(() => window.__pmMobileSendMessage?.(next.message, {
+          fromQueue: true,
+          attachments: Array.isArray(next.files) ? next.files : [],
+          excludedSkillIds: Array.isArray(next.excludedSkillIds) ? next.excludedSkillIds : [],
+          selectedSkillIds: Array.isArray(next.selectedSkillIds) ? next.selectedSkillIds : [],
+          selectedSkillRefs: Array.isArray(next.selectedSkillRefs) ? next.selectedSkillRefs : [],
+        }), 0);
       }
     } catch (err) {
       if (_readMobileActiveRun(requestedSession)?.disconnected) scheduleMobileRunRecovery(2500, { fullRefresh });
@@ -15132,15 +15359,22 @@ void main() {
 
   function noteChatStreamSeq(evt) {
     if (!evt) return true;
+    const seq = Math.max(0, Math.floor(Number(evt?.seq || 0)) || 0);
+    const streamId = evt?.streamId ? String(evt.streamId) : '';
     const cid = typeof evt.clientRequestId === 'string' ? evt.clientRequestId.trim() : '';
     if (cid) {
       if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
       const previous = __pmChat.sentClientRequestIds[requestedSession];
-      if (previous && previous !== cid) return false;
+      const currentRun = __pmChat.activeRuns?.[requestedSession] || {};
+      const currentStreamId = String(currentRun.streamId || '').trim();
+      // A second tab may have a speculative request ID for the same session.
+      // Once the gateway gives us a stream ID, that stream is the authority;
+      // adopt its request identity instead of dropping every replay frame.
+      // Only reject a frame when this tab already owns a different, known
+      // stream and the incoming frame is demonstrably from that other stream.
+      if (previous && previous !== cid && currentStreamId && streamId && currentStreamId !== streamId) return false;
       __pmChat.sentClientRequestIds[requestedSession] = cid;
     }
-    const seq = Math.max(0, Math.floor(Number(evt?.seq || 0)) || 0);
-    const streamId = evt?.streamId ? String(evt.streamId) : '';
     const runtimeId = String(evt?.runtimeId || evt?.run?.id || evt?.activeRun?.id || '').trim();
     if (runtimeId) {
       if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
@@ -15291,6 +15525,18 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
     if (!noteChatStreamSeq(evt)) return 'duplicate';
+    const eventClientRequestId = String(evt.clientRequestId || '').trim();
+    if (eventClientRequestId && (aiTurn._pmAdmissionPending === true || !String(aiTurn._clientRequestId || '').trim())) {
+      aiTurn._clientRequestId = eventClientRequestId;
+    }
+    if (evt.streamId) aiTurn._streamId = String(evt.streamId).trim();
+    if (evt.runtimeId || evt.run?.id || evt.activeRun?.id) {
+      aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || evt.activeRun?.id || '').trim();
+    }
+    if (evt.type !== 'error') {
+      aiTurn._pmAdmissionPending = false;
+      delete aiTurn._pmAdmissionClientRequestId;
+    }
     if (evt.type !== 'error') _clearRecoveredMobileChatError(aiTurn);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
     switch (evt.type) {
@@ -16049,7 +16295,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const selectedSkillRefs = fromQueue
       ? _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills)
       : _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills || pmSelectedComposerSkills);
-    let locallyBusy = !fromQueue && (__pmChat.activeRuns?.[busySessionId]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy);
+    const rememberedBusyRun = _readMobileActiveRun(busySessionId);
+    let locallyBusy = !fromQueue && (
+      __pmChat.activeRuns?.[busySessionId]?.busy
+      || __pmChat.activeRuns?.[requestedSession]?.busy
+      || !!rememberedBusyRun
+    );
     if (locallyBusy) {
       // Local cache is only a hint.  Before queueing behind it, reconcile with
       // the runtime owner so an interrupted/restarted turn cannot strand the
@@ -16063,6 +16314,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         locallyBusy = false;
         if (reconciliation.recovered) pmToast('Recovered an interrupted chat turn. Sending your message.', 'info');
       } else if (reconciliation?.active === true) {
+        _adoptMobileActiveRunState(busySessionId, {
+          run: reconciliation.run || null,
+          stream: reconciliation.stream || null,
+          fallback: rememberedBusyRun,
+        });
         scheduleMobileRunRecovery(0, { force: true, fullRefresh: false });
       }
     }
@@ -16173,6 +16429,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       renderPendingAttachments();
     }
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
+    const activeTurnStartedAt = Date.now();
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
     setBusy(true, actualSessionId);
@@ -16180,13 +16437,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     __pmChat.activeRuns[actualSessionId] = {
       ...(__pmChat.activeRuns[actualSessionId] || {}),
       busy: true,
+      startedAt: activeTurnStartedAt,
       lastSeq: 0,
       streamId: '',
       runtimeId: '',
       clientRequestId,
     };
     _markMobileSessionRunning(actualSessionId, true);
-    _rememberMobileActiveRun(actualSessionId, { disconnected: false, lastSeq: 0, streamId: '', runtimeId: '', clientRequestId });
+    _rememberMobileActiveRun(actualSessionId, { startedAt: activeTurnStartedAt, disconnected: false, lastSeq: 0, streamId: '', runtimeId: '', clientRequestId });
     window.__pmMobileContextTurnStart?.({ sessionId: actualSessionId });
 
     let optimisticUserTurn = null;
@@ -16204,13 +16462,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // Push streaming AI placeholder before attachment upload so the thread shows
     // an active turn even while workspace upload retries are still running.
     const aiTurn = {
-      role: 'ai', streaming: true, time: '', timestamp: Date.now(),
-      workStartedAt: Date.now(),
+      role: 'ai', streaming: true, time: '', timestamp: activeTurnStartedAt,
+      workStartedAt: activeTurnStartedAt,
       body: { sender: '', text: '' },
       content: '',
       processEntries: [],
       liveTraceEntries: [],
       agentExecutionMode: 'execute',
+      _pmAdmissionPending: true,
+      _pmAdmissionClientRequestId: clientRequestId,
       _clientRequestId: clientRequestId,
     };
     activeThread.push(aiTurn);
@@ -16351,6 +16611,41 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }, 0);
     };
 
+    const requeueRejectedAdmission = () => {
+      const queue = _getMobileQueuedPrompts(actualSessionId);
+      const queueKey = String(clientRequestId || '').trim();
+      if (!queue.some((item) => String(item?._pmRecoveryQueueKey || '') === queueKey)) {
+        const queued = _makeMobileQueuedPrompt(msg || 'Attached file(s)', files, { excludedSkillIds, selectedSkillIds, selectedSkillRefs });
+        queued._pmRecoveryQueueKey = queueKey;
+        queue.unshift(queued);
+      }
+      const removeTurn = (turn) => {
+        const index = activeThread.indexOf(turn);
+        if (index >= 0) activeThread.splice(index, 1);
+      };
+      // This POST was never admitted. Remove its speculative bubbles so the
+      // real server-owned stream has exactly one visible assistant turn.
+      const canonicalStreamAdopted = aiTurn && aiTurn._pmAdmissionPending !== true;
+      if (!canonicalStreamAdopted) removeTurn(optimisticUserTurn);
+      // Another tab can deliver the canonical stream before this tab receives
+      // the HTTP 409. If that stream adopted the speculative assistant turn,
+      // leave it in place; deleting it here would erase the real live trace.
+      const stillSpeculative = aiTurn
+        && aiTurn._pmAdmissionPending === true
+        && String(aiTurn._pmAdmissionClientRequestId || aiTurn._clientRequestId || '').trim() === clientRequestId;
+      if (stillSpeculative) removeTurn(aiTurn);
+      _reindexMobileThread(activeThread);
+      if (__pmChat.sentClientRequestIds?.[actualSessionId] === clientRequestId) {
+        delete __pmChat.sentClientRequestIds[actualSessionId];
+      }
+      const run = __pmChat.activeRuns?.[actualSessionId];
+      if (run && String(run.clientRequestId || '').trim() === clientRequestId) {
+        __pmChat.activeRuns[actualSessionId] = { ...run, busy: true, abort: null, clientRequestId: '' };
+      }
+      _renderMobileQueuedPromptsPanel(actualSessionId);
+      renderThreadNow();
+    };
+
     const stream = streamChat({
       message: messageForApi,
       sessionId: actualSessionId,
@@ -16393,16 +16688,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           const sourcePresentation = err?.chatPresentation || presentChatError(err);
           if (sourcePresentation?.key === 'session-turn-active') {
             recoveringExistingServerTurn = true;
-            targetAiTurn._pmSkipHistoryPersist = true;
             const presentation = {
               ...sourcePresentation,
               severity: 'info',
-              title: 'Restoring active request',
-              summary: 'Prometheus is already working in this chat. Reopening its live tool stream now.',
+              title: 'Active request found',
+              summary: 'Prometheus is already working in this chat. Your message was queued behind it while its live tool stream reconnects.',
             };
-            _recordMobileChatError(targetAiTurn, { chatPresentation: presentation });
-            _coalesceMobileChatError(activeThread, targetAiTurn, presentation);
-            setChatConnectionStatus(true, 'Restoring active request');
+            requeueRejectedAdmission();
+            setChatConnectionStatus(true, 'Reconnecting to active request');
             pmToast(presentation);
           } else {
             const presentation = _recordMobileChatError(targetAiTurn, err);
@@ -16416,7 +16709,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       },
       onDone: () => {
         if (recoveringExistingServerTurn) {
-          finishAiTurn();
+          setBusy(true, actualSessionId);
           scheduleMobileRunRecovery(0, { force: true, fullRefresh: false });
           return;
         }
@@ -16542,7 +16835,23 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     _markMobileSessionRunning(requestedSession, true);
     let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
     const foundRequestOwnedTurn = !!aiTurn;
-    if (!aiTurn) aiTurn = _findLatestAssistantTurn(activeThread);
+    if (!aiTurn) {
+      const latestAssistant = _findLatestAssistantTurn(activeThread);
+      const latestClientRequestId = String(latestAssistant?._clientRequestId || '').trim();
+      const canAdoptLatest = latestAssistant?.streaming === true
+        && (!latestClientRequestId
+          || !incomingClientRequestId
+          || latestClientRequestId === incomingClientRequestId
+          || latestAssistant._pmAdmissionPending === true
+          || latestAssistant._pmRejectedAdmission === true);
+      if (canAdoptLatest) {
+        aiTurn = latestAssistant;
+        if (incomingClientRequestId && latestClientRequestId !== incomingClientRequestId) {
+          aiTurn._clientRequestId = incomingClientRequestId;
+          aiTurn._pmAdmissionPending = false;
+        }
+      }
+    }
     // A persisted steer continuation intentionally loses ephemeral `streaming`
     // state in server history. If request identity found it, revive that exact
     // bubble; only allocate a new assistant when there is no owned live turn.
@@ -16577,6 +16886,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (handoffIndex >= 0) activeThread.splice(handoffIndex + 1, 0, aiTurn);
       else activeThread.push(aiTurn);
     }
+    _adoptMobileActiveRunState(requestedSession, {
+      run: {
+        id: data?.runtimeId || data?.run?.id || data?.activeRun?.id,
+        clientRequestId: incomingClientRequestId,
+        startedAt: data?.run?.startedAt || data?.startedAt || msg.startedAt || msg.at,
+      },
+      stream: { streamId: msg.streamId || data?.streamId || '' },
+      fallback: _readMobileActiveRun(requestedSession),
+    });
     _clearRecoveredMobileChatError(aiTurn);
     aiTurn.streaming = true;
     if (activeRunKind) {
@@ -16802,6 +17120,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    mobileRecoveryDisposed = true;
+    if (__pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken) {
+      delete __pmChat.mobileRecoveryOwners[requestedSession];
+      if (__pmChat.recoverTimer) {
+        clearTimeout(__pmChat.recoverTimer);
+        __pmChat.recoverTimer = null;
+      }
+    }
     stopMobileBackgroundAgentDetailRefresh();
     stopGatewayTargetUpdates?.();
     closeTargetPopover?.();

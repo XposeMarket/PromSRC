@@ -4,7 +4,7 @@
   "maxNewModuleBytes": 400000,
   "legacySurfaces": {
     "web-ui/src/pages/ChatPage.js": 2433160,
-    "web-ui/src/mobile/mobile-pages.js": 1991568,
+    "web-ui/src/mobile/mobile-pages.js": 2007952,
     "web-ui/src/styles/mobile.css": 590593,
     "web-ui/index.html": 564863
   }
