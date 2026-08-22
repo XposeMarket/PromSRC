@@ -334,8 +334,15 @@ async function renderModels(content, page) {
       </div>
       <div id="pm-settings-live-status"></div>
     `, 'gear', 'pm-card-strong')}
-    ${card('Context Window', `
-      <div class="pm-card-body">Prometheus uses the selected model's token window automatically. Full active conversation context is retained until token pressure requires rolling compaction; there is no message-count context limit.</div>
+    ${card('Context Compaction', `
+      <div class="pm-card-body">Prometheus uses the selected model's token window automatically. Context is compacted only when token pressure requires it; message count does not define model context.</div>
+      ${toggleRow('pm-session-roll', 'Rolling compaction', session.rollingCompactionEnabled !== false, 'Automatically summarize older active context when token pressure requires it.')}
+      ${field('Compaction threshold', input('pm-session-compact', session.compactionThreshold || 0.82, 'type="number" min="0.4" max="0.95" step="0.01"'))}
+      ${field('Memory flush threshold', input('pm-session-memory', session.memoryFlushThreshold || 0.9, 'type="number" min="0.5" max="0.98" step="0.01"'))}
+      ${field('Rolling tool turns', input('pm-session-tool-turns', session.rollingCompactionToolTurns || 4, 'type="number" min="1" max="12"'))}
+      ${field('Summary max words', input('pm-session-words', session.rollingCompactionSummaryMaxWords || 900, 'type="number" min="80" max="1500"'))}
+      ${field('Compaction model override', input('pm-session-model', session.rollingCompactionModel || '', 'placeholder="Optional"'))}
+      <button class="pm-btn primary" id="pm-save-session">${ICONS.check} Save compaction</button>
     `, 'clipboard')}
   `;
   wireToggles(page);
@@ -382,10 +389,8 @@ async function renderModels(content, page) {
     try {
       await mobileGatewayFetch('/api/settings/session', { method: 'POST', body: JSON.stringify({
         rollingCompactionEnabled: boolValue(page, 'pm-session-roll'),
-        maxMessages: Number(val(page, 'pm-session-max')),
         compactionThreshold: Number(val(page, 'pm-session-compact')),
         memoryFlushThreshold: Number(val(page, 'pm-session-memory')),
-        rollingCompactionMessageCount: Number(val(page, 'pm-session-roll-count')),
         rollingCompactionToolTurns: Number(val(page, 'pm-session-tool-turns')),
         rollingCompactionSummaryMaxWords: Number(val(page, 'pm-session-words')),
         rollingCompactionModel: val(page, 'pm-session-model'),
