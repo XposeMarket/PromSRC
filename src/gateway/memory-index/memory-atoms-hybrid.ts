@@ -260,7 +260,7 @@ function scoreDeterministic(snapshot: HybridSnapshot, atom: MemoryAtom, query: s
     + (exactPhrase ? 0.16 : 0);
   if (matchedConcepts.length >= 2) score += Math.min(0.16, conceptCoverage * 0.16);
   else if (matchedConcepts.length === 1 && matchedTerms.length > 0) score += 0.04;
-  if (singleLiteralAmbiguous) score *= 0.35;
+  if (singleLiteralAmbiguous) score *= 0.20;
 
   return {
     atom,
@@ -311,33 +311,32 @@ function buildRelated(snapshot: HybridSnapshot, direct: ScoredAtom[], all: Score
   if (!direct.length) return [];
   const directIds = new Set(direct.map((entry) => entry.atom.id));
   const anchors = relationAnchors(snapshot, direct, queryTerms);
-  const related = all
-    .filter((entry) => !directIds.has(entry.atom.id))
-    .map((entry) => {
-      const literal = snapshot.literalById.get(entry.atom.id) || [];
-      const sharedTerms = literal.filter((term) => anchors.terms.has(term));
-      const sharedEntities = entry.atom.entities
-        .map(normalize)
-        .filter((entity) => anchors.entities.has(entity));
-      const strongAnchor = sharedEntities.length > 0 || sharedTerms.length >= 2;
-      if (!strongAnchor) return null;
-      const relationBoost = Math.min(0.18, sharedEntities.length * 0.10 + sharedTerms.length * 0.035);
-      const score = Math.min(1, entry.score + relationBoost);
-      if (score < 0.30) return null;
-      return {
-        atom: entry.atom,
-        score,
-        matchedTerms: entry.matchedTerms,
-        relation: 'related' as const,
-        relationReason: sharedEntities.length
-          ? `shared_entity:${sharedEntities[0]}`
-          : 'shared_rare_memory_terms',
-      };
-    })
-    .filter((entry): entry is MemoryAtomMatch => Boolean(entry))
+  const related: MemoryAtomMatch[] = [];
+  for (const entry of all) {
+    if (directIds.has(entry.atom.id)) continue;
+    const literal = snapshot.literalById.get(entry.atom.id) || [];
+    const sharedTerms = literal.filter((term) => anchors.terms.has(term));
+    const sharedEntities = entry.atom.entities
+      .map(normalize)
+      .filter((entity) => anchors.entities.has(entity));
+    const strongAnchor = sharedEntities.length > 0 || sharedTerms.length >= 2;
+    if (!strongAnchor) continue;
+    const relationBoost = Math.min(0.18, sharedEntities.length * 0.10 + sharedTerms.length * 0.035);
+    const score = Math.min(1, entry.score + relationBoost);
+    if (score < 0.30) continue;
+    related.push({
+      atom: entry.atom,
+      score,
+      matchedTerms: entry.matchedTerms,
+      relation: 'related',
+      relationReason: sharedEntities.length
+        ? `shared_entity:${sharedEntities[0]}`
+        : 'shared_rare_memory_terms',
+    });
+  }
+  return related
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine)
     .slice(0, 2);
-  return related;
 }
 
 function capSelection(entries: MemoryAtomMatch[], snapshot: HybridSnapshot, options: HybridMemoryAtomOptions): MemoryAtomMatch[] {
