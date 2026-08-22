@@ -9,6 +9,7 @@ import { log } from '../security/log-scrubber';
 import type { LLMProvider, ProviderID } from './LLMProvider';
 import { OllamaAdapter } from './ollama-adapter';
 import { OpenAICompatAdapter } from './openai-compat-adapter';
+import { OpenCodeAdapter } from './opencode-adapter';
 import { OpenAICodexAdapter } from './openai-codex-adapter';
 import { AnthropicAdapter } from './anthropic-adapter';
 import { PerplexityAdapter } from './perplexity-adapter';
@@ -27,7 +28,8 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4';
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-pro';
+const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
+const PROTECTED_CONNECTION_IDS = new Set(['openai', 'openai_codex', 'xai', 'anthropic']);
 
 function getProviderConfig(): { active: ProviderID; providers: any; accountId?: string } {
   const raw = getConfig().getConfig() as any;
@@ -138,9 +140,22 @@ function readStringSetting(obj: Record<string, unknown>, key: string): string {
 }
 
 function requireApiKey(id: string, cfg: Record<string, unknown>): string {
-  const apiKey = resolveSecretKey(readStringSetting(cfg, 'api_key'));
+  let apiKey = resolveSecretKey(readStringSetting(cfg, 'api_key'));
+  // Bundled provider manifests declare their conventional environment variable
+  // names, so non-protected API-key providers should work without requiring an
+  // extra `env:VARIABLE` config entry. The direct OpenAI/xAI/Claude connection
+  // paths are deliberately excluded from this audit change.
+  if (!apiKey && !PROTECTED_CONNECTION_IDS.has(id)) {
+    for (const envName of getProviderDescriptor(id)?.setup?.envVars || []) {
+      const candidate = String(process.env[envName] || '').trim();
+      if (candidate) {
+        apiKey = candidate;
+        break;
+      }
+    }
+  }
   if (!apiKey) {
-    throw new Error(`${getProviderDisplayName(id)} API key not configured. Add it in Settings -> Models.`);
+    throw new Error(`${getProviderDisplayName(id)} API key not configured. Add it in Settings -> Models or set a supported provider environment variable.`);
   }
   return apiKey;
 }
@@ -272,6 +287,15 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
         authLabel: useXaiOAuth ? 'xAI OAuth' : (authType === 'api_key' ? 'API key' : undefined),
         staticModels: runtime.staticModels,
         supportsReasoningEffort: runtime.supportsReasoningEffort,
+      });
+    }
+
+    case 'providers/opencode-adapter': {
+      return new OpenCodeAdapter({
+        providerId: id,
+        endpoint: readStringSetting(cfg, 'endpoint') || runtime.endpoint || '',
+        apiKey: requireApiKey(id, cfg),
+        staticModels: runtime.staticModels || [],
       });
     }
 
