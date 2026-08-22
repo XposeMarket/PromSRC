@@ -10,23 +10,18 @@ def write(path: str, text: str) -> None:
     Path(path).write_bytes(text.encode('utf-8'))
 
 
-def newline_for(text: str) -> str:
-    crlf = text.count('\r\n')
-    bare_lf = text.count('\n') - crlf
-    return '\r\n' if crlf > bare_lf else '\n'
-
-
-def block(text: str, value: str) -> str:
-    return value.replace('\n', newline_for(text))
+def flexible_pattern(value: str) -> str:
+    return r'\r?\n'.join(re.escape(part) for part in value.split('\n'))
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
-    old = block(text, old)
-    new = block(text, new)
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f'{label}: expected exactly 1 match, found {count}')
-    return text.replace(old, new, 1)
+    matches = list(re.finditer(flexible_pattern(old), text))
+    if len(matches) != 1:
+        raise SystemExit(f'{label}: expected exactly 1 match, found {len(matches)}')
+    match = matches[0]
+    local_newline = '\r\n' if '\r\n' in match.group(0) else '\n'
+    replacement = new.replace('\n', local_newline)
+    return text[:match.start()] + replacement + text[match.end():]
 
 
 # Idempotent on the product patch.
@@ -75,11 +70,9 @@ text = replace_once(
     "    if (Number.isFinite(maxMessages) && messages.length > maxMessages) {",
     'finite history trim',
 )
-marker = block(text, "/**\n * Builds a legacy [RECENT_TOOL_LOG] block")
-helper = block(text, "export function getActiveHistoryForApiCall(id: string): ChatMessage[] {\n  return getHistoryForApiCall(id, 60, { fullActiveHistory: true });\n}\n\n")
-if marker not in text:
-    raise SystemExit('active history helper insertion marker missing')
-text = text.replace(marker, helper + marker, 1)
+marker = "/**\n * Builds a legacy [RECENT_TOOL_LOG] block"
+helper = "export function getActiveHistoryForApiCall(id: string): ChatMessage[] {\n  return getHistoryForApiCall(id, 60, { fullActiveHistory: true });\n}\n\n"
+text = replace_once(text, marker, helper + marker, 'active history helper insertion')
 write(path, text)
 
 # chat.router.ts
@@ -128,8 +121,8 @@ text = replace_once(
     "    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {",
     'post-tool arbitrary message gate',
 )
-generation_marker = block(text, "      const generationPromise = ollama.chatWithThinking(messages, 'executor', {")
-preflight = block(text, """      // The first provider call gets the same token-budget guard as later
+generation_marker = "      const generationPromise = ollama.chatWithThinking(messages, 'executor', {"
+preflight = """      // The first provider call gets the same token-budget guard as later
       // rounds. A single huge first turn can therefore compact immediately.
       if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
         const preflightCompact = await maybeRunMidWorkflowCompaction({
@@ -149,10 +142,8 @@ preflight = block(text, """      // The first provider call gets the same token-
         if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
       }
 
-""")
-if generation_marker not in text:
-    raise SystemExit('provider generation marker missing')
-text = text.replace(generation_marker, preflight + generation_marker, 1)
+"""
+text = replace_once(text, generation_marker, preflight + generation_marker, 'first model-call preflight')
 write(path, text)
 
 # mobile settings: retire misleading message-count context controls.
