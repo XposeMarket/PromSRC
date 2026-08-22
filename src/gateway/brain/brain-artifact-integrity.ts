@@ -28,7 +28,10 @@ export function inspectBrainThoughtCapsuleArtifact(
   filePath: string,
   runStartedAt: number,
 ): BrainThoughtCapsuleArtifactInspection {
-  if (!fs.existsSync(filePath)) return { status: 'missing', count: 0 };
+  // Thought owns this artifact as part of its required output contract. Treat a
+  // missing sidecar as invalid rather than recoverable so the runner cannot
+  // synthesize [] and mark a busy Thought successful with all continuity lost.
+  if (!fs.existsSync(filePath)) return { status: 'invalid', count: 0, error: 'required capsule sidecar is missing' };
   if (!isFresh(filePath, runStartedAt)) return { status: 'stale', count: 0 };
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
