@@ -39,37 +39,49 @@ for (const selector of [
   assert.ok(source.includes(selector), `missing live-demo material surface: ${selector}`);
 }
 
-// The stable mobile base intentionally hides the old decorative lens layer.
-// This material override must explicitly re-enable only the absolute lens layer
-// for composer/tabbar; otherwise the rim-refraction code below is dead CSS.
+// The stable mobile base intentionally hides the decorative lens layer. The
+// late material override must re-enable only that absolute child layer.
 assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?display:\s*block !important;/,
   'composer/tabbar decorative lens must be re-enabled by the late material override');
 const displayDeclarations = sourceCode.match(/^\s*display\s*:[^;]+;/gm) || [];
 assert.deepEqual(displayDeclarations.map((line) => line.trim()), ['display: block !important;'],
   'the only display override allowed is enabling the absolute decorative glass lens');
 
-// mobile.css still contains the older two-mask rim implementation. A late
-// mask-image declaration alone does NOT reset mask-composite in WebKit, so both
-// new lens paths must explicitly reset the mask shorthand before installing the
-// single radial mask. This prevents the old XOR/exclude compositor from leaking
-// into the new material on iOS.
+// mobile.css still contains an older two-mask rim implementation. Reset the mask
+// shorthand before installing each one-image radial mask so composite state can
+// never leak into the new lens on iOS.
 const mobileBase = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
 assert.match(mobileBase, /(?:-webkit-)?mask-composite\s*:/,
   'base mobile CSS is expected to contain the legacy composite-mask rim path');
 assert.match(mobileBase, /\.pm-tab-indicator::after\s*\{[\s\S]*?content:\s*['"]{2};[\s\S]*?position:\s*absolute;/,
   'base mobile CSS must already own the tab-slider edge pseudo geometry');
-assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
-  'composer/tabbar lens must reset inherited mask shorthand before its radial mask');
-const edgeLensRule = sourceCode.match(/body\.pm-mobile-active :is\(([^)]*)\)::after\s*\{([^}]*)\}/);
-assert.ok(edgeLensRule, 'header/slider edge-lens rule must exist');
-assert.match(edgeLensRule[1], /\.pm-tab-indicator/,
-  'tab slider must reuse its existing edge pseudo as its own separate glass piece');
-assert.match(edgeLensRule[2], /-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
-  'header/slider edge lens must reset inherited mask shorthand before its radial mask');
 assert.equal((sourceCode.match(/-webkit-mask:\s*none !important;/g) || []).length, 2,
   'exactly the two real decorative lens paths must reset the WebKit mask shorthand');
 assert.equal((sourceCode.match(/^\s*mask:\s*none !important;/gm) || []).length, 2,
   'exactly the two real decorative lens paths must reset the standard mask shorthand');
+
+// Refraction must be spatial, not just a dark fill/chroma decoration. Force a
+// real WebKit backdrop capture with a tiny non-identity color transform, reset
+// soft-light, and scale only the decorative snapshot toward the rim. This keeps
+// the real control geometry untouched while making background pixels visibly
+// shift under glass.
+assert.match(source, /--pm-demo-refract-x:\s*1\.06/,
+  'large-slab horizontal refraction scale must be present');
+assert.match(source, /--pm-demo-refract-y:\s*1\.18/,
+  'large-slab vertical refraction scale must be present');
+assert.equal((sourceCode.match(/transform:\s*scale\(var\(--pm-demo-refract-x\),\s*var\(--pm-demo-refract-y\)\) !important;/g) || []).length, 2,
+  'refraction transform must exist only on the two decorative lens paths');
+assert.equal((sourceCode.match(/transform-origin:\s*center center !important;/g) || []).length, 2,
+  'both decorative refraction layers must transform from their center');
+assert.equal((sourceCode.match(/mix-blend-mode:\s*normal !important;/g) || []).length, 2,
+  'both refraction snapshots must reset legacy soft-light blending');
+assert.equal((sourceCode.match(/(?:-webkit-)?backdrop-filter:\s*saturate\(1\.0001\) brightness\(1\.0001\) !important;/g) || []).length, 4,
+  'both lens paths must force a blur-free non-identity backdrop capture in WebKit and standard CSS');
+
+// The hamburger is a normal header glass control. Its real button must not retain
+// the old header blur; only its decorative ::after snapshot may refract.
+assert.match(sourceCode, /\.pm-icon-btn\[aria-label="Menu"\][\s\S]*?\.pm-icon-btn\[aria-label="Open menu"\][\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
+  'hamburger menu must explicitly use the same blur-free base material');
 
 // Resting material follows the deployed demo's blur=0. Only the opened composer
 // gets the explicit readability exception requested for Prometheus.
@@ -80,25 +92,26 @@ assert.match(source, /\.pm-composer:is\(:focus-within, \.is-focused, \.has-attac
 assert.match(source, /--pm-demo-open-composer-blur:\s*2\.5px/,
   'opened composer blur must stay 2.5px');
 
-// Regression guard for the #128 failure: this override is MATERIAL ONLY.
-// Comments are stripped first so documentation can name forbidden mechanisms
-// without the safety test mistaking prose for executable CSS. `display` is
-// checked separately above because the absolute decorative lens must be turned
-// back on after mobile.css intentionally hides it.
-const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|grid-template-columns|grid-template-rows|flex|transform)\s*:/m;
-assert.doesNotMatch(sourceCode, geometryDeclaration,
-  'mobile liquid-glass override must never alter control geometry/layout/motion');
+// Geometry safety: transforms are permitted ONLY on the decorative backdrop
+// snapshots above. Strip those two transform declarations before checking that
+// no real-control layout/size/motion declaration entered this material file.
+const geometrySafeCode = sourceCode
+  .replace(/^\s*transform:\s*scale\(var\(--pm-demo-refract-x\),\s*var\(--pm-demo-refract-y\)\) !important;\s*$/gm, '')
+  .replace(/^\s*transform-origin:\s*center center !important;\s*$/gm, '');
+const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|grid-template-columns|grid-template-rows|flex|transform|transform-origin)\s*:/m;
+assert.doesNotMatch(geometrySafeCode, geometryDeclaration,
+  'mobile liquid-glass override must never alter real control geometry/layout/motion');
 
-// Also prohibit the exact WebKit-hostile experiment that corrupted the app.
-// The safe shorthand reset above is allowed; active composite operators are not.
+// Prohibit the exact WebKit-hostile experiment that corrupted the app.
 assert.doesNotMatch(sourceCode, /url\(#|feDisplacementMap|mask-composite|-webkit-mask-composite/,
   'mobile glass must not reintroduce SVG displacement or active composite-mask rings');
 
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
+assert.equal(generatedData, sourceData, 'generated mobile-data must mirror source exactly');
 for (const data of [sourceData, generatedData]) {
-  assert.match(data, /PM_DEMO_GLASS_STYLE_VERSION = 'pm-v298-2026-08-21-live-demo-material-v2'/,
-    'mobile glass stylesheet cache key must be bumped for the live-demo material');
+  assert.match(data, /PM_DEMO_GLASS_STYLE_VERSION = 'pm-v299-2026-08-22-visible-refraction'/,
+    'mobile glass stylesheet cache key must be bumped for visible refraction');
 }
 
-console.log('mobile liquid glass is source-locked to the live Vercel demo and geometry-safe');
+console.log('mobile liquid glass is live-demo locked, visibly refractive, hamburger-consistent, and geometry-safe');
