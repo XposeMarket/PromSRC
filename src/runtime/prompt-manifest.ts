@@ -14,7 +14,7 @@ import {
 } from './instruction-intent-detector';
 import { getSkillRoutingReport, type SkillRoutingReport } from './skill-routing-resolver';
 
-export const RUNTIME_PROMPT_MANIFEST_VERSION = 5;
+export const RUNTIME_PROMPT_MANIFEST_VERSION = 6;
 
 export type RuntimePromptRole =
   | 'main'
