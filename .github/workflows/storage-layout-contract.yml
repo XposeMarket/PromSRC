@@ -6,6 +6,9 @@ on:
       - 'src/runtime/storage-layout.ts'
       - 'src/runtime/storage-layout.regression.ts'
       - 'src/runtime/storage-ownership.regression.ts'
+      - 'src/runtime/storage-migration.ts'
+      - 'src/runtime/storage-migration-cli.ts'
+      - 'src/runtime/storage-migration.regression.ts'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -19,6 +22,9 @@ on:
       - 'src/runtime/storage-layout.ts'
       - 'src/runtime/storage-layout.regression.ts'
       - 'src/runtime/storage-ownership.regression.ts'
+      - 'src/runtime/storage-migration.ts'
+      - 'src/runtime/storage-migration-cli.ts'
+      - 'src/runtime/storage-migration.regression.ts'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -42,5 +48,7 @@ jobs:
         run: npx --no-install tsx src/runtime/storage-layout.regression.ts
       - name: Storage ownership regression
         run: npx --no-install tsx src/runtime/storage-ownership.regression.ts
+      - name: Storage migration regression
+        run: npx --no-install tsx src/runtime/storage-migration.regression.ts
       - name: Backend typecheck
         run: npx --no-install tsc --noEmit
