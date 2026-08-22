@@ -42,6 +42,20 @@ if (typeof window !== 'undefined') {
   if (!window.prometheusCreativeCompositionTimelineInteractions) {
     window.prometheusCreativeCompositionTimelineInteractions = installCreativeCompositionTimelineInteractions();
   }
+  // Browsers keep custom drag payload values in protected mode until `drop`.
+  // Arm the sequence lane from the MIME/type marker alone so the interaction
+  // module can safely validate the concrete asset when the drop actually lands.
+  if (!window.prometheusCreativeCompositionDropArm && typeof document !== 'undefined') {
+    const armCompositionDrop = (event) => {
+      const lane = event.target?.closest?.('[data-ce-composition-lane]');
+      if (!lane || !event.dataTransfer?.types?.includes?.('text/ce-asset-id')) return;
+      event.preventDefault();
+      try { event.dataTransfer.dropEffect = 'copy'; } catch {}
+      lane.classList.add('ce-composition-drop-over');
+    };
+    document.addEventListener('dragover', armCompositionDrop, true);
+    window.prometheusCreativeCompositionDropArm = armCompositionDrop;
+  }
 }
 
 let hyperframesFeatureLoader = null;
