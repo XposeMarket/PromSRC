@@ -18,6 +18,12 @@ const STOP = new Set([
   'did','do','does','for','from','get','got','had','has','have','how','i','if','in','into','is','it','its','just','like','me','my',
   'of','on','or','our','please','should','so','that','the','their','them','then','there','these','they','this','to','us','was','we',
   'were','what','when','where','which','who','why','will','with','would','you','your',
+  // Conversational retrieval cues are not topical evidence. Removing them here
+  // prevents a vague request such as "anything important I should remember" from
+  // pulling a durable atom merely because the atom itself is important/helpful.
+  'advice','already','any','anything','approach','best','context','continue','decision','focus','help','important','know','learn',
+  'matter','memory','previous','project','recall','relevant','remember','remind','safeguard','something','tell','thing','think',
+  'through','today','useful','vaguely','work',
 ]);
 
 const CONCEPT_GROUPS: readonly (readonly string[])[] = [
