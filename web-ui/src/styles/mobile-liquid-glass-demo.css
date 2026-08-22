@@ -108,8 +108,13 @@ body.pm-mobile-active .pm-header .pm-online {
  * warp. Only the rim sees the scaled backdrop layer. We deliberately reuse the
  * already-shipping lens transform from mobile.css rather than applying any new
  * transform to the real controls themselves.
+ *
+ * mobile.css intentionally hides these legacy lens elements in its stable base
+ * material. This late material override turns ONLY those absolute decorative
+ * layers back on; it does not alter either control's layout or hitbox.
  */
 body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
+  display: block !important;
   background: transparent !important;
   opacity: .72 !important;
   -webkit-backdrop-filter: blur(0px) saturate(1) contrast(1) brightness(1) !important;
