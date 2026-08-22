@@ -30,7 +30,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main fix/context-window-live-tracking-ui
           git checkout -B fix/context-window-live-tracking-ui origin/fix/context-window-live-tracking-ui
-          if ! git merge origin/main --no-edit; then
+          if ! git merge origin/main --no-commit --no-ff; then
             conflicts="$(git diff --name-only --diff-filter=U | sort)"
             expected="$(printf '%s\n' 'generated/public-web-ui/static/performance.js' 'web-ui/src/performance.js' | sort)"
             if [ "$conflicts" != "$expected" ]; then
@@ -40,8 +40,12 @@ jobs:
             fi
             git checkout --ours -- generated/public-web-ui/static/performance.js web-ui/src/performance.js
             git add generated/public-web-ui/static/performance.js web-ui/src/performance.js
-            git commit --no-edit
           fi
+          # Keep the reviewed PR workflow exactly as it was before the merge so
+          # this refresh commit does not modify a workflow file through Actions.
+          git checkout ORIG_HEAD -- .github/workflows/pr-regression.yml
+          git add .github/workflows/pr-regression.yml
+          git commit -m "Merge current main into PR 133"
           git push origin HEAD:fix/context-window-live-tracking-ui
   verify:
     runs-on: ubuntu-latest
