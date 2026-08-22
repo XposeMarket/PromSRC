@@ -25,11 +25,23 @@ jobs:
           fetch-depth: 0
       - name: Merge current main into PR 133 branch
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main fix/context-window-live-tracking-ui
           git checkout -B fix/context-window-live-tracking-ui origin/fix/context-window-live-tracking-ui
-          git merge origin/main --no-edit
+          if ! git merge origin/main --no-edit; then
+            conflicts="$(git diff --name-only --diff-filter=U | sort)"
+            expected="$(printf '%s\n' 'generated/public-web-ui/static/performance.js' 'web-ui/src/performance.js' | sort)"
+            if [ "$conflicts" != "$expected" ]; then
+              echo "Unexpected merge conflicts:"
+              printf '%s\n' "$conflicts"
+              exit 1
+            fi
+            git checkout --ours -- generated/public-web-ui/static/performance.js web-ui/src/performance.js
+            git add generated/public-web-ui/static/performance.js web-ui/src/performance.js
+            git commit --no-edit
+          fi
           git push origin HEAD:fix/context-window-live-tracking-ui
   verify:
     runs-on: ubuntu-latest
