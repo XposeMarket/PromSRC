@@ -58,12 +58,16 @@ assert.match(mobileBase, /(?:-webkit-)?mask-composite\s*:/,
   'base mobile CSS is expected to contain the legacy composite-mask rim path');
 assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
   'composer/tabbar lens must reset inherited mask shorthand before its radial mask');
-assert.match(sourceCode, /\.pm-tab-indicator[\s\S]*?\)::after\s*\{[\s\S]*?-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
-  'header/slider edge lens must reset inherited mask shorthand before its radial mask');
+const edgeLensRule = sourceCode.match(/body\.pm-mobile-active :is\(([\s\S]*?)\)::after\s*\{([\s\S]*?)\}/);
+assert.ok(edgeLensRule, 'header edge-lens rule must exist');
+assert.doesNotMatch(edgeLensRule[1], /\.pm-tab-indicator/,
+  'tab slider has no existing edge pseudo and must not invent one');
+assert.match(edgeLensRule[2], /-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
+  'header edge lens must reset inherited mask shorthand before its radial mask');
 assert.equal((sourceCode.match(/-webkit-mask:\s*none !important;/g) || []).length, 2,
-  'exactly the two decorative lens paths must reset the WebKit mask shorthand');
+  'exactly the two real decorative lens paths must reset the WebKit mask shorthand');
 assert.equal((sourceCode.match(/^\s*mask:\s*none !important;/gm) || []).length, 2,
-  'exactly the two decorative lens paths must reset the standard mask shorthand');
+  'exactly the two real decorative lens paths must reset the standard mask shorthand');
 
 // Resting material follows the deployed demo's blur=0. Only the opened composer
 // gets the explicit readability exception requested for Prometheus.
