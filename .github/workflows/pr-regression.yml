@@ -50,6 +50,14 @@ jobs:
         run: npm run check:web-ui
       - name: Verify context window contract
         run: npm run test:context-window
+      - name: Verify Prom Bot persistent-agent stack
+        run: |
+          node scripts/test-desktop-prom-bot.mjs
+          node scripts/test-desktop-prom-bot-roster.mjs
+          node scripts/test-desktop-prom-bot-collab.mjs
+          node scripts/test-prom-bot-team-flow.mjs
+          node scripts/test-bot-creation-contract.mjs
+          node scripts/test-prom-bot-persistent-agent-hardening.mjs
       - name: Verify Prometheus chat link routing
         run: npm run test:link-routing
       - name: Verify web UI restart reload dedupe
