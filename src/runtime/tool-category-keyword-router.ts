@@ -1,9 +1,11 @@
+import { detectPromptSignalToolCategories } from './tool-category-prompt-signals';
+
 /**
- * Fast, side-effect-free category activation for the main chat turn.
+ * Fast category activation for the main chat turn.
  *
- * This is intentionally a conservative router. It decides which category is
- * worth making available, not which tool the model must call. The model keeps
- * request_tool_category as a fallback when the wording is ambiguous.
+ * Native workflow/admin categories use the shared declarative prompt-signal
+ * matcher. The remaining categories keep their specialized structural rules.
+ * The model keeps request_tool_category as a fallback when wording is ambiguous.
  */
 
 export type KeywordRoutingCategory =
@@ -76,15 +78,6 @@ function add(set: RoutingSet, category: KeywordRoutingCategory): void {
   set.add(category);
 }
 
-function addAutomationAliases(set: RoutingSet, pack: KeywordRoutingCategory): void {
-  add(set, pack);
-  // These aliases keep older prompt-context regressions and callers readable;
-  // auto-activation consumes the canonical pack IDs only.
-  set.add('automations');
-  if (pack === 'automation_scheduling') set.add('schedule');
-  if (pack === 'automation_tasks') set.add('task');
-}
-
 function normalize(input: unknown): string {
   return String(input || '')
     .replace(/\\/g, '/')
@@ -95,8 +88,7 @@ function normalize(input: unknown): string {
 }
 
 /**
- * Detect actionable tool-category intent in under a millisecond on normal
- * chat messages. No filesystem, network, model, or memory lookup occurs.
+ * Detect actionable tool-category intent on normal chat messages.
  */
 export function detectKeywordToolCategories(input: string): RoutingSet {
   const text = normalize(input);
@@ -110,6 +102,8 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
   const action = hasAction(text) || isExplicitToolName(text);
   const planningOnly = /\b(?:plan|planning|discuss|discussion|talk about|think through|should we|idea|ideas|strategy|recommendation|recommendations)\b/.test(text)
     && /\b(?:not|without|before|yet|just)\b/.test(text);
+
+  for (const category of detectPromptSignalToolCategories(text)) add(categories, category);
 
   const normalizedPath = text.replace(/\\/g, '/');
   const sourcePath = /(?:^|[\s("'`])(?:\.\/)?(?:src|web-ui)\/[a-z0-9_.@/-]+/i.test(normalizedPath);
@@ -167,8 +161,7 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
 
   if (/\b(?:creative_hyperframes|hyperframes|html motion|motion clip|hyperframe)\b/.test(text)) add(categories, 'creative_hyperframes');
   const qualityIntent = /\b(?:creative_quality|quality check|qa|preflight|text overflow|contrast|empty region|bounds|overlap|contact sheet|audio sync|caption timing|frame diff|lint the render)\b/.test(text);
-  if (qualityIntent
-    && action) add(categories, 'creative_quality');
+  if (qualityIntent && action) add(categories, 'creative_quality');
   if (/\b(?:creative_video_ops|creative video|video editor|editable video|timeline|storyboard|shot list|sequence|rough cut|trim|splice|stitch|voiceover|captions?)\b/.test(text)
     && (action || editableVideo) && !qualityIntent && !meaningQuestion) add(categories, 'creative_video');
   if (/\b(?:creative_image_ops|creative image|image layers?|masks?|cutouts?|background removal|brand kit|image asset|icon set)\b/.test(text)
@@ -176,41 +169,18 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
   if (/\b(?:creative_project|creative_scene|creative canvas|creative editor|scene state|canvas state)\b/.test(text)
     && !meaningQuestion) add(categories, 'creative_basic');
 
-  const schedulingAction = /\b(?:schedule|scheduled|recurring|cron|remind|reminder|every day|every week|daily|weekly|monthly|run at|run on|automate)\b/.test(text)
-    && /\b(?:create|make|set|schedule|run|start|stop|pause|resume|update|delete|change|remind|automate|list|show|inspect|check|when|what)\b/.test(text);
-  const timedAction = /\b(?:start|run|send|execute|launch|begin|fire|remind)\b[^.!?]{0,80}\bat\s+(?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)|\d{1,2}\s*o['’]?clock|noon|midnight)\b/i.test(text);
-  if ((schedulingAction || timedAction) && !meaningQuestion) addAutomationAliases(categories, 'automation_scheduling');
-
-  const taskAction = /\b(?:task|tasks|background run|job|jobs|execution|executions|run id|runid|queue|queued|dashboard)\b/.test(text)
-    && /\b(?:run|start|stop|pause|resume|cancel|retry|watch|monitor|inspect|check|show|list|get|control|status|output|outputs|now|running|in progress|what)\b/.test(text);
-  if (taskAction && !meaningQuestion) addAutomationAliases(categories, 'automation_tasks');
-
-  const recoveryIntent = /\b(?:recover|recovery|resume|rerun|retry|retry the original|interrupted|stalled|cut off|cutoff|failed run|failed request|pending approval|crashed|crash recovery)\b/.test(text)
-    && (action || /\b(?:request|run|task|job|work|thread|proposal|approval)\b/.test(text));
-  if (recoveryIntent && !meaningQuestion) addAutomationAliases(categories, 'automation_recovery');
-
+  // Session-language context is still used to prevent a phrase such as
+  // "find our discussion about the iMessage plugin" from accidentally exposing
+  // connected-app tools. Actual session-category activation is declarative.
   const conversationReference = /\b(?:other|another|previous|prior|old|that|this|our|my|full)\s+(?:prometheus\s+)?(?:chat|chats|conversation|conversations|thread|threads|session|sessions)\b/.test(text)
     || /\b(?:chat|conversation|thread|session)\s+where\b/.test(text)
     || /\b(?:our|the)\s+(?:discussion|conversation)\s+about\b/.test(text);
   const sessionLookupAction = /\b(?:create|start|send|message|steer|interrupt|rename|pin|follow|find|read|inspect|continue|ask|look|check|show|go|pick up|talk|discuss|history|where)\b/.test(text);
   const sessionLookupIntent = conversationReference
     && (action || sessionLookupAction || /\b(?:what did we talk|what happened|where did we leave off|find our|look through|go into|pick up|continue where we left off)\b/.test(text));
-  const sessionIntent = /\b(?:prometheus|main chat|chat)\b/.test(text)
-    && /\b(?:thread|session|conversation)\b/.test(text)
-    && /\b(?:create|start|send|message|steer|interrupt|rename|pin|follow|find|read|inspect|continue|ask|use|open|list|check|show|look)\b/.test(text);
-  const threadOpsReference = /\b(?:prometheus\s+)?thread\s+ops\b/.test(text);
-  const conversationalTopic = /\b(?:chat|chats|conversation|conversations|thread|threads|session|sessions)\b/.test(text)
-    && sessionLookupAction;
-  const directSessionTool = /\b(?:prometheus_thread_ops|prometheus_request_ops|prometheus_audit_ops)\b/.test(text);
-  if ((sessionIntent || sessionLookupIntent || conversationalTopic || threadOpsReference && action || directSessionTool)
-    && (!meaningQuestion || sessionLookupIntent)) addAutomationAliases(categories, 'automation_sessions');
-
-  if (/\b(?:diagnostic packet|system diagnostics|runtime diagnostics|gateway restart|restart prometheus|restart the gateway|runtime admin|diagnostic_packet|system_diagnostics|gateway_restart)\b/.test(text)
-    && !meaningQuestion) add(categories, 'runtime_admin');
 
   const connectorReference = /\b(?:connected app|connected apps|connected account|connected service|external app|external apps|connector|plugin|connector_list|list connectors)\b/.test(text);
   const connectionAction = /\b(?:connect|configure|authorize|authenticate|oauth|webhook|integration|integrate|setup|set up|add service|install (?:the )?(?:connector|plugin))\b/.test(text);
-  if ((connectionAction && /\b(?:mcp|connector|plugin|service|api|webhook|oauth|integration)\b/.test(text)) && !meaningQuestion) add(categories, 'integration_admin');
   const externalAction = /\b(?:search|read|list|send|post|publish|update|create|delete|inspect|use|check|find|show|open|review|query|comment|merge|archive|look|browse|pull|fetch|retrieve|manage|deploy|redeploy|trigger|preview|status|logs|tail|push)\b/.test(text);
   const externalResourceReference = /\b(?:my|the|this|that)\s+(?:inbox|email|emails|calendar|calendar event|deployment|deployments|issue|issues|commit|commits|pr|pull request)\b/.test(text);
   const sessionTopicLookup = /\b(?:chat|conversation|thread|session|discussion)\s+(?:where|about|regarding|on)\b/.test(text)
@@ -221,22 +191,9 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
     && (externalAction || bareExternalReference)
     && !connectionAction && !meaningQuestion && !sessionLookupWithoutExternalTarget) add(categories, 'external_apps');
 
-  const mcpDynamic = /(?:\bmcp__|\b(?:mcp tool|connected mcp tool|call an mcp|list mcp tools|mcp server tool|mcp_server_tools|mcp_server_manage)\b)/.test(text);
-  if (mcpDynamic && !/\b(?:connect|configure|authorize|setup|set up)\b/.test(text)) add(categories, 'mcp_server_tools');
-
-  const agentTarget = /\b(?:agent|subagent|sub-agent|worker|team|teammate|coordinator)\b/.test(text);
-  const agentAction = /\b(?:ask|tell|message|chat|talk|spawn|start|create|delegate|dispatch|send|steer|assign|run|manage|list|check|query|coordinate|hand off|handoff)\b/.test(text);
-  if (agentTarget && agentAction && !meaningQuestion) add(categories, 'agents_and_teams');
-
-  if (/\b(?:write|create|file|edit|update|revise|submit|approve|pending)\b/.test(text)
-    && /\bproposal\b/.test(text) && !/\b(?:sales|marketing|business) proposal\b/.test(text)) add(categories, 'proposal_admin');
-  if (/\b(?:composite tool|saved tool|multi-step tool|composites)\b/.test(text)
-    && (action || /\b(?:create|edit|delete|list|inspect|run)\b/.test(text))) add(categories, 'composite_tools');
   if (/\b(?:skill|skills)\b/.test(text)
     && /\b(?:create|write|update|edit|audit|check|test|match|trigger|metadata|manifest|resource|bundle|maintenance|repair)\b/.test(text)
     && !meaningQuestion) add(categories, 'skills');
-  if (/\b(?:agent model|agent models|model template|model templates|agent routing|executor route)\b/.test(text)
-    && action && !meaningQuestion) add(categories, 'model_management');
   if (/\b(?:business entity|client record|contact record|vendor record|project record|crm record|entity file|business context)\b/.test(text)
     && action && !meaningQuestion) add(categories, 'business');
   if (/\b(?:social profile|social intelligence|engagement analysis|growth trajectory|social account)\b/.test(text)
