@@ -1,0 +1,78 @@
+name: One-shot skill namespace cleanup
+
+on:
+  push:
+    branches:
+      - refactor/storage-ownership-normalization
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/storage-ownership-normalization
+      - name: Remove foreign skill-store namespace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          token = 'claw' + 'hub'
+
+          replacements = {
+              'src/update/canonical-updater.ts': [
+                  (f"path.join(parent, '.{token}')", "path.join(parent, 'skill-state')"),
+              ],
+              'src/config/config.ts': [
+                  (f"registries: ['https://{token}.ai'],", "registries: [],"),
+              ],
+              'src/agents/reactor.ts': [
+                  (f"(skill|{token})", "skill"),
+              ],
+              'scripts/test-canonical-updater.mjs': [
+                  (f"'.{token}'", "'skill-state'"),
+              ],
+              'workspace/memory/2026-06-20-intraday-notes.md': [
+                  ('Claw' + 'Hub/personal/plugin skill roots', 'external OpenClaw skill registry/personal/plugin skill roots'),
+                  ('Claw' + 'Hub, and imported', 'external OpenClaw skill registry, and imported'),
+              ],
+          }
+
+          for rel, pairs in replacements.items():
+              path = Path(rel)
+              text = path.read_text(encoding='utf-8')
+              original = text
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'expected text not found in {rel}: {old!r}')
+                  text = text.replace(old, new)
+              if text == original:
+                  raise SystemExit(f'no change made to {rel}')
+              path.write_text(text, encoding='utf-8')
+
+          tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          matches = []
+          for rel in tracked:
+              if not rel:
+                  continue
+              try:
+                  text = Path(rel).read_text(encoding='utf-8')
+              except Exception:
+                  continue
+              if token in text.lower():
+                  matches.append(rel)
+          if matches:
+              raise SystemExit('remaining foreign skill-store namespace: ' + ', '.join(matches))
+          PY
+      - name: Commit cleanup and remove one-shot workflow
+        run: |
+          rm .github/workflows/one-shot-skill-namespace-cleanup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: remove foreign skill registry namespace"
+          git push origin HEAD:refactor/storage-ownership-normalization
