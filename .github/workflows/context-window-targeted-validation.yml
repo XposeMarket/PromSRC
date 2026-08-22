@@ -57,3 +57,5 @@ jobs:
           git diff --cached --check
           git commit -m "test(context-window): wire thread ledger regressions"
           git push origin HEAD:fix/context-window-live-tracking-ui
+
+# One-shot: this workflow removes itself after validation succeeds.
