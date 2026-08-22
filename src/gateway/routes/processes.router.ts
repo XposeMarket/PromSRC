@@ -3,8 +3,14 @@ import { getProcessSupervisor } from '../process/supervisor';
 import { validateShellRequest } from '../../tools/shell.js';
 import { runTerminal } from '../terminal-service';
 import type { ProcessShell } from '../process/types';
+import { router as contextWindowPressureRouter } from './context-window-pressure.router';
 
 export const router = express.Router();
+
+// Runtime observability endpoints share this already-authenticated router. Keep
+// context pressure separate from the large chat router so it can report the
+// session compaction gate without changing the next-call breakdown contract.
+router.use(contextWindowPressureRouter);
 
 function normalizeLimit(value: unknown, fallback = 100): number {
   const parsed = Number(value);
