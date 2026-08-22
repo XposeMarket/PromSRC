@@ -1,0 +1,57 @@
+/*
+ * Mobile hamburger — exact Canvas Liquid Glass integration surface.
+ *
+ * The optical effect itself is NOT implemented here. It is rendered into
+ * .pm-hamburger-liquid-glass-canvas by the byte-identical vendored
+ * XposeMarket/liquid-glass compositor. These rules only remove the old CSS
+ * imitation from the hamburger and layer the real button/icon above the canvas.
+ */
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] {
+  position: relative !important;
+  isolation: isolate;
+  overflow: visible !important;
+  border-color: transparent !important;
+  background: var(--pm-demo-body, rgba(18, 22, 28, .4275)) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+/* #135's pseudo/backdrop approximation must not participate in the hamburger. */
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"]::after {
+  content: none !important;
+  display: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* Once a real compositor frame exists, its pixels are the button material. */
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"][data-pm-liquid-glass-ready="1"] {
+  background: transparent !important;
+}
+
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-hamburger-liquid-glass-canvas {
+  position: absolute !important;
+  z-index: 0 !important;
+  display: block !important;
+  max-width: none !important;
+  pointer-events: none !important;
+  touch-action: none !important;
+  opacity: 0;
+  transform: none !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
+  transition: opacity 80ms linear;
+}
+
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"][data-pm-liquid-glass-ready="1"] > .pm-hamburger-liquid-glass-canvas {
+  opacity: 1;
+}
+
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > svg,
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-i,
+body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-icon {
+  position: relative !important;
+  z-index: 2 !important;
+}
