@@ -29,6 +29,11 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify hybrid atomic durable-memory retrieval
+        run: |
+          npx tsx src/gateway/memory-index/memory-atoms-hybrid.regression.ts
+          npx tsx src/gateway/memory-index/memory-atoms-real-corpus.stress.ts
+          npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
       - name: Verify connector/plugin tool-surface parity
         run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
       - name: Verify natural-language tool activation
