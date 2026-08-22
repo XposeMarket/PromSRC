@@ -7,6 +7,7 @@ import {
   type PersonalityContextSnapshot,
   type SkillWindow,
 } from '../prompt-context.js';
+import { buildHybridMemoryAtomReferenceContext } from '../memory-index/memory-atoms-hybrid.js';
 import type { SkillsManager } from '../skills-runtime/skills-manager.js';
 import type { TurnTimingRecorder } from './turn-timing.js';
 
@@ -261,6 +262,23 @@ async function guardedFallback(
   }
 }
 
+function shouldUseHybridAtomicMemory(
+  snapshot: PersonalityContextSnapshot,
+  sessionId: string,
+  executionMode: string,
+  profile: BuildPersonalityContextOptions['profile'],
+  messageText: string,
+): boolean {
+  if (profile === 'local_llm' || profile === 'direct_subagent' || profile === 'teach_mode') return false;
+  if (executionMode === 'proposal_execution' || /^(?:brain_|auto_brain_)/i.test(String(sessionId || ''))) return false;
+  if (snapshot.runtimeActor?.kind === 'agent' || snapshot.runtimeActor?.kind === 'manager') return false;
+  const normalized = String(messageText || '').replace(/[^a-z0-9!?\s']/gi, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (/^(?:hi|hey|hello|yo|sup)(?:\s+prometheus)?[!?.,\s]*$/i.test(normalized)) return false;
+  if (/^(?:thanks(?:\s+(?:so much|a lot))?|thank you(?:\s+(?:so much|very much))?|thx|ty|ok(?:ay)?|got it|sounds good|great|perfect|nice|cool|alright|all right)[!?.,\s]*$/i.test(normalized)) return false;
+  return true;
+}
+
 export async function buildPersonalityContextIsolated(
   sessionId: string,
   workspacePath: string,
@@ -305,6 +323,33 @@ export async function buildPersonalityContextIsolated(
     signal,
     (fields) => timing?.mark('automatic_memory_search', fields),
   );
+  if (shouldUseHybridAtomicMemory(snapshot, sessionId, executionMode, options?.profile || 'default', messageText)) {
+    const memoryStartedAt = Date.now();
+    timing?.mark('atomic_memory_hybrid_start');
+    try {
+      snapshot.memoryAtomContext = await buildHybridMemoryAtomReferenceContext(
+        workspacePath,
+        messageText,
+        {
+          additionalContext: snapshot.projectContextBlock,
+          maxAtoms: options?.profile === 'voice_agent' ? 4 : 6,
+          maxChars: options?.profile === 'voice_agent' ? 4_500 : 14_000,
+        },
+      );
+      timing?.mark('atomic_memory_hybrid_done', {
+        durationMs: Date.now() - memoryStartedAt,
+        injected: Boolean(snapshot.memoryAtomContext),
+      });
+    } catch (error: any) {
+      // The snapshot already contains the synchronous deterministic atom result,
+      // so semantic retrieval is strictly additive: failure leaves the safe
+      // preexisting fallback intact.
+      timing?.mark('atomic_memory_hybrid_failed', {
+        durationMs: Date.now() - memoryStartedAt,
+        error: String(error?.message || error).slice(0, 200),
+      });
+    }
+  }
   timing?.mark('personality_snapshot_capture_done', { durationMs: Date.now() - snapshotStartedAt });
   if (signal?.aborted) {
     cancelled += 1;
