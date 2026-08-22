@@ -24,24 +24,17 @@ import {
 } from './desktop-backend.js';
 import type { DesktopMonitorInfo } from './desktop-tools.js';
 
-/** Locate the helper binary. Override with PROMETHEUS_DESKTOP_HELPER_PATH (e.g.
- *  a vendored universal binary in bin/). Falls back to the SwiftPM build output
- *  under native/desktop-helper-macos for local development. */
 function resolveHelperPath(): string {
   const override = String(process.env.PROMETHEUS_DESKTOP_HELPER_PATH || '').trim();
   if (override) return override;
-  // dist/gateway -> repo root is two levels up from src/gateway at build time;
-  // probe a few likely locations relative to this module and cwd.
   const rel = 'native/desktop-helper-macos/.build';
   const resourcesPath = String((process as any).resourcesPath || '').trim();
   const candidates = [
     ...(resourcesPath ? [path.resolve(resourcesPath, 'prometheus-desktop-helper')] : []),
     path.resolve(process.cwd(), 'prometheus-desktop-helper'),
     path.resolve(process.cwd(), 'bin/prometheus-desktop-helper'),
-    // build.sh output (direct swiftc) — preferred for local dev.
     path.resolve(__dirname, `../../${rel}/prometheus-desktop-helper`),
     path.resolve(process.cwd(), `${rel}/prometheus-desktop-helper`),
-    // SwiftPM output locations (if `swift build` is ever usable here).
     path.resolve(__dirname, `../../${rel}/release/prometheus-desktop-helper`),
     path.resolve(__dirname, `../../${rel}/debug/prometheus-desktop-helper`),
     path.resolve(process.cwd(), `${rel}/release/prometheus-desktop-helper`),
@@ -98,7 +91,7 @@ export class DarwinBackend implements DesktopBackend {
       try {
         msg = JSON.parse(line);
       } catch {
-        continue; // ignore non-JSON noise on stdout
+        continue;
       }
       const p = this.pending.get(Number(msg.id));
       if (!p) continue;
@@ -142,7 +135,6 @@ export class DarwinBackend implements DesktopBackend {
     });
   }
 
-  // ── Context / capture ──────────────────────────────────────────────────────
   async gatherContext(): Promise<DesktopContext> {
     return this.call<DesktopContext>('gatherContext');
   }
@@ -167,7 +159,6 @@ export class DarwinBackend implements DesktopBackend {
     return { png, bounds: r.bounds, devicePixelRatio: r.devicePixelRatio };
   }
 
-  // ── Pointer ────────────────────────────────────────────────────────────────
   async movePointer(x: number, y: number): Promise<void> {
     await this.call('movePointer', { x, y });
   }
@@ -181,7 +172,23 @@ export class DarwinBackend implements DesktopBackend {
     await this.call('drag', { fromX, fromY, toX, toY, steps });
   }
 
-  // ── Keyboard ───────────────────────────────────────────────────────────────
+  /** Hermes-style host co-work click. This does not move the real cursor or
+   * raise/focus the target app because the helper posts directly to the pid. */
+  async clickTargeted(pid: number, x: number, y: number, button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
+    if (!Number.isFinite(pid) || pid <= 0) throw new Error('clickTargeted requires a positive pid.');
+    await this.call('click', { pid, x, y, button, repeat, modifiers });
+  }
+
+  async scrollTargeted(pid: number, deltaX: number, deltaY: number): Promise<void> {
+    if (!Number.isFinite(pid) || pid <= 0) throw new Error('scrollTargeted requires a positive pid.');
+    await this.call('scroll', { pid, deltaX, deltaY });
+  }
+
+  async dragTargeted(pid: number, fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
+    if (!Number.isFinite(pid) || pid <= 0) throw new Error('dragTargeted requires a positive pid.');
+    await this.call('drag', { pid, fromX, fromY, toX, toY, steps });
+  }
+
   async typeText(text: string): Promise<void> {
     await this.call('typeText', { text });
   }
@@ -189,7 +196,16 @@ export class DarwinBackend implements DesktopBackend {
     await this.call('pressKey', { key: key.key, modifiers: key.modifiers });
   }
 
-  // ── Clipboard ────────────────────────────────────────────────────────────────
+  async typeTextTargeted(pid: number, text: string): Promise<void> {
+    if (!Number.isFinite(pid) || pid <= 0) throw new Error('typeTextTargeted requires a positive pid.');
+    await this.call('typeText', { pid, text });
+  }
+
+  async pressKeyTargeted(pid: number, key: DesktopCanonicalKey): Promise<void> {
+    if (!Number.isFinite(pid) || pid <= 0) throw new Error('pressKeyTargeted requires a positive pid.');
+    await this.call('pressKey', { pid, key: key.key, modifiers: key.modifiers });
+  }
+
   async getClipboard(): Promise<string> {
     const r = await this.call<{ text: string }>('getClipboard');
     return r.text ?? '';
@@ -198,7 +214,6 @@ export class DarwinBackend implements DesktopBackend {
     await this.call('setClipboard', { text });
   }
 
-  // ── Windows / apps ───────────────────────────────────────────────────────────
   async focusWindow(handle: number): Promise<boolean> {
     const r = await this.call<{ ok: boolean }>('focusWindow', { handle });
     return r.ok === true;
@@ -214,7 +229,6 @@ export class DarwinBackend implements DesktopBackend {
     });
   }
 
-  // ── Accessibility ──────────────────────────────────────────────────────────
   async getAccessibilityTree(opts: { windowName?: string; depth: number; maxNodes: number }): Promise<string> {
     const r = await this.call<{ tree: string }>('getAccessibilityTree', {
       windowName: opts.windowName ?? '',
@@ -224,16 +238,14 @@ export class DarwinBackend implements DesktopBackend {
     return r.tree ?? '';
   }
 
-  // ── Health ───────────────────────────────────────────────────────────────────
   async checkPermissions(): Promise<DesktopPermissionStatus[]> {
     return this.call<DesktopPermissionStatus[]>('checkPermissions');
   }
 
-  /** Best-effort shutdown of the helper process. */
   dispose(): void {
     if (this.proc && !this.proc.killed) {
-      try { this.proc.stdin.end(); } catch { /* ignore */ }
-      try { this.proc.kill(); } catch { /* ignore */ }
+      try { this.proc.stdin.end(); } catch {}
+      try { this.proc.kill(); } catch {}
     }
     this.proc = null;
   }
