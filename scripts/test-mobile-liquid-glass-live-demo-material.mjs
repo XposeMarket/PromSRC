@@ -5,6 +5,9 @@ const sourcePath = 'web-ui/src/styles/mobile-liquid-glass-demo.css';
 const generatedPath = 'generated/public-web-ui/static/styles/mobile-liquid-glass-demo.css';
 const source = fs.readFileSync(sourcePath, 'utf8');
 const generated = fs.readFileSync(generatedPath, 'utf8');
+const sourceCode = source
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '');
 
 assert.equal(generated, source, 'generated mobile liquid-glass CSS must mirror source exactly');
 
@@ -45,13 +48,14 @@ assert.match(source, /--pm-demo-open-composer-blur:\s*2\.5px/,
   'opened composer blur must stay 2.5px');
 
 // Regression guard for the #128 failure: this override is MATERIAL ONLY.
-// No control geometry, layout, or motion may be introduced here.
+// Comments are stripped first so documentation can name forbidden mechanisms
+// without the safety test mistaking prose for executable CSS.
 const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|display|grid-template-columns|grid-template-rows|flex|transform)\s*:/m;
-assert.doesNotMatch(source, geometryDeclaration,
+assert.doesNotMatch(sourceCode, geometryDeclaration,
   'mobile liquid-glass override must never alter control geometry/layout/motion');
 
 // Also prohibit the exact WebKit-hostile experiment that corrupted the app.
-assert.doesNotMatch(source, /url\(#|feDisplacementMap|mask-composite|-webkit-mask-composite/,
+assert.doesNotMatch(sourceCode, /url\(#|feDisplacementMap|mask-composite|-webkit-mask-composite/,
   'mobile glass must not reintroduce SVG displacement or composite-mask rings');
 
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
