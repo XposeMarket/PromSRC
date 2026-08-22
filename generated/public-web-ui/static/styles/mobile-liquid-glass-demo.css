@@ -135,16 +135,17 @@ body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
     drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
 }
 
-/* Header/model/action pills use their existing edge layer as the same rim-only
- * backdrop lens. The moving tab slider does not have a pre-existing edge pseudo
- * in mobile.css, so it keeps the same independent slab/hairline/chroma material
- * directly on .pm-tab-indicator instead of inventing a new pseudo-element. */
+/* Header/model/action pills and the moving tab slider use edge pseudo-elements
+ * that already exist in mobile.css. Reusing those layers keeps all real control
+ * boxes untouched. Reset any older composite-mask state before applying the
+ * single radial lens mask so iOS never sees the #128-style composite path. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header-actions > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
-  .pm-completion-toast
+  .pm-completion-toast,
+  .pm-tab-indicator
 )::after {
   border-color: transparent !important;
   background: transparent !important;
