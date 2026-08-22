@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { DesktopCanonicalKey, DesktopDeliveryTarget, DesktopModifier, DesktopMouseButton } from './desktop-backend.js';
-import { DesktopBackgroundDeliveryUnsupportedError } from './desktop-cowork-delivery.js';
+import type { DesktopCanonicalKey, DesktopModifier, DesktopMouseButton } from './desktop-backend.js';
+import { DesktopBackgroundDeliveryUnsupportedError, type DesktopDeliveryTarget } from './desktop-cowork-delivery.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,10 +14,6 @@ function requireHwnd(target: DesktopDeliveryTarget): number {
   const hwnd = positiveInt(target.windowHandle);
   if (!hwnd) throw new DesktopBackgroundDeliveryUnsupportedError('Windows background coordinate delivery requires an exact HWND.');
   return hwnd;
-}
-
-function psQuote(value: string): string {
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 async function invokeWin32Background(scriptBody: string, target: DesktopDeliveryTarget): Promise<void> {
@@ -33,7 +29,6 @@ public static class PmCowork {
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
- [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
  [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }
 '@
@@ -58,16 +53,13 @@ function clientPointScript(x: number, y: number): string {
 
 function modifierMask(modifiers: DesktopModifier[]): number {
   let mask = 0;
-  if (modifiers.includes('shift')) mask |= 0x0004; // MK_SHIFT
-  if (modifiers.includes('ctrl')) mask |= 0x0008; // MK_CONTROL
-  // Alt is not representable as a mouse-message key-state bit; use foreground.
+  if (modifiers.includes('shift')) mask |= 0x0004;
+  if (modifiers.includes('ctrl')) mask |= 0x0008;
   if (modifiers.includes('alt') || modifiers.includes('cmd')) throw new DesktopBackgroundDeliveryUnsupportedError('Alt/Cmd modified pointer input requires foreground compatibility delivery on Windows.');
   return mask;
 }
 
-export async function win32BackgroundClick(input: {
-  target: DesktopDeliveryTarget; x: number; y: number; button: DesktopMouseButton; repeat: number; modifiers: DesktopModifier[];
-}): Promise<void> {
+export async function win32BackgroundClick(input: { target: DesktopDeliveryTarget; x: number; y: number; button: DesktopMouseButton; repeat: number; modifiers: DesktopModifier[] }): Promise<void> {
   const right = input.button === 'right';
   const down = right ? 0x0204 : 0x0201;
   const up = right ? 0x0205 : 0x0202;
@@ -80,7 +72,6 @@ export async function win32BackgroundClick(input: {
 export async function win32BackgroundScroll(input: { target: DesktopDeliveryTarget; x: number; y: number; deltaX: number; deltaY: number }): Promise<void> {
   if (!Number.isFinite(input.x) || !Number.isFinite(input.y)) throw new DesktopBackgroundDeliveryUnsupportedError('Windows background scroll requires a target screen point.');
   const body: string[] = [];
-  // Wheel message lParam uses SCREEN coordinates, unlike ordinary mouse messages.
   body.push(`$lp=[IntPtr]((${Math.round(input.y)} -shl 16) -bor (${Math.round(input.x)} -band 0xffff))`);
   if (input.deltaY) body.push(`$wp=[IntPtr]((${Math.round(input.deltaY)} -band 0xffff) -shl 16); [void][PmCowork]::PostMessage($h,0x020A,$wp,$lp)`);
   if (input.deltaX) body.push(`$wp=[IntPtr]((${Math.round(input.deltaX)} -band 0xffff) -shl 16); [void][PmCowork]::PostMessage($h,0x020E,$wp,$lp)`);
@@ -100,8 +91,6 @@ export async function win32BackgroundDrag(input: { target: DesktopDeliveryTarget
 }
 
 export async function win32BackgroundTypeText(input: { target: DesktopDeliveryTarget; text: string }): Promise<void> {
-  // WM_CHAR is intentionally used only as a compatibility background transport.
-  // UI Automation ValuePattern remains preferred for semantic editable controls.
   const units = Array.from(String(input.text || '')).flatMap((ch) => {
     const encoded = Buffer.from(ch, 'utf16le');
     const values: number[] = [];
