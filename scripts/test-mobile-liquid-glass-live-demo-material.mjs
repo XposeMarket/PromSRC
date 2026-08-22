@@ -21,12 +21,13 @@ assert.match(source, /--pm-demo-body:\s*rgba\(18, 22, 28, \.4275\)/,
 assert.match(source, /--pm-demo-hairline:\s*rgba\(255, 252, 248, \.1936\)/,
   'top/bottom hairline must follow .16 + spec*.12 for spec=.28');
 assert.match(source, /--pm-demo-directional-glint:\s*rgba\(255, 255, 255, \.0242\)/,
-  'directional glint must stay tied to spec*.22/255');
+  'directional glint must stay tied to spec*22/255');
 assert.match(source, /--pm-demo-chroma:\s*\.35px/,
   'live .7 device-pixel chroma must map to .35 CSS px at the demo DPR cap of 2');
 
 for (const selector of [
   '.pm-header > .pm-icon-btn',
+  '.pm-header-actions > .pm-icon-btn',
   '.pm-header .pm-online',
   '.pm-header-action-cluster',
   '.pm-completion-toast',
