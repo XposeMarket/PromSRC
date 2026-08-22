@@ -5,10 +5,14 @@ import { DEFAULT_SPEC, renderLiquidGlass } from '../vendor/liquid-glass.js';
 // work here is supplying that exact compositor with a canvas snapshot of the DOM
 // pixels that are physically behind the mobile hamburger button.
 const DEMO_SPEC = Object.freeze({ ...DEFAULT_SPEC, blur: 0, fill: 0.65 });
-const TARGET_SELECTOR = '.pm-header > .pm-icon-btn[data-action="menu"]';
+const TARGET_SELECTOR = [
+  '.pm-header > .pm-icon-btn[data-action="menu"]',
+  '.pm-header .pm-icon-btn[aria-label="Menu"]',
+  '.pm-header .pm-icon-btn[aria-label="Open menu"]',
+].join(', ');
 const CANVAS_CLASS = 'pm-hamburger-liquid-glass-canvas';
 const STYLE_ID = 'pm-mobile-hamburger-liquid-glass-style';
-const STYLE_VERSION = 'pm-v300-2026-08-22-exact-canvas-hamburger';
+const STYLE_VERSION = 'pm-v301-2026-08-22-cropped-hamburger';
 const MIN_RENDER_INTERVAL_MS = 70;
 
 let html2CanvasPromise = null;
@@ -161,34 +165,53 @@ async function renderHamburgerGlass() {
       },
     });
 
-    const glassWidth = Math.max(2, scene.width);
-    const glassHeight = Math.max(2, scene.height);
-    if (canvas.width !== glassWidth) canvas.width = glassWidth;
-    if (canvas.height !== glassHeight) canvas.height = glassHeight;
-
-    canvas.style.left = `${left - rect.left}px`;
-    canvas.style.top = `${top - rect.top}px`;
-    canvas.style.width = `${captureWidth}px`;
-    canvas.style.height = `${captureHeight}px`;
-
-    const glassCtx = canvas.getContext('2d');
-    if (!glassCtx) throw new Error('2D output context unavailable');
-
     const sceneCtx = scene.getContext('2d', { willReadFrequently: true });
     if (!sceneCtx) throw new Error('2D scene context unavailable');
+
+    // The canonical compositor needs padding around the button so its inward
+    // sampling has real pixels to pull from. Keep that padded output OFFSCREEN,
+    // then crop only the physical button rectangle into the visible child canvas.
+    // This prevents any optical pixels from leaking into the status/safe-area strip.
+    const rendered = document.createElement('canvas');
+    rendered.width = Math.max(2, scene.width);
+    rendered.height = Math.max(2, scene.height);
+    const renderedCtx = rendered.getContext('2d');
+    if (!renderedCtx) throw new Error('2D compositor output context unavailable');
 
     const centerX = (rect.left - left + rect.width / 2) * dpr;
     const centerY = (rect.top - top + rect.height / 2) * dpr;
 
     renderLiquidGlass({
       sceneCtx,
-      glassCtx,
+      glassCtx: renderedCtx,
       x: centerX,
       y: centerY,
       width: rect.width * dpr,
       height: rect.height * dpr,
       spec: DEMO_SPEC,
     });
+
+    const buttonWidth = Math.max(2, Math.round(rect.width * dpr));
+    const buttonHeight = Math.max(2, Math.round(rect.height * dpr));
+    const cropX = Math.max(0, Math.round((rect.left - left) * dpr));
+    const cropY = Math.max(0, Math.round((rect.top - top) * dpr));
+
+    if (canvas.width !== buttonWidth) canvas.width = buttonWidth;
+    if (canvas.height !== buttonHeight) canvas.height = buttonHeight;
+    const visibleCtx = canvas.getContext('2d');
+    if (!visibleCtx) throw new Error('2D visible output context unavailable');
+    visibleCtx.clearRect(0, 0, buttonWidth, buttonHeight);
+    visibleCtx.drawImage(
+      rendered,
+      cropX,
+      cropY,
+      buttonWidth,
+      buttonHeight,
+      0,
+      0,
+      buttonWidth,
+      buttonHeight,
+    );
 
     state.renderCount += 1;
     state.lastCompletedAt = performance.now();
