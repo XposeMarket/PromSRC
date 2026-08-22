@@ -30,7 +30,7 @@ jobs:
         with:
           ref: fix/context-window-live-tracking-ui
           fetch-depth: 0
-      - name: Repair one-shot patch quoting
+      - name: Repair one-shot patch quoting and source drift
         shell: bash
         run: |
           python - <<'PY'
@@ -45,6 +45,12 @@ jobs:
               "label: `Thought context packets (${thoughtRows.length} unique)`,": "label: 'Thought context packets (' + thoughtRows.length + ' unique)',",
               "id: `previous_turns.tool_categories.${category}`,": "id: 'previous_turns.tool_categories.' + category,",
               "label: `Tool categories (${categoryTokens.size} unique)`,": "label: 'Tool categories (' + categoryTokens.size + ' unique)',",
+              "`  const inContextRows = [\\n": "`  const inContextRows: ContextWindowRow[] = [\\n",
+              "{ id: 'system_tools', label: 'System tools', tokens: systemToolTokens, active: systemToolTokens > 0, children: systemToolChildren }": "{ id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren }",
+              "`    { id: 'compaction_trigger', label: 'Compaction trigger', tokens: Math.max(0, input.compactionTriggerTokens), percentLabel: 'trigger', outOfBand: true },\\n`,": "`      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },\\n`,",
+              "`    { id: 'compaction_trigger', label: 'Model compaction trigger', tokens: Math.max(0, input.compactionTriggerTokens), percentLabel: 'trigger', outOfBand: true },\\n`);": "`      { id: 'compaction_trigger', label: 'Model compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },\\n`);",
+              "`    { id: 'total_thread_tokens', label: 'Total thread tokens', tokens: totalThreadTokens, percentLabel: 'total', outOfBand: true },\\n`,": "`      { id: 'total_thread_tokens', label: 'Total thread tokens', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },\\n`,",
+              "`    { id: 'total_thread_tokens', label: 'Stored thread footprint', tokens: totalThreadTokens, percentLabel: 'stored', outOfBand: true },\\n`);": "`      { id: 'total_thread_tokens', label: 'Stored thread footprint', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },\\n`);",
           }
           for old, new in replacements.items():
               if old not in text:
@@ -60,10 +66,11 @@ jobs:
           node scripts/apply-thread-context-window-patch.mjs
           status=$?
           if [ "$status" -ne 0 ]; then
-            echo '--- current inContextRows source ---'
-            grep -n -B 8 -A 30 "inContextRows" src/gateway/routes/chat.router.ts || true
+            echo '--- current context-window source anchors ---'
+            grep -n -B 8 -A 35 "inContextRows" src/gateway/routes/chat.router.ts || true
+            grep -n -B 8 -A 30 "const session = getSession(id)" src/gateway/routes/chat.router.ts | tail -80 || true
             echo '--- partial patch diff ---'
-            git diff -- src/runtime/prompt-manifest.ts src/providers/model-usage.ts src/agents/ollama-client.ts src/gateway/routes/chat.router.ts || true
+            git diff -- src/runtime/prompt-manifest.ts src/providers/model-usage.ts src/agents/ollama-client.ts src/gateway/routes/chat.router.ts web-ui/src/context-window-live-tracking.js || true
             exit "$status"
           fi
       - name: Remove one-shot patch machinery
