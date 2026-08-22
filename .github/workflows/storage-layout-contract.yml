@@ -1,0 +1,42 @@
+name: Storage layout contract
+
+on:
+  pull_request:
+    paths:
+      - 'src/runtime/storage-layout.ts'
+      - 'src/runtime/storage-layout.regression.ts'
+      - 'src/config/**'
+      - 'src/skills/**'
+      - 'src/extensions/**'
+      - 'src/gateway/**'
+      - 'electron/**'
+      - 'scripts/**migration**'
+      - '.github/workflows/storage-layout-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/runtime/storage-layout.ts'
+      - 'src/runtime/storage-layout.regression.ts'
+      - 'src/config/**'
+      - 'src/skills/**'
+      - 'src/extensions/**'
+      - 'src/gateway/**'
+      - 'electron/**'
+      - 'scripts/**migration**'
+      - '.github/workflows/storage-layout-contract.yml'
+
+jobs:
+  storage-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Storage layout regression
+        run: npx --no-install tsx src/runtime/storage-layout.regression.ts
+      - name: Backend typecheck
+        run: npx --no-install tsc --noEmit
