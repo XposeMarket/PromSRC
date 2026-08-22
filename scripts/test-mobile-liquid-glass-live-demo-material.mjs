@@ -38,6 +38,15 @@ for (const selector of [
   assert.ok(source.includes(selector), `missing live-demo material surface: ${selector}`);
 }
 
+// The stable mobile base intentionally hides the old decorative lens layer.
+// This material override must explicitly re-enable only the absolute lens layer
+// for composer/tabbar; otherwise the rim-refraction code below is dead CSS.
+assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?display:\s*block !important;/,
+  'composer/tabbar decorative lens must be re-enabled by the late material override');
+const displayDeclarations = sourceCode.match(/^\s*display\s*:[^;]+;/gm) || [];
+assert.deepEqual(displayDeclarations.map((line) => line.trim()), ['display: block !important;'],
+  'the only display override allowed is enabling the absolute decorative glass lens');
+
 // Resting material follows the deployed demo's blur=0. Only the opened composer
 // gets the explicit readability exception requested for Prometheus.
 assert.match(source, /body\.pm-mobile-active \.pm-composer \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
@@ -49,8 +58,10 @@ assert.match(source, /--pm-demo-open-composer-blur:\s*2\.5px/,
 
 // Regression guard for the #128 failure: this override is MATERIAL ONLY.
 // Comments are stripped first so documentation can name forbidden mechanisms
-// without the safety test mistaking prose for executable CSS.
-const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|display|grid-template-columns|grid-template-rows|flex|transform)\s*:/m;
+// without the safety test mistaking prose for executable CSS. `display` is
+// checked separately above because the absolute decorative lens must be turned
+// back on after mobile.css intentionally hides it.
+const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|grid-template-columns|grid-template-rows|flex|transform)\s*:/m;
 assert.doesNotMatch(sourceCode, geometryDeclaration,
   'mobile liquid-glass override must never alter control geometry/layout/motion');
 
