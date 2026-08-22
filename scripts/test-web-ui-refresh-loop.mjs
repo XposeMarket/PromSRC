@@ -26,13 +26,36 @@ assert.match(
 );
 assert.match(
   wsSource,
-  /const id = notificationId \|\| String\(msg\?\.batchId \|\| msg\?\.timestamp/,
-  'reload deduplication must remain stable when a notification id is available',
+  /function reloadScopeId\(msg = \{\}\)[\s\S]{0,220}msg\?\.batchId \|\| msg\?\.notificationId/,
+  'restart dedupe must prefer a shared restart batch before the individual notification id',
 );
 assert.match(
   wsSource,
-  /if \(isReloadPending\(\)\) return;/,
-  'a page must not schedule multiple reloads for one restart',
+  /function isReloadPending\(scopeId\)[\s\S]{0,360}guard\?\.scopeId[\s\S]{0,180}String\(scopeId \|\| ''\)[\s\S]{0,180}guard\?\.until/,
+  'the reload guard must suppress only the same restart scope while its guard is active',
 );
+assert.match(
+  wsSource,
+  /const scopeId = reloadScopeId\(msg\);\s*if \(isReloadPending\(scopeId\)\) return;/,
+  'duplicate notifications from the same restart scope must schedule only one reload',
+);
+assert.match(
+  wsSource,
+  /markReloadPending\(scopeId, delayMs \+ 15000\);/,
+  'the persisted reload guard must be written for the current restart scope',
+);
+assert.doesNotMatch(
+  wsSource,
+  /if \(isReloadPending\(\)\) return;/,
+  'a global time-only reload guard would incorrectly suppress a genuinely separate restart',
+);
+
+const scopeFor = (msg = {}) => String(msg?.batchId || msg?.notificationId || msg?.timestamp || msg?.reason || 'restart').trim();
+const sameNotification = { batchId: 'restart-a', notificationId: 'notification-1' };
+const sameBatchOtherNotification = { batchId: 'restart-a', notificationId: 'notification-2' };
+const separateRestart = { batchId: 'restart-b', notificationId: 'notification-3' };
+assert.equal(scopeFor(sameNotification), scopeFor(sameNotification), 'the same notification must retain one dedupe scope');
+assert.equal(scopeFor(sameNotification), scopeFor(sameBatchOtherNotification), 'multiple notifications from one restart batch must share one dedupe scope');
+assert.notEqual(scopeFor(sameNotification), scopeFor(separateRestart), 'a genuinely separate restart batch must be eligible for a new reload');
 
 console.log('web-ui refresh-loop contract passed');
