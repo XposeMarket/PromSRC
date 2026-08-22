@@ -11423,66 +11423,28 @@ function renderEmailComposerArtifact(a) {
   const bcc = normalizeEmailComposerList(a.bcc).join(', ');
   const subject = String(a.subject || '');
   const body = String(a.body || '');
-  const account = String(a.accountEmail || '').trim();
-  const messageId = String(a.messageId || '').trim();
-  const threadId = String(a.threadId || '').trim();
-  const sentAt = a.sentAt ? new Date(a.sentAt).toLocaleString() : '';
-  const readonly = sent ? 'readonly' : '';
-  const disabled = sent ? 'disabled' : '';
   const attachments = Array.isArray(a.attachments) ? a.attachments : [];
+  const title = sent ? 'Email sent' : (subject || 'New email');
   const attachmentHtml = attachments.length
     ? `<div class="email-composer-attachments">${attachments.map((att) => {
         const label = String(att?.name || att?.path || 'Attachment').trim();
-        const path = String(att?.path || '').trim();
-        return `<span class="email-composer-attachment" title="${escHtml(path || label)}">${escHtml(label)}</span>`;
+        return `<span class="email-composer-attachment">${escHtml(label)}</span>`;
       }).join('')}</div>`
     : '';
-  const meta = [
-    account ? `From ${account}` : '',
-    sentAt ? `Sent ${sentAt}` : '',
-    messageId ? `Message ${messageId}` : '',
-  ].filter(Boolean).join(' · ');
-  const summary = sent
-    ? `${subject || '(no subject)'}${to ? ` -> ${to}` : ''}`
-    : 'Review, edit, and send from Gmail';
-  const detailsAttrs = sent ? '' : ' open';
-  return `<details class="email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-artifact-id="${escHtml(id)}"${detailsAttrs}>
-    <summary class="email-composer-summary">
-      <span class="email-composer-summary-main">
-        <span class="email-composer-dot"></span>
-        <span><strong>${sent ? 'Email sent' : 'Email draft'}</strong><small>${escHtml(summary)}</small></span>
-      </span>
-      <span class="email-composer-status">${escHtml(sent ? 'sent' : 'draft')}</span>
-    </summary>
-    <div class="email-composer-window">
-      <div class="email-composer-titlebar">
-        <span>${sent ? 'Sent Email' : 'New Message'}</span>
-        <span class="email-composer-title-actions"><button type="button" title="Minimize" onclick="this.closest('details').open=false">_</button><button type="button" title="Pop out" onclick="emailComposerNotice('Pop out is coming soon')">[]</button></span>
-      </div>
-      <div class="email-composer-fields">
-        <label><span>To</span><input class="email-field-to" value="${escHtml(to)}" ${readonly}></label>
-        <label class="email-field-cc"><span>Cc</span><input class="email-field-cc-input" value="${escHtml(cc)}" ${readonly}></label>
-        <label class="email-field-bcc"><span>Bcc</span><input class="email-field-bcc-input" value="${escHtml(bcc)}" ${readonly}></label>
-        <label><input class="email-field-subject" value="${escHtml(subject)}" placeholder="Subject" ${readonly}></label>
-      </div>
-      <textarea class="email-field-body" placeholder="Write your message..." ${readonly}>${escHtml(body)}</textarea>
-      ${attachmentHtml}
-      ${meta ? `<div class="email-composer-meta">${escHtml(meta)}</div>` : ''}
-      <div class="email-composer-toolbar">
-        <div class="email-composer-send-wrap">
-          ${sent ? `<button type="button" class="email-send-btn is-sent" disabled>Sent</button>` : `<button type="button" class="email-send-btn" onclick="emailComposerSend(this)">Send</button>`}
-          ${sent ? '' : `<button type="button" class="email-send-menu" title="More send options" onclick="emailComposerNotice('More send options are coming soon')">v</button>`}
-        </div>
-        <button type="button" title="Formatting" onclick="emailComposerNotice('Formatting is coming soon')" ${disabled}>Aa</button>
-        <button type="button" title="Attach file" onclick="emailComposerNotice('Attachments are visible but Gmail attachment sending is not wired yet')" ${disabled}>clip</button>
-        <button type="button" title="Insert link" onclick="emailComposerNotice('Links can be pasted into the body')" ${disabled}>link</button>
-        <button type="button" title="Emoji" onclick="emailComposerInsertText(this, ':)')" ${disabled}>:)</button>
-        <button type="button" title="Insert image" onclick="emailComposerNotice('Image insertion is coming soon')" ${disabled}>img</button>
-        <span class="email-composer-spacer"></span>
-        ${sent ? '' : `<button type="button" title="Discard draft" onclick="emailComposerDiscard(this)">trash</button>`}
-      </div>
-    </div>
-  </details>`;
+  return `<article class="email-composer-card ${sent ? 'is-sent' : 'is-draft'}" data-email-artifact-id="${escHtml(id)}">
+    <input class="email-field-to" type="hidden" value="${escHtml(to)}">
+    <input class="email-field-cc-input" type="hidden" value="${escHtml(cc)}">
+    <input class="email-field-bcc-input" type="hidden" value="${escHtml(bcc)}">
+    <input class="email-field-subject" type="hidden" value="${escHtml(subject)}">
+    <textarea class="email-field-body" hidden>${escHtml(body)}</textarea>
+    <div class="email-composer-kicker">${escHtml(title)}</div>
+    <div class="email-composer-preview">${escHtml(body || '(empty draft)')}</div>
+    ${attachmentHtml}
+    ${sent ? `<div class="email-composer-sent">Sent</div>` : `<div class="email-composer-actions">
+      <button type="button" class="email-send-btn" onclick="emailComposerSend(this)">Send email</button>
+      <button type="button" class="email-discard-btn" onclick="emailComposerDiscard(this)">Discard</button>
+    </div>`}
+  </article>`;
 }
 
 function findEmailComposerArtifact(artifactId) {

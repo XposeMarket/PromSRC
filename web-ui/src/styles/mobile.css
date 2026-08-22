@@ -6661,240 +6661,73 @@ html.pm-session-context-open * {
   max-width: 100%;
   min-width: 0;
   margin: 10px 0 4px;
+  padding: 14px 14px 12px;
   border: 1px solid var(--pm-border);
-  border-radius: 14px;
-  background: var(--pm-surface);
-  box-shadow: var(--pm-shadow-sm);
-  overflow: hidden;
+  border-radius: 22px;
+  background: var(--pm-surface-secondary, var(--pm-surface));
   box-sizing: border-box;
 }
-.pm-email-composer-card summary {
-  list-style: none;
-}
-.pm-email-composer-card summary::-webkit-details-marker {
-  display: none;
-}
-.pm-email-composer-summary {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 9px;
-  align-items: center;
-  min-height: 50px;
-  padding: 10px 12px;
-  color: var(--pm-text);
-  cursor: pointer;
-}
-.pm-email-composer-summary span:not(.pm-email-composer-dot) {
-  min-width: 0;
-}
-.pm-email-composer-summary strong,
-.pm-email-composer-summary em,
-.pm-email-composer-summary small {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pm-email-composer-summary strong {
-  font-size: 13px;
-  font-weight: 850;
-}
-.pm-email-composer-summary em,
-.pm-email-composer-summary small {
+.pm-email-composer-kicker {
+  margin-bottom: 8px;
   color: var(--pm-muted);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 700;
-}
-.pm-email-composer-dot {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(26, 115, 232, .12);
-  color: #1a73e8;
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 750;
 }
-.pm-email-composer-card.is-sent .pm-email-composer-dot {
-  background: rgba(47, 174, 102, .14);
-  color: var(--pm-green);
-}
-.pm-email-composer-panel {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  border-top: 1px solid var(--pm-border);
-  background: rgba(255,255,255,.72);
-}
-.pm-email-composer-field {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  align-items: center;
-  min-height: 43px;
-  border-bottom: 1px solid var(--pm-border);
-  color: var(--pm-muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-.pm-email-composer-field span {
-  padding-left: 12px;
-}
-.pm-email-composer-field input,
-.pm-email-composer-body {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
+.pm-email-composer-preview {
+  padding: 14px 14px 16px;
+  border-radius: 16px;
+  background: var(--pm-surface, #fff);
   color: var(--pm-text);
-  box-sizing: border-box;
-  font: inherit;
-}
-.pm-email-composer-field input {
-  height: 42px;
-  padding: 0 12px 0 2px;
-  font-size: 13px;
-  font-weight: 650;
-}
-.pm-email-composer-two {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-width: 0;
-}
-.pm-email-composer-two .pm-email-composer-field:first-child {
-  border-right: 1px solid var(--pm-border);
-}
-.pm-email-composer-body {
-  min-height: 220px;
-  resize: vertical;
-  padding: 12px;
-  border-bottom: 1px solid var(--pm-border);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 16px;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: pre-wrap;
 }
 .pm-email-composer-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 10px 12px 0;
-}
-.pm-email-composer-attachments span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid var(--pm-border);
-  border-radius: 8px;
+  gap: 6px;
+  margin-top: 10px;
   color: var(--pm-muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-.pm-email-composer-attachments svg {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 auto;
+  font-size: 12px;
 }
 .pm-email-composer-actions {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 10px 12px 12px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  gap: 8px;
+  margin-top: 12px;
 }
 .pm-email-composer-send,
-.pm-email-composer-tool {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  min-height: 40px;
-  border: 1px solid var(--pm-border);
-  border-radius: 9px;
-  background: rgba(255,255,255,.9);
-  color: var(--pm-text);
-  font-size: 13px;
-  font-weight: 850;
-}
-.pm-email-composer-send {
-  gap: 7px;
-  min-width: 86px;
-  padding: 0 14px;
-  border-color: transparent;
-  background: #0b57d0;
-  color: #fff;
-}
-.pm-email-composer-send svg {
-  width: 15px;
-  height: 15px;
-}
-.pm-email-composer-tool {
-  width: 40px;
-}
-.pm-email-composer-tool svg {
-  width: 16px;
-  height: 16px;
-}
-.pm-email-composer-tool.danger {
-  margin-left: auto;
-  color: var(--pm-red);
-}
-.pm-email-composer-tool:disabled {
-  opacity: .45;
-}
-.pm-email-composer-sent {
-  color: var(--pm-green);
-  font-size: 12px;
-  font-weight: 850;
-}
-.pm-email-composer-notice {
-  margin: 0 12px 12px;
-  padding: 9px 10px;
-  border-radius: 9px;
-  background: rgba(26, 115, 232, .09);
-  color: var(--pm-muted);
-  font-size: 12px;
+.pm-email-composer-discard {
+  flex: 1 1 0;
+  min-height: 42px;
+  border-radius: 999px;
+  border: 0;
+  font-size: 15px;
   font-weight: 750;
 }
-.pm-email-composer-notice[data-kind="error"] {
-  background: rgba(216, 71, 58, .11);
-  color: var(--pm-red);
+.pm-email-composer-send {
+  background: var(--pm-text);
+  color: var(--pm-bg, #fff);
 }
-:root[data-theme="dark"] .pm-email-composer-card {
-  background: rgba(37, 41, 49, .94);
+.pm-email-composer-discard {
+  background: transparent;
+  border: 1px solid var(--pm-border);
+  color: var(--pm-text);
 }
-:root[data-theme="dark"] .pm-email-composer-panel {
-  background: rgba(22, 24, 29, .82);
+.pm-email-composer-sent {
+  margin-top: 10px;
+  color: var(--pm-muted);
+  font-size: 13px;
+  font-weight: 700;
 }
-:root[data-theme="dark"] .pm-email-composer-send {
-  background: #3b82f6;
+.pm-email-composer-notice {
+  margin-top: 8px;
+  color: var(--pm-danger, #c0392b);
+  font-size: 12px;
+  font-weight: 700;
 }
-:root[data-theme="dark"] .pm-email-composer-tool {
-  background: rgba(255,255,255,.06);
-}
-@media (max-width: 390px) {
-  .pm-email-composer-summary {
-    grid-template-columns: 28px minmax(0, 1fr);
-    padding: 9px 10px;
-  }
-  .pm-email-composer-two {
-    grid-template-columns: 1fr;
-  }
-  .pm-email-composer-two .pm-email-composer-field:first-child {
-    border-right: 0;
-  }
-  .pm-email-composer-field {
-    grid-template-columns: 48px minmax(0, 1fr);
-  }
-  .pm-email-composer-body {
-    min-height: 190px;
-  }
+.pm-email-composer-card.is-sent .pm-email-composer-preview {
+  opacity: .88;
 }
 
 /* Mobile map card */
