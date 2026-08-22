@@ -273,17 +273,25 @@ async function prepareMobileReload() {
   } catch {}
 }
 
-const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_until';
+const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_guard';
 
-function markReloadPending(windowMs = 15000) {
+function reloadScopeId(msg = {}) {
+  return String(msg?.batchId || msg?.notificationId || msg?.timestamp || msg?.reason || 'restart').trim();
+}
+
+function markReloadPending(scopeId, windowMs = 15000) {
   try {
-    sessionStorage.setItem(PM_RELOAD_GUARD_KEY, String(Date.now() + Math.max(1000, Number(windowMs) || 15000)));
+    sessionStorage.setItem(PM_RELOAD_GUARD_KEY, JSON.stringify({
+      scopeId: String(scopeId || '').trim(),
+      until: Date.now() + Math.max(1000, Number(windowMs) || 15000),
+    }));
   } catch {}
 }
 
-function isReloadPending() {
+function isReloadPending(scopeId) {
   try {
-    return Number(sessionStorage.getItem(PM_RELOAD_GUARD_KEY) || 0) > Date.now();
+    const guard = JSON.parse(sessionStorage.getItem(PM_RELOAD_GUARD_KEY) || '{}');
+    return String(guard?.scopeId || '') === String(scopeId || '') && Number(guard?.until || 0) > Date.now();
   } catch {
     return false;
   }
@@ -308,11 +316,11 @@ wsEventBus.on('dev_reload_requested', (msg) => {
       surface: mobile ? 'mobile' : 'web',
     });
   }
-  // A gateway restart can have more than one pending startup notification.
-  // Acknowledge every notification, but only the first one may schedule the
-  // navigation. The guard survives that navigation in sessionStorage so the
-  // next page cannot replay another queued restart notification.
-  if (isReloadPending()) return;
+  // Collapse duplicate notifications from the same gateway restart while still
+  // allowing a genuinely separate restart to request another reload immediately.
+  // batchId identifies a restart batch; notificationId is the safe fallback.
+  const scopeId = reloadScopeId(msg);
+  if (isReloadPending(scopeId)) return;
   const id = notificationId || String(msg?.batchId || msg?.timestamp || msg?.reason || Date.now());
   const key = `prom_dev_reload_${id}`;
   try {
@@ -323,7 +331,7 @@ wsEventBus.on('dev_reload_requested', (msg) => {
   // A service-worker update can emit controllerchange while this explicit
   // reload is being prepared. Share a cross-module guard so both paths do not
   // reload the PWA one after the other.
-  markReloadPending(delayMs + 15000);
+  markReloadPending(scopeId, delayMs + 15000);
   setTimeout(() => {
     prepareMobileReload().finally(() => {
       try { location.reload(); } catch {}
