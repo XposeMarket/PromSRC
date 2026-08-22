@@ -62,8 +62,6 @@ export interface PrometheusLegacyPaths {
   dataRootConfig: string | null;
   activeConfig: string;
   activeWorkspace: string;
-  localclawProject: string;
-  localclawHome: string;
 }
 
 export interface PrometheusLayout {
@@ -229,8 +227,6 @@ export function resolvePrometheusLayout(options: ResolvePrometheusLayoutOptions 
       dataRootConfig,
       activeConfig: activeLegacyConfig,
       activeWorkspace: activeLegacyWorkspace,
-      localclawProject: path.join(cwd, '.localclaw'),
-      localclawHome: path.join(homedir, '.localclaw'),
     },
     activeConfigRoot: mode === 'canonical' ? runtime.config : activeLegacyConfig,
     activeWorkspaceRoot: mode === 'canonical' ? workspace.root : activeLegacyWorkspace,
