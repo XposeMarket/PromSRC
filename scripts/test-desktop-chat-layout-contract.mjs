@@ -22,11 +22,8 @@ if (sourceComponents !== generatedComponents) throw new Error('components.css so
 if (sourceChat !== generatedChat) throw new Error('ChatPage.js source/generated copies are out of sync');
 
 const minimizedCenter = sourceBase.match(/body:not\(\.pm-mobile-active\)\.sources-minimized-open \.workspace > \.center-col\s*\{([\s\S]*?)\}/)?.[1] || '';
-if (!/margin-right:\s*var\(--sources-minimized-layout-reserve\)/.test(minimizedCenter)) {
-  throw new Error('minimized Sources must reserve only its layout footprint in the center column');
-}
-if (!/--sources-minimized-layout-reserve:\s*352px/.test(sourceBase)) {
-  throw new Error('minimized Sources layout reserve token is missing');
+if (/margin-right\s*:/.test(minimizedCenter) || /--sources-minimized-layout-reserve/.test(sourceBase)) {
+  throw new Error('minimized Sources must float without reserving a background drawer strip');
 }
 
 const minimizedRightPanel = sourceBase.match(/body:not\(\.pm-mobile-active\)\.sources-minimized-open #right-panel\s*\{([\s\S]*?)\}/)?.[1] || '';
