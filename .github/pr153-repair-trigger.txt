@@ -3,3 +3,4 @@ PR153 repair complete.
 Trigger PR133 refresh against current main.
 Retry after performance.js conflict resolution.
 Run constrained conflict resolution.
+Run workflow-preserving refresh.
