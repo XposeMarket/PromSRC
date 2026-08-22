@@ -273,7 +273,7 @@ async function prepareMobileReload() {
   } catch {}
 }
 
-const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_guard';
+const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_until';
 
 function reloadScopeId(msg = {}) {
   return String(msg?.batchId || msg?.notificationId || msg?.timestamp || msg?.reason || 'restart').trim();
