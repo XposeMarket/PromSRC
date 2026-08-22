@@ -73,8 +73,8 @@ function classifyGatewaySupervisorObservation(observation) {
   const pidAgreement = childIdentityConfirmed
     && (!statusIsRelevant || statusPidMatches)
     && (!leaseIsRelevant || leasePidMatches)
-    && statusGenerationMatches
-    && leaseGenerationMatches;
+    && (!statusIsRelevant || statusGenerationMatches)
+    && (!leaseIsRelevant || leaseGenerationMatches);
 
   if (observation.healthOk) {
     return {
@@ -108,8 +108,11 @@ function classifyGatewaySupervisorObservation(observation) {
     (portOwnerPids.length > 0 && !portOwnerPids.includes(childPid))
     || (statusIsRelevant && !statusPidMatches)
     || (leaseIsRelevant && !leasePidMatches)
-    || !statusGenerationMatches
-    || !leaseGenerationMatches
+    // A stale snapshot from a previous process is evidence only while it is
+    // still fresh. Once its heartbeat/lease has expired, it must not keep the
+    // supervisor in an identity-mismatch wait loop forever.
+    || (statusIsRelevant && !statusGenerationMatches)
+    || (leaseIsRelevant && !leaseGenerationMatches)
   ) {
     return {
       state: 'identity_mismatch',

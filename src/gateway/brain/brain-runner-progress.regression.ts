@@ -56,6 +56,25 @@ async function main(): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
     await runtimeApi.flushLiveRuntimePersistence();
     assert.equal(leaseApi.readGatewayProgressLease(leasePath)?.state, 'idle');
+
+    const brainAbortSignal = { aborted: false, reason: undefined as string | undefined };
+    const backgroundBrainId = runtimeApi.registerLiveRuntime({
+      kind: 'brain_thought',
+      label: 'background Thought yielded to foreground chat',
+      sessionId: 'brain_foreground_yield_regression',
+      abortSignal: brainAbortSignal,
+    });
+    const foregroundId = runtimeApi.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'foreground chat wins provider lane',
+      sessionId: 'foreground_yield_regression',
+      abortSignal: { aborted: false },
+    });
+    assert.equal(brainAbortSignal.aborted, true);
+    assert.equal(brainAbortSignal.reason, 'foreground_chat_started');
+    assert.equal(runtimeApi.getLiveRuntime(backgroundBrainId), null, 'aborted background Brain work must leave the active runtime lane immediately');
+    runtimeApi.finishLiveRuntime(foregroundId);
+    runtimeApi.finishLiveRuntime(backgroundBrainId);
     console.log('brain runner progress regression passed');
   } finally {
     if (previousDataDir === undefined) delete process.env.PROMETHEUS_DATA_DIR;

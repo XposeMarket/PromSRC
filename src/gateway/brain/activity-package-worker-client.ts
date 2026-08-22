@@ -1,5 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { RuntimeWorkerBroker, type RuntimeWorkerBrokerStatus } from '../process/runtime-worker-broker.js';
 import type { BuildActivityPackageOptions, BuiltActivityPackage } from './activity-package.js';
+
+interface ActivityPackageResultReference {
+  kind: 'activity_package_reference';
+  packagePath?: string;
+  resultPath?: string;
+  continuationPaths: string[];
+  metricsPath?: string;
+}
 
 export interface BrainActivityWorkerStatus {
   enabled: boolean;
@@ -31,6 +41,39 @@ function workerDisabledError(): Error {
   return new Error('Brain activity worker is disabled; refusing to run the activity scan in the gateway process.');
 }
 
+async function readWorkerResult(reference: ActivityPackageResultReference): Promise<BuiltActivityPackage> {
+  if (!reference || reference.kind !== 'activity_package_reference') {
+    throw new Error('Brain activity worker returned an invalid result reference.');
+  }
+
+  const packagePath = String(reference.packagePath || '').trim();
+  if (packagePath) {
+    const packageFile = path.resolve(packagePath);
+    const parsedPackage = JSON.parse(await fs.promises.readFile(packageFile, 'utf8'));
+    if (!parsedPackage || typeof parsedPackage !== 'object') throw new Error('Brain activity package artifact was invalid.');
+    return {
+      package: parsedPackage,
+      packagePath: packageFile,
+      continuationPaths: Array.isArray(reference.continuationPaths) ? reference.continuationPaths : [],
+      metricsPath: reference.metricsPath,
+    } as BuiltActivityPackage;
+  }
+
+  const resultPath = String(reference.resultPath || '').trim();
+  if (!resultPath) throw new Error('Brain activity worker returned neither a package nor a result path.');
+  const resultFile = path.resolve(resultPath);
+  const resultDir = path.dirname(resultFile);
+  try {
+    const built = JSON.parse(await fs.promises.readFile(resultFile, 'utf8')) as BuiltActivityPackage;
+    if (!built || typeof built !== 'object' || !built.package) {
+      throw new Error('Brain activity worker result artifact was invalid.');
+    }
+    return built;
+  } finally {
+    await fs.promises.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 export async function buildThoughtActivityPackageIsolated(
   options: BuildActivityPackageOptions,
   abortSignal?: { aborted: boolean },
@@ -51,7 +94,7 @@ export async function buildThoughtActivityPackageIsolated(
     abortPoll.unref?.();
   }
   try {
-    const result = await broker.run<BuiltActivityPackage>(
+    const reference = await broker.run<ActivityPackageResultReference>(
       'build_thought_activity_package',
       options,
       timeoutMs,
@@ -61,7 +104,7 @@ export async function buildThoughtActivityPackageIsolated(
       error.name = 'AbortError';
       throw error;
     }
-    return result;
+    return readWorkerResult(reference);
   } finally {
     if (abortPoll) clearInterval(abortPoll);
   }

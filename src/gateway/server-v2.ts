@@ -120,6 +120,7 @@ import {
   type TelegramChannelConfig, type DiscordChannelConfig, type WhatsAppChannelConfig,
   type ChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig,
 } from './comms/broadcaster';
+import { initializeRuntimeProgressLease } from './gateway-progress-lease';
 import {
   getSessionSkillWindows, sessionCurrentTurn,
   recoverSkillsIfEmpty,
@@ -991,6 +992,7 @@ const secureXaiVoiceStreaming = secureBundle ? attachXaiVoiceStreaming(secureBun
 const openAiRealtimeProxy = attachOpenAiRealtimeProxy(server);
 const secureOpenAiRealtimeProxy = secureBundle ? attachOpenAiRealtimeProxy(secureBundle.server) : null;
 startupMark('http server created');
+initializeRuntimeProgressLease();
 startRuntimeHeartbeat();
 setProposalsBroadcast(broadcastWS);
 setupErrorResponseEndpoint(app);
@@ -1005,7 +1007,7 @@ setShutdownHooks({
   stopTimers: () => mainChatTimerRunner.stop(),
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
-  stopBrain: () => brainRunner.stop(),
+  stopBrain: () => brainRunner.stop('gateway_restart'),
   stopRuntimeWorkers: () => {
     stopThreadSupervisionRunner();
     shutdownCodexRealtimeBridge();
@@ -1325,7 +1327,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { stopThreadSupervisionRunner(); } catch {}
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
-  try { brainRunner.stop(); } catch {}
+  try { brainRunner.stop('gateway_shutdown'); } catch {}
   try { shutdownCodexRealtimeBridge(); } catch {}
   try { flushAllSessions(); } catch (err: any) {
     console.warn('[Gateway] Session flush failed:', err?.message || err);

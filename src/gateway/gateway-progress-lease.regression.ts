@@ -93,6 +93,19 @@ async function main(): Promise<void> {
     assert.equal(isMeaningfulRuntimeProgressEvent('keepalive'), false);
     assert.equal(isMeaningfulRuntimeProgressEvent('provider_heartbeat'), true);
     assert.equal(isMeaningfulRuntimeProgressEvent('tool_result'), true);
+
+    now = 4_000;
+    const reset = store.resetForProcess();
+    assert.equal(reset.state, 'idle');
+    assert.equal(reset.runtimeId, '');
+    assert.equal(reset.pid, 4242);
+    assert.equal(reset.processStartedAt, 500);
+    await store.flush();
+    persisted = readGatewayProgressLease(filePath);
+    assert.equal(persisted?.state, 'idle');
+    assert.equal(persisted?.runtimeId, '');
+    assert.equal(persisted?.pid, 4242);
+    assert.equal(persisted?.updatedAt, 4_000);
     assert.equal(fs.readdirSync(root).some((name) => name.includes('.tmp-')), false, 'atomic temp files must be cleaned up');
     console.log('gateway progress lease regression passed');
   } finally {

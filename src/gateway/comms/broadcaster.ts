@@ -14,6 +14,7 @@ import { enqueueAsyncAppend, enqueueAsyncWrite } from '../../runtime/async-file-
 import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
+import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -144,12 +145,55 @@ function appendEventLoopStallDiagnostic(
   } catch {}
 }
 
+function abortBrainOnlyStall(
+  heartbeatDriftMs: number,
+  now: number,
+): boolean {
+  const active = listLiveRuntimes().filter((runtime) => runtime.status === 'running');
+  const brainRuntimes = active.filter((runtime) => runtime.kind === 'brain_thought' || runtime.kind === 'brain_dream');
+  if (brainRuntimes.length === 0) return false;
+
+  // A Brain run is intentionally best-effort background work. If it is the
+  // only live workload when the event loop stalls, abort that run and keep the
+  // gateway process alive for foreground sessions. A user turn or another
+  // non-Brain runtime remains eligible for the normal gateway recovery path.
+  const nonBrainRuntimes = active.filter((runtime) => runtime.kind !== 'brain_thought' && runtime.kind !== 'brain_dream');
+  if (nonBrainRuntimes.length > 0) return false;
+
+  const reason = 'event_loop_stall_background_brain';
+  const aborted = brainRuntimes.filter((runtime) => abortLiveRuntime(runtime.id, reason).ok);
+  if (aborted.length === 0) return false;
+
+  try {
+    enqueueAsyncAppend(
+      path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+      `${JSON.stringify({
+        timestamp: new Date(now).toISOString(),
+        event: 'event_loop_stall_background_brain_aborted',
+        action: 'abort_background_brain',
+        pid: process.pid,
+        nodeRuntime: _nodeRuntime,
+        heartbeatDriftMs,
+        thresholdMs: EVENT_LOOP_STALL_RESTART_MS,
+        reason,
+        abortedRuntimeIds: aborted.map((runtime) => runtime.id),
+        memory: process.memoryUsage(),
+        modelBusy: _modelBusyCount > 0,
+        lastMainSessionId: _lastMainSessionId,
+      })}\n`,
+    );
+  } catch {}
+  console.warn(`[GatewayRuntime] Event loop stalled for ${Math.round(heartbeatDriftMs / 1000)}s during background Brain work; aborted ${aborted.length} Brain runtime(s) without restarting the gateway.`);
+  return true;
+}
+
 function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: number): void {
   if (!EVENT_LOOP_STALL_AUTORESTART_ENABLED) return;
   if (EVENT_LOOP_STALL_RESTART_MS <= 0) return;
   if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
   if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
   if (_eventLoopStallRestartScheduled) return;
+  if (abortBrainOnlyStall(heartbeatDriftMs, now)) return;
   _eventLoopStallRestartScheduled = true;
 
   try {

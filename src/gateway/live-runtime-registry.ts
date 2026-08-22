@@ -453,6 +453,17 @@ function toSnapshot(record: LiveRuntimeRecord): LiveRuntimeSnapshot {
 }
 
 export function registerLiveRuntime(registration: LiveRuntimeRegistration): string {
+  if (registration.kind === 'main_chat' || registration.kind === 'main_chat_goal') {
+    // Brain work is best-effort background work. A foreground turn arriving
+    // after a Thought started must take the provider/runtime lane back instead
+    // of competing with the user and making both requests time out.
+    for (const runtime of Array.from(activeRuntimes.values())) {
+      if (runtime.status !== 'running') continue;
+      if (runtime.kind !== 'brain_thought' && runtime.kind !== 'brain_dream') continue;
+      if (!runtime.abortable) continue;
+      abortLiveRuntime(runtime.id, 'foreground_chat_started');
+    }
+  }
   const id = crypto.randomUUID();
   const record: LiveRuntimeRecord = {
     id,
@@ -546,7 +557,7 @@ export function findLiveRuntime(
   return null;
 }
 
-export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
+export function abortLiveRuntime(id: string, reason = 'operator_abort'): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
   const key = String(id || '');
   cancelCheckpointFlush(key);
   const record = activeRuntimes.get(key);
@@ -557,7 +568,7 @@ export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRunti
   record.updatedAt = Date.now();
   if (record.abortSignal) {
     record.abortSignal.aborted = true;
-    record.abortSignal.reason = 'operator_abort';
+    record.abortSignal.reason = String(reason || 'operator_abort').slice(0, 160);
   }
 
   try {
