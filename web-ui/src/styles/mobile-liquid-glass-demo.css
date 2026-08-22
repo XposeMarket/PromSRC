@@ -51,6 +51,7 @@ body.pm-mobile-active {
  */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -131,6 +132,7 @@ body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
  * inserting wrapper elements or changing any hitbox/size. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -235,6 +237,7 @@ body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
  * rim lens above. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-tabbar,
