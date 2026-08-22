@@ -21,6 +21,38 @@ function readText(filePath: string): string | null {
 }
 
 /**
+ * Older ensureAgentWorkspace callers still pass the historical bootstrap
+ * scaffold that mixed identity with runtime policy (including a prompt to list
+ * allowed tools). New agents should treat AGENT.md as identity/purpose only;
+ * actual tool/workspace/run policy is enforced structurally by the runtime.
+ *
+ * This only normalizes the known generated bootstrap template. Explicit user
+ * writes, migrated legacy AGENT.md files, and unrelated bootstrap templates
+ * remain byte-for-byte untouched.
+ */
+export function normalizeAgentPromptBootstrap(defaultContent: string): string {
+  const source = String(defaultContent || '');
+  const raw = source.trim();
+  if (!raw) return source;
+
+  const isLegacyGeneratedBootstrap = raw.includes('## Role')
+    && raw.includes('## Instructions')
+    && raw.includes('- List tools this agent is allowed to use.');
+  if (!isLegacyGeneratedBootstrap) return source;
+
+  const name = raw.match(/^#\s+(.+)$/m)?.[1]?.trim() || 'Agent';
+  const roleMatch = raw.match(/## Role\s*\n([\s\S]*?)(?=\n## Instructions|$)/);
+  const role = String(roleMatch?.[1] || '').trim();
+  const purpose = /^No description set\./i.test(role) ? '' : role;
+
+  return [
+    `# ${name}`,
+    purpose ? `\n## Purpose\n${purpose}` : '',
+    `\n## Working Identity\nYou are ${name}, a distinct Prometheus Bot. Work within the capabilities and workspace access Prometheus actually exposes to you.`,
+  ].filter(Boolean).join('\n').trim() + '\n';
+}
+
+/**
  * Resolve an agent's canonical identity prompt.
  *
  * AGENT.md is authoritative. Older workspaces are migrated lazily and
@@ -74,11 +106,12 @@ export function ensureAgentPromptFile(workspacePath: string, defaultContent: str
   if (existing) return existing;
   const workspace = path.resolve(String(workspacePath || '.'));
   const filePath = path.join(workspace, AGENT_PROMPT_FILENAME);
+  const content = normalizeAgentPromptBootstrap(defaultContent);
   fs.mkdirSync(workspace, { recursive: true });
-  fs.writeFileSync(filePath, String(defaultContent || ''), 'utf-8');
+  fs.writeFileSync(filePath, content, 'utf-8');
   return {
     path: filePath,
-    content: String(defaultContent || ''),
+    content,
     sourceFilename: AGENT_PROMPT_FILENAME,
     migrated: false,
   };
