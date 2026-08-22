@@ -2,17 +2,17 @@
   "id": "arcee",
   "kind": "provider",
   "name": "Arcee AI",
-  "description": "Arcee AI hosted models through the Arcee compatible API.",
+  "description": "Arcee AI hosted Trinity models through the official OpenAI-compatible API.",
   "category": "Hosted",
   "enabledByDefault": true,
-  "docsUrl": "https://www.arcee.ai/",
+  "docsUrl": "https://docs.arcee.ai/api-reference/your-first-api-call",
   "tags": ["arcee", "trinity", "openai-compatible"],
   "runtime": {
     "binding": "providers/openai-compat-adapter",
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["trinity-large-thinking", "trinity-large-preview", "trinity-mini"],
+      "staticModels": ["trinity-mini"],
       "supportsLiveModelDiscovery": true
     }
   },
@@ -21,13 +21,15 @@
   },
   "ownership": {
     "providerIds": ["arcee"],
-    "modelPrefixes": ["trinity-"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+    "modelPrefixes": ["trinity-", "arcee-ai/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "tools"]
   },
   "setup": {
     "authType": "api_key",
     "envVars": ["ARCEEAI_API_KEY", "ARCEE_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://docs.arcee.ai/api-reference/your-first-api-call",
+    "docsHint": "Arcee's current direct API quickstart identifies trinity-mini as the production model. Live /models discovery is preferred over copying older third-party static catalogs.",
     "fields": [
       {
         "key": "api_key",
@@ -35,14 +37,14 @@
         "input": "password",
         "required": true,
         "secret": true,
-        "placeholder": "arcee_..."
+        "placeholder": "Arcee API key"
       },
       {
         "key": "model",
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "trinity-large-thinking"
+        "placeholder": "trinity-mini"
       },
       {
         "key": "endpoint",
@@ -55,7 +57,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://api.arcee.ai/api/v1",
-      "model": "trinity-large-thinking"
+      "model": "trinity-mini"
     },
     "schema": {
       "api_key": "string",
