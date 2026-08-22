@@ -2,10 +2,10 @@ const PERF_EVENT = 'prometheus:client-performance-mark';
 const SEMANTIC_LABEL = 'Active context';
 const SEMANTIC_HELP = 'Next model call · stored thread tracked separately';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
+const MAINTENANCE_INTERVAL_MS = 500;
 
 const liveBySession = new Map();
-let semanticObserver = null;
-let semanticFrame = 0;
+let maintenanceTimer = 0;
 
 function numeric(value) {
   const number = Number(value);
@@ -125,9 +125,11 @@ function ensureSemanticNote(surface, elements) {
   }
   const copy = note.querySelector('[data-context-window-semantic-copy]');
   if (copy && copy.textContent !== SEMANTIC_HELP) copy.textContent = SEMANTIC_HELP;
-  elements.root.setAttribute('aria-label', 'Active context');
-  elements.button?.setAttribute('aria-label', 'Active context');
-  if (surface === 'mobile') elements.button?.setAttribute('title', 'Active context');
+  if (elements.root.getAttribute('aria-label') !== SEMANTIC_LABEL) elements.root.setAttribute('aria-label', SEMANTIC_LABEL);
+  if (elements.button?.getAttribute('aria-label') !== SEMANTIC_LABEL) elements.button?.setAttribute('aria-label', SEMANTIC_LABEL);
+  const title = String(elements.button?.title || '');
+  if (title.startsWith('Context window')) elements.button.title = title.replace(/^Context window/, SEMANTIC_LABEL);
+  if (surface === 'mobile' && !title) elements.button?.setAttribute('title', SEMANTIC_LABEL);
 }
 
 function installSemanticStyles() {
@@ -159,33 +161,6 @@ function installSemanticStyles() {
   document.head.appendChild(style);
 }
 
-function semanticPass() {
-  installSemanticStyles();
-  for (const surface of ['desktop', 'mobile']) {
-    const elements = surfaceElements(surface);
-    if (!elements.root) continue;
-    replaceHeadText(elements.head);
-    ensureSemanticNote(surface, elements);
-    const state = currentStateForSurface(surface);
-    if (state?.active) renderLiveEstimate(state);
-  }
-}
-
-function scheduleSemanticPass() {
-  if (semanticFrame) return;
-  semanticFrame = requestAnimationFrame(() => {
-    semanticFrame = 0;
-    semanticPass();
-  });
-}
-
-function installSemanticObserver() {
-  if (semanticObserver || !document.documentElement) return;
-  semanticObserver = new MutationObserver(() => scheduleSemanticPass());
-  semanticObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-  scheduleSemanticPass();
-}
-
 function makeState(sessionId, surface, clientRequestId = '') {
   return {
     sessionId: String(sessionId || '').trim(),
@@ -206,9 +181,13 @@ function stateKey(surface, sessionId) {
 }
 
 function currentStateForSurface(surface) {
-  const activeId = surface === 'mobile' ? activeMobileSessionId() : activeDesktopSessionId();
-  if (activeId) return liveBySession.get(stateKey(surface, activeId)) || null;
-  for (const state of liveBySession.values()) if (state.surface === surface && state.active) return state;
+  if (surface === 'desktop') {
+    const activeId = activeDesktopSessionId();
+    return activeId ? liveBySession.get(stateKey(surface, activeId)) || null : null;
+  }
+  for (const state of liveBySession.values()) {
+    if (state.surface === 'mobile' && state.active) return state;
+  }
   return null;
 }
 
@@ -259,10 +238,14 @@ function recordToolTokens(sessionId, surface, details = {}, explicitTokens = 0) 
   renderLiveEstimate(state);
 }
 
+function stateIsVisible(state) {
+  if (state.surface === 'mobile') return !!document.getElementById('pm-ctx-popover');
+  const activeId = activeDesktopSessionId();
+  return !!activeId && activeId === state.sessionId;
+}
+
 function renderLiveEstimate(state) {
-  if (!state?.active) return;
-  const activeId = state.surface === 'mobile' ? activeMobileSessionId() : activeDesktopSessionId();
-  if (activeId && activeId !== state.sessionId) return;
+  if (!state?.active || !stateIsVisible(state)) return;
   const elements = surfaceElements(state.surface);
   if (!elements.root || !elements.total) return;
   captureAuthoritative(state, elements);
@@ -277,7 +260,7 @@ function renderLiveEstimate(state) {
   const percent = Math.max(0, Math.min(100, (estimatedTokens / state.windowTokens) * 100));
   const label = `~${formatTokens(estimatedTokens)} / ${formatTokens(state.windowTokens)} (${Math.round(percent)}%)`;
   state.lastRenderedText = label;
-  elements.total.textContent = label;
+  if (elements.total.textContent !== label) elements.total.textContent = label;
   if (elements.fill) elements.fill.style.width = `${percent.toFixed(1)}%`;
   if (state.surface === 'mobile') {
     elements.ring?.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
@@ -288,8 +271,21 @@ function renderLiveEstimate(state) {
   ensureSemanticNote(state.surface, elements);
   const liveCopy = elements.root.querySelector('[data-context-window-live-copy]');
   if (liveCopy) {
-    liveCopy.hidden = false;
-    liveCopy.textContent = `+${formatTokens(unreflectedTokens)} live est`;
+    if (liveCopy.hidden) liveCopy.hidden = false;
+    const liveLabel = `+${formatTokens(unreflectedTokens)} live est`;
+    if (liveCopy.textContent !== liveLabel) liveCopy.textContent = liveLabel;
+  }
+}
+
+function semanticPass() {
+  installSemanticStyles();
+  for (const surface of ['desktop', 'mobile']) {
+    const elements = surfaceElements(surface);
+    if (!elements.root) continue;
+    replaceHeadText(elements.head);
+    ensureSemanticNote(surface, elements);
+    const state = currentStateForSurface(surface);
+    if (state?.active) renderLiveEstimate(state);
   }
 }
 
@@ -301,7 +297,7 @@ function requestAuthoritativeRefresh(state) {
       } else {
         try { window.refreshChatContextWindow?.({ force: true }); } catch {}
       }
-      scheduleSemanticPass();
+      semanticPass();
     }, delay);
   }
 }
@@ -316,8 +312,8 @@ function settleLive(sessionId, surface, clientRequestId = '') {
   const elements = surfaceElements(surface);
   const liveCopy = elements.root?.querySelector('[data-context-window-live-copy]');
   if (liveCopy) {
-    liveCopy.hidden = true;
-    liveCopy.textContent = '';
+    if (!liveCopy.hidden) liveCopy.hidden = true;
+    if (liveCopy.textContent) liveCopy.textContent = '';
   }
   requestAuthoritativeRefresh(state);
   setTimeout(() => liveBySession.delete(stateKey(surface, sid)), 8000);
@@ -370,30 +366,24 @@ function installMobileHookWrappers() {
   });
 }
 
-function installMobileWrapperObserver() {
-  const install = () => {
-    installMobileHookWrappers();
-    scheduleSemanticPass();
-  };
-  install();
-  window.addEventListener('hashchange', () => setTimeout(install, 0));
-  const root = document.getElementById('mobile-root') || document.documentElement;
-  const observer = new MutationObserver(() => {
-    if (semanticFrame) return;
-    semanticFrame = requestAnimationFrame(() => {
-      semanticFrame = 0;
-      install();
-    });
-  });
-  observer.observe(root, { childList: true, subtree: true });
+function maintenancePass() {
+  installMobileHookWrappers();
+  semanticPass();
 }
 
 export function installContextWindowLiveTracking() {
   if (window.__promContextWindowLiveTrackingInstalled) return;
   window.__promContextWindowLiveTrackingInstalled = true;
   window.addEventListener(PERF_EVENT, onPerformanceMark);
-  installSemanticObserver();
-  installMobileWrapperObserver();
+  window.addEventListener('hashchange', () => setTimeout(maintenancePass, 0));
+  maintenancePass();
+  maintenanceTimer = window.setInterval(maintenancePass, MAINTENANCE_INTERVAL_MS);
+  window.addEventListener('pagehide', () => {
+    if (maintenanceTimer) {
+      clearInterval(maintenanceTimer);
+      maintenanceTimer = 0;
+    }
+  }, { once: true });
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') installContextWindowLiveTracking();
