@@ -37,6 +37,24 @@ const TASK_STATUS_PRESENTATION = {
   awaiting_user_input: { label: 'needs you', color: '#6d2d9e', icon: '&#9888;' },
 };
 
+const proposalActionsInFlight = new Set();
+
+export function formatProposalActionError(error, fallback = 'Proposal approval failed') {
+  let message = String(error?.message || error || fallback).trim();
+  const apiPrefix = message.match(/^API\s+\d+\s*:\s*(.*)$/is);
+  if (apiPrefix) message = apiPrefix[1].trim();
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed && typeof parsed === 'object') {
+      message = String(parsed.error || parsed.message || parsed.detail || '').trim();
+    }
+  } catch {
+    // Keep ordinary Error messages as-is.
+  }
+  message = message.replace(/\s+/g, ' ').trim() || fallback;
+  return message.length > 240 ? `${message.slice(0, 239).trimEnd()}…` : message;
+}
+
 function getProposalFilterValue() {
   const filterEl = document.getElementById('proposals-filter');
   const value = typeof filterEl?.value === 'string' ? filterEl.value.trim() : '';
@@ -90,7 +108,7 @@ export async function loadProposals() {
     if (!data.success) throw new Error(data.error || 'Failed to load proposals');
     renderProposals(Array.isArray(data.proposals) ? data.proposals : [], filter);
   } catch (e) {
-    list.innerHTML = `<div style="color:var(--error,#e05c5c);font-size:13px;text-align:center;padding:40px 0">Failed to load proposals: ${e.message}</div>`;
+    list.innerHTML = `<div style="color:var(--error,#e05c5c);font-size:13px;text-align:center;padding:40px 0">Failed to load proposals: ${escHtml(formatProposalActionError(e, 'Request failed'))}</div>`;
   }
 }
 
@@ -236,22 +254,31 @@ export async function jumpToProposalTask(taskId) {
 }
 
 export async function approveProposal(id) {
+  const proposalId = String(id || '').trim();
+  if (!proposalId || proposalActionsInFlight.has(proposalId)) return;
+  proposalActionsInFlight.add(proposalId);
   try {
-    const data = await api(`/api/proposals/${id}/approve`, {
+    const data = await api(`/api/proposals/${encodeURIComponent(proposalId)}/approve`, {
       method: 'POST',
       body: '{}',
     });
-    if (!data.success) throw new Error(data.error);
+    if (!data?.success) throw new Error(data?.error || 'Proposal approval failed');
+    const status = String(data?.proposal?.status || '').toLowerCase();
+    const alreadyApproved = data?.idempotent === true;
     if (data.dispatched && data.taskId) {
-      showToast('Proposal approved', `Executor task ${data.taskId} started`, 'success');
+      showToast(alreadyApproved ? 'Proposal already approved' : 'Proposal approved', `Executor task ${data.taskId} is ${status === 'executing' ? 'running' : 'ready'}`, 'success');
     } else if (data.dispatched) {
-      showToast('Proposal approved - executor started', '', 'success');
+      showToast(alreadyApproved ? 'Proposal already approved' : 'Proposal approved - executor started', '', 'success');
     } else {
-      showToast('Proposal approved', 'No executor plan was attached.', 'warning');
+      showToast(alreadyApproved ? 'Proposal already approved' : 'Proposal approved', 'No executor plan was attached.', 'warning');
     }
-    loadProposals();
   } catch (e) {
-    showToast(`Error: ${e.message}`, '', 'error');
+    showToast('Approval failed', formatProposalActionError(e), 'error');
+  } finally {
+    proposalActionsInFlight.delete(proposalId);
+    // Always reconcile the page. The server may have durably moved the
+    // proposal to approved, executing, or failed before returning an error.
+    await loadProposals();
   }
 }
 
@@ -265,7 +292,7 @@ export async function denyProposal(id) {
     showToast('Proposal denied');
     loadProposals();
   } catch (e) {
-    showToast(`Error: ${e.message}`, '', 'error');
+    showToast('Denial failed', formatProposalActionError(e, 'Could not deny proposal'), 'error');
   }
 }
 
