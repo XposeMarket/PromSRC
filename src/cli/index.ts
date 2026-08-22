@@ -16,6 +16,7 @@ import {
   parseGatewayPort,
   resolveGatewayPort,
 } from '../config/gateway-port';
+import { resolveGatewayDataDir } from './gateway-instance-mode';
 import { getDatabase } from '../db/database';
 import { getOllamaClient } from '../agents/ollama-client';
 import * as ui from './ui.js';
@@ -194,13 +195,15 @@ function persistCanonicalDevGatewayPort(port: number): void {
   fs.writeFileSync(DEV_GATEWAY_INSTANCE_FILE, JSON.stringify({ version: 1, port }, null, 2) + '\n');
 }
 
-async function configureGatewayInstance(options: { port?: string; dataDir?: string; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }): Promise<void> {
+async function configureGatewayInstance(options: { port?: string; dataDir?: string; primaryInstance?: boolean; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }): Promise<void> {
   let selectedPort: number | undefined;
   let preferredPort: number | undefined;
   const autoInstance = options.autoInstance || process.env.PROMETHEUS_AUTO_INSTANCE === '1';
   if (options.port !== undefined) {
     selectedPort = parseGatewayPort(options.port);
     if (!selectedPort) throw new Error(`Invalid gateway port: ${options.port}`);
+  } else if (options.primaryInstance) {
+    selectedPort = gatewayPortOverride || resolveGatewayPort(getConfig().getConfig()) || DEFAULT_GATEWAY_PORT;
   } else if (options.canonicalDevInstance) {
     selectedPort = readCanonicalDevGatewayPort();
     persistCanonicalDevGatewayPort(selectedPort);
@@ -219,19 +222,17 @@ async function configureGatewayInstance(options: { port?: string; dataDir?: stri
     gatewayPortOverride = selectedPort;
     process.env.PROMETHEUS_GATEWAY_PORT = String(selectedPort);
   }
-  const needsIsolatedData = options.canonicalDevInstance
-    || options.newInstance
-    || process.env.PROMETHEUS_NEW_INSTANCE === '1'
-    || (autoInstance && selectedPort !== preferredPort);
-  if (options.dataDir || needsIsolatedData) {
-    const dataDir = path.resolve(
-      options.dataDir
-        || process.env.PROMETHEUS_DATA_DIR
-        || resolveInstallRoot(),
-      ...(options.dataDir || !selectedPort ? [] : ['.prometheus-instances', `port-${selectedPort}`]),
-    );
-    process.env.PROMETHEUS_DATA_DIR = dataDir;
-  }
+  const dataDir = resolveGatewayDataDir({
+    installRoot: resolveInstallRoot(),
+    requestedDataDir: options.dataDir || process.env.PROMETHEUS_DATA_DIR,
+    selectedPort,
+    primaryInstance: options.primaryInstance,
+    canonicalDevInstance: options.canonicalDevInstance,
+    newInstance: options.newInstance || process.env.PROMETHEUS_NEW_INSTANCE === '1',
+    autoInstance,
+    preferredPort,
+  });
+  if (dataDir) process.env.PROMETHEUS_DATA_DIR = dataDir;
 }
 
 function gatewaySupervisorEnabled(): boolean {
@@ -1129,10 +1130,11 @@ gateway
   .description('Start the gateway + web UI server')
   .option('--port <port>', 'Use a dedicated gateway port for this instance')
   .option('--data-dir <path>', 'Use a dedicated data directory for this instance')
+  .option('--primary-instance', 'Use the configured gateway port and primary workspace data')
   .option('--new-instance', 'Choose the next free port and an isolated instance data directory')
   .option('--auto-instance', 'Use the default instance when free, otherwise choose the next free isolated instance')
   .option('--canonical-dev-instance', 'Use the one persistent gateway assigned to this dev checkout')
-  .action(async (options: { port?: string; dataDir?: string; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }) => {
+  .action(async (options: { port?: string; dataDir?: string; primaryInstance?: boolean; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }) => {
     await configureGatewayInstance(options);
     const pairingAdmin = ensureManualPairingAdminCredential();
     if (pairingAdmin?.generated) {
