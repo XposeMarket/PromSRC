@@ -48,6 +48,8 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
+      - name: Verify Prometheus chat link routing
+        run: npm run test:link-routing
       - name: Verify web UI restart reload dedupe
         run: npm run test:web-ui-refresh-loop
       - name: Verify live mobile liquid glass material
