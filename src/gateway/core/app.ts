@@ -107,6 +107,12 @@ export function createApp(): express.Application {
   const jsPdfDistPath = path.join(root, 'node_modules', 'jspdf', 'dist');
   app.use('/vendor/jspdf', express.static(jsPdfDistPath, { etag: true, lastModified: true, maxAge: '1d' }));
 
+  // html2canvas is only the DOM-to-canvas input adapter for the mobile Liquid
+  // Glass bridge. The optical renderer itself remains the exact vendored
+  // XposeMarket/liquid-glass compositor under web-ui/src/vendor/liquid-glass.js.
+  const html2CanvasDistPath = path.join(root, 'node_modules', 'html2canvas', 'dist');
+  app.use('/vendor/html2canvas', express.static(html2CanvasDistPath, { etag: true, lastModified: true, maxAge: '1d' }));
+
   // Serve shared assets (icons, images, etc.)
   const assetsPath = path.join(root, 'assets');
   app.use('/assets', express.static(assetsPath));
