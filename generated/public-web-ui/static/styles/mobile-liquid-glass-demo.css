@@ -298,3 +298,11 @@ body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page 
   filter: none !important;
   text-shadow: none !important;
 }
+
+/* Only the hamburger menu's page-tab labels are forced white. Icons, chevrons,
+ * section headings, sessions, and project styling remain untouched. */
+body.pm-mobile-active .pm-drawer-list .pm-drawer-item > .pm-flex {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  opacity: 1 !important;
+}
