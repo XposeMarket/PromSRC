@@ -1,3 +1,5 @@
+import './computer-use-live-view.js';
+
 /**
  * Privacy-conscious client performance marks.
  *
