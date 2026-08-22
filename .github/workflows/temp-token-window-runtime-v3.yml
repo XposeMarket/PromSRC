@@ -1,0 +1,156 @@
+name: Temporary token-window runtime v3
+
+on:
+  pull_request:
+    branches:
+      - verify/token-window-native-context-base-v3
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild:
+    if: github.head_ref == 'fix/token-window-native-context'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/token-window-native-context
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply runtime repair
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(p): return Path(p).read_bytes().decode('utf-8')
+          def write(p, s): Path(p).write_bytes(s.encode('utf-8'))
+          def nl_for(s):
+              crlf=s.count('\r\n'); bare=s.count('\n')-crlf
+              return '\r\n' if crlf > bare else '\n'
+          def block(s, v): return v.replace('\n', nl_for(s))
+          def repl(s, old, new, label):
+              old=block(s,old); new=block(s,new)
+              c=s.count(old)
+              if c != 1: raise SystemExit(f'{label}: expected 1 match, got {c}')
+              return s.replace(old,new,1)
+
+          # session.ts
+          p='src/gateway/session.ts'; s=read(p)
+          s=repl(s,
+            "  session.contextSummaryUpdatedAt = Date.now();\n  appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);",
+            "  session.contextSummaryUpdatedAt = Date.now();\n  // Reconcile persisted pressure immediately after compaction so diagnostics\n  // and the next preflight reflect the new active context rather than the old peak.\n  session.contextTokenEstimate = estimateActiveContextTokens(session);\n  appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);",
+            'compaction pressure reconciliation')
+          s,n=re.subn(r"(\r?\n)    const realMessageCount = session\.history\.filter\(isRealContextMessage\)\.length \+ 1;",r"\1",s)
+          if n != 2: raise SystemExit(f'message-count declarations: expected 2, got {n}')
+          s=repl(s,
+            "    const shouldCompact = realMessageCount >= sessionPolicy.compactionMinMessages\n      && projectedTokens >= compactionThresholdTokens\n      && !recentlyCompacted;",
+            "    const shouldCompact = projectedTokens >= compactionThresholdTokens\n      && !recentlyCompacted;",
+            'compaction message gate')
+          s=repl(s,
+            "    const shouldInject = realMessageCount >= sessionPolicy.compactionMinMessages\n      && projectedTokens >= thresholdTokens\n      && !recentlyPrompted;",
+            "    const shouldInject = projectedTokens >= thresholdTokens\n      && !recentlyPrompted;",
+            'memory flush message gate')
+          s=repl(s,
+            "  options?: { maxMessages?: number },\n): ChatMessage[] {\n  const session = getSession(id);\n  const maxMessages = Number.isFinite(Number(options?.maxMessages))\n    ? Math.max(1, Math.floor(Number(options?.maxMessages)))\n    : maxTurns * 2;",
+            "  options?: { maxMessages?: number; fullActiveHistory?: boolean },\n): ChatMessage[] {\n  const session = getSession(id);\n  const maxMessages = options?.fullActiveHistory === true\n    ? Number.POSITIVE_INFINITY\n    : Number.isFinite(Number(options?.maxMessages))\n      ? Math.max(1, Math.floor(Number(options?.maxMessages)))\n      : maxTurns * 2;",
+            'full active history option')
+          s=repl(s,"    if (messages.length > maxMessages) {","    if (Number.isFinite(maxMessages) && messages.length > maxMessages) {",'finite history trim')
+          marker=block(s,"/**\n * Builds a legacy [RECENT_TOOL_LOG] block")
+          helper=block(s,"export function getActiveHistoryForApiCall(id: string): ChatMessage[] {\n  return getHistoryForApiCall(id, 60, { fullActiveHistory: true });\n}\n\n")
+          if helper not in s:
+              if marker not in s: raise SystemExit('active history insertion marker missing')
+              s=s.replace(marker,helper+marker,1)
+          write(p,s)
+
+          # chat.router.ts
+          p='src/gateway/routes/chat.router.ts'; s=read(p)
+          s=repl(s,
+            "getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext",
+            "getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext",
+            'session import')
+          s=repl(s,
+            "  const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;\n  htime('before getHistoryForApiCall');\n  const rawHistory = executionMode === 'cron'\n    ? []\n    : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });\n  htime('after getHistoryForApiCall');",
+            "  htime('before getHistoryForApiCall');\n  const rawHistory = executionMode === 'cron'\n    ? []\n    : getActiveHistoryForApiCall(sessionId);\n  htime('after getHistoryForApiCall');",
+            'main model active history')
+          s=repl(s,
+            "    const messageCount = resolveRollingCompactionPolicy().messageCount;\n    const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });",
+            "    const history = getActiveHistoryForApiCall(id);",
+            'context diagnostics active history')
+          s=repl(s,"    const rollingCompactionApplied = false;\n\n","",'dead rolling flag')
+          s=repl(s,
+            "        disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,",
+            "        // The actual model-call boundary owns token-aware compaction.\n        // Persisting a message must never impose a message-count context policy.\n        disableCompactionCheck: true,",
+            'legacy persistence compaction')
+          s=repl(s,
+            "  const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');\n  const recentWindow = nonSystemMessages.slice(-18);",
+            "  const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');\n  // Token pressure decides when to compact; message count must not decide what\n  // context is preserved. Retire the entire active conversation, while the\n  // previous rolling summary is supplied separately as previousSummary.\n  const recentWindow = nonSystemMessages.filter((m) => !/^\\[Rolling context summary\\]/i.test(String(m?.content || '').trim()));",
+            'full compaction retirement window')
+          s=repl(s,
+            "      numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),",
+            "      // Compaction output is tightly bounded, so the compactor can use\n      // the model's hard window to ingest the active conversation being retired.\n      numCtx: profile.contextWindowTokens,",
+            'compactor hard window')
+          s=repl(s,
+            "    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {",
+            "    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {",
+            'post-tool message gate')
+          marker=block(s,"      const generationPromise = ollama.chatWithThinking(messages, 'executor', {")
+          pre=block(s,"""      // The first provider call gets the same token-budget guard as later
+      // rounds. A single huge first turn can therefore compact immediately.
+      if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+        const preflightCompact = await maybeRunMidWorkflowCompaction({
+          sessionId,
+          messages,
+          toolResults: allToolResults,
+          reasoningTrail: normalizeReasoningSummary(allReasoningSummary),
+          sendSSE,
+          abortSignal,
+          reasonHint: 'pre_model_token_budget',
+          routeSnapshot: activeGenerationRouteSnapshot,
+        });
+        if (preflightCompact.compacted) {
+          midWorkflowCompactionsThisTurn++;
+          sendSSE('info', { message: 'Context compacted. Continuing the active workflow...' });
+        }
+        if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
+      }
+
+""")
+          if pre not in s:
+              if marker not in s: raise SystemExit('generation marker missing')
+              s=s.replace(marker,pre+marker,1)
+          write(p,s)
+
+          # mobile settings: remove misleading message-count controls
+          p='web-ui/src/mobile/mobile-settings.js'; s=read(p)
+          pat=re.compile(r"\$\{card\('Session Compaction', `.*?`, 'clipboard'\)\}",re.S)
+          replacement="${card('Context Window', `\n      <div class=\"pm-card-body\">Prometheus uses the selected model's token window automatically. Full active conversation context is retained until token pressure requires rolling compaction; there is no message-count context limit.</div>\n    `, 'clipboard')}"
+          s,n=pat.subn(replacement,s,count=1)
+          if n != 1: raise SystemExit(f'mobile context card: expected 1 replacement, got {n}')
+          write(p,s)
+          PY
+
+          npm ci --ignore-scripts
+          npm run sync:web-ui
+          node scripts/test-token-window-native-context.mjs
+          npm run test:context-window
+          npx tsc --noEmit
+          echo '--- diff stat ---'
+          git diff --stat
+          git diff --numstat
+      - name: Commit verified runtime patch
+        shell: bash
+        run: |
+          git config user.name "prometheus-context-bot"
+          git config user.email "prometheus-context-bot@users.noreply.github.com"
+          git add src/gateway/session.ts src/gateway/routes/chat.router.ts web-ui/src/mobile/mobile-settings.js generated/public-web-ui/static/mobile/mobile-settings.js
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "fix(context): use model token window for active history"
+          git push origin HEAD:fix/token-window-native-context
