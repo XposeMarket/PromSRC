@@ -1,3 +1,5 @@
+import './context-window-live-tracking.js';
+
 /**
  * Privacy-conscious client performance marks.
  *
@@ -42,6 +44,9 @@ export function markClientPerformance(name, details = {}) {
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
   try {
     performance.mark(`prom:${cleanName}`, { detail: safe });
+  } catch {}
+  try {
+    window.dispatchEvent(new CustomEvent('prometheus:client-performance-mark', { detail: entry }));
   } catch {}
   return at;
 }
