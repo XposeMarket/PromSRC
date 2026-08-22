@@ -190,8 +190,82 @@ if (!fs.existsSync(ELECTRON_PROFILE_DIR)) {
 const SETUP_STAMP_FILE = path.join(USER_DATA_DIR, '.setup-complete');
 const CURRENT_VERSION  = require('../package.json').version;
 const UPDATER_SETTINGS_FILE = path.join(USER_DATA_DIR, 'updater-settings.json');
-const CANONICAL_UPDATE_CONFIG_DIR = path.join(USER_DATA_DIR, '.prometheus');
-const GATEWAY_PORT_STATE_FILE = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'electron-gateway-port.json');
+const LEGACY_RUNTIME_STATE_DIR = path.join(USER_DATA_DIR, '.prometheus');
+const STORAGE_LAYOUT_V2_RUNTIME_DIR = path.join(USER_DATA_DIR, 'runtime');
+const STORAGE_LAYOUT_V2_WORKSPACE_DIR = path.join(USER_DATA_DIR, 'workspace');
+const STORAGE_LAYOUT_V2_READY_FILE = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-ready.json');
+let STORAGE_LAYOUT_V2_ACTIVE = false;
+let RUNTIME_STATE_DIR = LEGACY_RUNTIME_STATE_DIR;
+let RUNTIME_CONFIG_DIR = LEGACY_RUNTIME_STATE_DIR;
+let RUNTIME_CONFIG_FILE = path.join(RUNTIME_CONFIG_DIR, 'config.json');
+let CANONICAL_UPDATE_CONFIG_DIR = RUNTIME_STATE_DIR;
+let GATEWAY_PORT_STATE_FILE = path.join(RUNTIME_STATE_DIR, 'electron-gateway-port.json');
+
+function sameStoragePath(left, right) {
+  const a = path.resolve(String(left || ''));
+  const b = path.resolve(String(right || ''));
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function isStorageLayoutV2Ready() {
+  try {
+    const marker = JSON.parse(fs.readFileSync(STORAGE_LAYOUT_V2_READY_FILE, 'utf8'));
+    return marker?.readyToActivate === true
+      && Number(marker?.layoutVersion) === 2
+      && sameStoragePath(marker?.targetRuntimeRoot, STORAGE_LAYOUT_V2_RUNTIME_DIR)
+      && sameStoragePath(marker?.targetWorkspaceRoot, STORAGE_LAYOUT_V2_WORKSPACE_DIR);
+  } catch {
+    return false;
+  }
+}
+
+function refreshStorageLayoutState() {
+  STORAGE_LAYOUT_V2_ACTIVE = isStorageLayoutV2Ready();
+  RUNTIME_STATE_DIR = STORAGE_LAYOUT_V2_ACTIVE ? STORAGE_LAYOUT_V2_RUNTIME_DIR : LEGACY_RUNTIME_STATE_DIR;
+  RUNTIME_CONFIG_DIR = STORAGE_LAYOUT_V2_ACTIVE ? path.join(RUNTIME_STATE_DIR, 'config') : LEGACY_RUNTIME_STATE_DIR;
+  RUNTIME_CONFIG_FILE = path.join(RUNTIME_CONFIG_DIR, 'config.json');
+  CANONICAL_UPDATE_CONFIG_DIR = RUNTIME_STATE_DIR;
+  GATEWAY_PORT_STATE_FILE = path.join(RUNTIME_STATE_DIR, 'electron-gateway-port.json');
+}
+
+function runStorageLayoutV2Migration() {
+  if (isStorageLayoutV2Ready()) return true;
+  if (String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() === '0') return false;
+  try {
+    const commonArgs = ['--execute', '--app-data', USER_DATA_DIR, '--migration-id', 'desktop-auto-v2'];
+    const env = { ...process.env, PROMETHEUS_DATA_DIR: USER_DATA_DIR };
+    if (IS_PACKAGED_RUNTIME) {
+      const migrationEntry = path.join(getPackagedAppRoot(), 'dist', 'runtime', 'storage-migration-cli.js');
+      if (!fs.existsSync(migrationEntry)) throw new Error(`Storage migration entry is missing: ${migrationEntry}`);
+      execFileSync(process.execPath, [migrationEntry, ...commonArgs], {
+        cwd: getGatewayWorkingDirectory(),
+        env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 120_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    } else {
+      const tsxCli = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+      const migrationEntry = path.join(APP_ROOT, 'src', 'runtime', 'storage-migration-cli.ts');
+      const sourceNode = resolveSourceGatewayNode();
+      execFileSync(sourceNode, [tsxCli, migrationEntry, ...commonArgs], {
+        cwd: APP_ROOT,
+        env,
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 120_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    }
+    return isStorageLayoutV2Ready();
+  } catch (error) {
+    console.error('[StorageMigration] v2 migration did not activate; continuing on legacy state:', error?.message || error);
+    return false;
+  }
+}
+
+refreshStorageLayoutState();
 const AUTO_GATEWAY_PORT_MIN = 20_000;
 const AUTO_GATEWAY_PORT_MAX = 45_000;
 const AUTO_GATEWAY_PORT_ATTEMPTS = 512;
@@ -460,7 +534,7 @@ function getCanonicalStateRoots(requestRoots = []) {
   if (!canonicalUpdaterApi?.collectUserStateRoots) return [];
   let config = {};
   try {
-    const configPath = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'config.json');
+    const configPath = RUNTIME_CONFIG_FILE;
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     if (parsed && typeof parsed === 'object') config = parsed;
   } catch {}
@@ -951,7 +1025,7 @@ async function selectGatewayPort() {
 
 function getConfiguredTailscaleFunnel() {
   try {
-    const configPath = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'config.json');
+    const configPath = RUNTIME_CONFIG_FILE;
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const remoteAccess = config?.gateway?.remoteAccess;
     if (!remoteAccess?.enabled || typeof remoteAccess.publicUrl !== 'string') return null;
@@ -1232,7 +1306,7 @@ function resolveVaultMasterKey() {
       writeGatewayLog('[main] safeStorage unavailable — vault key will use file fallback\n');
       return null;
     }
-    const vaultDir = path.join(USER_DATA_DIR, '.prometheus', 'vault');
+    const vaultDir = path.join(RUNTIME_STATE_DIR, 'vault');
     if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
     const sealedPath = path.join(vaultDir, 'vault.key.enc');
     const legacyPath = path.join(vaultDir, 'vault.key');
@@ -1306,7 +1380,7 @@ function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
 
 function readGatewayRuntimeStatus() {
   try {
-    const statusPath = path.join(USER_DATA_DIR, '.prometheus', 'gateway-runtime-status.json');
+    const statusPath = path.join(RUNTIME_STATE_DIR, 'gateway-runtime-status.json');
     if (!fs.existsSync(statusPath)) return null;
     return JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
   } catch {
@@ -1315,7 +1389,7 @@ function readGatewayRuntimeStatus() {
 }
 
 function readGatewayProgressLease() {
-  return readSharedGatewayProgressLease(path.join(USER_DATA_DIR, '.prometheus'));
+  return readSharedGatewayProgressLease(RUNTIME_STATE_DIR);
 }
 
 // Electron can still be torn down by a renderer crash, an OS close request,
@@ -1732,7 +1806,7 @@ function observeGatewayHealth(healthOk, durationMs, outcome = healthOk ? 'ok' : 
     progressLease,
   });
   appendGatewaySupervisorEvidence(
-    path.join(USER_DATA_DIR, '.prometheus'),
+    RUNTIME_STATE_DIR,
     buildGatewaySupervisorEvidence({
       now,
       supervisorPid: process.pid,
@@ -1797,7 +1871,10 @@ function startGatewayHealthWatchdog() {
 
 async function startGateway() {
   console.log('[Prometheus] Starting gateway...');
+  runStorageLayoutV2Migration();
+  refreshStorageLayoutState();
   console.log(`[Prometheus] User data: ${USER_DATA_DIR}`);
+  console.log(`[Prometheus] Storage layout: ${STORAGE_LAYOUT_V2_ACTIVE ? 'v2' : 'legacy'}`);
   console.log(`[Prometheus] Packaged runtime: ${IS_PACKAGED_RUNTIME ? 'yes' : 'no'}`);
 
   openGatewayLog();
@@ -1827,8 +1904,13 @@ async function startGateway() {
     ...process.env,
     FORCE_COLOR:                  '0',
     PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
+    PROMETHEUS_APP_DATA_DIR:      USER_DATA_DIR,
     PROMETHEUS_APP_ROOT:          APP_ROOT,
-    PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
+    PROMETHEUS_WORKSPACE_DIR:     STORAGE_LAYOUT_V2_WORKSPACE_DIR,
+    ...(STORAGE_LAYOUT_V2_ACTIVE ? {
+      PROMETHEUS_STORAGE_LAYOUT:  'canonical',
+      PROMETHEUS_RUNTIME_DIR:     RUNTIME_STATE_DIR,
+    } : {}),
     // The public port remains the gateway identity used by pairing, lifecycle
     // restarts, Electron navigation, and Tailscale Funnel. Only the HTTP
     // listener itself moves behind Electron's stable relay.

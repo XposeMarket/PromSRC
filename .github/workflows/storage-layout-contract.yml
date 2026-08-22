@@ -13,8 +13,10 @@ on:
       - 'src/skills/**'
       - 'src/extensions/**'
       - 'src/gateway/**'
+      - 'src/scheduler.ts'
       - 'electron/**'
       - 'scripts/**migration**'
+      - 'scripts/test-storage-layout-electron-contract.mjs'
       - '.github/workflows/storage-layout-contract.yml'
   push:
     branches: [main]
@@ -29,14 +31,16 @@ on:
       - 'src/skills/**'
       - 'src/extensions/**'
       - 'src/gateway/**'
+      - 'src/scheduler.ts'
       - 'electron/**'
       - 'scripts/**migration**'
+      - 'scripts/test-storage-layout-electron-contract.mjs'
       - '.github/workflows/storage-layout-contract.yml'
 
 jobs:
   storage-layout:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,5 +54,15 @@ jobs:
         run: npx --no-install tsx src/runtime/storage-ownership.regression.ts
       - name: Storage migration regression
         run: npx --no-install tsx src/runtime/storage-migration.regression.ts
+      - name: Minimal workspace regression
+        run: npx --no-install tsx src/config/public-workspace.regression.ts
+      - name: Redo onboarding preservation regression
+        run: npx --no-install tsx src/gateway/onboarding/redo-onboarding.regression.ts
+      - name: Legacy config portability regression
+        run: npx --no-install tsx src/config/config-path-portability.regression.ts
+      - name: Canonical config activation regression
+        run: npx --no-install tsx src/config/config-storage-layout.regression.ts
+      - name: Electron storage activation contract
+        run: node scripts/test-storage-layout-electron-contract.mjs
       - name: Backend typecheck
         run: npx --no-install tsc --noEmit
