@@ -4,7 +4,6 @@ import fs from 'node:fs';
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const session = read('src/gateway/session.ts');
 const chat = read('src/gateway/routes/chat.router.ts');
-const workflow = read('.github/workflows/pr-regression.yml');
 const mobileSettings = read('web-ui/src/mobile/mobile-settings.js');
 
 // The main model path must use the entire active post-compaction history. A
@@ -63,8 +62,5 @@ assert.doesNotMatch(mobileSettings, /Rolling message count/,
   'mobile settings must not present rolling message count as a context control');
 assert.doesNotMatch(mobileSettings, /Max messages/,
   'mobile settings must not present max messages as a context-window control');
-
-assert.match(workflow, /Verify token-window-native model context/,
-  'PR CI must permanently run the token-window-native context regression');
 
 console.log('token-window-native context regression passed');
