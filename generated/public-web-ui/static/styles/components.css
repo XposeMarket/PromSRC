@@ -8604,6 +8604,60 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 
 /* ── Email composer card ─────────────────────────────────────── */
 .email-composer-card {
+  width: min(420px, 100%);
+  margin: 10px 0 6px;
+  padding: 14px;
+  border: 1px solid var(--border, var(--pm-border));
+  border-radius: 22px;
+  background: var(--surface-2, var(--pm-surface-secondary));
+  box-sizing: border-box;
+}
+.email-composer-kicker {
+  margin-bottom: 8px;
+  color: var(--muted, var(--pm-muted));
+  font-size: 13px;
+  font-weight: 700;
+}
+.email-composer-preview {
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--surface, var(--pm-surface));
+  color: var(--text, var(--pm-text));
+  font-size: 15px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.email-composer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.email-send-btn,
+.email-discard-btn {
+  flex: 1 1 0;
+  min-height: 40px;
+  border-radius: 999px;
+  border: 0;
+  font-size: 14px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.email-send-btn {
+  background: var(--text, var(--pm-text));
+  color: var(--bg, #fff);
+}
+.email-discard-btn {
+  background: transparent;
+  border: 1px solid var(--border, var(--pm-border));
+  color: var(--text, var(--pm-text));
+}
+.email-composer-sent {
+  margin-top: 10px;
+  color: var(--muted, var(--pm-muted));
+  font-size: 13px;
+}
+
+.email-composer-card {
   margin: 14px 0 6px;
   max-width: min(100%, 640px);
   border: 1px solid var(--border, #e3e3e3);
