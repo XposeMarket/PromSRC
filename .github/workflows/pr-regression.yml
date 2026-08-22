@@ -80,3 +80,5 @@ jobs:
         run: node scripts/test-design-preview-contract.mjs
       - name: Verify chat error presentation
         run: node scripts/test-chat-error-presentation.mjs
+      - name: Verify desktop reasoning summary streaming
+        run: node scripts/test-desktop-reasoning-summary-stream.mjs

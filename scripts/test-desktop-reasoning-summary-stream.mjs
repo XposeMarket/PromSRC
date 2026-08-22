@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const desktop = fs.readFileSync(new URL('../web-ui/src/pages/ChatPage.js', import.meta.url), 'utf8');
+const desktopGenerated = fs.readFileSync(new URL('../generated/public-web-ui/static/pages/ChatPage.js', import.meta.url), 'utf8');
+const mobile = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-pages.js', import.meta.url), 'utf8');
+const mobileGenerated = fs.readFileSync(new URL('../generated/public-web-ui/static/mobile/mobile-pages.js', import.meta.url), 'utf8');
+const legacySplit = /if \(isDesktopProgressNarration\(chunk\)\) setDesktopLiveProgressNarration\(streamState, chunk, (appendLiveTrace|appendTrace)\);\s*else appendDesktopReasoningSummary\(streamState, chunk, \1\);/g;
+assert.equal([...desktop.matchAll(legacySplit)].length, 0);
+assert.equal([...desktopGenerated.matchAll(legacySplit)].length, 0);
+const directPattern = /setDesktopLiveProgressNarration\(streamState, chunk, (appendLiveTrace|appendTrace)\);/g;
+assert.ok([...desktop.matchAll(directPattern)].length >= 4);
+assert.ok([...desktopGenerated.matchAll(directPattern)].length >= 4);
+for (const text of [mobile, mobileGenerated]) assert.match(text, /reasoning_summary[^]*?explicit user-safe progress channel[^]*?_setMobileLiveProgressNarration\(message, chunk\)/);
+console.log('desktop reasoning-summary stream parity regression passed');

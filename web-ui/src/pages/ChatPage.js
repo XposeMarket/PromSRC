@@ -17802,8 +17802,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
 	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
-	                if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
-	                else appendDesktopReasoningSummary(streamState, chunk, appendLiveTrace);
+	                // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	              }
 	            }
 	            break;
@@ -17813,8 +17812,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
 	              collectTurnThinking(chunk);
-	              if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
-	              else appendDesktopReasoningSummary(streamState, chunk, appendLiveTrace);
+	              // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	            }
 	            break;
 	          }
@@ -48506,8 +48504,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-      if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
-      else appendDesktopReasoningSummary(streamState, chunk, appendTrace);
+      // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking_delta') {
@@ -48518,8 +48515,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
       if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
         const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-        if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
-        else appendDesktopReasoningSummary(streamState, chunk, appendTrace);
+        // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
