@@ -29,6 +29,10 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify desktop background co-work delivery
+        run: |
+          npx tsx src/gateway/desktop-cowork-delivery.regression.ts
+          npx tsx src/gateway/desktop-cowork-wrapper.regression.ts
       - name: Verify proposal approval durability
         run: |
           npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts

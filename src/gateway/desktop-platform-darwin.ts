@@ -22,26 +22,20 @@ import {
   type DesktopAppLaunchRequest,
   type HelperResponse,
 } from './desktop-backend.js';
+import type { DesktopDeliveryTarget } from './desktop-cowork-delivery.js';
 import type { DesktopMonitorInfo } from './desktop-tools.js';
 
-/** Locate the helper binary. Override with PROMETHEUS_DESKTOP_HELPER_PATH (e.g.
- *  a vendored universal binary in bin/). Falls back to the SwiftPM build output
- *  under native/desktop-helper-macos for local development. */
 function resolveHelperPath(): string {
   const override = String(process.env.PROMETHEUS_DESKTOP_HELPER_PATH || '').trim();
   if (override) return override;
-  // dist/gateway -> repo root is two levels up from src/gateway at build time;
-  // probe a few likely locations relative to this module and cwd.
   const rel = 'native/desktop-helper-macos/.build';
   const resourcesPath = String((process as any).resourcesPath || '').trim();
   const candidates = [
     ...(resourcesPath ? [path.resolve(resourcesPath, 'prometheus-desktop-helper')] : []),
     path.resolve(process.cwd(), 'prometheus-desktop-helper'),
     path.resolve(process.cwd(), 'bin/prometheus-desktop-helper'),
-    // build.sh output (direct swiftc) — preferred for local dev.
     path.resolve(__dirname, `../../${rel}/prometheus-desktop-helper`),
     path.resolve(process.cwd(), `${rel}/prometheus-desktop-helper`),
-    // SwiftPM output locations (if `swift build` is ever usable here).
     path.resolve(__dirname, `../../${rel}/release/prometheus-desktop-helper`),
     path.resolve(__dirname, `../../${rel}/debug/prometheus-desktop-helper`),
     path.resolve(process.cwd(), `${rel}/release/prometheus-desktop-helper`),
@@ -56,6 +50,14 @@ function resolveHelperPath(): string {
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+}
+
+function requireTargetPid(target: DesktopDeliveryTarget, method: string): number {
+  const pid = Number(target?.pid);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new DesktopUnsupportedError('darwin', method, 'Background co-work delivery requires a positive target pid.');
+  }
+  return pid;
 }
 
 export class DarwinBackend implements DesktopBackend {
@@ -98,7 +100,7 @@ export class DarwinBackend implements DesktopBackend {
       try {
         msg = JSON.parse(line);
       } catch {
-        continue; // ignore non-JSON noise on stdout
+        continue;
       }
       const p = this.pending.get(Number(msg.id));
       if (!p) continue;
@@ -142,7 +144,6 @@ export class DarwinBackend implements DesktopBackend {
     });
   }
 
-  // ── Context / capture ──────────────────────────────────────────────────────
   async gatherContext(): Promise<DesktopContext> {
     return this.call<DesktopContext>('gatherContext');
   }
@@ -167,73 +168,62 @@ export class DarwinBackend implements DesktopBackend {
     return { png, bounds: r.bounds, devicePixelRatio: r.devicePixelRatio };
   }
 
-  // ── Pointer ────────────────────────────────────────────────────────────────
-  async movePointer(x: number, y: number): Promise<void> {
-    await this.call('movePointer', { x, y });
+  // Foreground compatibility lane.
+  async movePointer(x: number, y: number): Promise<void> { await this.call('movePointer', { x, y }); }
+  async click(button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> { await this.call('click', { button, repeat, modifiers }); }
+  async scroll(deltaX: number, deltaY: number): Promise<void> { await this.call('scroll', { deltaX, deltaY }); }
+  async drag(fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> { await this.call('drag', { fromX, fromY, toX, toY, steps }); }
+
+  // Background co-work lane. All OS backends expose the same target-first shape.
+  async clickTargeted(target: DesktopDeliveryTarget, x: number, y: number, button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
+    const pid = requireTargetPid(target, 'clickTargeted');
+    await this.call('click', { pid, x, y, button, repeat, modifiers });
   }
-  async click(button: DesktopMouseButton, repeat: number, modifiers: DesktopModifier[]): Promise<void> {
-    await this.call('click', { button, repeat, modifiers });
+  async scrollTargeted(target: DesktopDeliveryTarget, _x: number, _y: number, deltaX: number, deltaY: number): Promise<void> {
+    const pid = requireTargetPid(target, 'scrollTargeted');
+    await this.call('scroll', { pid, deltaX, deltaY });
   }
-  async scroll(deltaX: number, deltaY: number): Promise<void> {
-    await this.call('scroll', { deltaX, deltaY });
-  }
-  async drag(fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
-    await this.call('drag', { fromX, fromY, toX, toY, steps });
+  async dragTargeted(target: DesktopDeliveryTarget, fromX: number, fromY: number, toX: number, toY: number, steps: number): Promise<void> {
+    const pid = requireTargetPid(target, 'dragTargeted');
+    await this.call('drag', { pid, fromX, fromY, toX, toY, steps });
   }
 
-  // ── Keyboard ───────────────────────────────────────────────────────────────
-  async typeText(text: string): Promise<void> {
-    await this.call('typeText', { text });
+  async typeText(text: string): Promise<void> { await this.call('typeText', { text }); }
+  async pressKey(key: DesktopCanonicalKey): Promise<void> { await this.call('pressKey', { key: key.key, modifiers: key.modifiers }); }
+  async typeTextTargeted(target: DesktopDeliveryTarget, text: string): Promise<void> {
+    const pid = requireTargetPid(target, 'typeTextTargeted');
+    await this.call('typeText', { pid, text });
   }
-  async pressKey(key: DesktopCanonicalKey): Promise<void> {
-    await this.call('pressKey', { key: key.key, modifiers: key.modifiers });
+  async pressKeyTargeted(target: DesktopDeliveryTarget, key: DesktopCanonicalKey): Promise<void> {
+    const pid = requireTargetPid(target, 'pressKeyTargeted');
+    await this.call('pressKey', { pid, key: key.key, modifiers: key.modifiers });
   }
 
-  // ── Clipboard ────────────────────────────────────────────────────────────────
   async getClipboard(): Promise<string> {
     const r = await this.call<{ text: string }>('getClipboard');
     return r.text ?? '';
   }
-  async setClipboard(text: string): Promise<void> {
-    await this.call('setClipboard', { text });
-  }
-
-  // ── Windows / apps ───────────────────────────────────────────────────────────
+  async setClipboard(text: string): Promise<void> { await this.call('setClipboard', { text }); }
   async focusWindow(handle: number): Promise<boolean> {
     const r = await this.call<{ ok: boolean }>('focusWindow', { handle });
     return r.ok === true;
   }
-  async windowControl(handle: number, action: DesktopWindowAction): Promise<void> {
-    await this.call('windowControl', { handle, action });
-  }
+  async windowControl(handle: number, action: DesktopWindowAction): Promise<void> { await this.call('windowControl', { handle, action }); }
   async launchApp(request: DesktopAppLaunchRequest): Promise<void> {
-    await this.call('launchApp', {
-      name: request.name ?? '',
-      path: request.path ?? '',
-      bundleId: request.bundleId ?? '',
-    });
+    await this.call('launchApp', { name: request.name ?? '', path: request.path ?? '', bundleId: request.bundleId ?? '' });
   }
-
-  // ── Accessibility ──────────────────────────────────────────────────────────
   async getAccessibilityTree(opts: { windowName?: string; depth: number; maxNodes: number }): Promise<string> {
     const r = await this.call<{ tree: string }>('getAccessibilityTree', {
-      windowName: opts.windowName ?? '',
-      depth: opts.depth,
-      maxNodes: opts.maxNodes,
+      windowName: opts.windowName ?? '', depth: opts.depth, maxNodes: opts.maxNodes,
     });
     return r.tree ?? '';
   }
+  async checkPermissions(): Promise<DesktopPermissionStatus[]> { return this.call<DesktopPermissionStatus[]>('checkPermissions'); }
 
-  // ── Health ───────────────────────────────────────────────────────────────────
-  async checkPermissions(): Promise<DesktopPermissionStatus[]> {
-    return this.call<DesktopPermissionStatus[]>('checkPermissions');
-  }
-
-  /** Best-effort shutdown of the helper process. */
   dispose(): void {
     if (this.proc && !this.proc.killed) {
-      try { this.proc.stdin.end(); } catch { /* ignore */ }
-      try { this.proc.kill(); } catch { /* ignore */ }
+      try { this.proc.stdin.end(); } catch {}
+      try { this.proc.kill(); } catch {}
     }
     this.proc = null;
   }
