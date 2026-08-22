@@ -15,8 +15,8 @@ import {
 
 const STOP = new Set([
   'a','about','after','again','all','am','an','and','are','as','at','be','because','been','before','but','by','can','could',
-  'did','do','does','for','from','get','got','had','has','have','how','i','if','in','into','is','it','its','just','like','me','my',
-  'of','on','or','our','please','should','so','that','the','their','them','then','there','these','they','this','to','us','was','we',
+  'did','do','does','for','from','get','give','got','had','has','have','how','i','if','in','into','is','it','its','just','like','me','my',
+  'of','on','or','our','please','should','so','some','that','the','their','them','then','there','these','they','this','to','us','was','we',
   'were','what','when','where','which','who','why','will','with','would','you','your',
   // Conversational retrieval cues are not topical evidence. Removing them here
   // prevents a vague request such as "anything important I should remember" from
@@ -89,6 +89,7 @@ function stem(term: string): string {
 function literalTerms(value: string): string[] {
   return Array.from(new Set(normalize(value)
     .split(' ')
+    .filter((term) => term.length >= 2 && !STOP.has(term))
     .map(stem)
     .filter((term) => term.length >= 2 && !STOP.has(term))));
 }
