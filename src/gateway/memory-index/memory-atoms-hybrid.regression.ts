@@ -48,13 +48,13 @@ const DIMENSIONS: Record<Concept, number> = {
 
 const semanticSignals: Record<Concept, RegExp[]> = {
   code_safety: [/atlas source/i, /safety snapshot/i, /precaution.*touch.*code/i, /protect.*before.*codebase/i, /safeguard.*repository/i],
-  release_secret: [/release credentials/i, /deployment vault/i, /where.*shipping secret/i, /publish.*credential/i],
-  mobile_sync: [/mercury mobile/i, /relay queue/i, /phone.*conversation.*stay.*same/i, /handset.*chat.*sync/i],
+  release_secret: [/release credentials/i, /deployment vault/i, /shipping secret/i, /publish.*credential/i],
+  mobile_sync: [/mercury mobile/i, /relay queue/i, /phone.*conversation.*stay.*same/i, /handset.*chat/i, /chat.*handset/i, /handset.*desktop/i],
   legal_block: [/mercury launch/i, /legal approval/i, /lawyer.*sign/i, /counsel.*holding.*ship/i],
-  browser_anchor: [/browser navigation/i, /blind scrolling/i, /orient.*page.*scroll/i, /anchor.*before.*scroll/i],
-  sqlite_wal: [/sqlite persistence/i, /concurrent readers/i, /simultaneous.*read.*write/i, /database.*avoid.*reader.*stall/i],
+  browser_anchor: [/browser navigation/i, /blind scrolling/i, /orient.*page/i, /page.*moving.*down/i, /anchor.*before.*scroll/i],
+  sqlite_wal: [/sqlite persistence/i, /concurrent readers/i, /simultaneous.*read.*write/i, /database.*reader/i, /reader.*writer/i],
   delete_safety: [/destructive file removal/i, /verified backup/i, /before.*erase.*disk/i, /purge.*without.*losing/i],
-  deploy_smoke: [/production deployments/i, /smoke test/i, /after.*ship.*application/i, /verify.*once.*published/i],
+  deploy_smoke: [/production deployments/i, /smoke test/i, /ship.*application/i, /application.*ship/i, /verify.*once.*published/i],
   support_style: [/support inbox/i, /short direct replies/i, /customer.*message.*brief/i],
   ceramic: [/orange_sentinel/i, /ceramic glaze/i, /pottery.*inventory/i],
   status_style: [/compact technical status/i, /lead with the concrete result/i, /update.*bottom line.*first/i],
