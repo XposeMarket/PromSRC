@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { Router } from 'express';
+import type { IRouter } from 'express';
 
 import { getConfig } from '../../config/config.js';
 import {
@@ -17,6 +17,7 @@ import {
 } from '../creative/composition.js';
 import { normalizeCreativeComposition, type CreativeComposition, type CreativeTrackKind } from '../creative/contracts.js';
 import { renderComposition } from '../creative/renderers/composition_renderer.js';
+import { requireGatewayAuth } from '../gateway-auth.js';
 import { getWorkspace, sessionExists } from '../session.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
 
@@ -67,7 +68,11 @@ function sendError(res: any, error: unknown, fallback: string): void {
   res.status(isStorageBoundaryError(error) ? 400 : 500).json({ success: false, error: message || fallback });
 }
 
-export function registerCreativeCompositionRoutes(router: Router): void {
+export function registerCreativeCompositionRoutes(router: IRouter): void {
+  // Composition edits can write workspace state and invoke the renderer. Keep
+  // them on the same gateway-auth boundary as the rest of the Canvas APIs.
+  router.use('/api/canvas/composition', requireGatewayAuth);
+
   router.get('/api/canvas/composition', (req, res) => {
     try {
       const sessionId = sessionIdFrom(req.query.sessionId);
