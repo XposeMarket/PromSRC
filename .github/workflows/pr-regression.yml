@@ -16,37 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  refresh_pr133:
-    if: github.event_name == 'pull_request' && github.event.pull_request.title == 'trigger PR133 refresh'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Merge current main into PR 133 branch
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main fix/context-window-live-tracking-ui
-          git checkout -B fix/context-window-live-tracking-ui origin/fix/context-window-live-tracking-ui
-          if ! git merge origin/main --no-commit --no-ff; then
-            conflicts="$(git diff --name-only --diff-filter=U | sort)"
-            expected="$(printf '%s\n' 'generated/public-web-ui/static/performance.js' 'web-ui/src/performance.js' | sort)"
-            if [ "$conflicts" != "$expected" ]; then
-              echo "Unexpected merge conflicts:"
-              printf '%s\n' "$conflicts"
-              exit 1
-            fi
-            git checkout --ours -- generated/public-web-ui/static/performance.js web-ui/src/performance.js
-            git add generated/public-web-ui/static/performance.js web-ui/src/performance.js
-          fi
-          # Keep the reviewed PR workflow exactly as it was before the merge so
-          # this refresh commit does not modify a workflow file through Actions.
-          git checkout ORIG_HEAD -- .github/workflows/pr-regression.yml
-          git add .github/workflows/pr-regression.yml
-          git commit -m "Merge current main into PR 133"
-          git push origin HEAD:fix/context-window-live-tracking-ui
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -79,6 +48,8 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
+      - name: Verify context window contract
+        run: npm run test:context-window
       - name: Verify Prometheus chat link routing
         run: npm run test:link-routing
       - name: Verify web UI restart reload dedupe

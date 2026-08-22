@@ -1,4 +1,5 @@
 import './features/chat/multi-chat-workspace.js';
+import './context-window-live-tracking.js';
 
 /**
  * Privacy-conscious client performance marks.
@@ -44,6 +45,11 @@ export function markClientPerformance(name, details = {}) {
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
   try {
     performance.mark(`prom:${cleanName}`, { detail: safe });
+  } catch {}
+  // Only the already-scrubbed entry is published. This lets the context meter
+  // react to current-turn tool token telemetry without exposing message/tool text.
+  try {
+    window.dispatchEvent(new CustomEvent('prometheus:client-performance-mark', { detail: entry }));
   } catch {}
   return at;
 }
