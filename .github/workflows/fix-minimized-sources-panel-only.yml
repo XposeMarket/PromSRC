@@ -1,0 +1,94 @@
+name: Apply minimized Sources panel fix
+
+on:
+  push:
+    branches:
+      - fix/minimized-sources-panel-only
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/minimized-sources-panel-only
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Remove minimized Sources background reserve
+        shell: bash
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          base_paths = [
+              Path('web-ui/src/styles/base.css'),
+              Path('generated/public-web-ui/static/styles/base.css'),
+          ]
+
+          old_token = """  /* Compact Sources peek stays visually floating, but its footprint is reserved
+             so chat content never sits underneath it. 324px card + 14px edge + 14px gap. */
+          --sources-minimized-layout-reserve: 352px;
+          """
+          old_layout = """/* The minimized Sources surface remains the compact floating peek, but the
+             center column reserves only that peek's footprint. This reflows chat without
+             opening or reserving the full right drawer underneath it. */
+          body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
+            margin-right: var(--sources-minimized-layout-reserve);
+          }
+          """
+          new_layout = """/* The minimized Sources surface is a floating peek. It must not become a
+             second layout column or expose a background drawer behind the compact card. */
+          body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
+            margin-right: 0;
+          }
+          """
+
+          for path in base_paths:
+              source = path.read_text(encoding='utf-8')
+              if source.count(old_token) != 1:
+                  raise SystemExit(f'{path}: expected exactly one minimized Sources reserve token block')
+              if source.count(old_layout) != 1:
+                  raise SystemExit(f'{path}: expected exactly one minimized Sources center-layout block')
+              source = source.replace(old_token, '', 1).replace(old_layout, new_layout, 1)
+              path.write_text(source, encoding='utf-8')
+
+          test_path = Path('scripts/test-desktop-chat-layout-contract.mjs')
+          test_source = test_path.read_text(encoding='utf-8')
+          old_test = """const minimizedCenter = sourceBase.match(/body:not\\(\\.pm-mobile-active\\)\\.sources-minimized-open \\.workspace > \\.center-col\\s*\\{([\\s\\S]*?)\\}/)?.[1] || '';
+          if (!/margin-right:\\s*var\\(--sources-minimized-layout-reserve\\)/.test(minimizedCenter)) {
+            throw new Error('minimized Sources must reserve only its layout footprint in the center column');
+          }
+          if (!/--sources-minimized-layout-reserve:\\s*352px/.test(sourceBase)) {
+            throw new Error('minimized Sources layout reserve token is missing');
+          }
+          """
+          new_test = """const minimizedCenter = sourceBase.match(/body:not\\(\\.pm-mobile-active\\)\\.sources-minimized-open \\.workspace > \\.center-col\\s*\\{([\\s\\S]*?)\\}/)?.[1] || '';
+          if (!/margin-right:\\s*0\\s*;?/.test(minimizedCenter)) {
+            throw new Error('minimized Sources must remain a floating overlay without shifting the center column');
+          }
+          if (/--sources-minimized-layout-reserve:/.test(sourceBase)) {
+            throw new Error('minimized Sources must not reserve a background drawer footprint');
+          }
+          """
+          if test_source.count(old_test) != 1:
+              raise SystemExit('layout contract: expected exactly one minimized Sources reserve assertion block')
+          test_path.write_text(test_source.replace(old_test, new_test, 1), encoding='utf-8')
+
+          Path('.github/workflows/fix-minimized-sources-panel-only.yml').unlink()
+          PY
+
+          node scripts/test-desktop-chat-layout-contract.mjs
+          git diff --check
+          git diff --exit-code -- web-ui/src/styles/base.css generated/public-web-ui/static/styles/base.css >/dev/null || true
+          cmp web-ui/src/styles/base.css generated/public-web-ui/static/styles/base.css
+
+          git config user.name "Prometheus Review Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add web-ui/src/styles/base.css generated/public-web-ui/static/styles/base.css scripts/test-desktop-chat-layout-contract.mjs .github/workflows/fix-minimized-sources-panel-only.yml
+          git commit -m "fix: keep minimized Sources panel floating"
+          git push origin HEAD:fix/minimized-sources-panel-only
