@@ -113,7 +113,7 @@ if (!/prometheus_multi_chat_tabs_v1/.test(multiChat) || !/MAX_TABS\s*=\s*30/.tes
 if (!/DRAG_MIME\s*=\s*'application\/x-prometheus-chat'/.test(multiChat)) {
   throw new Error('sidebar/tab drag and drop must use the desktop chat transfer contract');
 }
-if (!/data-chat-drop=\\"main\\"/.test(multiChat) || !/data-chat-drop=\\"side\\"/.test(multiChat)) {
+if (!/data-chat-drop="main"/.test(multiChat) || !/data-chat-drop="side"/.test(multiChat)) {
   throw new Error('drag UI must expose independent main and side pane targets');
 }
 if (!/zone\?\.dataset\.chatDrop === 'main'\) activateMain/.test(multiChat)
