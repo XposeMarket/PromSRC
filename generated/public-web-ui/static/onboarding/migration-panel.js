@@ -19,7 +19,7 @@ function summarize(report) {
 }
 
 function sourceTitle(source) {
-  const kind = source?.kind === 'hermes' ? 'Hermes' : source?.kind === 'openclaw' ? 'OpenClaw' : source?.kind === 'localclaw' ? 'LocalClaw' : 'Custom';
+  const kind = source?.kind === 'hermes' ? 'Hermes' : source?.kind === 'openclaw' ? 'OpenClaw' : 'Custom';
   return `${kind} setup`;
 }
 
@@ -37,7 +37,7 @@ export function showMigrationPanel(opts = {}) {
         <div class="prom-onb-body">
           <h2 class="prom-onb-title">Import from another agent app</h2>
           <p class="prom-onb-caption">
-            I can look for Hermes, OpenClaw, or LocalClaw data and show you a preview before anything is written.
+            I can look for Hermes or OpenClaw data and show you a preview before anything is written.
           </p>
           ${devTest ? `<div style="margin-top:10px;padding:10px 12px;background:rgba(163,108,224,0.12);border:1px dashed #a36ce0;border-radius:8px;font-size:12px;color:#7a3ec1;font-weight:600">Dev test mode · importing is disabled.</div>` : ''}
           <div data-status style="font-size:12px;color:var(--muted,#666);margin:12px 0">Scanning…</div>
@@ -102,7 +102,7 @@ export function showMigrationPanel(opts = {}) {
 
     function renderSources() {
       if (!sources.length) {
-        statusEl.textContent = 'No Hermes, OpenClaw, or LocalClaw setup was found on this machine. Continuing...';
+        statusEl.textContent = 'No Hermes or OpenClaw setup was found on this machine. Continuing...';
         sourcesEl.innerHTML = `
           <div style="border:1px dashed var(--line,#ddd);border-radius:10px;padding:12px;background:#fff;font-size:13px;color:var(--muted,#666)">
             You can run this later from Settings → Migration if you install or locate an older setup.

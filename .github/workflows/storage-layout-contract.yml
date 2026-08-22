@@ -9,6 +9,7 @@ on:
       - 'src/runtime/storage-migration.ts'
       - 'src/runtime/storage-migration-cli.ts'
       - 'src/runtime/storage-migration.regression.ts'
+      - 'scripts/test-retired-firstgen-namespace.mjs'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -27,6 +28,7 @@ on:
       - 'src/runtime/storage-migration.ts'
       - 'src/runtime/storage-migration-cli.ts'
       - 'src/runtime/storage-migration.regression.ts'
+      - 'scripts/test-retired-firstgen-namespace.mjs'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -54,6 +56,8 @@ jobs:
         run: npx --no-install tsx src/runtime/storage-ownership.regression.ts
       - name: Storage migration regression
         run: npx --no-install tsx src/runtime/storage-migration.regression.ts
+      - name: Retired namespace regression
+        run: node scripts/test-retired-firstgen-namespace.mjs
       - name: Minimal workspace regression
         run: npx --no-install tsx src/config/public-workspace.regression.ts
       - name: Redo onboarding preservation regression

@@ -11,50 +11,6 @@ import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
 import { seedLegacyMainChatRoute } from './main-chat-route.js';
 import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from './gateway-port.js';
 
-function migrateLegacyDir(legacyDir: string, targetDir: string): void {
-  try {
-    if (!fs.existsSync(legacyDir)) return;
-    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-    const marker = path.join(targetDir, '.migrated-from-localclaw');
-    if (fs.existsSync(marker)) return;
-
-    // One-time migration: preserve existing users by carrying over all legacy data,
-    // including config, credentials, skills, logs, and state files.
-    fs.cpSync(legacyDir, targetDir, { recursive: true, force: true });
-    fs.writeFileSync(marker, new Date().toISOString(), 'utf-8');
-    console.log(`[Config] Migrated legacy data: ${legacyDir} -> ${targetDir}`);
-  } catch (err: any) {
-    console.warn(`[Config] Legacy migration failed (${legacyDir} -> ${targetDir}): ${String(err?.message || err)}`);
-  }
-}
-
-function migrateLegacyData(): void {
-  const projectLegacy = path.join(__dirname, '..', '..', '.localclaw');
-  const projectTarget = path.join(__dirname, '..', '..', '.prometheus');
-  const homeLegacy = path.join(os.homedir(), '.localclaw');
-  const homeTarget = path.join(os.homedir(), '.prometheus');
-
-  if (process.env.PROMETHEUS_DATA_DIR) {
-    const dataRoot = process.env.PROMETHEUS_DATA_DIR;
-    migrateLegacyDir(path.join(dataRoot, '.localclaw'), path.join(dataRoot, '.prometheus'));
-    return;
-  }
-
-  // Prefer project-local migration when this repo has (or previously had)
-  // project-scoped state; otherwise migrate home-scoped state.
-  const hasProjectScopedState = fs.existsSync(projectLegacy) || fs.existsSync(projectTarget) ||
-    false;
-  if (hasProjectScopedState) {
-    migrateLegacyDir(projectLegacy, projectTarget);
-    return;
-  }
-
-  migrateLegacyDir(homeLegacy, homeTarget);
-}
-
-migrateLegacyData();
-
 // ── Config & workspace directory resolution ──────────────────────────────────
 // Priority:
 //   1. PROMETHEUS_DATA_DIR env var  (set by Docker / CI)
@@ -588,17 +544,6 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
     gateway.auth = auth;
     delete gateway.auth_token;
     out.gateway = gateway;
-  }
-
-  // ── .localclaw → .prometheus migration ──────────────────────────────────
-  const skillsDir = String(out?.skills?.directory || '');
-  if (skillsDir && skillsDir.includes('.localclaw')) {
-    out.skills = { ...(out.skills || {}), directory: path.join(WORKSPACE_DIR, 'skills') };
-  }
-
-  const memoryPath = String(out?.memory?.path || '');
-  if (memoryPath && memoryPath.includes('.localclaw')) {
-    out.memory = { ...(out.memory || {}), path: path.join(CONFIG_DIR, 'memory') };
   }
 
   // ── Stale Windows paths on macOS/Linux ──────────────────────────────────

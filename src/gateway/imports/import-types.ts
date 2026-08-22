@@ -46,7 +46,6 @@ export type ImportAdapterId =
   | 'cursor-local'
   | 'hermes-local'
   | 'openclaw-local'
-  | 'localclaw-local'
   | 'setup-config'
   | 'unsupported';
 

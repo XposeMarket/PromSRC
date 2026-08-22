@@ -29,7 +29,7 @@ Prometheus resolves its data/config directory in this order:
 
 The normal configuration file is `<configDir>/config.json`.  The default
 workspace is a sibling `workspace/` directory unless
-`PROMETHEUS_WORKSPACE_DIR` overrides it.  Older `.localclaw` data can be
+`PROMETHEUS_WORKSPACE_DIR` overrides it.  Older `.prometheus` data can be
 migrated once into the selected `.prometheus` location at startup.
 
 `ConfigManager.updateConfig(...)` updates the in-memory configuration and

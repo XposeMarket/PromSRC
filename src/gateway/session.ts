@@ -1750,8 +1750,8 @@ function inferChannelFromSessionId(sessionId: string): NonNullable<Session['chan
 function resolveNumCtx(): number {
   // Explicit overrides win (used to pin a local Ollama num_ctx regardless of model).
   const envCandidates = [
-    process.env.LOCALCLAW_SESSION_NUM_CTX,
-    process.env.LOCALCLAW_CHAT_NUM_CTX,
+    process.env.PROMETHEUS_SESSION_NUM_CTX,
+    process.env.PROMETHEUS_CHAT_NUM_CTX,
   ];
   for (const raw of envCandidates) {
     const n = Number(raw);

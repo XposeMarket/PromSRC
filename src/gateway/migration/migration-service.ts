@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { getConfig } from '../../config/config';
 import { getMCPManager, MCPManager } from '../mcp-manager';
 
-export type MigrationSourceKind = 'hermes' | 'openclaw' | 'localclaw' | 'custom';
+export type MigrationSourceKind = 'hermes' | 'openclaw' | 'custom';
 export type MigrationMode = 'user-data' | 'full';
 export type MigrationStatus = 'migrated' | 'skipped' | 'conflict' | 'archived' | 'error';
 export type SkillConflictMode = 'skip' | 'overwrite' | 'rename';
@@ -73,7 +73,6 @@ type SourceProfile = {
 const SOURCE_LABELS: Record<MigrationSourceKind, string> = {
   hermes: 'Hermes',
   openclaw: 'OpenClaw',
-  localclaw: 'LocalClaw',
   custom: 'Custom source',
 };
 
@@ -263,7 +262,6 @@ function profileForSource(kind: MigrationSourceKind, root: string): SourceProfil
 function detectKindFromPath(root: string): MigrationSourceKind {
   if (existsFile(path.join(root, 'config.yaml')) || existsDir(path.join(root, 'memories'))) return 'hermes';
   if (existsFile(path.join(root, 'openclaw.json'))) return 'openclaw';
-  if (path.basename(root).toLowerCase().includes('localclaw')) return 'localclaw';
   return 'custom';
 }
 
@@ -289,14 +287,11 @@ function inspectSource(kind: MigrationSourceKind, root: string): MigrationSource
 
 export function listMigrationSources(): MigrationSource[] {
   const home = os.homedir();
-  const cwd = process.cwd();
   const candidates: Array<{ kind: MigrationSourceKind; root: string }> = [
     { kind: 'hermes', root: path.join(home, '.hermes') },
     { kind: 'openclaw', root: path.join(home, '.openclaw') },
     { kind: 'openclaw', root: path.join(home, '.clawdbot') },
     { kind: 'openclaw', root: path.join(home, '.moltbot') },
-    { kind: 'localclaw', root: path.join(home, '.localclaw') },
-    { kind: 'localclaw', root: path.join(cwd, '.localclaw') },
   ];
   const seen = new Set<string>();
   const sources: MigrationSource[] = [];
@@ -323,7 +318,7 @@ function resolveSource(options: MigrationOptions): MigrationSource {
     if (found) return found;
   }
   const preferred = sources.find((s) => s.kind === 'hermes') || sources.find((s) => s.kind === 'openclaw') || sources[0];
-  if (!preferred) throw new Error('No Hermes, OpenClaw, or LocalClaw source was found.');
+  if (!preferred) throw new Error('No Hermes or OpenClaw source was found.');
   return preferred;
 }
 

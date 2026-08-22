@@ -6,7 +6,7 @@
   - project-local `.prometheus/`
   - `~/.prometheus/`
 - Default workspace path is sibling to the config dir unless `PROMETHEUS_WORKSPACE_DIR` overrides it
-- Legacy `.localclaw` data is migrated forward into `.prometheus`
+- Retired pre-`.prometheus` startup migration is no longer supported; storage-v2 owns supported `.prometheus` state
 - Default config version in source is `1.0.2`
 
 ## 3) Canonical Runtime Surfaces

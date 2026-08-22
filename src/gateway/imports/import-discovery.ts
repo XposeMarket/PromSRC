@@ -112,7 +112,6 @@ function isTranscriptFile(relativePath: string, adapter: ImportAdapterId): boole
   if (adapter === 'hermes-local' && /\.(jsonl|json)$/i.test(lower)) return true;
   if (adapter === 'claude-code-local' && /\.jsonl$/i.test(lower)) return true;
   if (adapter === 'openclaw-local' && /\.(jsonl|json)$/i.test(lower) && /(session|transcript|history|conversation)/i.test(lower)) return true;
-  if (adapter === 'localclaw-local' && /\.(jsonl|json)$/i.test(lower) && /(session|transcript|history|conversation)/i.test(lower)) return true;
   if (adapter === 'cursor-local' && /\.(db|sqlite|sqlite3)$/i.test(lower)) return true;
   return false;
 }
@@ -354,20 +353,6 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       root: path.join(homeDir, '.openclaw'), mode: 'directory',
       includeWhen: (stats) => stats.setupFileCount > 0,
       notes: ['Local MCP declarations only; gateway credentials and pairing secrets require reauthorization.'],
-    }),
-    candidate({
-      id: 'localclaw-conversations', provider: 'localclaw', label: 'LocalClaw', kind: 'conversation', adapter: 'localclaw-local',
-      supportsProjects: true,
-      root: path.join(homeDir, '.localclaw'), mode: 'directory',
-      includeWhen: (stats) => stats.transcriptCount > 0,
-      notes: ['LocalClaw artifacts are shown only when transcript-like files are present.'],
-    }),
-    candidate({
-      id: 'localclaw-setup', provider: 'localclaw', label: 'LocalClaw MCP integrations', kind: 'setup', adapter: 'setup-config',
-      supportsProjects: false,
-      root: path.join(homeDir, '.localclaw'), mode: 'directory',
-      includeWhen: (stats) => stats.setupFileCount > 0,
-      notes: ['Local MCP declarations only; secrets are redacted and must be reauthorized.'],
     }),
     ...[
       path.join(appData, 'Cursor', 'User', 'History'),

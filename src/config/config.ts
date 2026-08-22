@@ -14,24 +14,11 @@ const STORAGE_LAYOUT = getPrometheusLayout();
 
 /**
  * Keep the pre-v2 ConfigManager available as an exact compatibility backend.
- * In canonical mode we load it only to reuse its mature default-config surface.
- * A temporary inert DATA_DIR prevents the classic module's old `.localclaw`
- * import shim from touching the source checkout while its constants initialize.
+ * Canonical storage-v2 reuses its mature default-config surface, while the
+ * retired pre-.prometheus startup import path is no longer supported.
  */
 function loadClassicConfigModule(): typeof import('./config-classic') {
-  if (STORAGE_LAYOUT.mode === 'legacy') {
-    return require('./config-classic.js') as typeof import('./config-classic');
-  }
-
-  const previousDataDir = process.env.PROMETHEUS_DATA_DIR;
-  const inertDataRoot = path.join(STORAGE_LAYOUT.runtime.migrations, '.classic-defaults');
-  process.env.PROMETHEUS_DATA_DIR = inertDataRoot;
-  try {
-    return require('./config-classic.js') as typeof import('./config-classic');
-  } finally {
-    if (previousDataDir === undefined) delete process.env.PROMETHEUS_DATA_DIR;
-    else process.env.PROMETHEUS_DATA_DIR = previousDataDir;
-  }
+  return require('./config-classic.js') as typeof import('./config-classic');
 }
 
 const classic = loadClassicConfigModule();

@@ -123,7 +123,7 @@ Current context-profile behavior:
 - profile sources are `config_override`, `provider_metadata`, `known_table`, `ollama_num_ctx`, or `fallback`
 - provider config overrides can set `context_window` / `contextWindowTokens`, `max_output_tokens` / `maxOutputTokens`, `reasoning_budget_tokens` / `thinking_budget`, and `tokenizer`
 - provider metadata can supply `contextWindowTokens`, `maxOutputTokens`, and tokenizer when available
-- Ollama context can come from configured `num_ctx`, `LOCALCLAW_SESSION_NUM_CTX`, or `LOCALCLAW_CHAT_NUM_CTX`
+- Ollama context can come from configured `num_ctx`, `PROMETHEUS_SESSION_NUM_CTX`, or `PROMETHEUS_CHAT_NUM_CTX`
 - tokenizer families are `openai`, `anthropic`, `gemini`, `llama`, `qwen`, and `heuristic`
 
 Known context table facts:

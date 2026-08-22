@@ -720,7 +720,6 @@ export interface PrometheusConfig {
   };
 }
 
-export type LocalClawConfig = PrometheusConfig;
 
 // ─── Multi-Provider LLM Config ──────────────────────────────────────────────
 

@@ -84,8 +84,8 @@ function resolveOllamaNumCtx(raw: any = getConfig().getConfig()): number | null 
     raw?.llm?.providers?.ollama?.num_ctx,
     raw?.llm?.num_ctx,
     raw?.ollama?.num_ctx,
-    process.env.LOCALCLAW_SESSION_NUM_CTX,
-    process.env.LOCALCLAW_CHAT_NUM_CTX,
+    process.env.PROMETHEUS_SESSION_NUM_CTX,
+    process.env.PROMETHEUS_CHAT_NUM_CTX,
   ];
   for (const value of candidates) {
     const n = Number(value);

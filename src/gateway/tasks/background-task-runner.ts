@@ -156,8 +156,8 @@ const BUILD_INVALIDATING_TOOLS = new Set([
 
 function resolveRoundTimeoutMs(isResearchTask?: boolean): number {
   const candidates = [
-    process.env.LOCALCLAW_BG_ROUND_TIMEOUT_MS,
-    process.env.LOCALCLAW_TASK_ROUND_TIMEOUT_MS,
+    process.env.PROMETHEUS_BG_ROUND_TIMEOUT_MS,
+    process.env.PROMETHEUS_TASK_ROUND_TIMEOUT_MS,
   ];
   for (const raw of candidates) {
     const n = Number(raw);

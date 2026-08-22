@@ -28,7 +28,7 @@ function normalizeAdapter(value: unknown): ImportAdapterId | undefined {
   const allowed: ImportAdapterId[] = [
     'chatgpt-export', 'generic-json', 'generic-jsonl', 'generic-markdown',
     'codex-local', 'claude-code-local', 'cursor-local', 'hermes-local',
-    'openclaw-local', 'localclaw-local', 'setup-config', 'unsupported',
+    'openclaw-local', 'setup-config', 'unsupported',
   ];
   const item = String(value || '').trim() as ImportAdapterId;
   return allowed.includes(item) ? item : undefined;

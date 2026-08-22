@@ -3831,13 +3831,13 @@ function renderMigrationSources() {
   const el = document.getElementById('migration-sources-list');
   if (!el) return;
   if (!migrationSources.length) {
-    el.innerHTML = '<div style="border:1px dashed var(--line);border-radius:10px;padding:10px;color:var(--muted);font-size:12px">No Hermes, OpenClaw, or LocalClaw folders found automatically. Use a custom source folder below.</div>';
+    el.innerHTML = '<div style="border:1px dashed var(--line);border-radius:10px;padding:10px;color:var(--muted);font-size:12px">No Hermes or OpenClaw folders found automatically. Use a custom source folder below.</div>';
     return;
   }
   if (!selectedMigrationSourceId) selectedMigrationSourceId = migrationSources[0].id;
   el.innerHTML = migrationSources.map((source) => {
     const selected = source.id === selectedMigrationSourceId;
-    const kind = source.kind === 'hermes' ? 'Hermes' : source.kind === 'openclaw' ? 'OpenClaw' : source.kind === 'localclaw' ? 'LocalClaw' : 'Custom';
+    const kind = source.kind === 'hermes' ? 'Hermes' : source.kind === 'openclaw' ? 'OpenClaw' : 'Custom';
     return `
       <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid ${selected ? '#bdd3f6' : 'var(--line)'};border-radius:10px;padding:10px;background:${selected ? '#f0f6ff' : '#fff'};cursor:pointer">
         <input type="radio" name="migration-source" value="${escHtml(source.id)}" ${selected ? 'checked' : ''} style="margin-top:3px" />

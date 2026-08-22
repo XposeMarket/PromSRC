@@ -1053,7 +1053,7 @@ function adapterForContext(context: AdapterContext): { adapter: ImportAdapterId;
           : context.requestedAdapter === 'cursor-local' ? 'cursor'
             : context.requestedAdapter === 'hermes-local' ? 'hermes'
               : context.requestedAdapter === 'openclaw-local' ? 'openclaw'
-                : context.requestedAdapter === 'localclaw-local' ? 'localclaw' : 'generic';
+                : 'generic';
     return { adapter: context.requestedAdapter, provider };
   }
   const lower = `${context.sourceLabel} ${context.files.map((file) => file.relativePath).join(' ')}`.toLowerCase();
@@ -1064,7 +1064,6 @@ function adapterForContext(context: AdapterContext): { adapter: ImportAdapterId;
   if (lower.includes('codex')) return { adapter: 'codex-local', provider: 'codex' };
   if (lower.includes('hermes')) return { adapter: 'hermes-local', provider: 'hermes' };
   if (lower.includes('openclaw')) return { adapter: 'openclaw-local', provider: 'openclaw' };
-  if (lower.includes('localclaw')) return { adapter: 'localclaw-local', provider: 'localclaw' };
   if (context.files.some((file) => file.relativePath.toLowerCase().endsWith('.jsonl'))) return { adapter: 'generic-jsonl', provider: 'generic' };
   if (context.files.some((file) => file.relativePath.toLowerCase().endsWith('.md'))) return { adapter: 'generic-markdown', provider: 'generic' };
   return { adapter: 'generic-json', provider: 'generic' };
@@ -1285,7 +1284,7 @@ function extractCodexMcpCandidates(text: string): { candidates: Array<{ id: stri
 
 export function parseSetupImport(context: AdapterContext): SetupAdapterResult {
   const lower = `${context.sourceLabel} ${context.files.map((file) => file.relativePath).join(' ')}`.toLowerCase();
-  const provider = lower.includes('codex') ? 'codex' : lower.includes('chatgpt') || lower.includes('openai') ? 'chatgpt' : lower.includes('hermes') ? 'hermes' : lower.includes('openclaw') ? 'openclaw' : lower.includes('localclaw') ? 'localclaw' : lower.includes('claude') ? 'claude' : 'generic';
+  const provider = lower.includes('codex') ? 'codex' : lower.includes('chatgpt') || lower.includes('openai') ? 'chatgpt' : lower.includes('hermes') ? 'hermes' : lower.includes('openclaw') ? 'openclaw' : lower.includes('claude') ? 'claude' : 'generic';
   const scope = context.setupScope || 'all';
   const mcpServers: ImportedMcpServer[] = [];
   const secretNotices: SetupSecretNotice[] = [];

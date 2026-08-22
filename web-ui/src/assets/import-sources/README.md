@@ -17,9 +17,6 @@ loaded from a remote URL at runtime.
   `website/static/img/nous-logo.png`.
 - `openclaw.svg` is the OpenClaw source wordmark copied from the inspected
   OpenClaw snapshot at `docs/assets/openclaw-logo-text-dark.svg`.
-- `localclaw.webp` is the LocalClaw mascot artwork packaged from the official
-  LocalClaw site asset:
-  https://localclaw.io/images/localclaw-mascot-hero.webp
 
 The adapter provenance chooses the source mark. Unknown or unsupported source
 identities intentionally render an accessible no-art fallback rather than

@@ -36,7 +36,7 @@ Current package build facts:
   - project-local `.prometheus/`
   - `~/.prometheus/`
 - Default workspace path is sibling to the config dir unless `PROMETHEUS_WORKSPACE_DIR` overrides it
-- Legacy `.localclaw` data is migrated forward into `.prometheus`
+- Legacy `.prometheus` data is migrated forward into `.prometheus`
 - Default config version in source is `1.0.2`
 
 ## 3) Canonical Runtime Surfaces
@@ -3055,7 +3055,7 @@ Current migration routes:
 
 Migration options currently support:
 
-- source kinds: `hermes`, `openclaw`, `localclaw`, `custom`
+- source kinds: `hermes`, `openclaw`, `prometheus`, `custom`
 - modes: `user-data` and `full`
 - categories filtering
 - optional secret inclusion
