@@ -6,10 +6,28 @@
  * XposeMarket/liquid-glass compositor. These rules only remove the old CSS
  * imitation from the hamburger and layer the real button/icon above the canvas.
  */
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] {
+
+/*
+ * The mobile header is floating chrome. Its safe-area/status strip must stay
+ * optically clear so chat content can continue underneath it all the way to the
+ * top of the display. Individual header controls own their own material.
+ */
+body.pm-mobile-active .pm-header {
+  background: transparent !important;
+  border-color: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+) {
   position: relative !important;
   isolation: isolate;
-  overflow: visible !important;
+  overflow: hidden !important;
   border-color: transparent !important;
   background: var(--pm-demo-body, rgba(18, 22, 28, .4275)) !important;
   -webkit-backdrop-filter: none !important;
@@ -18,7 +36,11 @@ body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] {
 }
 
 /* #135's pseudo/backdrop approximation must not participate in the hamburger. */
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"]::after {
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+)::after {
   content: none !important;
   display: none !important;
   -webkit-backdrop-filter: none !important;
@@ -27,15 +49,27 @@ body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"]::after {
 }
 
 /* Once a real compositor frame exists, its pixels are the button material. */
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"][data-pm-liquid-glass-ready="1"] {
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+)[data-pm-liquid-glass-ready="1"] {
   background: transparent !important;
 }
 
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-hamburger-liquid-glass-canvas {
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+) > .pm-hamburger-liquid-glass-canvas {
   position: absolute !important;
+  inset: 0 !important;
   z-index: 0 !important;
   display: block !important;
+  width: 100% !important;
+  height: 100% !important;
   max-width: none !important;
+  border-radius: inherit !important;
   pointer-events: none !important;
   touch-action: none !important;
   opacity: 0;
@@ -45,13 +79,29 @@ body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-hambur
   transition: opacity 80ms linear;
 }
 
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"][data-pm-liquid-glass-ready="1"] > .pm-hamburger-liquid-glass-canvas {
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+)[data-pm-liquid-glass-ready="1"] > .pm-hamburger-liquid-glass-canvas {
   opacity: 1;
 }
 
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > svg,
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-i,
-body.pm-mobile-active .pm-header > .pm-icon-btn[data-action="menu"] > .pm-icon {
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+) > svg,
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+) > .pm-i,
+body.pm-mobile-active .pm-header :is(
+  .pm-icon-btn[data-action="menu"],
+  .pm-icon-btn[aria-label="Menu"],
+  .pm-icon-btn[aria-label="Open menu"]
+) > .pm-icon {
   position: relative !important;
   z-index: 2 !important;
 }
