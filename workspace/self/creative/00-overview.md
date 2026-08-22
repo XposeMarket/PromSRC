@@ -1,33 +1,51 @@
 ## 6) Creative Modes
 
-Creative mode is a persisted per-session field in `session.ts`.
-Current supported values:
+Creative mode is persisted per session in `session.ts` and is surfaced to the desktop/mobile UI.
+Current supported values are:
 
 - `design`
 - `image`
-- `canvas`
+- `canvas` (legacy image/canvas alias)
 - `video`
 
-How it behaves now:
+Mode lifecycle:
 
-- entered with `enter_creative_mode` / `switch_creative_mode`
-- exited with `exit_creative_mode`
-- inspected with `get_creative_mode`
-- stored on the session as `creativeMode`
-- broadcast to the UI when changed
-- shortens the history window for API calls; isolated Creative Runtime uses a compact creative handoff instead of normal chat history
-- suppresses recent tool-log injection
-- keeps a separate recent creative tool-log/reference image context for image/canvas/video work
-- suppresses normal plan-first behavior unless the user explicitly asks for a plan
-- makes canvas/creative output the primary workspace in the system prompt
+- enter/switch with `enter_creative_mode` / `switch_creative_mode`
+- exit with `exit_creative_mode`
+- inspect with `get_creative_mode`
+- persist on the session as `creativeMode`
+- broadcast mode changes to the UI
 
-This is real session state, not just UI chrome.
+### What each mode owns
 
-Creative prompt profiles exist in `src/gateway/prompt-context.ts` for:
+**Design**
 
-- `creative_design`
-- `creative_image`
-- `creative_canvas`
-- `creative_video`
+- live HTML/app/project preview editing
+- same-origin DOM inspection/selection when the preview supports it
+- design annotations and edit/chat/select interaction over the preview
+- does **not** mount the dedicated video editor
 
-Creative Runtime isolated mode in `chat.router.ts` is active for `image`, `canvas`, and `video`. `canvas` is treated as a legacy alias for the image/canvas lane. The runtime exposes a narrowed allowlist of creative tools plus skill tools so creative turns stay focused on scene creation, visual QA, asset handling, and export rather than general tool noise.
+**Image**
+
+- generated/reference image workflows plus the structured Creative scene graph
+- image/canvas scene operations, editable visual elements, assets, and export
+- keeps the native image/canvas surface; it does **not** mount the dedicated video editor
+
+**Canvas**
+
+- legacy compatibility value for the image/canvas lane
+- new user-facing work should prefer `image` unless a caller explicitly depends on the legacy value
+
+**Video**
+
+- mounts the dedicated Creative video editor (`web-ui/src/components/creative/editor/`)
+- supports scene-graph motion editing, assets, text/shapes/effects/filters, subtitles, preview, history, export, and timeline controls
+- multi-clip sequencing is owned by the Creative composition contract in `src/gateway/creative/composition.ts` and its renderer, rather than by image/canvas scene operations
+
+### Runtime boundary
+
+Do not describe the current implementation as selecting named `creative_design`, `creative_image`, `creative_canvas`, or `creative_video` prompt profiles. Those names are legacy documentation and are not part of the current `BuildPersonalityContextOptions` contract in `src/gateway/prompt-context.ts`.
+
+Likewise, do not rely on the old claim that `src/gateway/routes/chat.router.ts` owns an isolated Creative Runtime: that route file is now an empty compatibility shell after the runtime refactor. Current Creative behavior is distributed across persisted session mode state, Creative tool definitions/skills, the active gateway capability executors, and the mode-specific UI/editor surfaces.
+
+When auditing Creative behavior, verify the current execution owner instead of assuming an old `chat.router.ts` or named prompt-profile path still exists.
