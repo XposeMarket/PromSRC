@@ -34,15 +34,22 @@ body.pm-mobile-active {
   --pm-demo-hairline: rgba(255, 252, 248, .1936);
   --pm-demo-hairline-soft: rgba(255, 252, 248, .085);
   --pm-demo-directional-glint: rgba(255, 255, 255, .0242);
+  /* The live canvas is capped at DPR 2. .7 device px is .35 CSS px there. */
   --pm-demo-chroma: .35px;
   --pm-demo-chroma-neg: -.35px;
   --pm-demo-shadow: rgba(0, 0, 0, .14);
   --pm-demo-icon: #fff;
   --pm-demo-open-composer-blur: 2.5px;
+  /* Refraction scales the sampled BACKDROP layer, never the actual control. */
   --pm-demo-refract-x: 1.06;
   --pm-demo-refract-y: 1.18;
 }
 
+/*
+ * One material contract for every persistent mobile glass surface requested:
+ * header controls, model pill, combined pencil/more pill, completion glass,
+ * Brain/Pulse cards, composer, tab bar, and tab slider as its own glass piece.
+ */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header-actions > .pm-icon-btn,
@@ -68,19 +75,24 @@ body.pm-mobile-active :is(
     0 7px 20px var(--pm-demo-shadow) !important;
 }
 
+/* Small header controls need a slightly stronger sampled-pixel pull because the
+ * same visual displacement is distributed across a much smaller lens. */
 body.pm-mobile-active :is(.pm-header > .pm-icon-btn, .pm-header-actions > .pm-icon-btn) {
   --pm-demo-refract-x: 1.18;
   --pm-demo-refract-y: 1.18;
 }
+
 body.pm-mobile-active :is(.pm-header .pm-online, .pm-header-action-cluster) {
   --pm-demo-refract-x: 1.10;
   --pm-demo-refract-y: 1.18;
 }
+
 body.pm-mobile-active .pm-tab-indicator {
   --pm-demo-refract-x: 1.12;
   --pm-demo-refract-y: 1.18;
 }
 
+/* The right-side pencil + overflow buttons remain ONE existing pill. */
 body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
   border: 0 !important;
   background: transparent !important;
@@ -89,28 +101,46 @@ body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
   box-shadow: none !important;
 }
 
+/* The hamburger had an older header blur underneath the demo material. Force
+ * the actual button itself to the same blur-free body as every other header
+ * piece; its ::after layer below supplies refraction, not blur. */
 body.pm-mobile-active .pm-header .pm-icon-btn[aria-label="Menu"],
 body.pm-mobile-active .pm-header .pm-icon-btn[aria-label="Open menu"] {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
 
+/* Header icon contrast only; dimensions stay owned by mobile.css. */
 body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) {
   color: var(--pm-demo-icon) !important;
 }
+
 body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg {
   color: var(--pm-demo-icon) !important;
   stroke: currentColor;
   stroke-width: 2.4 !important;
   opacity: 1 !important;
 }
+
 body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg :is(line, path, polyline, rect, circle) {
   vector-effect: non-scaling-stroke;
 }
+
 body.pm-mobile-active .pm-header .pm-online {
   color: rgba(255, 255, 255, .96) !important;
 }
 
+/*
+ * Visible DOM refraction for the two large slabs. Safari can optimize an exact
+ * identity backdrop-filter away, so use an imperceptibly non-identity capture
+ * (no blur) and transform only that captured decorative layer. The center stays
+ * transparent; the edge therefore shows the backdrop pulled inward, matching
+ * the direction of the demo compositor's -normal displacement.
+ *
+ * mobile.css intentionally hides these legacy lens elements in its stable base
+ * material. This late material override turns ONLY those absolute decorative
+ * layers back on; it does not alter either control's layout or hitbox.
+ */
 body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
   display: block !important;
   background: rgba(255, 255, 255, .001) !important;
@@ -131,6 +161,9 @@ body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
     drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
 }
 
+/* Header/model/action pills and the moving tab slider already have absolute
+ * edge pseudo-elements in mobile.css. Use those as the same refractive snapshot
+ * so the REAL controls never move, resize, or change hitbox. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header-actions > .pm-icon-btn,
@@ -158,13 +191,30 @@ body.pm-mobile-active :is(
     drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
 }
 
-body.pm-mobile-active .pm-tabbar .pm-tab { color: rgba(255, 255, 255, .78) !important; }
-body.pm-mobile-active .pm-tabbar .pm-tab svg { stroke-width: 2.35 !important; opacity: 1 !important; }
+/* The tab BAR and moving tab SLIDER remain two separate pieces. Material only. */
+body.pm-mobile-active .pm-tabbar .pm-tab {
+  color: rgba(255, 255, 255, .78) !important;
+}
+
+body.pm-mobile-active .pm-tabbar .pm-tab svg {
+  stroke-width: 2.35 !important;
+  opacity: 1 !important;
+}
+
 body.pm-mobile-active .pm-tabbar .pm-tab.active,
 body.pm-mobile-active .pm-tabbar .pm-tab-magnify,
-body.pm-mobile-active .pm-tabbar .pm-tab-magnify .pm-tab { color: #fff !important; }
+body.pm-mobile-active .pm-tabbar .pm-tab-magnify .pm-tab {
+  color: #fff !important;
+}
 
-body.pm-mobile-active .chat-pulse-card { color: #fff !important; }
+/* Brain cards keep their exact existing geometry. Their body/hairline/chroma
+ * remain consistent with the same live material; no extra stacking-context
+ * pseudo is introduced here because the cards did not ship with a safe optical
+ * child layer and we do not want to repeat the #128 card corruption. */
+body.pm-mobile-active .chat-pulse-card {
+  color: #fff !important;
+}
+
 body.pm-mobile-active .chat-pulse-card:hover,
 body.pm-mobile-active .chat-pulse-card:focus-visible {
   border-color: rgba(255, 255, 255, .04) !important;
@@ -178,32 +228,54 @@ body.pm-mobile-active .chat-pulse-card:focus-visible {
     inset var(--pm-demo-chroma-neg) 0 0 rgba(84,166,255,.065),
     0 8px 22px rgba(0,0,0,.16) !important;
 }
-body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon) { color: rgba(255, 255, 255, .97) !important; }
 
+body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon) {
+  color: rgba(255, 255, 255, .97) !important;
+}
+
+/*
+ * Composer resting state = the LIVE demo (blur 0).
+ * Composer opened/focused state = explicit readability exception: blur 2.5px.
+ */
 body.pm-mobile-active .pm-composer {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
 }
+
 body.pm-mobile-active .pm-composer:is(:focus-within, .is-focused, .has-attachments, .is-voice-active),
 body.pm-mobile-active.pm-keyboard-open .pm-composer {
   -webkit-backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) !important;
   backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) !important;
 }
+
 body.pm-mobile-active .pm-composer:is(:focus-within, .is-focused, .has-attachments, .is-voice-active) > .pm-glass-lens,
 body.pm-mobile-active.pm-keyboard-open .pm-composer > .pm-glass-lens {
   -webkit-backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) contrast(1) brightness(1) !important;
   backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) contrast(1) brightness(1) !important;
 }
-body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) { color: #fff !important; }
+
+body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) {
+  color: #fff !important;
+}
+
 body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) svg {
   color: #fff !important;
   stroke: currentColor;
   stroke-width: 2.4 !important;
   opacity: 1 !important;
 }
-body.pm-mobile-active .pm-composer :is(textarea, input) { color: #fff !important; }
-body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder { color: rgba(255,255,255,.60) !important; }
 
+body.pm-mobile-active .pm-composer :is(textarea, input) {
+  color: #fff !important;
+}
+
+body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
+  color: rgba(255,255,255,.60) !important;
+}
+
+/* Existing border children are decorative only. The live compositor has no
+ * generic white outline; all visible edge energy comes from the TB hairline and
+ * rim lens above. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header-actions > .pm-icon-btn,
@@ -216,6 +288,7 @@ body.pm-mobile-active :is(
   border-color: rgba(255,255,255,.025) !important;
 }
 
+/* Preserve the literal-white mobile page-title fix. */
 body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page .pm-detail-head h1) {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
