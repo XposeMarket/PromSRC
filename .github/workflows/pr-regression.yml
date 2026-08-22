@@ -48,6 +48,8 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
+      - name: Verify live mobile liquid glass material
+        run: node scripts/test-mobile-liquid-glass-live-demo-material.mjs
       - name: Verify web UI architecture guardrails
         run: node scripts/test-web-ui-architecture-guardrails.mjs
       - name: Verify shared chat core contract
