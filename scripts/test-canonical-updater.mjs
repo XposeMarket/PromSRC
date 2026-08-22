@@ -24,7 +24,7 @@ try {
   fs.mkdirSync(externalRoot, { recursive: true });
   fs.mkdirSync(path.join(importedSkillsRoot, 'imported-skill'), { recursive: true });
   fs.mkdirSync(path.join(importedSkillsParent, '.manifests'), { recursive: true });
-  fs.mkdirSync(path.join(importedSkillsParent, '.clawhub'), { recursive: true });
+  fs.mkdirSync(path.join(importedSkillsParent, 'skill-state'), { recursive: true });
   fs.writeFileSync(path.join(stateRoot, '.prometheus', 'vault', 'vault.enc'), 'test-only encrypted marker');
   fs.writeFileSync(path.join(stateRoot, '.prometheus', 'skills', 'local-skill', 'SKILL.md'), '# Local skill');
   fs.writeFileSync(path.join(stateRoot, 'workspace', 'README.md'), 'workspace marker');
@@ -34,7 +34,7 @@ try {
   fs.writeFileSync(path.join(importedSkillsRoot, 'imported-skill', 'SKILL.md'), '# Imported skill');
   fs.writeFileSync(path.join(importedSkillsParent, '.manifests', 'imported-skill.source.json'), '{}');
   fs.writeFileSync(path.join(importedSkillsParent, 'skills_state.json'), '{"imported":true}');
-  fs.writeFileSync(path.join(importedSkillsParent, '.clawhub', 'lock.json'), '{"skills":[]}');
+  fs.writeFileSync(path.join(importedSkillsParent, 'skill-state', 'lock.json'), '{"skills":[]}');
 
   const releasePayload = path.join(tempRoot, 'Prometheus-Setup-test.exe');
   fs.writeFileSync(releasePayload, 'fixture release bytes');

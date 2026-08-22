@@ -306,7 +306,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   },
   skills: {
     directory: path.join(WORKSPACE_DIR, 'skills'),
-    registries: ['https://clawhub.ai'],
+    registries: [],
     auto_update: false
   },
   memory: {
