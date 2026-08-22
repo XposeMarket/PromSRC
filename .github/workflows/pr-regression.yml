@@ -55,6 +55,7 @@ jobs:
           node scripts/test-desktop-prom-bot-collab.mjs
           node scripts/test-prom-bot-team-flow.mjs
           node scripts/test-bot-creation-contract.mjs
+          node scripts/test-prom-bot-persistent-agent-hardening.mjs
       - name: Verify live mobile liquid glass material
         run: node scripts/test-mobile-liquid-glass-live-demo-material.mjs
       - name: Verify web UI architecture guardrails

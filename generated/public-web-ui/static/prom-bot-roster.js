@@ -14,6 +14,7 @@ let metadataByAgent = new Map();
 let searchQuery = '';
 let refreshTimer = 0;
 let hydratePromise = null;
+let hydrateAgain = false;
 let observedList = null;
 let listObserver = null;
 let refreshQueued = false;
@@ -38,6 +39,11 @@ function latestTimestamp(items, getter = (item) => item?.ts) {
     if (Number.isFinite(value) && value > latest) latest = value;
   }
   return latest;
+}
+
+function isPromBotGroupTraffic(message) {
+  const source = String(message?.metadata?.source || message?.metadata?.channelSource || '').trim();
+  return source.startsWith('prom_bot_group:');
 }
 
 function latestMessage(messages) {
@@ -114,11 +120,15 @@ async function hydrateAgent(agent) {
     api(`/api/agents/${encodeURIComponent(id)}/runs?limit=12`).catch(() => ({ runs: [] })),
   ]);
   const messages = Array.isArray(chatData?.messages) ? chatData.messages : [];
+  // Lightweight Group turns intentionally execute through the canonical agent
+  // runtime, but they are not direct DMs. The backend persists their source in
+  // message metadata, so keep them out of direct-chat preview/unread state.
+  const directMessages = messages.filter((message) => !isPromBotGroupTraffic(message));
   const runs = Array.isArray(runsData?.runs) ? runsData.runs : [];
-  const latest = latestMessage(messages);
+  const latest = latestMessage(directMessages);
   const latestTs = Number(latest?.ts || latest?.createdAt || latest?.timestamp || 0);
   const latestAgentTs = latestTimestamp(
-    messages.filter((message) => message?.role !== 'user'),
+    directMessages.filter((message) => message?.role !== 'user'),
     (message) => message?.ts || message?.createdAt || message?.timestamp,
   );
   const needsYou = runs.some(runNeedsUser);
@@ -308,9 +318,11 @@ function decorateRows() {
 }
 
 async function hydrateRoster({ force = false } = {}) {
-  void force;
   if (!window.promBotMode || document.hidden) return [];
-  if (hydratePromise) return hydratePromise;
+  if (hydratePromise) {
+    if (force) hydrateAgain = true;
+    return hydratePromise;
+  }
   const agents = collectAgentsFromRows();
   if (!agents.length) return [];
   hydratePromise = (async () => {
@@ -318,7 +330,13 @@ async function hydrateRoster({ force = false } = {}) {
     metadataByAgent = new Map(hydrated.map((agent) => [agent.id, agent]));
     decorateRows();
     return hydrated;
-  })().finally(() => { hydratePromise = null; });
+  })().finally(() => {
+    hydratePromise = null;
+    if (hydrateAgain) {
+      hydrateAgain = false;
+      queueMicrotask(() => void hydrateRoster({ force: true }));
+    }
+  });
   return hydratePromise;
 }
 

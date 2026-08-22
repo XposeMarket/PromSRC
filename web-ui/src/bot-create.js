@@ -282,6 +282,9 @@ async function submitBotCreateForm() {
       identity: { displayName: name, shortName: name },
     };
 
+    // The resource creation is the commit point. Once POST /api/agents
+    // succeeds, later UI/prompt-save failures must never tell the user that the
+    // Bot itself failed to exist (which previously encouraged duplicate retries).
     const created = await api('/api/agents', {
       method: 'POST',
       body: JSON.stringify({ agent }),
@@ -289,23 +292,41 @@ async function submitBotCreateForm() {
     });
     if (!created?.success) throw new Error(created?.error || 'Bot creation failed');
 
-    await api(`/api/agents/${encodeURIComponent(id)}/agent-md`, {
-      method: 'PUT',
-      body: JSON.stringify({ content: buildAgentMd({ name, purpose, instructions }) }),
-      timeoutMs: 12000,
-    });
+    let identityError = null;
+    try {
+      await api(`/api/agents/${encodeURIComponent(id)}/agent-md`, {
+        method: 'PUT',
+        body: JSON.stringify({ content: buildAgentMd({ name, purpose, instructions }) }),
+        timeoutMs: 12000,
+      });
+    } catch (error) {
+      identityError = error;
+      console.warn('[Bot Create] Bot exists but AGENT.md could not be saved:', error);
+    }
 
     modal.classList.remove('open');
-    showToast?.('Bot created', `${name} is ready to chat.`, 'success');
+    if (identityError) {
+      showToast?.(
+        'Bot created · identity save needs attention',
+        `${name} was created successfully, but AGENT.md could not be saved. Open the Bot settings to retry the identity instructions; do not create a duplicate Bot.`,
+        'warning',
+      );
+    } else {
+      showToast?.('Bot created', `${name} is ready to chat.`, 'success');
+    }
 
-    try { await window.refreshSubagents?.(); } catch {}
-    try { await window.refreshPromBotAgents?.({ force: true }); } catch {}
+    try { await window.refreshSubagents?.(); } catch (error) { console.warn('[Bot Create] refreshSubagents failed:', error); }
+    try { await window.refreshPromBotAgents?.({ force: true }); } catch (error) { console.warn('[Bot Create] Prom Bot roster refresh failed:', error); }
 
-    if (typeof window.openPromBotAgent === 'function') {
-      await window.openPromBotAgent(id);
-    } else if (typeof window.openSubagentDetail === 'function') {
-      await window.openSubagentDetail(id);
-      try { await window.switchSubagentTab?.('chat', id); } catch {}
+    try {
+      if (typeof window.openPromBotAgent === 'function') {
+        await window.openPromBotAgent(id);
+      } else if (typeof window.openSubagentDetail === 'function') {
+        await window.openSubagentDetail(id);
+        try { await window.switchSubagentTab?.('chat', id); } catch {}
+      }
+    } catch (error) {
+      console.warn('[Bot Create] Bot was created but could not be opened automatically:', error);
     }
   } catch (error) {
     console.error('[Bot Create] Could not create Bot:', error);

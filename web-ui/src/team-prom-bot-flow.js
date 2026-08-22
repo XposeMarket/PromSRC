@@ -186,6 +186,15 @@ function openConvertModal(groupId) {
   requestAnimationFrame(() => document.getElementById('prom-bot-convert-purpose')?.focus());
 }
 
+async function openConvertedTeam(team) {
+  window.setMode?.('teams');
+  setTimeout(async () => {
+    try { await window.refreshTeams?.(); } catch {}
+    try { await window.openTeamBoard?.(team.id); } catch {}
+    try { window.switchTeamTab?.('chat', team.id); } catch {}
+  }, 180);
+}
+
 async function convertGroupToTeam(groupId) {
   const group = window.getPromBotGroup?.(groupId);
   if (!group) return;
@@ -215,7 +224,7 @@ async function convertGroupToTeam(groupId) {
     const team = data.team;
     const transcript = groupTranscript(group);
     if (transcript) {
-      await fetch(`/api/teams/${encodeURIComponent(team.id)}/context-references`, {
+      const contextRes = await fetch(`/api/teams/${encodeURIComponent(team.id)}/context-references`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -223,18 +232,27 @@ async function convertGroupToTeam(groupId) {
           content: transcript,
           actor: 'prom_bot_group_conversion',
         }),
-      }).catch(() => null);
+      });
+      const contextData = await contextRes.json().catch(() => ({}));
+      if (!contextRes.ok || contextData?.success === false) {
+        // The Team exists, but the source Group is the only guaranteed copy of
+        // the room transcript. Preserve it instead of silently deleting data.
+        closeConvertModal();
+        window.closePromBotGroup?.();
+        window.showToast?.(
+          'Team created · history preserved',
+          'The Team was created, but its Group transcript could not be imported. The original Group was kept so no conversation history is lost.',
+          'warning',
+        );
+        await openConvertedTeam(team);
+        return;
+      }
     }
     window.deletePromBotGroup?.(group.id);
     window.closePromBotGroup?.();
     closeConvertModal();
     window.showToast?.('Team created', `${name} is now a managed Prom Bot room.`, 'success');
-    window.setMode?.('teams');
-    setTimeout(async () => {
-      try { await window.refreshTeams?.(); } catch {}
-      try { await window.openTeamBoard?.(team.id); } catch {}
-      try { window.switchTeamTab?.('chat', team.id); } catch {}
-    }, 180);
+    await openConvertedTeam(team);
   } catch (error) {
     window.showToast?.('Convert to Team', error?.message || String(error), 'error');
     if (button) { button.disabled = false; button.textContent = 'Convert to Team'; }
