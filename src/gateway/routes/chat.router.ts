@@ -46,7 +46,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
@@ -2358,7 +2358,6 @@ async function maybeRunMidWorkflowCompaction(input: {
   routeSnapshot?: TurnRouteSnapshot;
 }): Promise<{ compacted: boolean; summaryText?: string; projectedTokens: number; triggerTokens: number }> {
   const cfg = (getConfig().getConfig() as any)?.session || {};
-  if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };
   const profile = input.routeSnapshot?.contextProfile || resolveActiveModelContextProfile();
   const budget = input.routeSnapshot?.contextBudget || buildContextBudget(profile);
   // Correct the raw model-tokenizer estimate toward real provider input-token
@@ -2404,7 +2403,10 @@ async function maybeRunMidWorkflowCompaction(input: {
 
   const systemMessage = input.messages.find((m) => m?.role === 'system');
   const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');
-  const recentWindow = nonSystemMessages.slice(-18);
+  // Token pressure decides when to compact; message count must not decide what
+  // context is preserved. Retire the entire active conversation, while the
+  // previous rolling summary is supplied separately as previousSummary.
+  const recentWindow = nonSystemMessages.filter((m) => !/^\[Rolling context summary\]/i.test(String(m?.content || '').trim()));
   const session = getSession(input.sessionId);
   const previousSummary = String((session as any).latestContextSummary || '').trim()
     || extractLastCompactionSummary(session.history || []);
@@ -2423,7 +2425,9 @@ async function maybeRunMidWorkflowCompaction(input: {
       reasoningTrailBlock: reasoningTrailText,
       artifactPathsBlock: formatCompactionArtifactPaths(input.sessionId),
       recentWindow,
-      numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),
+      // Compaction output is tightly bounded, so the compactor can use
+      // the model's hard window to ingest the active conversation being retired.
+      numCtx: profile.contextWindowTokens,
       numPredict: Math.max(900, Math.min(2600, Math.ceil(summaryMaxTokens * 1.2))),
       // An active interactive turn compacts with its admitted route, never a
       // newly selected global compaction/main provider.
@@ -2752,11 +2756,10 @@ async function handleChat(
     message,
     sessionId,
   });
-  const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;
   htime('before getHistoryForApiCall');
   const rawHistory = executionMode === 'cron'
     ? []
-    : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });
+    : getActiveHistoryForApiCall(sessionId);
   htime('after getHistoryForApiCall');
   htime('history_loaded', { messageCount: rawHistory.length });
   const normalizedIncomingMessage = String(message || '').replace(/\s+/g, ' ').trim();
@@ -7094,6 +7097,26 @@ RULES:
         toolCount: Array.isArray(tools) ? tools.length : 0,
         messageCount: Array.isArray(messages) ? messages.length : 0,
       });
+      // The first provider call gets the same token-budget guard as later
+      // rounds. A single huge first turn can therefore compact immediately.
+      if (round === 0 && (!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
+        const preflightCompact = await maybeRunMidWorkflowCompaction({
+          sessionId,
+          messages,
+          toolResults: allToolResults,
+          reasoningTrail: normalizeReasoningSummary(allReasoningSummary),
+          sendSSE,
+          abortSignal,
+          reasonHint: 'pre_model_token_budget',
+          routeSnapshot: activeGenerationRouteSnapshot,
+        });
+        if (preflightCompact.compacted) {
+          midWorkflowCompactionsThisTurn++;
+          sendSSE('info', { message: 'Context compacted. Continuing the active workflow...' });
+        }
+        if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
+      }
+
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
         tools,
         temperature: 0.3,
@@ -9406,7 +9429,7 @@ RULES:
 
     finalizeProgressRound();
 
-    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {
+    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
       const midCompact = await maybeRunMidWorkflowCompaction({
         sessionId,
         messages,
@@ -10256,8 +10279,6 @@ async function runInteractiveTurn(
     });
   }
   try {
-    const rollingCompactionApplied = false;
-
   if (!isSubagentChatSession && !isGoalContinuationTurn && /^\/goal(?:\s|$)/i.test(String(message || '').trim())) {
     const command = handleMainChatGoalCommand(sessionId, message);
     const reply = command.message || 'Goal command handled.';
@@ -10324,7 +10345,9 @@ async function runInteractiveTurn(
     : addMessage(sessionId, userMsg, {
         deferOnMemoryFlush: true,
         deferOnCompaction: true,
-        disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,
+        // The actual model-call boundary owns token-aware compaction.
+        // Persisting a message must never impose a message-count context policy.
+        disableCompactionCheck: true,
         disableMemoryFlushCheck: isSubagentChatSession,
         maxMessages: isSubagentChatSession ? 120 : undefined,
       });
@@ -22211,8 +22234,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const routeSnapshot = captureChatTurnRouteSnapshot(id).snapshot;
     const profile = routeSnapshot.contextProfile;
     const budget = routeSnapshot.contextBudget;
-    const messageCount = resolveRollingCompactionPolicy().messageCount;
-    const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });
+    const history = getActiveHistoryForApiCall(id);
     const recentToolContext = getRecentToolObservationsForContext(
       id,
       5,
