@@ -1,16 +1,16 @@
 name: Temporary desktop reasoning summary parity patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/desktop-reasoning-summary-stream
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
