@@ -72,7 +72,7 @@ COPY --from=builder /app/dist ./dist
 COPY web-ui/ ./web-ui/
 
 # Data directories (overridden by volumes in compose)
-RUN mkdir -p /data/workspace /data/logs /root/.localclaw
+RUN mkdir -p /data/workspace /data/logs
 
 # ── Environment defaults ─────────────────────────────────────
 # These are overridden by docker-compose.yml / -e flags.

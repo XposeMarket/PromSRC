@@ -253,7 +253,7 @@ Current migration routes:
 
 Migration options currently support:
 
-- source kinds: `hermes`, `openclaw`, `localclaw`, `custom`
+- source kinds: `hermes`, `openclaw`, `prometheus`, `custom`
 - modes: `user-data` and `full`
 - categories filtering
 - optional secret inclusion

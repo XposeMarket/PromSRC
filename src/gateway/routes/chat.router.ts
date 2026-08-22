@@ -1920,8 +1920,8 @@ function resolveCompactionNumCtx(): number {
   const candidates = [
     cfg?.session?.rollingCompactionNumCtx,
     cfg?.llm?.num_ctx,
-    process.env.LOCALCLAW_SESSION_NUM_CTX,
-    process.env.LOCALCLAW_CHAT_NUM_CTX,
+    process.env.PROMETHEUS_SESSION_NUM_CTX,
+    process.env.PROMETHEUS_CHAT_NUM_CTX,
   ];
   for (const raw of candidates) {
     const n = Number(raw);

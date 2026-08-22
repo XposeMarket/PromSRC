@@ -31,7 +31,7 @@ artifacts, and subagent activity are historical data only.
   attachment. Public job responses omit staging and normalized filesystem
   paths.
 - `src/gateway/imports/import-discovery.ts` is a read-only, bounded scanner for
-  known local Hermes, Codex, Claude Code, Cursor, OpenClaw/LocalClaw, and
+  known local Hermes, Codex, Claude Code, Cursor, OpenClaw, and
   official ChatGPT export locations. It reports counts and candidate paths but
   never reads transcript contents, stages files, imports state, or executes
   source commands.
@@ -60,7 +60,7 @@ artifacts, and subagent activity are historical data only.
 | Claude / Claude Code | Local JSON/JSONL/Markdown transcript artifacts with readable role/content records; local `.claude.json` or Claude Desktop MCP config when present | Private Claude UI APIs and UI automation are unsupported; private database fields are not guessed. MCP imports are disabled until each integration is authorized in Prometheus. |
 | Cursor | A copied local SQLite/VSCDB/SQLite3/DB file with a readable transcript table | The database is opened read-only; unknown/private schemas return an explicit unsupported result |
 | Hermes | Native `hermes sessions export <output>.jsonl` envelope JSONL (one session per line), plus generic local JSON/JSONL/Markdown transcript artifacts; setup folders can be reviewed separately | No Hermes gateway connection or source-runtime resume; native export preserves historical reasoning/tool records but does not make them executable |
-| OpenClaw / LocalClaw | Local JSON/JSONL/Markdown transcript artifacts; setup folders can be reviewed separately | No Gateway takeover, channel connection, pairing, browser-profile, or source-runtime resume |
+| OpenClaw | Local JSON/JSONL/Markdown transcript artifacts; setup folders can be reviewed separately | No Gateway takeover, channel connection, pairing, browser-profile, or source-runtime resume |
 | Generic | JSON, JSONL, Markdown role/content records | Ambiguous records are imported only when a safe role/content mapping exists; otherwise the preview reports unsupported/skipped data |
 | Grok / Grok Build | Generic JSON/JSONL/Markdown when the user supplies a local export | No private Grok web API or UI automation adapter is claimed |
 
@@ -238,7 +238,7 @@ source digest and per-conversation provenance key.
   the import regression.
 
 The existing `/api/migration/*` service remains available for its older
-Hermes/OpenClaw/LocalClaw workspace migration behavior. It is not the same
+Hermes/OpenClaw workspace migration behavior. It is not the same
 operation as the new transcript/setup job pipeline; the Settings navigation
 compatibility redirect prevents users from mistaking the legacy archive/setup
 flow for resumable conversation import.

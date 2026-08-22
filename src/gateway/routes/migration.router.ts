@@ -63,7 +63,7 @@ function normalizeOptions(raw: any): MigrationOptions {
   const skillConflict = raw.skillConflict === 'overwrite' || raw.skillConflict === 'rename'
     ? raw.skillConflict
     : 'skip';
-  const sourceKind = ['hermes', 'openclaw', 'localclaw', 'custom'].includes(raw.sourceKind)
+  const sourceKind = ['hermes', 'openclaw', 'custom'].includes(raw.sourceKind)
     ? raw.sourceKind
     : undefined;
   return {

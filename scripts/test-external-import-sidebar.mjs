@@ -24,7 +24,6 @@ for (const [key, label, asset] of [
   ['cursor', 'Cursor', 'cursor.svg'],
   ['hermes', 'Hermes', 'nous-research.png'],
   ['openclaw', 'OpenClaw', 'openclaw.svg'],
-  ['localclaw', 'LocalClaw', 'localclaw.webp'],
 ]) {
   assert.match(html, new RegExp(`${key}:[\\s\\S]*?label: '${label}'`), `${label} must be data-driven in the sidebar map`);
   assert.ok(html.includes(`/static/assets/import-sources/${asset}`), `${label} asset must be locally packaged`);
@@ -77,7 +76,6 @@ for (const fn of ['previewExternalImportJob', 'previewDiscoveredExternalImportBa
 assert.ok(mobileApi.includes('externalImport:'), 'mobile session summaries must retain import provenance');
 assert.ok(mobileShell.includes('MOBILE_IMPORTED_SOURCE_BRANDS'), 'mobile source logos must use a data-driven brand map');
 assert.ok(mobileShell.includes("'codex-local': { key: 'openai'"), 'mobile Codex imports must use the OpenAI source mark');
-assert.ok(mobileShell.includes("localclaw: { key: 'localclaw'"), 'mobile LocalClaw imports must use the LocalClaw source mark');
 assert.ok(mobileShell.includes('pm-session-import-logo'), 'mobile rows must render a compact source logo');
 assert.ok(mobileShell.includes('pm-session-time'), 'mobile rows must render last-message timestamps');
 assert.ok(mobileShell.includes('pm-session-subline'), 'mobile rows must keep source metadata and timestamp on one compact line');

@@ -1,5 +1,5 @@
 /**
- * reactor.ts - LocalClaw execute engine
+ * reactor.ts - Prometheus execute engine
  *
  * PRIMARY execute channel: node_call<...> pattern in model response text.
  *   The model writes: node_call<fs.readdirSync(WORKSPACE).filter(f => f.startsWith('golden'))>
@@ -153,9 +153,9 @@ const NODE_CALL_REPROMPT =
 
 // Native tool-call path: disabled by default for small models (4b and under).
 // The node_call<> text channel is far more reliable for Qwen3:4b.
-// Set LOCALCLAW_NATIVE_TOOL_CALLS=1 to force-enable (useful for 32b+ models).
+// Set PROMETHEUS_NATIVE_TOOL_CALLS=1 to force-enable (useful for 32b+ models).
 const NATIVE_TOOL_CALLS_ENABLED = (() => {
-  const explicit = process.env.LOCALCLAW_NATIVE_TOOL_CALLS;
+  const explicit = process.env.PROMETHEUS_NATIVE_TOOL_CALLS;
   if (explicit === '1' || explicit === 'true') return true;
   if (explicit === '0' || explicit === 'false') return false;
   // Auto-detect: disable for small models
@@ -171,13 +171,13 @@ const NATIVE_TOOL_CALLS_ENABLED = (() => {
   }
 })();
 const EXECUTE_NUM_CTX = (() => {
-  const n = Number(process.env.LOCALCLAW_EXECUTE_NUM_CTX || 4096);
+  const n = Number(process.env.PROMETHEUS_EXECUTE_NUM_CTX || 4096);
   return Number.isFinite(n) && n >= 2048 ? Math.floor(n) : 4096;
 })();
 const EXECUTE_NUM_PREDICT = (() => {
   // With think=true, thinking tokens are separate — num_predict only covers code output.
   // 512 is plenty for multi-line code (delete loops, file ops, etc.).
-  const n = Number(process.env.LOCALCLAW_EXECUTE_NUM_PREDICT || 512);
+  const n = Number(process.env.PROMETHEUS_EXECUTE_NUM_PREDICT || 512);
   return Number.isFinite(n) && n >= 256 ? Math.floor(n) : 512;
 })();
 const EXECUTE_THINK = (() => {
@@ -187,14 +187,14 @@ const EXECUTE_THINK = (() => {
   // and wrong operations) while num_predict goes entirely to the actual code output.
   // DO NOT use 'low' — it puts thinking inline in the response, eating the code budget.
   // DO NOT use 'false' — the model writes placeholder code or wrong operations.
-  const raw = String(process.env.LOCALCLAW_EXECUTE_THINK || 'on').trim().toLowerCase();
+  const raw = String(process.env.PROMETHEUS_EXECUTE_THINK || 'on').trim().toLowerCase();
   if (!raw || ['off', 'none', 'false', '0'].includes(raw)) return false;
   if (['low', 'medium', 'high'].includes(raw)) return raw as ('low' | 'medium' | 'high');
   if (['on', 'true', '1'].includes(raw)) return true;
   return false;
 })();
 const EXECUTE_MODEL_RETRIES = (() => {
-  const n = Number(process.env.LOCALCLAW_EXECUTE_MODEL_RETRIES || 1);
+  const n = Number(process.env.PROMETHEUS_EXECUTE_MODEL_RETRIES || 1);
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(3, Math.floor(n)));
 })();
@@ -230,7 +230,7 @@ export async function runNodeCallSandbox(
   const realRequire = require;
   const safeRequire = (mod: string): any => {
     if (BLOCKED_MODULES.has(mod)) {
-      throw new Error(`Module '${mod}' is blocked in the LocalClaw sandbox.`);
+      throw new Error(`Module '${mod}' is blocked in the Prometheus sandbox.`);
     }
     return realRequire(mod);
   };

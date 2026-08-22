@@ -14,7 +14,7 @@ Frontend onboarding modules live in `web-ui/src/onboarding/`:
 
 - `onboarding-controller.js` orchestrates steps and exposes `window.OnboardingController.runIfNeeded(...)`.
 - `tutorial-overlay.js` renders the clean tutorial modal.
-- `migration-panel.js` handles optional import from Hermes, OpenClaw, LocalClaw, or custom source paths.
+- `migration-panel.js` handles optional import from Hermes, OpenClaw, Prometheus, or custom source paths.
 - `model-picker.js` handles model setup.
 - `meet-panel.js` creates the onboarding meet-and-greet chat session.
 - `memory-confirm.js` previews and applies memory seed writes.
@@ -97,7 +97,7 @@ Migration can scan for:
 
 - Hermes
 - OpenClaw
-- LocalClaw
+- Prometheus
 - Custom source path, via the Settings migration panel
 
 The legacy migration service remains backed by `/api/migration/*`, but the
