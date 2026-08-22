@@ -61,4 +61,5 @@ assert.match(liveTracking, /__pmMobileContextStreamEvent/, 'mobile tool-result t
 assert.match(liveTracking, /Math\.max\(\s*state\.authoritativeTokens,\s*state\.baselineTokens \+ state\.liveToolTokens/s, 'live estimates must never move backward or double-add an authoritative server snapshot');
 assert.match(liveTracking, /\+\$\{formatTokens\(unreflectedTokens\)\} live est/, 'the UI must mark unreflected live tokens as an estimate instead of presenting them as authoritative');
 
+// CI refresh after review against current main.
 console.log('context-window UI contract: ok');
