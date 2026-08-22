@@ -281,6 +281,14 @@ function markReloadPending(windowMs = 15000) {
   } catch {}
 }
 
+function isReloadPending() {
+  try {
+    return Number(sessionStorage.getItem(PM_RELOAD_GUARD_KEY) || 0) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
 wsEventBus.on('dev_reload_requested', (msg) => {
   const target = String(msg?.target || 'all').toLowerCase();
   const mobile = isMobileRoute();
@@ -288,7 +296,24 @@ wsEventBus.on('dev_reload_requested', (msg) => {
     if (mobile && target !== 'mobile') return;
     if (!mobile && target !== 'desktop') return;
   }
-  const id = String(msg?.batchId || msg?.timestamp || msg?.reason || Date.now());
+  // A restart notification can be delivered again while the page is waiting
+  // for its async session recovery to finish. A stable id makes the reload
+  // idempotent across navigations, and the immediate ack prevents the gateway
+  // from retrying the same notification on the next page load.
+  const notificationId = String(msg?.notificationId || '').trim();
+  if (notificationId) {
+    wsSend({
+      type: 'startup_notification_ack',
+      notificationId,
+      surface: mobile ? 'mobile' : 'web',
+    });
+  }
+  // A gateway restart can have more than one pending startup notification.
+  // Acknowledge every notification, but only the first one may schedule the
+  // navigation. The guard survives that navigation in sessionStorage so the
+  // next page cannot replay another queued restart notification.
+  if (isReloadPending()) return;
+  const id = notificationId || String(msg?.batchId || msg?.timestamp || msg?.reason || Date.now());
   const key = `prom_dev_reload_${id}`;
   try {
     if (sessionStorage.getItem(key)) return;

@@ -560,6 +560,7 @@ export function createServer(
                   type: 'dev_reload_requested',
                   target: 'all',
                   source: 'hot_restart',
+                  notificationId: item.id,
                   reason: item.devReload?.reason || item.title || 'Prometheus restart complete',
                   surfaces: item.devReload?.surfaces || ['restart'],
                   batchId: item.devReload?.batchId,
