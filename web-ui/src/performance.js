@@ -1,3 +1,5 @@
+import './features/chat/multi-chat-workspace.js';
+
 /**
  * Privacy-conscious client performance marks.
  *

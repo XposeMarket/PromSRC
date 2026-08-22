@@ -44,9 +44,6 @@
   --sidebar-seg-active: rgba(255,255,255,0.15);
   --sidebar-w: 280px;
   --right-w: 380px;
-  /* Compact Sources peek stays visually floating, but its footprint is reserved
-     so chat content never sits underneath it. 324px card + 14px edge + 14px gap. */
-  --sources-minimized-layout-reserve: 352px;
   --log-bg: #fbfdff;
   --log-text: #5f6f86;
   --log-info: #2d5fb3;
@@ -913,11 +910,10 @@ body.right-canvas-open .page-title {
   transition: margin-right .24s ease;
 }
 
-/* The minimized Sources surface remains the compact floating peek, but the
-   center column reserves only that peek's footprint. This reflows chat without
-   opening or reserving the full right drawer underneath it. */
+/* The minimized Sources surface is a floating peek. It must not become a
+   second layout column or expose a background drawer behind the compact card. */
 body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
-  margin-right: var(--sources-minimized-layout-reserve);
+  margin-right: 0;
 }
 body:not(.pm-mobile-active).sources-minimized-open #right-panel {
   width: 0 !important;
