@@ -2,17 +2,17 @@
   "id": "kilocode",
   "kind": "provider",
   "name": "Kilo Gateway",
-  "description": "Kilo Gateway proxy for multi-provider model routing.",
+  "description": "Kilo AI Gateway for OpenAI-compatible access to hundreds of models and stable Auto routing tiers.",
   "category": "Gateway",
   "enabledByDefault": true,
-  "docsUrl": "https://kilocode.ai/",
-  "tags": ["kilocode", "gateway", "openai-compatible"],
+  "docsUrl": "https://kilo.ai/docs/gateway",
+  "tags": ["kilo", "kilocode", "gateway", "openai-compatible", "router"],
   "runtime": {
     "binding": "providers/openai-compat-adapter",
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["kilo/auto", "anthropic/claude-opus-4.8", "anthropic/claude-opus-4.7", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-flash-preview"],
+      "staticModels": ["kilo-auto/frontier", "kilo-auto/efficient", "kilo-auto/free"],
       "supportsLiveModelDiscovery": true
     }
   },
@@ -21,13 +21,15 @@
   },
   "ownership": {
     "providerIds": ["kilocode"],
-    "modelPrefixes": ["kilo/", "anthropic/", "openai/", "google/"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+    "modelPrefixes": ["kilo-auto/", "anthropic/", "openai/", "google/", "deepseek/", "moonshotai/", "minimax/", "z-ai/"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator", "automatic_routing"]
   },
   "setup": {
     "authType": "api_key",
-    "envVars": ["KILOCODE_API_KEY"],
+    "envVars": ["KILO_API_KEY", "KILOCODE_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://kilo.ai/docs/gateway/authentication",
+    "docsHint": "Kilo's current stable Auto IDs are kilo-auto/frontier, kilo-auto/efficient, and kilo-auto/free. The live /models endpoint remains authoritative for individual provider models.",
     "fields": [
       {
         "key": "api_key",
@@ -35,14 +37,14 @@
         "input": "password",
         "required": true,
         "secret": true,
-        "placeholder": "kilo_..."
+        "placeholder": "Kilo API key"
       },
       {
         "key": "model",
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "kilo/auto"
+        "placeholder": "kilo-auto/frontier"
       },
       {
         "key": "endpoint",
@@ -55,7 +57,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://api.kilo.ai/api/gateway",
-      "model": "kilo/auto"
+      "model": "kilo-auto/frontier"
     },
     "schema": {
       "api_key": "string",

@@ -2,18 +2,43 @@
   "id": "opencode",
   "kind": "provider",
   "name": "OpenCode Zen",
-  "description": "OpenCode Zen hosted model gateway.",
+  "description": "OpenCode Zen hosted model gateway with protocol-aware routing for supported models.",
   "category": "Gateway",
   "enabledByDefault": true,
-  "docsUrl": "https://opencode.ai/auth",
-  "tags": ["opencode", "gateway", "openai-compatible"],
+  "docsUrl": "https://opencode.ai/docs/zen/",
+  "tags": ["opencode", "zen", "gateway", "openai-compatible", "anthropic-compatible"],
   "runtime": {
-    "binding": "providers/openai-compat-adapter",
+    "binding": "providers/opencode-adapter",
     "options": {
-      "chatCompletionsPath": "/chat/completions",
-      "modelsPath": "/models",
-      "staticModels": ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.3-codex", "gemini-3-flash", "glm-5", "kimi-k2.5"],
-      "supportsLiveModelDiscovery": true
+      "endpoint": "https://opencode.ai/zen/v1",
+      "staticModels": [
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+        "qwen3.5-plus",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "minimax-m3",
+        "minimax-m2.7",
+        "glm-5.2",
+        "glm-5.1",
+        "kimi-k3",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "kimi-k2.5",
+        "big-pickle",
+        "x-preview-f-free",
+        "mimo-v2.5-free",
+        "hy3-free",
+        "nemotron-3-ultra-free",
+        "nemotron-3.5-lightning-free"
+      ],
+      "supportsLiveModelDiscovery": false
     }
   },
   "ui": {
@@ -21,13 +46,15 @@
   },
   "ownership": {
     "providerIds": ["opencode"],
-    "modelPrefixes": ["claude-", "gpt-", "gemini-", "glm-", "kimi-"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+    "modelPrefixes": ["claude-", "qwen", "deepseek-", "minimax-", "glm-", "kimi-"],
+    "capabilities": ["llm", "api_key_auth", "mixed_protocol", "aggregator"]
   },
   "setup": {
     "authType": "api_key",
     "envVars": ["OPENCODE_ZEN_API_KEY", "OPENCODE_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://opencode.ai/docs/zen/",
+    "docsHint": "Prometheus exposes the current Zen models it can invoke safely through Chat Completions or Anthropic Messages. Responses-only and Google-native Zen models stay hidden until those protocols have native Prometheus routing.",
     "fields": [
       {
         "key": "api_key",
@@ -42,7 +69,7 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "claude-opus-4-8"
+        "placeholder": "claude-opus-5"
       },
       {
         "key": "endpoint",
@@ -55,7 +82,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://opencode.ai/zen/v1",
-      "model": "claude-opus-4-8"
+      "model": "claude-opus-5"
     },
     "schema": {
       "api_key": "string",

@@ -1,0 +1,80 @@
+{
+  "id": "nous",
+  "kind": "provider",
+  "name": "Nous Portal",
+  "description": "Use a Nous Research Portal subscription through Hermes' local OpenAI-compatible subscription proxy.",
+  "category": "Hosted",
+  "enabledByDefault": true,
+  "docsUrl": "https://hermes-agent.nousresearch.com/docs/user-guide/features/subscription-proxy",
+  "tags": ["nous", "nous research", "hermes", "portal", "subscription", "oauth", "openai-compatible"],
+  "runtime": {
+    "binding": "providers/openai-compat-adapter",
+    "options": {
+      "endpoint": "http://127.0.0.1:8645",
+      "chatCompletionsPath": "/v1/chat/completions",
+      "modelsPath": "/v1/models",
+      "supportsLiveModelDiscovery": true
+    }
+  },
+  "ui": {
+    "color": "#6D28D9"
+  },
+  "ownership": {
+    "providerIds": ["nous"],
+    "capabilities": ["llm", "subscription_inference", "openai_compat"]
+  },
+  "setup": {
+    "authType": "none",
+    "statusMode": "generic",
+    "docsUrl": "https://hermes-agent.nousresearch.com/docs/user-guide/features/subscription-proxy",
+    "docsHint": "Run `hermes portal` once, then keep `hermes proxy start` running. Prometheus connects only to the localhost proxy; Hermes owns OAuth refresh and attaches the real Nous credential."
+  },
+  "config": {
+    "defaults": {
+      "endpoint": "http://127.0.0.1:8645",
+      "api_key": "sk-unused",
+      "model": "Hermes-4-70B"
+    },
+    "schema": {
+      "endpoint": "string",
+      "model": "string",
+      "api_key": "string?"
+    },
+    "uiHints": {
+      "endpoint": {
+        "label": "Hermes Proxy Endpoint",
+        "help": "Default: http://127.0.0.1:8645. Keep the proxy loopback-only unless you add your own network authentication."
+      },
+      "model": {
+        "label": "Model",
+        "help": "Choose from the live /v1/models list exposed by your Nous Portal subscription."
+      },
+      "api_key": {
+        "label": "Proxy Bearer",
+        "help": "The local Hermes proxy ignores this value and attaches the real short-lived Nous credential."
+      }
+    }
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["nous", "nous portal", "nous research", "hermes subscription", "hermes proxy"],
+    "domains": ["nousresearch.com", "hermes-agent.nousresearch.com"],
+    "strategies": [
+      {
+        "id": "nous-hermes-local-proxy",
+        "adapter": "local-resource",
+        "priority": 100,
+        "capabilities": ["llm"],
+        "readOnlyDefault": true,
+        "authentication": {
+          "type": "none"
+        },
+        "config": {
+          "endpoint": "http://127.0.0.1:8645",
+          "prerequisite": "hermes portal && hermes proxy start"
+        },
+        "verification": ["endpoint.reachable", "models.list", "completion.minimal"]
+      }
+    ]
+  }
+}

@@ -2,18 +2,38 @@
   "id": "opencode-go",
   "kind": "provider",
   "name": "OpenCode Go",
-  "description": "OpenCode Go hosted gateway for GLM, Kimi, Qwen, and MiMo model access.",
+  "description": "OpenCode Go subscription gateway with protocol-aware routing for supported models.",
   "category": "Gateway",
   "enabledByDefault": true,
-  "docsUrl": "https://opencode.ai/auth",
-  "tags": ["opencode-go", "gateway", "openai-compatible"],
+  "docsUrl": "https://opencode.ai/docs/go/",
+  "tags": ["opencode-go", "gateway", "subscription", "openai-compatible", "anthropic-compatible"],
   "runtime": {
-    "binding": "providers/openai-compat-adapter",
+    "binding": "providers/opencode-adapter",
     "options": {
-      "chatCompletionsPath": "/chat/completions",
-      "modelsPath": "/models",
-      "staticModels": ["kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "mimo-v2-pro", "mimo-v2-omni", "qwen3.6-plus", "qwen3.5-plus"],
-      "supportsLiveModelDiscovery": true
+      "endpoint": "https://opencode.ai/zen/go/v1",
+      "staticModels": [
+        "glm-5.3",
+        "glm-5.2",
+        "glm-5.1",
+        "kimi-k3",
+        "kimi-k2.7-code",
+        "kimi-k2.6",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "mimo-v2.5-pro",
+        "mimo-v2.5",
+        "minimax-m3",
+        "minimax-m2.7",
+        "minimax-m2.5",
+        "qwen3.8-max",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.6-plus",
+        "hy3",
+        "ox-alpha-free"
+      ],
+      "supportsLiveModelDiscovery": false
     }
   },
   "ui": {
@@ -21,13 +41,15 @@
   },
   "ownership": {
     "providerIds": ["opencode-go"],
-    "modelPrefixes": ["kimi-", "glm-", "mimo-", "qwen"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat", "aggregator"]
+    "modelPrefixes": ["kimi-", "glm-", "deepseek-", "mimo-", "minimax-", "qwen"],
+    "capabilities": ["llm", "api_key_auth", "mixed_protocol", "aggregator", "subscription"]
   },
   "setup": {
     "authType": "api_key",
     "envVars": ["OPENCODE_GO_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://opencode.ai/docs/go/",
+    "docsHint": "Prometheus exposes the current Go models it can invoke safely through Chat Completions or Anthropic Messages. Responses-only Go models stay hidden until Responses routing is added.",
     "fields": [
       {
         "key": "api_key",
@@ -42,7 +64,7 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "kimi-k2.6"
+        "placeholder": "glm-5.3"
       },
       {
         "key": "endpoint",
@@ -55,7 +77,7 @@
   "config": {
     "defaults": {
       "endpoint": "https://opencode.ai/zen/go/v1",
-      "model": "kimi-k2.6"
+      "model": "glm-5.3"
     },
     "schema": {
       "api_key": "string",

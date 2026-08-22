@@ -2,17 +2,17 @@
   "id": "qwen",
   "kind": "provider",
   "name": "Qwen Cloud",
-  "description": "Qwen and DashScope models through the compatible-mode API.",
+  "description": "Qwen models through Alibaba Cloud Model Studio's OpenAI-compatible API.",
   "category": "Hosted",
   "enabledByDefault": true,
-  "docsUrl": "https://www.alibabacloud.com/help/en/model-studio/",
+  "docsUrl": "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope",
   "tags": ["qwen", "dashscope", "alibaba", "openai-compatible"],
   "runtime": {
     "binding": "providers/openai-compat-adapter",
     "options": {
       "chatCompletionsPath": "/chat/completions",
       "modelsPath": "/models",
-      "staticModels": ["qwen3.5-plus", "qwen3-coder-plus", "qwen3-coder-next", "glm-5", "MiniMax-M2.5"],
+      "staticModels": ["qwen3.7-plus", "qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash", "qwen3-coder-plus", "qwen3-coder-next"],
       "supportsLiveModelDiscovery": true
     }
   },
@@ -21,13 +21,15 @@
   },
   "ownership": {
     "providerIds": ["qwen"],
-    "modelPrefixes": ["qwen", "MiniMax-", "glm-"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+    "modelPrefixes": ["qwen"],
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "tools"]
   },
   "setup": {
     "authType": "api_key",
-    "envVars": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"],
+    "envVars": ["DASHSCOPE_API_KEY", "QWEN_API_KEY", "MODELSTUDIO_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope",
+    "docsHint": "The legacy dashscope-intl compatible-mode endpoint remains functional, while Alibaba now recommends workspace-specific regional domains. Override endpoint with your workspace-specific compatible-mode/v1 URL when available. Qwen 3.8 Max is intentionally not a static default yet because its preserved-thinking transcript contract needs additional Prometheus message-history support.",
     "fields": [
       {
         "key": "api_key",
@@ -35,27 +37,27 @@
         "input": "password",
         "required": true,
         "secret": true,
-        "placeholder": "dashscope-..."
+        "placeholder": "DashScope API key"
       },
       {
         "key": "model",
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "qwen3.5-plus"
+        "placeholder": "qwen3.7-plus"
       },
       {
         "key": "endpoint",
         "label": "Endpoint Override",
         "input": "text",
-        "placeholder": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        "placeholder": "https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
       }
     ]
   },
   "config": {
     "defaults": {
       "endpoint": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen3.5-plus"
+      "model": "qwen3.7-plus"
     },
     "schema": {
       "api_key": "string",

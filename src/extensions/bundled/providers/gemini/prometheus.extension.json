@@ -2,13 +2,17 @@
   "id": "gemini",
   "kind": "provider",
   "name": "Google Gemini",
-  "description": "Google Gemini models via API key authentication.",
+  "description": "Google Gemini models through the official OpenAI-compatible Gemini API.",
   "category": "Hosted",
   "enabledByDefault": true,
-  "docsUrl": "https://ai.google.dev/",
-  "tags": ["google", "gemini", "api"],
+  "docsUrl": "https://ai.google.dev/gemini-api/docs/openai",
+  "tags": ["google", "gemini", "api", "openai-compatible"],
   "runtime": {
-    "binding": "providers/gemini-adapter"
+    "binding": "providers/gemini-adapter",
+    "options": {
+      "supportsLiveModelDiscovery": true,
+      "supportsReasoningEffort": true
+    }
   },
   "ui": {
     "color": "#2563EB"
@@ -16,11 +20,14 @@
   "ownership": {
     "providerIds": ["gemini"],
     "modelPrefixes": ["gemini-"],
-    "capabilities": ["llm", "api_key_auth"]
+    "capabilities": ["llm", "api_key_auth", "openai_compat", "reasoning"]
   },
   "setup": {
     "authType": "api_key",
+    "envVars": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://aistudio.google.com/apikey",
+    "docsHint": "Gemini 3 models support OpenAI-compatible chat completions and low/medium/high reasoning effort. Prometheus uses temperature 1.0 by default for Gemini 3, matching Google's current guidance.",
     "fields": [
       {
         "key": "api_key",
@@ -35,26 +42,27 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "gemini-2.5-pro"
+        "placeholder": "gemini-3.7-flash"
       }
     ]
   },
   "config": {
     "defaults": {
-      "model": "gemini-2.5-pro"
+      "model": "gemini-3.7-flash"
     },
     "schema": {
       "api_key": "string",
-      "model": "string"
+      "model": "string",
+      "reasoning_effort": "none|low|medium|high?"
     },
     "uiHints": {
       "api_key": {
         "label": "API Key",
-        "help": "Google AI Studio or Gemini API key."
+        "help": "Google AI Studio or Gemini API key. GEMINI_API_KEY and GOOGLE_API_KEY are also recognized."
       },
       "model": {
         "label": "Model",
-        "help": "Default Gemini model."
+        "help": "Default Gemini model. Live model discovery is used when available."
       }
     }
   }

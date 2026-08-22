@@ -2,18 +2,17 @@
   "id": "deepseek",
   "kind": "provider",
   "name": "DeepSeek",
-  "description": "Direct DeepSeek API access for DeepSeek chat and reasoning models.",
+  "description": "Direct DeepSeek V4 API access through the Anthropic-compatible Messages surface for reliable thinking-mode tool loops.",
   "category": "Hosted",
   "enabledByDefault": true,
-  "docsUrl": "https://api-docs.deepseek.com/",
-  "tags": ["deepseek", "api", "openai-compatible"],
+  "docsUrl": "https://api-docs.deepseek.com/quick_start/pricing-details-usd/",
+  "tags": ["deepseek", "api", "anthropic-compatible", "reasoning", "tools"],
   "runtime": {
-    "binding": "providers/openai-compat-adapter",
+    "binding": "providers/anthropic-adapter",
     "options": {
-      "chatCompletionsPath": "/chat/completions",
-      "modelsPath": "/models",
-      "staticModels": ["deepseek-chat", "deepseek-reasoner"],
-      "supportsLiveModelDiscovery": true
+      "endpoint": "https://api.deepseek.com/anthropic",
+      "authHeader": "x-api-key",
+      "staticModels": ["deepseek-v4-pro", "deepseek-v4-flash"]
     }
   },
   "ui": {
@@ -22,12 +21,14 @@
   "ownership": {
     "providerIds": ["deepseek"],
     "modelPrefixes": ["deepseek-"],
-    "capabilities": ["llm", "api_key_auth", "openai_compat"]
+    "capabilities": ["llm", "api_key_auth", "anthropic_compat", "reasoning", "tools"]
   },
   "setup": {
     "authType": "api_key",
     "envVars": ["DEEPSEEK_API_KEY"],
     "statusMode": "generic",
+    "docsUrl": "https://api-docs.deepseek.com/guides/anthropic_api",
+    "docsHint": "DeepSeek retired deepseek-chat and deepseek-reasoner on July 24, 2026. Prometheus uses DeepSeek's Anthropic-compatible endpoint because V4 thinking-mode tool loops require reasoning_content replay on the OpenAI ChatCompletions path; DeepSeek recommends the Anthropic path for clients that do not preserve that field.",
     "fields": [
       {
         "key": "api_key",
@@ -42,20 +43,20 @@
         "label": "Model",
         "input": "text",
         "required": true,
-        "placeholder": "deepseek-chat"
+        "placeholder": "deepseek-v4-pro"
       },
       {
         "key": "endpoint",
         "label": "Endpoint Override",
         "input": "text",
-        "placeholder": "https://api.deepseek.com/v1"
+        "placeholder": "https://api.deepseek.com/anthropic"
       }
     ]
   },
   "config": {
     "defaults": {
-      "endpoint": "https://api.deepseek.com/v1",
-      "model": "deepseek-chat"
+      "endpoint": "https://api.deepseek.com/anthropic",
+      "model": "deepseek-v4-pro"
     },
     "schema": {
       "api_key": "string",
