@@ -14,11 +14,15 @@ import type { TaskState } from '../tasks/task-runner';
 export const activeTasks: Map<string, TaskState> = new Map();
 
 /**
- * Default maximum LLM↔tool rounds per handleChat invocation (each round =
- * model reply + tool batch). Individual execution modes may override this
- * through the bounded PROMETHEUS_*_MAX_TOOL_ROUNDS settings.
+ * Interactive Prometheus turns are intentionally not bounded by a practical
+ * total tool-round count. Real safety comes from explicit cancellation,
+ * progress/stall detection, repeated-tool loop protection, provider failures,
+ * and task-level guards — not an arbitrary per-turn tool quota.
+ *
+ * chat.router.ts still accepts this legacy numeric hook while the large router
+ * is being decomposed, so return the largest exact integer rather than a small
+ * limit that can interrupt productive long-running work.
  */
 export function getMaxToolRounds(): number {
-  const parsed = Number(process.env.PROMETHEUS_INTERACTIVE_MAX_TOOL_ROUNDS);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.floor(parsed)) : 48;
+  return Number.MAX_SAFE_INTEGER;
 }
