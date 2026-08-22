@@ -33,54 +33,54 @@ jobs:
               Path('generated/public-web-ui/static/styles/base.css'),
           ]
 
-          old_token = """  /* Compact Sources peek stays visually floating, but its footprint is reserved
-             so chat content never sits underneath it. 324px card + 14px edge + 14px gap. */
-          --sources-minimized-layout-reserve: 352px;
-          """
-          old_layout = """/* The minimized Sources surface remains the compact floating peek, but the
-             center column reserves only that peek's footprint. This reflows chat without
-             opening or reserving the full right drawer underneath it. */
-          body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
-            margin-right: var(--sources-minimized-layout-reserve);
-          }
-          """
-          new_layout = """/* The minimized Sources surface is a floating peek. It must not become a
-             second layout column or expose a background drawer behind the compact card. */
-          body:not(.pm-mobile-active).sources-minimized-open .workspace > .center-col {
-            margin-right: 0;
-          }
-          """
-
           for path in base_paths:
-              source = path.read_text(encoding='utf-8')
-              if source.count(old_token) != 1:
-                  raise SystemExit(f'{path}: expected exactly one minimized Sources reserve token block')
-              if source.count(old_layout) != 1:
-                  raise SystemExit(f'{path}: expected exactly one minimized Sources center-layout block')
-              source = source.replace(old_token, '', 1).replace(old_layout, new_layout, 1)
-              path.write_text(source, encoding='utf-8')
+              lines = path.read_text(encoding='utf-8').splitlines()
+
+              token_matches = [i for i, line in enumerate(lines) if '--sources-minimized-layout-reserve: 352px;' in line]
+              if len(token_matches) != 1:
+                  raise SystemExit(f'{path}: expected one minimized Sources reserve token, found {len(token_matches)}')
+              token_i = token_matches[0]
+              if token_i < 2 or 'Compact Sources peek' not in lines[token_i - 2] or 'chat content never sits underneath it' not in lines[token_i - 1]:
+                  raise SystemExit(f'{path}: reserve token comment no longer matches expected layout')
+              del lines[token_i - 2:token_i + 1]
+
+              margin_matches = [i for i, line in enumerate(lines) if 'margin-right: var(--sources-minimized-layout-reserve);' in line]
+              if len(margin_matches) != 1:
+                  raise SystemExit(f'{path}: expected one minimized Sources reserve margin, found {len(margin_matches)}')
+              margin_i = margin_matches[0]
+              lines[margin_i] = lines[margin_i].replace('margin-right: var(--sources-minimized-layout-reserve);', 'margin-right: 0;')
+
+              comment_start = None
+              for i in range(max(0, margin_i - 8), margin_i):
+                  if 'The minimized Sources surface remains the compact floating peek' in lines[i]:
+                      comment_start = i
+                      break
+              if comment_start is None:
+                  raise SystemExit(f'{path}: minimized Sources layout comment not found')
+              body_i = next((i for i in range(comment_start, margin_i) if lines[i].startswith('body:not(.pm-mobile-active).sources-minimized-open')), None)
+              if body_i is None:
+                  raise SystemExit(f'{path}: minimized Sources center selector not found')
+              lines[comment_start:body_i] = [
+                  '/* The minimized Sources surface is a floating peek. It must not become a',
+                  '   second layout column or expose a background drawer behind the compact card. */',
+              ]
+
+              path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
           test_path = Path('scripts/test-desktop-chat-layout-contract.mjs')
-          test_source = test_path.read_text(encoding='utf-8')
-          old_test = """const minimizedCenter = sourceBase.match(/body:not\\(\\.pm-mobile-active\\)\\.sources-minimized-open \\.workspace > \\.center-col\\s*\\{([\\s\\S]*?)\\}/)?.[1] || '';
-          if (!/margin-right:\\s*var\\(--sources-minimized-layout-reserve\\)/.test(minimizedCenter)) {
-            throw new Error('minimized Sources must reserve only its layout footprint in the center column');
+          lines = test_path.read_text(encoding='utf-8').splitlines()
+          replacements = {
+              "if (!/margin-right:\\s*var\\(--sources-minimized-layout-reserve\\)/.test(minimizedCenter)) {": "if (!/margin-right:\\s*0\\s*;?/.test(minimizedCenter)) {",
+              "  throw new Error('minimized Sources must reserve only its layout footprint in the center column');": "  throw new Error('minimized Sources must remain a floating overlay without shifting the center column');",
+              "if (!/--sources-minimized-layout-reserve:\\s*352px/.test(sourceBase)) {": "if (/--sources-minimized-layout-reserve:/.test(sourceBase)) {",
+              "  throw new Error('minimized Sources layout reserve token is missing');": "  throw new Error('minimized Sources must not reserve a background drawer footprint');",
           }
-          if (!/--sources-minimized-layout-reserve:\\s*352px/.test(sourceBase)) {
-            throw new Error('minimized Sources layout reserve token is missing');
-          }
-          """
-          new_test = """const minimizedCenter = sourceBase.match(/body:not\\(\\.pm-mobile-active\\)\\.sources-minimized-open \\.workspace > \\.center-col\\s*\\{([\\s\\S]*?)\\}/)?.[1] || '';
-          if (!/margin-right:\\s*0\\s*;?/.test(minimizedCenter)) {
-            throw new Error('minimized Sources must remain a floating overlay without shifting the center column');
-          }
-          if (/--sources-minimized-layout-reserve:/.test(sourceBase)) {
-            throw new Error('minimized Sources must not reserve a background drawer footprint');
-          }
-          """
-          if test_source.count(old_test) != 1:
-              raise SystemExit('layout contract: expected exactly one minimized Sources reserve assertion block')
-          test_path.write_text(test_source.replace(old_test, new_test, 1), encoding='utf-8')
+          for old, new in replacements.items():
+              matches = [i for i, line in enumerate(lines) if line == old]
+              if len(matches) != 1:
+                  raise SystemExit(f'layout contract: expected one line: {old!r}; found {len(matches)}')
+              lines[matches[0]] = new
+          test_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
           Path('.github/workflows/fix-minimized-sources-panel-only.yml').unlink()
           PY
