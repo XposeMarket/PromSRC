@@ -2152,6 +2152,9 @@ export function recordSessionCompaction(
       ? `after:${stableMessageIdentity(session.history[session.history.length - 1])}`
       : undefined;
   session.contextSummaryUpdatedAt = Date.now();
+  // Reconcile persisted pressure immediately after compaction so diagnostics
+  // and the next preflight reflect the new active context rather than the old peak.
+  session.contextTokenEstimate = estimateActiveContextTokens(session);
   appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);
   appendContinuityEvent(sessionId, 'compaction', {
     kind,
@@ -2549,12 +2552,11 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !session.pendingCompaction
   ) {
     const projectedTokens = beforeTokens + Math.round(estimateMessageTokens(msg) * usageCalibrationFactor);
-    const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
+
     const recentlyCompacted = session.history
       .slice(-8)
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_SUMMARY_PROMPT);
-    const shouldCompact = realMessageCount >= sessionPolicy.compactionMinMessages
-      && projectedTokens >= compactionThresholdTokens
+    const shouldCompact = projectedTokens >= compactionThresholdTokens
       && !recentlyCompacted;
     if (shouldCompact) {
       const injectedMsg: ChatMessage = {
@@ -2577,12 +2579,11 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     && !session.pendingMemoryFlush
   ) {
     const projectedTokens = beforeTokens + Math.round(estimateMessageTokens(msg) * usageCalibrationFactor);
-    const realMessageCount = session.history.filter(isRealContextMessage).length + 1;
+
     const recentlyPrompted = session.history
       .slice(-6)
       .some((h) => h.role === 'user' && h.content === PRE_COMPACTION_MEMORY_FLUSH_PROMPT);
-    const shouldInject = realMessageCount >= sessionPolicy.compactionMinMessages
-      && projectedTokens >= thresholdTokens
+    const shouldInject = projectedTokens >= thresholdTokens
       && !recentlyPrompted;
     if (shouldInject) {
       const injectedMsg: ChatMessage = {
@@ -2807,12 +2808,14 @@ function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
 export function getHistoryForApiCall(
   id: string,
   maxTurns: number = 60,
-  options?: { maxMessages?: number },
+  options?: { maxMessages?: number; fullActiveHistory?: boolean },
 ): ChatMessage[] {
   const session = getSession(id);
-  const maxMessages = Number.isFinite(Number(options?.maxMessages))
-    ? Math.max(1, Math.floor(Number(options?.maxMessages)))
-    : maxTurns * 2;
+  const maxMessages = options?.fullActiveHistory === true
+    ? Number.POSITIVE_INFINITY
+    : Number.isFinite(Number(options?.maxMessages))
+      ? Math.max(1, Math.floor(Number(options?.maxMessages)))
+      : maxTurns * 2;
   const rawMessages = Array.isArray(session.history) ? session.history : [];
 
   let messages: ChatMessage[];
@@ -2830,7 +2833,7 @@ export function getHistoryForApiCall(
     };
     const since = base < rawMessages.length ? rawMessages.slice(base) : [];
     messages = goalSummaryMsg ? [summaryMsg, goalSummaryMsg, ...since] : [summaryMsg, ...since];
-    if (messages.length > maxMessages) {
+    if (Number.isFinite(maxMessages) && messages.length > maxMessages) {
       const preserved = goalSummaryMsg ? [summaryMsg, goalSummaryMsg] : [summaryMsg];
       messages = [...preserved, ...since.slice(-maxMessages)];
     }
@@ -2856,6 +2859,10 @@ export function getHistoryForApiCall(
     delete contextMessage.historicalEvents;
     return { ...contextMessage, content };
   }).filter((msg): msg is ChatMessage => !!msg);
+}
+
+export function getActiveHistoryForApiCall(id: string): ChatMessage[] {
+  return getHistoryForApiCall(id, 60, { fullActiveHistory: true });
 }
 
 /**
