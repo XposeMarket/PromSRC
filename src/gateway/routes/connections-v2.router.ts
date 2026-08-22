@@ -1,7 +1,72 @@
 import { Router } from 'express';
 import { getConnectionRuntime } from '../../connections/runtime';
+import { browserVisionScreenshot } from '../browser-tools';
+import { desktopScreenshot, getDesktopAdvisorPacket } from '../desktop-tools';
 
 export const router = Router();
+
+router.get('/api/computer-use/frame/:sessionId', async (req, res) => {
+  const sessionId = String(req.params.sessionId || '').trim();
+  const source = String(req.query.source || 'browser').trim().toLowerCase();
+  if (!sessionId) {
+    res.status(400).json({ success: false, error: 'sessionId is required' });
+    return;
+  }
+
+  try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+
+    if (source === 'browser') {
+      const shot = await browserVisionScreenshot(sessionId);
+      if (!shot?.base64) {
+        res.status(404).json({ success: false, error: 'No browser frame is available for this session yet.' });
+        return;
+      }
+      res.json({
+        success: true,
+        source: 'browser',
+        capturedAt: Date.now(),
+        frame: {
+          base64: shot.base64,
+          mimeType: shot.mimeType || 'image/png',
+          width: shot.width,
+          height: shot.height,
+          viewportWidth: shot.viewportWidth || shot.width,
+          viewportHeight: shot.viewportHeight || shot.height,
+        },
+      });
+      return;
+    }
+
+    if (source === 'desktop') {
+      await desktopScreenshot(sessionId, { skipOcr: true });
+      const packet = getDesktopAdvisorPacket(sessionId);
+      if (!packet?.screenshotBase64) {
+        res.status(404).json({ success: false, error: 'No desktop frame is available for this session yet.' });
+        return;
+      }
+      res.json({
+        success: true,
+        source: 'desktop',
+        capturedAt: packet.capturedAt,
+        frame: {
+          base64: packet.screenshotBase64,
+          mimeType: packet.screenshotMime || 'image/png',
+          width: packet.width,
+          height: packet.height,
+          captureRegion: packet.captureRegion,
+          virtualScreen: packet.virtualScreen,
+        },
+      });
+      return;
+    }
+
+    res.status(400).json({ success: false, error: 'source must be browser or desktop' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || String(error) });
+  }
+});
 
 router.get('/api/connection-discovery', (req, res) => {
   const service = String(req.query.service || '').trim();
