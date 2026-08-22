@@ -105,6 +105,14 @@ try {
   assert.ok(unexpectedCheckpoint, 'recovery must preserve a visible interruption checkpoint');
   assert.match(unexpectedCheckpoint.content, /automatically continue this turn/i);
 
+  const plannedCheckpoint = sessions.getHistory(plannedSessionId, 10).find((entry) =>
+    entry.role === 'assistant' && /^\[Hot restart checkpoint: planned by this chat\]/.test(String(entry.content || ''))
+  );
+  assert.ok(plannedCheckpoint, 'planned restart recovery must preserve its continuation checkpoint');
+  assert.match(plannedCheckpoint.content, /continuation of the same in-flight turn, not a fresh user request/i);
+  assert.match(plannedCheckpoint.content, /do not repeat steps already recorded as completed or successful/i);
+  assert.match(plannedCheckpoint.content, /gateway restart that resumed this turn is already complete/i);
+
   const cappedPause = sessions.getHistory(cappedSessionId, 10).find((entry) =>
     entry.role === 'assistant' && /Automatic recovery paused after/i.test(String(entry.content || ''))
   );
