@@ -3,7 +3,7 @@ name: Temporary token-window context rebuild
 on:
   pull_request:
     branches:
-      - verify/token-window-native-context-base
+      - verify/token-window-native-context-base-v2
 
 permissions:
   contents: write
@@ -51,117 +51,72 @@ jobs:
                   raise SystemExit(f'{label}: expected exactly 1 match, found {count}')
               return text.replace(old, new, 1)
 
-          # ---- session.ts: preserve original mixed/newline layout ----------
           path = 'src/gateway/session.ts'
           text = read(path)
-
-          text = replace_once(
-              text,
+          text = replace_once(text,
               "  session.contextSummaryUpdatedAt = Date.now();\n  appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);",
               "  session.contextSummaryUpdatedAt = Date.now();\n  // Reconcile persisted active pressure immediately after a real compaction.\n  session.contextTokenEstimate = estimateActiveContextTokens(session);\n  appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);",
-              'recordSessionCompaction pressure reconciliation',
-          )
-
-          text, n = re.subn(
-              r"(\r?\n)    const realMessageCount = session\.history\.filter\(isRealContextMessage\)\.length \+ 1;",
-              r"\1",
-              text,
-          )
-          if n != 2:
-              raise SystemExit(f'message-count gate declarations: expected 2 removals, found {n}')
-
-          text = replace_once(
-              text,
+              'recordSessionCompaction pressure reconciliation')
+          text, n = re.subn(r"(\r?\n)    const realMessageCount = session\.history\.filter\(isRealContextMessage\)\.length \+ 1;", r"\1", text)
+          if n != 2: raise SystemExit(f'message-count gate declarations: expected 2 removals, found {n}')
+          text = replace_once(text,
               "    const shouldCompact = realMessageCount >= sessionPolicy.compactionMinMessages\n      && projectedTokens >= compactionThresholdTokens\n      && !recentlyCompacted;",
               "    const shouldCompact = projectedTokens >= compactionThresholdTokens\n      && !recentlyCompacted;",
-              'token-only compaction gate',
-          )
-          text = replace_once(
-              text,
+              'token-only compaction gate')
+          text = replace_once(text,
               "    const shouldInject = realMessageCount >= sessionPolicy.compactionMinMessages\n      && projectedTokens >= thresholdTokens\n      && !recentlyPrompted;",
               "    const shouldInject = projectedTokens >= thresholdTokens\n      && !recentlyPrompted;",
-              'token-only memory flush gate',
-          )
-
-          text = replace_once(
-              text,
+              'token-only memory flush gate')
+          text = replace_once(text,
               "  options?: { maxMessages?: number },\n): ChatMessage[] {\n  const session = getSession(id);\n  const maxMessages = Number.isFinite(Number(options?.maxMessages))\n    ? Math.max(1, Math.floor(Number(options?.maxMessages)))\n    : maxTurns * 2;",
               "  options?: { maxMessages?: number; fullActiveHistory?: boolean },\n): ChatMessage[] {\n  const session = getSession(id);\n  const maxMessages = options?.fullActiveHistory === true\n    ? Number.POSITIVE_INFINITY\n    : Number.isFinite(Number(options?.maxMessages))\n      ? Math.max(1, Math.floor(Number(options?.maxMessages)))\n      : maxTurns * 2;",
-              'full active history option',
-          )
-          text = replace_once(
-              text,
+              'full active history option')
+          text = replace_once(text,
               "    if (messages.length > maxMessages) {",
               "    if (Number.isFinite(maxMessages) && messages.length > maxMessages) {",
-              'summary history max guard',
-          )
+              'summary history max guard')
           marker = block(text, "/**\n * Builds a legacy [RECENT_TOOL_LOG] block")
           helper = block(text, "export function getActiveHistoryForApiCall(id: string): ChatMessage[] {\n  return getHistoryForApiCall(id, 60, { fullActiveHistory: true });\n}\n\n")
           if helper not in text:
-              if marker not in text:
-                  raise SystemExit('active history helper insertion marker missing')
+              if marker not in text: raise SystemExit('active history helper insertion marker missing')
               text = text.replace(marker, helper + marker, 1)
           write(path, text)
 
-          # ---- chat.router.ts ---------------------------------------------
           path = 'src/gateway/routes/chat.router.ts'
           text = read(path)
-
-          text = replace_once(
-              text,
+          text = replace_once(text,
               "getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext",
               "getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext",
-              'chat session import',
-          )
-          text = replace_once(
-              text,
+              'chat session import')
+          text = replace_once(text,
               "  const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;\n  htime('before getHistoryForApiCall');\n  const rawHistory = executionMode === 'cron'\n    ? []\n    : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });\n  htime('after getHistoryForApiCall');",
               "  htime('before getHistoryForApiCall');\n  const rawHistory = executionMode === 'cron'\n    ? []\n    : getActiveHistoryForApiCall(sessionId);\n  htime('after getHistoryForApiCall');",
-              'main chat full active history',
-          )
-          text = replace_once(
-              text,
+              'main chat full active history')
+          text = replace_once(text,
               "    const messageCount = resolveRollingCompactionPolicy().messageCount;\n    const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });",
               "    const history = getActiveHistoryForApiCall(id);",
-              'context-window full active history',
-          )
-          text = replace_once(
-              text,
-              "    const rollingCompactionApplied = false;\n\n",
-              "",
-              'dead rolling flag',
-          )
-          text = replace_once(
-              text,
+              'context-window full active history')
+          text = replace_once(text, "    const rollingCompactionApplied = false;\n\n", "", 'dead rolling flag')
+          text = replace_once(text,
               "        disableCompactionCheck: rollingCompactionApplied || isSubagentChatSession,",
               "        // The actual model-call boundary owns token-aware compaction.\n        // Persisting a message must never impose a message-count context policy.\n        disableCompactionCheck: true,",
-              'disable legacy persistence compaction',
-          )
-          text = replace_once(
-              text,
+              'disable legacy persistence compaction')
+          text = replace_once(text,
               "  if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };\n",
               "",
-              'context safety cannot be disabled',
-          )
-          text = replace_once(
-              text,
+              'context safety cannot be disabled')
+          text = replace_once(text,
               "  const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');\n  const recentWindow = nonSystemMessages.slice(-18);",
               "  const nonSystemMessages = input.messages.filter((m) => m?.role !== 'system');\n  // Retire every active conversation message, not an arbitrary last-N tail.\n  // The existing rolling summary is supplied separately as previousSummary.\n  const recentWindow = nonSystemMessages.filter((m) => !/^\\[Rolling context summary\\]/i.test(String(m?.content || '').trim()));",
-              'full compaction retirement window',
-          )
-          text = replace_once(
-              text,
+              'full compaction retirement window')
+          text = replace_once(text,
               "      numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),",
               "      // Compactor output is tightly bounded, so it can use the hard\n      // model window to ingest the full active conversation being retired.\n      numCtx: profile.contextWindowTokens,",
-              'compactor hard model window',
-          )
-          text = replace_once(
-              text,
+              'compactor hard model window')
+          text = replace_once(text,
               "    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3 && messages.length > 3) {",
               "    if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {",
-              'post-tool arbitrary message gate',
-          )
-
+              'post-tool arbitrary message gate')
           generation_marker = block(text, "      const generationPromise = ollama.chatWithThinking(messages, 'executor', {")
           preflight = block(text, """      // The first provider call gets the same token-budget guard as later
       // tool rounds. A single huge first turn can therefore trigger compaction
@@ -186,19 +141,16 @@ jobs:
 
 """)
           if preflight not in text:
-              if generation_marker not in text:
-                  raise SystemExit('provider generation marker missing')
+              if generation_marker not in text: raise SystemExit('provider generation marker missing')
               text = text.replace(generation_marker, preflight + generation_marker, 1)
           write(path, text)
 
-          # ---- mobile settings -------------------------------------------
           path = 'web-ui/src/mobile/mobile-settings.js'
           text = read(path)
           pattern = re.compile(r"\$\{card\('Session Compaction', `.*?`, 'clipboard'\)\}", re.S)
           replacement = "${card('Context Window', `\n      <div class=\"pm-card-body\">Prometheus uses the selected model's live token window automatically. Full active conversation context is retained until token pressure requires rolling compaction; there is no message-count context limit.</div>\n    `, 'clipboard')}"
           text, n = pattern.subn(replacement, text, count=1)
-          if n != 1:
-              raise SystemExit(f'mobile compaction card: expected 1 replacement, found {n}')
+          if n != 1: raise SystemExit(f'mobile compaction card: expected 1 replacement, found {n}')
           write(path, text)
           PY
 
