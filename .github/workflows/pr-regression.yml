@@ -48,6 +48,8 @@ jobs:
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
         run: npm run check:web-ui
+      - name: Verify desktop multi-chat contract
+        run: node scripts/test-desktop-chat-layout-contract.mjs
       - name: Verify context window contract
         run: npm run test:context-window
       - name: Verify Prometheus chat link routing
