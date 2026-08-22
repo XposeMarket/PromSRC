@@ -48,6 +48,23 @@ const displayDeclarations = sourceCode.match(/^\s*display\s*:[^;]+;/gm) || [];
 assert.deepEqual(displayDeclarations.map((line) => line.trim()), ['display: block !important;'],
   'the only display override allowed is enabling the absolute decorative glass lens');
 
+// mobile.css still contains the older two-mask rim implementation. A late
+// mask-image declaration alone does NOT reset mask-composite in WebKit, so both
+// new lens paths must explicitly reset the mask shorthand before installing the
+// single radial mask. This prevents the old XOR/exclude compositor from leaking
+// into the new material on iOS.
+const mobileBase = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+assert.match(mobileBase, /(?:-webkit-)?mask-composite\s*:/,
+  'base mobile CSS is expected to contain the legacy composite-mask rim path');
+assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
+  'composer/tabbar lens must reset inherited mask shorthand before its radial mask');
+assert.match(sourceCode, /\.pm-tab-indicator[\s\S]*?\)::after\s*\{[\s\S]*?-webkit-mask:\s*none !important;[\s\S]*?mask:\s*none !important;[\s\S]*?-webkit-mask-image:/,
+  'header/slider edge lens must reset inherited mask shorthand before its radial mask');
+assert.equal((sourceCode.match(/-webkit-mask:\s*none !important;/g) || []).length, 2,
+  'exactly the two decorative lens paths must reset the WebKit mask shorthand');
+assert.equal((sourceCode.match(/^\s*mask:\s*none !important;/gm) || []).length, 2,
+  'exactly the two decorative lens paths must reset the standard mask shorthand');
+
 // Resting material follows the deployed demo's blur=0. Only the opened composer
 // gets the explicit readability exception requested for Prometheus.
 assert.match(source, /body\.pm-mobile-active \.pm-composer \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
@@ -67,8 +84,9 @@ assert.doesNotMatch(sourceCode, geometryDeclaration,
   'mobile liquid-glass override must never alter control geometry/layout/motion');
 
 // Also prohibit the exact WebKit-hostile experiment that corrupted the app.
+// The safe shorthand reset above is allowed; active composite operators are not.
 assert.doesNotMatch(sourceCode, /url\(#|feDisplacementMap|mask-composite|-webkit-mask-composite/,
-  'mobile glass must not reintroduce SVG displacement or composite-mask rings');
+  'mobile glass must not reintroduce SVG displacement or active composite-mask rings');
 
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
