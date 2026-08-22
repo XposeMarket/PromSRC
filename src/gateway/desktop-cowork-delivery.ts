@@ -14,13 +14,25 @@ export interface DesktopDeliveryRequest {
   allowForegroundFallback?: boolean;
 }
 
+export interface DesktopDeliveryAttempt<T> {
+  value: T;
+  /** Background delivery MUST explicitly verify true before it is accepted. */
+  verified?: boolean;
+  verification?: string;
+  /** Foreground metadata may be more precise than the conservative defaults. */
+  cursorDisturbed?: boolean;
+  focusDisturbed?: boolean;
+}
+
 export interface DesktopDeliveryResult {
   requestedMode: DesktopDeliveryMode;
   deliveredMode: DesktopDeliveryMode;
   target: DesktopDeliveryTarget;
   backgroundAttempted: boolean;
   foregroundFallbackUsed: boolean;
+  /** True when this action actually used or may have used the human's real pointer. */
   cursorDisturbed: boolean;
+  /** True when this action actually raised/activated or may have changed foreground focus. */
   focusDisturbed: boolean;
   verified: boolean;
   verification?: string;
@@ -44,12 +56,25 @@ export function normalizeDesktopDeliveryMode(value: unknown): DesktopDeliveryMod
   return String(value || '').trim().toLowerCase() === 'foreground' ? 'foreground' : 'background';
 }
 
+function positiveInteger(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+function positiveFinite(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
 export function normalizeDesktopDeliveryTarget(target: DesktopDeliveryTarget | null | undefined): DesktopDeliveryTarget {
   const input = target || {};
   const output: DesktopDeliveryTarget = {};
-  if (Number.isFinite(Number(input.windowHandle))) output.windowHandle = Number(input.windowHandle);
-  if (Number.isFinite(Number(input.pid))) output.pid = Number(input.pid);
-  if (Number.isFinite(Number(input.processStartTime))) output.processStartTime = Number(input.processStartTime);
+  const windowHandle = positiveInteger(input.windowHandle);
+  const pid = positiveInteger(input.pid);
+  const processStartTime = positiveFinite(input.processStartTime);
+  if (windowHandle !== undefined) output.windowHandle = windowHandle;
+  if (pid !== undefined) output.pid = pid;
+  if (processStartTime !== undefined) output.processStartTime = processStartTime;
   if (String(input.appId || '').trim()) output.appId = String(input.appId).trim();
   if (String(input.title || '').trim()) output.title = String(input.title).trim();
   return output;
@@ -57,7 +82,7 @@ export function normalizeDesktopDeliveryTarget(target: DesktopDeliveryTarget | n
 
 export function hasStrongBackgroundTarget(target: DesktopDeliveryTarget | null | undefined): boolean {
   const normalized = normalizeDesktopDeliveryTarget(target);
-  return Number.isFinite(normalized.pid) || Number.isFinite(normalized.windowHandle);
+  return normalized.pid !== undefined || normalized.windowHandle !== undefined;
 }
 
 export function shouldEscalateDesktopDelivery(error: unknown): boolean {
@@ -65,10 +90,32 @@ export function shouldEscalateDesktopDelivery(error: unknown): boolean {
     || error instanceof DesktopBackgroundDeliveryNoopError;
 }
 
+function foregroundMetadata<T>(
+  requestedMode: DesktopDeliveryMode,
+  target: DesktopDeliveryTarget,
+  result: DesktopDeliveryAttempt<T>,
+  input: { backgroundAttempted: boolean; foregroundFallbackUsed: boolean; fallbackReason?: string },
+): { value: T; delivery: DesktopDeliveryResult } {
+  return {
+    value: result.value,
+    delivery: {
+      requestedMode,
+      deliveredMode: 'foreground',
+      target,
+      backgroundAttempted: input.backgroundAttempted,
+      foregroundFallbackUsed: input.foregroundFallbackUsed,
+      cursorDisturbed: result.cursorDisturbed ?? true,
+      focusDisturbed: result.focusDisturbed ?? true,
+      verified: result.verified === true,
+      verification: result.verification || input.fallbackReason,
+    },
+  };
+}
+
 export async function runDesktopDeliveryWithFallback<T>(input: {
   request?: DesktopDeliveryRequest;
-  background: (target: DesktopDeliveryTarget) => Promise<{ value: T; verified?: boolean; verification?: string }>;
-  foreground: (target: DesktopDeliveryTarget) => Promise<{ value: T; verified?: boolean; verification?: string }>;
+  background: (target: DesktopDeliveryTarget) => Promise<DesktopDeliveryAttempt<T>>;
+  foreground: (target: DesktopDeliveryTarget) => Promise<DesktopDeliveryAttempt<T>>;
 }): Promise<{ value: T; delivery: DesktopDeliveryResult }> {
   const request = input.request || {};
   const requestedMode = normalizeDesktopDeliveryMode(request.requestedMode);
@@ -76,48 +123,31 @@ export async function runDesktopDeliveryWithFallback<T>(input: {
   const allowFallback = request.allowForegroundFallback !== false;
 
   if (requestedMode === 'foreground') {
-    const result = await input.foreground(target);
-    return {
-      value: result.value,
-      delivery: {
-        requestedMode,
-        deliveredMode: 'foreground',
-        target,
-        backgroundAttempted: false,
-        foregroundFallbackUsed: false,
-        cursorDisturbed: true,
-        focusDisturbed: true,
-        verified: result.verified !== false,
-        verification: result.verification,
-      },
-    };
+    return foregroundMetadata(requestedMode, target, await input.foreground(target), {
+      backgroundAttempted: false,
+      foregroundFallbackUsed: false,
+    });
   }
 
   if (!hasStrongBackgroundTarget(target)) {
     if (!allowFallback) {
-      throw new DesktopBackgroundDeliveryUnsupportedError('Background delivery requires an exact window handle or pid.');
+      throw new DesktopBackgroundDeliveryUnsupportedError('Background delivery requires a positive exact window handle or pid.');
     }
-    const result = await input.foreground(target);
-    return {
-      value: result.value,
-      delivery: {
-        requestedMode,
-        deliveredMode: 'foreground',
-        target,
-        backgroundAttempted: false,
-        foregroundFallbackUsed: true,
-        cursorDisturbed: true,
-        focusDisturbed: true,
-        verified: result.verified !== false,
-        verification: result.verification || 'Background target identity unavailable; used foreground compatibility lane.',
-      },
-    };
+    return foregroundMetadata(requestedMode, target, await input.foreground(target), {
+      backgroundAttempted: false,
+      foregroundFallbackUsed: true,
+      fallbackReason: 'Background target identity unavailable; used foreground compatibility lane.',
+    });
   }
 
   try {
     const result = await input.background(target);
-    if (result.verified === false) {
-      throw new DesktopBackgroundDeliveryNoopError(result.verification);
+    // This is intentionally strict: "no error" is not proof that PostMessage,
+    // postToPid, UIA, or another background mechanism actually affected the app.
+    if (result.verified !== true) {
+      throw new DesktopBackgroundDeliveryNoopError(
+        result.verification || 'Background action returned without an explicit positive verification.',
+      );
     }
     return {
       value: result.value,
@@ -135,20 +165,10 @@ export async function runDesktopDeliveryWithFallback<T>(input: {
     };
   } catch (error) {
     if (!allowFallback || !shouldEscalateDesktopDelivery(error)) throw error;
-    const result = await input.foreground(target);
-    return {
-      value: result.value,
-      delivery: {
-        requestedMode,
-        deliveredMode: 'foreground',
-        target,
-        backgroundAttempted: true,
-        foregroundFallbackUsed: true,
-        cursorDisturbed: true,
-        focusDisturbed: true,
-        verified: result.verified !== false,
-        verification: result.verification || String((error as any)?.message || error || 'Background delivery failed verification.'),
-      },
-    };
+    return foregroundMetadata(requestedMode, target, await input.foreground(target), {
+      backgroundAttempted: true,
+      foregroundFallbackUsed: true,
+      fallbackReason: String((error as any)?.message || error || 'Background delivery failed verification.'),
+    });
   }
 }
