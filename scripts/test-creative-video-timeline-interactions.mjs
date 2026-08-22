@@ -32,7 +32,10 @@ assert.match(interactions, /event\.stopImmediatePropagation\(\)[\s\S]*addVideoAs
 assert.match(interactions, /key === 'delete' \|\| key === 'backspace'/, 'Delete/Backspace must target an active composition clip');
 assert.match(interactions, /key === 's'/, 'S split shortcut must target an active composition clip');
 
-assert.match(timeline, /\[data-ce-comp-action\],\[data-ce-comp-clip\]\]\)\) return/, 'base timeline intentionally delegates composition pointer interaction to the capture-layer module');
+assert.ok(
+  timeline.includes("e.target.closest?.('[data-ce-comp-action],[data-ce-comp-clip]')) return;"),
+  'base timeline intentionally delegates composition pointer interaction to the capture-layer module',
+);
 assert.match(importer, /path: persisted\?\.path \|\| null/, 'video asset descriptors must retain workspace-relative paths for source-video composition clips');
 
 console.log('[creative-video-timeline-interactions] direct sequence move/trim/drop/keyboard contracts passed');
