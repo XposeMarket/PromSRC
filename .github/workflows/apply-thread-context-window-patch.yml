@@ -30,6 +30,29 @@ jobs:
         with:
           ref: fix/context-window-live-tracking-ui
           fetch-depth: 0
+      - name: Repair one-shot patch quoting
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-thread-context-window-patch.mjs')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              "const id = `thought:${threadKey}`;": "const id = 'thought:' + threadKey;",
+              "label: `Atomic memories (${atomRows.length} unique)`,": "label: 'Atomic memories (' + atomRows.length + ' unique)',",
+              "label: `Direct atoms (${directAtoms.length})`,": "label: 'Direct atoms (' + directAtoms.length + ')',",
+              "label: `Related atoms (${relatedAtoms.length})`,": "label: 'Related atoms (' + relatedAtoms.length + ')',",
+              "label: `Thought context packets (${thoughtRows.length} unique)`,": "label: 'Thought context packets (' + thoughtRows.length + ' unique)',",
+              "id: `previous_turns.tool_categories.${category}`,": "id: 'previous_turns.tool_categories.' + category,",
+              "label: `Tool categories (${categoryTokens.size} unique)`,": "label: 'Tool categories (' + categoryTokens.size + ' unique)',",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing expected patch-script fragment: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          node --check scripts/apply-thread-context-window-patch.mjs
       - name: Apply patch
         run: node scripts/apply-thread-context-window-patch.mjs
       - name: Remove one-shot patch machinery
