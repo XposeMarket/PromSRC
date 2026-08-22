@@ -18,6 +18,7 @@ import { listLiveRuntimes } from '../live-runtime-registry';
 import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worker-client';
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 import { registerStartupAsyncRequest } from '../startup-async-diagnostics';
+import { registerCreativeCompositionRoutes } from '../routes/creative-composition.routes';
 
 const startedAt = Date.now();
 // Request timing is intentionally separate from the normal startup profile:
@@ -63,6 +64,11 @@ export function createApp(): express.Application {
   const hookPath = resolveHookConfig().path;
   app.use(`${hookPath}/provider/:provider`, providerWebhookRawBodyMiddleware());
   app.use(express.json({ limit: '50mb' }));
+
+  // Creative video compositions are a gateway-owned workspace resource. Mount
+  // the small route family at app creation so the editor and agent tools share
+  // one persistent multi-clip contract instead of maintaining a UI-only bridge.
+  registerCreativeCompositionRoutes(app);
 
   app.get('/api/health', (_req, res) => {
     const memoryMaintenance = getMemoryIndexRefreshWorkerStatus();
