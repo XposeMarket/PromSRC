@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/runtime/storage-layout.ts'
       - 'src/runtime/storage-layout.regression.ts'
+      - 'src/runtime/storage-ownership.regression.ts'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'src/runtime/storage-layout.ts'
       - 'src/runtime/storage-layout.regression.ts'
+      - 'src/runtime/storage-ownership.regression.ts'
       - 'src/config/**'
       - 'src/skills/**'
       - 'src/extensions/**'
@@ -38,5 +40,7 @@ jobs:
       - run: npm ci
       - name: Storage layout regression
         run: npx --no-install tsx src/runtime/storage-layout.regression.ts
+      - name: Storage ownership regression
+        run: npx --no-install tsx src/runtime/storage-ownership.regression.ts
       - name: Backend typecheck
         run: npx --no-install tsc --noEmit

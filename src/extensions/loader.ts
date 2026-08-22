@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getPrometheusLayout } from '../runtime/storage-layout.js';
 import { parseExtensionDescriptor } from './schema.js';
 import type { LoadedExtensionDescriptor } from './types.js';
 
@@ -30,8 +31,13 @@ function walkForDescriptorFiles(rootDir: string): string[] {
 }
 
 export function resolveUserPluginsDir(): string {
-  // Keep extension discovery independent from ConfigManager initialization;
-  // config itself consults provider extension manifests during startup.
+  // Extension discovery must remain independent from ConfigManager startup.
+  // In layout v2 executable user extensions are application/runtime state,
+  // unlike authored skills which live in the user's portable workspace.
+  const layout = getPrometheusLayout();
+  if (layout.mode === 'canonical') return layout.runtime.plugins;
+
+  // Preserve exact pre-v2 resolution while legacy mode is active.
   const projectConfig = path.join(__dirname, '..', '..', '.prometheus');
   const configDir = process.env.PROMETHEUS_DATA_DIR
     ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')

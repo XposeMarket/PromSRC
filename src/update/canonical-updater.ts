@@ -596,7 +596,7 @@ export function collectUserStateRoots(stateRoot: string, config: any = {}, confi
     if (parent !== path.parse(parent).root) {
       add(`${label}-manifests`, path.join(parent, '.manifests'));
       add(`${label}-state`, path.join(parent, 'skills_state.json'));
-      add(`${label}-lock`, path.join(parent, '.clawhub'));
+      add(`${label}-lock`, path.join(parent, 'skill-state'));
     }
   };
   addSkillRoot('skills', path.join(root, '.prometheus', 'skills'));

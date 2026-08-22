@@ -115,7 +115,7 @@ const NODE_CALL_RE = /node_call</gi;
 const URL_LIKE_RE = /\bhttps?:\/\/|www\./i;
 const WEB_HINT_RE = /\b(url|link|website|web|internet|browse|scrape|crawl|fetch|search)\b/i;
 const CODING_HINT_RE = /\b(code|script|file|folder|directory|path|repo|repository|build|compile|test|debug|patch|refactor|typescript|javascript|python|npm|node)\b/i;
-const SKILL_HINT_RE = /\b(skill|clawhub)\b/i;
+const SKILL_HINT_RE = /\bskill\b/i;
 const GENERIC_REPEAT_WINDOW = 6;
 const GENERIC_REPEAT_THRESHOLD = 3;
 
