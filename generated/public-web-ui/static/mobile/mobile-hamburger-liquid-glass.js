@@ -1,4 +1,3 @@
-import html2canvas from '/vendor/html2canvas/html2canvas.esm.js';
 import { DEFAULT_SPEC, renderLiquidGlass } from '../vendor/liquid-glass.js';
 
 // This bridge does not implement or approximate Liquid Glass. The optical pass
@@ -11,6 +10,8 @@ const CANVAS_CLASS = 'pm-hamburger-liquid-glass-canvas';
 const STYLE_ID = 'pm-mobile-hamburger-liquid-glass-style';
 const STYLE_VERSION = 'pm-v300-2026-08-22-exact-canvas-hamburger';
 const MIN_RENDER_INTERVAL_MS = 70;
+
+let html2CanvasPromise = null;
 
 const state = {
   observer: null,
@@ -26,6 +27,18 @@ const state = {
   failureCount: 0,
   lastError: '',
 };
+
+function loadHtml2Canvas() {
+  if (!html2CanvasPromise) {
+    html2CanvasPromise = import('/vendor/html2canvas/html2canvas.esm.js')
+      .then((module) => module.default || module)
+      .catch((error) => {
+        html2CanvasPromise = null;
+        throw error;
+      });
+  }
+  return html2CanvasPromise;
+}
 
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -117,6 +130,7 @@ async function renderHamburgerGlass() {
   button.setAttribute('data-pm-liquid-glass-rendering', '1');
 
   try {
+    const html2canvas = await loadHtml2Canvas();
     const scene = await html2canvas(app, {
       backgroundColor: null,
       logging: false,
@@ -205,7 +219,9 @@ function wireInvalidationEvents() {
 }
 
 function installObserver() {
-  if (state.observer || !document.documentElement) return;
+  if (state.observer) return;
+  const root = document.getElementById('mobile-root');
+  if (!root) return;
   state.observer = new MutationObserver((mutations) => {
     let relevant = false;
     for (const mutation of mutations) {
@@ -216,7 +232,7 @@ function installObserver() {
     }
     if (relevant) schedule('dom-mutation');
   });
-  state.observer.observe(document.documentElement, {
+  state.observer.observe(root, {
     childList: true,
     subtree: true,
     characterData: true,
