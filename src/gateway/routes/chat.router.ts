@@ -2358,7 +2358,6 @@ async function maybeRunMidWorkflowCompaction(input: {
   routeSnapshot?: TurnRouteSnapshot;
 }): Promise<{ compacted: boolean; summaryText?: string; projectedTokens: number; triggerTokens: number }> {
   const cfg = (getConfig().getConfig() as any)?.session || {};
-  if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };
   const profile = input.routeSnapshot?.contextProfile || resolveActiveModelContextProfile();
   const budget = input.routeSnapshot?.contextBudget || buildContextBudget(profile);
   // Correct the raw model-tokenizer estimate toward real provider input-token
