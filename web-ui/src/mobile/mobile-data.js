@@ -8,7 +8,7 @@
 const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
 const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v296-2026-08-21-background-dock-flow';
 const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
-const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v297-2026-08-21-liquid-optics';
+const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v295-2026-08-19-demo-glass-port';
 
 function ensureMobileComposerStackStyles() {
   if (typeof document === 'undefined') return;
