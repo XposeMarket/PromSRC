@@ -11,7 +11,7 @@ jobs:
   sync:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/current-main-web-ui-sync'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      - name: Install dependencies without package lifecycle scripts
+        run: npm ci --ignore-scripts
       - name: Regenerate public web UI mirrors
         run: npm run sync:web-ui
       - name: Commit generated parity repair
