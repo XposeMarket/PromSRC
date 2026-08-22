@@ -103,6 +103,8 @@ export async function renderMobileGatewaysPage(page, { navigate }) {
   const filterAll = page.querySelector('#pm-gateway-filter-all');
   let entries = loadGatewayCatalog();
 
+  // The legacy View filter surface is now the compact Devices row; keep the
+  // stored all/selected filter behavior because the drawer uses the same state.
   function renderFilter() {
     const filter = getGatewayFilter();
     const selected = new Set(filter.gatewayIds || []);
