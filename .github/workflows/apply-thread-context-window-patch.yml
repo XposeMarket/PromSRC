@@ -7,6 +7,16 @@ on:
     paths:
       - scripts/apply-thread-context-window-patch.mjs
       - .github/workflows/apply-thread-context-window-patch.yml
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - scripts/apply-thread-context-window-patch.mjs
+      - .github/workflows/apply-thread-context-window-patch.yml
 
 permissions:
   contents: write
