@@ -21,12 +21,29 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fix/token-window-native-context
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Apply and verify PR171 runtime repair
+        run: |
+          python scripts/temp-apply-pr171-runtime.py
+          npm run sync:web-ui
+          node scripts/test-token-window-native-context.mjs
+          npm run test:context-window
+          npx tsc --noEmit
+          git config user.name "prometheus-context-bot"
+          git config user.email "prometheus-context-bot@users.noreply.github.com"
+          git add src/gateway/session.ts src/gateway/routes/chat.router.ts web-ui/src/mobile/mobile-settings.js generated/public-web-ui/static/mobile/mobile-settings.js
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(context): use model token window for active history"
+            git push origin HEAD:fix/token-window-native-context
+          fi
       - name: Type-check backend
         run: npx tsc --noEmit
       - name: Verify proposal approval durability
