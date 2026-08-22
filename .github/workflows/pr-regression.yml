@@ -16,6 +16,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  refresh_pr133:
+    if: github.event_name == 'pull_request' && github.event.pull_request.title == 'trigger PR133 refresh'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Merge current main into PR 133 branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main fix/context-window-live-tracking-ui
+          git checkout -B fix/context-window-live-tracking-ui origin/fix/context-window-live-tracking-ui
+          git merge origin/main --no-edit
+          git push origin HEAD:fix/context-window-live-tracking-ui
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
