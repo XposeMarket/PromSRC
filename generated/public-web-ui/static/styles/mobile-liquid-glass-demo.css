@@ -201,3 +201,19 @@ body.pm-mobile-active :is(
   opacity: .18 !important;
   border-color: rgba(255,255,255,.055) !important;
 }
+
+/* Mobile hierarchy polish: page titles use literal white, never a theme-tinted
+   text fill/gradient, while drawer section labels stay gold but read larger. */
+body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page .pm-detail-head h1) {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  background: none !important;
+  background-image: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+body.pm-mobile-active .pm-drawer .pm-drawer-section-title {
+  font-size: 13px !important;
+}
