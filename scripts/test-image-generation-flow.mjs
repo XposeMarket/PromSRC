@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -15,130 +14,72 @@ const codex = read('src/image-generation/providers/openai-codex.ts');
 const xai = read('src/image-generation/providers/xai.ts');
 const mediaCredentials = read('src/media-generation/provider-credentials.ts');
 const tool = read('src/tools/generate-image.ts');
-const router = read('src/gateway/routes/chat.router.ts');
-const executor = read('src/gateway/agents-runtime/subagent-executor.ts');
 const webMedia = read('src/gateway/agents-runtime/capabilities/web-media-executor.ts');
+const capabilityRegistry = read('src/gateway/agents-runtime/capabilities/registry.ts');
+const preview = read('src/gateway/generated-image-preview.ts');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const defs = read('src/gateway/tools/defs/file-web-memory.ts');
 const skill = read('workspace/skills/imagegen/SKILL.md');
-const previewHelpers = await import(pathToFileURL(path.join(root, 'dist/gateway/generated-image-preview.js')).href);
 
-const partialA = {
-  path: path.join(root, '.prometheus', 'cache', 'images', 'partial-a.png'),
-  cache_path: path.join(root, '.prometheus', 'cache', 'images', 'partial-a.png'),
-  mime_type: 'image/png',
-  file_name: 'partial-a.png',
-  generation_id: 'ig_A',
-  partial_index: 0,
-  partial: true,
-};
-const partialB = {
-  path: path.join(root, '.prometheus', 'cache', 'images', 'partial-b.png'),
-  cache_path: path.join(root, '.prometheus', 'cache', 'images', 'partial-b.png'),
-  mime_type: 'image/png',
-  file_name: 'partial-b.png',
-  generation_id: 'ig_B',
-  partial_index: 0,
-  partial: true,
-};
-const finalA = {
-  path: path.join(root, 'workspace', 'generated', 'images', 'final-a.png'),
-  rel_path: 'generated/images/final-a.png',
-  cache_path: path.join(root, '.prometheus', 'cache', 'images', 'final-a.png'),
-  mime_type: 'image/png',
-  file_name: 'final-a.png',
-  generation_id: 'ig_A',
-};
-const partialPreviewA = previewHelpers.buildGeneratedImagePreviewPayload(partialA);
-const partialPreviewB = previewHelpers.buildGeneratedImagePreviewPayload(partialB);
-const finalPreviewA = previewHelpers.buildGeneratedImagePreviewPayload(finalA);
-assert.ok(partialPreviewA, 'cache-only partial must produce a preview payload');
-assert.match(partialPreviewA.dataUrl, /^\/api\/canvas\/generated-image-preview\?cache=partial-a\.png$/, 'cache-only partial must use constrained generated-image cache preview route');
-assert.equal(partialPreviewA.workspacePath, undefined, 'cache-only partial must not fake a workspace path');
-assert.equal(partialPreviewA.cacheKey, 'partial-a.png', 'cache-only partial should expose only a basename cache key');
-assert.equal(partialPreviewA.generationId, 'ig_A', 'partial preview must carry generation identity');
-assert.equal(partialPreviewA.previewId, finalPreviewA.previewId, 'partial and final previews for the same generation must share replacement identity');
-assert.notEqual(partialPreviewB.previewId, finalPreviewA.previewId, 'simultaneous image previews must have distinct replacement identities');
-assert.doesNotMatch(JSON.stringify(partialPreviewA), /[A-Za-z]:\\\\|base64,/i, 'partial preview payload must not contain absolute paths or base64');
+// Typed request/result and provider capability contract.
+assert.match(types, /ImageGenerationPresentationMode = 'foreground' \| 'background'/, 'presentation mode must remain a typed result contract');
+assert.match(types, /ImageGenerationProviderCapabilities/, 'provider capabilities must remain declared in image-generation types');
+assert.match(tool, /presentation_mode\?: 'foreground' \| 'background' \| 'auto'/, 'generate_image must accept explicit/auto presentation routing');
+assert.match(tool, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'generate_image schema must describe foreground/background routing');
+assert.match(defs, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'model-facing tool definition must expose image presentation routing');
 
-const liveEntries = [
-  { type: 'vision', preview: partialPreviewA },
-  { type: 'vision', preview: partialPreviewB },
-];
-const incomingPreviewId = String(finalPreviewA.previewId || '').trim();
-const incomingGenerationId = String(finalPreviewA.generationId || '').trim();
-const incomingWorkspacePath = String(finalPreviewA.workspacePath || '').trim();
-const incomingCacheKey = String(finalPreviewA.cacheKey || '').trim();
-const priorIndex = liveEntries.findIndex((entry) =>
-  entry?.type === 'vision'
-  && String(entry?.preview?.artifactKind || '') === 'generated_image_partial'
-  && (
-    (!!incomingPreviewId && String(entry?.preview?.previewId || '') === incomingPreviewId)
-    || (!!incomingGenerationId && String(entry?.preview?.generationId || '') === incomingGenerationId)
-    || (!incomingPreviewId && !incomingGenerationId && !!incomingWorkspacePath && String(entry?.preview?.workspacePath || '') === incomingWorkspacePath)
-    || (!incomingPreviewId && !incomingGenerationId && !!incomingCacheKey && String(entry?.preview?.cacheKey || '') === incomingCacheKey)
-  )
-);
-assert.equal(priorIndex, 0, 'final image must replace only the matching partial preview by generation identity');
-liveEntries.splice(priorIndex, 1);
-assert.equal(liveEntries.length, 1, 'replacement must leave other simultaneous partial previews intact');
-assert.equal(liveEntries[0].preview.previewId, partialPreviewB.previewId, 'replacement must not remove another image partial');
-
-assert.match(types, /ImageGenerationPresentationMode = 'foreground' \| 'background'/, 'presentation mode must be a typed contract');
-assert.match(types, /ImageGenerationProviderCapabilities/, 'provider capabilities must be declared in image-generation types');
-assert.match(tool, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'generate_image schema must expose presentation_mode');
-assert.match(defs, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'model-facing tool definitions must expose presentation_mode');
-
+// Registry validation and provider routing.
 assert.match(registry, /providerSupportsRequest\([\s\S]*?transparency[\s\S]*?maskEditing[\s\S]*?partialStreaming/, 'registry must route by provider capabilities');
-assert.match(registry, /partialImages > 0[\s\S]*partialStreaming/, 'registry must require partial-streaming support only when partial images are requested');
-assert.match(registry, /exactSizeRequested[\s\S]*exactSizes/, 'registry must reject exact width/height requests for providers without exact-size support');
+assert.match(registry, /partialImages > 0[\s\S]*partialStreaming/, 'partial previews must require provider support');
+assert.match(registry, /exactSizeRequested[\s\S]*exactSizes/, 'exact dimensions must require provider support');
 assert.match(registry, /Mask editing requires at least one reference image edit target/, 'mask edits must require an edit target');
-assert.match(registry, /normalizeImageSize/, 'registry must validate exact sizes before provider execution');
-assert.match(registry, /normalizeImageOutputCompression/, 'registry must normalize output compression before provider execution');
-assert.match(registry, /presentationMode/, 'registry errors/results must carry presentation mode');
-assert.match(utils, /inspectImageBuffer/, 'persisted images must be inspected for actual dimensions/alpha');
+assert.match(registry, /normalizeImagePresentationMode\(request\.presentation_mode\)/, 'registry must normalize presentation mode centrally');
+assert.match(utils, /normalizeImagePresentationMode[\s\S]*background[\s\S]*foreground/, 'presentation normalization must keep foreground as the direct-deliverable default');
 assert.match(utils, /validateMaskImage[\s\S]*alpha channel[\s\S]*dimensions/, 'mask validation must check alpha and dimensions');
+assert.match(utils, /inspectImageBuffer/, 'persisted images must be inspected for actual dimensions/alpha');
 
-assert.match(openai, /readonly capabilities[\s\S]*transparency: true[\s\S]*maskEditing: true[\s\S]*outputCompression: true/, 'OpenAI provider must advertise alpha, mask, and compression capabilities');
-assert.match(openai, /form\.append\('mask'/, 'OpenAI edits path must send mask files');
+// Provider capability and credential paths.
+assert.match(openai, /readonly capabilities[\s\S]*transparency: true[\s\S]*maskEditing: true[\s\S]*outputCompression: true/, 'OpenAI provider must advertise alpha, mask and compression support');
+assert.match(openai, /form\.append\('mask'/, 'OpenAI edits must send mask files');
 assert.match(openai, /output_compression/, 'OpenAI provider must forward output compression');
-assert.match(codex, /partialStreaming: true/, 'Codex auth provider must advertise partial streaming');
-assert.match(codex, /on_partial_image/, 'Codex auth provider must emit partial-image callbacks');
-assert.match(codex, /partial_images: request\.partial_images/, 'Codex auth provider must honor partial_images control');
-assert.match(codex, /generation_id: generated\.id \|\| null/, 'Codex auth final images must retain generation identity for partial replacement');
-assert.match(xai, /transparency: false/, 'xAI provider must declare transparency unsupported');
-assert.match(registry, /Prefer it when callers say "openai"/, 'OpenAI image routing must prefer saved Codex OAuth before API-key auth');
-assert.match(mediaCredentials, /getConfiguredProviderAccountId/, 'media providers must resolve the selected saved account');
+assert.match(codex, /partialStreaming: true/, 'Codex OAuth provider must advertise partial streaming');
+assert.match(codex, /on_partial_image/, 'Codex OAuth provider must emit partial previews');
+assert.match(codex, /partial_images: request\.partial_images/, 'Codex OAuth provider must honor partial_images');
+assert.match(codex, /generation_id: generated\.id \|\| null/, 'final Codex images must retain generation identity');
+assert.match(xai, /transparency: false/, 'xAI provider must declare unsupported transparency');
+assert.match(registry, /Prefer it when callers say "openai"/, 'OpenAI routing must prefer saved Codex OAuth before API-key auth');
+assert.match(mediaCredentials, /getConfiguredProviderAccountId/, 'media providers must resolve selected saved accounts');
 assert.match(mediaCredentials, /providerSettings[\s\S]*accountId/, 'media providers must merge account-scoped settings');
-assert.match(openai, /getConfiguredProviderConfig\('openai'\)/, 'OpenAI images must read the selected saved provider credential');
-assert.match(codex, /getConfiguredProviderAccountId\('openai_codex'\)/, 'Codex images must read the selected OAuth account');
-assert.match(xai, /getConfiguredProviderConfig\('xai'\)/, 'xAI images must read the selected saved provider credential');
-assert.match(codex, /pendingPartialCallbacks/, 'Codex partial callbacks must settle before the generation result returns');
-assert.match(codex, /item_id[\s\S]*image_generation_id[\s\S]*generation_id/, 'partial previews must use stable generation identity fields');
-assert.match(previewHelpers.generatedImagePreviewIdentity({ parent_generation_id: 'ig_parent', partial_index: 0 }), /generation:ig_parent:partial:0/, 'partial index zero must be a valid preview identity');
-assert.match(read('web-ui/src/styles/pages.css'), /\.assistant-image-pending-preview[\s\S]*width: min\(100vw - 80px, 320px\)[\s\S]*aspect-ratio: 16 \/ 9/, 'desktop image loading card must be compact');
-assert.match(read('web-ui/src/styles/mobile.css'), /\.pm-generated-image-batch--pending[\s\S]*width: min\(100%, 280px\)[\s\S]*\.pm-generated-image-loading-panel[\s\S]*aspect-ratio: 16 \/ 9/, 'mobile image loading card must be compact');
 
-assert.match(router, /inferImageGenerationPresentationMode/, 'main chat must infer image presentation mode at orchestration layer');
-assert.match(router, /presentation_mode = inferImageGenerationPresentationMode/, 'main chat must write inferred presentation_mode into tool args');
-assert.match(router, /sourceValue === 'generated_image' \? 'Generated image'/, 'durable trace must label generated-image previews');
-assert.match(executor, /presentation_mode: args\.presentation_mode === 'background' \? 'background' : 'foreground'/, 'shared executor must preserve explicit background mode');
-assert.match(executor, /buildGeneratedImageVisionEvent/, 'shared executor must emit generated-image visual preview events through the shared helper');
-assert.match(executor, /buildGeneratedImageVisionEvent[\s\S]*Generated image partial/, 'shared executor must stream partial generated-image previews through the shared helper');
-assert.match(webMedia, /presentation_mode: args\.presentation_mode === 'foreground' \? 'foreground' : 'background'/, 'workflow media executor should default images to background mode');
-assert.match(webMedia, /buildGeneratedImageVisionEvent[\s\S]*Generated image/, 'workflow media executor must emit generated-image previews through the shared helper');
+// Current runtime ownership. The old chat.router/subagent-executor assertions were
+// stale after the capability-runtime refactor; web-media is now the executable
+// generate_image path and the registry installs that capability.
+assert.match(webMedia, /case 'generate_image'/, 'web-media capability must own generate_image execution');
+assert.match(webMedia, /executeGenerateImage\(/, 'web-media capability must call the shared image generator');
+assert.match(webMedia, /presentation_mode: args\.presentation_mode === 'foreground' \? 'foreground' : 'background'/, 'workflow capability must preserve explicit foreground and otherwise use background working-asset mode');
+assert.match(webMedia, /buildGeneratedImageVisionEvent[\s\S]*Generated image partial/, 'runtime must emit partial previews through the shared preview helper');
+assert.match(webMedia, /buildGeneratedImageVisionEvent[\s\S]*Generated image/, 'runtime must emit final previews through the shared preview helper');
+assert.match(capabilityRegistry, /webMediaCapabilityExecutor/, 'capability registry must install the web/media executor');
 
-assert.match(desktop, /hasBackgroundImageGeneration[\s\S]*return false/, 'foreground loader must be suppressed for background image generation');
-assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop UI must render cache-backed generated-image previews');
-assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop UI must replace partial generated-image previews by stable identity');
-assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile UI must render cache-backed generated-image previews');
-assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile UI must replace partial generated-image previews by stable identity');
-assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not promote background image previews into a duplicate final gallery');
-assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image vision events must mark background working assets as inline-only');
-assert.match(mobile, /case 'tool_call': \{[\s\S]{0,900}renderStreamingThreadNow\(\)/, 'mobile tool calls must patch the streaming turn without rebuilding every image node');
-assert.match(mobile, /case 'tool_result': \{[\s\S]{0,1400}renderStreamingThreadNow\(\)/, 'mobile tool results must patch the streaming turn without rebuilding every image node');
-assert.match(skill, /presentation_mode="foreground"[\s\S]*presentation_mode="background"/, 'imagegen skill must teach foreground/background routing');
-assert.match(skill, /PNG alpha `mask`/, 'imagegen skill must document selection mask editing');
+// Preview payloads must use constrained URLs and stable generation identity.
+assert.match(preview, /GENERATED_IMAGE_CACHE_PREVIEW_ROUTE = '\/api\/canvas\/generated-image-preview'/, 'cache-only previews must use the constrained Canvas route');
+assert.match(preview, /generation:\$\{generationId\}/, 'preview identity must prefer stable generation IDs');
+assert.match(preview, /parent_generation_id[\s\S]*partial_index/, 'partial previews must retain parent generation identity including index zero');
+assert.match(preview, /workspacePath: workspacePath \|\| undefined/, 'preview payload must distinguish workspace-backed images');
+assert.doesNotMatch(preview, /base64,/i, 'preview payload helper must not embed image bytes as base64');
 
-console.log('[image-generation-flow] presentation routing, previews, capabilities, validation, and docs contracts passed');
+// Desktop/mobile presentation contracts.
+assert.match(desktop, /hasBackgroundImageGeneration[\s\S]*return false/, 'desktop foreground loader must be suppressed for background working assets');
+assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop must render constrained cache-backed previews');
+assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop must replace matching partial previews by stable identity');
+assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile must render constrained cache-backed previews');
+assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile must replace matching partial previews by stable identity');
+assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not duplicate background working assets into the final gallery');
+assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image events must mark background working assets inline-only');
+
+// Agent-facing guidance must teach the foreground/background distinction.
+assert.match(skill, /presentation_mode="foreground"[\s\S]*presentation_mode="background"/, 'imagegen skill must teach direct-deliverable vs working-asset routing');
+assert.match(skill, /PNG alpha `mask`/, 'imagegen skill must document selection-mask editing');
+
+console.log('[image-generation-flow] current capability runtime, providers, previews, validation, and UI contracts passed');

@@ -52,6 +52,8 @@ jobs:
         run: node scripts/test-desktop-chat-layout-contract.mjs
       - name: Verify context window contract
         run: npm run test:context-window
+      - name: Verify token-window-native model context
+        run: node scripts/test-token-window-native-context.mjs
       - name: Verify Prom Bot persistent-agent stack
         run: |
           node scripts/test-desktop-prom-bot.mjs
