@@ -1,4 +1,5 @@
 import './features/chat/multi-chat-workspace-v2.js';
+import './features/chat/desktop-turn-file-diff.js';
 import './context-window-live-tracking.js';
 
 if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
