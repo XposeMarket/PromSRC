@@ -8,6 +8,8 @@ import { DEFAULT_SPEC, renderLiquidGlass } from '../vendor/liquid-glass.js';
 const DEMO_SPEC = Object.freeze({ ...DEFAULT_SPEC, blur: 0, fill: 0.65 });
 const TARGET_SELECTOR = '.pm-header > .pm-icon-btn[data-action="menu"]';
 const CANVAS_CLASS = 'pm-hamburger-liquid-glass-canvas';
+const STYLE_ID = 'pm-mobile-hamburger-liquid-glass-style';
+const STYLE_VERSION = 'pm-v300-2026-08-22-exact-canvas-hamburger';
 const MIN_RENDER_INTERVAL_MS = 70;
 
 const state = {
@@ -24,6 +26,16 @@ const state = {
   failureCount: 0,
   lastError: '',
 };
+
+function ensureStyles() {
+  if (document.getElementById(STYLE_ID)) return;
+  const link = document.createElement('link');
+  link.id = STYLE_ID;
+  link.rel = 'stylesheet';
+  link.href = new URL(`../styles/mobile-hamburger-liquid-glass.css?v=${STYLE_VERSION}`, import.meta.url).href;
+  link.dataset.promMobileHamburgerLiquidGlass = '1';
+  document.head.appendChild(link);
+}
 
 function currentTarget() {
   if (!document.body?.classList?.contains('pm-mobile-active')) return null;
@@ -217,6 +229,7 @@ export function initMobileHamburgerLiquidGlass() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (window.__pmHamburgerLiquidGlass?.initialized) return;
 
+  ensureStyles();
   wireInvalidationEvents();
   installObserver();
   schedule('init');
