@@ -42,9 +42,14 @@ export function normalizeSourcePanelContext(input = {}) {
   return { surface: SOURCE_PANEL_SURFACE.NONE, sessionId: '', agentId: '', key: 'none' };
 }
 
-export function sourcePanelContextIsVisible(context, { mode = '', activeSessionId = '' } = {}) {
+export function sourcePanelContextIsVisible(context, { mode = '', activeSessionId = '', selectedSessionId = '' } = {}) {
   const normalized = normalizeSourcePanelContext(context);
-  const active = String(activeSessionId || '').trim();
+  const explicitSelected = String(
+    selectedSessionId
+    || (typeof globalThis !== 'undefined' ? globalThis.__PROM_SOURCE_PANEL_SELECTED_SESSION_ID : '')
+    || '',
+  ).trim();
+  const active = explicitSelected || String(activeSessionId || '').trim();
   if (normalized.surface === SOURCE_PANEL_SURFACE.MAIN_CHAT) {
     return mode === 'chat' && (!active || active === normalized.sessionId);
   }
