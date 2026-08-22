@@ -6,6 +6,8 @@
  * normal desktop chat boot does not parse or execute the full Creative graph.
  */
 
+import { createCreativeCompositionBridge } from './compositionBridge.js';
+
 export {
   normalizeCreativeAudioTrackConfig,
   hasCreativeAudioTrackConfig,
@@ -28,7 +30,12 @@ export {
 
 export { createCreativeExportEngine } from './exportEngine.js';
 export { createCreativeMotionTemplateClient } from './motionTemplates.js';
+export { createCreativeCompositionBridge } from './compositionBridge.js';
 export { syncCreativeEditor } from './editor/index.js';
+
+if (typeof window !== 'undefined' && !window.prometheusCreativeCompositionBridge) {
+  window.prometheusCreativeCompositionBridge = createCreativeCompositionBridge();
+}
 
 let hyperframesFeatureLoader = null;
 
