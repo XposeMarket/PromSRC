@@ -7,6 +7,7 @@
  */
 
 import { createCreativeCompositionBridge } from './compositionBridge.js';
+import { installCreativeCompositionTimelineInteractions } from './compositionInteractions.js';
 
 export {
   normalizeCreativeAudioTrackConfig,
@@ -31,10 +32,16 @@ export {
 export { createCreativeExportEngine } from './exportEngine.js';
 export { createCreativeMotionTemplateClient } from './motionTemplates.js';
 export { createCreativeCompositionBridge } from './compositionBridge.js';
+export { installCreativeCompositionTimelineInteractions } from './compositionInteractions.js';
 export { syncCreativeEditor } from './editor/index.js';
 
-if (typeof window !== 'undefined' && !window.prometheusCreativeCompositionBridge) {
-  window.prometheusCreativeCompositionBridge = createCreativeCompositionBridge();
+if (typeof window !== 'undefined') {
+  if (!window.prometheusCreativeCompositionBridge) {
+    window.prometheusCreativeCompositionBridge = createCreativeCompositionBridge();
+  }
+  if (!window.prometheusCreativeCompositionTimelineInteractions) {
+    window.prometheusCreativeCompositionTimelineInteractions = installCreativeCompositionTimelineInteractions();
+  }
 }
 
 let hyperframesFeatureLoader = null;
