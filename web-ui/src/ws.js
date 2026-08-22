@@ -101,16 +101,12 @@ function _isCurrentWs(ws, generation) {
 
 function _wsScheduleReconnect(customDelay = null) {
   if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
-  if (_wsWaitingForOnline) return; // already waiting for network
-
-  // If the browser reports offline, wait for the 'online' event instead of
-  // hammering the server with failed reconnects every few seconds.
+  if (_wsWaitingForOnline) return;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     _wsWaitingForOnline = true;
     wsEventBus._dispatch({ type: 'ws:waiting_for_network', timestamp: Date.now() });
     return;
   }
-
   const delay = Number.isFinite(Number(customDelay)) ? Math.max(0, Number(customDelay)) : _wsNextDelay();
   wsEventBus._dispatch({ type: 'ws:reconnecting', timestamp: Date.now(), delayMs: delay, attempt: _wsBackoffIdx });
   _wsReconnectTimer = setTimeout(() => {
@@ -125,30 +121,21 @@ export function connectWS(options = {}) {
   const current = window.ws;
   if (!force && current && current.readyState === WebSocket.OPEN) return current;
   if (!force && current && current.readyState === WebSocket.CONNECTING) return current;
-
   if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
   _wsClearConnectTimer();
-
   if (force && current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
     try { current.close(4001, 'reconnect requested'); } catch {}
   }
-
   const generation = ++_wsGeneration;
   _wsConnecting = true;
   const ws = new WebSocket(buildWsUrl());
   window.ws = ws;
-
   _wsConnectTimer = setTimeout(() => {
     if (!_isCurrentWs(ws, generation)) return;
     wsEventBus._dispatch({ type: 'ws:timeout', timestamp: Date.now(), timeoutMs });
-    try {
-      ws.close(4000, 'connection timeout');
-    } catch {
-      _wsConnecting = false;
-      _wsScheduleReconnect(0);
-    }
+    try { ws.close(4000, 'connection timeout'); }
+    catch { _wsConnecting = false; _wsScheduleReconnect(0); }
   }, timeoutMs);
-
   ws.onopen = () => {
     if (!_isCurrentWs(ws, generation)) return;
     _wsConnecting = false;
@@ -157,18 +144,12 @@ export function connectWS(options = {}) {
     _wsLastMessageAt = Date.now();
     wsEventBus._dispatch({ type: 'ws:open', timestamp: Date.now() });
   };
-
   ws.onmessage = (e) => {
     if (!_isCurrentWs(ws, generation)) return;
     _wsLastMessageAt = Date.now();
-    try {
-      const msg = JSON.parse(e.data);
-      wsEventBus._dispatch(msg);
-    } catch (err) {
-      console.error('[WS] Parse error:', err);
-    }
+    try { wsEventBus._dispatch(JSON.parse(e.data)); }
+    catch (err) { console.error('[WS] Parse error:', err); }
   };
-
   ws.onclose = (event) => {
     if (!_isCurrentWs(ws, generation)) return;
     _wsConnecting = false;
@@ -176,14 +157,11 @@ export function connectWS(options = {}) {
     wsEventBus._dispatch({ type: 'ws:close', timestamp: Date.now(), code: event?.code, reason: event?.reason || '' });
     _wsScheduleReconnect(options.reconnectDelayMs);
   };
-
   ws.onerror = (event) => {
     if (!_isCurrentWs(ws, generation)) return;
     _wsConnecting = false;
     wsEventBus._dispatch({ type: 'ws:error', timestamp: Date.now(), message: event?.message || 'WebSocket error' });
-    // onclose fires after onerror for WebSockets — no need to close manually.
   };
-
   return ws;
 }
 
@@ -227,10 +205,6 @@ function probeWsOnResume() {
   ensureWSConnected({ timeoutMs: 6000 });
 }
 
-// readyState can remain OPEN after a mobile network handoff or an intermediary
-// silently drops the route. The server sends gateway_heartbeat application
-// frames every 10s; if none arrive, replace the socket instead of waiting for a
-// close event that may never come.
 const _wsLivenessTimer = setInterval(() => {
   if (document.visibilityState === 'hidden') return;
   const current = window.ws;
@@ -254,9 +228,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') probeWsOnResume();
 });
 
-function isMobileRoute() {
-  return isMobileSurface();
-}
+function isMobileRoute() { return isMobileSurface(); }
 
 async function prepareMobileReload() {
   if (!isMobileRoute()) return;
@@ -273,7 +245,7 @@ async function prepareMobileReload() {
   } catch {}
 }
 
-const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_guard';
+const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_until';
 
 function reloadScopeId(msg = {}) {
   return String(msg?.batchId || msg?.notificationId || msg?.timestamp || msg?.reason || 'restart').trim();
@@ -292,9 +264,7 @@ function isReloadPending(scopeId) {
   try {
     const guard = JSON.parse(sessionStorage.getItem(PM_RELOAD_GUARD_KEY) || '{}');
     return String(guard?.scopeId || '') === String(scopeId || '') && Number(guard?.until || 0) > Date.now();
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 wsEventBus.on('dev_reload_requested', (msg) => {
@@ -304,21 +274,10 @@ wsEventBus.on('dev_reload_requested', (msg) => {
     if (mobile && target !== 'mobile') return;
     if (!mobile && target !== 'desktop') return;
   }
-  // A restart notification can be delivered again while the page is waiting
-  // for its async session recovery to finish. A stable id makes the reload
-  // idempotent across navigations, and the immediate ack prevents the gateway
-  // from retrying the same notification on the next page load.
   const notificationId = String(msg?.notificationId || '').trim();
   if (notificationId) {
-    wsSend({
-      type: 'startup_notification_ack',
-      notificationId,
-      surface: mobile ? 'mobile' : 'web',
-    });
+    wsSend({ type: 'startup_notification_ack', notificationId, surface: mobile ? 'mobile' : 'web' });
   }
-  // Collapse duplicate notifications from the same gateway restart while still
-  // allowing a genuinely separate restart to request another reload immediately.
-  // batchId identifies a restart batch; notificationId is the safe fallback.
   const scopeId = reloadScopeId(msg);
   if (isReloadPending(scopeId)) return;
   const id = notificationId || String(msg?.batchId || msg?.timestamp || msg?.reason || Date.now());
@@ -328,9 +287,6 @@ wsEventBus.on('dev_reload_requested', (msg) => {
     sessionStorage.setItem(key, '1');
   } catch {}
   const delayMs = Number.isFinite(Number(msg?.delayMs)) ? Math.max(250, Number(msg.delayMs)) : 900;
-  // A service-worker update can emit controllerchange while this explicit
-  // reload is being prepared. Share a cross-module guard so both paths do not
-  // reload the PWA one after the other.
   markReloadPending(scopeId, delayMs + 15000);
   setTimeout(() => {
     prepareMobileReload().finally(() => {
@@ -340,12 +296,9 @@ wsEventBus.on('dev_reload_requested', (msg) => {
 });
 
 export function wsSend(msg) {
-  if (window.ws && window.ws.readyState === WebSocket.OPEN) {
-    window.ws.send(JSON.stringify(msg));
-  }
+  if (window.ws && window.ws.readyState === WebSocket.OPEN) window.ws.send(JSON.stringify(msg));
 }
 
-// Expose on window
 window.connectWS = connectWS;
 window.ensureWSConnected = ensureWSConnected;
 window.wsEventBus = wsEventBus;
