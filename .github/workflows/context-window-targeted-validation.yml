@@ -1,0 +1,59 @@
+name: Context window targeted validation
+
+on:
+  push:
+    branches:
+      - fix/context-window-live-tracking-ui
+    paths:
+      - .github/workflows/context-window-targeted-validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/context-window-live-tracking-ui
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Wire the context-window regressions into the existing test command
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('package.json')
+          text = path.read_text(encoding='utf-8')
+          old = '"test:context-window": "tsx src/gateway/context/context-window-usage.regression.ts && node scripts/test-context-window-ui.mjs"'
+          new = '"test:context-window": "tsx src/gateway/context/context-window-usage.regression.ts && tsx src/gateway/routes/context-window.regression.ts && tsx src/runtime/prompt-manifest-context-references.regression.ts && node scripts/test-context-window-ui.mjs"'
+          if old not in text:
+              raise SystemExit('context-window package script drifted')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Install dependencies without package lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Type-check backend
+        run: npx tsc --noEmit
+      - name: Run full context-window regression suite
+        run: npm run test:context-window
+      - name: Run runtime prompt manifest regression suite
+        run: npm run test:runtime-prompt-manifest
+      - name: Verify public web source sync
+        run: npm run check:web-ui
+      - name: Remove one-shot validation workflow
+        run: rm .github/workflows/context-window-targeted-validation.yml
+      - name: Commit the durable regression hook
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json .github/workflows/context-window-targeted-validation.yml
+          git diff --cached --check
+          git commit -m "test(context-window): wire thread ledger regressions"
+          git push origin HEAD:fix/context-window-live-tracking-ui
