@@ -16947,6 +16947,180 @@ function getLastTurnUsageTelemetry(session: any): { providerUsage?: any; toolRes
   return {};
 }
 
+type HistoricalContextReference = {
+  id: string;
+  kind: string;
+  estimatedTokens: number;
+  relation?: string;
+  label?: string;
+};
+
+function normalizeHistoricalContextReferences(value: any): HistoricalContextReference[] {
+  return (Array.isArray(value) ? value : [])
+    .map((reference: any) => ({
+      id: String(reference?.id || '').trim(),
+      kind: String(reference?.kind || '').trim(),
+      estimatedTokens: Math.max(0, Math.round(Number(reference?.estimatedTokens || 0) || 0)),
+      relation: String(reference?.relation || '').trim() || undefined,
+      label: String(reference?.label || '').trim() || undefined,
+    }))
+    .filter((reference: HistoricalContextReference) => reference.id && reference.kind);
+}
+
+function buildPreviousTurnsContextRow(
+  session: any,
+  latestContextCall: any,
+  recentToolTokens: number,
+): ContextWindowRow | null {
+  const history = Array.isArray(session?.history) ? session.history : [];
+  if (!history.length) return null;
+
+  let latestUserIndex = -1;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') { latestUserIndex = index; break; }
+  }
+  const assistantEntries = history
+    .map((message: any, index: number) => ({ message, index }))
+    .filter(({ message }: any) => message?.role === 'assistant' && (message?.turnProviderUsage || message?.toolResultBudget));
+  const completedCurrentEntry = [...assistantEntries]
+    .reverse()
+    .find(({ index }: any) => index > latestUserIndex) || null;
+  const previousEntries = completedCurrentEntry
+    ? assistantEntries.filter((entry: any) => entry !== completedCurrentEntry)
+    : assistantEntries;
+  if (!previousEntries.length) return null;
+
+  const latestUserAt = latestUserIndex >= 0 ? Number(history[latestUserIndex]?.timestamp || 0) : 0;
+  const latestContextAt = Number.isFinite(Date.parse(String(latestContextCall?.timestamp || '')))
+    ? Date.parse(String(latestContextCall.timestamp))
+    : 0;
+  const currentCall = completedCurrentEntry?.message?.turnProviderUsage?.lastContextCall
+    || (latestContextAt >= latestUserAt ? latestContextCall : null);
+  const currentReferenceIds = new Set(normalizeHistoricalContextReferences(currentCall?.contextReferences).map((reference) => reference.id));
+  const currentCategories = new Set((Array.isArray(currentCall?.activeToolCategories) ? currentCall.activeToolCategories : [])
+    .map((category: any) => String(category || '').trim())
+    .filter(Boolean));
+
+  const atomic = new Map<string, HistoricalContextReference>();
+  const thoughts = new Map<string, HistoricalContextReference>();
+  const categoryTokens = new Map<string, number>();
+  let previousToolResultTokens = 0;
+
+  for (const { message } of previousEntries as any[]) {
+    const call = message?.turnProviderUsage?.lastContextCall || message?.turnProviderUsage?.lastCall || null;
+    for (const reference of normalizeHistoricalContextReferences(call?.contextReferences)) {
+      if (currentReferenceIds.has(reference.id)) continue;
+      const target = reference.kind === 'atomic_memory' ? atomic
+        : reference.kind === 'thought_context_packet' ? thoughts
+          : null;
+      if (!target) continue;
+      const prior = target.get(reference.id);
+      if (!prior || reference.estimatedTokens > prior.estimatedTokens) target.set(reference.id, reference);
+    }
+
+    const categories = (Array.isArray(call?.activeToolCategories) ? call.activeToolCategories : [])
+      .map((category: any) => String(category || '').trim())
+      .filter(Boolean);
+    const schemaTokens = Math.max(0, Number(call?.estimatedToolSchemaTokens || 0) || 0);
+    const perCategoryTokens = categories.length > 0 ? Math.max(1, Math.round(schemaTokens / categories.length)) : 0;
+    for (const category of categories) {
+      if (currentCategories.has(category)) continue;
+      categoryTokens.set(category, Math.max(categoryTokens.get(category) || 0, perCategoryTokens));
+    }
+
+    const budget = message?.toolResultBudget || {};
+    previousToolResultTokens += Math.max(0, Number(budget.totalTokens || budget.resultTokens || 0) || 0);
+  }
+
+  // While a new turn is active, recent observations are already represented by
+  // the current Tool observations row. Remove that overlapping tail from the
+  // cumulative prior-tool bucket so the whole-thread total does not double count it.
+  if (!completedCurrentEntry && previousToolResultTokens > 0) {
+    previousToolResultTokens = Math.max(0, previousToolResultTokens - Math.min(previousToolResultTokens, Math.max(0, Number(recentToolTokens || 0))));
+  }
+
+  const atomRows = Array.from(atomic.values());
+  const directAtoms = atomRows.filter((reference) => reference.relation === 'direct');
+  const relatedAtoms = atomRows.filter((reference) => reference.relation !== 'direct');
+  const directTokens = directAtoms.reduce((sum, reference) => sum + reference.estimatedTokens, 0);
+  const relatedTokens = relatedAtoms.reduce((sum, reference) => sum + reference.estimatedTokens, 0);
+  const atomicTokens = directTokens + relatedTokens;
+  const thoughtRows = Array.from(thoughts.values());
+  const thoughtTokens = thoughtRows.reduce((sum, reference) => sum + reference.estimatedTokens, 0);
+  const toolCategoryTokens = Array.from(categoryTokens.values()).reduce((sum, tokens) => sum + tokens, 0);
+
+  const children: ContextWindowRow[] = [];
+  if (atomicTokens > 0) {
+    children.push({
+      id: 'previous_turns.atomic_memory',
+      label: 'Atomic memories (' + atomRows.length + ' unique)',
+      tokens: atomicTokens,
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
+      children: [
+        ...(directTokens > 0 ? [{ id: 'previous_turns.atomic_memory.direct', label: 'Direct atoms (' + directAtoms.length + ')', tokens: directTokens, estimated: true }] : []),
+        ...(relatedTokens > 0 ? [{ id: 'previous_turns.atomic_memory.related', label: 'Related atoms (' + relatedAtoms.length + ')', tokens: relatedTokens, estimated: true }] : []),
+      ],
+    });
+  }
+  if (thoughtTokens > 0) {
+    children.push({
+      id: 'previous_turns.thought_context_packets',
+      label: 'Thought context packets (' + thoughtRows.length + ' unique)',
+      tokens: thoughtTokens,
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
+    });
+  }
+  if (toolCategoryTokens > 0) {
+    const categoryChildren = Array.from(categoryTokens.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([category, tokens]) => ({
+        id: 'previous_turns.tool_categories.' + category,
+        label: category,
+        tokens,
+        estimated: true,
+      }));
+    children.push({
+      id: 'previous_turns.tool_categories',
+      label: 'Tool categories (' + categoryTokens.size + ' unique)',
+      tokens: toolCategoryTokens,
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
+      children: categoryChildren,
+    });
+  }
+  if (previousToolResultTokens > 0) {
+    children.push({
+      id: 'previous_turns.tool_results',
+      label: 'Tool results',
+      tokens: Math.round(previousToolResultTokens),
+      active: true,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
+    });
+  }
+
+  const tokens = children.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
+  return {
+    id: 'previous_turns',
+    label: 'Previous turns',
+    tokens,
+    active: tokens > 0,
+    includedInContext: true,
+    percentBasis: 'window',
+    estimated: children.some((row) => row.estimated),
+    ...(children.length ? { children } : {}),
+  };
+}
+
 function buildActiveSkillsContextEstimate(sessionId: string, profile: { tokenizer: any }) {
   const children: ContextWindowRow[] = [];
   let text = '';
@@ -17490,6 +17664,8 @@ export function buildContextWindowCurrentState(input: {
   profile: { contextWindowTokens: number; tokenizer: any };
   currentInputTokens: number;
   messageTokens: number;
+  fullMessageTokens: number;
+  previousTurnsRow?: ContextWindowRow | null;
   historyMessages: number;
   recentToolTokens: number;
   inputBudgetTokens: number;
@@ -17543,10 +17719,20 @@ export function buildContextWindowCurrentState(input: {
   // message estimate shown in the current-context rows.
   const totalThreadTokens = Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0));
   const contextLimitTokens = contextWindowTokens || inputBudgetTokens || compactionTriggerTokens;
+  const currentMessageTokens = Math.max(0, input.messageTokens);
+  const fullMessageTokens = Math.max(currentMessageTokens, Math.max(0, input.fullMessageTokens));
+  const earlierMessageTokens = Math.max(0, fullMessageTokens - currentMessageTokens);
+  const messageChildren: ContextWindowRow[] = [
+    { id: 'messages.current_model_slice', label: 'Current model slice', tokens: currentMessageTokens, active: currentMessageTokens > 0, includedInContext: true, percentBasis: 'window' },
+    ...(earlierMessageTokens > 0
+      ? [{ id: 'messages.earlier_thread', label: 'Earlier thread', tokens: earlierMessageTokens, active: true, includedInContext: true, percentBasis: 'window' }]
+      : []),
+  ];
   const inContextRows: ContextWindowRow[] = [
-    { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
+    { id: 'messages', label: 'Messages', tokens: fullMessageTokens, active: fullMessageTokens > 0, children: messageChildren },
     { id: 'system_tools', label: 'System tools', tokens: latestToolSchemaTokens, active: latestToolSchemaTokens > 0, children: systemToolChildren },
     { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
+    ...(input.previousTurnsRow ? [input.previousTurnsRow] : []),
     { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren, estimated: activeSkillTokens > 0 },
     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
   ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
@@ -17575,9 +17761,9 @@ export function buildContextWindowCurrentState(input: {
     rows: [
       ...inContextRows,
       ...runtimeOverheadRow,
-      { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },
+      { id: 'compaction_trigger', label: 'Model compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },
       { id: 'cached', label: 'Cached', tokens: cachedTokens, active: cachedTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'cached' },
-      { id: 'total_thread_tokens', label: 'Total thread tokens', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+      { id: 'total_thread_tokens', label: 'Stored thread footprint', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
     ],
   };
 }
@@ -22224,14 +22410,18 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
+    const fullMessageTokens = Math.round(estimateMessagesTokensForModel(session.history as any, profile) * calibrationFactor);
     const storedThread = estimateStoredThreadFootprint(id, session, profile);
     const modelUsage = aggregateSessionModelUsage(id);
+    const previousTurnsRow = buildPreviousTurnsContextRow(session, modelUsage.lastContextCall, toolTokens);
     const turnTelemetry = getLastTurnUsageTelemetry(session);
     const currentState = buildContextWindowCurrentState({
       sessionId: id,
       profile,
       currentInputTokens,
       messageTokens,
+      fullMessageTokens,
+      previousTurnsRow,
       historyMessages: history.length,
       recentToolTokens: toolTokens,
       inputBudgetTokens: budget.inputBudgetTokens,

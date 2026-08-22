@@ -287,6 +287,7 @@ export class OllamaClient {
       executionMode: promptManifest.executionMode,
       systemSegmentIds: promptManifest.systemSegmentIds,
       activeToolCategories: promptManifest.toolSurface.activeCategories,
+      contextReferences: promptManifest.contextReferences,
       durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };
@@ -344,6 +345,7 @@ export class OllamaClient {
       executionMode: promptManifest.executionMode,
       systemSegmentIds: promptManifest.systemSegmentIds,
       activeToolCategories: promptManifest.toolSurface.activeCategories,
+      contextReferences: promptManifest.contextReferences,
       durationMs: Date.now() - startedAt,
     });
     return result;

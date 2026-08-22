@@ -52,6 +52,13 @@ export interface ModelUsageEvent {
   executionMode?: string;
   systemSegmentIds?: string[];
   activeToolCategories?: string[];
+  contextReferences?: Array<{
+    id: string;
+    kind: 'atomic_memory' | 'thought_context_packet' | string;
+    estimatedTokens: number;
+    relation?: string;
+    label?: string;
+  }>;
 }
 
 function usageLogPath(): string {
@@ -246,6 +253,28 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       estimatedConversationTokens: normalizeCount(event.estimatedConversationTokens),
       estimatedToolSchemaTokens: normalizeCount(event.estimatedToolSchemaTokens),
       estimatedProviderInputTokens: normalizeCount(event.estimatedProviderInputTokens),
+      promptManifestId: event.promptManifestId ? String(event.promptManifestId) : undefined,
+      promptManifestHash: event.promptManifestHash ? String(event.promptManifestHash) : undefined,
+      promptManifestVersion: normalizeCount(event.promptManifestVersion) || undefined,
+      runtimeRole: event.runtimeRole ? String(event.runtimeRole) : undefined,
+      executionMode: event.executionMode ? String(event.executionMode) : undefined,
+      systemSegmentIds: Array.isArray(event.systemSegmentIds)
+        ? Array.from(new Set(event.systemSegmentIds.map((value) => String(value || '').trim()).filter(Boolean)))
+        : undefined,
+      activeToolCategories: Array.isArray(event.activeToolCategories)
+        ? Array.from(new Set(event.activeToolCategories.map((value) => String(value || '').trim()).filter(Boolean)))
+        : undefined,
+      contextReferences: Array.isArray(event.contextReferences)
+        ? event.contextReferences
+          .map((reference) => ({
+            id: String(reference?.id || '').trim(),
+            kind: String(reference?.kind || '').trim(),
+            estimatedTokens: normalizeCount(reference?.estimatedTokens),
+            ...(String(reference?.relation || '').trim() ? { relation: String(reference?.relation || '').trim() } : {}),
+            ...(String(reference?.label || '').trim() ? { label: String(reference?.label || '').trim().slice(0, 120) } : {}),
+          }))
+          .filter((reference) => reference.id && reference.kind)
+        : undefined,
     };
     const cost = estimateModelUsageCost(base);
     const full: ModelUsageEvent = {

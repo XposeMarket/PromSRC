@@ -14,7 +14,7 @@ import {
 } from './instruction-intent-detector';
 import { getSkillRoutingReport, type SkillRoutingReport } from './skill-routing-resolver';
 
-export const RUNTIME_PROMPT_MANIFEST_VERSION = 5;
+export const RUNTIME_PROMPT_MANIFEST_VERSION = 6;
 
 export type RuntimePromptRole =
   | 'main'
@@ -73,6 +73,14 @@ export interface RuntimePromptSystemMessageSummary {
   cacheMarkerPresent: boolean;
 }
 
+export interface RuntimePromptContextReference {
+  id: string;
+  kind: 'atomic_memory' | 'thought_context_packet';
+  estimatedTokens: number;
+  relation?: string;
+  label?: string;
+}
+
 export interface RuntimePromptManifest {
   version: number;
   id: string;
@@ -96,6 +104,7 @@ export interface RuntimePromptManifest {
   stage4InstructionRouting: Stage4InstructionRoutingReport;
   skillRouting?: SkillRoutingReport;
   systemMessages: RuntimePromptSystemMessageSummary[];
+  contextReferences: RuntimePromptContextReference[];
   messageSurface: {
     count: number;
     systemCount: number;
@@ -179,6 +188,60 @@ function contentToText(content: any): string {
   return content.map((part) => part?.type === 'text' ? String(part.text || '') : '').filter(Boolean).join('\n');
 }
 
+function extractRuntimeContextReferences(systemText: string): RuntimePromptContextReference[] {
+  const references = new Map<string, RuntimePromptContextReference>();
+  const lines = String(systemText || '').split(/\r?\n/);
+  let section: 'memory' | 'thought' | '' = '';
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index] || '';
+    const line = rawLine.trim();
+    if (line === '[MEMORY_REFERENCE]') { section = 'memory'; continue; }
+    if (line.startsWith('[BRAIN_ACTIVE_CONTEXT')) { section = 'thought'; continue; }
+    if (/^\[[A-Z0-9_][^\]]*\]/.test(line)) { section = ''; continue; }
+
+    if (section === 'memory' && /^atom=matom_/i.test(line)) {
+      const id = line.match(/^atom=(matom_[a-z0-9]+)/i)?.[1] || '';
+      if (!id) continue;
+      const relation = line.match(/\brelation=([a-z_]+)/i)?.[1] || '';
+      const block = [rawLine];
+      let cursor = index + 1;
+      while (cursor < lines.length) {
+        const next = String(lines[cursor] || '');
+        const nextTrimmed = next.trim();
+        if (/^atom=matom_/i.test(nextTrimmed) || /^\[[A-Z0-9_][^\]]*\]/.test(nextTrimmed)) break;
+        block.push(next);
+        cursor += 1;
+      }
+      index = cursor - 1;
+      const estimatedTokens = estimateTextTokens(block.join('\n').trim());
+      references.set(id, {
+        id,
+        kind: 'atomic_memory',
+        estimatedTokens,
+        ...(relation ? { relation } : {}),
+      });
+      continue;
+    }
+
+    if (section === 'thought') {
+      const match = line.match(/^-\s+\[([^\]]+)\]\s*(.*)$/);
+      if (!match) continue;
+      const threadKey = String(match[1] || '').trim();
+      if (!threadKey) continue;
+      const id = 'thought:' + threadKey;
+      references.set(id, {
+        id,
+        kind: 'thought_context_packet',
+        estimatedTokens: estimateTextTokens(rawLine),
+        label: threadKey.slice(0, 120),
+      });
+    }
+  }
+
+  return Array.from(references.values());
+}
+
 function normalizeCapabilities(value: RuntimePromptManifestContext['capabilities']): Record<string, string | number | boolean | null> {
   if (!value || typeof value !== 'object') return {};
   return Object.fromEntries(
@@ -259,6 +322,7 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     .filter((message) => message?.role === 'system')
     .map((message) => contentToText(message?.content))
     .join('\n\n');
+  const contextReferences = extractRuntimeContextReferences(systemText);
   const toolNames = tools
     .map((tool) => String(tool?.function?.name || tool?.name || '').trim())
     .filter(Boolean)
@@ -347,6 +411,7 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     promptVariant: String(context.promptVariant || ''),
     capabilities,
     systemSegmentIds,
+    contextReferences,
     policyIds,
     instructionResolution,
     stage4InstructionRouting,

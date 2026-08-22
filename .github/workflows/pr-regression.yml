@@ -29,6 +29,12 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify full-thread context accounting
+        run: |
+          npx tsx src/gateway/context/context-window-usage.regression.ts
+          npx tsx src/runtime/prompt-manifest-context-references.regression.ts
+          node scripts/test-context-window-ui.mjs
+          npm run test:runtime-prompt-manifest
       - name: Verify proposal approval durability
         run: |
           npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts
