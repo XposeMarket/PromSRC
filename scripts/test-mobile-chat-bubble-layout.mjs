@@ -6,7 +6,24 @@ import { chromium } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8');
-const browser = await chromium.launch({ headless: true });
+
+async function launchLayoutBrowser() {
+  // PR CI intentionally installs dependencies without lifecycle scripts, so
+  // Playwright's downloaded Chromium may be absent. GitHub's runner includes
+  // stable Chrome; keep the bundled browser first for local determinism and
+  // use the system channel as a CI-safe fallback.
+  const candidates = process.env.CI
+    ? [{ channel: 'chrome' }, {}]
+    : [{}, { channel: 'chrome' }];
+  const failures = [];
+  for (const candidate of candidates) {
+    try { return await chromium.launch({ headless: true, ...candidate }); }
+    catch (error) { failures.push(error); }
+  }
+  throw new AggregateError(failures, 'No Chromium-compatible browser is available for the mobile bubble layout regression.');
+}
+
+const browser = await launchLayoutBrowser();
 const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
 try {
