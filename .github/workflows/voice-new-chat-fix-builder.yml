@@ -1,0 +1,63 @@
+name: Voice new-chat fix builder
+on:
+  pull_request:
+    branches: [main]
+    paths: ['.github/workflows/voice-new-chat-fix-builder.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.head_ref == 'fix/mobile-voice-new-chat-chrome'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Patch mobile Voice/new-chat behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('web-ui/src/styles/mobile.css')
+          s=p.read_text()
+          marker='.pm-chat-voice-shell {\n  position: relative;\n'
+          assert marker in s
+          s=s.replace(marker, '.pm-chat-voice-shell {\n  position: relative;\n  /* Voice is an overlay inside the conversation, not a separate bordered pane. */\n  outline: 0;\n', 1)
+          marker2='.pm-chat-voice-inline {\n  padding-top: 36px;\n'
+          assert marker2 in s
+          s=s.replace(marker2, '.pm-chat-voice-inline {\n  padding-top: 36px;\n  border: 0 !important;\n  outline: 0 !important;\n  box-shadow: none !important;\n', 1)
+          p.write_text(s)
+
+          p=Path('web-ui/src/mobile/mobile-voice-page.js')
+          s=p.read_text()
+          old="""    if (targetSessionId === context.MOBILE_CHAT_SESSION_ID) {\n      const voiceTitle = String(finalText || 'New Chat').replace(/\\s+/g, ' ').trim().slice(0, 72) || 'New Chat';\n      targetSessionId = await context._ensureDurableMobileVoiceSession({ title: voiceTitle, source: 'mobile_voice_session_created' });\n      _paintVoiceTarget?.();\n    }\n"""
+          new="""    if (targetSessionId === context.MOBILE_CHAT_SESSION_ID) {\n      const voiceTitle = String(finalText || 'New Chat').replace(/\\s+/g, ' ').trim().slice(0, 72) || 'New Chat';\n      targetSessionId = await context._ensureDurableMobileVoiceSession({ title: voiceTitle, source: 'mobile_voice_session_created' });\n      _paintVoiceTarget?.();\n      // A spoken first turn is the same first message as a typed send. Once the\n      // durable session exists, leave new-chat/brain-card chrome behind and bind\n      // the visible chat to that session instead of keeping draft selectors up.\n      if (voiceNewChatDraft) {\n        context.__pmChat.activeSessionId = targetSessionId;\n        context._rememberMobileLastChatSession?.(targetSessionId);\n        try {\n          context.window.dispatchEvent(new CustomEvent('pm-mobile-voice-first-turn-materialized', {\n            detail: { sessionId: targetSessionId },\n          }));\n        } catch {}\n      }\n    }\n"""
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('scripts/test-mobile-voice-fresh-session.mjs')
+          s=p.read_text()
+          needle="""assert.match(\n  voicePage,\n  /if \\(targetSessionId === MOBILE_CHAT_SESSION_ID\\)[\\s\\S]*?_ensureDurableMobileVoiceSession/,\n  'the first utterance in a fresh Voice draft must materialize a new durable session',\n);\n"""
+          assert needle in s
+          add=needle+"""assert.match(\n  voicePage,\n  /if \\(voiceNewChatDraft\\) \\{[\\s\\S]*?__pmChat\\.activeSessionId = targetSessionId;[\\s\\S]*?_rememberMobileLastChatSession\\?\\.\\(targetSessionId\\);[\\s\\S]*?pm-mobile-voice-first-turn-materialized/,\n  'a spoken first turn must promote the new-chat draft into the durable chat and notify the chat surface',\n);\n"""
+          p.write_text(s.replace(needle,add,1))
+          PY
+      - name: Sync public web sources
+        run: npm ci --ignore-scripts && npm run sync:web-ui
+      - name: Verify focused regressions
+        run: |
+          node scripts/test-mobile-voice-fresh-session.mjs
+          node scripts/test-mobile-voice-media-contract.mjs
+          git diff --check
+      - name: Commit patch and remove builder
+        run: |
+          rm .github/workflows/voice-new-chat-fix-builder.yml
+          git config user.name 'XposeMarket'
+          git config user.email '220522120+XposeMarket@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(mobile): clean up inline voice new-chat transition'
+          git push origin HEAD:${{ github.head_ref }}
