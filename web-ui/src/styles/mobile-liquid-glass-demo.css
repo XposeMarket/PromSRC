@@ -17,10 +17,9 @@
  * August 12 material again and restores only the shadows that the August 13
  * cleanup suppresses with !important.
  *
- * IMPORTANT: PR #163's iOS/PWA header behavior is preserved. The header/safe-
- * area strip remains transparent and blur-free so content can continue beneath
- * it and iOS can provide its own status-area translucency. Individual header
- * controls still own their glass.
+ * IMPORTANT: PR #163's clear iOS/PWA header contract stays intact here. PR
+ * #181's lighter native status-edge tint is layered separately and does not
+ * alter these controls. Individual header controls still own their glass.
  *
  * This file must not change control geometry, tab motion, composer expansion,
  * routing, popovers, or page layout.
@@ -36,11 +35,16 @@ body.pm-mobile-active .pm-header {
 }
 
 /*
- * Restore the pre-August-13 floating depth. Everything except box-shadow comes
- * from the historical mobile.css material beneath this compatibility layer.
+ * Restore the pre-August-13 floating depth. Target only standalone header
+ * buttons here: the two icon slots inside .pm-header-action-cluster were
+ * intentionally shadowless on August 12 because the cluster itself is one
+ * shared glass pill.
  */
 body.pm-mobile-active :is(
-  .pm-header .pm-icon-btn,
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
+  .pm-header-actions > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -55,7 +59,10 @@ body.pm-mobile-active :is(
 }
 
 :root[data-theme="dark"] body.pm-mobile-active :is(
-  .pm-header .pm-icon-btn,
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
+  .pm-header-actions > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -67,6 +74,14 @@ body.pm-mobile-active :is(
     inset 0 -1px 1px rgba(255,255,255,.07),
     0 6px 16px rgba(0,0,0,.34),
     0 1px 4px rgba(0,0,0,.22) !important;
+}
+
+/* The cluster's icon slots stay transparent and shadowless, as in the August
+ * 12 baseline. This explicit guard prevents the restore layer from turning the
+ * shared right-side pill back into two nested glass buttons. */
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn,
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:hover {
+  box-shadow: none !important;
 }
 
 /* The moving tab selector had its own deeper floating shadow on August 12. */
@@ -83,6 +98,17 @@ body.pm-mobile-active .pm-tab-indicator {
     inset 0 1.5px 1.5px rgba(255,255,255,.24),
     inset 0 -1.5px 1.5px rgba(255,255,255,.12),
     0 8px 22px rgba(0,0,0,.42) !important;
+}
+
+/* August 12 also gave the whole tab bar a stronger lifted depth while the
+ * selector was being pressed/dragged. The August 13 !important cleanup would
+ * otherwise suppress this interaction even after the resting shadow returned. */
+body.pm-mobile-active .pm-tabbar.pm-tabbar-pressing {
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.36),
+    inset 0 -10px 26px rgba(255,255,255,.05),
+    0 20px 52px rgba(0,0,0,.24),
+    0 5px 14px rgba(0,0,0,.12) !important;
 }
 
 /*
