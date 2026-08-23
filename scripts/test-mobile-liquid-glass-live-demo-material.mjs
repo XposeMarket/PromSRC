@@ -1,199 +1,98 @@
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 
+const baselineSha = '9fc966536b71aee88cd677265ebbebabf1f20adc';
 const sourcePath = 'web-ui/src/styles/mobile-liquid-glass-demo.css';
 const generatedPath = 'generated/public-web-ui/static/styles/mobile-liquid-glass-demo.css';
 const source = fs.readFileSync(sourcePath, 'utf8');
 const generated = fs.readFileSync(generatedPath, 'utf8');
-const sourceCode = source
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .replace(/\/\/.*$/gm, '');
+const mobileBase = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+const sourceCode = source.replace(/\/\*[\s\S]*?\*\//g, '');
 
-assert.equal(generated, source, 'generated mobile liquid-glass CSS must mirror source exactly');
+assert.equal(generated, source, 'generated mobile glass restore CSS must mirror source exactly');
+assert.match(source, new RegExp(`Historical baseline: ${baselineSha}`),
+  'the restore layer must pin the exact August 12 historical baseline');
 
-// Lock the actual LIVE Vercel demo mount, not DEFAULT_SPEC by itself.
-assert.match(source, /spec:\s*\{\s*\.\.\.DEFAULT_SPEC,\s*blur:\s*0,\s*fill:\s*0\.65\s*\}/,
-  'reference comment must record the live demo override: blur 0 / fill .65');
-assert.match(source, /rim 32, strength 20, chroma \.7, spec \.28/,
-  'reference comment must retain the live compositor optical constants');
-assert.match(source, /--pm-demo-body:\s*rgba\(18, 22, 28, \.4275\)/,
-  'fill .65 must resolve through body=.07+fill*.55 to .4275 toward rgb(18,22,28)');
-assert.match(source, /--pm-demo-hairline:\s*rgba\(255, 252, 248, \.1936\)/,
-  'top/bottom hairline must follow .16 + spec*.12 for spec=.28');
-assert.match(source, /--pm-demo-directional-glint:\s*rgba\(255, 255, 255, \.0242\)/,
-  'directional glint must stay tied to spec*22/255');
-assert.match(source, /--pm-demo-chroma:\s*\.35px/,
-  'live .7 device-pixel chroma must map to .35 CSS px at the demo DPR cap of 2');
+// The underlying mobile.css still owns the August 12 material. Lock the optical
+// values that matter so this late compatibility layer cannot silently drift.
+for (const [name, value] of [
+  ['--pm-lg-header-blur', '1.5px'],
+  ['--pm-lg-pill-blur', '2.5px'],
+  ['--pm-lg-panel-blur', '2px'],
+  ['--pm-lg-shadow-y', '8px'],
+  ['--pm-lg-shadow-blur', '56px'],
+  ['--pm-lg-shadow-alpha', '.11'],
+  ['--pm-lg-lens-inset', '-5px'],
+  ['--pm-lg-lens-opacity', '.56'],
+  ['--pm-lg-lens-scale', '1.054'],
+  ['--pm-lg-lens-blur', '1.7px'],
+  ['--pm-lg-lens-saturate', '1'],
+  ['--pm-lg-lens-contrast', '.7'],
+  ['--pm-lg-lens-brightness', '1.075'],
+  ['--pm-lg-rim-width', '9px'],
+]) {
+  assert.ok(mobileBase.includes(`${name}: ${value};`), `August 12 base token drifted: ${name}`);
+}
+assert.match(mobileBase, /\.pm-header \.pm-icon-btn\s*\{[\s\S]*?background:\s*rgba\(255,255,255,\.025\);[\s\S]*?blur\(var\(--pm-lg-header-blur/,
+  'header buttons must still use the historical low-blur material in mobile.css');
+assert.match(mobileBase, /\.pm-glass-lens\s*\{[\s\S]*?inset:\s*var\(--pm-lg-lens-inset[\s\S]*?transform:\s*scale\(var\(--pm-lg-lens-scale/,
+  'historical refraction vocabulary must remain intact in mobile.css');
+assert.match(mobileBase, /These layers were specific to the old panel treatment[\s\S]*?\.pm-composer > \.pm-glass-lens,[\s\S]*?\.pm-tabbar > \.pm-glass-lens,[\s\S]*?display:\s*none !important;/,
+  'August 12 composer/tabbar decorative lens layers must stay hidden by the base material');
+assert.match(mobileBase, /Mobile glass cleanup:[\s\S]*?remove the cast shadow behind floating glass surfaces/,
+  'the later August 13 shadow cleanup is expected to remain in mobile.css and be narrowly overridden here');
 
+// Preserve the recently fixed iOS/PWA top strip: transparent, no header-wide
+// blur, while each child button/model pill keeps its own glass material.
+assert.match(sourceCode, /body\.pm-mobile-active \.pm-header\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;[\s\S]*?box-shadow:\s*none !important;/,
+  'iOS/PWA header safe-area must remain transparent and header-blur-free');
+
+// Restore exactly the pre-August-13 depth for the persistent glass group.
 for (const selector of [
-  '.pm-header > .pm-icon-btn',
-  '.pm-header-actions > .pm-icon-btn',
+  '.pm-header .pm-icon-btn',
   '.pm-header .pm-online',
   '.pm-header-action-cluster',
   '.pm-completion-toast',
-  '.chat-pulse-card',
   '.pm-composer',
   '.pm-tabbar',
-  '.pm-tab-indicator',
 ]) {
-  assert.ok(source.includes(selector), `missing live-demo material surface: ${selector}`);
+  assert.ok(source.includes(selector), `missing August 12 shadow restore surface: ${selector}`);
 }
+assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.38\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.18\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.16\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.08\) !important;/,
+  'light persistent glass must restore the August 12 cast-shadow recipe');
+assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.16\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.07\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.34\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.22\) !important;/,
+  'dark persistent glass must restore the August 12 cast-shadow recipe');
+assert.match(sourceCode, /\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px rgba\(255,255,255,\.34\),[\s\S]*?0 8px 22px rgba\(40,28,16,\.18\),[\s\S]*?0 1px 4px rgba\(40,28,16,\.12\) !important;/,
+  'tab selector must restore its August 12 light floating depth');
+assert.match(sourceCode, /data-theme="dark"[\s\S]*?\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px rgba\(255,255,255,\.24\),[\s\S]*?0 8px 22px rgba\(0,0,0,\.42\) !important;/,
+  'tab selector must restore its August 12 dark floating depth');
 
-// The stable mobile base intentionally hides the decorative lens layer. The
-// late material override must re-enable only that absolute child layer.
-assert.match(sourceCode, /body\.pm-mobile-active :is\(\.pm-tabbar, \.pm-composer\) > \.pm-glass-lens\s*\{[\s\S]*?display:\s*block !important;/,
-  'composer/tabbar decorative lens must be re-enabled by the late material override');
-const displayDeclarations = sourceCode.match(/^\s*display\s*:[^;]+;/gm) || [];
-assert.deepEqual(displayDeclarations.map((line) => line.trim()), ['display: block !important;'],
-  'the only display override allowed is enabling the absolute decorative glass lens');
-
-// mobile.css still contains an older two-mask rim implementation. Reset the mask
-// shorthand before installing each one-image radial mask so composite state can
-// never leak into the new lens on iOS.
-const mobileBase = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
-assert.match(mobileBase, /(?:-webkit-)?mask-composite\s*:/,
-  'base mobile CSS is expected to contain the legacy composite-mask rim path');
-assert.match(mobileBase, /\.pm-tab-indicator::after\s*\{[\s\S]*?content:\s*['"]{2};[\s\S]*?position:\s*absolute;/,
-  'base mobile CSS must already own the tab-slider edge pseudo geometry');
-assert.equal((sourceCode.match(/-webkit-mask:\s*none !important;/g) || []).length, 2,
-  'exactly the two real decorative lens paths must reset the WebKit mask shorthand');
-assert.equal((sourceCode.match(/^\s*mask:\s*none !important;/gm) || []).length, 2,
-  'exactly the two real decorative lens paths must reset the standard mask shorthand');
-
-// Existing large surfaces remain on their current DOM material until their own
-// exact-canvas ports are validated. The hamburger prototype below deliberately
-// bypasses this approximation entirely.
-assert.match(source, /--pm-demo-refract-x:\s*1\.06/,
-  'large-slab horizontal refraction scale must remain present for non-prototype surfaces');
-assert.match(source, /--pm-demo-refract-y:\s*1\.18/,
-  'large-slab vertical refraction scale must remain present for non-prototype surfaces');
-assert.equal((sourceCode.match(/transform:\s*scale\(var\(--pm-demo-refract-x\),\s*var\(--pm-demo-refract-y\)\) !important;/g) || []).length, 2,
-  'legacy DOM refraction transform must remain limited to its two decorative lens paths');
-assert.equal((sourceCode.match(/transform-origin:\s*center center !important;/g) || []).length, 2,
-  'both legacy decorative refraction layers must transform from their center');
-assert.equal((sourceCode.match(/mix-blend-mode:\s*normal !important;/g) || []).length, 2,
-  'both legacy refraction snapshots must reset soft-light blending');
-assert.equal((sourceCode.match(/(?:-webkit-)?backdrop-filter:\s*saturate\(1\.0001\) brightness\(1\.0001\) !important;/g) || []).length, 4,
-  'legacy non-prototype lens paths must retain their existing capture behavior');
-
-// Resting material follows the deployed demo's blur=0. Only the opened composer
-// gets the explicit readability exception requested for Prometheus.
-assert.match(source, /body\.pm-mobile-active \.pm-composer \{[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
-  'resting composer must remain blur-free');
-assert.match(source, /\.pm-composer:is\(:focus-within, \.is-focused, \.has-attachments, \.is-voice-active\)[\s\S]*?blur\(var\(--pm-demo-open-composer-blur\)\)/,
-  'opened/focused composer must enable the 2.5px readability blur');
-assert.match(source, /--pm-demo-open-composer-blur:\s*2\.5px/,
-  'opened composer blur must stay 2.5px');
-
-// Geometry safety for the older shared material file: transforms are permitted
-// ONLY on its decorative snapshots. The hamburger exact-canvas layer has its own
-// isolated integration stylesheet and is tested separately below.
-const geometrySafeCode = sourceCode
-  .replace(/^\s*transform:\s*scale\(var\(--pm-demo-refract-x\),\s*var\(--pm-demo-refract-y\)\) !important;\s*$/gm, '')
-  .replace(/^\s*transform-origin:\s*center center !important;\s*$/gm, '');
-const geometryDeclaration = /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|grid-template-columns|grid-template-rows|flex|transform|transform-origin)\s*:/m;
-assert.doesNotMatch(geometrySafeCode, geometryDeclaration,
-  'shared mobile liquid-glass override must never alter real control geometry/layout/motion');
-
-// Prohibit the exact WebKit-hostile experiment that corrupted the app.
-assert.doesNotMatch(sourceCode, /url\(#|feDisplacementMap|mask-composite|-webkit-mask-composite/,
-  'shared mobile glass must not reintroduce SVG displacement or active composite-mask rings');
-
-// The original data module moved byte-for-byte to mobile-data-base.js so the
-// tiny wrapper can initialize the hamburger prototype without rewriting that
-// large data file. Source/generated mirrors must remain exact.
-const sourceDataBase = fs.readFileSync('web-ui/src/mobile/mobile-data-base.js', 'utf8');
-const generatedDataBase = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data-base.js', 'utf8');
-assert.equal(generatedDataBase, sourceDataBase, 'generated mobile-data base must mirror source exactly');
-for (const data of [sourceDataBase, generatedDataBase]) {
-  assert.match(data, /PM_DEMO_GLASS_STYLE_VERSION = 'pm-v299-2026-08-22-visible-refraction'/,
-    'existing shared mobile glass stylesheet cache key must remain intact');
-}
+// The live-demo material and exact-canvas hamburger are deliberately no longer
+// part of the runtime path. The old implementation can remain in the repo for
+// archaeology, but mobile-data must not initialize it.
+assert.doesNotMatch(sourceCode, /--pm-demo-|DEFAULT_SPEC|pm-demo-refract|saturate\(1\.0001\)|mask-image:\s*radial-gradient/,
+  'late glass layer must not retain the later live-demo material/refraction override');
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
-assert.match(sourceData, /initMobileHamburgerLiquidGlass/,
-  'mobile-data wrapper must initialize the hamburger exact-canvas prototype');
-assert.match(sourceData, /pm-v301-2026-08-22-cropped-hamburger/,
-  'hamburger prototype module cache key must be versioned for the cropped output fix');
+assert.equal(sourceData.trim(), "export * from './mobile-data-base.js';",
+  'mobile-data must return to the passive wrapper used before the hamburger exact-canvas experiment');
+assert.doesNotMatch(sourceData, /mobile-hamburger-liquid-glass|initMobileHamburgerLiquidGlass/,
+  'exact-canvas hamburger must not run on mobile boot');
+assert.match(sourceCode, /\.pm-hamburger-liquid-glass-canvas\s*\{[\s\S]*?display:\s*none !important;/,
+  'a stale exact-canvas child must remain inert after a hot update');
 
-// Pin the exact XposeMarket/liquid-glass source. Git blob identity makes this
-// stronger than checking a few constants: any renderer edit will fail this gate.
-function gitBlobSha(text) {
-  const data = Buffer.from(text, 'utf8');
-  return crypto.createHash('sha1')
-    .update(Buffer.from(`blob ${data.length}\0`, 'utf8'))
-    .update(data)
-    .digest('hex');
-}
+// Scope guard: this layer is material-only. Do not let a future cleanup sneak
+// geometry, motion, popover, or layout changes into the historical restore.
+assert.doesNotMatch(sourceCode, /^\s*(?:position|inset|top|right|bottom|left|width|height|min-width|max-width|min-height|max-height|padding|margin|border-radius|overflow|transform|transition)\s*:/m,
+  'August 12 restore layer must not alter geometry or motion');
+assert.doesNotMatch(sourceCode, /popover|msheet|attach-sheet|ctx-popover|chat-settings-popover/,
+  'popover/sheet styling is explicitly outside this restore');
 
-const exactRendererSource = fs.readFileSync('web-ui/src/vendor/liquid-glass.js', 'utf8');
-const exactRendererGenerated = fs.readFileSync('generated/public-web-ui/static/vendor/liquid-glass.js', 'utf8');
-assert.equal(exactRendererGenerated, exactRendererSource,
-  'generated exact Liquid Glass renderer must mirror source exactly');
-assert.equal(gitBlobSha(exactRendererSource), 'c79a03e89fbad053eaa9932d71915be66a27b14d',
-  'vendored Liquid Glass renderer must remain byte-identical to XposeMarket/liquid-glass/src/liquid-glass.js');
-assert.match(exactRendererSource, /sceneCtx\.getImageData\(/,
-  'exact renderer must sample real scene pixels');
-assert.match(exactRendererSource, /renderLiquidGlass\(/,
-  'exact renderer must expose the canonical compositor');
-assert.match(exactRendererSource, /glassCtx\.putImageData\(/,
-  'exact renderer must write the canonical pixel result');
+// Keep unrelated white-title fixes that happened to share the old late file.
+assert.match(source, /\.pm-title-row \.pm-title/,
+  'literal-white mobile page title fix must remain intact');
+assert.match(source, /\.pm-drawer-list \.pm-drawer-item > \.pm-flex/,
+  'drawer page-tab label fix must remain intact');
 
-// The bridge may only solve DOM -> Canvas input. It must call the exact renderer
-// with the exact deployed demo override and must not invent another optical path.
-const bridgeSource = fs.readFileSync('web-ui/src/mobile/mobile-hamburger-liquid-glass.js', 'utf8');
-const bridgeGenerated = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-hamburger-liquid-glass.js', 'utf8');
-assert.equal(bridgeGenerated, bridgeSource, 'generated hamburger canvas bridge must mirror source exactly');
-assert.match(bridgeSource, /import \{ DEFAULT_SPEC, renderLiquidGlass \} from '\.\.\/vendor\/liquid-glass\.js';/,
-  'hamburger bridge must import the exact vendored compositor');
-assert.match(bridgeSource, /Object\.freeze\(\{ \.\.\.DEFAULT_SPEC, blur: 0, fill: 0\.65 \}\)/,
-  'hamburger bridge must use the exact deployed demo override');
-assert.match(bridgeSource, /import\('\/vendor\/html2canvas\/html2canvas\.esm\.js'\)/,
-  'DOM capture adapter must be lazy-loaded so a capture failure cannot break mobile boot');
-assert.match(bridgeSource, /const dpr = Math\.min\(window\.devicePixelRatio \|\| 1, 2\);/,
-  'hamburger bridge must keep the demo DPR cap of 2');
-assert.match(bridgeSource, /\.pm-icon-btn\[data-action="menu"\]/,
-  'prototype must target the real data-action hamburger');
-assert.match(bridgeSource, /\.pm-icon-btn\[aria-label="Menu"\]/,
-  'prototype must retain an aria-label Menu fallback');
-assert.match(bridgeSource, /\.pm-icon-btn\[aria-label="Open menu"\]/,
-  'prototype must retain an aria-label Open menu fallback');
-assert.match(bridgeSource, /const scene = await html2canvas\(app,/,
-  'bridge must rasterize the live DOM backdrop into a Canvas scene');
-assert.match(bridgeSource, /const rendered = document\.createElement\('canvas'\);/,
-  'padded canonical compositor output must stay offscreen');
-assert.match(bridgeSource, /renderLiquidGlass\(\{[\s\S]*?sceneCtx,[\s\S]*?glassCtx:\s*renderedCtx,[\s\S]*?spec: DEMO_SPEC,/,
-  'bridge must feed captured pixels into the exact renderer without changing optics');
-assert.match(bridgeSource, /visibleCtx\.drawImage\([\s\S]*?rendered,[\s\S]*?cropX,[\s\S]*?cropY,[\s\S]*?buttonWidth,[\s\S]*?buttonHeight/,
-  'visible hamburger canvas must receive only the cropped physical button rectangle');
-assert.doesNotMatch(bridgeSource, /canvas\.style\.(?:left|top|width|height)\s*=/,
-  'visible canvas must never be positioned as the padded capture surface');
-assert.match(bridgeSource, /document\.getElementById\('mobile-root'\)/,
-  'mutation observation must stay inside the mobile root so html2canvas clone work cannot self-trigger forever');
-assert.doesNotMatch(bridgeSource, /feDisplacementMap|mask-composite|-webkit-mask-composite|url\(#/,
-  'hamburger bridge must not contain SVG/composite-mask optical substitutes');
-
-const hamburgerCssSource = fs.readFileSync('web-ui/src/styles/mobile-hamburger-liquid-glass.css', 'utf8');
-const hamburgerCssGenerated = fs.readFileSync('generated/public-web-ui/static/styles/mobile-hamburger-liquid-glass.css', 'utf8');
-assert.equal(hamburgerCssGenerated, hamburgerCssSource,
-  'generated hamburger integration CSS must mirror source exactly');
-assert.match(hamburgerCssSource, /body\.pm-mobile-active \.pm-header\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
-  'mobile header/safe-area strip must remain transparent and completely blur-free');
-assert.match(hamburgerCssSource, /::after\s*\{[\s\S]*?content:\s*none !important;/,
-  'hamburger must disable the previous pseudo/backdrop approximation');
-assert.match(hamburgerCssSource, /overflow:\s*hidden !important;/,
-  'hamburger must hard-clip compositor pixels to the real button bounds');
-assert.match(hamburgerCssSource, /\.pm-hamburger-liquid-glass-canvas[\s\S]*?inset:\s*0 !important;[\s\S]*?width:\s*100% !important;[\s\S]*?height:\s*100% !important;/,
-  'visible exact-renderer canvas must fill only the hamburger button');
-assert.match(hamburgerCssSource, /data-pm-liquid-glass-ready="1"\][\s\S]*?background:\s*transparent !important;/,
-  'once a real frame exists, the canvas must become the hamburger material');
-
-const gatewayApp = fs.readFileSync('src/gateway/core/app.ts', 'utf8');
-assert.match(gatewayApp, /app\.use\('\/vendor\/html2canvas', express\.static\(html2CanvasDistPath/,
-  'gateway must serve the DOM capture adapter locally');
-assert.ok(fs.existsSync('node_modules/html2canvas/dist/html2canvas.esm.js'),
-  'html2canvas DOM capture adapter must be installed by npm ci');
-
-console.log('mobile liquid glass keeps the header clear and clips exact hamburger refraction to the real button');
+console.log('mobile persistent chat glass restored to August 12 while preserving the clear iOS/PWA header strip');

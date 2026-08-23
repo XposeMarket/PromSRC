@@ -1,294 +1,100 @@
 /*
- * Prometheus mobile Liquid Glass — material-only port of the LIVE deployed demo.
+ * Prometheus Mobile persistent chat chrome — August 12, 2026 material restore.
  *
- * Canonical reference: https://liquid-glass-beta-sage.vercel.app/
- * Source linked by that deployment: XposeMarket/liquid-glass/index.html +
- * src/liquid-glass.js.
+ * Historical baseline: 9fc966536b71aee88cd677265ebbebabf1f20adc
  *
- * IMPORTANT: the live page does NOT render DEFAULT_SPEC unchanged. Its actual
- * demo mount is:
- *   spec: { ...DEFAULT_SPEC, blur: 0, fill: 0.65 }
- * while DEFAULT_SPEC supplies rim 32, strength 20, chroma .7, spec .28.
+ * The canonical August 12 material is still present in mobile.css: low-blur
+ * header/pill/panel optics, the original directional rim, the original tab
+ * selector treatment, and the original composer/tab-bar material. Later work
+ * added two late overrides on top of it:
  *
- * The compositor then uses:
- *   body = .07 + fill * .55 = .4275
- *   dark slab target = rgb(18, 22, 28)
- *   max top/bottom hairline = .16 + spec * .12 = .1936
- *   max directional glint = spec * 22 / 255 ~= .0242
+ *   1. the August 13 "Mobile glass cleanup" removed cast shadows from floating
+ *      glass surfaces; and
+ *   2. the later live-demo port replaced the persistent chat chrome material
+ *      and re-enabled decorative refraction layers that August 12 kept hidden.
  *
- * This file changes MATERIAL ONLY. mobile.css continues to own width, height,
- * padding, radius, position, tab-slider motion, composer expansion, and every
- * other real-control geometry/interaction rule.
+ * Keep this stylesheet intentionally small. It lets mobile.css own the actual
+ * August 12 material again and restores only the shadows that the August 13
+ * cleanup suppresses with !important.
  *
- * The live compositor owns its scene in Canvas and performs an inward SDF pull.
- * Arbitrary DOM cannot run that exact getImageData pass, so the mobile port uses
- * a clipped backdrop snapshot on the decorative glass layers and magnifies that
- * snapshot toward the rim. Scaling ONLY the decorative backdrop layer makes the
- * sampled pixels visibly shift inward without resizing or moving the real pill.
- * No SVG displacement filters and no active composite-mask rings are used.
+ * IMPORTANT: PR #163's iOS/PWA header behavior is preserved. The header/safe-
+ * area strip remains transparent and blur-free so content can continue beneath
+ * it and iOS can provide its own status-area translucency. Individual header
+ * controls still own their glass.
+ *
+ * This file must not change control geometry, tab motion, composer expansion,
+ * routing, popovers, or page layout.
  */
 
-body.pm-mobile-active {
-  --pm-demo-body: rgba(18, 22, 28, .4275);
-  --pm-demo-edge: rgba(255, 255, 255, .028);
-  --pm-demo-hairline: rgba(255, 252, 248, .1936);
-  --pm-demo-hairline-soft: rgba(255, 252, 248, .085);
-  --pm-demo-directional-glint: rgba(255, 255, 255, .0242);
-  /* The live canvas is capped at DPR 2. .7 device px is .35 CSS px there. */
-  --pm-demo-chroma: .35px;
-  --pm-demo-chroma-neg: -.35px;
-  --pm-demo-shadow: rgba(0, 0, 0, .14);
-  --pm-demo-icon: #fff;
-  --pm-demo-open-composer-blur: 2.5px;
-  /* Refraction scales the sampled BACKDROP layer, never the actual control. */
-  --pm-demo-refract-x: 1.06;
-  --pm-demo-refract-y: 1.18;
-}
-
-/*
- * One material contract for every persistent mobile glass surface requested:
- * header controls, model pill, combined pencil/more pill, completion glass,
- * Brain/Pulse cards, composer, tab bar, and tab slider as its own glass piece.
- */
-body.pm-mobile-active :is(
-  .pm-header > .pm-icon-btn,
-  .pm-header-actions > .pm-icon-btn,
-  .pm-header .pm-online,
-  .pm-header-action-cluster,
-  .pm-completion-toast,
-  .chat-pulse-card,
-  .pm-composer,
-  .pm-tabbar,
-  .pm-tab-indicator
-) {
-  border-color: var(--pm-demo-edge) !important;
-  background:
-    radial-gradient(70% 56% at 18% 0%, var(--pm-demo-directional-glint), transparent 58%),
-    var(--pm-demo-body) !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-  box-shadow:
-    inset 0 1px 0 var(--pm-demo-hairline),
-    inset 0 -1px 0 var(--pm-demo-hairline-soft),
-    inset var(--pm-demo-chroma) 0 0 rgba(255, 86, 86, .055),
-    inset var(--pm-demo-chroma-neg) 0 0 rgba(84, 166, 255, .055),
-    0 7px 20px var(--pm-demo-shadow) !important;
-}
-
-/* Small header controls need a slightly stronger sampled-pixel pull because the
- * same visual displacement is distributed across a much smaller lens. */
-body.pm-mobile-active :is(.pm-header > .pm-icon-btn, .pm-header-actions > .pm-icon-btn) {
-  --pm-demo-refract-x: 1.18;
-  --pm-demo-refract-y: 1.18;
-}
-
-body.pm-mobile-active :is(.pm-header .pm-online, .pm-header-action-cluster) {
-  --pm-demo-refract-x: 1.10;
-  --pm-demo-refract-y: 1.18;
-}
-
-body.pm-mobile-active .pm-tab-indicator {
-  --pm-demo-refract-x: 1.12;
-  --pm-demo-refract-y: 1.18;
-}
-
-/* The right-side pencil + overflow buttons remain ONE existing pill. */
-body.pm-mobile-active .pm-header-action-cluster > :is(button, .pm-icon-btn) {
-  border: 0 !important;
+/* Preserve the clear iOS/PWA safe-area/header behavior from #163. */
+body.pm-mobile-active .pm-header {
   background: transparent !important;
+  border-color: transparent !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
 
-/* The hamburger had an older header blur underneath the demo material. Force
- * the actual button itself to the same blur-free body as every other header
- * piece; its ::after layer below supplies refraction, not blur. */
-body.pm-mobile-active .pm-header .pm-icon-btn[aria-label="Menu"],
-body.pm-mobile-active .pm-header .pm-icon-btn[aria-label="Open menu"] {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
-}
-
-/* Header icon contrast only; dimensions stay owned by mobile.css. */
-body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) {
-  color: var(--pm-demo-icon) !important;
-}
-
-body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg {
-  color: var(--pm-demo-icon) !important;
-  stroke: currentColor;
-  stroke-width: 2.4 !important;
-  opacity: 1 !important;
-}
-
-body.pm-mobile-active .pm-header :is(.pm-icon-btn, .pm-header-action-cluster button) svg :is(line, path, polyline, rect, circle) {
-  vector-effect: non-scaling-stroke;
-}
-
-body.pm-mobile-active .pm-header .pm-online {
-  color: rgba(255, 255, 255, .96) !important;
-}
-
 /*
- * Visible DOM refraction for the two large slabs. Safari can optimize an exact
- * identity backdrop-filter away, so use an imperceptibly non-identity capture
- * (no blur) and transform only that captured decorative layer. The center stays
- * transparent; the edge therefore shows the backdrop pulled inward, matching
- * the direction of the demo compositor's -normal displacement.
- *
- * mobile.css intentionally hides these legacy lens elements in its stable base
- * material. This late material override turns ONLY those absolute decorative
- * layers back on; it does not alter either control's layout or hitbox.
+ * Restore the pre-August-13 floating depth. Everything except box-shadow comes
+ * from the historical mobile.css material beneath this compatibility layer.
  */
-body.pm-mobile-active :is(.pm-tabbar, .pm-composer) > .pm-glass-lens {
-  display: block !important;
-  background: rgba(255, 255, 255, .001) !important;
-  opacity: .86 !important;
-  mix-blend-mode: normal !important;
-  -webkit-backdrop-filter: saturate(1.0001) brightness(1.0001) !important;
-  backdrop-filter: saturate(1.0001) brightness(1.0001) !important;
-  -webkit-mask: none !important;
-  mask: none !important;
-  -webkit-mask-image: radial-gradient(ellipse 118% 94% at 50% 50%, transparent 0 64%, rgba(0,0,0,.16) 73%, rgba(0,0,0,.78) 87%, #000 100%) !important;
-  mask-image: radial-gradient(ellipse 118% 94% at 50% 50%, transparent 0 64%, rgba(0,0,0,.16) 73%, rgba(0,0,0,.78) 87%, #000 100%) !important;
-  -webkit-mask-repeat: no-repeat !important;
-  mask-repeat: no-repeat !important;
-  transform: scale(var(--pm-demo-refract-x), var(--pm-demo-refract-y)) !important;
-  transform-origin: center center !important;
-  filter:
-    drop-shadow(var(--pm-demo-chroma) 0 rgba(255, 86, 86, .10))
-    drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
-}
-
-/* Header/model/action pills and the moving tab slider already have absolute
- * edge pseudo-elements in mobile.css. Use those as the same refractive snapshot
- * so the REAL controls never move, resize, or change hitbox. */
 body.pm-mobile-active :is(
-  .pm-header > .pm-icon-btn,
-  .pm-header-actions > .pm-icon-btn,
+  .pm-header .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
-  .pm-tab-indicator
-)::after {
-  border-color: transparent !important;
-  background: rgba(255, 255, 255, .001) !important;
-  opacity: .80 !important;
-  mix-blend-mode: normal !important;
-  -webkit-backdrop-filter: saturate(1.0001) brightness(1.0001) !important;
-  backdrop-filter: saturate(1.0001) brightness(1.0001) !important;
-  -webkit-mask: none !important;
-  mask: none !important;
-  -webkit-mask-image: radial-gradient(ellipse 118% 94% at 50% 50%, transparent 0 63%, rgba(0,0,0,.16) 72%, rgba(0,0,0,.78) 87%, #000 100%) !important;
-  mask-image: radial-gradient(ellipse 118% 94% at 50% 50%, transparent 0 63%, rgba(0,0,0,.16) 72%, rgba(0,0,0,.78) 87%, #000 100%) !important;
-  -webkit-mask-repeat: no-repeat !important;
-  mask-repeat: no-repeat !important;
-  transform: scale(var(--pm-demo-refract-x), var(--pm-demo-refract-y)) !important;
-  transform-origin: center center !important;
-  filter:
-    drop-shadow(var(--pm-demo-chroma) 0 rgba(255, 86, 86, .10))
-    drop-shadow(var(--pm-demo-chroma-neg) 0 rgba(84, 166, 255, .10)) !important;
-}
-
-/* The tab BAR and moving tab SLIDER remain two separate pieces. Material only. */
-body.pm-mobile-active .pm-tabbar .pm-tab {
-  color: rgba(255, 255, 255, .78) !important;
-}
-
-body.pm-mobile-active .pm-tabbar .pm-tab svg {
-  stroke-width: 2.35 !important;
-  opacity: 1 !important;
-}
-
-body.pm-mobile-active .pm-tabbar .pm-tab.active,
-body.pm-mobile-active .pm-tabbar .pm-tab-magnify,
-body.pm-mobile-active .pm-tabbar .pm-tab-magnify .pm-tab {
-  color: #fff !important;
-}
-
-/* Brain cards keep their exact existing geometry. Their body/hairline/chroma
- * remain consistent with the same live material; no extra stacking-context
- * pseudo is introduced here because the cards did not ship with a safe optical
- * child layer and we do not want to repeat the #128 card corruption. */
-body.pm-mobile-active .chat-pulse-card {
-  color: #fff !important;
-}
-
-body.pm-mobile-active .chat-pulse-card:hover,
-body.pm-mobile-active .chat-pulse-card:focus-visible {
-  border-color: rgba(255, 255, 255, .04) !important;
-  background:
-    radial-gradient(70% 56% at 18% 0%, rgba(255,255,255,.032), transparent 58%),
-    var(--pm-demo-body) !important;
+  .pm-composer,
+  .pm-tabbar
+) {
   box-shadow:
-    inset 0 1px 0 rgba(255,252,248,.22),
-    inset 0 -1px 0 rgba(255,252,248,.10),
-    inset var(--pm-demo-chroma) 0 0 rgba(255,86,86,.065),
-    inset var(--pm-demo-chroma-neg) 0 0 rgba(84,166,255,.065),
-    0 8px 22px rgba(0,0,0,.16) !important;
+    inset 0 1px 1px rgba(255,255,255,.38),
+    inset 0 -1px 1px rgba(255,255,255,.18),
+    0 6px 16px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.08) !important;
 }
 
-body.pm-mobile-active :is(.chat-pulse-card-body, .chat-pulse-card-icon) {
-  color: rgba(255, 255, 255, .97) !important;
+:root[data-theme="dark"] body.pm-mobile-active :is(
+  .pm-header .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-completion-toast,
+  .pm-composer,
+  .pm-tabbar
+) {
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.16),
+    inset 0 -1px 1px rgba(255,255,255,.07),
+    0 6px 16px rgba(0,0,0,.34),
+    0 1px 4px rgba(0,0,0,.22) !important;
+}
+
+/* The moving tab selector had its own deeper floating shadow on August 12. */
+body.pm-mobile-active .pm-tab-indicator {
+  box-shadow:
+    inset 0 1.5px 1.5px rgba(255,255,255,.34),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
+    0 8px 22px rgba(40,28,16,.18),
+    0 1px 4px rgba(40,28,16,.12) !important;
+}
+
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab-indicator {
+  box-shadow:
+    inset 0 1.5px 1.5px rgba(255,255,255,.24),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.12),
+    0 8px 22px rgba(0,0,0,.42) !important;
 }
 
 /*
- * Composer resting state = the LIVE demo (blur 0).
- * Composer opened/focused state = explicit readability exception: blur 2.5px.
+ * The exact-canvas hamburger experiment is no longer initialized by
+ * mobile-data.js. Keep a stale canvas inert if a hot reload leaves one behind;
+ * after a normal reload the historical .pm-icon-btn material is the hamburger.
  */
-body.pm-mobile-active .pm-composer {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+body.pm-mobile-active .pm-hamburger-liquid-glass-canvas {
+  display: none !important;
 }
 
-body.pm-mobile-active .pm-composer:is(:focus-within, .is-focused, .has-attachments, .is-voice-active),
-body.pm-mobile-active.pm-keyboard-open .pm-composer {
-  -webkit-backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) !important;
-  backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) !important;
-}
-
-body.pm-mobile-active .pm-composer:is(:focus-within, .is-focused, .has-attachments, .is-voice-active) > .pm-glass-lens,
-body.pm-mobile-active.pm-keyboard-open .pm-composer > .pm-glass-lens {
-  -webkit-backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) contrast(1) brightness(1) !important;
-  backdrop-filter: blur(var(--pm-demo-open-composer-blur)) saturate(1) contrast(1) brightness(1) !important;
-}
-
-body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) {
-  color: #fff !important;
-}
-
-body.pm-mobile-active .pm-composer :is(button, .pm-composer-btn, .pm-composer-icon-btn) svg {
-  color: #fff !important;
-  stroke: currentColor;
-  stroke-width: 2.4 !important;
-  opacity: 1 !important;
-}
-
-body.pm-mobile-active .pm-composer :is(textarea, input) {
-  color: #fff !important;
-}
-
-body.pm-mobile-active .pm-composer :is(textarea, input)::placeholder {
-  color: rgba(255,255,255,.60) !important;
-}
-
-/* Existing border children are decorative only. The live compositor has no
- * generic white outline; all visible edge energy comes from the TB hairline and
- * rim lens above. */
-body.pm-mobile-active :is(
-  .pm-header > .pm-icon-btn,
-  .pm-header-actions > .pm-icon-btn,
-  .pm-header .pm-online,
-  .pm-header-action-cluster,
-  .pm-tabbar,
-  .pm-composer
-) .pm-glass-border {
-  opacity: .08 !important;
-  border-color: rgba(255,255,255,.025) !important;
-}
-
-/* Preserve the literal-white mobile page-title fix. */
+/* Preserve the literal-white mobile page-title fix that shared this late file. */
 body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page .pm-detail-head h1) {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
@@ -299,8 +105,7 @@ body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page 
   text-shadow: none !important;
 }
 
-/* Only the hamburger menu's page-tab labels are forced white. Icons, chevrons,
- * section headings, sessions, and project styling remain untouched. */
+/* Preserve the existing drawer page-tab label fix; this is not glass styling. */
 body.pm-mobile-active .pm-drawer-list .pm-drawer-item > .pm-flex {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
