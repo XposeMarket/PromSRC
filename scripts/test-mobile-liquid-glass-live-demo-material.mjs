@@ -83,12 +83,20 @@ assert.doesNotMatch(sourceCode, /--pm-demo-|DEFAULT_SPEC|pm-demo-refract|saturat
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
-assert.match(sourceData, /PM_AUG12_GLASS_STYLE_VERSION\s*=\s*'pm-v303-2026-08-23-aug12-glass-crosscheck'/,
+assert.deepEqual(sourceData.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean), [
+  "export * from './mobile-data-base.js';",
+  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';",
+  'initMobileStatusBarTheme();',
+], 'mobile-data must keep the shared base module as its stylesheet owner');
+const sourceDataBase = fs.readFileSync('web-ui/src/mobile/mobile-data-base.js', 'utf8');
+const generatedDataBase = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data-base.js', 'utf8');
+assert.equal(generatedDataBase, sourceDataBase, 'generated mobile-data base must mirror source exactly');
+assert.match(sourceDataBase, /PM_DEMO_GLASS_STYLE_VERSION\s*=\s*'pm-v303-2026-08-23-aug12-glass-crosscheck'/,
   'restored glass must use a fresh explicit cache key');
-assert.match(sourceData, /getElementById\('pm-mobile-demo-glass-style'\)[\s\S]*?mobile-liquid-glass-demo\.css\?v=\$\{PM_AUG12_GLASS_STYLE_VERSION\}/,
-  'mobile boot must refresh the existing glass stylesheet link to the corrected material');
+assert.match(sourceDataBase, /getElementById\(PM_DEMO_GLASS_STYLE_ID\)[\s\S]*?mobile-liquid-glass-demo\.css\?v=\$\{PM_DEMO_GLASS_STYLE_VERSION\}/,
+  'the existing mobile-data-base owner must refresh the glass stylesheet link');
 assert.match(sourceData, /initMobileStatusBarTheme\(\);/,
-  'the existing isolated status-edge theme bridge must remain initialized');
+  'the isolated status-edge theme bridge must remain initialized');
 assert.doesNotMatch(sourceData, /mobile-hamburger-liquid-glass|initMobileHamburgerLiquidGlass/,
   'exact-canvas hamburger must not run on mobile boot');
 assert.match(sourceCode, /\.pm-hamburger-liquid-glass-canvas\s*\{[\s\S]*?display:\s*none !important;/,
