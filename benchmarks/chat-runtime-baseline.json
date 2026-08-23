@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-22T23:10:53-04:00",
+  "referenceEnvironment": {
+    "os": "Windows x64",
+    "node": "v20.20.2",
+    "command": "npm run benchmark:chat-runtime"
+  },
+  "hydration": [
+    { "count": 100, "p50Ms": 0.178, "p95Ms": 0.322, "maxMs": 0.719 },
+    { "count": 500, "p50Ms": 0.311, "p95Ms": 0.655, "maxMs": 0.949 },
+    { "count": 1000, "p50Ms": 0.628, "p95Ms": 1.054, "maxMs": 1.45 }
+  ],
+  "streaming": {
+    "turns": 1000,
+    "chunks": 400,
+    "deltaP50Ms": 0.0048,
+    "deltaP95Ms": 0.0131,
+    "deltaMaxMs": 0.1928,
+    "unrelatedQueueNotifications": 0
+  },
+  "paging": {
+    "turns": 1000,
+    "loadedTarget": 480,
+    "pageSize": 80,
+    "suffixMessagesTransferred": 1680,
+    "cursorMessagesTransferred": 480,
+    "suffixGzipBytes": 1104077,
+    "cursorGzipBytes": 316134,
+    "gzipReductionPercent": 71.37
+  }
+}

@@ -5,8 +5,6 @@
  * progress panel, agent execution tracking, canvas panel, file upload,
  * queued prompts.
  *
- * ~2,421 lines extracted from index.html (the final page extraction).
- *
  * Dependencies: api() from api.js, escHtml/renderMd/showToast/timeAgo/
  *   buildVisualIframe/buildVisualSrcdoc from utils.js
  * Cross-page: setMode from app.js, various page functions via window.*
@@ -32,6 +30,8 @@ import {
   toolActivitySummary,
 } from '../tool-activity.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
+import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 import {
   SOURCE_PANEL_SURFACE,
@@ -137,6 +137,28 @@ const THEME_KEY = window.THEME_KEY || 'prometheus_theme';
 const SIDE_CHAT_STATE_KEY = 'prometheus_side_chats_v1';
 const MAX_QUEUED_PROMPTS = window.MAX_QUEUED_PROMPTS || 8;
 const AGENT_STATUS = window.AGENT_STATUS || { ACTIVE: 'active', COMPLETED: 'completed', PAUSED: 'paused' };
+const {
+  runtimeFor: desktopChatRuntime,
+  sync: syncDesktopChatRuntime,
+  queue: getSessionQueuedPrompts,
+  activeQueue: getActiveQueuedPrompts,
+  activate: activateDesktopChatRuntime,
+  applyInitialPage: applyDesktopInitialHistoryPage,
+  requestInterruption: requestGatewayMainChatAbort,
+  renderHistoryPager: renderDesktopHistoryPager,
+} = createDesktopChatRuntimeAdapter({
+  getSession: getChatSessionById,
+  getBackgroundRecords: backgroundAgentWorkForSession,
+  isInternalMessage: isInternalChatMessage,
+  mergeHistory: mergeServerAndLocalHistory,
+  render: renderChatMessages,
+  persist: saveChatSessions,
+  toast: showToast,
+  encodeInline: encodeInlineJsString,
+  request: api,
+  getStreamState: getSessionStreamState,
+  recordProcess: addSessionProcessEntry,
+});
 const EMPTY_CHAT_STARTER_PROMPTS = [
   {
     title: 'Start a new build',
@@ -1491,78 +1513,12 @@ function syncActiveSessionRunState() {
   return activeThinking;
 }
 
-async function requestGatewayMainChatAbort(sessionId = window.activeChatSessionId, source = 'desktop') {
-  const sid = String(sessionId || '').trim();
-  const st = getSessionStreamState(sid);
-  if (st) {
-    st.abortRequested = true;
-    st.abortRequestedAt = Date.now();
-    st.abortRequestedSource = String(source || 'desktop');
-  }
-  try {
-    const result = await api('/api/mobile/commands/stop-now', {
-      method: 'POST',
-      body: { sessionId: sid, source },
-      timeoutMs: 15000,
-    });
-    if (result?.success) {
-      addSessionProcessEntry(sid, 'warn', 'Gateway abort requested for active main chat runtime.', {
-        actor: 'Desktop Abort',
-        source,
-        target: result.target || null,
-      });
-      return true;
-    }
-    if (result?.message) {
-      addSessionProcessEntry(sid, 'warn', result.message, { actor: 'Desktop Abort', source });
-    }
-  } catch (err) {
-    addSessionProcessEntry(sid, 'error', `Gateway abort request failed: ${String(err?.message || err)}`, {
-      actor: 'Desktop Abort',
-      source,
-    });
-  }
-  return false;
-}
-
-function getSessionQueuedPrompts(id) {
-  const sid = String(id || '').trim();
-  if (!sid) return [];
-  if (!Array.isArray(window._sessionQueuedPrompts[sid])) window._sessionQueuedPrompts[sid] = [];
-  return window._sessionQueuedPrompts[sid];
-}
-
-function getActiveQueuedPrompts() {
-  return getSessionQueuedPrompts(window.activeChatSessionId);
-}
-
-function normalizeQueuedChatTurn(value) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const message = String(value.message || value.text || '').trim();
-    const files = Array.isArray(value.files) ? value.files : [];
-    const excludedSkillIds = Array.isArray(value.excludedSkillIds) ? value.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
-    const selectedSkillIds = normalizeSelectedSkillIds(value.selectedSkillIds || value.forcedSkillIds || value.matchedSkillIds);
-    return { message, files, excludedSkillIds, selectedSkillIds };
-  }
-  return { message: String(value || '').trim(), files: [], excludedSkillIds: [], selectedSkillIds: [] };
-}
-
-function makeQueuedChatTurn(message, files = [], options = {}) {
-  return {
-    message: String(message || '').trim(),
-    files: Array.isArray(files) ? files.slice() : [],
-    excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
-    selectedSkillIds: normalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds),
-  };
-}
-
-function getQueuedTurnMessage(value) {
-  return normalizeQueuedChatTurn(value).message;
-}
-
-function getQueuedTurnFiles(value) {
-  return normalizeQueuedChatTurn(value).files;
-}
+const {
+  normalize: normalizeQueuedChatTurn,
+  create: makeQueuedChatTurn,
+  message: getQueuedTurnMessage,
+  files: getQueuedTurnFiles,
+} = createQueuedPromptTools({ normalizeSkillIds: normalizeSelectedSkillIds });
 
 function updateSessionStreamState(id, patch = {}, options = {}) {
   const st = getSessionStreamState(id);
@@ -7832,7 +7788,7 @@ async function _loadSessionFromServer(id, options = {}) {
     if (options.full === true) {
       params.set('full', '1');
     } else {
-      params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 160)))));
+      params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 80)))));
       params.set('processLimit', String(Math.max(40, Math.min(500, Number(options.processLimit || 240)))));
       params.set('includeToolLog', '0');
     }
@@ -7851,7 +7807,7 @@ async function _loadSessionFromServer(id, options = {}) {
         timestamp: m.timestamp,
       }));
     sess.history = mergeServerAndLocalHistory(localHistory, serverHistory);
-    sess.messageCount = Array.isArray(s.history) ? s.history.length : Number(s.messageCount || 0);
+    applyDesktopInitialHistoryPage(sess, s);
     const serverProcessLog = Array.isArray(s.processLog) ? s.processLog : [];
     const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
     sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
@@ -7900,6 +7856,7 @@ async function _loadSessionFromServer(id, options = {}) {
       sess.lastMessagePreview = sess.preview;
     }
     delete sess._needsServerLoad;
+    syncDesktopChatRuntime(sess, { source: 'desktop-initial-page', pageInfo: sess.historyPage });
     saveChatSessions();
     if (window.activeChatSessionId === id) {
       scheduleChatContextWindowRefresh(250);
@@ -7935,7 +7892,7 @@ async function loadChatSessions() {
   if (shouldRestoreRememberedSession) {
     window.activeChatSessionId = startupSessionId;
     setAgentSessionId(startupSessionId);
-    await _loadSessionFromServer(startupSessionId, { force: true, historyLimit: 300, processLimit: 500 });
+    await _loadSessionFromServer(startupSessionId, { force: true, historyLimit: 80, processLimit: 240 });
   } else {
     setDraftChatSession(startupSessionId);
   }
@@ -8201,6 +8158,7 @@ async function mainGoalAction(action) {
 
 function syncActiveChat() {
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
+  activateDesktopChatRuntime(sess);
   syncChatTopbarTitle();
   // Model/reasoning is per chat. Refresh it on every session switch instead of
   // letting the global provider-health poll overwrite the composer label.
@@ -14266,7 +14224,8 @@ function renderChatMessages() {
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
-  const mainHtml = renderVisibleChatHistoryHtml(window.chatHistory || []) + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
+  const mainHtml = renderDesktopHistoryPager(window.activeChatSessionId) + renderVisibleChatHistoryHtml(window.chatHistory || [])
+    + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
   if (splitActive) {
     container.classList.add('side-chat-split-shell');
     setInnerHTMLPreservingVisuals(container, `
@@ -16868,6 +16827,7 @@ function persistSession(id) {
   syncSessionSidebarSummary(s);
   applyAutoSessionTitleOnce(s, s.history);
   s.updatedAt = Date.now();
+  syncDesktopChatRuntime(s, { source: 'desktop-persist' });
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   window.scheduleSessionListRefresh?.();
@@ -17337,6 +17297,10 @@ async function sendChat(queuedMessage = null, options = {}) {
   }
   window._sessionThinking[thisSessionId] = true;
   persistSession(thisSessionId);
+  desktopChatRuntime(thisSessionId)?.beginStreaming({
+    clientRequestId,
+    startedAt: Date.now(),
+  });
   if (!queuedTurn) {
     clearChatComposerAfterSend(input);
   }
@@ -17788,6 +17752,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              beginFinalResponse(streamState);
 	              _settlePendingChatSteerPresentation(thisSessionId, streamState);
 	              streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
+              desktopChatRuntime(thisSessionId)?.appendStreamDelta(chunk, { clientRequestId, allowStart: true });
               syncStreamingVisualActivity(streamState, streamState.streamingAIText, applyLiveToolActivity);
               if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
               scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
@@ -18365,6 +18330,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 
 	          case 'done':
 	            finalReply = event.reply || finalReply || '';
+              desktopChatRuntime(thisSessionId)?.completeStream(finalReply || streamState.streamingAIText, event);
 	            if (finalReply) partialContent = finalReply;
 	            syncStreamingVisualActivity(streamState, finalReply || streamState.streamingAIText, applyLiveToolActivity, { finalize: true });
 	            if (event.thinking) collectTurnThinking(event.thinking);
@@ -18379,6 +18345,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 
 	          case 'final':
 	            finalReply = reconcileFinalResponse(streamState.streamingAIText, event.text || event.reply || '');
+              desktopChatRuntime(thisSessionId)?.completeStream(finalReply, event);
 	            if (finalReply) {
 	              partialContent = finalReply;
 	              beginFinalResponse(streamState);
@@ -18479,6 +18446,7 @@ async function sendChat(queuedMessage = null, options = {}) {
       saveInterruptedAssistantTurn();
     } else if (pageLifecycleDisconnected || isDesktopChatTransportDisconnect(err)) {
       desktopStreamRecoveryPending = true;
+      desktopChatRuntime(thisSessionId)?.markRetry({ reason: String(err?.message || err || 'connection_lost') });
       streamState.lastHeartbeat = {
         ...streamState.lastHeartbeat,
         state: 'running',
@@ -44472,6 +44440,7 @@ function syncChatAttachmentStackVisibility() {
 }
 
 function renderChatFilePills() {
+  desktopChatRuntime(window.activeChatSessionId)?.replaceAttachments(pendingChatFiles);
   const staging = document.getElementById('chat-file-staging');
   if (!staging) return;
   if (!pendingChatFiles.length) {
@@ -46514,6 +46483,7 @@ function upsertInlinePrometheusQuestion(questionInput, options = {}) {
       timestamp: Date.now(),
     });
   }
+  try { desktopChatRuntime(sessionId)?.upsertQuestion(question); } catch {}
   if (window.activeChatSessionId === sessionId) {
     window.chatHistory = sess.history;
     renderChatMessages();
@@ -46538,6 +46508,11 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
       msg.questionRequest = normalizePrometheusQuestionRecord(event.question || msg.questionRequest, { ...event, id, status });
       msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
     });
+    try {
+      const record = matches[0]?.questionRequest || { id, status };
+      if (status && status !== 'pending') desktopChatRuntime(sess.id)?.resolveQuestion(id, status, record);
+      else desktopChatRuntime(sess.id)?.upsertQuestion(record);
+    } catch {}
     persistSession(sess.id);
   });
   if (window.activeChatSessionId === sessionId) renderChatMessages();
@@ -46723,6 +46698,7 @@ function upsertStreamingApproval(sessionId, approvalInput) {
   if (idx >= 0) list[idx] = { ...list[idx], ...approval };
   else list.push(approval);
   st.pendingApprovals = list.slice(-6);
+  try { desktopChatRuntime(sessionId)?.upsertApproval(approval); } catch {}
   if (window.activeChatSessionId === sessionId) {
     applyStreamStateToWindow(sessionId);
     renderChatMessages();
@@ -46742,6 +46718,7 @@ function updateStreamingApprovalStatus(sessionId, id, status = '', event = {}) {
     status: status || st.pendingApprovals[idx].status || 'pending',
   });
   st.pendingApprovals[idx].status = status || st.pendingApprovals[idx].status || 'pending';
+  try { desktopChatRuntime(sessionId)?.resolveApproval(id, st.pendingApprovals[idx].status, st.pendingApprovals[idx]); } catch {}
   if (window.activeChatSessionId === sessionId) {
     applyStreamStateToWindow(sessionId);
     renderChatMessages();
@@ -46879,6 +46856,9 @@ async function loadSessionApprovals() {
       .filter((q) => String(q.sourceSessionId || q.sessionId || '').trim() === currentSessionId)
       .map((q) => ({ ...normalizePrometheusQuestionRecord(q), approvalType: 'question' }));
     const all = [...questionItems, ...approvalItems, ...proposalItems];
+    const runtime = desktopChatRuntime(currentSessionId);
+    approvalItems.forEach((item) => { try { runtime?.upsertApproval(item); } catch {} });
+    questionItems.forEach((item) => { try { runtime?.upsertQuestion(item); } catch {} });
     const inlineStreamOwnsApprovals = Boolean(
       currentSessionId
       && window._sessionThinking?.[currentSessionId]

@@ -22,6 +22,11 @@ import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
 import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus } from '../chat/context-build-worker-client';
+import {
+  ChatHistoryCursorError,
+  historyMessageCursorKey,
+  paginateChatHistory,
+} from '../chat/history-cursor';
 
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
@@ -22183,6 +22188,49 @@ router.delete('/api/sessions/:id/model-route', requireSafeSessionParam, (req, re
   }
 });
 
+// Older transcript pages use an opaque anchor cursor instead of asking clients
+// to redownload a progressively larger suffix. The anchor is scoped to the
+// session and remains stable when new turns append at the end of the history.
+router.get('/api/sessions/:id/history-page', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    const session = getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    const mobileOptimized = req.query.mobile === '1'
+      || req.query.client === 'mobile'
+      || !!req.headers['x-pairing-token']
+      || sessionId.startsWith('mobile_')
+      || sessionId === 'mobile_default';
+    const limit = boundedPositiveInt(req.query.limit, mobileOptimized ? 40 : 80, 1, 500);
+    const includeToolLog = req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
+    const fullProcess = req.query.fullProcess === '1' || req.query.fullProcess === 'true';
+    const page = paginateChatHistory(sessionId, session.history, {
+      limit,
+      before: String(req.query.before || '').trim(),
+    });
+    const items = sanitizeHistoryForUiResponse(page.items, {
+      historyLimit: 0,
+      includeToolLog,
+      perMessageProcessLimit: fullProcess ? 500 : mobileOptimized ? 12 : 50,
+      processEntryTextLimit: fullProcess ? 4000 : mobileOptimized ? 900 : 1600,
+      processEntryExtraLimit: fullProcess ? 4000 : mobileOptimized ? 700 : 1200,
+      attachmentPreviewDataUrlLimit: mobileOptimized ? 30_000 : 60_000,
+      attachmentPreviewTextLimit: mobileOptimized ? 2000 : 4000,
+    });
+    res.json({ sessionId, items, pageInfo: page.pageInfo });
+  } catch (error: any) {
+    if (error instanceof ChatHistoryCursorError) {
+      res.status(400).json({ code: error.code, error: error.message });
+      return;
+    }
+    console.error('[/api/sessions/:id/history-page] Error:', error);
+    res.status(500).json({ error: error?.message || 'Failed to page session history' });
+  }
+});
+
 router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id);
@@ -22206,8 +22254,23 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       ? 500
       : boundedPositiveInt(req.query.processLimit, mobileOptimized ? 120 : 250, 20, mobileOptimized ? 160 : 500);
     const includeToolLog = full || req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
-    const responseHistory = sanitizeHistoryForUiResponse(session.history, {
-      historyLimit,
+    const sourceHistory = Array.isArray(session.history) ? session.history : [];
+    const initialHistoryPage = full
+      ? {
+          items: sourceHistory,
+          pageInfo: {
+            olderCursor: null,
+            hasOlder: false,
+            totalCount: sourceHistory.length,
+            startIndex: 0,
+            endIndex: sourceHistory.length,
+            startKey: sourceHistory.length ? historyMessageCursorKey(sourceHistory[0]) : null,
+            endKey: sourceHistory.length ? historyMessageCursorKey(sourceHistory[sourceHistory.length - 1]) : null,
+          },
+        }
+      : paginateChatHistory(sessionId, sourceHistory, { limit: historyLimit });
+    const responseHistory = sanitizeHistoryForUiResponse(initialHistoryPage.items, {
+      historyLimit: 0,
       includeToolLog,
       perMessageProcessLimit: fullProcess ? 500 : mobileOptimized ? 12 : 50,
       processEntryTextLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 900 : 1600,
@@ -22232,8 +22295,9 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
         channel: session.channel,
         history: responseHistory,
         processLog: responseProcessLog,
-        historyTruncated: !full && Array.isArray(session.history) && responseHistory.length < session.history.length,
-        totalHistoryCount: Array.isArray(session.history) ? session.history.length : 0,
+        historyTruncated: initialHistoryPage.pageInfo.hasOlder,
+        totalHistoryCount: initialHistoryPage.pageInfo.totalCount,
+        historyPage: initialHistoryPage.pageInfo,
         createdAt: session.createdAt,
         lastActiveAt: session.lastActiveAt,
         lastAssistantAt: session.lastAssistantAt || null,

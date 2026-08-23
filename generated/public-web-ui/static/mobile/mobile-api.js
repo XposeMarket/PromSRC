@@ -4,6 +4,7 @@
 import { api } from '../api.js';
 import { API } from '../state.js';
 import { presentChatError } from '../chat-error-presentation.js';
+import { createChatHistoryClient } from '../features/chat/runtime/history-client.js';
 
 /* ---------------- pairing / device token ---------------- */
 // All mobile fetches go through `mfetch()` below which automatically attaches
@@ -1851,6 +1852,7 @@ export async function loadLatestUsableSession() {
 const _sessionCache = new Map(); // scoped session id → { session, expiresAt }
 const _sessionRequests = new Map(); // scoped session/detail → in-flight Promise
 const _SESSION_CACHE_TTL = 30_000; // ms
+const _mobileHistoryClients = new Map();
 
 function _sessionCacheKey(sid, scope = _mobileGatewayCacheScope()) {
   return `${scope}::${String(sid || '').trim()}`;
@@ -1912,6 +1914,27 @@ export async function loadMobileChatSession(sessionId, options = {}) {
   });
   _sessionRequests.set(requestKey, request);
   return request;
+}
+
+export async function loadMobileChatHistoryPage(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) throw new Error('Session id required');
+  const gatewayScope = _mobileGatewayCacheScope();
+  if (!_mobileHistoryClients.has(gatewayScope)) {
+    _mobileHistoryClients.set(gatewayScope, createChatHistoryClient({
+      mobile: true,
+      request: (path, requestOptions = {}) => mfetch(path, {
+        ...requestOptions,
+        timeoutMs: 20_000,
+      }),
+    }));
+  }
+  return _mobileHistoryClients.get(gatewayScope).loadOlder({
+    sessionId: sid,
+    before: String(options.before || '').trim(),
+    limit: Math.max(1, Math.min(180, Math.floor(Number(options.limit) || 40))),
+    signal: options.signal,
+  });
 }
 
 

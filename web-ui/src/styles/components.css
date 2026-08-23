@@ -10152,3 +10152,12 @@ button.source-panel-row:hover {
   color: #93c5fd;
   font: 10px/1.35 'IBM Plex Mono', monospace;
 }
+.chat-history-pager {
+  display: flex;
+  justify-content: center;
+  padding: 10px 12px 18px;
+}
+
+.chat-history-pager .btn {
+  min-height: 34px;
+}
