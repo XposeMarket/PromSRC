@@ -1,3 +1,4 @@
+// Contract coverage for mobile-only device motion; keep this deterministic and browser-independent.
 import assert from 'node:assert/strict';
 import {
   computeShakeEnergy,
