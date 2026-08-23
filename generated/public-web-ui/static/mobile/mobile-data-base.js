@@ -8,7 +8,7 @@
 const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
 const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v296-2026-08-21-background-dock-flow';
 const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
-const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v299-2026-08-22-visible-refraction';
+const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v303-2026-08-23-aug12-glass-crosscheck';
 
 function ensureMobileComposerStackStyles() {
   if (typeof document === 'undefined') return;
@@ -21,14 +21,17 @@ function ensureMobileComposerStackStyles() {
       link.dataset.promMobileComposerStackStyle = '1';
       document.head.appendChild(link);
     }
-    if (!document.getElementById(PM_DEMO_GLASS_STYLE_ID)) {
-      const demoGlassLink = document.createElement('link');
+    let demoGlassLink = document.getElementById(PM_DEMO_GLASS_STYLE_ID);
+    if (!demoGlassLink) {
+      demoGlassLink = document.createElement('link');
       demoGlassLink.id = PM_DEMO_GLASS_STYLE_ID;
       demoGlassLink.rel = 'stylesheet';
-      demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}&drawer-tabs=white-v1`, import.meta.url).href;
       demoGlassLink.dataset.promMobileDemoGlassStyle = '1';
       document.head.appendChild(demoGlassLink);
     }
+    // Refresh an existing link after a hot update so the corrected material
+    // cannot remain pinned to the prior cache key.
+    demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}&drawer-tabs=white-v1`, import.meta.url).href;
   } catch {}
 }
 
