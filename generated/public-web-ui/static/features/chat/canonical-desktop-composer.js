@@ -1,0 +1,215 @@
+// Desktop secondary chat surfaces must not maintain a visual copy of the main
+// composer. Subagent, team, and legacy side-chat renderers may still own their
+// transport/state adapters, but the visible control is cloned from the actual
+// main #chat-view composer DOM every time those surfaces render.
+//
+// This deliberately strips the old surface-specific geometry classes
+// (side-chat-composer, unified-agent-chat-composer, subagent-panel-chat-composer,
+// etc.) so only the same .chat-input-area/.chat-input-row styling path used by
+// the main chat can affect the visible control.
+
+const SECONDARY_COMPOSER_SELECTOR = [
+  '.side-chat-composer.chat-input-area',
+  '.unified-agent-chat-composer.chat-input-area',
+].join(', ');
+
+const MAIN_COMPOSER_SELECTOR = '#chat-view > .chat-input-area:not([data-canonical-secondary-composer])';
+const MAIN_ONLY_SELECTOR = [
+  '#main-goal-strip',
+  '#chat-design-selection-pills',
+  '#chat-skill-trigger-pill',
+  '#chat-question-popover',
+  '#chat-slash-command-popover',
+  '#chat-skill-command-popover',
+  '#chat-slash-menu',
+  '#chat-command-chip',
+].join(', ');
+
+function copyBehaviorAttributes(target, source, names) {
+  if (!target || !source) return;
+  for (const name of names) {
+    if (source.hasAttribute(name)) target.setAttribute(name, source.getAttribute(name));
+    else target.removeAttribute(name);
+  }
+}
+
+function copyIdentity(target, source) {
+  if (!target || !source) return;
+  if (source.id) target.id = source.id;
+  else target.removeAttribute('id');
+  for (const attr of Array.from(source.attributes || [])) {
+    if (!attr.name.startsWith('data-')) continue;
+    target.setAttribute(attr.name, attr.value);
+  }
+}
+
+function copyRootState(target, source) {
+  if (!target || !source) return;
+  for (const attr of Array.from(source.attributes || [])) {
+    if (!attr.name.startsWith('data-') && !attr.name.startsWith('aria-')) continue;
+    target.setAttribute(attr.name, attr.value);
+  }
+}
+
+function resetMainOnlyState(clone) {
+  clone.querySelectorAll(MAIN_ONLY_SELECTOR).forEach((node) => node.remove());
+
+  // A DOM clone also copies every descendant id. Those ids belong to the real
+  // main composer and must never exist twice in the document (for example,
+  // #chat-composer-input-wrap). Context-specific ids are restored below from
+  // the owning secondary renderer after the main visual shell is sanitized.
+  clone.querySelectorAll('[id]').forEach((node) => node.removeAttribute('id'));
+
+  const queuePanel = clone.querySelector('.queued-prompts-panel');
+  if (queuePanel) {
+    queuePanel.style.display = 'none';
+    const list = queuePanel.querySelector('.queued-prompts-list');
+    if (list) list.replaceChildren();
+  }
+
+  const richPreview = clone.querySelector('.chat-composer-rich-preview');
+  if (richPreview) {
+    richPreview.replaceChildren();
+    richPreview.hidden = true;
+  }
+}
+
+function legacyStagingNode(legacy) {
+  const candidates = Array.from(legacy.querySelectorAll('.chat-file-staging'));
+  return candidates.find((node) => node.id)
+    || candidates.find((node) => node.innerHTML.trim() || node.style.display !== 'none')
+    || candidates[0]
+    || null;
+}
+
+function transferStaging(clone, legacy) {
+  const legacyStaging = legacyStagingNode(legacy);
+  const cloneStack = clone.querySelector('.chat-composer-attachment-stack');
+  const cloneStaging = clone.querySelector('.chat-file-staging');
+  if (!cloneStack || !cloneStaging) return;
+
+  cloneStack.removeAttribute('id');
+  cloneStack.style.display = legacyStaging && legacyStaging.style.display !== 'none' ? '' : 'none';
+  if (!legacyStaging) {
+    cloneStaging.removeAttribute('id');
+    cloneStaging.replaceChildren();
+    cloneStaging.style.display = 'none';
+    return;
+  }
+
+  copyIdentity(cloneStaging, legacyStaging);
+  cloneStaging.innerHTML = legacyStaging.innerHTML;
+  cloneStaging.style.display = legacyStaging.style.display || 'none';
+}
+
+function transferFileInput(clone, legacy) {
+  const source = legacy.querySelector('input[type="file"]');
+  const target = clone.querySelector('input[type="file"]');
+  if (!source || !target) return;
+  copyIdentity(target, source);
+  copyBehaviorAttributes(target, source, ['onchange', 'accept', 'multiple']);
+}
+
+function transferButton(clone, legacy, selector, behaviorAttributes) {
+  const source = legacy.querySelector(selector);
+  const target = clone.querySelector(selector);
+  if (!source || !target) return;
+  copyIdentity(target, source);
+  copyBehaviorAttributes(target, source, behaviorAttributes);
+  // Keep the main composer's button chrome but preserve contextual stop/send
+  // iconography where the owning surface changes it dynamically.
+  if (selector === '.send-btn') target.innerHTML = source.innerHTML;
+}
+
+function transferTextarea(clone, legacy) {
+  const source = legacy.querySelector('textarea');
+  const target = clone.querySelector('textarea');
+  if (!source || !target) return;
+
+  copyIdentity(target, source);
+  copyBehaviorAttributes(target, source, [
+    'oninput', 'onkeydown', 'onpaste', 'placeholder', 'autocomplete',
+    'autocapitalize', 'enterkeyhint', 'aria-label', 'rows',
+  ]);
+  // Secondary IDs cannot use the #chat-input selector, so use the existing
+  // shared textarea hook. Its declarations intentionally match #chat-input.
+  target.classList.add('chat-textarea');
+  target.value = source.value || '';
+  target.textContent = source.value || '';
+}
+
+function transferFooter(clone, legacy) {
+  const source = legacy.querySelector('.agent-toggle');
+  const target = clone.querySelector('.agent-toggle');
+  if (!source || !target) return;
+
+  // Move the contextual footer rather than serializing it so any listeners
+  // already attached by Subagents/Teams survive canonicalization. Remove the
+  // old helper-only class/inline spacing so the main .agent-toggle rules win.
+  source.classList.remove('unified-desktop-chat-composer-footer');
+  source.removeAttribute('style');
+  target.replaceWith(source);
+}
+
+function canonicalizeComposer(legacy) {
+  if (!(legacy instanceof HTMLElement)) return null;
+  if (legacy.dataset.canonicalSecondaryComposer === '1') return legacy;
+
+  const main = document.querySelector(MAIN_COMPOSER_SELECTOR);
+  if (!(main instanceof HTMLElement) || main === legacy) return null;
+
+  const clone = main.cloneNode(true);
+  clone.hidden = false;
+  clone.removeAttribute('id');
+  clone.removeAttribute('style');
+  clone.removeAttribute('aria-hidden');
+  // Keep only the base composer plus the existing non-geometric shared hook.
+  // Critically, do not carry any side/subagent/team geometry class forward.
+  clone.className = 'chat-input-area unified-desktop-chat-composer';
+  copyRootState(clone, legacy);
+  clone.dataset.canonicalSecondaryComposer = '1';
+  clone.dataset.canonicalComposerSource = 'main-chat-dom';
+  clone.setAttribute('data-main-composer-parity', '1');
+
+  resetMainOnlyState(clone);
+  transferStaging(clone, legacy);
+  transferFileInput(clone, legacy);
+  transferButton(clone, legacy, '.chat-attach-btn', ['onclick', 'title', 'aria-label', 'type']);
+  transferButton(clone, legacy, '.chat-voice-btn', ['onclick', 'title', 'aria-label', 'type']);
+  transferTextarea(clone, legacy);
+  transferButton(clone, legacy, '.send-btn', ['onclick', 'title', 'aria-label', 'type']);
+  transferFooter(clone, legacy);
+
+  legacy.replaceWith(clone);
+  try {
+    clone.dispatchEvent(new CustomEvent('prometheus:canonical-composer-mounted', { bubbles: true }));
+  } catch {}
+  return clone;
+}
+
+function scan(root = document) {
+  if (window.__PROM_SHOULD_BOOT_MOBILE?.()) return;
+  if (root instanceof Element && root.matches?.(SECONDARY_COMPOSER_SELECTOR)) {
+    canonicalizeComposer(root);
+  }
+  const scope = root?.querySelectorAll ? root : document;
+  scope.querySelectorAll(SECONDARY_COMPOSER_SELECTOR).forEach((node) => canonicalizeComposer(node));
+}
+
+function install() {
+  if (window.__PROM_CANONICAL_DESKTOP_COMPOSER_INSTALLED) return;
+  window.__PROM_CANONICAL_DESKTOP_COMPOSER_INSTALLED = true;
+  scan(document);
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element) scan(node);
+      }
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  window.__PROM_CANONICAL_DESKTOP_COMPOSER = { scan, canonicalizeComposer };
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install, { once: true });
+else install();

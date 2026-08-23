@@ -13,8 +13,8 @@ assert.equal(performanceSource, performanceGenerated, 'desktop bootstrap mirror 
 assert.match(performanceSource, /!window\.__PROM_SHOULD_BOOT_MOBILE\?\.\(\)/, 'Prom Bot must stay out of the mobile/PWA runtime');
 assert.match(performanceSource, /import\('\.\/prom-bot\.js'\)/, 'Prom Bot must boot with the desktop app shell');
 
-// The new mode button belongs between Search and Priority and deliberately
-// reuses the existing Subagents robot glyph rather than inventing a new icon.
+// The mode button belongs between Search and Priority and deliberately reuses
+// the existing Subagents robot glyph rather than inventing a new icon.
 assert.match(source, /getElementById\('sidebarSearchToggle'\)/);
 assert.match(source, /getElementById\('sidebarPriorityToggle'\)/);
 assert.match(source, /insertBefore\(button, priorityButton\)/, 'Prom Bot toggle must sit immediately before Priority');
@@ -37,23 +37,28 @@ assert.match(index, /id="jobs-list"/);
 assert.match(source, /api\('\/api\/agents'/);
 assert.match(source, /!agent\.default && !agent\.isSynthetic/);
 
-// Critical architecture contract: clicking a bot reuses the existing durable
-// single-thread Subagents runtime and the shared ChatPage renderer. There is no
-// second /chat implementation or duplicate thread id in this feature shell.
+// Critical architecture contract: clicking a bot reuses the durable Subagents
+// runtime and shared ChatPage renderer, but it replaces the visible main chat
+// region instead of layering an absolute subagent panel over it.
 assert.match(source, /import\('\.\/pages\/SubagentsPage\.js'\)/);
 assert.match(source, /__PROM_UNIFIED_DESKTOP_CHAT/);
 assert.match(source, /openSubagentDetail\(id\)/);
 assert.match(source, /switchSubagentTab\('chat', id\)/);
-assert.match(source, /getElementById\('subagent-board'\)/);
-assert.match(source, /getElementById\('chat-view'\)/);
-assert.match(source, /PROM_BOT_HOST_ID = 'prom-bot-chat-host'/);
+assert.match(source, /PROM_BOT_SURFACE_ID = 'prom-bot-main-surface'/);
+assert.match(source, /function displaceMainChatSurface\(/);
+assert.match(source, /entry\.node\.hidden = true/);
+assert.match(source, /function restoreMainChatSurface\(/);
+assert.match(source, /mountSubagentBoardAsMainChatSurface\(\)/);
+assert.doesNotMatch(source, /PROM_BOT_HOST_ID|prom-bot-chat-host/, 'the retired absolute overlay host must not return');
+assert.doesNotMatch(source, /#\$\{PROM_BOT_SURFACE_ID\}\s*\{[\s\S]*?position:\s*absolute/, 'Prom Bot surface must participate in the main chat layout instead of overlaying it');
 assert.doesNotMatch(source, /api\(`\/api\/agents\/\$\{[^}]+\}\/chat/, 'Prom Bot shell must not fork the direct-chat transport');
 
-// Normal sidebar navigation restores the untouched Prometheus chat underneath
-// while Prom Bot mode itself can remain enabled and visible.
+// Normal sidebar navigation restores the displaced Prometheus chat nodes while
+// Prom Bot mode itself can remain enabled and visible.
 assert.match(source, /closePromBotChat\(\{ keepMode: true \}\)/);
 assert.match(source, /restoreSubagentBoard\(\)/);
+assert.match(source, /restoreMainChatSurface\(\)/);
 assert.match(source, /originalBoardParent\.insertBefore/);
 assert.match(source, /sidebar\.addEventListener\('click'/);
 
-console.log('[test-desktop-prom-bot] passed: persistent sidebar bots reuse durable subagent threads and unified desktop chat');
+console.log('[test-desktop-prom-bot] passed: persistent sidebar bots replace the main chat region without an overlay and reuse durable subagent threads');

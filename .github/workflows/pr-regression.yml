@@ -50,8 +50,10 @@ jobs:
         run: npm run check:web-ui
       - name: Verify Creative video timeline interactions
         run: node scripts/test-creative-video-timeline-interactions.mjs
-      - name: Verify desktop multi-chat contract
-        run: node scripts/test-desktop-chat-layout-contract.mjs
+      - name: Verify desktop multi-chat and composer contracts
+        run: |
+          node scripts/test-desktop-chat-layout-contract.mjs
+          node scripts/test-desktop-subagent-chat-ui.mjs
       - name: Verify context window contract
         run: npm run test:context-window
       - name: Verify token-window-native model context
