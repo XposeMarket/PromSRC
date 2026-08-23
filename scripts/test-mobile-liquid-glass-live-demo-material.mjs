@@ -43,13 +43,16 @@ assert.match(mobileBase, /Mobile glass cleanup:[\s\S]*?remove the cast shadow be
   'the later August 13 shadow cleanup is expected to remain in mobile.css and be narrowly overridden here');
 
 // Preserve the recently fixed iOS/PWA top strip: transparent, no header-wide
-// blur, while each child button/model pill keeps its own glass material.
+// blur, while each standalone button/model pill keeps its own glass material.
 assert.match(sourceCode, /body\.pm-mobile-active \.pm-header\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;[\s\S]*?box-shadow:\s*none !important;/,
   'iOS/PWA header safe-area must remain transparent and header-blur-free');
 
-// Restore exactly the pre-August-13 depth for the persistent glass group.
+// Restore exactly the pre-August-13 depth for standalone persistent glass.
 for (const selector of [
-  '.pm-header .pm-icon-btn',
+  '.pm-header > .pm-icon-btn',
+  '.pm-header > .pm-haptic-host > .pm-icon-btn',
+  '.pm-header-actions > .pm-icon-btn',
+  '.pm-header-actions > .pm-haptic-host > .pm-icon-btn',
   '.pm-header .pm-online',
   '.pm-header-action-cluster',
   '.pm-completion-toast',
@@ -58,6 +61,10 @@ for (const selector of [
 ]) {
   assert.ok(source.includes(selector), `missing August 12 shadow restore surface: ${selector}`);
 }
+assert.doesNotMatch(sourceCode, /body\.pm-mobile-active :is\([\s\S]*?\.pm-header \.pm-icon-btn,/,
+  'broad descendant header-button shadow ownership must not return');
+assert.match(sourceCode, /\.pm-header-action-cluster \.pm-icon-btn,[\s\S]*?\.pm-header-action-cluster \.pm-icon-btn:hover\s*\{[\s\S]*?box-shadow:\s*none !important;/,
+  'child icon slots inside the combined header action pill must remain shadowless');
 assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.38\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.18\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.16\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.08\) !important;/,
   'light persistent glass must restore the August 12 cast-shadow recipe');
 assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.16\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.07\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.34\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.22\) !important;/,
@@ -66,22 +73,22 @@ assert.match(sourceCode, /\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px r
   'tab selector must restore its August 12 light floating depth');
 assert.match(sourceCode, /data-theme="dark"[\s\S]*?\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px rgba\(255,255,255,\.24\),[\s\S]*?0 8px 22px rgba\(0,0,0,\.42\) !important;/,
   'tab selector must restore its August 12 dark floating depth');
+assert.match(sourceCode, /\.pm-tabbar\.pm-tabbar-pressing\s*\{[\s\S]*?inset 0 1\.5px 1px rgba\(255,255,255,\.36\),[\s\S]*?0 20px 52px rgba\(0,0,0,\.24\),[\s\S]*?0 5px 14px rgba\(0,0,0,\.12\) !important;/,
+  'pressed/dragged tab bar must restore the stronger August 12 floating depth');
 
-// The live-demo material and exact-canvas hamburger are deliberately no longer
-// part of the runtime path. A small status-edge initializer is allowed, but the
-// old hamburger experiment must never return.
+// The later live-demo material and exact-canvas hamburger are deliberately no
+// longer part of the runtime path.
 assert.doesNotMatch(sourceCode, /--pm-demo-|DEFAULT_SPEC|pm-demo-refract|saturate\(1\.0001\)|mask-image:\s*radial-gradient/,
   'late glass layer must not retain the later live-demo material/refraction override');
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
-const allowedMobileDataLines = [
-  "export * from './mobile-data-base.js';",
-  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';",
-  'initMobileStatusBarTheme();',
-];
-assert.deepEqual(sourceData.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean), allowedMobileDataLines,
-  'mobile-data may initialize only the isolated status-edge theme bridge on top of the August 12 glass baseline');
+assert.match(sourceData, /PM_AUG12_GLASS_STYLE_VERSION\s*=\s*'pm-v303-2026-08-23-aug12-glass-crosscheck'/,
+  'restored glass must use a fresh explicit cache key');
+assert.match(sourceData, /getElementById\('pm-mobile-demo-glass-style'\)[\s\S]*?mobile-liquid-glass-demo\.css\?v=\$\{PM_AUG12_GLASS_STYLE_VERSION\}/,
+  'mobile boot must refresh the existing glass stylesheet link to the corrected material');
+assert.match(sourceData, /initMobileStatusBarTheme\(\);/,
+  'the existing isolated status-edge theme bridge must remain initialized');
 assert.doesNotMatch(sourceData, /mobile-hamburger-liquid-glass|initMobileHamburgerLiquidGlass/,
   'exact-canvas hamburger must not run on mobile boot');
 assert.match(sourceCode, /\.pm-hamburger-liquid-glass-canvas\s*\{[\s\S]*?display:\s*none !important;/,
@@ -117,4 +124,4 @@ assert.match(source, /\.pm-title-row \.pm-title/,
 assert.match(source, /\.pm-drawer-list \.pm-drawer-item > \.pm-flex/,
   'drawer page-tab label fix must remain intact');
 
-console.log('mobile persistent chat glass restored to August 12 with isolated theme-aware iOS status-edge sync');
+console.log('mobile persistent chat glass restore keeps one header action pill, pressed depth, cache freshness, and status-edge isolation');
