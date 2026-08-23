@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
+// Guard the architectural boundary: Thought is supervisory cognition, not a normal Prometheus chat turn.
 const runner = fs.readFileSync('src/gateway/brain/brain-runner.ts', 'utf8');
 const toolBuilder = fs.readFileSync('src/gateway/tool-builder.ts', 'utf8');
 const chatHelpers = fs.readFileSync('src/gateway/chat/chat-helpers.ts', 'utf8');
