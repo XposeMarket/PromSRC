@@ -63,7 +63,9 @@ const server = http.createServer((request, response) => {
   }
 
   let file = null;
-  if (url.pathname === '/mobile' || url.pathname.startsWith('/mobile/')) {
+  if (url.pathname === '/') {
+    file = path.join(publicRoot, 'index.html');
+  } else if (url.pathname === '/mobile' || url.pathname.startsWith('/mobile/')) {
     file = path.join(publicRoot, 'mobile.html');
   } else if (url.pathname.startsWith('/assets/')) {
     file = safeFile(path.join(root, 'assets'), url.pathname.slice('/assets/'.length));
@@ -167,6 +169,23 @@ async function inspectRoute(browser, baseUrl, { route, paired, expectedOwner, fo
   return { route, expectedOwner, observed: [...new Set(observed)].sort(), metrics };
 }
 
+async function inspectSettingsHandoff(browser, baseUrl) {
+  const start = requests.length;
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+  await context.addInitScript(() => {
+    localStorage.setItem('pm_device_token', 'route-chunk-test-token');
+    localStorage.setItem('pm_force_mobile', '1');
+  });
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/mobile/settings`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL((url) => url.pathname === '/' && url.searchParams.get('desktop') === '1' && url.searchParams.get('settings') === '1');
+  await page.waitForFunction(() => document.getElementById('settings-modal')?.style.display === 'flex');
+  const observed = requests.slice(start);
+  assert(observed.includes(assetManifest.entries.desktop.js), 'settings handoff must boot the desktop web UI entry');
+  assert(!observed.includes(mobileOutput('mobile-settings.js')), 'settings handoff must not load the retired mobile settings owner');
+  await context.close();
+}
+
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -203,7 +222,6 @@ try {
   });
 
   const routeContracts = [
-    { route: '/mobile/settings', expectedOwner: mobileOutput('mobile-settings.js'), allowed: [], selector: '.pm-settings-body' },
     { route: '/mobile/creative', expectedOwner: mobileOutput('mobile-creative-pages.js'), allowed: [mobileOutput('mobile-creative-pages.js')], selector: '#pm-creative-body' },
     { route: '/mobile/teams', expectedOwner: mobileOutput('mobile-teams-pages.js'), allowed: [mobileOutput('mobile-teams-pages.js')], selector: '#pm-teams-body' },
     { route: '/mobile/tasks', expectedOwner: mobileOutput('mobile-tasks-pages.js'), allowed: [mobileOutput('mobile-tasks-pages.js'), mobileOutput('mobile-teams-pages.js')], selector: '#pm-tasks-body' },
@@ -218,6 +236,7 @@ try {
       forbiddenOwners: ownerFiles.filter((owner) => !contract.allowed.includes(owner)),
     });
   }
+  await inspectSettingsHandoff(browser, baseUrl);
 
   console.log(JSON.stringify({ pair: pair.metrics, chat: chat.metrics, voice: voice.metrics, schedule: schedule.metrics }, null, 2));
   console.log('Mobile route chunk behavior passed.');

@@ -39,7 +39,7 @@ export function pmToast(message, kind = 'info') {
   toast.dataset.pmToastKey = toastKey;
   toast.dataset.pmToastCount = '1';
   toast.setAttribute('role', severity === 'error' ? 'alert' : 'status');
-  toast.style.cssText = `background:${background};color:#fff;padding:9px 14px;border-radius:16px;font-size:13px;font-weight:650;line-height:1.35;box-shadow:0 8px 24px rgba(0,0,0,.22);max-width:min(88vw,420px);text-align:center;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;`;
+  toast.style.cssText = `background:${background};color:#fff;padding:9px 14px;border-radius:16px;font-family:var(--pm-font),system-ui,-apple-system,sans-serif;font-size:13px;font-weight:650;line-height:1.35;box-shadow:0 8px 24px rgba(0,0,0,.22);max-width:min(88vw,420px);text-align:center;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;`;
   toast.textContent = toastText;
   host.appendChild(toast);
   requestAnimationFrame(() => {

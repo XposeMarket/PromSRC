@@ -26,6 +26,23 @@ if (mobileSurface) {
   ]);
 }
 
+// Mobile Settings intentionally crosses into the canonical desktop document.
+// Open the requested settings tab after the desktop modules have initialized.
+try {
+  const settingsParams = new URLSearchParams(window.location.search || '');
+  if (!mobileSurface && settingsParams.get('settings') === '1') {
+    const requestedSettingsTab = String(settingsParams.get('settingsTab') || '').trim();
+    // The inline desktop shim is already available and reveals the canonical
+    // settings surface before its lazy module finishes loading. Do not wait on
+    // the unrelated desktop bundle: one failed import must not strand a mobile
+    // settings handoff on the underlying chat page.
+    if (typeof window.openSettings === 'function') {
+      Promise.resolve(window.openSettings(requestedSettingsTab || undefined))
+        .catch((error) => console.warn('[settings] desktop handoff failed:', error));
+    }
+  }
+} catch {}
+
 function unlockApp() {
   document.body.classList.remove('auth-pending');
   document.getElementById('prometheus-auth-gate')?.remove();
