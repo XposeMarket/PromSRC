@@ -20,7 +20,7 @@
 const RELEASE_VERSION = 'pm-v305-2026-08-23-mobile-settings-streaming';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '3fc24fdc9b517551';
+const ASSET_BUILD_ID = '67c85cceb9c10ac9';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -42,23 +42,24 @@ const SOURCE_PRECACHE = [
 const BUILD_PRECACHE = [
   "/asset-manifest.json",
   "/assets/Prometheus.png",
+  "/build/chunks/chunk-2L2KLWMY.js",
   "/build/chunks/chunk-3EPMIDRU.js",
-  "/build/chunks/chunk-43NFT3AG.js",
   "/build/chunks/chunk-4WCZDNBS.js",
-  "/build/chunks/chunk-6NAOKPTY.js",
+  "/build/chunks/chunk-B4S6FUCZ.js",
   "/build/chunks/chunk-EPSJJCWL.js",
   "/build/chunks/chunk-GBLBNUG2.js",
-  "/build/chunks/chunk-H6JDDAGZ.js",
   "/build/chunks/chunk-IPNQ4FF4.js",
-  "/build/chunks/chunk-ISSIO4KX.js",
   "/build/chunks/chunk-JF4LWGNM.js",
+  "/build/chunks/chunk-M5JONE3D.js",
   "/build/chunks/chunk-MGDZYTA3.js",
+  "/build/chunks/chunk-MVKGBY75.js",
   "/build/chunks/chunk-YMT6MSCC.js",
-  "/build/chunks/mobile-router-G3TPASEJ.js",
-  "/build/entries/mobile-ONNVIIYE.js",
+  "/build/chunks/chunk-YPZ3VTX5.js",
+  "/build/chunks/mobile-router-67HM4Q3G.js",
+  "/build/entries/mobile-NKLCCAAN.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-  "/build/styles/mobile-DEGVMVJT.css",
+  "/build/styles/mobile-KL24EG7S.css",
   "/mobile.html",
   "/mobile/chat",
 ];

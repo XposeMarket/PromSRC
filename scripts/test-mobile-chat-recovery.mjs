@@ -16,6 +16,7 @@ const shell = read('web-ui/src/mobile/mobile-shell.js');
 const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
 const desktopEntry = read('web-ui/src/desktop-entry.js');
+const settingsReturn = read('web-ui/src/settings-return.js');
 const mobileFeedback = read('web-ui/src/mobile/mobile-feedback.js');
 const mobileCss = read('web-ui/src/styles/mobile.css');
 const ws = read('web-ui/src/ws.js');
@@ -30,7 +31,9 @@ const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
-assert.match(mobileRouter, /URLSearchParams\(\{ desktop: '1', settings: '1' \}\)/, 'the lightweight mobile document must explicitly boot the canonical desktop settings document');
+assert.match(mobileRouter, /buildMobileSettingsHandoffUrl\(window\.location, tab\)/, 'the lightweight mobile document must boot canonical Settings with a safe return route');
+assert.match(settingsReturn, /desktop: '1',[\s\S]{0,120}settings: '1'/, 'the Settings handoff must explicitly boot the desktop document');
+assert.match(settingsReturn, /query\.set\(MOBILE_SETTINGS_SOURCE_PARAM, 'pwa'\)/, 'the Settings handoff must remember PWA mode without sending source=pwa to the desktop request');
 assert.match(mobileRouter, /page === 'settings' && !document\.getElementById\('settings-modal'\)[\s\S]{0,180}return Promise\.resolve\(\)/, 'a lightweight settings deep link must redirect before rendering the retired mobile owner');
 assert.match(desktopEntry, /settingsParams\.get\('settings'\) === '1'[\s\S]{0,900}window\.openSettings\(requestedSettingsTab \|\| undefined\)/, 'desktop boot must open the settings modal requested by the mobile handoff');
 assert.match(mobileFeedback, /font-family:var\(--pm-font\),system-ui,-apple-system,sans-serif/, 'mobile status toasts must use the mobile system font');
@@ -244,8 +247,8 @@ assert.match(
 );
 assert.match(
   mobileCss,
-  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,520}overflow-wrap: anywhere;[\s\S]{0,80}word-break: break-word;/,
-  'user bubbles must wrap long text inside their bounded mobile width',
+  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,520}width: max-content;[\s\S]{0,180}overflow-wrap: anywhere;[\s\S]{0,80}word-break: normal;/,
+  'user bubbles must use max-content sizing without collapsing prose to min-content width',
 );
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');

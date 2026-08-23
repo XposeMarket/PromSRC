@@ -3969,7 +3969,13 @@ html.pm-session-context-open * {
 .pm-msg.pm-agent-chat-msg {
   margin-bottom: 10px;
 }
-.pm-msg.from-user { align-self: flex-end; align-items: flex-end; min-width: 0; }
+.pm-msg.from-user {
+  align-self: flex-end;
+  align-items: flex-end;
+  width: max-content;
+  max-width: min(86%, calc(100vw - 28px));
+  min-width: 0;
+}
 .pm-workflow-transition-label {
   max-width: 100%;
   color: var(--pm-muted);
@@ -3999,12 +4005,20 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  width: fit-content; inline-size: fit-content;
+  width: max-content; inline-size: max-content;
   max-width: 100%; max-inline-size: 100%;
-  min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+  min-width: 0; overflow-wrap: anywhere; word-break: normal; white-space: normal;
 }
 .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, span, strong, em, a) {
-  min-width: 0; max-width: 100%; max-inline-size: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+  min-width: 0; max-width: 100%; max-inline-size: 100%; word-break: normal; white-space: normal;
+}
+.pm-msg.from-user .pm-bubble .markdown-body {
+  width: auto;
+  inline-size: auto;
+  overflow-wrap: break-word;
+}
+.pm-msg.from-user .pm-bubble :where(a, code) {
+  overflow-wrap: anywhere;
 }
 .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   background: color-mix(in srgb, var(--pm-orange-soft), var(--pm-surface) 42%);
@@ -10827,6 +10841,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-chat-voice-shell[hidden] { display: none; }
 .pm-chat-voice-shell {
   position: relative;
+  outline: 0;
   min-height: 248px;
   overflow: visible;
   border-radius: inherit;
@@ -10879,6 +10894,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-chat-voice-inline[hidden] { display: none; }
 .pm-chat-voice-inline {
   padding-top: 36px;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
   max-width: 100%;
   box-sizing: border-box;
   overflow: hidden;

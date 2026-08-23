@@ -1307,12 +1307,14 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
     };
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {
+    const visibility = String(data?.visibility || (eventType === 'agent_thought' ? 'user' : 'private')).toLowerCase();
+    if (visibility === 'private' || visibility === 'internal') return null;
     return {
       ts,
       type: 'think',
       actor: 'Prom',
       content: truncateRuntimeProcessText(data?.thinking || data?.text || data?.message),
-      extra: { source: 'runtime_checkpoint', event: eventType },
+      extra: { source: String(data?.source || 'runtime_checkpoint'), event: eventType, visibility },
     };
   }
   if (eventType === 'error' || eventType === 'warn') {
@@ -7363,7 +7365,7 @@ RULES:
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
 	            allThinking += (allThinking ? '\n\n' : '') + result.thinking;
-	            sendSSE('thinking', { thinking: result.thinking });
+	            sendSSE('thinking', { thinking: result.thinking, source: 'provider_thinking', visibility: 'private' });
 	          }
 	        }
 	      } else {
@@ -7381,7 +7383,7 @@ RULES:
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
 	            allThinking += (allThinking ? '\n\n' : '') + result.thinking;
-	            sendSSE('thinking', { thinking: result.thinking });
+	            sendSSE('thinking', { thinking: result.thinking, source: 'provider_thinking', visibility: 'private' });
 	          }
 	        }
 	      }
@@ -7390,7 +7392,7 @@ RULES:
       if (explicitThink.thinking) {
         console.log(`[v2] TAG THINK (${explicitThink.thinking.length} chars): ${explicitThink.thinking.slice(0, 150)}...`);
         allThinking += (allThinking ? '\n\n' : '') + explicitThink.thinking;
-        sendSSE('thinking', { thinking: explicitThink.thinking });
+        sendSSE('thinking', { thinking: explicitThink.thinking, source: 'provider_thinking', visibility: 'private' });
       }
       if (String(response?.content || '') !== explicitThink.cleaned) {
         response.content = explicitThink.cleaned;
@@ -7449,7 +7451,7 @@ RULES:
       if (inlineThinking) {
         console.log(`[v2] INLINE REASONING (${inlineThinking.length} chars): ${inlineThinking.slice(0, 100)}...`);
         allThinking += (allThinking ? '\n\n' : '') + inlineThinking;
-        sendSSE('thinking', { thinking: inlineThinking });
+        sendSSE('thinking', { thinking: inlineThinking, source: 'provider_thinking', visibility: 'private' });
       }
 
       const rawAssistantText = String(response.content || '').trim();

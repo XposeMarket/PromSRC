@@ -175,6 +175,12 @@ async function inspectSettingsHandoff(browser, baseUrl) {
   await context.addInitScript(() => {
     localStorage.setItem('pm_device_token', 'route-chunk-test-token');
     localStorage.setItem('pm_force_mobile', '1');
+    localStorage.setItem('prometheus_account', JSON.stringify({
+      email: 'route-test@example.invalid',
+      subscriptionActive: true,
+      accessActive: true,
+      purchaseActive: true,
+    }));
   });
   const page = await context.newPage();
   await page.goto(`${baseUrl}/mobile/settings`, { waitUntil: 'domcontentloaded' });
@@ -183,6 +189,12 @@ async function inspectSettingsHandoff(browser, baseUrl) {
   const observed = requests.slice(start);
   assert(observed.includes(assetManifest.entries.desktop.js), 'settings handoff must boot the desktop web UI entry');
   assert(!observed.includes(mobileOutput('mobile-settings.js')), 'settings handoff must not load the retired mobile settings owner');
+  const backButton = page.getByRole('button', { name: 'Back to app' });
+  await backButton.waitFor({ state: 'visible' });
+  const backBox = await backButton.boundingBox();
+  assert(backBox && backBox.width >= 44 && backBox.height >= 44, 'mobile Settings back control must meet the 44px tap-target contract');
+  await backButton.click();
+  await page.waitForURL((url) => url.pathname === '/mobile/more');
   await context.close();
 }
 

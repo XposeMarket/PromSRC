@@ -16,6 +16,7 @@ import { api } from '../api.js';
 import { escHtml, renderMd, bgtToast, timeAgo, showToast, showConfirm } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { applyToolActivityEvent } from '../tool-activity.js';
+import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
 
 // ── Stubs for cross-module globals not yet migrated ──────────────
 let _teamsDataSig = '';
@@ -1418,7 +1419,7 @@ function applyTeamManagerStreamEvent(msg) {
     case 'thinking':
     case 'agent_thought': {
       const thought = String(event.thinking || event.text || '').trim();
-      if (!thought) break;
+      if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
       addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
       break;
@@ -1605,7 +1606,7 @@ function applyTeamMemberStreamEvent(msg) {
     case 'thinking':
     case 'agent_thought': {
       const thought = String(event.thinking || event.text || '').trim();
-      if (!thought) break;
+      if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
       addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
       break;
@@ -2125,7 +2126,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
     case 'thinking':
     case 'agent_thought': {
       const thought = String(event.thinking || event.text || '').trim();
-      if (thought) {
+      if (thought && chatProgressVisibility(event) !== 'private') {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = teamChatStreamingState.thinking ? `${teamChatStreamingState.thinking}\n\n${thought}` : thought;
         addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
@@ -2291,7 +2292,7 @@ function applyTeamDispatchStreamEvent(msg) {
     case 'thinking':
     case 'agent_thought': {
       const thought = String(event.thinking || event.text || '').trim();
-      if (!thought) break;
+      if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
       addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
       break;
@@ -4939,7 +4940,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
           case 'thinking':
           case 'agent_thought': {
             const thought = String(event.thinking || event.text || '').trim();
-            if (thought) {
+            if (thought && chatProgressVisibility(event) !== 'private') {
               markTeamChatManagerStarted(teamId);
               streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
               addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
