@@ -70,6 +70,55 @@ function completedEdit(args, result = 'ok', extra = {}) {
 }
 
 {
+  const entry = completedEdit(
+    {
+      action: 'find_replace',
+      path: 'src/same-line.js',
+      find: 'old',
+      replace: 'new',
+      replace_all: true,
+      before: 'old old',
+      after: 'new new',
+    },
+    'Updated src/same-line.js (2 occurrences replaced).',
+  );
+  assert.deepEqual(toolActivityEditStats(entry.activity), { added: 1, removed: 1 },
+    'multiple replacements on one physical line count once');
+}
+
+{
+  const entry = completedEdit(
+    {
+      action: 'find_replace',
+      path: 'src/separate-lines.js',
+      find: 'old',
+      replace: 'new',
+      replace_all: true,
+      before: 'old\nkeep\nold',
+      after: 'new\nkeep\nnew',
+    },
+    'Updated src/separate-lines.js (2 occurrences replaced).',
+  );
+  assert.deepEqual(toolActivityEditStats(entry.activity), { added: 2, removed: 2 },
+    'replacements on separate physical lines count separately');
+}
+
+{
+  const entry = completedEdit(
+    {
+      action: 'find_replace',
+      path: 'src/ambiguous.js',
+      find: 'old',
+      replace: 'new',
+      replace_all: true,
+    },
+    'Updated src/ambiguous.js (2 occurrences replaced).',
+  );
+  assert.equal(toolActivityEditStats(entry.activity), null,
+    'replace-all stats are omitted when distinct affected lines are unavailable');
+}
+
+{
   const entry = completedEdit({
     action: 'apply_patch',
     patch: [

@@ -168,6 +168,50 @@ function stringArg(args, keys) {
   return null;
 }
 
+function textLineDelta(beforeRaw, afterRaw) {
+  const normalizeLines = (value) => {
+    const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!text) return [];
+    const lines = text.split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  };
+  const before = normalizeLines(beforeRaw);
+  const after = normalizeLines(afterRaw);
+  if (before.length * after.length > 2_000_000) return null;
+
+  // A line-level LCS gives the smallest honest add/remove counts. In
+  // particular, two replacements on one physical line are +1/-1, while the
+  // same replacements on two lines are +2/-2.
+  let previous = new Uint32Array(after.length + 1);
+  for (const beforeLine of before) {
+    const current = new Uint32Array(after.length + 1);
+    for (let index = 1; index <= after.length; index += 1) {
+      current[index] = beforeLine === after[index - 1]
+        ? previous[index - 1] + 1
+        : Math.max(previous[index], current[index - 1]);
+    }
+    previous = current;
+  }
+  const unchanged = previous[after.length];
+  return { added: after.length - unchanged, removed: before.length - unchanged };
+}
+
+function textPair(value) {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { return null; }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const candidates = [parsed, parsed.data, parsed.diff, parsed.change].filter((item) => item && typeof item === 'object');
+  for (const candidate of candidates) {
+    const before = stringArg(candidate, ['before', 'beforeText', 'before_text', 'oldText', 'old_text', 'old_content', 'oldContent']);
+    const after = stringArg(candidate, ['after', 'afterText', 'after_text', 'newText', 'new_text', 'new_content', 'newContent', 'updatedText', 'updated_text']);
+    if (before !== null && after !== null) return { before, after };
+  }
+  return null;
+}
+
 function replacementOccurrenceCount(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
@@ -257,6 +301,9 @@ function editOperationDelta(actionRaw, argsRaw = {}, resultRaw = '') {
     const replaceAll = args.replace_all === true || args.replaceAll === true;
     const occurrences = replaceAll ? replacementOccurrenceCount(resultRaw) : 1;
     if (!Number.isFinite(occurrences) || occurrences < 1) return null;
+    const beforeAfter = textPair(args) || textPair(resultRaw);
+    if (beforeAfter) return textLineDelta(beforeAfter.before, beforeAfter.after);
+    if (replaceAll && occurrences > 1) return null;
     return {
       added: textLineCount(newText) * occurrences,
       removed: textLineCount(oldText) * occurrences,
