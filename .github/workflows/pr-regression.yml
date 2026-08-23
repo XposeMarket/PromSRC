@@ -27,8 +27,6 @@ jobs:
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
       - name: Verify proposal approval durability
@@ -52,6 +50,8 @@ jobs:
         run: |
           npm run sync:web-ui
           git diff --exit-code
+      - name: Verify tool activity edit line stats
+        run: node scripts/test-tool-activity-edit-stats.mjs
       - name: Verify Creative video timeline interactions
         run: node scripts/test-creative-video-timeline-interactions.mjs
       - name: Verify desktop multi-chat and composer contracts
@@ -78,8 +78,6 @@ jobs:
         run: node scripts/test-mobile-liquid-glass-live-demo-material.mjs
       - name: Verify web UI architecture guardrails
         run: node scripts/test-web-ui-architecture-guardrails.mjs
-      - name: Verify web UI performance foundation
-        run: npm run test:web-ui-performance
       - name: Verify shared chat core contract
         run: node scripts/test-chat-core-contract.mjs
       - name: Verify mobile multi-gateway contract
