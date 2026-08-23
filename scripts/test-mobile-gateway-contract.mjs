@@ -42,7 +42,7 @@ function loadCatalogForTest() {
     unescape,
     console,
   };
-  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  saveGatewayCatalog, setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  resolveMobileSessionGateway, getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson,\n  hasAnyGatewayCredential, filterOnlineGatewayEntries, loadMobileGatewaySessionPage,\n  searchMobileGatewaySessions\n};`, context, { filename: 'mobile-gateway-catalog.js' });
+  vm.runInNewContext(`${source}\nthis.__catalog = {\n  normalizeGatewayDescriptor, targetNamespacedId, parseTargetNamespacedId,\n  upsertGateway, loadGatewayCatalog, getGateway, setGatewayToken, getGatewayToken,\n  saveGatewayCatalog, setGatewayFilter, getGatewayFilter, updateGatewayStatus, bindMobileSessionTarget,\n  resolveMobileSessionGateway, getMobileSessionTarget, encodePairingPayload, getPairingPayload, gatewayFetchJson, pairingGatewayFetchJson,\n  hasAnyGatewayCredential, filterOnlineGatewayEntries, loadMobileGatewaySessionPage,\n  searchMobileGatewaySessions\n};`, context, { filename: 'mobile-gateway-catalog.js' });
   context.__setDeviceToken = (value) => { deviceToken = String(value || ''); };
   return context;
 }
@@ -222,6 +222,53 @@ async function run() {
     'the mobile catalog must retain restart-aware error identity',
   );
 
+  let pairingAttempts = 0;
+  ctx.fetch = async () => {
+    pairingAttempts += 1;
+    if (pairingAttempts === 1) {
+      return {
+        ok: false,
+        status: 503,
+        headers: new Headers({ 'Retry-After': '0', 'X-Prometheus-Gateway-State': 'restarting' }),
+        text: async () => JSON.stringify({ code: 'GATEWAY_RESTARTING', error: 'Prometheus gateway is restarting.' }),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ success: true, requestId: 'req-recovered' }),
+    };
+  };
+  const recoveredPairing = await c.pairingGatewayFetchJson(desktop.origin, '/api/pairing/claim', {
+    method: 'POST',
+    body: JSON.stringify({ code: 'PAIR-ABCD-1234', deviceFingerprint: 'test-device' }),
+    restartRetryWindowMs: 1500,
+  });
+  assert.equal(pairingAttempts, 2, 'pairing retries the relay restart response instead of failing the QR immediately');
+  assert.equal(recoveredPairing.requestId, 'req-recovered');
+
+  pairingAttempts = 0;
+  ctx.fetch = async () => {
+    pairingAttempts += 1;
+    return {
+      ok: false,
+      status: 503,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ error: 'ordinary backend failure' }),
+    };
+  };
+  await assert.rejects(
+    () => c.pairingGatewayFetchJson(desktop.origin, '/api/pairing/claim', {
+      method: 'POST',
+      body: '{}',
+      restartRetryWindowMs: 1500,
+    }),
+    (error) => error.code === 'PAIRING_REQUEST_FAILED' && error.retryable === false,
+    'pairing must not blindly replay ambiguous non-restart POST failures',
+  );
+  assert.equal(pairingAttempts, 1, 'non-restart pairing errors remain fail-fast');
+
   // Session aggregation is liveness-gated, not merely catalog-filtered. Both
   // independent targets can expose the same local session id without a
   // collision while they are live.
@@ -277,7 +324,7 @@ async function run() {
   await assert.rejects(() => c.gatewayFetchJson(desktop.gatewayId, '/api/mobile/gateway/catalog'), (error) => error.code === 'GATEWAY_REVOKED');
   assert.equal(c.hasAnyGatewayCredential(), true);
 
-  console.log('[test-mobile-gateway-contract] passed: identity, target isolation, pairing payload, replay/fingerprint contract, status fail-closed, filters, and immutable bindings');
+  console.log('[test-mobile-gateway-contract] passed: identity, target isolation, pairing payload, replay/fingerprint contract, restart recovery, status fail-closed, filters, and immutable bindings');
 }
 
 run().catch((error) => {
