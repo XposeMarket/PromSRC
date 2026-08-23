@@ -44,6 +44,44 @@ export function createMobileChatRuntimeAdapter({
     return getChatRuntime(identity(sessionId));
   }
 
+  function mobileRuntimeRole(message) {
+    const role = String(message?.role || '').trim().toLowerCase();
+    if (role === 'ai' || role === 'assistant') return 'assistant';
+    if (role === 'user') return 'user';
+    return role;
+  }
+
+  function mobileRuntimeRequestId(message, event = null) {
+    return String(
+      message?._clientRequestId
+      || message?.clientRequestId
+      || event?.clientRequestId
+      || '',
+    ).trim();
+  }
+
+  function mobileRuntimeTurnId(message, event = null, fallbackRole = '') {
+    const explicit = String(message?.messageId || message?.turnId || message?.id || '').trim();
+    if (explicit) return explicit;
+    const requestId = mobileRuntimeRequestId(message, event);
+    const role = mobileRuntimeRole(message) || String(fallbackRole || '').trim().toLowerCase();
+    if (!requestId || !['user', 'assistant'].includes(role)) return '';
+    // clientRequestId identifies one request, not one transcript row. Mobile
+    // intentionally gives the optimistic user row and speculative assistant
+    // row the same request id. Give the shared runtime role-scoped row ids so
+    // stream begin/delta reconciliation can never replace the user row.
+    return `mobile-request:${requestId}:${role}`;
+  }
+
+  function mobileRuntimeHistory(thread) {
+    return (Array.isArray(thread) ? thread : []).map((message) => {
+      if (!message || typeof message !== 'object') return message;
+      if (message.messageId || message.turnId || message.id) return message;
+      const turnId = mobileRuntimeTurnId(message);
+      return turnId ? { ...message, messageId: turnId } : message;
+    });
+  }
+
   function setRunning(sessionId, running) {
     const sid = identity(sessionId).sessionId;
     const state = getState();
@@ -96,7 +134,7 @@ export function createMobileChatRuntimeAdapter({
       : (Array.isArray(state.threads?.[sid]) ? state.threads[sid] : []);
     const activeRun = state.activeRuns?.[sid] || {};
     runtime.transaction(() => {
-      runtime.replaceHistory(thread, {
+      runtime.replaceHistory(mobileRuntimeHistory(thread), {
         source: String(options.source || 'mobile-compatibility-bridge'),
         pageInfo: options.pageInfo || runtime.snapshot.paging,
       });
@@ -205,8 +243,8 @@ export function createMobileChatRuntimeAdapter({
     const runtime = runtimeFor(sessionId);
     if (!runtime.snapshot.stream.active && !['final', 'done', 'error'].includes(String(event?.type))) {
       runtime.beginStreaming({
-        turnId: turn?.messageId,
-        clientRequestId: turn?._clientRequestId || event?.clientRequestId,
+        turnId: mobileRuntimeTurnId(turn, event, 'assistant'),
+        clientRequestId: mobileRuntimeRequestId(turn, event),
         text: String(turn?.body?.text || turn?.content || ''),
         startedAt: turn?.workStartedAt || turn?.timestamp,
       });
@@ -216,7 +254,8 @@ export function createMobileChatRuntimeAdapter({
 
   function appendStreamEvent(runtime, turn, event, chunk) {
     runtime.appendStreamDelta(chunk, {
-      clientRequestId: turn?._clientRequestId || event?.clientRequestId,
+      turnId: mobileRuntimeTurnId(turn, event, 'assistant'),
+      clientRequestId: mobileRuntimeRequestId(turn, event),
       startedAt: turn?.workStartedAt || turn?.timestamp,
       allowStart: true,
     });

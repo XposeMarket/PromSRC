@@ -4,6 +4,7 @@ import { buildCodexCloudflareHeaders, getValidToken, loadTokens, refreshTokens }
 import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
 import { loadVoiceAgentMemory } from '../prompt-context.js';
 import { getCodexRealtimeBridge } from '../realtime/codex-app-server-bridge.js';
+import { classifyCodexRealtimeStartError } from '../realtime/codex-realtime-errors.js';
 
 export const router = express.Router();
 
@@ -345,11 +346,12 @@ router.post('/api/realtime/codex-bridge/call', async (req, res) => {
       ...result,
     });
   } catch (err: any) {
+    const presentation = classifyCodexRealtimeStartError(err);
     res.status(502).json({
       success: false,
       auth: 'chatgpt_oauth_app_server',
       transport: 'codex_app_server',
-      error: String(err?.message || err),
+      ...presentation,
     });
   }
 });

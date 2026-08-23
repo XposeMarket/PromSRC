@@ -15,6 +15,7 @@ import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydr
 import { renderReasoningSelector, wireReasoningSelector } from '../components/reasoning-selector.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { SOURCE_PANEL_SURFACE, subagentChatSessionId } from '../source-panel-context.js';
+import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
 import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
@@ -2930,7 +2931,7 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
           case 'thinking':
           case 'agent_thought': {
             const thought = String(event.thinking || event.text || '').trim();
-            if (!thought) break;
+            if (!thought || chatProgressVisibility(event) === 'private') break;
             streamState.thinking = streamState.thinking
               ? `${streamState.thinking}\n\n${thought}`
               : thought;
@@ -3650,7 +3651,7 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
     case 'thinking':
     case 'agent_thought': {
       const thought = String(event.thinking || event.text || '').trim();
-      if (thought) {
+      if (thought && chatProgressVisibility(event) !== 'private') {
         streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
         addSubagentProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined, streamState);
       }

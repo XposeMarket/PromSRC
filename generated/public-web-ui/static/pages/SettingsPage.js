@@ -1,3 +1,5 @@
+import { returnFromMobileSettings } from '../settings-return.js';
+
 /**
  * SettingsPage.js — Settings Modal Extract
  *
@@ -3080,12 +3082,14 @@ async function openSettings(tab) {
 
 function closeSettings() {
   setSettingsSaveFeedback();
-  document.getElementById('settings-modal').style.display = 'none';
+  const modal = document.getElementById('settings-modal');
+  if (modal) modal.style.display = 'none';
   document.body.classList.remove('settings-page-open');
   document.body.classList.remove('pm-mobile-overlay-open');
   window.queueNativeBrowserSurfaceSync?.({ force: true });
   channelsStatusLoaded = false;
   _settingsAgentsLoadedSelection = '';
+  returnFromMobileSettings(window.location);
 }
 
 // -- P11-37 external import panel -----------------------------------------------------------------------------------------------

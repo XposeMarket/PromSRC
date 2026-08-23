@@ -25,6 +25,7 @@ import {
   onGatewayCatalogChanged,
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
+import { buildMobileSettingsHandoffUrl } from '../settings-return.js';
 
 let mobileRenderGeneration = 0;
 const mobileRouteOwnerPromises = new Map();
@@ -194,9 +195,7 @@ function openMobileSettings(section = '') {
   // to the full app document once, then the shared desktop settings modal can
   // remain the single authoritative settings surface.
   if (!modal) {
-    const query = new URLSearchParams({ desktop: '1', settings: '1' });
-    if (tab) query.set('settingsTab', tab);
-    window.location.assign(`/?${query.toString()}`);
+    window.location.assign(buildMobileSettingsHandoffUrl(window.location, tab));
     return true;
   }
   document.body.classList.add('pm-mobile-overlay-open');

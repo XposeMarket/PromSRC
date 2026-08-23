@@ -1,4 +1,7 @@
 import { checkSessionDetailed, mountLoginScreen, getAccount, getPersistedAccount } from './auth/account.js';
+import { installMobileSettingsReturnBridge } from './settings-return.js';
+
+installMobileSettingsReturnBridge(window);
 
 const ACCOUNT_MONITOR_INTERVAL_MS = 2 * 60 * 1000;
 let accountMonitorId = null;

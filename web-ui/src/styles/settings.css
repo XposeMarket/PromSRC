@@ -1375,6 +1375,18 @@
     border-bottom: 1px solid var(--line-strong);
   }
 
+  #settings-modal .settings-sidebar-top {
+    padding: max(8px, env(safe-area-inset-top)) 12px 4px;
+  }
+
+  #settings-modal .settings-back-btn {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px 4px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
   #settings-modal .settings-tabstrip {
     display: flex;
     align-items: center;

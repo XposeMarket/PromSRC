@@ -27,6 +27,8 @@ import {
 } from '../features/chat/timeline/keyed-dom.js';
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { mountThinkingOrbWhenReady } from '../features/chat/optional/thinking-orb-runtime.js';
+import { presentRealtimeVoiceError, realtimeVoiceErrorFromResponse } from '../voice/realtime-error-presentation.js';
+import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
 import {
   SOURCE_PANEL_SURFACE,
   normalizeSourcePanelContext,
@@ -17535,18 +17537,22 @@ async function sendChat(queuedMessage = null, options = {}) {
 
 	          case 'agent_thought': {
 	            const thoughtText = String(event.text || '').trim();
-	            if (thoughtText) {
+	            const visibility = chatProgressVisibility(event);
+	            if (thoughtText && visibility !== 'private') {
 	              collectTurnThinking(thoughtText);
-	              setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace);
+	              setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility });
 	            }
 	            break;
 	          }
 
 	          case 'thinking':
-	            if (event.thinking && String(event.thinking).trim()) {
+	            if (event.thinking && String(event.thinking).trim() && chatProgressVisibility(event) !== 'private') {
 	              const thinkingText = String(event.thinking).trim();
 	              collectTurnThinking(thinkingText);
-	              setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace);
+	              setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, {
+	                replace: true,
+	                visibility: chatProgressVisibility(event),
+	              });
 	            }
 	            break;
 
@@ -18608,12 +18614,13 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
     }
     if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
       const text = String(extra.thinking || extra.text || entry.content || '').trim();
-      if (!text) return;
+      const visibility = chatProgressVisibility({ ...extra, type: eventType || entry.type });
+      if (!text || visibility === 'private') return;
       const previous = trace[trace.length - 1];
       const visibleExtra = {
         ...extra,
-        source: String(extra.source || 'reasoning_summary'),
-        visibility: 'user',
+        source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_progress')),
+        visibility,
       };
       if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
         previous.text = `${previous.text || ''}${text}`;
@@ -18688,11 +18695,17 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
     case 'thinking':
     case 'agent_thought': {
       const text = String(msg.thinking || msg.text || '').trim();
-      return text ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: { ...extra, source: 'reasoning_summary', visibility: 'user' } } : null;
+      const visibility = chatProgressVisibility(msg);
+      return text && visibility !== 'private'
+        ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: { ...extra, source: visibility === 'summary' ? 'reasoning_summary' : 'agent_progress', visibility } }
+        : null;
     }
     case 'thinking_delta': {
       const text = String(msg.thinking || msg.text || '').trim();
-      return text ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: { ...extra, source: 'reasoning_summary', visibility: 'user' } } : null;
+      const visibility = chatProgressVisibility(msg);
+      return text && visibility !== 'private'
+        ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: { ...extra, source: 'reasoning_summary', visibility } }
+        : null;
     }
     case 'info':
     case 'heartbeat':
@@ -26311,7 +26324,11 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       });
       const bridgeResult = await sdpResp.json().catch(() => ({}));
       if (!sdpResp.ok || !bridgeResult?.success) {
-        throw new Error(bridgeResult?.error || `Codex OAuth realtime bridge failed (${sdpResp.status})`);
+        throw realtimeVoiceErrorFromResponse(
+          bridgeResult,
+          sdpResp.status,
+          `Codex OAuth realtime bridge failed (${sdpResp.status})`,
+        );
       }
       answerSdp = String(bridgeResult.sdp || '');
       codexBridgeSessionId = String(bridgeResult.sessionId || '');
@@ -28416,7 +28433,8 @@ async function toggleRealtimeVoiceReplies() {
         setRealtimeVoiceButtonState();
         // For xAI, let the caller fall back to the standard STT/TTS route.
         if (xaiRealtime) throw err;
-        showToast('Realtime agent failed', String(err?.message || err), 'error');
+        const presentation = presentRealtimeVoiceError(err);
+        showToast(presentation.title, presentation.message, 'error');
       }
       return;
     }
@@ -46046,7 +46064,7 @@ function isDesktopProgressNarration(value) {
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
 }
 
-function setDesktopLiveProgressNarration(streamState, text, appendTrace) {
+function setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace = false, visibility = 'summary' } = {}) {
   if (!streamState) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -46055,14 +46073,22 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace) {
     String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
   );
   if (!existing) {
-    appendTrace('think', incoming, { extra: { visibility: 'summary', source: 'agent_progress' } });
+    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress' } });
     return true;
   }
-  const merged = normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
+  const merged = replace
+    ? normalizeLiveTraceProseText(incoming)
+    : normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
   const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
-  if (!latest || latest === String(existing.text || '').trim()) return false;
+  if (!latest) return false;
+  const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
+  if (latest === String(existing.text || '').trim()) {
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+    return visibilityChanged;
+  }
   existing.text = latest;
   existing.ts = new Date().toLocaleTimeString();
+  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
   return true;
 }
 
@@ -46746,9 +46772,13 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     }
   } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
-    if (text) {
-      setDesktopLiveProgressNarration(streamState, text, (type, content, options) =>
-        appendLiveTraceToStreamState(streamState, type, content, options)
+    const visibility = chatProgressVisibility(evt);
+    if (text && visibility !== 'private') {
+      setDesktopLiveProgressNarration(
+        streamState,
+        text,
+        (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options),
+        { replace: true, visibility },
       );
       renderIfViewing();
     }

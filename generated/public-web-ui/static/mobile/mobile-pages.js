@@ -102,6 +102,7 @@ import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } 
 import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-chat-adapter.js';
 import { createMobileTimelineView } from '../features/chat/timeline/mobile-timeline-view.js';
 import { captureKeyedScrollState, reconcileKeyedTimelineRows } from '../features/chat/timeline/keyed-dom.js';
+import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
 installToolActivityExpansionPersistence();
 import {
   renderAgentModelPicker as _renderAgentModelPicker,
@@ -3090,7 +3091,7 @@ function _isMobileProgressNarration(value) {
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
 }
 
-function _setMobileLiveProgressNarration(message, text, { replace = false } = {}) {
+function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
   if (!message) return false;
   const incoming = String(text || '');
   if (!incoming) return false;
@@ -3100,7 +3101,7 @@ function _setMobileLiveProgressNarration(message, text, { replace = false } = {}
   );
   if (!existing) {
     _appendMobileLiveTrace(message, 'think', incoming, {
-      extra: { visibility: 'summary', source: 'agent_progress' },
+      extra: { visibility, source: 'agent_progress' },
     });
     return true;
   }
@@ -3110,9 +3111,15 @@ function _setMobileLiveProgressNarration(message, text, { replace = false } = {}
   const latest = replace
     ? merged
     : (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged);
-  if (!latest || latest === String(existing.text || '').trim()) return false;
+  if (!latest) return false;
+  const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
+  if (latest === String(existing.text || '').trim()) {
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+    return visibilityChanged;
+  }
   existing.text = latest;
   existing.time = _nowTime();
+  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
   return true;
 }
 
@@ -3184,13 +3191,15 @@ function _handleMobileReasoningSummaryDelta(message, evt) {
 
 function _handleMobileCleanThought(message, evt) {
   if (!message) return false;
+  const visibility = chatProgressVisibility(evt);
+  if (visibility === 'private') return false;
   const text = String(evt?.thinking || evt?.text || '').trim();
   if (!text) return false;
   // Agent-thought packets are operational progress narration (for example,
   // "planning" and "preparing"), not standalone reasoning prose. Keep the
   // latest one only as the collapsed live tool-stream label.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
-  return _setMobileLiveProgressNarration(message, text, { replace: true });
+  return _setMobileLiveProgressNarration(message, text, { replace: true, visibility });
 }
 
 function _handleMobileThinkingCallback(message, text, meta = null) {
@@ -15088,6 +15097,10 @@ void main() {
       _rememberMobileLastChatSession(sid);
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`); } catch {}
       invalidateMobileDrawerSessions('mobile');
+      // Recompute the inline Voice chrome against the newly durable session.
+      // Otherwise the first spoken turn leaves the draft-only selectors and
+      // new-chat body class visible even though chat state has already moved.
+      if (form?.classList.contains('is-voice-active')) _setChatVoiceActive(true);
     }
     if (!sid || (sid === requestedSession && sid === activeSid)) {
       if (sid && __pmChat.threads?.[sid]) {
@@ -15464,8 +15477,7 @@ void main() {
           break;
         case 'thinking':
         case 'agent_thought': {
-          // Raw agent-thought frames are internal progress narration. The
-          // replay should reconstruct only explicit reasoning summaries.
+          _handleMobileCleanThought(replayState, evt);
           break;
         }
         case 'thinking_delta': {
@@ -27983,7 +27995,7 @@ function _mobileRealtimeAgentPttPress(sessionId) {
   ptt.pressedAt = Date.now();
   const pressId = ++ptt.pressId;
   if (!__pmRealtimeAgent.conn) {
-    _startMobileRealtimeAgentSession(sid, { listenMode: 'push_to_talk' })
+    return _startMobileRealtimeAgentSession(sid, { listenMode: 'push_to_talk' })
       .then((conn) => {
         // A release can happen while AVAS/WebRTC is still opening. Only honor
         // the press when it is still the current held gesture; otherwise the
@@ -27999,12 +28011,16 @@ function _mobileRealtimeAgentPttPress(sessionId) {
           stillHeld,
           transport: conn?.transport || '',
         });
+        return conn;
       })
-      .catch((err) => _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) }));
-    return;
+      .catch((err) => {
+        _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) });
+        throw err;
+      });
   }
   _startMobileRealtimeLiveCameraVision('ptt_press');
   _setMobileRealtimeAgentMicEnabled(true);
+  return Promise.resolve(__pmRealtimeAgent.conn);
 }
 
 function _mobileRealtimeAgentPttRelease() {
@@ -29260,6 +29276,7 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_finalizeVoiceInterruptionForTranscript": { enumerable: true, get: () => _finalizeVoiceInterruptionForTranscript },
   "_flushMobilePendingThinkingBurst": { enumerable: true, get: () => _flushMobilePendingThinkingBurst },
   "_formatBytes": { enumerable: true, get: () => _formatBytes },
+  "_handleMobileCleanThought": { enumerable: true, get: () => _handleMobileCleanThought },
   "_getRecorderMimeType": { enumerable: true, get: () => _getRecorderMimeType },
   "_handleMobileThinkingCallback": { enumerable: true, get: () => _handleMobileThinkingCallback },
   "_handoffMobileCodexVoiceRoomTarget": { enumerable: true, get: () => _handoffMobileCodexVoiceRoomTarget },

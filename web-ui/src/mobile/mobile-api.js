@@ -222,6 +222,8 @@ async function mfetch(path, opts = {}) {
   if (!res.ok) {
     const err = new Error(json?.error || `HTTP ${res.status}`);
     err.status = res.status; err.body = json;
+    if (json?.code) err.code = String(json.code);
+    if (typeof json?.retryable === 'boolean') err.retryable = json.retryable;
     const restarting = res.status === 503
       && (json?.code === 'GATEWAY_RESTARTING' || res.headers.get('X-Prometheus-Gateway-State') === 'restarting');
     if (restarting) {
@@ -248,7 +250,9 @@ async function mfetchWithRetry(path, opts = {}, retry = {}) {
       lastErr = err;
       if (opts.signal?.aborted) break;
       const status = Number(err?.status || 0);
-      const retryable = err?.retryable === true || status === 408 || status === 429 || status >= 500;
+      const retryable = err?.retryable === false
+        ? false
+        : (err?.retryable === true || status === 408 || status === 429 || status >= 500);
       if (!retryable || attempt >= attempts - 1) break;
       await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
     }
