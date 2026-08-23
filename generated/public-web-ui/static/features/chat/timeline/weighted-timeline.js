@@ -63,8 +63,8 @@ export function chatTurnRenderWeight(message = {}) {
 // This signature intentionally ignores disclosure/open state. A row is patched
 // only when render-bearing message state changes, so selections, terminals,
 // decoded media, and open details survive unrelated transcript updates. Rich
-// records use full-content fingerprints so updates beyond a display truncation
-// boundary cannot accidentally reuse stale DOM.
+// collections use full-content fingerprints so updates to any member, including
+// non-tail tool/process records, cannot accidentally reuse stale DOM.
 export function chatTimelineRowSignature(message = {}) {
   const parts = [
     message.role,
@@ -86,7 +86,7 @@ export function chatTimelineRowSignature(message = {}) {
     'canvasFiles', 'fileChanges', 'artifacts', 'visualArtifacts', 'productCarousel',
   ]) {
     const value = message[field];
-    parts.push(field, listLength(value), jsonFingerprint(tailRecord(value)));
+    parts.push(field, listLength(value), jsonFingerprint(value));
   }
   return hashText(parts.join('\u0000'));
 }
