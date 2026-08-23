@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const RELEASE_VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
+const RELEASE_VERSION = 'pm-v305-2026-08-23-mobile-settings-streaming';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
 const ASSET_BUILD_ID = 'source-build';

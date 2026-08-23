@@ -585,7 +585,7 @@ body.pm-mobile-drawer-open .pm-app {
   overflow: hidden;
   color: var(--pm-text);
   text-align: left;
-  font: inherit;
+  font-family: var(--pm-font);
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
   border-radius: 22px;
   background: rgba(255,255,255,.025);
@@ -3969,7 +3969,7 @@ html.pm-session-context-open * {
 .pm-msg.pm-agent-chat-msg {
   margin-bottom: 10px;
 }
-.pm-msg.from-user { align-self: flex-end; align-items: flex-end; }
+.pm-msg.from-user { align-self: flex-end; align-items: flex-end; min-width: 0; }
 .pm-workflow-transition-label {
   max-width: 100%;
   color: var(--pm-muted);
@@ -3999,12 +3999,12 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  width: fit-content;
-  max-width: 100%;
+  width: fit-content; inline-size: fit-content;
+  max-width: 100%; max-inline-size: 100%;
   min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
 }
 .pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, span, strong, em, a) {
-  max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+  min-width: 0; max-width: 100%; max-inline-size: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
 }
 .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   background: color-mix(in srgb, var(--pm-orange-soft), var(--pm-surface) 42%);

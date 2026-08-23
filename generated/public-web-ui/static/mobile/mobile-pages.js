@@ -2707,16 +2707,27 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     }
     if (requestId) seenRequests.set(requestId, msg);
     const key = _mobileAssistantContentKey(msg);
-    if (!key) {
-      if (msg?.role === 'user') seen.clear();
-      continue;
-    }
+    if (!key) continue;
     const prevIndex = seen.get(key);
     if (prevIndex == null) {
       seen.set(key, i);
       continue;
     }
     const previous = list[prevIndex];
+    const separatedByUser = list.slice(prevIndex + 1, i).some((turn) => turn?.role === 'user');
+    if (separatedByUser) {
+      const previousAt = Number(previous?.workEndedAt || previous?.timestamp || 0) || 0;
+      const currentAt = Number(msg?.workEndedAt || msg?.timestamp || 0) || 0;
+      const isRecentDuplicate = previous?.streaming !== true
+        && msg?.streaming !== true
+        && previousAt > 0
+        && currentAt > 0
+        && Math.abs(currentAt - previousAt) < 30_000;
+      if (!isRecentDuplicate) {
+        seen.set(key, i);
+        continue;
+      }
+    }
     const keepCurrent = _mobileAssistantRichnessScore(msg) > _mobileAssistantRichnessScore(previous);
     const keepIndex = keepCurrent ? i : prevIndex;
     const dropIndex = keepCurrent ? prevIndex : i;
@@ -15983,7 +15994,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       } catch (err) {
         updateCommandTurn(turn, { text: `Could not load models: ${err.message || err}` });
       }
-      navigate?.('#mobile/settings/models');
+      window.pmOpenSettings?.('models');
       return true;
     }
 
@@ -16159,7 +16170,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     button.disabled = true;
     try {
       if (action === 'open-models') {
-        navigate?.('#mobile/settings/models');
+        window.pmOpenSettings?.('models');
         return;
       }
       if (action === 'update-check' || action === 'update-apply') {
@@ -16286,9 +16297,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // Claim this physical send before any gateway/recovery await. Previously
     // rapid taps could all pass the guard while the first probe was pending,
     // admitting duplicate turns before busy state or the user bubble existed.
-    const sendAttemptKey = `${busySessionId}|${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
+    // Exclude the session id: the first send promotes `mobile_default` to a
+    // durable id while a delayed iOS click from the same physical tap can
+    // still be pending. A session-qualified key lets that duplicate through.
+    const sendAttemptKey = `${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
     const previousSendAttempt = __pmChat.lastMobileSendAttempt;
-    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 1200) return;
+    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 8000) return;
     __pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };
     let selectedGateway = currentChatGateway();
     if (!selectedGateway) {

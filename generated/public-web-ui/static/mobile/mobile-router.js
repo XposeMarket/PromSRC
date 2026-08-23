@@ -194,8 +194,9 @@ function openMobileSettings(section = '') {
   // to the full app document once, then the shared desktop settings modal can
   // remain the single authoritative settings surface.
   if (!modal) {
-    const hash = tab ? `#mobile/settings/${encodeURIComponent(tab)}` : '#mobile/settings';
-    window.location.assign(`/?source=pwa${hash}`);
+    const query = new URLSearchParams({ desktop: '1', settings: '1' });
+    if (tab) query.set('settingsTab', tab);
+    window.location.assign(`/?${query.toString()}`);
     return true;
   }
   document.body.classList.add('pm-mobile-overlay-open');
@@ -323,6 +324,14 @@ function render() {
   else if (!getDeviceToken() && !hasAnyGatewayCredential() && page !== 'pair') page = 'pair';
   window.__pmMobilePairingActive = page === 'pair';
 
+  // The lightweight PWA must never render its retired settings owner. Hand
+  // every settings deep link to the canonical desktop document before the
+  // mobile shell or route chunk is created.
+  if (page === 'settings' && !document.getElementById('settings-modal')) {
+    openMobileSettings(arg ? decodeURIComponent(arg) : '');
+    return Promise.resolve();
+  }
+
   if (page !== 'settings') closeMobileSettings();
 
   const activeTab = TAB_FOR_PAGE[page] || null;
@@ -428,7 +437,8 @@ function render() {
         openMobileSettings(arg ? decodeURIComponent(arg) : '');
         return undefined;
       }
-      return owner.renderMobileSettingsPage(slot, { section: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
+      openMobileSettings(arg ? decodeURIComponent(arg) : '');
+      return undefined;
     case 'hub':       return owner.renderHubPage(slot, { navigate: mobileNavigate });
     case 'subagents':
       if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return owner.renderSubagentChatPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate });

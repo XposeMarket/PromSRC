@@ -15,6 +15,8 @@ const desktop = read('web-ui/src/pages/ChatPage.js');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
 const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
+const desktopEntry = read('web-ui/src/desktop-entry.js');
+const mobileFeedback = read('web-ui/src/mobile/mobile-feedback.js');
 const mobileCss = read('web-ui/src/styles/mobile.css');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
@@ -28,7 +30,11 @@ const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
-assert.match(mobileRouter, /window\.location\.assign\(`\/\?source=pwa\$\{hash\}`\)/, 'the lightweight mobile document must route settings through the full app document');
+assert.match(mobileRouter, /URLSearchParams\(\{ desktop: '1', settings: '1' \}\)/, 'the lightweight mobile document must explicitly boot the canonical desktop settings document');
+assert.match(mobileRouter, /page === 'settings' && !document\.getElementById\('settings-modal'\)[\s\S]{0,180}return Promise\.resolve\(\)/, 'a lightweight settings deep link must redirect before rendering the retired mobile owner');
+assert.match(desktopEntry, /settingsParams\.get\('settings'\) === '1'[\s\S]{0,900}window\.openSettings\(requestedSettingsTab \|\| undefined\)/, 'desktop boot must open the settings modal requested by the mobile handoff');
+assert.match(mobileFeedback, /font-family:var\(--pm-font\),system-ui,-apple-system,sans-serif/, 'mobile status toasts must use the mobile system font');
+assert.match(mobileCss, /\.pm-completion-toast\s*\{[\s\S]{0,560}font-family:\s*var\(--pm-font\)/, 'completion toasts must use the mobile system font');
 assert.match(mobileCss, /\.pm-msheet\s*\{[\s\S]{0,360}font-family:\s*var\(--pm-font\)/, 'mobile model and reasoning sheets must use the mobile system font');
 assert.match(mobileCss, /\.pm-project-row \.pm-session-title\s*\{[\s\S]{0,100}font-family:\s*var\(--pm-font\)/, 'drawer project titles must use the same mobile font as chat sessions');
 assert.match(mobileCss, /\.pm-tab\s*\{[\s\S]{0,320}color:\s*rgba\(34,26,20,\.68\)/, 'resting light tab icons must remain muted');
@@ -204,6 +210,8 @@ assert.ok(
     < pages.indexOf('selectedGateway = await probeGateway(selectedGateway);'),
   'mobile send admission must be claimed before the awaited gateway probe',
 );
+assert.match(pages, /const sendAttemptKey = `\$\{msg\}\|\$\{files\.map/, 'duplicate-send admission must remain stable while a draft session is promoted');
+assert.match(pages, /previousSendAttempt\?\.key === sendAttemptKey[\s\S]{0,100}< 8000/, 'one physical iOS send must remain suppressed through session promotion');
 assert.match(
   pages,
   /const isPendingUser = msg\.role === 'user'[\s\S]{0,260}msg\._pmOptimistic === true[\s\S]{0,180}pendingUserAge < 45_000/,
@@ -213,6 +221,11 @@ assert.match(
   pages,
   /const seenRequests = new Map\(\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails/,
   'assistant recovery dedupe must collapse duplicate bubbles by stable request identity across user boundaries',
+);
+assert.match(
+  pages,
+  /const separatedByUser = list\.slice\(prevIndex \+ 1, i\)[\s\S]{0,420}Math\.abs\(currentAt - previousAt\) < 30_000/,
+  'recent identical responses from duplicate admissions must collapse even when recovery placed the user turn between them',
 );
 assert.match(
   pages,
