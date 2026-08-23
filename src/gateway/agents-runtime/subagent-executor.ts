@@ -183,7 +183,7 @@ import {
 import { routeTeamEvent } from '../teams/team-event-router';
 import { appendTeamMemoryEvent, claimAgentForTeamWorkspace } from '../teams/team-workspace';
 import { notifyMainAgent } from '../teams/notify-bridge';
-import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
+import { recordAgentRun } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
 import { addMessage, flushSession } from '../session';

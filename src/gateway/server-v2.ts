@@ -68,7 +68,6 @@ import { ActiveThreadSupervisionController } from './threads/thread-supervision-
 import { BrainRunner, createBrainHandleChatAdapter, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
-  stopAgentSchedules,
 } from '../scheduler';
 import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
@@ -1007,7 +1006,7 @@ startupMark('error endpoints setup');
 // These enable lifecycle.ts to cleanly shut down all subsystems before respawning.
 setShutdownHooks({
   stopTelegram: () => { telegramChannel.stop(); telegramPersonaBots.stop().catch(() => {}); },
-  stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
+  stopCron: () => cronScheduler.stop(),
   stopAutoSettle: () => stopAutoSettleScheduler(),
   stopTimers: () => mainChatTimerRunner.stop(),
   stopInternalWatches: () => internalWatchRunner.stop(),
@@ -1333,7 +1332,6 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { mainChatTimerRunner.stop(); } catch {}
   try { internalWatchRunner.stop(); } catch {}
   try { stopThreadSupervisionRunner(); } catch {}
-  try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop('gateway_shutdown'); } catch {}
   try { shutdownCodexRealtimeBridge(); } catch {}

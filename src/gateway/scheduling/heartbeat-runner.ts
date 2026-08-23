@@ -612,7 +612,7 @@ export class SubagentHeartbeatManager {
 
 // ─── Global instance accessor ────────────────────────────────────────────────
 // Allows team-manager-runner and other modules to access the running instance
-// without full dependency injection (mirrors setSchedulerBroadcast pattern).
+// without full dependency injection.
 
 let _globalInstance: SubagentHeartbeatManager | null = null;
 
