@@ -90,6 +90,10 @@ jobs:
         run: node scripts/test-mobile-chat-recovery.mjs
       - name: Verify mobile voice/media contract
         run: node scripts/test-mobile-voice-media-contract.mjs
+      - name: Verify mobile voice motion and realtime resilience
+        run: |
+          node scripts/test-mobile-voice-motion-orb.mjs
+          node scripts/test-mobile-realtime-transient-disconnect.mjs
       - name: Verify Electron gateway relay
         run: node scripts/test-electron-gateway-relay.mjs
       - name: Verify Electron security boundary
