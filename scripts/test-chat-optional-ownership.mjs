@@ -75,6 +75,26 @@ globalThis.localStorage = {
   removeItem: (key) => storage.delete(key),
 };
 
+// A transient hashed/dynamic chunk failure must not poison the optional owner
+// for the remainder of the page. Queued synchronous facade work must survive
+// the failed attempt and flush after the next first-use retry succeeds.
+let retryImportAttempts = 0;
+globalThis.__PROM_TOOL_ACTIVITY_IMPORT_FOR_TESTS = async () => {
+  retryImportAttempts += 1;
+  if (retryImportAttempts === 1) throw new Error('simulated stale optional chunk');
+  return import('../web-ui/src/tool-activity.js');
+};
+const retryToolActivity = await import(`../web-ui/src/features/chat/optional/tool-activity-runtime.js?retry=${Date.now()}`);
+retryToolActivity.setToolActivityDisclosureState('retry-disclosure', true);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(retryToolActivity.getToolActivityFeatureState().state, 'error', 'first chunk failure should be visible but recoverable');
+assert.equal(retryToolActivity.getToolActivityFeatureState().pendingOperations, 1, 'queued tool state must survive a transient chunk failure');
+await retryToolActivity.loadToolActivityFeature();
+assert.equal(retryImportAttempts, 2, 'a later first-use attempt must retry the failed optional chunk');
+assert.equal(retryToolActivity.getToolActivityFeatureState().state, 'ready');
+assert.equal(retryToolActivity.getToolActivityFeatureState().pendingOperations, 0, 'queued tool state must flush after recovery');
+delete globalThis.__PROM_TOOL_ACTIVITY_IMPORT_FOR_TESTS;
+
 const toolActivity = await import('../web-ui/src/features/chat/optional/tool-activity-runtime.js');
 assert.equal(toolActivity.getToolActivityFeatureState().state, 'idle');
 toolActivity.installToolActivityExpansionPersistence(documentRef);
