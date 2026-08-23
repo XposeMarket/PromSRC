@@ -1,4 +1,5 @@
 import { automationCapabilityExecutor } from './automation-executor';
+import { brainThoughtCapabilityExecutor } from './brain-thought-executor';
 import { memoryCapabilityExecutor } from './memory-executor';
 import { platformCapabilityExecutor } from './platform-executor';
 import { skillsCapabilityExecutor } from './skills-executor';
@@ -12,6 +13,7 @@ import type {
 } from './types';
 
 const CAPABILITY_EXECUTORS: CapabilityExecutor[] = [
+  brainThoughtCapabilityExecutor,
   skillsCapabilityExecutor,
   automationCapabilityExecutor,
   teamAgentCapabilityExecutor,

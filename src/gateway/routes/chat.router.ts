@@ -2529,7 +2529,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2586,6 +2586,7 @@ async function handleChat(
     ? runtimeOptions?.turnRouteSnapshot || captureChatTurnRouteSnapshot(sessionId).snapshot
     : undefined;
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
+  const isBrainThoughtRuntime = runtimeOptions?.brainThoughtRuntime === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
   const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
@@ -4502,7 +4503,18 @@ async function handleChat(
   turnTiming.mark('context_queue_wait_start');
   let contextPermitAcquiredAt = contextAdmissionStartedAt;
   let personalityCtx: string;
-  if (isBootStartupTurn) {
+  if (isBrainThoughtRuntime) {
+    // Thought owns a small supervisory system profile. Do not compile the normal
+    // main-agent USER/SOUL/MEMORY/skills/project/tool-policy personality context.
+    contextPermitAcquiredAt = Date.now();
+    turnTiming.mark('context_queue_wait_done', { durationMs: 0, skipped: true, reason: 'brain_thought_isolated_profile' });
+    personalityCtx = '';
+    turnTiming.mark('runtime.brain_thought_context_built', {
+      durationMs: Math.max(0, Date.now() - contextBuildStartedAt),
+      contextChars: 0,
+      skippedNormalContextBuild: true,
+    });
+  } else if (isBootStartupTurn) {
     // BOOT already has a bounded, pre-fetched snapshot in callerContext. The
     // normal interactive personality build would reread USER/SOUL/MEMORY,
     // skills, brain context, and tool instructions for no benefit, adding
@@ -4759,6 +4771,16 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   ].join('\n');
 
   const buildBaseSystemPrompt = (): string => {
+    if (isBrainThoughtRuntime) {
+      return [
+        'You are Thought, an internal supervisory cognition process inside Prometheus.',
+        'You are not Prom, not Prometheus, and not a user-facing assistant. Do not inherit the main assistant personality, voice, durable-memory projection, or user-facing operating policies.',
+        'Your job is observation and supervision: understand recent activity, verify current state, retrieve only relevant durable context, and identify corrections, unfinished work, reusable workflows, blockers, memory/business/skill candidates, and useful proactive opportunities.',
+        'This is an autonomous scheduled run. Complete it without asking the user questions or waiting for interaction.',
+        'Use only the tools exposed for this Thought run. Do not mutate durable memory, create proposals, mutate skills, schedules, config, teams, or unrelated external state.',
+        'Finish by calling brain_thought_submit exactly once; a Thought is not successful unless that structured submission succeeds.',
+      ].join('\n');
+    }
     if (isBootStartupTurn) {
       return [
         'You are Prom, a local AI assistant running inside Prometheus.',
@@ -4847,13 +4869,30 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     };
     if (mode === 'full' && cachedFullSystemPromptKey === cacheKey) return markSystemPromptBuilt(cachedFullSystemPrompt, true);
     const baseSystemPrompt = buildBaseSystemPrompt();
-    const modelSystemBlock = isBootStartupTurn ? '' : currentModelSystemBlock;
+    const modelSystemBlock = (isBootStartupTurn || isBrainThoughtRuntime) ? '' : currentModelSystemBlock;
     if (mode === 'switch_model') {
       return markSystemPromptBuilt(assembleCacheAwareSystemPrompt({
         stableParts: [baseSystemPrompt, modelSystemBlock],
         personalityContext: switchModelPersonalityCtx || '',
         volatileParts: [`Current date: ${dateStr}, ${timeStr}.`, resourceContextBlock],
       }), false);
+    }
+    if (isBrainThoughtRuntime) {
+      // Deliberately tiny: no main-chat working packets, resource/project/browser
+      // context, personality stack, onboarding, or model-specific assistant prose.
+      const value = assembleCacheAwareSystemPrompt({
+        stableParts: [baseSystemPrompt],
+        personalityContext: '',
+        volatileParts: [
+          `Current date: ${dateStr}, ${timeStr}.`,
+          callerContext,
+        ],
+      });
+      if (mode === 'full') {
+        cachedFullSystemPromptKey = cacheKey;
+        cachedFullSystemPrompt = value;
+      }
+      return markSystemPromptBuilt(value, false);
     }
     if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file

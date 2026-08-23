@@ -11,6 +11,7 @@ import { registerAgentBuilderTools } from './agents-runtime/agent-builder-integr
 import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
 import { getCisSystemTools } from './tools/defs/cis-system';
+import { getBrainThoughtToolDefinitions } from './brain/brain-thought-runtime';
 import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
@@ -41,6 +42,11 @@ export interface BuildToolsDeps {
   getMCPManager: () => any;
   /** Validation-only: keep static wrapper schemas but skip loading live extension modules. */
   skipDynamicExtensionTools?: boolean;
+}
+
+export interface BuildToolsOptions {
+  /** Expose run-scoped Brain Thought tools only to an active Thought session. */
+  includeBrainThoughtTools?: boolean;
 }
 
 // ─── Tool Category System ─────────────────────────────────────────────────────
@@ -1029,8 +1035,9 @@ function trimToolBuildCache(): void {
   }
 }
 
-export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
+export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>, options: BuildToolsOptions = {}) {
   const { getMCPManager } = deps;
+  const includeBrainThoughtTools = options.includeBrainThoughtTools === true;
   const configSnapshot = getConfig().getConfig() as any;
   const workspaceToolMode = getWorkspaceToolMode(configSnapshot);
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
@@ -1080,6 +1087,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       `subagent:${subagentMode ? '1' : '0'}`,
       `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
       `workspaceMode:${workspaceToolMode}`,
+      `brainThought:${includeBrainThoughtTools ? '1' : '0'}`,
       `extensions:${extensionRevision}`,
       `mcp:${mcpToolSignature}`,
       `cats:${stableCategoryKey(normalizedActiveCategories)}`,
@@ -1341,6 +1349,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     ...getAgentTeamScheduleTools(),
     // ── CIS, System, and Self-improvement tools ───────────────────────────────
     ...getCisSystemTools(),
+    // ── Brain Thought supervisory tools — never part of ordinary chat schemas.
+    ...(includeBrainThoughtTools ? getBrainThoughtToolDefinitions() : []),
     // ── Creative editor tools ─────────────────────────────────────────────────
     ...(creativeCategoryActive ? getCreativeToolDefs() : []),
     // ── Agent Builder Integration Tools (only when enabled in config) ─────────
