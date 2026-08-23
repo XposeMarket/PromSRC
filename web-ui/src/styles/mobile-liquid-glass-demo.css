@@ -35,7 +35,10 @@ body.pm-mobile-active .pm-header {
 
 /* Restore pre-August-13 floating depth. Target only standalone header buttons:
  * the icon slots inside .pm-header-action-cluster were intentionally shadowless
- * on August 12 because the cluster itself is one shared glass pill. */
+ * on August 12 because the cluster itself is one shared glass pill. The resting
+ * tab bar is intentionally excluded: its historical geometry already provides
+ * the correct composer gap, while an outward cast shadow visually consumes that
+ * gap and makes the bar read wider/taller than its real bounds. */
 body.pm-mobile-active :is(
   .pm-header > .pm-icon-btn,
   .pm-header > .pm-haptic-host > .pm-icon-btn,
@@ -44,8 +47,7 @@ body.pm-mobile-active :is(
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
-  .pm-composer,
-  .pm-tabbar
+  .pm-composer
 ) {
   box-shadow:
     inset 0 1px 1px rgba(255,255,255,.38),
@@ -62,8 +64,7 @@ body.pm-mobile-active :is(
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
-  .pm-composer,
-  .pm-tabbar
+  .pm-composer
 ) {
   box-shadow:
     inset 0 1px 1px rgba(255,255,255,.16),
@@ -72,9 +73,42 @@ body.pm-mobile-active :is(
     0 1px 4px rgba(0,0,0,.22) !important;
 }
 
-body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn,
-body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:hover {
+/* Keep New Chat + overflow as one outer glass pill even after the iOS haptic
+ * helper wraps each real button in .pm-haptic-host. No inner wrapper/button is
+ * allowed to paint its own glass body, rim, blur, or shadow. */
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host,
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host:hover,
+body.pm-mobile-active .pm-header-action-cluster > .pm-icon-btn,
+body.pm-mobile-active .pm-header-action-cluster > .pm-icon-btn:hover,
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host > .pm-icon-btn,
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host > .pm-icon-btn:hover {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
   box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+body.pm-mobile-active .pm-header-action-cluster > .pm-icon-btn::after,
+body.pm-mobile-active .pm-header-action-cluster > .pm-haptic-host > .pm-icon-btn::after {
+  display: none !important;
+}
+
+/* At rest the tab bar keeps only its internal glass depth. The old layout is
+ * already 56px tall with an 8px physical composer gap; avoiding a cast shadow
+ * keeps those historical bounds visually honest instead of swelling into the
+ * composer and side insets. Press/drag depth is restored separately below. */
+body.pm-mobile-active .pm-tabbar {
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.38),
+    inset 0 -1px 1px rgba(255,255,255,.18) !important;
+}
+
+:root[data-theme="dark"] body.pm-mobile-active .pm-tabbar {
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.16),
+    inset 0 -1px 1px rgba(255,255,255,.07) !important;
 }
 
 body.pm-mobile-active .pm-tab-indicator {
