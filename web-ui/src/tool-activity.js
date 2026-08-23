@@ -138,6 +138,206 @@ function resultCount(value, keys) {
   return null;
 }
 
+function textLineCount(value) {
+  const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!text) return 0;
+  const lines = text.split('\n');
+  return Math.max(0, lines.length - (lines[lines.length - 1] === '' ? 1 : 0));
+}
+
+function lineRangeCount(startRaw, endRaw) {
+  const start = Math.floor(Number(startRaw));
+  if (!Number.isFinite(start) || start < 1) return null;
+  const endValue = endRaw == null || endRaw === '' ? start : Math.floor(Number(endRaw));
+  if (!Number.isFinite(endValue) || endValue < start) return null;
+  return endValue - start + 1;
+}
+
+function resultLineRangeCount(value, verb) {
+  const raw = String(value ?? '');
+  const match = raw.match(new RegExp(`${verb}\\s+lines?\\s+(\\d+)(?:-(\\d+))?`, 'i'));
+  if (!match) return null;
+  return lineRangeCount(match[1], match[2] || match[1]);
+}
+
+function stringArg(args, keys) {
+  const source = args && typeof args === 'object' ? args : {};
+  for (const key of keys) {
+    if (typeof source[key] === 'string') return source[key];
+  }
+  return null;
+}
+
+function textLineDelta(beforeRaw, afterRaw) {
+  const normalizeLines = (value) => {
+    const text = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!text) return [];
+    const lines = text.split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  };
+  const before = normalizeLines(beforeRaw);
+  const after = normalizeLines(afterRaw);
+  if (before.length * after.length > 2_000_000) return null;
+
+  // A line-level LCS gives the smallest honest add/remove counts. In
+  // particular, two replacements on one physical line are +1/-1, while the
+  // same replacements on two lines are +2/-2.
+  let previous = new Uint32Array(after.length + 1);
+  for (const beforeLine of before) {
+    const current = new Uint32Array(after.length + 1);
+    for (let index = 1; index <= after.length; index += 1) {
+      current[index] = beforeLine === after[index - 1]
+        ? previous[index - 1] + 1
+        : Math.max(previous[index], current[index - 1]);
+    }
+    previous = current;
+  }
+  const unchanged = previous[after.length];
+  return { added: after.length - unchanged, removed: before.length - unchanged };
+}
+
+function textPair(value) {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { return null; }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const candidates = [parsed, parsed.data, parsed.diff, parsed.change].filter((item) => item && typeof item === 'object');
+  for (const candidate of candidates) {
+    const before = stringArg(candidate, ['before', 'beforeText', 'before_text', 'oldText', 'old_text', 'old_content', 'oldContent']);
+    const after = stringArg(candidate, ['after', 'afterText', 'after_text', 'newText', 'new_text', 'new_content', 'newContent', 'updatedText', 'updated_text']);
+    if (before !== null && after !== null) return { before, after };
+  }
+  return null;
+}
+
+function replacementOccurrenceCount(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const match = raw.match(/(?:^|[\s(])([0-9]+)\s+occurrences?\b/i);
+  if (match) return Number(match[1]);
+  if (raw.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw);
+      for (const source of [parsed, parsed?.data]) {
+        for (const key of ['replacements', 'replacement_count', 'occurrences']) {
+          const count = Number(source?.[key]);
+          if (Number.isFinite(count) && count >= 0) return count;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function patchLineDelta(value) {
+  const raw = String(value ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!raw.trim()) return null;
+  let added = 0;
+  let removed = 0;
+  let sawHunk = false;
+  let inHunk = false;
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith('@@')) {
+      sawHunk = true;
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || line.startsWith('+++ ') || line.startsWith('--- ') || line.startsWith('\\ No newline')) continue;
+    if (line.startsWith('+')) added += 1;
+    else if (line.startsWith('-')) removed += 1;
+  }
+  return sawHunk ? { added, removed } : null;
+}
+
+function editOperationName(actionRaw, args = {}) {
+  let action = normalizeAction(actionRaw);
+  if (action === 'workspace_edit' || action === 'dev_source_edit') {
+    action = normalizeAction(args.action || args.operation || args.mode || args.op);
+  }
+  if (action === 'patchset' || action === 'apply_workspace_patchset' || action === 'apply_dev_source_patchset') return 'patchset';
+  if (action === 'apply_patch' || action === 'patch_file') return 'apply_patch';
+  if (action === 'create' || /create_file/.test(action)) return 'create';
+  if (/replace_lines/.test(action)) return 'replace_lines';
+  if (/insert_after/.test(action)) return 'insert_after';
+  if (/delete_lines/.test(action)) return 'delete_lines';
+  if (/find_replace/.test(action) || action === 'edit_file') return 'find_replace';
+  if (action === 'write' || /^write(?:_|$)/.test(action)) return 'write';
+  return action;
+}
+
+function editOperationDelta(actionRaw, argsRaw = {}, resultRaw = '') {
+  const args = parseArgs(argsRaw);
+  const operation = editOperationName(actionRaw, args);
+  if (operation === 'apply_patch') return patchLineDelta(args.patch);
+  if (operation === 'create') {
+    const content = stringArg(args, ['content', 'new_content', 'newContent']);
+    return content == null ? null : { added: textLineCount(content), removed: 0 };
+  }
+  if (operation === 'insert_after') {
+    const content = stringArg(args, ['content', 'new_content', 'newContent']);
+    return content == null ? null : { added: textLineCount(content), removed: 0 };
+  }
+  if (operation === 'delete_lines') {
+    const removed = resultLineRangeCount(resultRaw, 'deleted')
+      ?? lineRangeCount(args.start_line ?? args.startLine, args.end_line ?? args.endLine);
+    return removed == null ? null : { added: 0, removed };
+  }
+  if (operation === 'replace_lines') {
+    const content = stringArg(args, ['new_content', 'newContent', 'content']);
+    const removed = resultLineRangeCount(resultRaw, 'replaced')
+      ?? lineRangeCount(args.start_line ?? args.startLine, args.end_line ?? args.endLine);
+    return content == null || removed == null ? null : { added: textLineCount(content), removed };
+  }
+  if (operation === 'find_replace') {
+    const oldText = stringArg(args, ['find', 'old_str', 'old_text', 'oldText']);
+    const newText = stringArg(args, ['replace', 'new_str', 'new_text', 'newText']);
+    if (oldText == null || !oldText || newText == null) return null;
+    const replaceAll = args.replace_all === true || args.replaceAll === true;
+    const occurrences = replaceAll ? replacementOccurrenceCount(resultRaw) : 1;
+    if (!Number.isFinite(occurrences) || occurrences < 1) return null;
+    const beforeAfter = textPair(args) || textPair(resultRaw);
+    if (beforeAfter) return textLineDelta(beforeAfter.before, beforeAfter.after);
+    if (replaceAll && occurrences > 1) return null;
+    return {
+      added: textLineCount(newText) * occurrences,
+      removed: textLineCount(oldText) * occurrences,
+    };
+  }
+  if (operation === 'patchset') {
+    const edits = Array.isArray(args.edits) ? args.edits : [];
+    if (!edits.length) return null;
+    let added = 0;
+    let removed = 0;
+    for (const rawEdit of edits) {
+      const edit = rawEdit && typeof rawEdit === 'object' ? rawEdit : {};
+      const delta = editOperationDelta(edit.op || edit.action || edit.type, edit, '');
+      if (!delta) return null;
+      added += delta.added;
+      removed += delta.removed;
+    }
+    return { added, removed };
+  }
+  // Full-file overwrites and deletes do not carry enough before-state in the
+  // activity payload to calculate an honest diff. Omit stats instead of lying.
+  return null;
+}
+
+export function toolActivityEditStats(activity = {}) {
+  if (activity.kind !== 'result' || activity.ok === false) return null;
+  const delta = editOperationDelta(activity.action, activity.args, activity.result);
+  if (!delta) return null;
+  return {
+    added: Math.max(0, Math.floor(Number(delta.added) || 0)),
+    removed: Math.max(0, Math.floor(Number(delta.removed) || 0)),
+  };
+}
+
 function normalizeAction(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -212,7 +412,7 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (['read_file', 'file_read'].includes(action)) return make('file.read', 'file read', 'Preparing file read…', fileTarget ? `Reading ${fileTarget}` : 'Reading file', fileTarget ? `Read ${fileTarget}` : 'Read file', { family: 'file', target: fileTarget, countNoun: 'file read' });
   if (/^(?:grep_file|grep_files|search_files|find_files)$/.test(action)) return make('file.search', 'file search', 'Preparing file search…', search ? `Searching files for ${quote(search)}` : 'Searching files', 'Searched files', { family: 'file', target: search || fileTarget, countNoun: 'file search' });
   if (/^(?:list_directory|list_files)$/.test(action)) return make('file.list', 'file listing', 'Preparing file listing…', fileTarget ? `Listing ${fileTarget}` : 'Listing files', 'Listed files', { family: 'file', target: fileTarget, countNoun: 'file listing' });
-  if (action === 'workspace_edit' || action === 'dev_source_edit' || /^(?:apply_patch|replace_lines|insert_after|delete_lines|find_replace|write_file|edit_file|create_file|patch_file|replace_file|delete_file)$/.test(action)) {
+  if (action === 'workspace_edit' || action === 'dev_source_edit' || /^(?:apply_patch|apply_workspace_patchset|apply_dev_source_patchset|replace_lines|insert_after|delete_lines|find_replace|write_file|edit_file|create_file|patch_file|replace_file|delete_file)$/.test(action)) {
     const targetText = fileTarget ? `Editing ${fileTarget}` : 'Editing files';
     return make('file.edit', 'file edit', 'Preparing file edit…', targetText, fileTarget ? `Updated ${fileTarget}` : 'Updated files', { family: 'file', target: fileTarget, countNoun: 'file edit' });
   }
@@ -575,6 +775,13 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     ? escapeHtml
     : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = String(entry.text || activityText(activity));
+  const editStats = toolActivityEditStats(activity);
+  const durationMatch = editStats ? label.match(/(\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s))$/i) : null;
+  const labelBase = durationMatch ? label.slice(0, -durationMatch[1].length) : label;
+  const editStatsHtml = editStats
+    ? ` <span class="tool-activity-edit-delta" data-added-lines="${editStats.added}" data-removed-lines="${editStats.removed}"><span class="tool-activity-edit-added" style="color:var(--ok,#4ade80)">+${editStats.added}</span> <span class="tool-activity-edit-removed" style="color:var(--err,#f87171)">−${editStats.removed}</span></span>`
+    : '';
+  const labelHtml = `${esc(labelBase)}${editStatsHtml}${durationMatch ? esc(durationMatch[1]) : ''}`;
   const state = activity.kind === 'result' ? (activity.ok === false ? 'failed' : 'succeeded') : activity.status || 'running';
   const activityKey = activity.callId || activity.activityId || entry?.id || `${activity.action || 'tool'}_${activity.kind || 'operation'}`;
   const terminal = activity.family === 'command' ? activity.terminal : null;
@@ -590,7 +797,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   </details>` : '';
   return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}">
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
-    <div class="tool-activity-entry-summary"><span class="tool-activity-label">${esc(label)}</span></div>
+    <div class="tool-activity-entry-summary"><span class="tool-activity-label">${labelHtml}</span></div>
   </div>
   ${terminalHtml}
   </div>`;
