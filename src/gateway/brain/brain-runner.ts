@@ -63,6 +63,11 @@ import {
   type ActivityPackage,
 } from './activity-package.js';
 import { buildThoughtActivityPackageIsolated } from './activity-package-worker-client';
+import {
+  buildBrainThoughtActivityIndex,
+  clearBrainThoughtRun,
+  registerBrainThoughtRun,
+} from './brain-thought-runtime.js';
 import { runSkillCurator } from '../skills-runtime/skill-curator';
 import { applyCarryForwardToIntradayFile } from './brain-continuity.js';
 import {
@@ -397,6 +402,8 @@ type HandleChatFn = (
   toolFilter?: string[],
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   reasoningOptions?: { enabled?: boolean; level?: string },
+  callerOnToken?: (token: string) => void,
+  runtimeOptions?: { brainThoughtRuntime?: boolean },
 ) => Promise<{
   type: string;
   text: string;
@@ -1120,11 +1127,26 @@ export class BrainRunner {
       builtActivityPackage = { package: failedPackage, continuationPaths: [] };
       checkpointBrainRuntime(runtimeId, 'activity_package_failed', { phase: 'prompt_build' });
     }
-	    const prompt = this._buildThoughtPromptV2({
-	      windowStart, windowEnd, dateStr, windowLabel,
-	      thoughtNumber, outFile: absOutFile, capsuleFile,
-      activityPackage: builtActivityPackage.package,
-	    });
+      const businessCandidatesFile = path.posix.join('Brain', 'business-candidates', dateStr, 'candidates.jsonl');
+      const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
+      registerBrainThoughtRun({
+        sessionId,
+        workspacePath: this.deps.workspacePath,
+        dateStr,
+        thoughtNumber,
+        windowStart: fmtUtc(windowStart),
+        windowEnd: fmtUtc(windowEnd),
+        activityPackage: builtActivityPackage.package,
+        thoughtFile: workspaceOutFile,
+        capsuleFile,
+        activeWorkFile,
+        businessCandidatesFile,
+      });
+      const prompt = this._buildThoughtPromptV2({
+        windowStart, windowEnd, dateStr, windowLabel,
+        thoughtNumber, outFile: absOutFile, capsuleFile,
+        activityPackage: builtActivityPackage.package,
+      });
 
     const sendSSE = (event: string, data: any) => {
       checkpointBrainRuntime(runtimeId, event, data);
@@ -1144,8 +1166,6 @@ export class BrainRunner {
         if (!isPublicBrainProfile()) {
           activateToolCategory(sessionId, 'source_read'); // inspect own code/tools for current-state + tool-failure diagnosis
         }
-        const businessCandidatesFile = path.posix.join('Brain', 'business-candidates', dateStr, 'candidates.jsonl');
-        const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
         setSessionMutationScope(sessionId, {
           allowedFiles: [workspaceOutFile, capsuleFile, businessCandidatesFile, activeWorkFile],
           allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(capsuleFile), path.posix.dirname(businessCandidatesFile)],
@@ -1157,29 +1177,27 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, verify current state against live artifacts, do light research, maintain the Active Work Ledger, write the thought file, and submit structured skill candidates only. No memory writes, proposals, or skill mutations.`,
+        `[THOUGHT RUN] ${thoughtNumber} for ${dateStr}; window ${fmtUtc(windowStart)} -> ${fmtUtc(windowEnd)}. You are the isolated supervisory Thought process described by the system message. Use brain_context_search only when durable context is relevant, brain_activity_read for exact window evidence, live read-only tools for current-state verification, skill_candidate_submit for evidence-backed skill candidates, and brain_thought_submit exactly once to finalize.`,
         thoughtModelOverride,
         'cron',
         brainDreamToolFilter([
+          // Thought-owned context/evidence/finalization tools.
+          'brain_context_search',
+          'brain_activity_read',
+          'brain_thought_submit',
+          // Read-only current-state verification.
           'workspace_read',
-          'workspace_edit',
           'read_file',
           'read_files_batch',
-	          'file_stats',
-          'mkdir',
-          'create_file',
-          'write_file',
-	          'replace_lines',
-          'find_replace',
-          'insert_after',
-          'delete_lines',
-          // Light research — confirm current state of an idea and scan for prior art.
+          'list_files',
+          'list_directory',
+          'file_stats',
+          // Light public research.
           'web_search',
           'web_search_multi',
           'web_search_single',
           'web_fetch',
-          // Private builds only (stripped by brainDreamToolFilter in public builds):
-          // inspect own source/tools to confirm current state and diagnose tool failures.
+          // Private builds only: read Prometheus implementation state.
           'list_source',
           'source_stats',
           'read_source',
@@ -1187,6 +1205,7 @@ export class BrainRunner {
           'list_prom',
           'read_prom_file',
           'grep_prom',
+          // Skill inspection + candidate submission; never skill mutation.
           'skill_list',
           'skill_read',
           'skill_inspect',
@@ -1197,6 +1216,8 @@ export class BrainRunner {
         ]),
         undefined,
         thoughtReasoning ? { enabled: true, level: thoughtReasoning } : undefined,
+        undefined,
+        { brainThoughtRuntime: true },
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain thought run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
@@ -1219,6 +1240,7 @@ export class BrainRunner {
 	    } finally {
 	      finishLiveRuntime(runtimeId);
 	      clearSessionMutationScope(sessionId);
+      clearBrainThoughtRun(sessionId);
       this.thoughtRunning = false;
     }
 
@@ -1246,42 +1268,11 @@ export class BrainRunner {
         return false;
       }
     };
-    let recoveredArtifact = false;
-    if (!wasAborted && !runFailed && !artifactFresh() && String(resultText || '').trim()) {
-      try {
-        fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
-        fs.writeFileSync(absOutFile, [
-          `# Thought ${thoughtNumber} - ${dateStr}`,
-          `_Generated: ${fmtLocal(new Date())}_`,
-          '',
-          '## Artifact Recovery Note',
-          'The model-backed Thought run returned a response but did not write its artifact. Prometheus recovered the run by saving that response here.',
-          '',
-          '## Recovered Thought Response',
-          String(resultText || '').trim(),
-          '',
-        ].join('\n'), 'utf-8');
-        recoveredArtifact = true;
-      } catch (err: any) {
-        console.warn('[BrainRunner] Failed to recover thought artifact:', err?.message || err);
-      }
-    }
     const fileLooksFresh = artifactFresh();
-    let capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
-    // An empty array is a valid quiet-window result. Recover only a genuinely
-    // missing sidecar; malformed or stale model output is preserved and fails
-    // the run so continuity loss is observable instead of silently erased.
-    if (capsuleArtifact.status === 'missing' && fileLooksFresh && !wasAborted && !runFailed) {
-      try {
-        fs.mkdirSync(path.dirname(absCapsuleFile), { recursive: true });
-        fs.writeFileSync(absCapsuleFile, '[]\n', 'utf-8');
-        capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
-      } catch (err: any) {
-        capsuleArtifact = { status: 'invalid', count: 0, error: String(err?.message || err) };
-      }
-    }
+    const capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
     const capsuleArtifactValid = capsuleArtifact.status === 'valid';
-    const verifiedSuccess = fileLooksFresh && capsuleArtifactValid && !runFailed;
+    const submissionSucceeded = toolResults.some((tool) => String(tool?.name || '') === 'brain_thought_submit' && tool?.error !== true);
+    const verifiedSuccess = submissionSucceeded && fileLooksFresh && capsuleArtifactValid && !runFailed;
     const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
     const success = outcome === 'success';
 
@@ -1291,9 +1282,7 @@ export class BrainRunner {
       latestAfter.lastThoughtWindowEndAt = windowEnd.toISOString();
       latestAfter.lastThoughtWindow = windowLabel;
       latestAfter.lastThoughtStatus = 'success';
-      latestAfter.lastThoughtError = recoveredArtifact
-        ? `Recovered missing/stale thought artifact: ${outFile}`
-        : null;
+      latestAfter.lastThoughtError = null;
       saveLatestState(latestAfter);
     } else {
       latestAfter.lastThoughtStatus = outcome;
@@ -1302,9 +1291,11 @@ export class BrainRunner {
         outcome,
         runFailed
           ? String(resultText).slice(0, 500)
-          : !fileLooksFresh
-            ? `Expected thought artifact missing or stale: ${outFile}`
-            : `Thought capsule artifact ${capsuleArtifact.status}: ${capsuleFile}${capsuleArtifact.error ? ` (${capsuleArtifact.error})` : ''}`,
+          : !submissionSucceeded
+            ? 'Expected one successful brain_thought_submit call; Thought artifacts do not advance coverage without structured submission.'
+            : !fileLooksFresh
+              ? `Expected thought artifact missing or stale: ${outFile}`
+              : `Thought capsule artifact ${capsuleArtifact.status}: ${capsuleFile}${capsuleArtifact.error ? ` (${capsuleArtifact.error})` : ''}`,
         abortSignal.reason,
       );
       saveLatestState(latestAfter);
@@ -2354,311 +2345,44 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     capsuleFile: string;
     activityPackage: ActivityPackage;
   }): string {
-    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile, capsuleFile, activityPackage } = opts;
+    const { windowStart, windowEnd, dateStr, thoughtNumber, activityPackage } = opts;
     const wsStart = fmtUtc(windowStart);
     const wsEnd = fmtUtc(windowEnd);
-    const nowStr = fmtLocal(new Date());
-    const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
-    const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
-    const businessCandidatesFileRel = path.join(businessCandidatesDirRel, 'candidates.jsonl');
-    const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
-    const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
-    const outFileRel = path.relative(this.deps.workspacePath, outFile);
-
-    return `You are Prometheus, running an automated Brain Thought analysis.
-
-BRAIN THOUGHT ${thoughtNumber} - Observation + Seed Capture
+    const activityIndex = buildBrainThoughtActivityIndex(activityPackage);
+    return `THOUGHT RUN ${thoughtNumber} — Observation + Seed Capture
 Window: ${wsStart} -> ${wsEnd}
 Date: ${dateStr}
-Outputs:
-- ${outFileRel}
-- ${capsuleFile}
 
-IMPORTANT - FILE PATH CONVENTION:
-All paths in this prompt are relative to the workspace root.
-Pass them directly to file tools without modification.
-Do not prepend "workspace/" or any drive letter.
-Use workspace_edit with action "create" or "write" for file output; legacy create_file/write_file tools may not be exposed.
+MISSION
+You are an internal supervisory Thought, not Prometheus. Build a grounded picture of what happened, what it means, and what may deserve attention before the next Thought/Dream. Be proactive without inventing work.
 
-STRICT RULES:
-- Do not write to USER.md, SOUL.md, or any memory files
-- Do not call write_proposal or create any proposals
-- Do not create new skills directly
-- Do not update cron jobs, configs, or team state
-- Do not search for or reconstruct activity covered by the Activity Package below. It is authoritative for this window.
-- If the inline ledger says continuationRequired=true, read only the exact continuation paths listed in the package using direct file reads; do not list/search audit directories.
-- Your direct file writes are limited to the thought output file, ${capsuleFile}, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
-- Do not mutate an existing skill. Read/inspect it, then use skill_candidate_submit for any proposed trigger, metadata, instruction, resource, or new-skill change
-- You may call skill_audit_all for a light read-only fleet metadata scan
-- Candidate submissions must be evidence-backed and scoped to one exact skill gap or repeated workflow
-- Curator clusters and reviews candidates; Thought never applies them
-- You MAY read freely and do LIGHT research: read any workspace/project file, ${isPublicBrainProfile() ? 'and use web_search/web_fetch' : 'use read_source/grep_source/read_prom_file to inspect Prometheus\'s own code and tools, and use web_search/web_fetch'} to confirm the current state of an idea and scan for prior art. Keep research light (a couple of lookups); the Dream does the deep dive.
+EVIDENCE MODEL
+- The compact Activity Index below is authoritative for covered recent activity. Use brain_activity_read when you need exact event detail or a listed continuation. Do not reconstruct covered activity from audit directories.
+- Durable main-agent context is NOT injected. Use brain_context_search only when a recent signal actually needs historical/user context. It uses Prometheus's atomic durable-memory retrieval for MEMORY.md and bounded reads for USER/today notes; request SOUL only when comparing intended Prometheus behavior.
+- Separate ORIGIN evidence (where an idea/request came from) from CURRENT-STATE evidence (what the accessible live artifact does now).
+- Verify current state directly with read-only workspace/source tools when the relevant artifact is local. For public pages, use web_fetch/web_search where that can establish current state. Browser observations in the Activity Package are evidence from the window, not permission to disturb a user's live browser session.
+- If current state cannot be safely verified with the available read-only surface, say verification is unavailable instead of declaring the item broken/unfinished. If it is already handled, mark it resolved rather than seeding stale work.
+- Respect package completeness/omissions and redaction. Do not infer missing activity from silence or try to recover secrets/raw private reasoning.
 
-DIRECT ACTIVITY PACKAGE (AUTHORITATIVE; assembled before this model call):
-${JSON.stringify(activityPackage, null, 2)}
+WHAT TO NOTICE
+1. Activity: major requests, completed/failed work, meaningful file/tool/task/schedule/agent changes.
+2. Behavior: where Prometheus was effective; where it looped, stalled, over/under-tooled, misunderstood, or was corrected.
+3. Skills/workflows: repeated tool choreography, missing/weak skill triggers/instructions/resources, reusable workflows. Inspect existing skills before submitting skill_candidate_submit. Thought never mutates a skill.
+4. Business candidates: durable company/entity facts or events for later Dream reconciliation; do not mutate BUSINESS/entities now.
+5. Memory candidates: only durable context that would change future behavior. Keep procedural workflow learning in skills, not memory.
+6. Opportunity seeds: unfinished or proactive openings the user would likely value, including partial features, repeated workflows, agent/team follow-up, product/business/content/operations ideas.
+7. Active work: include concrete live threads in active_work so the runtime can upsert Brain/active-work.jsonl. Mark resolved items when current-state verification proves completion.
+8. Pulse Cards: exactly three natural user-facing cards derived from actual recent momentum. Each title <=52 chars, body <=90 chars, and prompt must be a complete editable prompt with enough grounding for later verification.
+9. Runtime capsules: capture every distinct evidence-supported thread that could usefully change behavior before the next Thought. No top-N storage cap; merge duplicates by stable threadKey, expire weak opportunities quickly, and set verificationRequired=true for mutable/unfinished state.
 
-Activity-package rules:
-- The window is UTC and half-open: [${wsStart}, ${wsEnd}). Events at the exact start are included; events at the exact end belong to the next window.
-- Use event IDs and provenance refs from this package when citing what happened. Do not infer missing activity from silence.
-- The package includes chats/messages, tasks/journals/evidence, runs/schedules/heartbeats, managed threads/teams, tool calls/results/errors, browser metadata/observations, file/workspace changes, agents/subagents, runtime/config changes, important events, and unresolved work where the stores make them available.
-- sourceCoverage, completeness.omissions, and continuation entries are part of the answer. Report partial or unavailable sources instead of silently treating them as empty.
-- Raw credentials, tokens, cookies, raw tool payloads, binary/screenshot payloads, and private chain-of-thought are intentionally redacted. Do not attempt to recover them.
-- The package is direct context, not a search hint. Covered-activity search calls are a contract violation and are not needed for the activity summary.
+FINALIZATION
+- Do not write Thought files with generic file tools. Do not write USER.md, SOUL.md, MEMORY.md, proposals, config, cron, team state, or skills.
+- Submit evidence-backed skill candidates separately with skill_candidate_submit when warranted.
+- Finish by calling brain_thought_submit exactly once. Its schema is the output contract and the runtime writes/validates the Markdown, capsule sidecar, business candidates, and Active Work ledger.
+- A prose response or coincidentally fresh files are NOT a successful Thought. The runner advances the six-hour coverage cursor only after brain_thought_submit succeeds and both required artifacts pass integrity checks.
+- After brain_thought_submit succeeds, stop.
 
-WHO YOU ARE THIS RUN:
-You have the user's USER.md, SOUL.md, MEMORY.md, and today's notes in your system context. Use them. Reason like a second brain that already knows what this user is building and cares about: "they planned X with me — let me check whether it actually exists yet", "they added project Y to the workspace — let me look through it for bugs or half-finished work", "this tool keeps failing them — let me see what's actually wrong with it." Proactivity is the point: you do not need an explicit task to investigate something the user clearly cares about.
-
-PRIMARY PURPOSE:
-You are not just auditing for mistakes. You are acting like a proactive second brain. You are trying to notice:
-- repeated workflows the user performed manually today that could become a skill, composite tool, browser teaching workflow, desktop workflow, or automation
-- unfinished feature ideas the user mentioned but did not complete
-- new agents, subagents, teams, or workspace surfaces that now deserve follow-up work
-- latent opportunities where Prometheus could proactively help tomorrow, across any context: business, marketing, websites, apps, notifications, communications, code, research, content, or operations
-- business operating signals that should become structured company/entity memory later: people, leads, clients, projects, vendors, social accounts, offers, policies, deadlines, outreach, payments, meetings, and other business events
-- broad next-step plan seeds the Dream can rank behind the strongest Pulse Cards
-- "the user would probably appreciate if I got ahead on this" moments, even when they were not phrased as explicit tasks
-- useful wonderings: thoughtful "I wonder if..." observations that may be seeds for future help, not only defects
-
-CURRENT-STATE VERIFICATION (MANDATORY — this is the most important rule):
-Separate two kinds of evidence for everything you flag:
-- ORIGIN evidence: where the idea/bug/request came from (a chat, transcript, or note). This only PINS the item.
-- CURRENT-STATE evidence: what the artifact actually does RIGHT NOW.
-You must never flag something as unfinished, broken, or needed based only on the conversation. Before you record any opportunity/bug/seed as live, OPEN THE ACTUAL ARTIFACT TONIGHT — the file, the tool definition, the page, the project folder — and confirm the gap still exists and is still unhandled. Things move on: the user often fixes a bug with Claude/Codex/another tool, or finishes the feature, without doing it through Prometheus. Check the real current state (file contents, recent modification, the project's actual code). If current state shows it is already done or fixed, mark it RESOLVED and do NOT seed it for the Dream. A seed that survives a real current-state check is worth ten that were inferred from chat.
-
-ACTIVE WORK LEDGER (Brain/active-work.jsonl):
-This is the standing, memory-grounded list of things the user is actively working on or circling — it is what makes you proactive even on a day with no note. Read it first if it exists.
-- For each live idea/project/bug you confirm (from today's activity AND from what MEMORY/USER tells you the user is building), upsert one JSONL row (one JSON object per line):
-  {"id":"slug","title":"...","origin":"chat/transcript/note ref or 'memory'","diskPath":"workspace-relative or absolute allowed path, if it is a real project","status":"idea|drafted|in_progress|stalled|resolved","lastVerified":"${dateStr}","currentState":"what you actually observed in the artifact tonight","research":["url or finding"],"evidence":["path:line or ref"]}
-- Update status to "resolved" (and say how you verified) when current-state shows it is already done/fixed.
-- Keep entries concrete and grounded in current state; the Dream uses this ledger to enrich or dedupe the selected Pulse Cards, not to create a second unbounded proposal queue.
-
-STEP 2 - ANALYZE USING THE RUBRIC
-
-For every finding, assign confidence (high, medium, low) and cite evidence.
-
-A. Activity Summary
-- What actually happened in this window
-- Major user requests and what was asked
-- Files written or changed
-- Tasks completed or failed
-- Scheduled jobs that ran
-- Agents or teams that were invoked
-
-B. Behavior Quality
-- Where Prometheus acted well
-- Where it stalled, looped, or took too many steps
-- Over-tooling or under-tooling
-- User corrections, re-prompts, or frustration signals
-- Misunderstandings that required clarification
-
-C. Skill And Workflow Signals
-- Skills read or used in the window, with the user request, tool sequence, final response, and any error/rework signal from ${skillEpisodesDirRel}/episodes.jsonl when available
-- Live skill gardener candidates from ${skillGardenerDirRel}, including candidate type, status, confidence, suggestedAction, and evidence
-- Existing skills that may need updated triggers, clearer steps, examples, resource templates, or guardrails
-- New repeatable workflows that seem skill-worthy because they appeared more than once, required many tools, or represent a reusable browser/desktop/file/code/business process
-- Procedural "do this next time" learnings belong here, not in memory candidates
-- Format as: Skill/Workflow | Signal | Possible Action | Confidence | Evidence
-
-C2. Existing Skill Maintenance
-- For a plausible existing-skill improvement, call skill_read first, then skill_inspect or skill_resource_list/read if useful
-- Use skill_audit_all only as a light metadata scan when trigger/description/category quality is relevant to the window
-- Submit one structured candidate with skill_candidate_submit; do not write the skill
-- Use add_trigger only with an exact target skill id; use create_new_skill_candidate only for repeated workflows with no suitable overlap
-- Include evidence paths and submittedBy="brain_thought"
-- In the thought file, record candidate ids and why each item was submitted or deferred
-
-D. Business Candidates
-- Business facts/events that may belong in BUSINESS.md or workspace/entities/*
-- Use BUSINESS.md only for company-level identity, offers, policies, approval rules, priorities, and broad operating context
-- Use entity files for clients/prospects, contacts/people, projects, vendors/tools, and social accounts
-- Thought does not update BUSINESS.md or entity files. It only records candidates for Dream reconciliation.
-- For high/medium confidence candidates, also write JSONL rows to ${businessCandidatesFileRel}. Use one JSON object per line with:
-  {"timestamp":"ISO","date":"${dateStr}","source":"thought:${outFileRel}","confidence":"high|medium|low","action":"create_entity|update_entity|append_event|update_business_profile|suggest_skill","entityType":"client|project|vendor|contact|social","entityId":"slug-if-known","displayName":"Name if known","summary":"concise business fact or event","evidence":["path:line or transcript ref"],"sensitivity":"normal|private|external_action"}
-- Do not write low-confidence rows to JSONL unless they are important enough for Dream to review; keep weak hunches only in the thought markdown.
-- Format as: Candidate | Destination | Action | Confidence | Evidence
-
-E. Memory Candidates
-- Items that might be worthy of USER.md, SOUL.md, or MEMORY.md
-- Only flag if durable and not clearly already captured
-- Exclude procedural workflow instructions, skill usage improvements, tool-order recipes, and "when doing X, do Y" notes unless they are truly global operating rules
-- Future Behavior Memory Test:
-  A memory is only useful if it changes future behavior. For every candidate, answer:
-  1. What future situation should trigger recall?
-  2. What should Prometheus do differently because of it?
-  3. Where is the best home: USER.md, SOUL.md, MEMORY.md, BUSINESS.md, entity file, skill, proposal, or nowhere?
-  4. What would make this stale or wrong later?
-  If you cannot answer these, do not write it as memory.
-- Format as a table row: Item | Target file | Confidence | Evidence
-
-F. Opportunity Seeds
-- Capture unfinished or proactive opportunities the Dream can rank behind the strongest Pulse Cards
-- This is the most important section when the user talked about something but did not finish it
-- Include repeated manual workflows, partial feature ideas, new agents/subagents/teams created but not yet deployed, placeholder-heavy or underused workspace surfaces, business/marketing/product ideas, notification follow-ups, and concrete "Prometheus should probably help with this next" openings
-- Prefer seeds that can become proposals, skills, composite tools, browser/desktop taught workflows, scheduled monitors, or one-shot task triggers
-- Format as: Seed | Why it matters | Suggested scouting surface | Confidence | Evidence
-
-G. Improvement Candidates
-- Broad plan seeds or supporting signals that may strengthen one of the three Pulse Cards; do not write implementation tickets here
-- Format as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
-- Proposal types: ${brainThoughtProposalTypes()}
-- Execution modes: ${brainThoughtExecutionModes()}
-
-H. Window Verdict
-- Active: yes / no
-- Signal quality: high / medium / low / none
-- Summary: short narrative brain note, 2-4 paragraphs. Put the real summary at the top of the final file, before section A.
-- Wonder: include 1-3 natural "I wonder if..." thoughts. They can be speculative, but label uncertainty honestly and ground them in the day's signals.
-
-STEP 3 - WRITE THE THOUGHT FILE AND CAPSULE SIDECAR
-
-Create the output directory if needed: ${thoughtsDirRel}
-Write the thought file to: ${outFileRel}
-
-Use exactly this structure:
-
----
-# Thought ${thoughtNumber} - ${dateStr} | Window: ${wsStart}-${wsEnd}
-_Generated: ${nowStr}_
-
-## Summary
-[2-4 short paragraphs. Make this feel like an actual thought, not a report stub: summarize what happened, what it seems to mean, where the momentum or friction was, and include 1-3 natural "I wonder if..." observations. Keep it grounded; do not invent facts.]
-
-## Pulse Cards
-Write exactly 3 homepage Pulse cards that a user could click on the Prometheus new-chat screen.
-These are proactive "you were circling this, want to dig in?" cards based on the user's chats and momentum.
-They are not questions about the Brain Thought, not report summaries, and not citations of your analysis sections.
-Choose card ideas from actual user-facing threads: things the user mentioned briefly, unfinished ideas, repeated interests, half-built features, follow-up-worthy creative/product/business/code directions, or practical next steps that naturally continue recent conversations.
-Prefer cards that feel useful, timely, personal to the user's recent work with Prometheus, and editable, not alarmist or awkward.
-Each card must:
-- have a short, natural title under 52 characters
-- have a clear body that is one short sentence under 90 characters
-- have a prompt that can be placed directly into the chat composer for the user to edit or send
-- avoid phrases like "Brain Thought", "thought file", "Dream should", "audit window", "evidence", "section", raw citations, file paths, and internal jargon in title/body/prompt
-- make the prompt grounded enough that Prometheus can verify current state before acting
-- be based on actual chat/user evidence from this Thought; if the window has weak signal, use gentle review/planning cards instead of inventing work
-
-Good card style examples:
-- title: "Premium UI Microfeatures"
-  body: "Small polish passes can make Prometheus feel more finished without a rebuild."
-  prompt: "Let's dig into premium UI microfeatures for Prometheus based on the recent chat UI work. Review what changed recently, then suggest 5 small high-impact polish ideas and the best first one to implement."
-- title: "Prompt Cache Next Steps"
-  body: "A lightweight prompt cache could turn repeated workflows into reusable tooling."
-  prompt: "Let's explore a Prompt Cache feature for Prometheus. Ground it in recent chats and current workspace artifacts, then sketch the smallest useful version and how it would show up in the UI."
-- title: "Opus 4.8 Showcase"
-  body: "The model upgrade could become a cleaner demo or launch asset."
-  prompt: "Let's revisit the Opus 4.8 showcase idea from the recent Prometheus work. Check what exists now, then propose the cleanest next version or repair path."
-
-Use this exact fenced JSON shape and no extra keys:
-
-\`\`\`json
-[
-  {
-    "title": "Short card title",
-    "body": "One sentence describing why this is worth opening.",
-    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
-  },
-  {
-    "title": "Short card title",
-    "body": "One sentence describing why this is worth opening.",
-    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
-  },
-  {
-    "title": "Short card title",
-    "body": "One sentence describing why this is worth opening.",
-    "prompt": "A complete, editable user prompt for Prometheus to act on or plan from."
-  }
-]
-\`\`\`
-
-
-Dream handoff rule: these three Pulse Cards are the normal proposal shortlist.
-Capsules, ledger rows, and improvement candidates are supporting evidence, not
-additional proposal candidates. Dream may expand a selected card into one
-lightweight general plan, but it should defer the rest.
-
-## Runtime Thought Capsules
-After writing the Markdown, write ${capsuleFile} as a JSON array. There is NO fixed item-count limit: capture every distinct, evidence-supported thread that could usefully change Prometheus's behavior before the next Thought. A busy six-hour window may legitimately produce 10, 20, or more capsules; an inactive window may produce []. Merge duplicate activity under one stable threadKey and omit completed micro-actions with no future implication.
-
-Every object must use exactly this contract:
-{"id":"unique-version-id","threadKey":"stable topic key such as project:galaxy-drift","kind":"active_work|decision|correction|blocker|time_sensitive|opportunity","priority":"critical|high|normal|low","status":"active|in_progress|blocked|dormant|resolved","createdAt":"ISO","expiresAt":"ISO (normally next Thought window; longer only with evidence)","summary":"present-tense concise context","facts":["verified fact"],"nextUsefulAction":"what helps when relevant","relevance":{"projects":["names"],"triggers":["natural user terms"],"surfaces":["main_chat|coding|business|other"]},"evidence":["source refs"],"lastValidatedAt":"ISO","verificationRequired":true,"supersedes":["older capsule ids"]}
-
-Rules:
-- Storage/capture is evidence-driven and never top-N capped. Prompt injection later is separately relevance/budget bounded.
-- Use stable threadKey values so a newer capsule replaces the older state.
-- Set verificationRequired=true for unfinished, blocked, inferred, or externally mutable state.
-- Do not phrase speculation as fact. Weak opportunities expire quickly.
-- Write valid JSON even when empty. Do not wrap this sidecar in Markdown fences.
-
-## A. Activity Summary
-[populate from your analysis]
-
-## B. Behavior Quality
-**Went well:**
-- [item] | evidence: [ref]
-
-**Stalled or struggled:**
-- [item] | evidence: [ref]
-
-**Tool usage patterns:**
-- [observations]
-
-**User corrections:**
-- [observations, or "none observed"]
-
-## C. Skill And Workflow Signals
-| Skill/Workflow | Signal | Possible Action | Confidence | Evidence |
-|----------------|--------|-----------------|-----------|---------|
-| ... | [request + tool/final response signal] | update existing skill / propose new skill / no action | high/medium/low | [skill episode or transcript ref] |
-
-_(Leave table with a single dash row if nothing found.)_
-
-## C2. Existing Skill Maintenance
-**Applied during this Thought:**
-- [skill id] | [change made] | why: [reason] | evidence: [refs] | verification: [skill_read/skill_inspect result summary]
-
-**Deferred for Dream review:**
-- [skill/workflow] | [why deferred: new skill / too risky / insufficient evidence] | evidence: [refs]
-
-_(Write "none" under either list if nothing belongs there.)_
-
-## D. Business Candidates
-| Candidate | Destination | Action | Confidence | Evidence |
-|-----------|-------------|--------|-----------|---------|
-| ... | BUSINESS.md or entities/[type]/[id].md | create_entity / update_entity / append_event / update_business_profile / suggest_skill | high/medium/low | [file ref] |
-
-**Business candidate JSONL:** ${businessCandidatesFileRel} written / not needed
-
-_(Leave table with a single dash row if nothing found.)_
-
-## E. Memory Candidates
-| Item | Target | Recall Trigger | Future Behavior | Staleness Risk | Confidence | Evidence |
-|------|--------|----------------|-----------------|----------------|-----------|---------|
-| ...  | USER.md or SOUL.md or MEMORY.md | [when this should be recalled] | [what Prometheus should do differently] | [what could make it wrong/stale] | high/medium/low | [file ref] |
-
-_(Leave table with a single dash row if nothing found.)_
-
-## F. Opportunity Seeds
-| Seed | Why It Matters | Suggested Scouting Surface | Confidence | Evidence |
-|------|----------------|----------------------------|-----------|---------|
-| ...  | [why Dream should care tomorrow] | [${brainOpportunitySurfaceExample()}] | high/medium/low | [ref] |
-
-_(Leave table with a single dash row if nothing found.)_
-
-## G. Improvement Candidates
-| Issue | Proposal Type | Suggested Execution Mode | Confidence | Evidence |
-|-------|---------------|--------------------------|------------|---------|
-| ...   | ${brainThoughtProposalTypesExample()} | ${brainThoughtExecutionModesExample()} | high/medium/low | [ref] |
-
-_(Leave table with a single dash row if nothing found.)_
-
-## H. Window Verdict
-**Active:** yes/no
-**Signal quality:** high/medium/low/none
-**Summary:** [1-2 sentence factual recap; the richer narrative belongs in the top Summary section]
----
-
-After the file is written: confirm the write succeeded and stop. Do not do anything else.
-`;
+${activityIndex}`;
   }
 
   private _buildDreamCleanupPromptV2(opts: {

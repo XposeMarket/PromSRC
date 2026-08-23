@@ -89,6 +89,7 @@ import {
   type SkillWindow,
 } from '../prompt-context';
 import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
+import { isBrainThoughtRunActive } from '../brain/brain-thought-runtime.js';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
 import { planMessageExtensionActivation } from '../../extensions/activation-planner.js';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
@@ -661,7 +662,11 @@ export async function buildPersonalityContext(
 // buildTools is imported from tool-builder.ts
 export function buildTools(sessionId?: string) {
   const activatedCategories = sessionId ? getActivatedToolCategories(sessionId) : undefined;
-  return _buildTools({ getMCPManager }, activatedCategories);
+  return _buildTools(
+    { getMCPManager },
+    activatedCategories,
+    { includeBrainThoughtTools: !!sessionId && isBrainThoughtRunActive(sessionId) },
+  );
 }
 
 // ─── Auto-detect and activate tool categories on first turn ───────────────────
