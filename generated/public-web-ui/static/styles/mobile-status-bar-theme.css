@@ -1,0 +1,51 @@
+/*
+ * iOS/PWA top-edge theme bridge.
+ *
+ * WebKit owns the native scroll-edge blur above the page, so Prometheus cannot
+ * disable that blur from CSS. This file only controls the pixels WebKit sees
+ * beneath that native effect: a very small, theme-aware tint over the safe-area
+ * edge. It deliberately applies NO blur/filter of its own.
+ */
+
+:root {
+  --pm-mobile-native-chrome-color: var(--pm-bg, #0b0b0d);
+}
+
+html:has(body.pm-mobile-active),
+body.pm-mobile-active {
+  background-color: var(--pm-mobile-native-chrome-color, var(--pm-bg, #0b0b0d)) !important;
+}
+
+body.pm-mobile-active .pm-app > .pm-mobile-status-edge-tint {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(max(env(safe-area-inset-top), 44px) + 10px);
+  z-index: 5;
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, .075) 0%,
+    rgba(255, 255, 255, .035) 58%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, color-mix(in srgb, var(--pm-mobile-native-chrome-color, var(--pm-bg)) 72%, white 28%) 38%, transparent) 0%,
+    color-mix(in srgb, color-mix(in srgb, var(--pm-mobile-native-chrome-color, var(--pm-bg)) 84%, white 16%) 24%, transparent) 58%,
+    transparent 100%
+  );
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
+  box-shadow: none !important;
+}
+
+body:not(.pm-mobile-active) .pm-mobile-status-edge-tint {
+  display: none !important;
+}
