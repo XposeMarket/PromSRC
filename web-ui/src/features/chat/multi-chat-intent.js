@@ -13,10 +13,14 @@ function hasPersistedWorkspace() {
 
 export function loadMultiChatWorkspace() {
   if (!workspacePromise) {
-    workspacePromise = Promise.all([
-      import('./multi-chat-workspace-v2.js'),
-      import('./canonical-desktop-composer.js'),
-    ]).then(([workspace]) => {
+    workspacePromise = Promise.resolve().then(() => {
+      const testImporter = globalThis.__PROM_MULTI_CHAT_IMPORT_FOR_TESTS;
+      if (typeof testImporter === 'function') return testImporter();
+      return Promise.all([
+        import('./multi-chat-workspace-v2.js'),
+        import('./canonical-desktop-composer.js'),
+      ]);
+    }).then(([workspace]) => {
       workspace.installMultiChatWorkspace?.();
       return workspace;
     }).catch((error) => {

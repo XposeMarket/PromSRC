@@ -75,6 +75,27 @@ globalThis.localStorage = {
   removeItem: (key) => storage.delete(key),
 };
 
+let multiChatImportCalls = 0;
+let multiChatInstallCalls = 0;
+globalThis.__PROM_MULTI_CHAT_IMPORT_FOR_TESTS = async () => {
+  multiChatImportCalls += 1;
+  return [{ installMultiChatWorkspace: () => { multiChatInstallCalls += 1; } }, {}];
+};
+await import(`../web-ui/src/features/chat/multi-chat-intent.js?intent=${Date.now()}`);
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(multiChatImportCalls, 0, 'ordinary chat boot must keep the full multi-chat workspace dormant');
+windowRef.dispatchEvent(new CustomEvent('prometheus:side-chat-state', { detail: { open: false } }));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(multiChatImportCalls, 0, 'closed side-chat state must not activate multi-chat ownership');
+windowRef.dispatchEvent(new CustomEvent('prometheus:side-chat-state', { detail: { open: true } }));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(multiChatImportCalls, 1, 'opening a side chat must activate multi-chat ownership once');
+assert.equal(multiChatInstallCalls, 1, 'the loaded workspace must install through the intent owner');
+windowRef.dispatchEvent(new CustomEvent('prometheus:open-multi-chat'));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(multiChatImportCalls, 1, 'repeated explicit intent must reuse the keyed workspace load');
+delete globalThis.__PROM_MULTI_CHAT_IMPORT_FOR_TESTS;
+
 // A transient hashed/dynamic chunk failure must not poison the optional owner
 // for the remainder of the page. Queued synchronous facade work must survive
 // the failed attempt and flush after the next first-use retry succeeds.
