@@ -4,6 +4,7 @@ const paths = {
   base: 'web-ui/src/styles/base.css',
   components: 'web-ui/src/styles/components.css',
   chat: 'web-ui/src/pages/ChatPage.js',
+  multiChatIntent: 'web-ui/src/features/chat/multi-chat-intent.js',
   multiChat: 'web-ui/src/features/chat/multi-chat-workspace-v2.js',
   multiChatCss: 'web-ui/src/styles/multi-chat-workspace.css',
   performance: 'web-ui/src/performance.js',
@@ -11,6 +12,7 @@ const paths = {
   generatedBase: 'generated/public-web-ui/static/styles/base.css',
   generatedComponents: 'generated/public-web-ui/static/styles/components.css',
   generatedChat: 'generated/public-web-ui/static/pages/ChatPage.js',
+  generatedMultiChatIntent: 'generated/public-web-ui/static/features/chat/multi-chat-intent.js',
   generatedMultiChat: 'generated/public-web-ui/static/features/chat/multi-chat-workspace-v2.js',
   generatedMultiChatCss: 'generated/public-web-ui/static/styles/multi-chat-workspace.css',
   generatedPerformance: 'generated/public-web-ui/static/performance.js',
@@ -21,6 +23,7 @@ const read = (path) => fs.readFileSync(path, 'utf8');
 const sourceBase = read(paths.base);
 const sourceComponents = read(paths.components);
 const sourceChat = read(paths.chat);
+const multiChatIntent = read(paths.multiChatIntent);
 const multiChat = read(paths.multiChat);
 const multiChatCss = read(paths.multiChatCss);
 const performance = read(paths.performance);
@@ -28,6 +31,7 @@ const sourceContext = read(paths.sourceContext);
 const generatedBase = read(paths.generatedBase);
 const generatedComponents = read(paths.generatedComponents);
 const generatedChat = read(paths.generatedChat);
+const generatedMultiChatIntent = read(paths.generatedMultiChatIntent);
 const generatedMultiChat = read(paths.generatedMultiChat);
 const generatedMultiChatCss = read(paths.generatedMultiChatCss);
 const generatedPerformance = read(paths.generatedPerformance);
@@ -36,6 +40,7 @@ const generatedSourceContext = read(paths.generatedSourceContext);
 if (sourceBase !== generatedBase) throw new Error('base.css source/generated copies are out of sync');
 if (sourceComponents !== generatedComponents) throw new Error('components.css source/generated copies are out of sync');
 if (sourceChat !== generatedChat) throw new Error('ChatPage.js source/generated copies are out of sync');
+if (multiChatIntent !== generatedMultiChatIntent) throw new Error('multi-chat intent source/generated copies are out of sync');
 if (multiChat !== generatedMultiChat) throw new Error('multi-chat v2 workspace source/generated copies are out of sync');
 if (multiChatCss !== generatedMultiChatCss) throw new Error('multi-chat workspace styles source/generated copies are out of sync');
 if (performance !== generatedPerformance) throw new Error('performance.js source/generated copies are out of sync');
@@ -104,12 +109,17 @@ if (!/data\.recent/.test(miniItems) || !/data\.gitItems/.test(miniItems)) {
   throw new Error('populated Sources state must continue to use minimized source items');
 }
 
-// Surface exclusion is exercised in a browser by
-// test-web-ui-performance-foundation.mjs. This older contract only verifies
-// which controller the desktop entry selects.
-if (!/import\('\.\/features\/chat\/multi-chat-workspace-v2\.js'\)/.test(performance)
-  || /import\('\.\/features\/chat\/multi-chat-workspace\.js'\)/.test(performance)) {
-  throw new Error('desktop boot must install only the corrected multi-chat v2 controller');
+// Intent activation is exercised behaviorally by
+// test-chat-optional-ownership.mjs. This ownership check ensures the desktop
+// entry cannot bypass the lightweight intent module and eagerly load a full
+// workspace controller.
+if (!/import\('\.\/features\/chat\/multi-chat-intent\.js'\)/.test(performance)
+  || /import\('\.\/features\/chat\/multi-chat-workspace(?:-v2)?\.js'\)/.test(performance)) {
+  throw new Error('desktop boot must select the lightweight multi-chat intent owner');
+}
+if (!/import\('\.\/multi-chat-workspace-v2\.js'\)/.test(multiChatIntent)
+  || /import\('\.\/multi-chat-workspace\.js'\)/.test(multiChatIntent)) {
+  throw new Error('multi-chat intent must select only the corrected v2 workspace');
 }
 if (!/prometheus_multi_chat_tabs_v3/.test(multiChat) || !/MAX_TABS\s*=\s*30/.test(multiChat)) {
   throw new Error('native multi-chat tabs need a clean persisted state namespace');

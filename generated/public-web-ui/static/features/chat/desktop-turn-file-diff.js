@@ -34,7 +34,7 @@ function turnFileTarget(row) {
   };
 }
 
-function openTurnFileDiff(row) {
+export function openTurnFileDiff(row) {
   const target = turnFileTarget(row);
   if (!target || typeof window.openCodingWorkspace !== 'function') return false;
   window.openCodingWorkspace('', target);

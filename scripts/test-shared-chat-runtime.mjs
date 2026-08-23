@@ -162,6 +162,15 @@ const desktopAdapter = createDesktopChatRuntimeAdapter({
 assert.equal(desktopAdapter.sync(desktopSession).getTurns()[0].content, 'desktop');
 desktopAdapter.queue(desktopSession.id).push({ message: 'queued' });
 assert.equal(desktopAdapter.runtimeFor(desktopSession.id).snapshot.queue.length, 1);
+desktopAdapter.activate(desktopSession);
+const sideRuntime = desktopAdapter.retainSecondary('desktop-side-session');
+assert.equal(sideRuntime, desktopAdapter.runtimeFor('desktop-side-session'), 'secondary panes must reuse the keyed runtime');
+assert.deepEqual(desktopAdapter.diagnostics().secondarySessionIds, ['desktop-side-session']);
+assert.equal(desktopAdapter.diagnostics().primarySessionId, desktopSession.id);
+desktopAdapter.setSecondaryVisible('desktop-other-side');
+assert.deepEqual(desktopAdapter.diagnostics().secondarySessionIds, ['desktop-other-side'], 'only the visible secondary lease should remain retained');
+assert.equal(desktopAdapter.releaseSecondary('desktop-other-side'), true);
+assert.deepEqual(desktopAdapter.diagnostics().secondarySessionIds, []);
 assert.equal(await desktopAdapter.loadOlder(desktopSession.id), true, 'desktop cursor paging should succeed through the injected transport');
 assert.equal(desktopSharedRequestCalls, 1, 'desktop cursor paging must use the shared API transport exactly once');
 assert.equal(desktopRawFetchCalls, 0, 'desktop cursor paging must never call raw window.fetch');

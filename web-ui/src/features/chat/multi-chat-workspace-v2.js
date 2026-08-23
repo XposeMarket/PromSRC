@@ -10,8 +10,6 @@ let state = {
 };
 let installed = false;
 let dragPayload = null;
-let observer = null;
-let activeSessionPoll = null;
 let pendingDrawerOpen = false;
 let pendingSideSessionId = '';
 let nativeSideRetryTimer = 0;
@@ -286,7 +284,9 @@ async function refreshNativeSideSession(sessionId) {
   const sid = clean(sessionId);
   if (!sid || typeof window._loadSessionFromServer !== 'function') return;
   try {
-    await window._loadSessionFromServer(sid, { force: true, historyLimit: 300, processLimit: 500 });
+    // The shared runtime owns the bounded initial suffix and cursor paging.
+    // Opening a second pane must not revive the old 300-message suffix fetch.
+    await window._loadSessionFromServer(sid, { force: true, historyLimit: 80, processLimit: 240 });
   } catch {}
   if (state.sideSessionId === sid) {
     ensureNativeSideLink(sid);
@@ -600,13 +600,17 @@ function installWorkspace() {
   document.addEventListener('dragover', handleDragOver, true);
   document.addEventListener('dragleave', handleDragLeave, true);
   document.addEventListener('drop', handleDrop, true);
-  observer = new MutationObserver(() => {
+  window.addEventListener('prometheus:chat-session-activated', syncMainSession);
+  window.addEventListener('prometheus:side-chat-state', () => {
+    syncNativeSideState();
+    patchNativeSplitHeaders();
+    renderTabStrip();
+  });
+  window.addEventListener('prometheus:chat-rendered', () => {
     syncMainSession();
     patchNativeSplitHeaders();
     if (!document.getElementById('prom-multi-chat-tabs')) renderTabStrip();
   });
-  observer.observe(document.body, { childList: true, subtree: true });
-  activeSessionPoll = window.setInterval(syncMainSession, 500);
   render();
 }
 

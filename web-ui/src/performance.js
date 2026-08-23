@@ -3,20 +3,68 @@ const shouldBootMobile = window.__PROM_SHOULD_BOOT_MOBILE?.() === true;
 // performance.js is shared by both documents. Resolve the surface before any
 // desktop module is requested so the mobile entry never parses or evaluates a
 // composer, side-chat workspace, context tracker, or optional desktop feature.
+const desktopFeatureLoads = new Map();
+
+function loadDesktopFeature(name, loader) {
+  if (shouldBootMobile) return Promise.resolve(null);
+  if (!desktopFeatureLoads.has(name)) {
+    desktopFeatureLoads.set(name, loader().catch((error) => {
+      desktopFeatureLoads.delete(name);
+      console.warn(`[${name}] Desktop feature failed to load:`, error);
+      throw error;
+    }));
+  }
+  return desktopFeatureLoads.get(name);
+}
+
+function startDesktopFeature(name, loader) {
+  void loadDesktopFeature(name, loader).catch(() => {});
+}
+
+function activateDesktopPageFeatures(mode) {
+  if (shouldBootMobile) return;
+  const page = String(mode || '').trim().toLowerCase();
+  if (page === 'chat') {
+    startDesktopFeature('Chat Intent', () => import('./features/chat/multi-chat-intent.js'));
+    startDesktopFeature('Context Window', () => import('./context-window-live-tracking.js'));
+  }
+  if (page === 'subagents' || page === 'teams') {
+    startDesktopFeature('Prom Bot', () => import('./prom-bot.js')
+      .then(() => import('./prom-bot-roster.js'))
+      .then(() => import('./prom-bot-collab.js'))
+      .then(() => import('./prom-bot-collab-hardening.js'))
+      .then(() => import('./team-prom-bot-flow.js')));
+  }
+  if (page === 'subagents' || page === 'teams') {
+    startDesktopFeature('Canonical Composer', () => import('./features/chat/canonical-desktop-composer.js'));
+    startDesktopFeature('Bot Create', () => import('./bot-create.js')
+      .then(() => import('./bot-create-settings-bridge.js')));
+  }
+}
+
+function installTurnDiffIntent() {
+  const selector = '.file-changes-card .file-change-row.is-openable';
+  const activate = async (event) => {
+    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+    const row = event.target?.closest?.(selector);
+    if (!row) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+      const feature = await loadDesktopFeature('Turn Diff', () => import('./features/chat/desktop-turn-file-diff.js'));
+      feature?.openTurnFileDiff?.(row);
+    } catch {}
+  };
+  document.addEventListener('click', activate, true);
+  document.addEventListener('keydown', activate, true);
+}
+
 if (!shouldBootMobile) {
-  void Promise.all([
-    import('./features/chat/multi-chat-workspace-v2.js'),
-    import('./features/chat/canonical-desktop-composer.js'),
-    import('./context-window-live-tracking.js'),
-  ]).catch((error) => console.warn('[Chat] Desktop workspace failed to load:', error));
-  void import('./features/chat/desktop-turn-file-diff.js')
-    .catch((error) => console.warn('[Turn Diff] Desktop file diff bridge failed to load:', error));
-  void import('./prom-bot.js')
-    .then(() => import('./prom-bot-roster.js'))
-    .then(() => import('./prom-bot-collab.js'))
-    .then(() => import('./prom-bot-collab-hardening.js'))
-    .then(() => import('./team-prom-bot-flow.js'))
-    .catch((error) => console.warn('[Prom Bot] Desktop shell failed to load:', error));
+  window.addEventListener('prometheus:page-activated', (event) => {
+    activateDesktopPageFeatures(event?.detail?.mode);
+  });
+  installTurnDiffIntent();
+  window.__PROM_DESKTOP_FEATURE_LOADS = () => Object.freeze([...desktopFeatureLoads.keys()].sort());
 }
 
 /**
@@ -78,13 +126,3 @@ export function getClientPerformanceEvents() {
 
 window.__PROM_PERF_MARK = markClientPerformance;
 window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
-
-// Bot creation is a desktop shell affordance. performance.js is also imported
-// by the mobile router, so keep these modules completely out of the PWA runtime.
-if (!shouldBootMobile) {
-  void import('./bot-create.js')
-    .then(() => import('./bot-create-settings-bridge.js'))
-    .catch((error) => {
-      console.warn('[Bot Create] Desktop creation module failed to load:', error);
-    });
-}

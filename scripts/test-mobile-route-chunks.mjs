@@ -11,6 +11,7 @@ const publicRoot = path.join(root, 'generated', 'public-web-ui');
 const assetManifest = JSON.parse(fs.readFileSync(path.join(publicRoot, 'asset-manifest.json'), 'utf8'));
 const mobileOutput = (filename) => assetManifest.moduleOutputs[`src/mobile/${filename}`];
 const ownerFiles = [
+  'mobile-voice-page.js',
   'mobile-schedule-pages.js',
   'mobile-teams-pages.js',
   'mobile-hub-pages.js',
@@ -185,6 +186,14 @@ try {
     forbiddenOwners: ownerFiles,
     forbiddenApis: ['/api/bg-tasks', '/api/schedules', '/api/teams', '/api/subagents'],
   });
+  const voiceOwner = mobileOutput('mobile-voice-page.js');
+  const voice = await inspectRoute(browser, baseUrl, {
+    route: '/mobile/voice',
+    paired: true,
+    expectedOwner: voiceOwner,
+    forbiddenOwners: ownerFiles.filter((owner) => owner !== voiceOwner),
+    selector: '#pm-voice-orb',
+  });
   const schedule = await inspectRoute(browser, baseUrl, {
     route: '/mobile/schedule',
     paired: true,
@@ -210,7 +219,7 @@ try {
     });
   }
 
-  console.log(JSON.stringify({ pair: pair.metrics, chat: chat.metrics, schedule: schedule.metrics }, null, 2));
+  console.log(JSON.stringify({ pair: pair.metrics, chat: chat.metrics, voice: voice.metrics, schedule: schedule.metrics }, null, 2));
   console.log('Mobile route chunk behavior passed.');
 } finally {
   await browser.close();

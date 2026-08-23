@@ -58,6 +58,7 @@ for (const source of [
   'src/pages/SettingsPage.js',
   'src/mobile/mobile-router.js',
   'src/mobile/mobile-pages.js',
+  'src/mobile/mobile-voice-page.js',
   'src/mobile/mobile-schedule-pages.js',
 ]) {
   assert.match(manifest.moduleOutputs[source] || '', /^\/build\/(?:entries|chunks)\//, `${source}: missing feature-owned output`);
@@ -66,6 +67,11 @@ assert.notEqual(
   manifest.moduleOutputs['src/mobile/mobile-pages.js'],
   manifest.moduleOutputs['src/mobile/mobile-schedule-pages.js'],
   'Chat and Schedule must remain independently addressable route chunks',
+);
+assert.notEqual(
+  manifest.moduleOutputs['src/mobile/mobile-pages.js'],
+  manifest.moduleOutputs['src/mobile/mobile-voice-page.js'],
+  'Chat and Voice must remain independently addressable feature chunks',
 );
 
 assert(manifest.initial.mobile.jsGzipBytes < 250_000, `mobile shell JS gzip budget exceeded: ${manifest.initial.mobile.jsGzipBytes}`);
