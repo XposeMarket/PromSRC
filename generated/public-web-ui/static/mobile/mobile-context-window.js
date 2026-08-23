@@ -6,8 +6,8 @@
 // Mirrors the desktop context-window popover (ChatPage.js) but self-contained
 // for the mobile shell.
 
-import { mobileGatewayFetch } from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
-import { escapeHtml } from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+import { mobileGatewayFetch } from './mobile-api.js';
+import { escapeHtml } from './mobile-shell.js';
 
 let _open = false;
 let _expanded = false;

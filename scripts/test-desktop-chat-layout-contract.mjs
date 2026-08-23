@@ -104,8 +104,11 @@ if (!/data\.recent/.test(miniItems) || !/data\.gitItems/.test(miniItems)) {
   throw new Error('populated Sources state must continue to use minimized source items');
 }
 
-if (!/import '\.\/features\/chat\/multi-chat-workspace-v2\.js';/.test(performance)
-  || /import '\.\/features\/chat\/multi-chat-workspace\.js';/.test(performance)) {
+// Surface exclusion is exercised in a browser by
+// test-web-ui-performance-foundation.mjs. This older contract only verifies
+// which controller the desktop entry selects.
+if (!/import\('\.\/features\/chat\/multi-chat-workspace-v2\.js'\)/.test(performance)
+  || /import\('\.\/features\/chat\/multi-chat-workspace\.js'\)/.test(performance)) {
   throw new Error('desktop boot must install only the corrected multi-chat v2 controller');
 }
 if (!/prometheus_multi_chat_tabs_v3/.test(multiChat) || !/MAX_TABS\s*=\s*30/.test(multiChat)) {

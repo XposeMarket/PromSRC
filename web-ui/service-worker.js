@@ -17,39 +17,24 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v292-2026-08-15-static-cache-contract';
+const VERSION = 'pm-v303-2026-08-22-canonical-precache';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
 // Files needed for the mobile shell to render offline.
 const PRECACHE = [
-  '/',
-  '/index.html',
   '/mobile/chat',
-  '/mobile/voice',
-  '/mobile/tasks',
-  '/?source=pwa#mobile/chat',
-  '/src/styles/mobile.css',
-  '/src/styles/base.css',
-  '/src/mobile/mobile-router.js',
-  '/src/mobile/mobile-shell.js',
-  '/src/mobile/mobile-pages.js',
-  '/src/mobile/voice-preview-deck.mjs',
-  '/src/mobile/mobile-data.js',
-  '/src/mobile/mobile-api.js',
-  '/src/model-display.js',
   '/static/styles/mobile.css',
   '/static/styles/base.css',
   '/static/mobile/mobile-router.js',
   '/static/mobile/mobile-shell.js',
   '/static/mobile/mobile-pages.js',
-  '/static/mobile/voice-preview-deck.mjs',
   '/static/mobile/mobile-data.js',
   '/static/mobile/mobile-api.js',
   '/static/model-display.js',
-  '/src/api.js',
-  '/src/state.js',
-  '/src/utils.js',
+  '/static/api.js',
+  '/static/state.js',
+  '/static/utils.js',
   '/assets/Prometheus.png',
   '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
 ];

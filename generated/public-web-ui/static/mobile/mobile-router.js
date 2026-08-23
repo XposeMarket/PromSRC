@@ -4,20 +4,20 @@
 
 import { markClientPerformance } from '../performance.js';
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+} from './mobile-pages.js';
 import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+} from './mobile-api.js';
 import {
   loadMobileGatewaySessionGroups,
   searchMobileGatewaySessions,
@@ -39,7 +39,7 @@ let mobileRenderGeneration = 0;
 
 function loadMobilePairingPage() {
   if (!mobilePairingPagePromise) {
-    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v291-2026-08-13-mobile-syntax-recovery')
+    mobilePairingPagePromise = import('./mobile-pairing-page.js')
       .catch((error) => {
         mobilePairingPagePromise = null;
         throw error;
@@ -200,7 +200,7 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
-  import('../pages/SettingsPage.js?v=settings-boot-recovery-v12')
+  import('../pages/SettingsPage.js')
     .then(() => openMobileSettings(tab))
     .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');

@@ -7,6 +7,31 @@ const baselinePath = path.join(root, 'scripts', 'web-ui-architecture-baseline.js
 const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
 const failures = [];
 
+// These ceilings are code-owned review boundaries, not values loaded from the
+// editable baseline document. The JSON ratchet can move down as owners leave a
+// legacy surface, but raising it alone can never make a growth regression pass.
+// A ceiling change therefore appears as executable policy in review.
+const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
+  'web-ui/src/pages/ChatPage.js': 2485073,
+  'web-ui/src/mobile/mobile-pages.js': 2054461,
+  'web-ui/src/styles/mobile.css': 603583,
+  'web-ui/index.html': 574535,
+});
+const CODE_OWNED_NEW_MODULE_CEILING = 400000;
+
+if (baseline.version !== 2) failures.push(`architecture baseline version must be 2 (received ${baseline.version})`);
+for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)) {
+  const configured = Number(baseline.legacySurfaces?.[relativePath]);
+  if (!Number.isFinite(configured)) {
+    failures.push(`${relativePath}: missing JSON ratchet`);
+  } else if (configured > ceiling) {
+    failures.push(`${relativePath}: JSON ratchet ${configured} exceeds code-owned ceiling ${ceiling}`);
+  }
+}
+if (Number(baseline.maxNewModuleBytes) > CODE_OWNED_NEW_MODULE_CEILING) {
+  failures.push(`new module JSON ceiling ${baseline.maxNewModuleBytes} exceeds code-owned ceiling ${CODE_OWNED_NEW_MODULE_CEILING}`);
+}
+
 function bytes(relativePath) {
   const absolute = path.join(root, relativePath);
   if (!fs.existsSync(absolute)) {
@@ -24,7 +49,10 @@ for (const [relativePath, maxBytes] of Object.entries(baseline.legacySurfaces ||
 }
 
 const legacy = new Set(Object.keys(baseline.legacySurfaces || {}));
-const maxNewModuleBytes = Number(baseline.maxNewModuleBytes || 400000);
+const maxNewModuleBytes = Math.min(
+  Number(baseline.maxNewModuleBytes || CODE_OWNED_NEW_MODULE_CEILING),
+  CODE_OWNED_NEW_MODULE_CEILING,
+);
 
 function walk(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -48,6 +76,7 @@ walk(path.join(root, 'web-ui', 'src'));
 for (const required of [
   'workspace/self/WEB_UI_ARCHITECTURE.md',
   'workspace/self/WEB_UI_ARCHITECTURE_PERFORMANCE_REVIEW_2026-08-19.md',
+  'workspace/self/WEB_UI_PERFORMANCE_PROGRAM_2026-08-22.md',
 ]) {
   if (!fs.existsSync(path.join(root, required))) failures.push(`${required}: missing architecture documentation`);
 }

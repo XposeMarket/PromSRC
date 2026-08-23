@@ -1,8 +1,8 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 import {
   getGateway,
   getGatewayFilter,
