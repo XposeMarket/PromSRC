@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "hard": {
+    "desktopMaxPlainPaintRows": 96,
+    "desktopMaxPlainMaterializedRows": 180,
+    "mobileMaxPlainPaintRows": 52,
+    "mobileMaxPlainMaterializedRows": 92,
+    "hiddenDesktopMaxPlainPaintRows": 26,
+    "desktopMaxSyntheticDomNodes": 900,
+    "mobileMaxSyntheticDomNodes": 550,
+    "maxRetainedViewGrowth500To2000Ratio": 1.5,
+    "maxNavigatorRows": 120,
+    "maxRowsUpdatedPerSingleTurnCommit": 1,
+    "minimumDesktopDomReductionAt500Pct": 80,
+    "minimumDesktopDomReductionAt1000Pct": 90,
+    "minimumMobileDomReductionAt500Pct": 89,
+    "minimumMobileDomReductionAt1000Pct": 94
+  },
+  "diagnostics": {
+    "selectionP95Ms": 5,
+    "singleTurnCommitP95Ms": 8,
+    "policy": "Timing is tracked against the committed reference environment; deterministic row, weight, and commit caps are the portable CI gates."
+  }
+}

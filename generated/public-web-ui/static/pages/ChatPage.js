@@ -1,15 +1,3 @@
-/**
- * ChatPage.js — F3f Extract
- *
- * Chat page: sessions, sendChat (SSE), message rendering, process log,
- * progress panel, agent execution tracking, canvas panel, file upload,
- * queued prompts.
- *
- * Dependencies: api() from api.js, escHtml/renderMd/showToast/timeAgo/
- *   buildVisualIframe/buildVisualSrcdoc from utils.js
- * Cross-page: setMode from app.js, various page functions via window.*
- */
-
 import { api } from '../api.js';
 import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
@@ -32,6 +20,14 @@ import {
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
+import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
+import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
+import {
+  captureKeyedScrollState,
+  reconcileKeyedTimelinePanes,
+  reconcileKeyedTimelineRows,
+} from '../features/chat/timeline/keyed-dom.js';
+import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
 import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 import {
   SOURCE_PANEL_SURFACE,
@@ -50,7 +46,7 @@ import {
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
 installToolActivityExpansionPersistence();
-// (state.js imports handled via window.* proxy above)
+const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
 
 let creativeFeatureRuntime = null;
 let creativeFeatureRuntimePromise = null;
@@ -122,11 +118,6 @@ function ensureHyperframesFeature() {
   return hyperframesFeaturePromise;
 }
 
-// ─── Global state: all shared mutable state accessed via window.* ───────────
-// ES modules have their own scope. To share state with the inline <script>,
-// connectWS, Settings, and other modules, we access everything via window.
-// The inline script declares and exposes all globals on window before modules load.
-
 const API = window.API || '';
 const CHAT_SESSIONS_KEY = window.CHAT_SESSIONS_KEY || 'prometheus_chat_sessions_v1';
 const AGENT_SESSION_KEY = window.AGENT_SESSION_KEY || 'prometheus_agent_session_id';
@@ -158,6 +149,23 @@ const {
   request: api,
   getStreamState: getSessionStreamState,
   recordProcess: addSessionProcessEntry,
+});
+
+const {
+  controller: desktopTimelineController,
+  entries: desktopTimelineEntries,
+  navigatorEntries: boundDesktopNavigatorEntries,
+  wireScroller: wireDesktopTimelineScroller,
+  rowSignature: desktopTimelineRowSignature,
+  renderHead: renderDesktopTimelinePager,
+  renderTail: renderDesktopTimelineTailControl,
+} = createDesktopTimelineView({
+  runtimeFor: desktopChatRuntime,
+  isInternalMessage: isInternalChatMessage,
+  getHistory: (sessionId) => getChatSessionById(sessionId)?.history || window.chatHistory || [],
+  renderGatewayPager: renderDesktopHistoryPager,
+  render: renderChatMessages,
+  encode: encodeInlineJsString,
 });
 const EMPTY_CHAT_STARTER_PROMPTS = [
   {
@@ -13492,12 +13500,14 @@ function workflowTransitionLabel(msg) {
 }
 
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
-  const visibleHistory = collapseDuplicateAssistantMessageEntries((history || [])
-    .map((msg, originalIndex) => ({ msg, originalIndex })))
+  const sourceEntries = Array.isArray(options.entries)
+    ? options.entries
+    : desktopTimelineEntries(history, options.sessionId || window.activeChatSessionId);
+  const visibleHistory = collapseDuplicateAssistantMessageEntries(sourceEntries.map((entry) => ({ ...entry })))
     .filter((entry) => !isInternalChatMessage(entry.msg))
     .filter((entry) => !(options.hideSideChatBoundary !== false && entry.msg?.sideChatBoundary === true));
 
-  return visibleHistory.map(({ msg, originalIndex }) => {
+  return visibleHistory.map(({ msg, originalIndex, key, signature }) => {
     const isSyntheticTimerTrigger =
       String(msg?.channelLabel || '').toLowerCase() === 'timer'
       && msg.role === 'user'
@@ -13563,7 +13573,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
     return `
-    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}">
+    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}" data-chat-row-key="${escHtml(String(key || `message:${originalIndex}`))}" data-chat-row-signature="${escHtml(`${String(signature || desktopTimelineRowSignature(msg))}:${isEditingThisUserMessage ? 'editing' : 'view'}`)}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         <div class="msg-bubble-stack">
           ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
@@ -13799,7 +13809,7 @@ function renderSessionThinkingHtml(sessionId) {
   if (pendingQuestion && !hasNonQuestionThinking) return '';
   const thinkingOnly = !hasNonQuestionThinking;
   return `
-    <div class="msg-shell ai">
+    <div class="msg-shell ai" data-chat-row-key="live:${escHtml(sessionId)}">
       <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
         <div class="msg-bubble-stack">
           <div class="msg-body" data-live-stream-body="${escHtml(sessionId)}">
@@ -13810,17 +13820,23 @@ function renderSessionThinkingHtml(sessionId) {
     </div>`;
 }
 
-function renderSideChatPaneHtml() {
+function renderSideChatPaneHtml(timelineBudget = null) {
   const link = getActiveSideChatLink();
   const side = getSideChatSession();
   if (!link || !side) return '';
   const title = side.title || link.title || 'Side chat';
   const parent = getSideChatParentSession(link);
   const parentTitle = parent?.title || 'Main chat';
-  const historyHtml = renderVisibleChatHistoryHtml(side.history || [], { sessionId: side.id, readonly: true, hideSideChatBoundary: true });
+  const entries = desktopTimelineEntries(side.history || [], side.id);
+  const timeline = desktopTimelineController.select(`desktop:side:${side.id}`, entries, {
+    ...(timelineBudget || {}), hidden: document.hidden === true,
+  });
+  const historyHtml = renderVisibleChatHistoryHtml(side.history || [], {
+    sessionId: side.id, readonly: true, hideSideChatBoundary: true, entries: timeline.paintEntries,
+  });
   const thinkingHtml = renderSessionThinkingHtml(side.id);
   return `
-    <section class="side-chat-pane" aria-label="Side chat">
+    <section class="side-chat-pane" data-chat-pane-key="side:${escHtml(side.id)}" aria-label="Side chat">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
           <div class="side-chat-kicker">Side chat · ${escHtml(parentTitle)}</div>
@@ -13844,7 +13860,7 @@ function renderSideChatPaneHtml() {
     </section>`;
 }
 
-function renderBackgroundAgentSidePaneHtml(record) {
+function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
   if (!record) return '';
   const identity = resolveBackgroundAgentIdentity(record.id, {
     existingName: record.agentName,
@@ -13873,19 +13889,27 @@ function renderBackgroundAgentSidePaneHtml(record) {
       workflowPart: 'interruption',
     }))
     .filter((steer) => steer.content);
+  const sideSessionId = `background:${record.id}`;
+  const sideHistory = running ? steerHistory : [...steerHistory, message];
+  const sideEntries = desktopTimelineEntries(sideHistory, sideSessionId);
+  const sideTimeline = desktopTimelineController.select(`desktop:side:${sideSessionId}`, sideEntries, {
+    ...(timelineBudget || {}), hidden: document.hidden === true,
+  });
   const historyHtml = running
     ? `${renderVisibleChatHistoryHtml(steerHistory, {
-      sessionId: `background:${record.id}`,
+      sessionId: sideSessionId,
       readonly: true,
       hideSideChatBoundary: true,
+      entries: sideTimeline.paintEntries,
     })}${renderUnifiedDesktopLiveMessageHtml(message, { sessionId: `background:${record.id}` })}`
-    : renderVisibleChatHistoryHtml([...steerHistory, message], {
-      sessionId: `background:${record.id}`,
+    : renderVisibleChatHistoryHtml(sideHistory, {
+      sessionId: sideSessionId,
       readonly: true,
       hideSideChatBoundary: true,
+      entries: sideTimeline.paintEntries,
     });
   return `
-    <section class="side-chat-pane background-agent-side-pane" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
+    <section class="side-chat-pane background-agent-side-pane" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
           <div class="side-chat-kicker">Background work · ${escHtml(statusLabel)}</div>
@@ -13906,63 +13930,19 @@ function renderBackgroundAgentSidePaneHtml(record) {
         inputAttributes: 'oninput="handleBackgroundAgentInputResize(this)" onkeydown="handleBackgroundAgentInputKeydown(event)"',
         footerHint: `Live steer · sent directly to ${identity.name}`,
       })}
-      <!-- <div class="legacy-background-agent-composer">
-        <div class="chat-input-row">
-          <button class="chat-attach-btn" type="button" onclick="showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')" title="Attach file(s)" aria-label="Attach file(s)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-          </button>
-          <button class="chat-voice-btn" type="button" onclick="showToast('Use the main composer mic for voice input, then steer this agent from here.', '', 'info')" title="Dictate message" aria-label="Dictate message">
-            <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-          </button>
-          <div class="chat-composer-input-wrap">
-            <textarea id="background-agent-chat-input" rows="1" placeholder="Steer ${escHtml(identity.name)} directly" autocomplete="off" oninput="handleBackgroundAgentInputResize(this)" onkeydown="handleBackgroundAgentInputKeydown(event)"></textarea>
-          </div>
-          <button class="send-btn" type="button" onclick="sendBackgroundAgentSteerMessage()" title="Send live steer" aria-label="Send live steer">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
-          </button>
-        </div>
-        <div class="agent-toggle side-chat-composer-footer" style="margin-bottom:0;margin-top:6px">
-          <div class="chat-hint" style="margin:0;flex:1">Live steer · sent directly to ${escHtml(identity.name)}</div>
-          <div class="chat-model-switcher-wrap">
-            <button type="button" style="background:none;border:none;padding:0;cursor:default;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Background agent model">
-              <span>${escHtml(document.getElementById('chat-model-name')?.textContent || 'your model')}</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-          </div>
-        </div>
-      </div> -->
     </section>`;
 }
-
-// ── Streaming render coalescer ──────────────────────────────────────────────
-// During an active turn, token/live-trace appends arrive faster than is useful
-// to repaint. State (streamingAIText, liveTraceEntries) is still updated
-// immediately on every token; only the *visible* render is coalesced to a steady
-// cadence so the final answer streams in a few words at a time (like Telegram's
-// bubble edits) instead of flickering per token. Timers are keyed per session id
-// so a background/non-viewed session can never repaint the foreground — the
-// render fns themselves also guard on visibility. Every finalization path must
-// flush so the complete final answer always lands.
-const STREAM_RENDER_THROTTLE_MS = 180;
-const _streamRenderTimers = new Map(); // sessionId -> timeout handle
 
 function scheduleStreamingRenderFor(sessionId, renderFn) {
   const key = String(sessionId || '');
   if (!key || typeof renderFn !== 'function') { try { renderFn?.(); } catch {} return; }
-  if (_streamRenderTimers.has(key)) return; // leading-guard coalesce
-  const handle = setTimeout(() => {
-    _streamRenderTimers.delete(key);
-    try { renderFn(); } catch {}
-  }, STREAM_RENDER_THROTTLE_MS);
-  if (handle && typeof handle.unref === 'function') handle.unref();
-  _streamRenderTimers.set(key, handle);
+  desktopStreamRenderScheduler.schedule(`desktop:${key}`, renderFn);
 }
 
 function flushStreamingRenderFor(sessionId, renderFn) {
   const key = String(sessionId || '');
-  const handle = _streamRenderTimers.get(key);
-  if (handle) { clearTimeout(handle); _streamRenderTimers.delete(key); }
-  if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
+  if (key) desktopStreamRenderScheduler.flush(`desktop:${key}`, renderFn);
+  else if (typeof renderFn === 'function') { try { renderFn(); } catch {} }
 }
 
 function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
@@ -14177,19 +14157,18 @@ function renderChatMessages() {
   if (typeof window.updateTokenCount === 'function') window.updateTokenCount();
   const container = document.getElementById('chat-messages');
   const chatView = document.getElementById('chat-view');
-  // Preserve scroll positions before the innerHTML rebuild below.
+  // Preserve rich-control state while keyed rows independently reconcile.
   const _panelScroll = captureProcessPanelScroll();
   const _questionDraft = captureQuestionDraftState();
   const _approvalProcessState = captureApprovalProcessState();
   const _approvalDetailsState = captureApprovalDetailsState();
-  const _mainScrollTop = container ? container.scrollTop : 0;
+  const _timelineScroll = captureKeyedScrollState(container, container);
   syncAssistantWorkTimer();
   updateSideChatChrome();
   renderBackgroundSpawnDock();
 
-  const visibleHistory = collapseDuplicateAssistantMessageEntries((window.chatHistory || [])
-    .map((msg, originalIndex) => ({ msg, originalIndex })))
-    .filter((entry) => !isInternalChatMessage(entry.msg));
+  const allTimelineEntries = desktopTimelineEntries(window.chatHistory || [], window.activeChatSessionId);
+  const visibleHistory = collapseDuplicateAssistantMessageEntries(allTimelineEntries.map((entry) => ({ ...entry })));
   const voicePendingHtml = renderVoicePendingTurns();
   const sideActive = window.sideChatSplitOpen && !!getActiveSideChatLink();
   const backgroundAgentRecord = window.backgroundAgentDetailId
@@ -14200,6 +14179,17 @@ function renderChatMessages() {
     updateSideChatChrome();
   }
   const splitActive = sideActive || !!backgroundAgentRecord;
+  const paneBudgets = allocateTimelinePaneBudgets(
+    splitActive ? [{ key: 'main' }, { key: 'side' }] : [{ key: 'main' }],
+    { surface: 'desktop', focusedKey: 'main', hidden: document.hidden === true },
+  );
+  const mainTimelineKey = `desktop:main:${window.activeChatSessionId}`;
+  const mainTimeline = desktopTimelineController.select(mainTimelineKey, allTimelineEntries, {
+    ...paneBudgets.main,
+    followTail: !window.chatMessagesUserScrolledUp,
+    pinnedKeys: _timelineScroll.pinnedKeys,
+    hidden: document.hidden === true,
+  });
   const projectWelcome = getEmptyProjectChatWelcome();
 
   if (!splitActive && visibleHistory.length === 0 && !voicePendingHtml) {
@@ -14224,12 +14214,16 @@ function renderChatMessages() {
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
-  const mainHtml = renderDesktopHistoryPager(window.activeChatSessionId) + renderVisibleChatHistoryHtml(window.chatHistory || [])
-    + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId);
+  const mainHtml = renderDesktopTimelinePager(mainTimeline, window.activeChatSessionId)
+    + renderVisibleChatHistoryHtml(window.chatHistory || [], { entries: mainTimeline.paintEntries, sessionId: window.activeChatSessionId })
+    + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId)
+    + renderDesktopTimelineTailControl(mainTimeline, window.activeChatSessionId);
   if (splitActive) {
-    container.classList.add('side-chat-split-shell');
-    setInnerHTMLPreservingVisuals(container, `
-      <section class="side-chat-main-pane" aria-label="Main chat">
+    const sideTimelineKey = sideActive
+      ? `desktop:side:${getSideChatSession()?.id || ''}`
+      : `desktop:side:background:${backgroundAgentRecord?.id || ''}`;
+    const splitHtml = `
+      <section class="side-chat-main-pane" data-chat-pane-key="main:${escHtml(window.activeChatSessionId)}" aria-label="Main chat">
         <div class="side-chat-pane-header">
           <div>
             <div class="side-chat-kicker">Main chat</div>
@@ -14238,14 +14232,19 @@ function renderChatMessages() {
         </div>
         <div class="side-chat-main-messages">${mainHtml}</div>
       </section>
-      ${sideActive ? renderSideChatPaneHtml() : renderBackgroundAgentSidePaneHtml(backgroundAgentRecord)}
-    `);
-    if (!window.chatMessagesUserScrolledUp) {
-      const mainPane = container.querySelector('.side-chat-main-messages');
-      const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
+      ${sideActive ? renderSideChatPaneHtml(paneBudgets.side) : renderBackgroundAgentSidePaneHtml(backgroundAgentRecord, paneBudgets.side)}
+    `;
+    container.classList.add('side-chat-split-shell');
+    const panesReconciled = reconcileKeyedTimelinePanes(container, splitHtml, { setContents: setInnerHTMLPreservingVisuals });
+    if (!panesReconciled) setInnerHTMLPreservingVisuals(container, splitHtml);
+    const mainPane = container.querySelector('.side-chat-main-messages');
+    const sidePane = container.querySelector('#side-chat-messages, #background-agent-side-messages');
+    if (!panesReconciled && !window.chatMessagesUserScrolledUp) {
       if (mainPane) mainPane.scrollTop = mainPane.scrollHeight;
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
     }
+    wireDesktopTimelineScroller(mainPane, mainTimelineKey, { trackPrimary: true });
+    wireDesktopTimelineScroller(sidePane, sideTimelineKey);
     restoreProcessPanelScroll(_panelScroll);
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     restoreQuestionDraftState(_questionDraft);
@@ -14257,11 +14256,12 @@ function renderChatMessages() {
   }
 
   container.classList.remove('side-chat-split-shell');
-  setInnerHTMLPreservingVisuals(container, mainHtml);
-  // innerHTML reset clears scrollTop: stick to bottom unless the user scrolled
-  // up to read, in which case restore their position instead of snapping.
-  if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
-  else container.scrollTop = _mainScrollTop;
+  reconcileKeyedTimelineRows(container, mainHtml, {
+    scroller: container,
+    scrollState: _timelineScroll,
+    followBottom: !window.chatMessagesUserScrolledUp,
+    setContents: setInnerHTMLPreservingVisuals,
+  });
   restoreProcessPanelScroll(_panelScroll);
   syncDesktopQuestionComposerPopover(window.activeChatSessionId);
   restoreQuestionDraftState(_questionDraft);
@@ -14277,9 +14277,10 @@ function renderChatMessageNavigator() {
   if (!chatView || !container) return;
   chatView.querySelector('.chat-message-navigator')?.remove();
   if (container.classList.contains('side-chat-split-shell')) return;
-  const messages = Array.from(container.querySelectorAll('.msg-shell.user[data-chat-message-index]'));
-  if (!messages.length) return;
   const history = Array.isArray(window.chatHistory) ? window.chatHistory : [];
+  const messages = boundDesktopNavigatorEntries(desktopTimelineEntries(history, window.activeChatSessionId)
+    .filter((entry) => String(entry.msg?.role || '').toLowerCase() === 'user'));
+  if (!messages.length) return;
 
   const textForPreview = (value, fallback) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 180) || fallback;
   const pairedResponseFor = (historyIndex) => {
@@ -14298,23 +14299,32 @@ function renderChatMessageNavigator() {
   const navigator = document.createElement('nav');
   navigator.className = 'chat-message-navigator';
   navigator.setAttribute('aria-label', 'Message navigator');
-  navigator.innerHTML = messages.map((node, position) => {
-    const index = String(node.getAttribute('data-chat-message-index') || '');
-    const historyIndex = Number(index);
+  navigator.innerHTML = messages.map((entry, position) => {
+    const historyIndex = entry.originalIndex;
+    const index = String(historyIndex);
     const prompt = textForPreview(history[historyIndex]?.content, `Message ${position + 1}`);
     const response = pairedResponseFor(historyIndex);
     return `<button type="button" class="chat-message-nav-marker" data-chat-message-target="${escHtml(index)}" aria-label="Go to message ${position + 1}"><span class="chat-message-nav-preview"><strong>${escHtml(prompt)}</strong><small>${escHtml(response)}</small></span></button>`;
   }).join('');
   navigator.querySelectorAll('[data-chat-message-target]').forEach((button) => button.addEventListener('click', () => {
     const index = button.getAttribute('data-chat-message-target');
-    const target = container.querySelector(`.msg-shell[data-chat-message-index="${CSS.escape(String(index || ''))}"]`);
-    if (!target) return;
+    let target = container.querySelector(`.msg-shell[data-chat-message-index="${CSS.escape(String(index || ''))}"]`);
     window.chatMessagesUserScrolledUp = true;
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    target.classList.remove('navigator-target');
-    void target.offsetWidth;
-    target.classList.add('navigator-target');
-    setTimeout(() => target.classList.remove('navigator-target'), 1400);
+    if (!target) {
+      const entries = desktopTimelineEntries(history, window.activeChatSessionId);
+      const position = entries.findIndex((entry) => entry.originalIndex === Number(index));
+      if (position >= 0) desktopTimelineController.focusIndex(`desktop:main:${window.activeChatSessionId}`, entries, position);
+      renderChatMessages();
+      target = container.querySelector(`.msg-shell[data-chat-message-index="${CSS.escape(String(index || ''))}"]`);
+    }
+    requestAnimationFrame(() => {
+      if (!target?.isConnected) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.classList.remove('navigator-target');
+      void target.offsetWidth;
+      target.classList.add('navigator-target');
+      setTimeout(() => target.classList.remove('navigator-target'), 1400);
+    });
   }));
   const updatePointerWave = (event) => {
     const markers = Array.from(navigator.querySelectorAll('[data-chat-message-target]'));
@@ -45244,10 +45254,8 @@ function setupChatMessageScrollbarFade() {
   messages.addEventListener('touchmove', reveal, { passive: true });
   messages.addEventListener('pointerdown', reveal);
 
-  messages.addEventListener('scroll', () => {
-    window.chatMessagesUserScrolledUp = !isNearBottom(messages, 60);
-    updateChatMessageNavigatorActive(messages);
-  }, { passive: true });
+  wireDesktopTimelineScroller(messages, () => `desktop:main:${window.activeChatSessionId}`, { trackPrimary: true });
+  messages.addEventListener('scroll', () => updateChatMessageNavigatorActive(messages), { passive: true });
 }
 
 function canvasInitDrop() {

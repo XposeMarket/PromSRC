@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseHTML } from 'linkedom';
+import { createTimelineEntries, createWeightedTimelineController } from '../web-ui/src/features/chat/timeline/weighted-timeline.js';
+import { reconcileKeyedTimelineRows } from '../web-ui/src/features/chat/timeline/keyed-dom.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -63,7 +66,15 @@ assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration req
 assert.match(api, /const fullProcess = options\.fullProcess === undefined \? force : options\.fullProcess === true/, 'forced recovery hydration must request complete process entries by default');
 assert.match(api, /\$\{fullProcess \? '&fullProcess=1' : ''\}\$\{force \? '&_fresh=1' : ''\}/, 'session hydration must independently encode fresh and full-process modes');
 assert.match(pages, /const PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE = 20/, 'mobile chat history must use bounded 20-message pages');
-assert.match(pages, /\.slice\(firstRenderedIndex\)/, 'mobile chat must only render the active message window');
+{
+  const entries = createTimelineEntries(Array.from({ length: 500 }, (_, index) => ({
+    messageId: `recovery-window-${index}`, role: index % 2 ? 'assistant' : 'user', content: `turn ${index}`, timestamp: index + 1,
+  })));
+  const timeline = createWeightedTimelineController({ surface: 'mobile' }).select('recovery', entries, { followTail: true });
+  assert.equal(timeline.paintEntries.length, 52, 'mobile chat must retain a bounded active paint window');
+  assert.equal(timeline.lastPaintIndex, 499, 'the active mobile window must include the latest message');
+  assert.equal(timeline.omittedBefore, 448, 'older loaded messages must remain available outside the DOM window');
+}
 assert.match(pages, /if \(isUpwardScroll && scrollTop <= 80\) loadOlderMobileMessages\(\)/, 'scrolling to the top must load the next history page');
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
@@ -326,17 +337,16 @@ assert.match(
   /stable\.isConnected === false\) node\.replaceWith\(stable\)/,
   'stable image nodes must be restored synchronously after a streaming repaint',
 );
-const fullThreadRenderStart = pages.indexOf('function _renderThread');
-const fullThreadImageCapture = pages.indexOf("threadEl.querySelectorAll('img[src]')", fullThreadRenderStart);
-const fullThreadHtmlReplace = pages.indexOf('setInnerHTMLPreservingVisuals(threadEl,', fullThreadImageCapture);
-const fullThreadImageRestore = pages.indexOf('node.replaceWith(stable)', fullThreadHtmlReplace);
-assert.ok(
-  fullThreadRenderStart >= 0
-    && fullThreadImageCapture > fullThreadRenderStart
-    && fullThreadHtmlReplace > fullThreadImageCapture
-    && fullThreadImageRestore > fullThreadHtmlReplace,
-  'full thread renders must retain decoded images from completed turns',
-);
+{
+  const { document } = parseHTML('<!doctype html><html><body><main id="thread"><article data-pm-row-key="settled" data-pm-row-signature="1"><img src="stable.png"></article><article data-pm-row-key="active" data-pm-row-signature="1">working</article></main></body></html>');
+  const thread = document.getElementById('thread');
+  const settledRow = thread.children[0];
+  const decodedImage = settledRow.querySelector('img');
+  const stats = reconcileKeyedTimelineRows(thread, '<article data-pm-row-key="settled" data-pm-row-signature="1"><img src="stable.png"></article><article data-pm-row-key="active" data-pm-row-signature="2">done</article>');
+  assert.equal(thread.children[0], settledRow, 'settled keyed rows must survive an active-row commit');
+  assert.equal(thread.querySelector('img'), decodedImage, 'decoded images in settled rows must retain DOM identity');
+  assert.equal(stats.updated, 1, 'a terminal transition must update only the active row');
+}
 assert.match(
   pages,
   /if \(restartSessionId === MOBILE_CHAT_SESSION_ID\) \{[\s\S]{0,320}_ensureDurableMobileVoiceSession/,

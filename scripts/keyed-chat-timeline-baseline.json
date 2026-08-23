@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "capturedFrom": "bcf1cedcf31b6e67d74f230d755dfb86d548758f",
+  "capturedAt": "2026-08-23T00:06:56-04:00",
+  "referenceEnvironment": {
+    "os": "Windows 11 10.0.26200",
+    "node": "20.20.2",
+    "classification": "timing diagnostics are reference-only; deterministic row, weight, and commit caps are enforced"
+  },
+  "results": {
+    "desktopPaintedRows": {
+      "100": 48,
+      "500": 48,
+      "1000": 53,
+      "2000": 52
+    },
+    "mobilePaintedRows": {
+      "100": 24,
+      "500": 26,
+      "1000": 29,
+      "2000": 30
+    },
+    "selectionP95Ms": {
+      "100": 0.629,
+      "500": 0.6,
+      "1000": 0.574,
+      "2000": 0.624
+    },
+    "desktopSyntheticDomNodes": {
+      "100": 330,
+      "500": 294,
+      "1000": 312,
+      "2000": 309
+    },
+    "mobileSyntheticDomNodes": {
+      "100": 180,
+      "500": 156,
+      "1000": 165,
+      "2000": 168
+    },
+    "desktopRetainedViewBytes": {
+      "100": 3721,
+      "500": 3744,
+      "1000": 4002,
+      "2000": 4091
+    },
+    "singleTurnCommitP95Ms": 4.789,
+    "singleTurnMaximumRowsUpdated": 1,
+    "singleTurnAverageRowsReused": 95,
+    "rowWriteReductionPct": 98.958
+  }
+}
