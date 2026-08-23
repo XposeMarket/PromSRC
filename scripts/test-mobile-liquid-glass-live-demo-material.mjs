@@ -42,12 +42,26 @@ assert.match(mobileBase, /These layers were specific to the old panel treatment[
 assert.match(mobileBase, /Mobile glass cleanup:[\s\S]*?remove the cast shadow behind floating glass surfaces/,
   'the later August 13 shadow cleanup is expected to remain in mobile.css and be narrowly overridden here');
 
+// Keep the previously correct bottom-chrome geometry. The visual regression was
+// caused by material painting outside these bounds, not by these sizing values.
+assert.match(mobileBase, /--pm-tabbar-h:\s*60px;/,
+  'historical mobile tabbar reservation must stay 60px');
+assert.match(mobileBase, /--pm-mobile-tabbar-bottom:\s*7px;/,
+  'historical mobile tabbar bottom offset must stay 7px');
+assert.match(mobileBase, /--pm-mobile-composer-gap:\s*11px;/,
+  'historical mobile composer spacing token must stay 11px');
+assert.match(mobileBase, /\.pm-tabbar\s*\{[\s\S]*?height:\s*56px;[\s\S]*?padding:\s*4px;/,
+  'historical tabbar body must stay 56px tall with 4px internal padding');
+assert.match(mobileBase, /\.pm-composer\s*\{[\s\S]*?bottom:\s*calc\(var\(--pm-tabbar-h\) \+ env\(safe-area-inset-bottom\) \+ var\(--pm-mobile-composer-gap, 22px\)\);/,
+  'composer must remain positioned from the historical tabbar reservation and gap');
+
 // Preserve the recently fixed iOS/PWA top strip: transparent, no header-wide
 // blur, while each standalone button/model pill keeps its own glass material.
 assert.match(sourceCode, /body\.pm-mobile-active \.pm-header\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?-webkit-backdrop-filter:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;[\s\S]*?box-shadow:\s*none !important;/,
   'iOS/PWA header safe-area must remain transparent and header-blur-free');
 
-// Restore exactly the pre-August-13 depth for standalone persistent glass.
+// Restore exactly the pre-August-13 depth for genuinely floating persistent
+// glass. The resting tabbar is intentionally not in this cast-shadow group.
 for (const selector of [
   '.pm-header > .pm-icon-btn',
   '.pm-header > .pm-haptic-host > .pm-icon-btn',
@@ -57,18 +71,26 @@ for (const selector of [
   '.pm-header-action-cluster',
   '.pm-completion-toast',
   '.pm-composer',
-  '.pm-tabbar',
 ]) {
   assert.ok(source.includes(selector), `missing August 12 shadow restore surface: ${selector}`);
 }
 assert.doesNotMatch(sourceCode, /body\.pm-mobile-active :is\([\s\S]*?\.pm-header \.pm-icon-btn,/,
   'broad descendant header-button shadow ownership must not return');
-assert.match(sourceCode, /\.pm-header-action-cluster \.pm-icon-btn,[\s\S]*?\.pm-header-action-cluster \.pm-icon-btn:hover\s*\{[\s\S]*?box-shadow:\s*none !important;/,
-  'child icon slots inside the combined header action pill must remain shadowless');
+assert.match(sourceCode, /\.pm-header-action-cluster > \.pm-haptic-host,[\s\S]*?\.pm-header-action-cluster > \.pm-haptic-host > \.pm-icon-btn:hover\s*\{[\s\S]*?background:\s*transparent !important;[\s\S]*?border:\s*0 !important;[\s\S]*?box-shadow:\s*none !important;[\s\S]*?backdrop-filter:\s*none !important;/,
+  'haptic wrappers and child icon slots inside the combined header action pill must remain completely glassless');
+assert.match(sourceCode, /\.pm-header-action-cluster > \.pm-icon-btn::after,[\s\S]*?\.pm-header-action-cluster > \.pm-haptic-host > \.pm-icon-btn::after\s*\{[\s\S]*?display:\s*none !important;/,
+  'combined header action child rims must remain disabled');
 assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.38\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.18\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.16\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.08\) !important;/,
-  'light persistent glass must restore the August 12 cast-shadow recipe');
+  'light floating glass must restore the August 12 cast-shadow recipe');
 assert.match(sourceCode, /inset 0 1px 1px rgba\(255,255,255,\.16\),[\s\S]*?inset 0 -1px 1px rgba\(255,255,255,\.07\),[\s\S]*?0 6px 16px rgba\(0,0,0,\.34\),[\s\S]*?0 1px 4px rgba\(0,0,0,\.22\) !important;/,
-  'dark persistent glass must restore the August 12 cast-shadow recipe');
+  'dark floating glass must restore the August 12 cast-shadow recipe');
+
+// The resting tabbar keeps its real historical footprint: internal rim only,
+// with no outward shadow visually swelling into the composer gap or side inset.
+assert.match(sourceCode, /body\.pm-mobile-active \.pm-tabbar\s*\{\s*box-shadow:\s*inset 0 1px 1px rgba\(255,255,255,\.38\),\s*inset 0 -1px 1px rgba\(255,255,255,\.18\) !important;\s*\}/,
+  'resting light tabbar must use inset-only depth');
+assert.match(sourceCode, /data-theme="dark"\] body\.pm-mobile-active \.pm-tabbar\s*\{\s*box-shadow:\s*inset 0 1px 1px rgba\(255,255,255,\.16\),\s*inset 0 -1px 1px rgba\(255,255,255,\.07\) !important;\s*\}/,
+  'resting dark tabbar must use inset-only depth');
 assert.match(sourceCode, /\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px rgba\(255,255,255,\.34\),[\s\S]*?0 8px 22px rgba\(40,28,16,\.18\),[\s\S]*?0 1px 4px rgba\(40,28,16,\.12\) !important;/,
   'tab selector must restore its August 12 light floating depth');
 assert.match(sourceCode, /data-theme="dark"[\s\S]*?\.pm-tab-indicator\s*\{[\s\S]*?inset 0 1\.5px 1\.5px rgba\(255,255,255,\.24\),[\s\S]*?0 8px 22px rgba\(0,0,0,\.42\) !important;/,
@@ -132,4 +154,4 @@ assert.match(source, /\.pm-title-row \.pm-title/,
 assert.match(source, /\.pm-drawer-list \.pm-drawer-item > \.pm-flex/,
   'drawer page-tab label fix must remain intact');
 
-console.log('mobile persistent chat glass restore keeps one header action pill, pressed depth, cache freshness, and status-edge isolation');
+console.log('mobile persistent chat glass keeps one header action pill, historical tabbar footprint, pressed depth, cache freshness, and status-edge isolation');
