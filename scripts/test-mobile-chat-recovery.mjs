@@ -13,6 +13,9 @@ const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
+const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
+const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
+const mobileCss = read('web-ui/src/styles/mobile.css');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
 const router = read('src/gateway/routes/chat.router.ts');
@@ -23,6 +26,16 @@ const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
 const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
+
+assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
+assert.match(mobileRouter, /window\.location\.assign\(`\/\?source=pwa\$\{hash\}`\)/, 'the lightweight mobile document must route settings through the full app document');
+assert.match(mobileCss, /\.pm-msheet\s*\{[\s\S]{0,360}font-family:\s*var\(--pm-font\)/, 'mobile model and reasoning sheets must use the mobile system font');
+assert.match(mobileCss, /\.pm-project-row \.pm-session-title\s*\{[\s\S]{0,100}font-family:\s*var\(--pm-font\)/, 'drawer project titles must use the same mobile font as chat sessions');
+assert.match(mobileCss, /\.pm-tab\s*\{[\s\S]{0,320}color:\s*rgba\(34,26,20,\.68\)/, 'resting light tab icons must remain muted');
+assert.match(mobileCss, /:root\[data-theme="dark"\] \.pm-tab\s*\{\s*color:\s*rgba\(242,238,231,\.66\)/, 'resting dark tab icons must remain muted');
+assert.match(mobileCss, /\.pm-tab-magnify-cell svg\s*\{[\s\S]{0,100}color:\s*#fff/, 'only the icon clone beneath the liquid slider should be white');
+assert.match(mobileCss, /\.pm-new-project-popover\s*\{[^}]*--pm-new-project-available-height[^}]*box-sizing:\s*border-box[^}]*overflow-y:\s*auto/, 'new-project modal must fit and scroll within the visual viewport');
+assert.match(pages, /syncNewProjectPopoverToKeyboard\(false, Number\(window\.visualViewport\?\.height/, 'new-project modal must size itself as soon as it opens');
 
 const composerRafDeclaration = pages.indexOf('let chatComposerSpaceRaf = 0;');
 const composerShiftDeclaration = pages.indexOf('let chatComposerShiftAnimation = null;');
@@ -183,6 +196,41 @@ assert.match(
   'watch-race steers must be persisted as visible durable user messages',
 );
 assert.match(pages, /reconcileMobileChatTurn\(busySessionId\)/, 'composer gating must consult authoritative server state before queueing behind local cache');
+assert.ok(
+  pages.indexOf('__pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };')
+    < pages.indexOf('selectedGateway = await probeGateway(selectedGateway);'),
+  'mobile send admission must be claimed before the awaited gateway probe',
+);
+assert.match(
+  pages,
+  /const isPendingUser = msg\.role === 'user'[\s\S]{0,260}msg\._pmOptimistic === true[\s\S]{0,180}pendingUserAge < 45_000/,
+  'recovery hydration must retain a recent optimistic user turn while server history catches up',
+);
+assert.match(
+  pages,
+  /const seenRequests = new Map\(\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails/,
+  'assistant recovery dedupe must collapse duplicate bubbles by stable request identity across user boundaries',
+);
+assert.match(
+  pages,
+  /restore user -> assistant ordering[\s\S]{0,620}list\.splice\(assistantIndex, 0, user\)/,
+  'recovery must restore a request-owned user turn before its assistant response',
+);
+assert.match(
+  mobileBadge,
+  /onLostPointerCapture[\s\S]{0,360}onVisibilityChange/,
+  'the tabbar gesture must cancel when pointer capture or page lifecycle state is lost',
+);
+assert.match(
+  mobileCss,
+  /\.pm-drawer\s*\{[\s\S]{0,220}width: var\(--pm-drawer-width\);[\s\S]{0,120}box-sizing: border-box;/,
+  'drawer padding must remain inside the same width used to shift the app shell',
+);
+assert.match(
+  mobileCss,
+  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,520}overflow-wrap: anywhere;[\s\S]{0,80}word-break: break-word;/,
+  'user bubbles must wrap long text inside their bounded mobile width',
+);
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');
 assert.match(pages, /aiTurn\._pmFinalReceived = true/, 'a displayed final response must become a monotonic recovery boundary');

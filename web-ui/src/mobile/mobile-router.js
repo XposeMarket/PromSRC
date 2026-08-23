@@ -187,12 +187,38 @@ export function mobileNavigate(route) {
   }
 }
 
-// The lightweight mobile document has no desktop app tree or settings modal.
-// Header settings actions navigate to the dedicated mobile settings owner.
-window.pmOpenSettings = (section = '') => {
-  const suffix = String(section || '').trim();
-  mobileNavigate(suffix ? `#mobile/settings/${encodeURIComponent(suffix)}` : '#mobile/settings');
-};
+function openMobileSettings(section = '') {
+  const tab = String(section || '').trim();
+  const modal = document.getElementById('settings-modal');
+  // The lightweight /mobile document deliberately omits desktop markup. Move
+  // to the full app document once, then the shared desktop settings modal can
+  // remain the single authoritative settings surface.
+  if (!modal) {
+    const hash = tab ? `#mobile/settings/${encodeURIComponent(tab)}` : '#mobile/settings';
+    window.location.assign(`/?source=pwa${hash}`);
+    return true;
+  }
+  document.body.classList.add('pm-mobile-overlay-open');
+  try {
+    if (modal.parentElement !== document.body) document.body.appendChild(modal);
+    if (typeof window.openSettings === 'function') window.openSettings(tab || undefined);
+    else import('../pages/SettingsPage.js').then(() => openMobileSettings(tab)).catch((error) => {
+      console.warn('[mobile settings] could not load desktop Settings', error);
+    });
+  } catch (error) {
+    console.warn('[mobile settings] could not open desktop Settings', error);
+  }
+  return true;
+}
+window.pmOpenSettings = openMobileSettings;
+
+function closeMobileSettings() {
+  const modal = document.getElementById('settings-modal');
+  if (modal && modal.style.display !== 'none' && typeof window.closeSettings === 'function') {
+    try { window.closeSettings(); } catch {}
+  }
+  document.body.classList.remove('pm-mobile-overlay-open');
+}
 
 const TAB_FOR_PAGE = {
   chat: 'chat', voice: 'voice', tasks: 'tasks', hub: 'hub',
@@ -297,6 +323,8 @@ function render() {
   else if (!getDeviceToken() && !hasAnyGatewayCredential() && page !== 'pair') page = 'pair';
   window.__pmMobilePairingActive = page === 'pair';
 
+  if (page !== 'settings') closeMobileSettings();
+
   const activeTab = TAB_FOR_PAGE[page] || null;
   const shell = createMobileShell({
     activeTab,
@@ -372,7 +400,8 @@ function render() {
     } catch {}
   }
 
-  return loadMobileRouteOwner(page).then((owner) => {
+  const routeOwner = page === 'settings' && document.getElementById('settings-modal') ? 'chat' : page;
+  return loadMobileRouteOwner(routeOwner).then((owner) => {
     // Navigation may win while a route owner is still crossing the network.
     if (renderGeneration !== mobileRenderGeneration) return undefined;
     switch (page) {
@@ -393,7 +422,13 @@ function render() {
       if (arg) return owner.renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return owner.renderTeamsPage(slot, { navigate: mobileNavigate });
     case 'tasks':     return owner.renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
-    case 'settings':  return owner.renderMobileSettingsPage(slot, { section: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
+    case 'settings':
+      if (document.getElementById('settings-modal')) {
+        owner.renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
+        openMobileSettings(arg ? decodeURIComponent(arg) : '');
+        return undefined;
+      }
+      return owner.renderMobileSettingsPage(slot, { section: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
     case 'hub':       return owner.renderHubPage(slot, { navigate: mobileNavigate });
     case 'subagents':
       if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return owner.renderSubagentChatPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate });
