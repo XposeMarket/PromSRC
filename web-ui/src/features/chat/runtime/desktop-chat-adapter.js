@@ -24,7 +24,10 @@ export function createDesktopChatRuntimeAdapter({
   if (!windowRef || typeof getSession !== 'function') {
     throw new TypeError('Desktop chat runtime adapter requires a window and getSession.');
   }
-  const historyClient = createChatHistoryClient({ request: windowRef.fetch.bind(windowRef) });
+  if (typeof request !== 'function') {
+    throw new TypeError('Desktop chat runtime adapter requires the shared API request transport.');
+  }
+  const historyClient = createChatHistoryClient({ request });
   let activeLease = null;
 
   function identity(sessionId = windowRef.activeChatSessionId) {
