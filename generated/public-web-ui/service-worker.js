@@ -20,7 +20,7 @@
 const RELEASE_VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = 'bfdd2874d3ffa0a9';
+const ASSET_BUILD_ID = '62059cee52b28f48';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
