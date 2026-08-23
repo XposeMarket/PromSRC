@@ -68,19 +68,41 @@ assert.match(sourceCode, /data-theme="dark"[\s\S]*?\.pm-tab-indicator\s*\{[\s\S]
   'tab selector must restore its August 12 dark floating depth');
 
 // The live-demo material and exact-canvas hamburger are deliberately no longer
-// part of the runtime path. The old implementation can remain in the repo for
-// archaeology, but mobile-data must not initialize it.
+// part of the runtime path. A small status-edge initializer is allowed, but the
+// old hamburger experiment must never return.
 assert.doesNotMatch(sourceCode, /--pm-demo-|DEFAULT_SPEC|pm-demo-refract|saturate\(1\.0001\)|mask-image:\s*radial-gradient/,
   'late glass layer must not retain the later live-demo material/refraction override');
 const sourceData = fs.readFileSync('web-ui/src/mobile/mobile-data.js', 'utf8');
 const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data.js', 'utf8');
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
-assert.equal(sourceData.trim(), "export * from './mobile-data-base.js';",
-  'mobile-data must return to the passive wrapper used before the hamburger exact-canvas experiment');
+const allowedMobileDataLines = [
+  "export * from './mobile-data-base.js';",
+  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js?v=pm-v302-2026-08-22-status-edge-theme-sync';",
+  'initMobileStatusBarTheme();',
+];
+assert.deepEqual(sourceData.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean), allowedMobileDataLines,
+  'mobile-data may initialize only the isolated status-edge theme bridge on top of the August 12 glass baseline');
 assert.doesNotMatch(sourceData, /mobile-hamburger-liquid-glass|initMobileHamburgerLiquidGlass/,
   'exact-canvas hamburger must not run on mobile boot');
 assert.match(sourceCode, /\.pm-hamburger-liquid-glass-canvas\s*\{[\s\S]*?display:\s*none !important;/,
   'a stale exact-canvas child must remain inert after a hot update');
+
+const statusThemeSource = fs.readFileSync('web-ui/src/mobile/mobile-status-bar-theme.js', 'utf8');
+const statusThemeGenerated = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-status-bar-theme.js', 'utf8');
+const statusCssSource = fs.readFileSync('web-ui/src/styles/mobile-status-bar-theme.css', 'utf8');
+const statusCssGenerated = fs.readFileSync('generated/public-web-ui/static/styles/mobile-status-bar-theme.css', 'utf8');
+assert.equal(statusThemeGenerated, statusThemeSource, 'generated status-edge theme runtime must mirror source exactly');
+assert.equal(statusCssGenerated, statusCssSource, 'generated status-edge theme CSS must mirror source exactly');
+assert.match(statusThemeSource, /meta\[name="theme-color"\]/,
+  'status-edge bridge must sync the PWA theme-color meta tag');
+assert.match(statusThemeSource, /prom-theme-change/,
+  'status-edge bridge must react to live theme changes');
+assert.match(statusCssSource, /z-index:\s*5;/,
+  'status-edge tint must remain below the existing mobile header controls');
+assert.doesNotMatch(statusCssSource, /blur\(/,
+  'status-edge bridge must not add its own blur');
+assert.match(statusCssSource, /backdrop-filter:\s*none !important;/,
+  'status-edge bridge must explicitly remain blur-free');
 
 // Scope guard: this layer is material-only. Do not let a future cleanup sneak
 // geometry, motion, popover, or layout changes into the historical restore.
@@ -95,4 +117,4 @@ assert.match(source, /\.pm-title-row \.pm-title/,
 assert.match(source, /\.pm-drawer-list \.pm-drawer-item > \.pm-flex/,
   'drawer page-tab label fix must remain intact');
 
-console.log('mobile persistent chat glass restored to August 12 while preserving the clear iOS/PWA header strip');
+console.log('mobile persistent chat glass restored to August 12 with isolated theme-aware iOS status-edge sync');
