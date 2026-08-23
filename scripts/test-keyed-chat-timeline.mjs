@@ -105,6 +105,25 @@ function messages(count, { rich = false } = {}) {
     chatTimelineRowSignature(longToolB),
     'rich record changes beyond the old truncation boundary must revise the keyed row',
   );
+  const twoToolsRunning = {
+    ...base,
+    liveTraceEntries: [
+      { id: 'tool-first', status: 'running', output: 'working' },
+      { id: 'tool-tail', status: 'done', output: 'stable tail' },
+    ],
+  };
+  const twoToolsDone = {
+    ...base,
+    liveTraceEntries: [
+      { id: 'tool-first', status: 'done', output: 'finished' },
+      { id: 'tool-tail', status: 'done', output: 'stable tail' },
+    ],
+  };
+  assert.notEqual(
+    chatTimelineRowSignature(twoToolsRunning),
+    chatTimelineRowSignature(twoToolsDone),
+    'mutating a non-tail rich record must revise the keyed row even when length and tail stay unchanged',
+  );
 }
 
 {
