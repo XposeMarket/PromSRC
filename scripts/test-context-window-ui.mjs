@@ -13,9 +13,6 @@ const generatedPerformance = read('generated/public-web-ui/static/performance.js
 const live = read('web-ui/src/context-window-live-tracking.js');
 const generatedLive = read('generated/public-web-ui/static/context-window-live-tracking.js');
 
-// The visible meter is thread-level active context pressure. It is deliberately
-// sourced from the same persisted estimate / rolling-summary boundary used by
-// session compaction, not from a per-turn or fixed recent-message slice.
 assert.match(pressureRouter, /router\.get\('\/api\/sessions\/:id\/context-pressure'/, 'the thread-context pressure endpoint must exist');
 assert.match(pressureRouter, /contextTokenEstimate: session\.contextTokenEstimate/, 'thread pressure must use the persisted session active-context estimate');
 assert.match(pressureRouter, /latestContextSummary: session\.latestContextSummary/, 'thread pressure must honor the rolling compaction summary');
@@ -24,13 +21,13 @@ assert.match(pressureRouter, /calibrationFactor: calibration\.factor/, 'thread p
 assert.match(pressureRouter, /effectiveCompactionTriggerTokens/, 'the API must expose the effective compaction trigger');
 assert.match(processesRouter, /router\.use\(contextWindowPressureRouter\)/, 'the authenticated gateway must mount the pressure endpoint');
 
-// If an older session lacks the persisted estimate, reconstruction must still
-// use the entire active transcript (or summary + everything since checkpoint).
 assert.match(pressureModel, /history\.reduce\(\(total, message\) => total \+ estimateSessionMessageTokens\(message\), 0\)/, 'uncompacted fallback must count the full active session history');
 assert.match(pressureModel, /const activeHistory = history\.slice\(start\)/, 'compacted fallback must count every message after the summary checkpoint');
 assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persistedEstimate >= 0\)/, 'persisted session pressure should remain authoritative when available');
 
-assert.match(performance, /import '\.\/context-window-live-tracking\.js';/, 'desktop/mobile entry must load the shared context meter');
+assert.match(performance, /const shouldBootMobile = window\.__PROM_SHOULD_BOOT_MOBILE\?\.\(\) === true;/, 'the shared entry must resolve the mobile predicate before feature loading');
+assert.match(performance, /if \(!shouldBootMobile\) \{[\s\S]*?import\('\.\/context-window-live-tracking\.js'\)/, 'desktop boot must lazily request the shared context meter');
+assert.doesNotMatch(performance, /^import ['"]\.\/context-window-live-tracking\.js['"];?$/m, 'mobile-safe shared boot must not statically import the context meter');
 assert.match(performance, /new CustomEvent\('prometheus:client-performance-mark', \{ detail: entry \}\)/, 'only scrubbed telemetry may be published to the live estimator');
 assert.equal(performance, generatedPerformance, 'performance source/generated mirrors must stay byte-identical');
 assert.equal(live, generatedLive, 'live-context source/generated mirrors must stay byte-identical');
@@ -43,9 +40,6 @@ assert.match(live, /Math\.max\(authoritativePressure, liveProjection\)/, 'unpers
 assert.match(live, /model slice \$\{formatTokens\(state\.authoritativeTokens\)\}/, 'the smaller next-call/model slice must be secondary information when it differs');
 assert.match(live, /compaction at \$\{formatTokens\(state\.pressureTriggerTokens\)\}/, 'the tooltip must expose the compaction trigger');
 
-// Starting or settling a new turn may reset only per-turn telemetry. The thread
-// pressure itself must persist until an authoritative session refresh or real
-// context compaction changes it.
 const newTurnBlock = live.match(/else if \(startsNewTurn\) \{([\s\S]*?)\n  \} else if \(requestId/);
 assert.ok(newTurnBlock, 'the new-turn state transition must remain explicit');
 assert.match(newTurnBlock[1], /state\.baselineTokens = 0;/, 'new turns should clear the old per-turn baseline');
