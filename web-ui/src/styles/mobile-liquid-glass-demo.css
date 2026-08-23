@@ -17,16 +17,14 @@
  * August 12 material again and restores only the shadows that the August 13
  * cleanup suppresses with !important.
  *
- * IMPORTANT: PR #163's iOS/PWA header behavior is preserved. The header/safe-
- * area strip remains transparent and blur-free so content can continue beneath
- * it and iOS can provide its own status-area translucency. Individual header
- * controls still own their glass.
+ * IMPORTANT: PR #163's clear iOS/PWA header contract stays intact here. The
+ * lighter native status-edge tint is layered separately and does not alter
+ * these controls. Individual header controls still own their glass.
  *
  * This file must not change control geometry, tab motion, composer expansion,
  * routing, popovers, or page layout.
  */
 
-/* Preserve the clear iOS/PWA safe-area/header behavior from #163. */
 body.pm-mobile-active .pm-header {
   background: transparent !important;
   border-color: transparent !important;
@@ -35,12 +33,14 @@ body.pm-mobile-active .pm-header {
   box-shadow: none !important;
 }
 
-/*
- * Restore the pre-August-13 floating depth. Everything except box-shadow comes
- * from the historical mobile.css material beneath this compatibility layer.
- */
+/* Restore pre-August-13 floating depth. Target only standalone header buttons:
+ * the icon slots inside .pm-header-action-cluster were intentionally shadowless
+ * on August 12 because the cluster itself is one shared glass pill. */
 body.pm-mobile-active :is(
-  .pm-header .pm-icon-btn,
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
+  .pm-header-actions > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -55,7 +55,10 @@ body.pm-mobile-active :is(
 }
 
 :root[data-theme="dark"] body.pm-mobile-active :is(
-  .pm-header .pm-icon-btn,
+  .pm-header > .pm-icon-btn,
+  .pm-header > .pm-haptic-host > .pm-icon-btn,
+  .pm-header-actions > .pm-icon-btn,
+  .pm-header-actions > .pm-haptic-host > .pm-icon-btn,
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
@@ -69,7 +72,11 @@ body.pm-mobile-active :is(
     0 1px 4px rgba(0,0,0,.22) !important;
 }
 
-/* The moving tab selector had its own deeper floating shadow on August 12. */
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn,
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:hover {
+  box-shadow: none !important;
+}
+
 body.pm-mobile-active .pm-tab-indicator {
   box-shadow:
     inset 0 1.5px 1.5px rgba(255,255,255,.34),
@@ -85,16 +92,18 @@ body.pm-mobile-active .pm-tab-indicator {
     0 8px 22px rgba(0,0,0,.42) !important;
 }
 
-/*
- * The exact-canvas hamburger experiment is no longer initialized by
- * mobile-data.js. Keep a stale canvas inert if a hot reload leaves one behind;
- * after a normal reload the historical .pm-icon-btn material is the hamburger.
- */
+body.pm-mobile-active .pm-tabbar.pm-tabbar-pressing {
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.36),
+    inset 0 -10px 26px rgba(255,255,255,.05),
+    0 20px 52px rgba(0,0,0,.24),
+    0 5px 14px rgba(0,0,0,.12) !important;
+}
+
 body.pm-mobile-active .pm-hamburger-liquid-glass-canvas {
   display: none !important;
 }
 
-/* Preserve the literal-white mobile page-title fix that shared this late file. */
 body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page .pm-detail-head h1) {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
@@ -105,7 +114,6 @@ body.pm-mobile-active :is(.pm-title-row .pm-title, .pm-page .pm-title, .pm-page 
   text-shadow: none !important;
 }
 
-/* Preserve the existing drawer page-tab label fix; this is not glass styling. */
 body.pm-mobile-active .pm-drawer-list .pm-drawer-item > .pm-flex {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
