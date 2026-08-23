@@ -163,7 +163,7 @@ export function createDesktopChatRuntimeAdapter({
     const page = getSession(sessionId)?.historyPage;
     if (!page?.hasOlder || !String(page.olderCursor || '').trim()) return '';
     const loading = page.loadingOlder === true;
-    return `<div class="chat-history-pager" role="navigation" aria-label="Earlier messages">
+    return `<div class="chat-history-pager" data-chat-row-key="history-pager:gateway" role="navigation" aria-label="Earlier messages">
       <button type="button" class="btn btn-sm" onclick="loadOlderDesktopChatHistory(${encodeInline(sessionId)})" ${loading ? 'disabled' : ''}>
         ${loading ? 'Loading earlier messages…' : 'Load earlier messages'}
       </button>
@@ -175,9 +175,6 @@ export function createDesktopChatRuntimeAdapter({
     const session = getSession(sid);
     const cursor = String(session?.historyPage?.olderCursor || '').trim();
     if (!session || !cursor || session.historyPage?.loadingOlder === true) return false;
-    const container = windowRef.document.getElementById('chat-messages');
-    const priorHeight = Number(container?.scrollHeight || 0);
-    const priorTop = Number(container?.scrollTop || 0);
     session.historyPage = { ...session.historyPage, loadingOlder: true, error: null };
     runtimeFor(sid)?.setPaging({ loadingOlder: true, error: null });
     if (sid === windowRef.activeChatSessionId) render();
@@ -194,8 +191,6 @@ export function createDesktopChatRuntimeAdapter({
         windowRef.chatHistory = session.history;
         windowRef.chatMessagesUserScrolledUp = true;
         render();
-        const nextHeight = Number(container?.scrollHeight || 0);
-        if (container) container.scrollTop = Math.max(0, priorTop + (nextHeight - priorHeight));
       }
       return true;
     } catch (error) {

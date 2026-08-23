@@ -100,6 +100,8 @@ import {
 } from '../tool-activity.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-chat-adapter.js';
+import { createMobileTimelineView } from '../features/chat/timeline/mobile-timeline-view.js';
+import { captureKeyedScrollState, reconcileKeyedTimelineRows } from '../features/chat/timeline/keyed-dom.js';
 installToolActivityExpansionPersistence();
 import {
   renderAgentModelPicker as _renderAgentModelPicker,
@@ -519,8 +521,6 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   drawerRunSessionIds: new Set(),
   statusTimer: null,
   recoverTimer: null,
-  renderTimers: {},
-  patchRenderTimers: {},
   backgroundSpawnLanes: {},
   toolProgressBySession: {},
   pendingApprovals: {},
@@ -530,7 +530,6 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   goalDetailsOpen: {},
   goalTimer: null,
   editingMessageIndex: -1,
-  renderedMessageLimits: {},
   historyPagination: {},
   resolvedQuestionIds: {},
   mobileRecoveryOwners: {},
@@ -538,7 +537,6 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
 });
 
 if (!__pmChat.mainChatGoals || typeof __pmChat.mainChatGoals !== 'object') __pmChat.mainChatGoals = {};
-if (!__pmChat.renderedMessageLimits || typeof __pmChat.renderedMessageLimits !== 'object') __pmChat.renderedMessageLimits = {};
 if (!__pmChat.historyPagination || typeof __pmChat.historyPagination !== 'object') __pmChat.historyPagination = {};
 __pmChat.mainChatGoals = { ..._readMobileGoalCache(), ...__pmChat.mainChatGoals };
 if (!__pmChat.goalDetailsOpen || typeof __pmChat.goalDetailsOpen !== 'object') __pmChat.goalDetailsOpen = {};
@@ -559,6 +557,15 @@ const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
 });
 const _makeMobileQueuedPrompt=mobileChatRuntimeAdapter.createQueuedPrompt;
 const _markMobileSessionRunning = mobileChatRuntimeAdapter.setRunning;
+const {
+  controller: mobileTimelineController,
+  scheduler: mobileStreamRenderScheduler,
+  entries: _mobileTimelineEntries,
+  rowSignature: chatTimelineRowSignature,
+} = createMobileTimelineView({
+  runtimeFor: mobileChatRuntimeAdapter.runtimeFor,
+  isHiddenMessage: _isMobileHiddenVoiceDraftMessage,
+});
 
 function _mobileGoalTimestampMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -1546,10 +1553,6 @@ if (!window.__pmMobilePushRepairInstalled) {
   window.addEventListener('online', _reconcileMobilePushSubscriptionSilently);
   wsEventBus?.on?.('ws:open', _reconcileMobilePushSubscriptionSilently);
   setTimeout(_reconcileMobilePushSubscriptionSilently, 1200);
-}
-
-if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') {
-  __pmChat.patchRenderTimers = {};
 }
 
 function _cloneMobileMessageForBranch(msg) {
@@ -7651,8 +7654,10 @@ function _mobileWorkflowTransitionLabel(message) {
   return String(message?.workflowLabel || '').trim();
 }
 
-function _renderChatMessageHtml(m, index = -1) {
+function _renderChatMessageHtml(m, index = -1, rowKey = '', rowSignature = '') {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
+  const stableRowKey = String(rowKey || `mobile-message:${msgIndex}`);
+  const stableRowSignature = String(rowSignature || chatTimelineRowSignature(m));
   const workflowLabel = _mobileWorkflowTransitionLabel(m);
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
   const attachmentHtml = attachments.length
@@ -7673,7 +7678,7 @@ function _renderChatMessageHtml(m, index = -1) {
     const contentHtml = isEditing
       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
       : `${attachmentHtml}${userBubbleHtml}`;
-    return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
+    return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:${isEditing ? 'editing' : 'view'}`)}">
       ${workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }
@@ -7795,7 +7800,7 @@ function _renderChatMessageHtml(m, index = -1) {
   inner += _renderMobileThreadLinkArtifacts(m);
   inner += _renderMobileGoalCompletionReport(m.goalCompletionReport);
   if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
-  return `<div class="pm-msg from-ai${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
+  return `<div class="pm-msg from-ai${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:view`)}"${m.streaming ? ' data-streaming="1"' : ''}>
     ${workflowLabel ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
 }
@@ -8530,12 +8535,11 @@ function _isMobileSessionRenderCurrent(key = '') {
 function _renderThread(threadEl, sessionKey = '') {
   const { sid, thread } = _threadForMobileSessionKey(sessionKey);
   __pmChat.thread = thread;
+  const bodyEl = document.getElementById('pm-chat-body');
+  const timelineScroll = captureKeyedScrollState(threadEl, _mobileChatScrollTarget(bodyEl));
   _dedupeMobileAssistantTurns(thread);
   _reindexMobileThread(thread);
   _captureMobileWorkerDeckViewState(threadEl);
-  // Preserve which process-log <details> the user has opened or closed, plus inner
-  // scroll, across this full innerHTML rebuild — otherwise streaming re-renders
-  // reset panel state every tick.
   const openProc = {};
   const closedProc = new Set();
   const openTraceDrawers = new Set();
@@ -8546,10 +8550,6 @@ function _renderThread(threadEl, sessionKey = '') {
   const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
   const questionDrafts = _captureMobileQuestionDraftState(document);
   try {
-    // Full thread renders happen when a new turn starts, session status is
-    // reconciled, or durable history refreshes. Keep every decoded image node
-    // across that rebuild so completed turns do not flash blank while the same
-    // URL is fetched/decoded again.
     threadEl.querySelectorAll('img[src]').forEach((node) => {
       const src = String(node.getAttribute('src') || '').trim();
       if (!src) return;
@@ -8592,33 +8592,36 @@ function _renderThread(threadEl, sessionKey = '') {
       };
     });
   } catch {}
-  const renderLimit = Math.max(
-    PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-    Number(__pmChat.renderedMessageLimits?.[sid] || PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE) || PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-  );
-  __pmChat.renderedMessageLimits[sid] = renderLimit;
-  const firstRenderedIndex = Math.max(0, thread.length - renderLimit);
+  const timelineKey = `mobile:main:${sid}`;
+  const timelineEntries = _mobileTimelineEntries(sid, thread);
+  const previousTimeline = mobileTimelineController.peek(timelineKey);
+  const timeline = mobileTimelineController.select(timelineKey, timelineEntries, {
+    followTail: timelineScroll.nearBottom && !(previousTimeline?.omittedAfter > 0),
+    pinnedKeys: timelineScroll.pinnedKeys,
+    hidden: document.hidden === true,
+  });
   const pagination = __pmChat.historyPagination?.[sid] || {};
-  const hasEarlierMessages = firstRenderedIndex > 0 || pagination.historyTruncated === true;
+  const hasEarlierMessages = timeline.omittedBefore > 0 || pagination.historyTruncated === true;
   const olderMessagesControl = hasEarlierMessages
-    ? `<div class="pm-chat-history-loader" data-pm-history-loader>
+    ? `<div class="pm-chat-history-loader" data-pm-history-loader data-pm-row-key="timeline-pager:older">
         <button type="button" data-pm-load-older ${pagination.loading ? 'disabled aria-busy="true"' : ''}>
           ${pagination.loading ? 'Loading earlier messages...' : `Load ${PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE} earlier messages`}
         </button>
       </div>`
     : '';
-  const renderedMessages = thread
-    .slice(firstRenderedIndex)
-    .map((msg, offset) => {
-      const index = firstRenderedIndex + offset;
-      return _isMobileHiddenVoiceDraftMessage(msg, index) ? '' : _renderChatMessageHtml(msg, index);
-    })
+  const renderedMessages = timeline.paintEntries
+    .map((entry) => _renderChatMessageHtml(entry.msg, entry.originalIndex, entry.key, entry.signature))
     .join('');
-  setInnerHTMLPreservingVisuals(threadEl, (olderMessagesControl + renderedMessages) || (
+  reconcileKeyedTimelineRows(threadEl, (olderMessagesControl + renderedMessages) || (
     sid === MOBILE_CHAT_SESSION_ID
       ? _renderMobileEmptyChatStarterCards()
       : ''
-  ));
+  ), {
+    scroller: _mobileChatScrollTarget(bodyEl),
+    scrollState: timelineScroll,
+    followBottom: timelineScroll.nearBottom,
+    setContents: setInnerHTMLPreservingVisuals,
+  });
   _syncMobileQuestionComposerPopover(sid, questionDrafts);
   try {
     threadEl.querySelectorAll('img[src]').forEach((node) => {
@@ -8818,7 +8821,12 @@ function _patchMobileThreadMessage(threadEl, message, index) {
   const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
   if (!currentEl) return false;
   const nextWrap = document.createElement('div');
-  nextWrap.innerHTML = _renderChatMessageHtml(message, msgIndex);
+  nextWrap.innerHTML = _renderChatMessageHtml(
+    message,
+    msgIndex,
+    currentEl.getAttribute('data-pm-row-key') || '',
+    chatTimelineRowSignature(message),
+  );
   const nextEl = nextWrap.firstElementChild;
   if (!nextEl) return false;
   const currentClass = String(currentEl.className || '');
@@ -8840,6 +8848,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
   } else {
     if (nextStreaming) currentEl.setAttribute('data-streaming', '1');
     else currentEl.removeAttribute('data-streaming');
+    currentEl.setAttribute('data-pm-row-signature', nextEl.getAttribute('data-pm-row-signature') || '');
     const currentBubble = currentEl.querySelector('.pm-bubble');
     const nextBubble = nextEl.querySelector('.pm-bubble');
     if (!currentBubble || !nextBubble) return false;
@@ -8999,8 +9008,12 @@ function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
   const { thread } = _threadForMobileSessionKey(key);
   const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
   if (!message) return false;
+  const messageIndex = thread.indexOf(message);
+  const timeline = mobileTimelineController.peek(`mobile:main:${String(key || 'chat')}`);
+  if (!threadEl.querySelector(`[data-msg-index="${messageIndex}"]`)
+    && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) return true;
   const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
-  const patched = _patchMobileThreadMessage(threadEl, message, thread.indexOf(message));
+  const patched = _patchMobileThreadMessage(threadEl, message, messageIndex);
   if (!patched) return false;
   _syncMobileWorkTimer(threadEl, bodyEl, key);
   _restoreMobileChatScroll(bodyEl, scrollSnapshot);
@@ -9011,14 +9024,11 @@ function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 1
   if (!threadEl) return false;
   if (!_isMobileSessionRenderCurrent(key)) return true;
   const timerKey = String(key || 'chat');
-  if (__pmChat.patchRenderTimers?.[timerKey]) return true;
-  if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') __pmChat.patchRenderTimers = {};
-  __pmChat.patchRenderTimers[timerKey] = setTimeout(() => {
-    delete __pmChat.patchRenderTimers[timerKey];
+  mobileStreamRenderScheduler.schedule(`mobile:patch:${timerKey}`, () => {
     if (!_patchLatestMobileStreamingMessage(threadEl, bodyEl, timerKey)) {
       _scheduleThreadRender(threadEl, bodyEl, timerKey, delay);
     }
-  }, Math.max(16, Number(delay) || 50));
+  }, { minimumDelay: Math.max(0, Number(delay) || 0) });
   return true;
 }
 
@@ -9419,35 +9429,22 @@ function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
   if (!threadEl) return;
   if (!_isMobileSessionRenderCurrent(key)) return;
   const timerKey = String(key || 'chat');
-  if (__pmChat.patchRenderTimers?.[timerKey]) {
-    clearTimeout(__pmChat.patchRenderTimers[timerKey]);
-    delete __pmChat.patchRenderTimers[timerKey];
-  }
-  if (__pmChat.renderTimers?.[timerKey]) return;
-  __pmChat.renderTimers[timerKey] = setTimeout(() => {
-    delete __pmChat.renderTimers[timerKey];
+  mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
+  mobileStreamRenderScheduler.schedule(`mobile:thread:${timerKey}`, () => {
     if (!_isMobileSessionRenderCurrent(timerKey)) return;
-    const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
     _renderThread(threadEl, timerKey);
-    _restoreMobileChatScroll(bodyEl, scrollSnapshot);
-  }, Math.max(16, Number(delay) || 90));
+  }, { minimumDelay: Math.max(0, Number(delay) || 0) });
 }
 
 function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
   const timerKey = String(key || 'chat');
   if (!_isMobileSessionRenderCurrent(timerKey)) return;
-  if (__pmChat.renderTimers?.[timerKey]) {
-    clearTimeout(__pmChat.renderTimers[timerKey]);
-    delete __pmChat.renderTimers[timerKey];
-  }
-  if (__pmChat.patchRenderTimers?.[timerKey]) {
-    clearTimeout(__pmChat.patchRenderTimers[timerKey]);
-    delete __pmChat.patchRenderTimers[timerKey];
-  }
-  const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
-  _renderThread(threadEl, timerKey);
-  _syncMobileWorkTimer(threadEl, bodyEl, timerKey);
-  _restoreMobileChatScroll(bodyEl, scrollSnapshot, options);
+  mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
+  mobileStreamRenderScheduler.flush(`mobile:thread:${timerKey}`, () => {
+    _renderThread(threadEl, timerKey);
+    _syncMobileWorkTimer(threadEl, bodyEl, timerKey);
+    if (options.forceBottom) _restoreMobileChatScroll(bodyEl, null, options);
+  });
 }
 
 function _renderMobileChatSessionNow(sessionId) {
@@ -13044,7 +13041,6 @@ void main() {
         _renderMobileGoalPill(goalStrip, requestedSession);
         updateChatComposerSpace();
         const history = Array.isArray(session?.history) ? session.history : [];
-        __pmChat.renderedMessageLimits[requestedSession] = PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE;
         __pmChat.historyPagination[requestedSession] = {
           loading: false,
           loadedHistoryCount: history.length,
@@ -13671,14 +13667,8 @@ void main() {
 
   function renderStreamingThreadNow() {
     const timerKey = String(requestedSession || 'chat');
-    if (__pmChat.renderTimers?.[timerKey]) {
-      clearTimeout(__pmChat.renderTimers[timerKey]);
-      delete __pmChat.renderTimers[timerKey];
-    }
-    if (__pmChat.patchRenderTimers?.[timerKey]) {
-      clearTimeout(__pmChat.patchRenderTimers[timerKey]);
-      delete __pmChat.patchRenderTimers[timerKey];
-    }
+    mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
+    mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
     if (!_patchLatestMobileStreamingMessage(threadEl, body, requestedSession)) {
       _flushThreadRender(threadEl, body, requestedSession);
     }
@@ -13868,15 +13858,11 @@ void main() {
   async function loadOlderMobileMessages() {
     if (historyLoadInFlight || __pmChat.activeSessionId !== requestedSession) return historyLoadInFlight;
     const thread = __pmChat.threads?.[requestedSession] || [];
-    const currentLimit = Math.max(
-      PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-      Number(__pmChat.renderedMessageLimits?.[requestedSession] || PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE) || PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-    );
-    const snapshot = _mobileChatScrollSnapshot(body, 0);
-    if (thread.length > currentLimit) {
-      __pmChat.renderedMessageLimits[requestedSession] = Math.min(thread.length, currentLimit + PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE);
+    const timelineEntries = _mobileTimelineEntries(requestedSession, thread);
+    const timelineKey = `mobile:main:${requestedSession}`;
+    if (mobileTimelineController.peek(timelineKey)?.omittedBefore > 0) {
+      mobileTimelineController.stepEarlier(timelineKey, timelineEntries);
       _renderThread(threadEl, requestedSession);
-      _restoreMobileChatScroll(body, snapshot);
       return null;
     }
     const pagination = __pmChat.historyPagination?.[requestedSession] || {};
@@ -13892,9 +13878,7 @@ void main() {
       limit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
     }).then(({ applied }) => {
       if (!applied) return;
-      __pmChat.renderedMessageLimits[requestedSession] = currentLimit + PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE;
       _renderThread(threadEl, requestedSession);
-      _restoreMobileChatScroll(body, snapshot);
       _scheduleMobileThreadCacheSave(requestedSession, 120);
     }).catch((err) => {
       pagination.loading = false;
@@ -13909,6 +13893,10 @@ void main() {
     const scrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);
     const isUpwardScroll = scrollTop < lastHistoryScrollTop - 2;
     lastHistoryScrollTop = scrollTop;
+    const timelineKey = `mobile:main:${requestedSession}`;
+    const keyedScroll = captureKeyedScrollState(threadEl, _mobileChatScrollTarget(body));
+    if (keyedScroll.nearBottom && !(mobileTimelineController.peek(timelineKey)?.omittedAfter > 0)) mobileTimelineController.followTail(timelineKey);
+    else if (keyedScroll.anchorKey) mobileTimelineController.anchorKey(timelineKey, keyedScroll.anchorKey);
     if (isUpwardScroll && scrollTop <= 80) loadOlderMobileMessages();
   };
   const onLoadOlderClick = (event) => {
@@ -13920,6 +13908,8 @@ void main() {
   const jumpToLatest = () => {
     const scrollTarget = _mobileChatScrollTarget(body);
     if (!scrollTarget) return;
+    mobileTimelineController.followTail(`mobile:main:${requestedSession}`);
+    _renderThread(threadEl, requestedSession);
     try { pmHaptic(12); } catch {}
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     try {
@@ -15786,14 +15776,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
     }
     const timerKey = String(requestedSession || 'chat');
-    if (__pmChat.renderTimers?.[timerKey]) {
-      clearTimeout(__pmChat.renderTimers[timerKey]);
-      delete __pmChat.renderTimers[timerKey];
-    }
-    if (__pmChat.patchRenderTimers?.[timerKey]) {
-      clearTimeout(__pmChat.patchRenderTimers[timerKey]);
-      delete __pmChat.patchRenderTimers[timerKey];
-    }
+    mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
+    mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
     const scrollSnapshot = _mobileChatScrollSnapshot(body);
     const patchedFinal = _patchMobileThreadMessage(threadEl, aiTurn, _activeMobileThread().indexOf(aiTurn));
     if (patchedFinal) {
@@ -16560,14 +16544,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (__pmChat.sentClientRequestIds?.[actualSessionId] === clientRequestId) delete __pmChat.sentClientRequestIds[actualSessionId];
       _rememberMobileCompletedAssistantTurn(actualSessionId, targetAiTurn);
       const timerKey = String(actualSessionId || 'chat');
-      if (__pmChat.renderTimers?.[timerKey]) {
-        clearTimeout(__pmChat.renderTimers[timerKey]);
-        delete __pmChat.renderTimers[timerKey];
-      }
-      if (__pmChat.patchRenderTimers?.[timerKey]) {
-        clearTimeout(__pmChat.patchRenderTimers[timerKey]);
-        delete __pmChat.patchRenderTimers[timerKey];
-      }
+      mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
+      mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
       const patchedFinal = _patchMobileThreadMessage(threadEl, targetAiTurn, activeThread.indexOf(targetAiTurn));
       if (patchedFinal) {
