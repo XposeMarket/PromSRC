@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "hydration1000P95MaxMs": 40,
+  "streamDeltaP95MaxMs": 1,
+  "cursorPagingGzipReductionMinPercent": 55
+}

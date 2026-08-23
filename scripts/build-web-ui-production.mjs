@@ -9,7 +9,21 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WEB_UI_ROOT = path.join(ROOT, 'web-ui');
 const DEFAULT_OUT_ROOT = path.join(ROOT, 'generated', 'public-web-ui');
 const BUILD_DESCRIPTOR = 'prometheus-web-production-v1|esm-split|minify|chrome120|safari16.4';
-const TEXT_EXTENSIONS = new Set(['.css', '.html', '.js', '.json', '.mjs', '.txt', '.webmanifest']);
+// Every textual file type admitted by web-ui/ must be canonicalized before it
+// contributes to the source digest. Git may check these files out as CRLF on
+// Windows even when the production bytes emitted by esbuild are identical.
+const TEXT_EXTENSIONS = new Set([
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.jsx',
+  '.md',
+  '.mjs',
+  '.svg',
+  '.txt',
+  '.webmanifest',
+]);
 const args = new Set(process.argv.slice(2));
 const outRootIndex = process.argv.indexOf('--out-root');
 const OUT_ROOT = outRootIndex >= 0

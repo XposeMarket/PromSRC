@@ -1,4 +1,4 @@
-// Chat + inline Voice route owner. Secondary mobile routes live in their own modules.
+// Chat and inline Voice route owner.
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
 } from './mobile-shell.js';
@@ -39,7 +39,7 @@ import {
   saveTeamContextReference, invalidateTeamsCache,
   streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession, createMobileProject, createMobileProjectChatSession,
   resolveMobileVoiceRoom, appendMobileVoiceRoomTranscript,
-  loadGatewayStatus, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay, reconcileMobileChatTurn,
+  loadGatewayStatus, loadMobileChatSession, loadMobileChatHistoryPage, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay, reconcileMobileChatTurn,
   loadMobileBackgroundStatuses, loadMobileBackgroundStatus, loadMobileBackgroundStreamReplay, sendMobileBackgroundSteer,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
@@ -99,6 +99,7 @@ import {
   toolActivitySummary,
 } from '../tool-activity.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
+import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-chat-adapter.js';
 installToolActivityExpansionPersistence();
 import {
   renderAgentModelPicker as _renderAgentModelPicker,
@@ -545,6 +546,19 @@ if (!__pmChat.toolProgressBySession || typeof __pmChat.toolProgressBySession !==
 if (!__pmChat.resolvedQuestionIds || typeof __pmChat.resolvedQuestionIds !== 'object') __pmChat.resolvedQuestionIds = {};
 if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== 'object') __pmChat.mobileRecoveryOwners = {};
 if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
+
+const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
+  defaultSessionId: MOBILE_CHAT_SESSION_ID,
+  getState: () => __pmChat,
+  getSessionTarget: getMobileSessionTarget,
+  getActiveGatewayId,
+  loadHistoryPage: loadMobileChatHistoryPage,
+  mergeHistory: _mergeMobileSessionThreadWithLocal,
+  normalizeSkillIds: _pmNormalizeSelectedSkillIds,
+  normalizeSkillRefs: _pmNormalizeSelectedComposerSkillRefs,
+});
+const _makeMobileQueuedPrompt=mobileChatRuntimeAdapter.createQueuedPrompt;
+const _markMobileSessionRunning = mobileChatRuntimeAdapter.setRunning;
 
 function _mobileGoalTimestampMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -1126,14 +1140,6 @@ if (typeof window !== 'undefined' && !window.__pmMobileThreadCacheLifecycleInsta
       _scheduleMobileSessionFreshnessRefresh(__pmChat.activeSessionId, { delayMs: 80 });
     }
   });
-}
-
-function _markMobileSessionRunning(sessionId, running) {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return;
-  if (!(__pmChat.drawerRunSessionIds instanceof Set)) __pmChat.drawerRunSessionIds = new Set();
-  if (running) __pmChat.drawerRunSessionIds.add(sid);
-  else __pmChat.drawerRunSessionIds.delete(sid);
 }
 
 // A mobile tab can observe a turn admitted by another tab.  Make the server's
@@ -2146,24 +2152,7 @@ function _clearMobileActiveRun(sessionId = '') {
 
 const PM_MOBILE_MAX_QUEUED_PROMPTS = 8;
 
-function _getMobileQueuedPrompts(sessionId = '') {
-  const sid = String(sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
-  if (!__pmChat.queuedPrompts || typeof __pmChat.queuedPrompts !== 'object') __pmChat.queuedPrompts = {};
-  if (!Array.isArray(__pmChat.queuedPrompts[sid])) __pmChat.queuedPrompts[sid] = [];
-  return __pmChat.queuedPrompts[sid];
-}
-
-function _makeMobileQueuedPrompt(message, files = [], options = {}) {
-  return {
-    id: `mq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    message: String(message || '').trim(),
-    files: Array.isArray(files) ? files.slice() : [],
-    excludedSkillIds: Array.isArray(options.excludedSkillIds) ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
-    selectedSkillIds: _pmNormalizeSelectedSkillIds(options.selectedSkillIds || options.forcedSkillIds || options.matchedSkillIds),
-    selectedSkillRefs: _pmNormalizeSelectedComposerSkillRefs(options.selectedSkillRefs || options.selectedSkills),
-    createdAt: Date.now(),
-  };
-}
+const _getMobileQueuedPrompts = mobileChatRuntimeAdapter.queue;
 
 function _moveMobileQueuedPromptToComposer(sessionId, index) {
   const sid = String(sessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
@@ -5960,6 +5949,7 @@ function _upsertMobilePendingApproval(approvalInput = {}) {
   if (idx >= 0) list[idx] = { ...list[idx], ...storedApproval };
   else list.push(storedApproval);
   __pmChat.pendingApprovals[sid] = list;
+  mobileChatRuntimeAdapter.upsertApproval(sid, storedApproval);
   return true;
 }
 
@@ -5973,6 +5963,7 @@ function _updateMobilePendingApproval(id, patch = {}) {
     const lane = _linkMobileApprovalToBackgroundLane(list[idx]);
     if (lane?.approvalRequest) list[idx] = lane.approvalRequest;
     __pmChat.pendingApprovals[sid] = list;
+    mobileChatRuntimeAdapter.upsertApproval(sid, list[idx]);
     return list[idx];
   }
   return null;
@@ -7452,6 +7443,7 @@ function _setMobileQuestionSubmitting(id) {
     thread.forEach((message) => {
       if (String(message?.questionRequest?.id || '') !== qid) return;
       message.questionRequest = { ...message.questionRequest, status: 'submitting' };
+      mobileChatRuntimeAdapter.upsertQuestion(sid, message.questionRequest);
       changed = true;
     });
     if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
@@ -7466,6 +7458,7 @@ function _removeMobileQuestionFromThread(id) {
     let changed = false;
     thread.forEach((message) => {
       if (String(message?.questionRequest?.id || '') !== qid) return;
+      mobileChatRuntimeAdapter.resolveQuestion(sid, qid, 'resolved', message.questionRequest);
       delete message.questionRequest;
       changed = true;
     });
@@ -7551,6 +7544,7 @@ function _upsertMobileQuestion(q) {
   } else {
     thread.push({ role: 'ai', timestamp: Date.now(), time: _nowTime(), body: { sender: 'Prometheus', text: '' }, content: '', questionRequest: q });
   }
+  mobileChatRuntimeAdapter.upsertQuestion(sid, q);
   if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
 }
 function _updateMobileQuestionStatus(event, status) {
@@ -7571,6 +7565,7 @@ function _updateMobileQuestionStatus(event, status) {
       msg.questionRequest = _normalizeMobileQuestion(event.question || msg.questionRequest, { id, status });
       msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
     });
+    try { mobileChatRuntimeAdapter.reconcileQuestion(sid, id, status, matches[0]?.questionRequest || { id, status }); } catch {}
     if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
   }
 }
@@ -10694,6 +10689,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   }
   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
   _activeMobileThread();
+  const releaseActiveChatRuntime = mobileChatRuntimeAdapter.mount(requestedSession);
 
   // These values are used by the initial new-chat template below. Keep their
   // declarations before page.innerHTML is evaluated; otherwise the template
@@ -13054,9 +13050,11 @@ void main() {
           loadedHistoryCount: history.length,
           totalHistoryCount: Number(session?.totalHistoryCount || history.length) || history.length,
           historyTruncated: session?.historyTruncated === true,
+          olderCursor: String(session?.historyPage?.olderCursor || '').trim() || null,
         };
         const localThread = __pmChat.threads[requestedSession] || [];
         __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
+        mobileChatRuntimeAdapter.syncInitial(requestedSession, session, __pmChat.threads[requestedSession]);
         _activeMobileThread();
         _renderThread(threadEl);
         _scrollChat(body);
@@ -13883,33 +13881,18 @@ void main() {
     }
     const pagination = __pmChat.historyPagination?.[requestedSession] || {};
     if (!pagination.historyTruncated) return null;
-    const loadedHistoryCount = Math.max(Number(pagination.loadedHistoryCount || thread.length) || 0, thread.length);
-    const totalHistoryCount = Math.max(Number(pagination.totalHistoryCount || 0) || 0, loadedHistoryCount);
-    const nextHistoryLimit = Math.min(
-      totalHistoryCount || loadedHistoryCount + PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-      loadedHistoryCount + PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
-    );
-    if (nextHistoryLimit <= loadedHistoryCount) return null;
+    const olderCursor = String(pagination.olderCursor || '').trim();
+    if (!olderCursor) return null;
     pagination.loading = true;
     __pmChat.historyPagination[requestedSession] = pagination;
+    mobileChatRuntimeAdapter.setPaging(requestedSession,{ loadingOlder:true,error:null });
     _renderThread(threadEl, requestedSession);
-    historyLoadInFlight = loadMobileChatSession(requestedSession, {
-      force: true,
-      historyLimit: nextHistoryLimit,
-      processLimit: Math.max(60, nextHistoryLimit * 3),
-      fullProcess: false,
-    }).then((session) => {
-      if (__pmChat.activeSessionId !== requestedSession) return;
-      const history = Array.isArray(session?.history) ? session.history : [];
-      const localThread = __pmChat.threads[requestedSession] || [];
-      __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
+    historyLoadInFlight = mobileChatRuntimeAdapter.loadOlderPage(requestedSession, {
+      before: olderCursor,
+      limit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
+    }).then(({ applied }) => {
+      if (!applied) return;
       __pmChat.renderedMessageLimits[requestedSession] = currentLimit + PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE;
-      __pmChat.historyPagination[requestedSession] = {
-        loading: false,
-        loadedHistoryCount: history.length,
-        totalHistoryCount: Number(session?.totalHistoryCount || history.length) || history.length,
-        historyTruncated: session?.historyTruncated === true,
-      };
       _renderThread(threadEl, requestedSession);
       _restoreMobileChatScroll(body, snapshot);
       _scheduleMobileThreadCacheSave(requestedSession, 120);
@@ -15538,6 +15521,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (evt.type !== 'error') _clearRecoveredMobileChatError(aiTurn);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
+    const sharedRuntime = mobileChatRuntimeAdapter.observeStreamEvent(requestedSession, aiTurn, evt);
     switch (evt.type) {
       case 'final_response_start':
         beginFinalResponse(aiTurn);
@@ -15551,6 +15535,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
             _appendMobileLiveTrace(aiTurn, 'preamble', chunk, { append: true });
           } else {
             _appendMobileVisualStreamToken(aiTurn, chunk, renderThreadSoon);
+            mobileChatRuntimeAdapter.appendStreamEvent(sharedRuntime, aiTurn, evt, chunk);
           }
           _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         }
@@ -15742,6 +15727,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
+        mobileChatRuntimeAdapter.completeStream(requestedSession, evt.text || aiTurn.body?.text || aiTurn.content, aiTurn);
         _scheduleMobileThreadCacheSave(requestedSession, 80);
         _clearMobileBackgroundSpawnDockForSession(requestedSession);
         renderThreadSoon();
@@ -15761,12 +15747,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           _finishMobileVisualStreamText(aiTurn);
         }
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
+        mobileChatRuntimeAdapter.completeStream(requestedSession, evt.reply || aiTurn.body?.text || aiTurn.content, aiTurn);
         return 'done';
       case 'error':
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _finishMobileVisualStreamText(aiTurn);
         _recordMobileChatError(aiTurn, { message: String(evt.message || 'Chat error'), rawBody: String(evt.message || ''), payload: evt });
+        mobileChatRuntimeAdapter.completeStream(requestedSession, aiTurn.body?.text || aiTurn.content, aiTurn);
         pmToast(aiTurn.errorPresentation);
         renderThreadNow();
         return 'error';
@@ -15789,6 +15777,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     _mergeMobileLiveTraceIntoProcess(aiTurn);
     _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
     _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
+    mobileChatRuntimeAdapter.completeStream(requestedSession, aiTurn.body?.text || aiTurn.content, aiTurn);
     if (__pmChat.activeRuns?.[requestedSession]) __pmChat.activeRuns[requestedSession].abort = null;
     __pmChat.abort = null;
     _clearMobileActiveRun(requestedSession);
@@ -15860,6 +15849,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   async function requestMobileMainChatAbort(sessionId = requestedSession, { showToast = true } = {}) {
     const sid = String(sessionId || requestedSession || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    mobileChatRuntimeAdapter.requestInterruption(sid);
     const runtimeId = String(
       __pmChat.activeRuns?.[sid]?.runtimeId ||
       __pmChat.activeRuns?.[requestedSession]?.runtimeId ||
@@ -17119,6 +17109,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    releaseActiveChatRuntime();
     mobileRecoveryDisposed = true;
     if (__pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken) {
       delete __pmChat.mobileRecoveryOwners[requestedSession];
@@ -28445,6 +28436,7 @@ function _persistMobileThreadSnapshot(sessionId) {
   const sid = String(sessionId || '').trim();
   const thread = sid ? __pmChat.threads?.[sid] : null;
   if (!sid || !Array.isArray(thread)) return Promise.resolve(false);
+  mobileChatRuntimeAdapter.sync(sid, { history: thread, source: 'mobile-persist' });
   const history = _mobileHistoryForServer(thread);
   const previous = _mobileThreadSnapshotWriteQueues.get(sid) || Promise.resolve(true);
   const write = previous.catch(() => false).then(() => updateMobileChatSessionHistory(sid, history)).then(() => true).catch((err) => {
