@@ -9,7 +9,7 @@ const PROM_BOT_COLLAPSED_KEY = 'prometheus_prom_bot_section_collapsed_v1';
 const PROM_BOT_BUTTON_ID = 'sidebarPromBotToggle';
 const PROM_BOT_SECTION_ID = 'prom-bot-sidebar-section';
 const PROM_BOT_LIST_ID = 'prom-bot-subagents-list';
-const PROM_BOT_HOST_ID = 'prom-bot-chat-host';
+const PROM_BOT_SURFACE_ID = 'prom-bot-main-surface';
 
 let promBotMode = false;
 let promBotAgents = [];
@@ -18,6 +18,7 @@ let promBotRefreshPromise = null;
 let subagentRuntimePromise = null;
 let originalBoardParent = null;
 let originalBoardNextSibling = null;
+let displacedMainChatChildren = [];
 let sidebarCaptureBound = false;
 
 const ROBOT_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg>`;
@@ -84,18 +85,27 @@ function installPromBotStyles() {
     .prom-bot-agent-state { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--sidebar-muted, var(--muted)) 60%, transparent); }
     .prom-bot-agent-state.working { background: #36c986; box-shadow: 0 0 0 3px rgba(54,201,134,.12); }
     .prom-bot-sidebar-empty { padding: 8px 10px 12px; color: var(--sidebar-muted, var(--muted)); font-size: 11px; line-height: 1.45; }
-    #chat-view.prom-bot-chat-active { position: relative; min-height: 0; }
-    #${PROM_BOT_HOST_ID} {
-      position: absolute;
-      inset: 0;
-      z-index: 12;
-      display: flex;
+
+    /* Prom Bot is the main chat surface while an agent is selected. Do not
+       stack a second absolute chat panel over the existing conversation. */
+    #chat-view.prom-bot-chat-active {
+      display: flex !important;
+      flex-direction: column;
       min-width: 0;
       min-height: 0;
       overflow: hidden;
-      background: var(--pm-chat-page-bg, var(--bg));
     }
-    #${PROM_BOT_HOST_ID} #subagent-board {
+    #${PROM_BOT_SURFACE_ID} {
+      position: relative;
+      display: flex;
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+    #${PROM_BOT_SURFACE_ID} #subagent-board {
       display: flex !important;
       flex: 1 1 auto;
       width: 100% !important;
@@ -106,10 +116,10 @@ function installPromBotStyles() {
       border-left: 0 !important;
       background: transparent !important;
     }
-    #${PROM_BOT_HOST_ID} #subagent-board-header { display: none !important; }
-    #${PROM_BOT_HOST_ID} #subagent-board-body { flex: 1 1 auto; min-height: 0; }
-    #${PROM_BOT_HOST_ID} .unified-agent-chat-shell { width: 100%; height: 100%; min-height: 0; }
-    #${PROM_BOT_HOST_ID} .unified-agent-chat-header .side-chat-close { display: none !important; }
+    #${PROM_BOT_SURFACE_ID} #subagent-board-header { display: none !important; }
+    #${PROM_BOT_SURFACE_ID} #subagent-board-body { flex: 1 1 auto; min-height: 0; }
+    #${PROM_BOT_SURFACE_ID} .unified-agent-chat-shell { width: 100%; height: 100%; min-height: 0; }
+    #${PROM_BOT_SURFACE_ID} .unified-agent-chat-header { display: none !important; }
   `;
   document.head.appendChild(style);
 }
@@ -274,30 +284,56 @@ async function ensureSubagentRuntime() {
   return subagentRuntimePromise;
 }
 
-function getPromBotHost() {
-  let host = document.getElementById(PROM_BOT_HOST_ID);
-  if (host) return host;
+function getPromBotSurface() {
+  let surface = document.getElementById(PROM_BOT_SURFACE_ID);
+  if (surface) return surface;
   const chatView = document.getElementById('chat-view');
   if (!chatView) return null;
-  host = document.createElement('div');
-  host.id = PROM_BOT_HOST_ID;
-  host.setAttribute('role', 'region');
-  host.setAttribute('aria-label', 'Prom Bot direct chat');
-  chatView.appendChild(host);
-  return host;
+  surface = document.createElement('div');
+  surface.id = PROM_BOT_SURFACE_ID;
+  surface.setAttribute('role', 'region');
+  surface.setAttribute('aria-label', 'Prom Bot direct chat');
+  chatView.appendChild(surface);
+  return surface;
 }
 
-function mountSubagentBoardInMainChat() {
+function displaceMainChatSurface(chatView, surface) {
+  if (displacedMainChatChildren.length) return;
+  displacedMainChatChildren = Array.from(chatView.children)
+    .filter((node) => node !== surface)
+    .map((node) => ({
+      node,
+      hidden: node.hidden === true,
+      ariaHidden: node.getAttribute('aria-hidden'),
+    }));
+  for (const entry of displacedMainChatChildren) {
+    entry.node.hidden = true;
+    entry.node.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function restoreMainChatSurface() {
+  for (const entry of displacedMainChatChildren) {
+    if (!entry.node?.isConnected) continue;
+    entry.node.hidden = entry.hidden;
+    if (entry.ariaHidden == null) entry.node.removeAttribute('aria-hidden');
+    else entry.node.setAttribute('aria-hidden', entry.ariaHidden);
+  }
+  displacedMainChatChildren = [];
+}
+
+function mountSubagentBoardAsMainChatSurface() {
   const board = document.getElementById('subagent-board');
   const chatView = document.getElementById('chat-view');
-  const host = getPromBotHost();
-  if (!board || !chatView || !host) throw new Error('Prom Bot chat surface is unavailable.');
+  const surface = getPromBotSurface();
+  if (!board || !chatView || !surface) throw new Error('Prom Bot chat surface is unavailable.');
 
   if (!originalBoardParent) {
     originalBoardParent = board.parentNode;
     originalBoardNextSibling = board.nextSibling;
   }
-  if (board.parentNode !== host) host.appendChild(board);
+  displaceMainChatSurface(chatView, surface);
+  if (board.parentNode !== surface) surface.appendChild(board);
   board.style.display = 'flex';
   board.style.width = '100%';
   board.style.opacity = '1';
@@ -311,12 +347,13 @@ function restoreSubagentBoard() {
     if (originalBoardNextSibling?.parentNode === originalBoardParent) originalBoardParent.insertBefore(board, originalBoardNextSibling);
     else originalBoardParent.appendChild(board);
   }
-  document.getElementById(PROM_BOT_HOST_ID)?.remove();
+  restoreMainChatSurface();
+  document.getElementById(PROM_BOT_SURFACE_ID)?.remove();
   document.getElementById('chat-view')?.classList.remove('prom-bot-chat-active');
 }
 
 function closePromBotChat({ keepMode = true } = {}) {
-  if (!activePromBotAgentId && !document.getElementById(PROM_BOT_HOST_ID)) return;
+  if (!activePromBotAgentId && !document.getElementById(PROM_BOT_SURFACE_ID)) return;
   restoreSubagentBoard();
   activePromBotAgentId = '';
   window.promBotActiveAgentId = '';
@@ -334,12 +371,13 @@ async function openPromBotAgent(agentId) {
     await ensureSubagentRuntime();
     if (!promBotAgents.some((agent) => String(agent?.id || '') === id)) await refreshPromBotAgents({ force: true });
 
-    // Keep the ordinary Prometheus session untouched underneath this surface.
-    // Switching back to a pinned/project/chat therefore restores it instantly.
+    // Prom Bot takes over the existing main chat region instead of creating an
+    // absolutely-positioned chat layer above it. The durable subagent runtime
+    // still owns transport/state; only the visible host changes.
     if (typeof window.setMode === 'function') window.setMode('chat');
     await window.openSubagentDetail(id);
     await window.switchSubagentTab('chat', id);
-    mountSubagentBoardInMainChat();
+    mountSubagentBoardAsMainChatSurface();
 
     activePromBotAgentId = id;
     window.promBotActiveAgentId = id;
