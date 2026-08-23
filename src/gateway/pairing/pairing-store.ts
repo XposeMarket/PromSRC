@@ -35,6 +35,7 @@ import { getConfig } from '../../config/config';
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;       // 5 minutes
 const REQUEST_TTL_MS   = 10 * 60 * 1000;      // 10 minutes
 const STORE_FILE_NAME  = 'paired-devices.json';
+const SESSION_STORE_FILE_NAME = 'pairing-session-state.json';
 
 export type PairingRequestStatus = 'pending' | 'approved' | 'denied' | 'expired';
 
@@ -59,6 +60,7 @@ export interface PairingPendingRequest {
   status: PairingRequestStatus;
   deviceId?: string;       // populated on approval
   deviceToken?: string;    // plaintext, only held until phone polls
+  tokenDeliveryPending?: boolean; // persisted without the plaintext token
 }
 
 export interface PairedDevice {
@@ -79,8 +81,17 @@ interface PairingFile {
   updatedAt: number;
 }
 
-// In-memory state. Challenges and pending requests are intentionally NOT
-// persisted to disk; they are short-lived and don't survive restarts.
+interface PairingSessionFile {
+  version: 1;
+  challenges: PairingChallenge[];
+  requests: Array<Omit<PairingPendingRequest, 'deviceToken'>>;
+  updatedAt: number;
+}
+
+// Device grants are long-lived. Challenges and pending requests remain
+// short-lived, but are checkpointed without plaintext device tokens so an
+// Electron-managed gateway child replacement cannot invalidate a QR midway
+// through pairing.
 const _challenges = new Map<string, PairingChallenge>();
 const _requests   = new Map<string, PairingPendingRequest>();
 let   _devices: PairedDevice[] = [];
@@ -92,31 +103,89 @@ function _storePath(): string {
   return path.join(dir, STORE_FILE_NAME);
 }
 
+function _sessionStorePath(): string {
+  const dir = getConfig().getConfigDir();
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, SESSION_STORE_FILE_NAME);
+}
+
 function _load(): void {
   if (_loaded) return;
   _loaded = true;
+
   try {
     const file = _storePath();
-    if (!fs.existsSync(file)) return;
-    const raw = fs.readFileSync(file, 'utf-8');
-    const parsed = JSON.parse(raw) as PairingFile;
-    if (Array.isArray(parsed?.devices)) {
-      _devices = parsed.devices.map((d) => ({
-        id: String(d.id),
-        name: String(d.name || 'Device'),
-        fingerprint: String(d.fingerprint || ''),
-        tokenHash: String(d.tokenHash || ''),
-        enabled: d.enabled !== false,
-        createdAt: Number(d.createdAt) || Date.now(),
-        lastSeenAt: Number(d.lastSeenAt) || 0,
-        lastIpHint: String(d.lastIpHint || ''),
-        lastUserAgent: String(d.lastUserAgent || ''),
-      }));
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, 'utf-8');
+      const parsed = JSON.parse(raw) as PairingFile;
+      if (Array.isArray(parsed?.devices)) {
+        _devices = parsed.devices.map((d) => ({
+          id: String(d.id),
+          name: String(d.name || 'Device'),
+          fingerprint: String(d.fingerprint || ''),
+          tokenHash: String(d.tokenHash || ''),
+          enabled: d.enabled !== false,
+          createdAt: Number(d.createdAt) || Date.now(),
+          lastSeenAt: Number(d.lastSeenAt) || 0,
+          lastIpHint: String(d.lastIpHint || ''),
+          lastUserAgent: String(d.lastUserAgent || ''),
+        }));
+      }
     }
   } catch (err) {
     console.warn('[pairing] failed to load store:', err);
     _devices = [];
   }
+
+  try {
+    const file = _sessionStorePath();
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, 'utf-8');
+      const parsed = JSON.parse(raw) as PairingSessionFile;
+      const now = Date.now();
+      if (Array.isArray(parsed?.challenges)) {
+        for (const value of parsed.challenges) {
+          const challenge: PairingChallenge = {
+            id: String(value?.id || ''),
+            code: String(value?.code || ''),
+            humanCode: String(value?.humanCode || ''),
+            createdAt: Number(value?.createdAt || 0) || 0,
+            expiresAt: Number(value?.expiresAt || 0) || 0,
+            claimed: value?.claimed === true,
+          };
+          if (!challenge.id || !challenge.code || !challenge.humanCode || challenge.expiresAt <= now) continue;
+          _challenges.set(challenge.id, challenge);
+        }
+      }
+      if (Array.isArray(parsed?.requests)) {
+        for (const value of parsed.requests) {
+          const status = String(value?.status || '') as PairingRequestStatus;
+          if (!['pending', 'approved', 'denied'].includes(status)) continue;
+          const request: PairingPendingRequest = {
+            id: String(value?.id || ''),
+            challengeId: String(value?.challengeId || ''),
+            deviceName: String(value?.deviceName || 'New device').slice(0, 80),
+            deviceFingerprint: String(value?.deviceFingerprint || '').slice(0, 120),
+            userAgent: String(value?.userAgent || '').slice(0, 240),
+            ipHint: String(value?.ipHint || '').slice(0, 80),
+            createdAt: Number(value?.createdAt || 0) || 0,
+            expiresAt: Number(value?.expiresAt || 0) || 0,
+            status,
+            deviceId: value?.deviceId ? String(value.deviceId) : undefined,
+            tokenDeliveryPending: value?.tokenDeliveryPending === true,
+          };
+          if (!request.id || !request.challengeId || request.expiresAt <= now) continue;
+          _requests.set(request.id, request);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[pairing] failed to load short-lived pairing state:', err);
+    _challenges.clear();
+    _requests.clear();
+  }
+
+  _sweep();
 }
 
 function _persist(): void {
@@ -126,6 +195,25 @@ function _persist(): void {
     fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
     console.error('[pairing] failed to persist store:', err);
+  }
+}
+
+function _persistSessionState(): void {
+  try {
+    const file = _sessionStorePath();
+    const requests = Array.from(_requests.values()).map((request) => {
+      const { deviceToken: _deviceToken, ...safe } = request;
+      return safe;
+    });
+    const data: PairingSessionFile = {
+      version: 1,
+      challenges: Array.from(_challenges.values()),
+      requests,
+      updatedAt: Date.now(),
+    };
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[pairing] failed to persist short-lived pairing state:', err);
   }
 }
 
@@ -159,11 +247,18 @@ function _hashToken(token: string): string {
 
 function _sweep(): void {
   const now = Date.now();
-  for (const [id, ch] of _challenges) if (ch.expiresAt < now) _challenges.delete(id);
-  for (const [id, r]  of _requests)   if (r.expiresAt   < now && r.status === 'pending') {
-    r.status = 'expired';
-    _requests.delete(id);
+  let changed = false;
+  for (const [id, ch] of _challenges) {
+    if (ch.expiresAt >= now) continue;
+    _challenges.delete(id);
+    changed = true;
   }
+  for (const [id, request] of _requests) {
+    if (request.expiresAt >= now) continue;
+    _requests.delete(id);
+    changed = true;
+  }
+  if (changed && _loaded) _persistSessionState();
 }
 
 /* ---------------- challenges ---------------- */
@@ -185,6 +280,7 @@ export function createPairingChallenge(): PairingChallenge {
     claimed: false,
   };
   _challenges.set(challenge.id, challenge);
+  _persistSessionState();
   return challenge;
 }
 
@@ -222,6 +318,7 @@ export function createPendingRequest(input: {
   _requests.set(req.id, req);
   const challenge = _challenges.get(input.challengeId);
   if (challenge) challenge.claimed = true;
+  _persistSessionState();
   return req;
 }
 
@@ -294,6 +391,8 @@ export function approvePendingRequest(id: string, overrideName?: string): {
   req.status = 'approved';
   req.deviceId = device.id;
   req.deviceToken = deviceToken;
+  req.tokenDeliveryPending = true;
+  _persistSessionState();
 
   return { request: req, device, deviceToken };
 }
@@ -303,16 +402,33 @@ export function denyPendingRequest(id: string): boolean {
   const req = _requests.get(id);
   if (!req || req.status !== 'pending') return false;
   req.status = 'denied';
+  _persistSessionState();
   return true;
 }
 
 export function consumePendingRequestToken(id: string): string | null {
   // Phone polls until approved; once it has the token in hand we erase it
-  // from server memory so it cannot be re-collected by another caller.
+  // from server memory and checkpoint the one-use delivery state. If the
+  // gateway child restarted after approval but before collection, regenerate
+  // one replacement token and rotate the stored hash instead of persisting a
+  // plaintext bearer credential to disk.
+  _load(); _sweep();
   const req = _requests.get(id);
-  if (!req || req.status !== 'approved' || !req.deviceToken) return null;
-  const token = req.deviceToken;
+  if (!req || req.status !== 'approved' || req.tokenDeliveryPending !== true) return null;
+
+  let token = req.deviceToken;
+  if (!token) {
+    const device = _devices.find((item) => item.id === req.deviceId);
+    if (!device) return null;
+    token = _randomBase64Url(32);
+    device.tokenHash = _hashToken(token);
+    device.lastSeenAt = Date.now();
+    _persist();
+  }
+
   req.deviceToken = undefined;
+  req.tokenDeliveryPending = false;
+  _persistSessionState();
   return token;
 }
 

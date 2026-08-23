@@ -31,6 +31,7 @@ const PENDING_GATEWAY_PAIR_KEY = 'pm_mobile_pending_gateway_pair_v1';
 const TOKEN_PREFIX = 'pm_mobile_gateway_token_v1:';
 const DEVICE_PREFIX = 'pm_mobile_gateway_device_v1:';
 const STATUS_PROBE_TIMEOUT_MS = 8000;
+const PAIRING_RESTART_RETRY_WINDOW_MS = 180_000;
 const FETCH_AUTH_GUARD_KEY = '__pmMobileGatewayFetchAuthGuardInstalled';
 
 export function isMobileGatewayCatalogEnabled() {
@@ -641,9 +642,57 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
   }
 }
 
+function _pairingAbortError() {
+  const error = new Error('Pairing request aborted.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function _pairingRestartDelayMs(response, retryCount, remainingMs) {
+  let retryAfterMs = 0;
+  const retryAfter = String(response?.headers?.get?.('Retry-After') || '').trim();
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      retryAfterMs = seconds * 1000;
+    } else {
+      const retryAt = Date.parse(retryAfter);
+      if (Number.isFinite(retryAt)) retryAfterMs = Math.max(0, retryAt - Date.now());
+    }
+  }
+  const backoffMs = Math.min(5000, 1000 * (2 ** Math.min(Math.max(0, retryCount), 3)));
+  return Math.max(1, Math.min(Math.max(1, remainingMs), Math.max(retryAfterMs, backoffMs)));
+}
+
+function _waitForPairingRetry(delayMs, signal) {
+  if (!delayMs) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(_pairingAbortError());
+      return;
+    }
+    let settled = false;
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener?.('abort', onAbort);
+      callback();
+    };
+    const timer = setTimeout(() => finish(resolve), delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      finish(() => reject(_pairingAbortError()));
+    };
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
 // Pairing is the one intentional pre-credential request. It is bound by the
 // short-lived challenge in the body, never by a token in the URL, and the
-// target desktop still has to approve the pending request.
+// target desktop still has to approve the pending request. The Electron relay
+// can deliberately return GATEWAY_RESTARTING while its private child is being
+// replaced; keep the bootstrap request alive across that bounded window rather
+// than making the phone discard an otherwise-valid QR or manual pair code.
 export async function pairingGatewayFetchJson(origin, path, options = {}) {
   const safeOrigin = normalizeGatewayOrigin(origin);
   if (!safeOrigin || !String(path || '').startsWith('/')) {
@@ -654,33 +703,57 @@ export async function pairingGatewayFetchJson(origin, path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json');
-  const controller = new AbortController();
   const parentSignal = options.signal;
-  const onAbort = () => controller.abort();
-  if (parentSignal) {
-    if (parentSignal.aborted) controller.abort();
-    else parentSignal.addEventListener('abort', onAbort, { once: true });
-  }
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(options.timeoutMs || STATUS_PROBE_TIMEOUT_MS)));
-  try {
-    const response = await fetch(`${safeOrigin}${path}`, { ...options, headers, signal: controller.signal });
-    const text = await response.text();
-    let body = null;
-    try { body = text ? JSON.parse(text) : null; } catch { body = null; }
-    if (!response.ok) {
-      const error = new Error(String(body?.error || body?.message || `Pairing request failed (${response.status}).`));
-      error.status = response.status;
-      error.body = body;
+  const perAttemptTimeoutMs = Math.max(1000, Number(options.timeoutMs || STATUS_PROBE_TIMEOUT_MS));
+  const restartRetryWindowMs = Math.max(0, Number(options.restartRetryWindowMs ?? PAIRING_RESTART_RETRY_WINDOW_MS));
+  const retryDeadline = Date.now() + restartRetryWindowMs;
+  const {
+    timeoutMs: _timeoutMs,
+    restartRetryWindowMs: _restartRetryWindowMs,
+    signal: _signal,
+    ...fetchOptions
+  } = options;
+  let restartRetryCount = 0;
+
+  for (;;) {
+    if (parentSignal?.aborted) throw _pairingAbortError();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (parentSignal) parentSignal.addEventListener('abort', onAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(), perAttemptTimeoutMs);
+    let restartDelayMs = 0;
+    let result;
+    try {
+      const response = await fetch(`${safeOrigin}${path}`, { ...fetchOptions, headers, signal: controller.signal });
+      const text = await response.text();
+      let body = null;
+      try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+      if (!response.ok) {
+        const restarting = response.status === 503
+          && (body?.code === 'GATEWAY_RESTARTING' || response.headers?.get?.('X-Prometheus-Gateway-State') === 'restarting');
+        const error = new Error(String(body?.error || body?.message || (restarting ? 'Gateway is restarting. Please retry shortly.' : `Pairing request failed (${response.status}).`)));
+        error.status = response.status;
+        error.body = body;
+        error.code = restarting ? 'GATEWAY_RESTARTING' : 'PAIRING_REQUEST_FAILED';
+        error.retryable = restarting;
+        const remainingMs = retryDeadline - Date.now();
+        if (!restarting || remainingMs <= 0) throw error;
+        restartDelayMs = _pairingRestartDelayMs(response, restartRetryCount, remainingMs);
+        restartRetryCount += 1;
+      } else {
+        result = body || {};
+      }
+    } catch (error) {
+      if (parentSignal?.aborted) throw error;
+      if (error?.name === 'AbortError') throw _timeoutError('Pairing request timed out.');
       throw error;
+    } finally {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener?.('abort', onAbort);
     }
-    return body || {};
-  } catch (error) {
-    if (parentSignal?.aborted) throw error;
-    if (error?.name === 'AbortError') throw _timeoutError('Pairing request timed out.');
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    parentSignal?.removeEventListener?.('abort', onAbort);
+
+    if (!restartDelayMs) return result;
+    await _waitForPairingRetry(restartDelayMs, parentSignal);
   }
 }
 
