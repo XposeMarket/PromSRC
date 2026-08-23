@@ -40,25 +40,34 @@ function flushPending(module) {
   dispatchReady();
 }
 
+function importToolActivityModule() {
+  const testImporter = globalThis.__PROM_TOOL_ACTIVITY_IMPORT_FOR_TESTS;
+  if (typeof testImporter === 'function') return Promise.resolve().then(() => testImporter());
+  return import('../../../tool-activity.js');
+}
+
 export function loadToolActivityFeature() {
   if (feature) return Promise.resolve(feature);
-  if (featureError) return Promise.reject(featureError);
-  if (!featurePromise) {
-    publishState('loading');
-    featurePromise = import('../../../tool-activity.js')
-      .then((module) => {
-        feature = module;
-        publishState('ready');
-        flushPending(module);
-        return module;
-      })
-      .catch((error) => {
-        featureError = error;
-        publishState('error', error);
-        pendingOperations.length = 0;
-        throw error;
-      });
-  }
+  if (featurePromise) return featurePromise;
+  // A failed hashed/dynamic chunk request is recoverable. Keep queued tool
+  // operations intact, expose the error state, and allow the next first-use
+  // attempt to request the module again without requiring a page reload.
+  featureError = null;
+  publishState('loading');
+  featurePromise = importToolActivityModule()
+    .then((module) => {
+      feature = module;
+      featurePromise = Promise.resolve(module);
+      publishState('ready');
+      flushPending(module);
+      return module;
+    })
+    .catch((error) => {
+      featureError = error;
+      featurePromise = null;
+      publishState('error', error);
+      throw error;
+    });
   return featurePromise;
 }
 
@@ -134,7 +143,7 @@ export function appendCommandTerminalChunkToDom(runId, chunk, sequence = 0) {
 
 export function getToolActivityFeatureState() {
   return Object.freeze({
-    state: feature ? 'ready' : featureError ? 'error' : featurePromise ? 'loading' : 'idle',
+    state: feature ? 'ready' : featurePromise ? 'loading' : featureError ? 'error' : 'idle',
     pendingOperations: pendingOperations.length,
   });
 }
