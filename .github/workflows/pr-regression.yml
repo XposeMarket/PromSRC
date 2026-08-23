@@ -49,7 +49,9 @@ jobs:
       - name: Verify provider-neutral connector policy
         run: npx tsx src/gateway/connector-tool-capabilities.regression.ts && npx tsx src/extensions/runtime-registry.performance.regression.ts
       - name: Verify public web source sync
-        run: npm run check:web-ui
+        run: |
+          npm run sync:web-ui
+          git diff --exit-code
       - name: Verify Creative video timeline interactions
         run: node scripts/test-creative-video-timeline-interactions.mjs
       - name: Verify desktop multi-chat and composer contracts
