@@ -1,7 +1,5 @@
-const MULTI_CHAT_STORAGE_KEY = 'prometheus_multi_chat_tabs_v2';
+const MULTI_CHAT_STORAGE_KEY = 'prometheus_multi_chat_tabs_v3';
 const DRAG_MIME = 'application/x-prometheus-chat';
-const EMBED_PARAM = 'multiChatPane';
-const SESSION_PARAM = 'multiChatSession';
 const MAX_TABS = 30;
 
 let state = {
@@ -13,9 +11,10 @@ let state = {
 let installed = false;
 let dragPayload = null;
 let observer = null;
-let embeddedObserver = null;
 let activeSessionPoll = null;
 let pendingDrawerOpen = false;
+let pendingSideSessionId = '';
+let nativeSideRetryTimer = 0;
 
 function clean(value) {
   return String(value || '').trim();
@@ -28,10 +27,6 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-}
-
-function isEmbeddedSidePane() {
-  try { return new URLSearchParams(location.search).get(EMBED_PARAM) === 'side'; } catch { return false; }
 }
 
 function ensureStylesheet() {
@@ -86,6 +81,30 @@ function recordTitle(record) {
   return clean(record?.title || record?.name || record?.label || record?.summary || 'Chat');
 }
 
+function sessionRecord(sessionId) {
+  const sid = clean(sessionId);
+  return sessionRecords().find((candidate) => recordSessionId(candidate) === sid) || null;
+}
+
+function sessionMeta(sessionId, fallbackTitle = '') {
+  const sid = clean(sessionId);
+  const record = sessionRecord(sid);
+  const row = findSidebarRow(sid);
+  const rowTitle = clean(row?.querySelector?.('.job-item-title, .chat-session-title, [data-session-title]')?.textContent || row?.textContent);
+  const title = record ? recordTitle(record) : (rowTitle || clean(fallbackTitle) || 'Chat');
+  const projectName = clean(record?.projectName || record?.canvasProjectLabel || '');
+  return {
+    sessionId: sid,
+    title,
+    projectName,
+    projectId: clean(record?.projectId || ''),
+  };
+}
+
+function titleForSession(sessionId, fallback = '') {
+  return sessionMeta(sessionId, fallback).title;
+}
+
 function currentMainSessionId() {
   return clean(window.activeChatSessionId || window.state?.activeChatSessionId || window.agentSessionId);
 }
@@ -109,15 +128,6 @@ function findSidebarRow(sessionId) {
   const sid = clean(sessionId);
   if (!sid) return null;
   return sidebarRows().find((row) => extractSessionFromRow(row) === sid) || null;
-}
-
-function titleForSession(sessionId, fallback = '') {
-  const sid = clean(sessionId);
-  const record = sessionRecords().find((candidate) => recordSessionId(candidate) === sid);
-  if (record) return recordTitle(record);
-  const row = findSidebarRow(sid);
-  const rowTitle = clean(row?.querySelector?.('.job-item-title, .chat-session-title, [data-session-title]')?.textContent || row?.textContent);
-  return rowTitle || clean(fallback) || 'Chat';
 }
 
 function normalizePayload(raw) {
@@ -151,11 +161,23 @@ function addExplicitTab(sessionId, title = '') {
   return true;
 }
 
+function closeNativeSideIfOwned(sessionId = state.sideSessionId) {
+  const sid = clean(sessionId);
+  if (!sid) return;
+  if (clean(window.activeSideChatId) !== sid || window.sideChatSplitOpen !== true) return;
+  try { window.closeSideChatSplit?.(); } catch {}
+}
+
 function removeTab(sessionId) {
   const sid = clean(sessionId);
   if (!sid) return;
+  const wasSide = state.sideSessionId === sid;
   state.tabs = state.tabs.filter((tab) => tab.sessionId !== sid);
-  if (state.sideSessionId === sid) state.sideSessionId = '';
+  if (wasSide) {
+    state.sideSessionId = '';
+    pendingSideSessionId = '';
+    closeNativeSideIfOwned(sid);
+  }
   if (state.sourceSessionId === sid) state.sourceSessionId = '';
   persistState();
   render();
@@ -180,24 +202,119 @@ function callNativeSessionSwitcher(sessionId) {
   } catch { return false; }
 }
 
+function ensureNativeSideLink(sessionId = state.sideSessionId) {
+  const sid = clean(sessionId);
+  const parentSessionId = currentMainSessionId();
+  if (!sid || !parentSessionId || sid === parentSessionId) return null;
+  if (!Array.isArray(window.sideChatLinks)) window.sideChatLinks = [];
+  const now = Date.now();
+  let link = window.sideChatLinks.find((candidate) => clean(candidate?.id || candidate?.sessionId) === sid) || null;
+  if (!link) {
+    link = {
+      id: sid,
+      parentSessionId,
+      title: titleForSession(sid),
+      anchorIndex: null,
+      anchorPreview: '',
+      createdAt: now,
+      updatedAt: now,
+      closed: false,
+      __promMultiChatTab: true,
+    };
+    window.sideChatLinks.push(link);
+  } else {
+    link.parentSessionId = parentSessionId;
+    link.title = titleForSession(sid, link.title);
+    link.updatedAt = now;
+    link.closed = false;
+    link.__promMultiChatTab = true;
+  }
+  window.sideChatLinks = window.sideChatLinks.filter((candidate, index, all) => {
+    const candidateId = clean(candidate?.id || candidate?.sessionId);
+    return candidateId !== sid || all.findIndex((item) => clean(item?.id || item?.sessionId) === sid) === index;
+  });
+  return link;
+}
+
+function patchPaneHeader(header, sessionId) {
+  if (!header) return;
+  const meta = sessionMeta(sessionId);
+  const title = header.querySelector('.side-chat-title');
+  const kicker = header.querySelector('.side-chat-kicker');
+  header.classList.add('prom-multi-chat-session-header');
+  header.dataset.multiChatSessionId = meta.sessionId;
+  if (title) title.textContent = meta.title;
+  if (kicker) {
+    kicker.textContent = meta.projectName ? `Project · ${meta.projectName}` : '';
+    kicker.hidden = !meta.projectName;
+    kicker.setAttribute('aria-hidden', String(!meta.projectName));
+  }
+}
+
+function patchNativeSplitHeaders() {
+  const sid = clean(state.sideSessionId);
+  const nativeActive = Boolean(sid && window.sideChatSplitOpen === true && clean(window.activeSideChatId) === sid);
+  document.body?.classList?.toggle('prom-multi-chat-native-split', nativeActive);
+  if (!nativeActive) return;
+  const root = document.getElementById('chat-messages');
+  patchPaneHeader(root?.querySelector('.side-chat-main-pane .side-chat-pane-header'), currentMainSessionId());
+  patchPaneHeader(root?.querySelector('.side-chat-pane .side-chat-header'), sid);
+}
+
+function revealNativeSide(attempt = 0) {
+  const sid = clean(state.sideSessionId);
+  if (!sid) return false;
+  const parentSessionId = currentMainSessionId();
+  if (!parentSessionId || sid === parentSessionId) return false;
+  ensureNativeSideLink(sid);
+  if (typeof window.showSideChatSplit === 'function') {
+    const opened = window.showSideChatSplit(sid) !== false;
+    if (opened) {
+      pendingSideSessionId = '';
+      window.setTimeout(patchNativeSplitHeaders, 0);
+      return true;
+    }
+  }
+  if (attempt < 30) {
+    window.clearTimeout(nativeSideRetryTimer);
+    nativeSideRetryTimer = window.setTimeout(() => revealNativeSide(attempt + 1), 100);
+  }
+  return false;
+}
+
+async function refreshNativeSideSession(sessionId) {
+  const sid = clean(sessionId);
+  if (!sid || typeof window._loadSessionFromServer !== 'function') return;
+  try {
+    await window._loadSessionFromServer(sid, { force: true, historyLimit: 300, processLimit: 500 });
+  } catch {}
+  if (state.sideSessionId === sid) {
+    ensureNativeSideLink(sid);
+    revealNativeSide();
+    patchNativeSplitHeaders();
+  }
+}
+
 function activateMain(sessionId, title = '') {
   const sid = clean(sessionId);
   if (!sid) return;
-  // Only explicit multi-chat actions add a tab. Normal sidebar navigation never calls this.
   addExplicitTab(sid, title);
+  if (state.sideSessionId === sid) {
+    const oldSide = state.sideSessionId;
+    state.sideSessionId = '';
+    pendingSideSessionId = '';
+    closeNativeSideIfOwned(oldSide);
+  }
   state.mainSessionId = sid;
   callNativeSessionSwitcher(sid);
   persistState();
-  render();
-}
-
-function sideFrameUrl(sessionId) {
-  const url = new URL(location.href);
-  url.searchParams.set('desktop', '1');
-  url.searchParams.set(EMBED_PARAM, 'side');
-  url.searchParams.set(SESSION_PARAM, clean(sessionId));
-  url.hash = '';
-  return url.toString();
+  renderTabStrip();
+  window.setTimeout(() => {
+    state.mainSessionId = currentMainSessionId();
+    if (state.sideSessionId && state.sideSessionId !== state.mainSessionId) revealNativeSide();
+    patchNativeSplitHeaders();
+    renderTabStrip();
+  }, 120);
 }
 
 function openSide(sessionId, title = '') {
@@ -205,13 +322,19 @@ function openSide(sessionId, title = '') {
   if (!sid || sid === currentMainSessionId()) return;
   addExplicitTab(sid, title);
   state.sideSessionId = sid;
+  pendingSideSessionId = sid;
   persistState();
-  render();
+  renderTabStrip();
+  revealNativeSide();
+  void refreshNativeSideSession(sid);
 }
 
 function closeSide() {
-  // Closing a pane never closes its browser-style tab.
+  const sid = clean(state.sideSessionId);
+  if (!sid) return;
   state.sideSessionId = '';
+  pendingSideSessionId = '';
+  closeNativeSideIfOwned(sid);
   persistState();
   render();
 }
@@ -246,51 +369,21 @@ function renderTabStrip() {
   const mainId = currentMainSessionId();
   state.mainSessionId = mainId;
   strip.innerHTML = state.tabs.map((tab) => {
+    const meta = sessionMeta(tab.sessionId, tab.title);
+    tab.title = meta.title;
     const isMain = tab.sessionId === mainId;
     const isSide = tab.sessionId === state.sideSessionId;
-    const role = isMain ? 'Main chat' : isSide ? 'Side chat' : 'Chat';
-    return `<div class="prom-multi-chat-tab${isMain ? ' is-main' : ''}${isSide ? ' is-side' : ''}" draggable="true" role="tab" aria-selected="${isMain ? 'true' : 'false'}" data-session-id="${escapeHtml(tab.sessionId)}" title="${escapeHtml(tab.title)}">
-      <button type="button" class="prom-multi-chat-tab-open" data-tab-open="${escapeHtml(tab.sessionId)}"><span class="prom-multi-chat-tab-role">${role}</span><span class="prom-multi-chat-tab-title">${escapeHtml(tab.title)}</span></button>
-      <button type="button" class="prom-multi-chat-tab-close" data-tab-close="${escapeHtml(tab.sessionId)}" aria-label="Close ${escapeHtml(tab.title)} tab" title="Close tab">×</button>
+    const tooltip = meta.projectName ? `${meta.title} · ${meta.projectName}` : meta.title;
+    return `<div class="prom-multi-chat-tab${isMain ? ' is-main' : ''}${isSide ? ' is-side' : ''}" draggable="true" role="tab" aria-selected="${isMain ? 'true' : 'false'}" data-session-id="${escapeHtml(tab.sessionId)}" title="${escapeHtml(tooltip)}">
+      <button type="button" class="prom-multi-chat-tab-open" data-tab-open="${escapeHtml(tab.sessionId)}"><span class="prom-multi-chat-tab-title">${escapeHtml(meta.title)}</span></button>
+      <button type="button" class="prom-multi-chat-tab-close" data-tab-close="${escapeHtml(tab.sessionId)}" aria-label="Close ${escapeHtml(meta.title)} tab" title="Close tab">×</button>
     </div>`;
   }).join('');
-  // A single retained tab must remain visible after the side pane is closed so it can be dragged back down.
   strip.hidden = state.tabs.length === 0;
-}
-
-function ensureSidePane() {
-  let pane = document.getElementById('prom-multi-chat-side-pane');
-  const chatView = document.getElementById('chat-view');
-  if (!chatView) return null;
-  if (!pane) {
-    pane = document.createElement('section');
-    pane.id = 'prom-multi-chat-side-pane';
-    pane.className = 'prom-multi-chat-side-pane';
-    pane.innerHTML = '<header class="prom-multi-chat-side-header"><div><span class="prom-multi-chat-side-kicker">SIDE CHAT</span><strong id="prom-multi-chat-side-title">Chat</strong></div><button type="button" id="prom-multi-chat-side-close" aria-label="Close side chat" title="Close side chat">×</button></header><iframe id="prom-multi-chat-side-frame" title="Side chat"></iframe>';
-    chatView.appendChild(pane);
-  }
-  return pane;
-}
-
-function renderSidePane() {
-  const pane = ensureSidePane();
-  if (!pane) return;
-  const sid = clean(state.sideSessionId);
-  document.body.classList.toggle('prom-multi-chat-side-open', Boolean(sid));
-  pane.hidden = !sid;
-  if (!sid) return;
-  const title = titleForSession(sid);
-  const titleEl = pane.querySelector('#prom-multi-chat-side-title');
-  if (titleEl) titleEl.textContent = title;
-  const frame = pane.querySelector('#prom-multi-chat-side-frame');
-  if (frame && frame.dataset.sessionId !== sid) {
-    frame.dataset.sessionId = sid;
-    frame.src = sideFrameUrl(sid);
-  }
+  persistState();
 }
 
 function allSourceTabs() {
-  // Sources intentionally scopes only to explicitly tabbed chats. A normal sidebar click does not enroll a chat.
   return state.tabs.slice();
 }
 
@@ -303,7 +396,10 @@ function showSourceSelector({ openDrawerAfter = false } = {}) {
   panel.classList.add('prom-source-chat-selector');
   document.body.classList.add('sources-minimized-open');
   try { window.syncSourcesMinimizedLayout?.(true); } catch {}
-  panel.innerHTML = `<div class="prom-source-chat-selector-head"><strong>Sources for chat</strong><span>Select a tab</span></div><div class="prom-source-chat-selector-list">${tabs.map((tab) => `<button type="button" data-source-chat="${escapeHtml(tab.sessionId)}"><span>${escapeHtml(tab.title)}</span>${tab.sessionId === currentMainSessionId() ? '<small>Main</small>' : tab.sessionId === state.sideSessionId ? '<small>Side</small>' : ''}</button>`).join('')}</div>`;
+  panel.innerHTML = `<div class="prom-source-chat-selector-head"><strong>Sources for chat</strong><span>Select a tab</span></div><div class="prom-source-chat-selector-list">${tabs.map((tab) => {
+    const meta = sessionMeta(tab.sessionId, tab.title);
+    return `<button type="button" data-source-chat="${escapeHtml(tab.sessionId)}"><span>${escapeHtml(meta.title)}</span>${meta.projectName ? `<small>${escapeHtml(meta.projectName)}</small>` : ''}</button>`;
+  }).join('')}</div>`;
   return true;
 }
 
@@ -382,17 +478,12 @@ function handleClick(event) {
     const panel = document.getElementById('sources-minimized-panel');
     panel?.classList.remove('prom-source-chat-selector');
     if (shouldOpen) panel?.setAttribute('hidden', '');
-    return;
-  }
-  if (event.target.closest?.('#prom-multi-chat-side-close')) {
-    event.preventDefault();
-    closeSide();
   }
 }
 
 function handleDragStart(event) {
   const tab = event.target.closest?.('.prom-multi-chat-tab');
-  const row = event.target.closest?.('.chat-session-item, #sessions-list .job-item, #channels-list .chat-session-item');
+  const row = event.target.closest?.('.chat-session-item, #sessions-list .job-item');
   const sessionId = tab?.dataset?.sessionId || extractSessionFromRow(row);
   if (!sessionId) return;
   const title = tab?.querySelector?.('.prom-multi-chat-tab-title')?.textContent || titleForSession(sessionId, row?.textContent);
@@ -420,7 +511,7 @@ function ensureDropZones() {
   const zones = document.createElement('div');
   zones.id = 'prom-multi-chat-dropzones';
   zones.className = 'prom-multi-chat-dropzones';
-  zones.innerHTML = '<div class="prom-multi-chat-dropzone" data-chat-drop="main"><strong>Main chat</strong><span>Replace the main pane</span></div><div class="prom-multi-chat-dropzone" data-chat-drop="side"><strong>Side chat</strong><span>Open beside main</span></div>';
+  zones.innerHTML = '<div class="prom-multi-chat-dropzone" data-chat-drop="main"><strong>Main chat</strong><span>Replace the left pane</span></div><div class="prom-multi-chat-dropzone" data-chat-drop="side"><strong>Side chat</strong><span>Open beside it</span></div>';
   chatView.appendChild(zones);
 }
 
@@ -456,21 +547,48 @@ function handleDrop(event) {
   handleDragEnd();
 }
 
-function render() {
-  if (isEmbeddedSidePane()) return;
-  renderTabStrip();
-  renderSidePane();
+function syncNativeSideState() {
+  const sid = clean(state.sideSessionId);
+  if (!sid) {
+    document.body?.classList?.remove('prom-multi-chat-native-split');
+    return;
+  }
+  if (pendingSideSessionId === sid) return;
+  const nativeOpen = window.sideChatSplitOpen === true && clean(window.activeSideChatId) === sid;
+  if (!nativeOpen) {
+    state.sideSessionId = '';
+    persistState();
+    renderTabStrip();
+    document.body?.classList?.remove('prom-multi-chat-native-split');
+  }
 }
 
 function syncMainSession() {
   const sid = currentMainSessionId();
-  if (!sid || sid === state.mainSessionId) return;
-  // Normal sidebar clicks update which session is main, but do not opt it into multi-chat tabs.
-  state.mainSessionId = sid;
-  renderTabStrip();
+  if (!sid) return;
+  if (sid !== state.mainSessionId) {
+    state.mainSessionId = sid;
+    if (state.sideSessionId === sid) {
+      const oldSide = state.sideSessionId;
+      state.sideSessionId = '';
+      pendingSideSessionId = '';
+      closeNativeSideIfOwned(oldSide);
+    } else if (state.sideSessionId) {
+      revealNativeSide();
+    }
+    renderTabStrip();
+  }
+  syncNativeSideState();
+  patchNativeSplitHeaders();
 }
 
-function installParentWorkspace() {
+function render() {
+  renderTabStrip();
+  if (state.sideSessionId) revealNativeSide();
+  patchNativeSplitHeaders();
+}
+
+function installWorkspace() {
   if (installed) return;
   installed = true;
   ensureStylesheet();
@@ -484,81 +602,20 @@ function installParentWorkspace() {
   document.addEventListener('drop', handleDrop, true);
   observer = new MutationObserver(() => {
     syncMainSession();
-    if (!document.getElementById('prom-multi-chat-tabs')) render();
+    patchNativeSplitHeaders();
+    if (!document.getElementById('prom-multi-chat-tabs')) renderTabStrip();
   });
   observer.observe(document.body, { childList: true, subtree: true });
-  activeSessionPoll = window.setInterval(syncMainSession, 900);
+  activeSessionPoll = window.setInterval(syncMainSession, 500);
   render();
-}
-
-function isolateEmbeddedChatSurface() {
-  const chatView = document.getElementById('chat-view');
-  if (!chatView) return false;
-  document.body.classList.add('prom-multi-chat-embedded-side');
-  document.documentElement.style.setProperty('overflow', 'hidden', 'important');
-  document.body.style.setProperty('overflow', 'hidden', 'important');
-  document.body.style.setProperty('margin', '0', 'important');
-
-  // Hide every sibling between #chat-view and <body>. This is intentionally structural rather
-  // than selector-based so future sidebar/titlebar class changes cannot leak the whole app shell
-  // into the side iframe again.
-  let node = chatView;
-  while (node && node !== document.body) {
-    const parent = node.parentElement;
-    if (!parent) break;
-    for (const sibling of Array.from(parent.children)) {
-      if (sibling === node) continue;
-      sibling.dataset.promEmbeddedHidden = '1';
-      sibling.style.setProperty('display', 'none', 'important');
-    }
-    parent.style.setProperty('width', '100%', 'important');
-    parent.style.setProperty('max-width', 'none', 'important');
-    parent.style.setProperty('margin', '0', 'important');
-    parent.style.setProperty('padding-left', '0', 'important');
-    parent.style.setProperty('padding-right', '0', 'important');
-    parent.style.setProperty('flex', '1 1 100%', 'important');
-    node = parent;
-  }
-  chatView.style.setProperty('width', '100%', 'important');
-  chatView.style.setProperty('max-width', 'none', 'important');
-  chatView.style.setProperty('margin', '0', 'important');
-  return true;
-}
-
-function installEmbeddedSidePane() {
-  ensureStylesheet();
-  isolateEmbeddedChatSurface();
-  embeddedObserver = new MutationObserver(() => isolateEmbeddedChatSurface());
-  embeddedObserver.observe(document.body, { childList: true, subtree: true });
-
-  const params = new URLSearchParams(location.search);
-  const sid = clean(params.get(SESSION_PARAM));
-  if (!sid) return;
-  const choose = () => {
-    isolateEmbeddedChatSurface();
-    if (currentMainSessionId() === sid) return true;
-    return callNativeSessionSwitcher(sid);
-  };
-  choose();
-  const timer = window.setInterval(() => {
-    if (currentMainSessionId() === sid) {
-      window.clearInterval(timer);
-      isolateEmbeddedChatSurface();
-      return;
-    }
-    choose();
-  }, 500);
-  window.setTimeout(() => window.clearInterval(timer), 15000);
 }
 
 export function installMultiChatWorkspace() {
   if (typeof document === 'undefined') return;
-  if (isEmbeddedSidePane()) installEmbeddedSidePane();
-  else installParentWorkspace();
+  installWorkspace();
 }
 
 window.__PROM_MULTI_CHAT_WORKSPACE = {
-  version: 2,
   getState: () => ({ ...state, tabs: state.tabs.map((tab) => ({ ...tab })) }),
   openSide,
   activateMain,

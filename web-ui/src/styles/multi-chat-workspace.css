@@ -1,7 +1,7 @@
-/* Desktop multi-chat workspace. Loaded by features/chat/multi-chat-workspace.js. */
+/* Desktop multi-chat workspace. Loaded by features/chat/multi-chat-workspace-v2.js. */
 
 body:not(.pm-mobile-active) #chat-view {
-  --prom-multi-chat-tabs-height: 52px;
+  --prom-multi-chat-tabs-height: 40px;
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tabs {
@@ -18,7 +18,7 @@ body:not(.pm-mobile-active) .prom-multi-chat-tabs {
   overflow-y: hidden;
   padding: 0 8px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
   backdrop-filter: blur(16px) saturate(1.08);
   -webkit-backdrop-filter: blur(16px) saturate(1.08);
   scrollbar-width: thin;
@@ -71,27 +71,14 @@ body:not(.pm-mobile-active) .prom-multi-chat-tab-open {
   min-width: 0;
   flex: 1 1 auto;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  padding: 7px 8px 7px 12px;
+  align-items: center;
+  padding: 0 8px 0 12px;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   font: inherit;
   cursor: pointer;
-}
-
-body:not(.pm-mobile-active) .prom-multi-chat-tab-role {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .06em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tab-title {
@@ -103,30 +90,29 @@ body:not(.pm-mobile-active) .prom-multi-chat-tab-title {
   white-space: nowrap;
 }
 
-body:not(.pm-mobile-active) .prom-multi-chat-tab-close,
-body:not(.pm-mobile-active) #prom-multi-chat-side-close {
-  width: 28px;
-  height: 28px;
+body:not(.pm-mobile-active) .prom-multi-chat-tab-close {
+  width: 26px;
+  height: 26px;
   align-self: center;
   flex: 0 0 auto;
-  margin-right: 6px;
+  margin-right: 5px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font: 18px/1 system-ui, sans-serif;
+  font: 17px/1 system-ui, sans-serif;
   cursor: pointer;
 }
 
-body:not(.pm-mobile-active) .prom-multi-chat-tab-close:hover,
-body:not(.pm-mobile-active) #prom-multi-chat-side-close:hover {
+body:not(.pm-mobile-active) .prom-multi-chat-tab-close:hover {
   background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 
-body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #chat-messages,
-body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #prom-multi-chat-side-pane {
+/* The browser-like tab row sits above the normal chat headers. The actual
+   main/side content below continues to be rendered by ChatPage's native split. */
+body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #chat-messages {
   top: var(--prom-multi-chat-tabs-height);
 }
 
@@ -134,93 +120,51 @@ body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #chat-view 
   bottom: 18px;
 }
 
-body:not(.pm-mobile-active) .prom-multi-chat-side-pane {
-  position: absolute;
-  z-index: 25;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 50%;
-  min-width: 360px;
-  overflow: hidden;
-  border-left: 1px solid var(--line);
-  background: var(--bg);
-}
-
-body:not(.pm-mobile-active) .prom-multi-chat-side-pane[hidden] {
-  display: none;
-}
-
-body:not(.pm-mobile-active) .prom-multi-chat-side-header {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 10px 0 14px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-}
-
-body:not(.pm-mobile-active) .prom-multi-chat-side-header > div {
+/* Multi-chat now reuses the native split renderer. These overrides only make
+   its two pane headers read like normal sessions instead of MAIN CHAT/SIDE CHAT. */
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header > div,
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-title-wrap {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-body:not(.pm-mobile-active) .prom-multi-chat-side-kicker {
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 850;
-  letter-spacing: .06em;
-}
-
-body:not(.pm-mobile-active) #prom-multi-chat-side-title {
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-title {
+  order: 0;
   overflow: hidden;
   color: var(--text);
   font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-body:not(.pm-mobile-active) #prom-multi-chat-side-frame {
-  position: absolute;
-  inset: 50px 0 0;
-  width: 100%;
-  height: calc(100% - 50px);
-  border: 0;
-  background: var(--bg);
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-kicker {
+  order: 1;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: none;
 }
 
-/* The visible main chat owns the left half while the side session iframe owns
-   the right half. The composer uses the SAME shared width contract as normal
-   main chat, only evaluated inside a 50% pane. */
-body:not(.pm-mobile-active).prom-multi-chat-side-open #chat-messages {
-  right: auto !important;
-  width: 50% !important;
-  max-width: 50% !important;
-  padding-left: 0;
-  padding-right: 0;
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-kicker[hidden] {
+  display: none !important;
 }
 
-body:not(.pm-mobile-active).prom-multi-chat-side-open #chat-view > .chat-input-area {
+/* Keep the main composer in the left native pane on the same shared responsive
+   width contract used outside split view. */
+body:not(.pm-mobile-active).prom-multi-chat-native-split #chat-view > .chat-input-area {
   left: 25% !important;
   width: min(var(--chat-content-max-width), calc(50% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter))) !important;
   max-width: none !important;
 }
 
-/* Fix the legacy side-chat mismatch left behind by earlier parity PRs. Their
-   markup was unified, but CSS still hard-coded 760px / 52px geometry. Every
-   desktop side composer now consumes the same conversation width tokens as
-   the main composer. */
+/* Every native side composer consumes the same desktop conversation width
+   tokens as the main composer. No iframe-specific sizing or legacy 760px copy. */
 body:not(.pm-mobile-active) .side-chat-composer.chat-input-area,
 body:not(.pm-mobile-active) .unified-agent-chat-composer.chat-input-area {
   left: 50% !important;
@@ -339,43 +283,16 @@ body:not(.pm-mobile-active) .prom-source-chat-selector-list button span {
 
 body:not(.pm-mobile-active) .prom-source-chat-selector-list button small {
   flex: 0 0 auto;
+  max-width: 42%;
+  overflow: hidden;
   color: var(--muted);
   font-size: 9px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-/* The side iframe is a second isolated chat runtime, not a second app shell.
-   Keeping the real chat surface is what guarantees composer/model/stream
-   parity instead of maintaining another hand-copied side-chat implementation. */
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #sidebar,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #right-panel,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #sources-minimized-panel,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #prom-multi-chat-tabs,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) .electron-titlebar,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) .app-titlebar {
-  display: none !important;
-}
-
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) .workspace,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) .workspace > .center-col,
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #chat-view {
-  width: 100% !important;
-  max-width: none !important;
-  margin: 0 !important;
-  flex: 1 1 100% !important;
-}
-
-body.prom-multi-chat-embedded-side:not(.pm-mobile-active) #chat-view > .chat-input-area {
-  left: 50% !important;
-  width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter))) !important;
-  max-width: none !important;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 980px) {
-  body:not(.pm-mobile-active) .prom-multi-chat-side-pane {
-    min-width: 320px;
-  }
   body:not(.pm-mobile-active) .prom-multi-chat-tab {
     flex-basis: 220px;
     min-width: 132px;
