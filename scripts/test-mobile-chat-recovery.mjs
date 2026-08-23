@@ -34,6 +34,9 @@ assert.match(mobileCss, /\.pm-project-row \.pm-session-title\s*\{[\s\S]{0,100}fo
 assert.match(mobileCss, /\.pm-tab\s*\{[\s\S]{0,320}color:\s*rgba\(34,26,20,\.68\)/, 'resting light tab icons must remain muted');
 assert.match(mobileCss, /:root\[data-theme="dark"\] \.pm-tab\s*\{\s*color:\s*rgba\(242,238,231,\.66\)/, 'resting dark tab icons must remain muted');
 assert.match(mobileCss, /\.pm-tab-magnify-cell svg\s*\{[\s\S]{0,100}color:\s*#fff/, 'only the icon clone beneath the liquid slider should be white');
+assert.match(mobileCss, /body\.pm-mobile-active \.pm-tab,[\s\S]{0,180}color:\s*rgba\(34,26,20,\.68\)/, 'the final mobile cascade must keep light tab icons muted');
+assert.match(mobileCss, /:root\[data-theme="dark"\] body\.pm-mobile-active \.pm-tab,[\s\S]{0,180}color:\s*rgba\(242,238,231,\.66\)/, 'the final mobile cascade must keep dark tab icons muted');
+assert.match(mobileCss, /body\.pm-mobile-active \.pm-tab svg\s*\{\s*color:\s*currentColor/, 'resting tab SVGs must inherit the muted tab color');
 assert.match(mobileCss, /\.pm-new-project-popover\s*\{[^}]*--pm-new-project-available-height[^}]*box-sizing:\s*border-box[^}]*overflow-y:\s*auto/, 'new-project modal must fit and scroll within the visual viewport');
 assert.match(pages, /syncNewProjectPopoverToKeyboard\(false, Number\(window\.visualViewport\?\.height/, 'new-project modal must size itself as soon as it opens');
 

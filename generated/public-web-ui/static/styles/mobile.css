@@ -18036,17 +18036,18 @@ body.pm-mobile-active :where(
 }
 
 
-/* Keep mobile page-tab labels/icons neutral white across every theme. */
+/* Keep resting tabs muted; the clipped magnify clone is the only white layer. */
 body.pm-mobile-active .pm-tab,
-body.pm-mobile-active .pm-tab.active,
-:root[data-theme="dark"] body.pm-mobile-active .pm-tab,
-:root[data-theme="dark"] body.pm-mobile-active .pm-tab.active {
-  color: #fff;
+body.pm-mobile-active .pm-tab.active {
+  color: rgba(34,26,20,.68);
   text-shadow: 0 1px 2px rgba(0,0,0,.28);
 }
-body.pm-mobile-active .pm-tab svg,
-:root[data-theme="dark"] body.pm-mobile-active .pm-tab svg {
-  color: #fff;
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tab.active {
+  color: rgba(242,238,231,.66);
+}
+body.pm-mobile-active .pm-tab svg {
+  color: currentColor;
 }
 
 /* Selected computer filters need dark content against their white pill. */
