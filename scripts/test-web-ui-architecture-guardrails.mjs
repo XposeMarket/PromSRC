@@ -12,10 +12,10 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2485073,
-  'web-ui/src/mobile/mobile-pages.js': 2054461,
-  'web-ui/src/styles/mobile.css': 603583,
-  'web-ui/index.html': 574535,
+  'web-ui/src/pages/ChatPage.js': 2435115,
+  'web-ui/src/mobile/mobile-pages.js': 1738241,
+  'web-ui/src/styles/mobile.css': 585518,
+  'web-ui/index.html': 564529,
 });
 const CODE_OWNED_NEW_MODULE_CEILING = 400000;
 
@@ -37,6 +37,11 @@ function bytes(relativePath) {
   if (!fs.existsSync(absolute)) {
     failures.push(`${relativePath}: missing`);
     return 0;
+  }
+  // Git may materialize text as CRLF on Windows. Architecture budgets measure
+  // canonical LF bytes so the same commit has the same result on every runner.
+  if (/\.(?:js|mjs|css|html)$/i.test(relativePath)) {
+    return Buffer.byteLength(fs.readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n'));
   }
   return fs.statSync(absolute).size;
 }
@@ -64,7 +69,7 @@ function walk(directory) {
     if (!/\.(?:js|mjs|css)$/i.test(entry.name)) continue;
     const relativePath = path.relative(root, absolute).split(path.sep).join('/');
     if (legacy.has(relativePath)) continue;
-    const actual = fs.statSync(absolute).size;
+    const actual = bytes(relativePath);
     if (actual > maxNewModuleBytes) {
       failures.push(`${relativePath}: ${actual} bytes exceeds module ceiling ${maxNewModuleBytes}`);
     }

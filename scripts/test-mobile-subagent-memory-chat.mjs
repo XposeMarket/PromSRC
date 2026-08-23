@@ -4,7 +4,10 @@ import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
-const pages = read('web-ui/src/mobile/mobile-pages.js');
+const pages = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-subagent-pages.js'),
+].join('\n');
 const router = read('web-ui/src/mobile/mobile-router.js');
 const api = read('web-ui/src/mobile/mobile-api.js');
 const channels = read('src/gateway/routes/channels.router.ts');
@@ -23,7 +26,7 @@ assert.ok(channels.includes('fileChanges: result?.fileChanges || undefined') && 
 assert.ok(channels.includes('fileChanges: payload.result?.fileChanges') && channels.includes('richArtifacts: payload.result?.richArtifacts'), 'subagent stream completion must deliver file and artifact presentation data');
 assert.ok(styles.includes('body.pm-mobile-active.pm-mobile-document-scroll .pm-body.pm-subagent-chat-body'), 'locked Chat must override document scrolling');
 assert.ok(styles.includes('pm-mobile-subagent-chat-locked') && styles.includes('overflow: hidden;'), 'locked Chat must disable the outer document scroller for this route');
-assert.ok(styles.includes('.pm-subagent-chat-body {\n  display: flex;\n  flex-direction: column;\n  height: 100dvh;'), 'locked Chat viewport must be measured once from the full viewport');
+assert.match(styles, /\.pm-subagent-chat-body\s*\{\s*display:\s*flex;\s*flex-direction:\s*column;\s*height:\s*100dvh;/, 'locked Chat viewport must be measured once from the full viewport');
 assert.ok(styles.includes('position: fixed !important;') && styles.includes('--pm-sa-chat-composer-space'), 'locked Chat composer must stay fixed above the tab bar with matching reading clearance');
 assert.ok(pages.includes('function scrollToLatest()') && pages.includes('setTimeout(pin, 80);'), 'subagent history must pin to the newest message after layout settles');
 assert.ok(pages.includes("document.body.classList.add('pm-mobile-subagent-chat-locked')") && pages.includes('historyResizeObserver = new ResizeObserver'), 'locked Chat must hold the newest message through its initial async layout');

@@ -50,6 +50,8 @@ const selectedScenarioIds = String(argument('scenarios', ''))
 const GIT_SOURCE_FILES = {
   '/': 'web-ui/index.html',
   '/index.html': 'web-ui/index.html',
+  '/mobile/pair': 'web-ui/mobile.html',
+  '/mobile/chat': 'web-ui/mobile.html',
   '/src/api.js': 'web-ui/src/api.js',
   '/src/app.js': 'web-ui/src/app.js',
   '/src/pages/ChatPage.js': 'web-ui/src/pages/ChatPage.js',
@@ -458,7 +460,7 @@ async function runDesktopSample(index) {
           await route.continue();
           return;
         }
-        const isHtml = pathname === '/' || pathname === '/index.html';
+        const isHtml = pathname === '/' || pathname === '/index.html' || pathname.startsWith('/mobile/');
         await route.fulfill({
           status: 200,
           contentType: isHtml ? 'text/html; charset=utf-8' : 'application/javascript; charset=utf-8',
@@ -603,9 +605,7 @@ async function runMobileSample() {
   let browser;
   let crashed = false;
   let page;
-  const url = new URL(baseUrl.toString());
-  url.searchParams.set('source', 'pwa');
-  url.hash = 'mobile/pair';
+  const url = new URL('/mobile/pair', baseUrl);
   try {
     browser = await chromium.launch({
       headless: true,

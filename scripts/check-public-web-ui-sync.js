@@ -72,8 +72,9 @@ function toPosix(value) {
   return value.split(path.sep).join('/');
 }
 
-function transformIndexHtml(html) {
+function transformHtml(html) {
   return html
+    .replace(/(["'])\/src\//g, '$1/static/')
     .replace(/(["'])src\//g, '$1static/')
     .replace(/(["'])\.\/(src)\//g, '$1./static/')
     .replace(/(EXTRACTED to )src\//g, '$1static/')
@@ -100,17 +101,20 @@ function compareBuffer(expectedPath, actualPath, expectedBuffer) {
 
 function verifyGeneratedWebUiIsCurrent() {
   const sourceIndex = path.join(SRC_WEB_UI, 'index.html');
-  const generatedIndex = path.join(OUT_ROOT, 'index.html');
 
   if (!fs.existsSync(sourceIndex)) {
     fail(`Missing source UI index: ${toPosix(path.relative(ROOT, sourceIndex))}`);
     return;
   }
 
-  const expectedIndex = Buffer.from(transformIndexHtml(fs.readFileSync(sourceIndex, 'utf8')), 'utf8');
-  compareBuffer(sourceIndex, generatedIndex, expectedIndex);
-
   const expectedFiles = new Set(['index.html']);
+  for (const name of ['index.html', 'mobile.html']) {
+    const sourcePath = path.join(SRC_WEB_UI, name);
+    if (!fs.existsSync(sourcePath)) continue;
+    expectedFiles.add(name);
+    const expectedHtml = Buffer.from(transformHtml(fs.readFileSync(sourcePath, 'utf8')), 'utf8');
+    compareBuffer(sourcePath, path.join(OUT_ROOT, name), expectedHtml);
+  }
   for (const sourcePath of walkFiles(SRC_WEB_UI_SRC)) {
     const relative = path.relative(SRC_WEB_UI_SRC, sourcePath);
     const generatedPath = path.join(OUT_STATIC, relative);
@@ -155,9 +159,10 @@ function verifyIndexAssets(root, indexPath, assetRootName) {
   while ((match = assetPattern.exec(html)) !== null) {
     const ref = match[1];
     if (/^(?:https?:)?\/\//i.test(ref) || ref.startsWith('data:') || ref.startsWith('#')) continue;
-    if (!ref.startsWith(`${assetRootName}/`)) continue;
+    const rootedRef = ref.replace(/^\/+/, '');
+    if (!rootedRef.startsWith(`${assetRootName}/`)) continue;
 
-    const cleanRef = ref.split(/[?#]/, 1)[0];
+    const cleanRef = rootedRef.split(/[?#]/, 1)[0];
     const target = path.join(root, cleanRef);
     if (!fs.existsSync(target)) {
       fail(`Missing index asset reference in ${toPosix(path.relative(ROOT, indexPath))}: ${cleanRef}`);
@@ -228,6 +233,7 @@ function verifyJavaScriptSyntax(filePath) {
 
 function verifySourceWebUi() {
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'index.html'), 'src');
+  verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'mobile.html'), 'src');
 
   for (const filePath of walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'))) {
     verifyJavaScriptSyntax(filePath);
@@ -237,6 +243,7 @@ function verifySourceWebUi() {
 
 function verifyGeneratedWebUi() {
   verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'index.html'), 'static');
+  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'mobile.html'), 'static');
 }
 
 verifySourceWebUi();

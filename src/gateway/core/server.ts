@@ -180,8 +180,11 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
   if (rawUrl.startsWith('/api/') || rawUrl === '/ws') return false;
 
   let pathname = '/';
+  let mobileDocumentRequested = false;
   try {
-    pathname = decodeURIComponent(new URL(rawUrl, 'http://localhost').pathname || '/');
+    const parsedUrl = new URL(rawUrl, 'http://localhost');
+    pathname = decodeURIComponent(parsedUrl.pathname || '/');
+    mobileDocumentRequested = parsedUrl.searchParams.has('pair') || parsedUrl.searchParams.get('source') === 'pwa';
   } catch {
     return false;
   }
@@ -199,7 +202,15 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
     if (isInsideRoot(file, candidateRoot)) candidates.push({ root: candidateRoot, file });
   };
 
-  if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
+  if ((pathname === '/' || pathname === '/index.html') && mobileDocumentRequested) {
+    push(webUiRoot, 'mobile.html');
+    push(webUiRoot, 'index.html');
+  } else if (pathname === '/' || pathname === '/index.html') {
+    push(webUiRoot, 'index.html');
+  } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
+    // Mobile has a dedicated document so it never parses the desktop shell or
+    // desktop styles. Keep index.html as a source/distribution rollback path.
+    push(webUiRoot, 'mobile.html');
     push(webUiRoot, 'index.html');
   } else if (pathname.startsWith('/src/')) {
     push(webUiRoot, pathname);

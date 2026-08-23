@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v303-2026-08-22-canonical-precache';
+const VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
@@ -25,16 +25,10 @@ const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 const PRECACHE = [
   '/mobile/chat',
   '/static/styles/mobile.css',
-  '/static/styles/base.css',
+  '/static/mobile/mobile-entry.js',
+  '/static/mobile/mobile-pwa.js',
   '/static/mobile/mobile-router.js',
   '/static/mobile/mobile-shell.js',
-  '/static/mobile/mobile-pages.js',
-  '/static/mobile/mobile-data.js',
-  '/static/mobile/mobile-api.js',
-  '/static/model-display.js',
-  '/static/api.js',
-  '/static/state.js',
-  '/static/utils.js',
   '/assets/Prometheus.png',
   '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
 ];
@@ -96,11 +90,7 @@ async function staleWhileRevalidate(request, cacheName) {
 
 function offlineShellResponse() {
   const candidates = [
-    '/?source=pwa#mobile/chat',
-    '/?source=pwa',
     '/mobile/chat',
-    '/',
-    '/index.html',
   ];
   return caches.open(STATIC_CACHE)
     .then(async (cache) => {

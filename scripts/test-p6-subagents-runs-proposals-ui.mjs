@@ -8,7 +8,11 @@ const source = {
   capabilities: read('web-ui/src/reasoning-capabilities.js'),
   desktopSubagents: read('web-ui/src/pages/SubagentsPage.js'),
   desktopProposals: read('web-ui/src/pages/ProposalsPage.js'),
-  mobilePages: read('web-ui/src/mobile/mobile-pages.js'),
+  mobileSubagents: read('web-ui/src/mobile/mobile-subagent-pages.js'),
+  mobileProposals: [
+    read('web-ui/src/mobile/mobile-hub-pages.js'),
+    read('web-ui/src/mobile/mobile-proposals-pages.js'),
+  ].join('\n'),
   mobileBadge: read('web-ui/src/mobile/mobile-model-badge.js'),
   mobileApi: read('web-ui/src/mobile/mobile-api.js'),
   chat: read('web-ui/src/pages/ChatPage.js'),
@@ -30,13 +34,13 @@ assert(/data-subagent-reasoning-trigger/.test(source.desktopSubagents) && /wireR
 assert(/\/api\/agents\/\$\{encodeURIComponent\(agentId\)\}\/model/.test(source.desktopSubagents), 'subagent reasoning must persist through the existing agent model route');
 assert(/subagent-run-recovery-composer/.test(source.desktopSubagents) && /AbortController/.test(source.desktopSubagents), 'desktop Runs recovery composer needs an abortable composer');
 assert(/state\.queue\.length >= 8/.test(source.desktopSubagents), 'desktop recovery composer queue limit is missing');
-assert(/data-sa-run-composer/.test(source.mobilePages) && /isBusy: \(\) => state\.busy/.test(source.mobilePages), 'mobile subagent Runs composer must be stateful');
-assert(/onAbort:[\s\S]{0,220}state\.controller/.test(source.mobilePages), 'mobile recovery composer must stop its active request');
-assert(/pm-sa-run-composer-status/.test(source.mobilePages) && /Uploading/.test(source.mobilePages), 'mobile recovery composer needs loading and error status presentation');
+assert(/data-sa-run-composer/.test(source.mobileSubagents) && /isBusy: \(\) => state\.busy/.test(source.mobileSubagents), 'mobile subagent Runs composer must be stateful');
+assert(/onAbort:[\s\S]{0,220}state\.controller/.test(source.mobileSubagents), 'mobile recovery composer must stop its active request');
+assert(/pm-sa-run-composer-status/.test(source.mobileSubagents) && /Uploading/.test(source.mobileSubagents), 'mobile recovery composer needs loading and error status presentation');
 assert(/signal: options\?\.signal/.test(source.mobileApi), 'mobile recovery APIs must accept the active abort signal');
 assert(/uploadStagedFilesToCanvas\(stagedFiles = pendingChatFiles, \{ signal \}/.test(source.chat) && /signal,/.test(source.chat), 'shared desktop attachment uploads must honor recovery abort signals');
 assert(/isApprovedProposalExecutionStep/.test(source.desktopProposals) && /is-approved/.test(source.desktopProposals), 'desktop approved proposal steps need an approved state class');
-assert(/_pmIsApprovedExecutionStep/.test(source.mobilePages) && /is-approved/.test(source.mobilePages), 'mobile approved proposal steps need an approved state class');
+assert(/_pmIsApprovedExecutionStep/.test(source.mobileProposals) && /is-approved/.test(source.mobileProposals), 'mobile approved proposal steps need an approved state class');
 assert(/proposal-execution-step\.is-approved/.test(source.desktopCss) && /font-weight: 800/.test(source.desktopCss), 'desktop approved proposal steps must be visibly bold');
 assert(/pm-proposal-step\.is-approved/.test(source.mobileCss) && /font-weight: 800/.test(source.mobileCss), 'mobile approved proposal steps must be visibly bold');
 assert(/resolveConfiguredAgentModel/.test(source.settings) && /reasoning_effort/.test(source.settings), 'agent reasoning persistence must validate effective default models');

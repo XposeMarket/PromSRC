@@ -6,16 +6,8 @@ import { markClientPerformance } from '../performance.js';
 
 import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js';
 import {
-  renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
-  renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
-  renderTasksPage, renderMorePage, renderProposalsPage,
-  renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js';
-import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
-import {
   getDeviceToken,
   loadMobileSessionGroups,
-  prefetchMobileSecondaryPages,
   searchMobileChatSessions,
 } from './mobile-api.js';
 import {
@@ -34,18 +26,37 @@ import {
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
 
-let mobilePairingPagePromise = null;
 let mobileRenderGeneration = 0;
+const mobileRouteOwnerPromises = new Map();
+const MOBILE_ROUTE_OWNER_LOADERS = Object.freeze({
+  pair: () => import('./mobile-pairing-page.js'),
+  gateways: () => import('./mobile-gateways-page.js'),
+  chat: () => import('./mobile-pages.js'),
+  // Chat and Voice still share live-call state and 38 lexical runtime bindings.
+  // They remain one owner until the shared runtime lands; every secondary route
+  // is independently loadable now and ordinary Chat does not evaluate it.
+  voice: () => import('./mobile-pages.js'),
+  schedule: () => import('./mobile-schedule-pages.js'),
+  teams: () => import('./mobile-teams-pages.js'),
+  tasks: () => import('./mobile-tasks-pages.js'),
+  settings: () => import('./mobile-settings.js'),
+  hub: () => import('./mobile-hub-pages.js'),
+  more: () => import('./mobile-hub-pages.js'),
+  proposals: () => import('./mobile-proposals-pages.js'),
+  creative: () => import('./mobile-creative-pages.js'),
+  subagents: () => import('./mobile-subagent-pages.js'),
+});
 
-function loadMobilePairingPage() {
-  if (!mobilePairingPagePromise) {
-    mobilePairingPagePromise = import('./mobile-pairing-page.js')
-      .catch((error) => {
-        mobilePairingPagePromise = null;
-        throw error;
-      });
+export function loadMobileRouteOwner(route) {
+  const owner = Object.hasOwn(MOBILE_ROUTE_OWNER_LOADERS, route) ? route : 'chat';
+  if (!mobileRouteOwnerPromises.has(owner)) {
+    const pending = MOBILE_ROUTE_OWNER_LOADERS[owner]().catch((error) => {
+      mobileRouteOwnerPromises.delete(owner);
+      throw error;
+    });
+    mobileRouteOwnerPromises.set(owner, pending);
   }
-  return mobilePairingPagePromise;
+  return mobileRouteOwnerPromises.get(owner);
 }
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
@@ -115,10 +126,9 @@ function normalizeMobileRouteParts(parts) {
     proposal: 'proposals',
     prop: 'proposals',
     approvals: 'proposals',
-    creative: 'hub',
   };
   page = aliases[page] || page;
-  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'more', 'pair', 'gateways'].includes(page)) {
+  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'creative', 'more', 'pair', 'gateways'].includes(page)) {
     extra = [arg, ...extra].filter(Boolean);
     arg = page || null;
     page = 'chat';
@@ -148,8 +158,8 @@ export function mobileDeepLink(route = 'chat', arg = '', extra = [], opts = {}) 
     .filter(Boolean)
     .map((p, i) => i <= 1 ? p.replace(/^\/+|\/+$/g, '') : encodeURIComponent(p));
   const suffix = parts.join('/');
-  if (opts.path === true) return `/?source=pwa#${suffix}`;
-  if (opts.absolute === true) return `${window.location.origin}/?source=pwa#${suffix}`;
+  if (opts.path === true) return `/${suffix}`;
+  if (opts.absolute === true) return `${window.location.origin}/${suffix}`;
   return `#${suffix}`;
 }
 
@@ -177,51 +187,16 @@ export function mobileNavigate(route) {
   }
 }
 
-// Mobile reuses the full desktop Settings modal instead of a separate mobile
-// settings surface. The same #settings-modal markup and SettingsPage.js ship in
-// this bundle, and the shared api() helper attaches the paired-device token, so
-// every desktop settings loader/saver authenticates correctly on a phone.
-// `mobile.css` (scoped to body.pm-mobile-active) presents the modal full-screen.
-function openMobileSettings(tab) {
-  document.body.classList.add('pm-mobile-overlay-open');
-  if (typeof window.openSettings === 'function') {
-    // The desktop #settings-modal lives inside the .app container, which the
-    // mobile shell hides with `display:none`. A position:fixed element nested
-    // under a display:none ancestor never renders (it collapses to 0x0), so the
-    // modal opened but stayed invisible. Lift it to <body> — outside the hidden
-    // .app — before opening. It still matches `body.pm-mobile-active
-    // #settings-modal` since it remains a descendant of <body>.
-    try {
-      const modal = document.getElementById('settings-modal');
-      if (modal && modal.parentElement !== document.body) {
-        document.body.appendChild(modal);
-      }
-    } catch (err) { console.warn('[mobile settings] could not reparent modal', err); }
-    try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
-    return true;
-  }
-  import('../pages/SettingsPage.js')
-    .then(() => openMobileSettings(tab))
-    .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
-  console.warn('[mobile settings] desktop Settings modal not available yet');
-  return false;
-}
-window.pmOpenSettings = openMobileSettings;
-
-// Close the desktop Settings modal if it is open. Used when the mobile router
-// navigates to any non-settings page so the overlay never lingers on top of a
-// different mobile screen.
-function closeMobileSettings() {
-  const modal = document.getElementById('settings-modal');
-  if (modal && modal.style.display !== 'none' && typeof window.closeSettings === 'function') {
-    try { window.closeSettings(); } catch {}
-  }
-  document.body.classList.remove('pm-mobile-overlay-open');
-}
+// The lightweight mobile document has no desktop app tree or settings modal.
+// Header settings actions navigate to the dedicated mobile settings owner.
+window.pmOpenSettings = (section = '') => {
+  const suffix = String(section || '').trim();
+  mobileNavigate(suffix ? `#mobile/settings/${encodeURIComponent(suffix)}` : '#mobile/settings');
+};
 
 const TAB_FOR_PAGE = {
   chat: 'chat', voice: 'voice', tasks: 'tasks', hub: 'hub',
-  schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null, gateways: null,
+  schedule: null, teams: null, subagents: null, proposals: null, creative: 'hub', settings: null, more: null, gateways: null,
 };
 
 function _repairNamespacedChatRoute(page, arg) {
@@ -322,11 +297,6 @@ function render() {
   else if (!getDeviceToken() && !hasAnyGatewayCredential() && page !== 'pair') page = 'pair';
   window.__pmMobilePairingActive = page === 'pair';
 
-  // The desktop Settings modal can be opened on top of any mobile page (via the
-  // header gear) without changing the route. Any actual navigation to a
-  // different page should dismiss it so it never lingers over the wrong screen.
-  if (page !== 'settings') closeMobileSettings();
-
   const activeTab = TAB_FOR_PAGE[page] || null;
   const shell = createMobileShell({
     activeTab,
@@ -392,53 +362,49 @@ function render() {
         try { connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 }); } catch {}
       }
     });
-    if (Date.now() - Number(window.__pmMobileSecondaryPrefetchedAt || 0) > 60_000) {
-      window.__pmMobileSecondaryPrefetchedAt = Date.now();
-      const prefetch = () => prefetchMobileSecondaryPages().catch(() => {});
-      if (typeof requestIdleCallback === 'function') requestIdleCallback(prefetch, { timeout: 1800 });
-      else setTimeout(prefetch, 900);
-    }
   }
 
-  switch (page) {
+  if (page === 'chat' || page === 'voice') {
+    try {
+      if (typeof window.__PROM_ENSURE_MARKDOWN_LIBS === 'function') {
+        window.__PROM_EXTERNAL_LIBS_READY = window.__PROM_ENSURE_MARKDOWN_LIBS();
+      }
+    } catch {}
+  }
+
+  return loadMobileRouteOwner(page).then((owner) => {
+    // Navigation may win while a route owner is still crossing the network.
+    if (renderGeneration !== mobileRenderGeneration) return undefined;
+    switch (page) {
     case 'pair':
-      return loadMobilePairingPage().then(({ renderPairPage }) => {
-        // A route change can happen while the pairing-only chunk is loading.
-        // Do not let a late import resolution repaint a newer mobile route.
-        if (renderGeneration !== mobileRenderGeneration) return undefined;
-        return renderPairPage(slot, { code: activePairCode, addMode: arg === 'add', navigate: mobileNavigate });
-      });
-    case 'gateways': return renderMobileGatewaysPage(slot, { navigate: mobileNavigate });
-    case 'chat':      return renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, voiceRoomTranscript: String(extra?.[0] || '').toLowerCase() === 'voice-room' });
-    case 'voice':     return renderVoicePage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, autoStart: !!arg });
+      return owner.renderPairPage(slot, { code: activePairCode, addMode: arg === 'add', navigate: mobileNavigate });
+    case 'gateways': return owner.renderMobileGatewaysPage(slot, { navigate: mobileNavigate });
+    case 'chat':      return owner.renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, voiceRoomTranscript: String(extra?.[0] || '').toLowerCase() === 'voice-room' });
+    case 'voice':     return owner.renderVoicePage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, autoStart: !!arg });
     case 'schedule':
       if (String(arg || '').toLowerCase() === 'edit' && extra?.[0]) {
-        return renderScheduleEditorPage(slot, {
+        return owner.renderScheduleEditorPage(slot, {
           scheduleId: decodeURIComponent(extra[0]),
           navigate: mobileNavigate,
         });
       }
-      return renderSchedulePage(slot, { navigate: mobileNavigate });
+      return owner.renderSchedulePage(slot, { navigate: mobileNavigate });
     case 'teams':
-      if (arg) return renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
-      return renderTeamsPage(slot, { navigate: mobileNavigate });
-    case 'tasks':     return renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
-    case 'settings':
-      // Deep links like #mobile/settings or #mobile/settings/models open the
-      // full desktop Settings modal over a chat base, so closing it lands the
-      // user back on chat. `arg` maps directly to a desktop settings tab id.
-      renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
-      openMobileSettings(arg || undefined);
-      return;
-    case 'hub':       return renderHubPage(slot, { navigate: mobileNavigate });
+      if (arg) return owner.renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
+      return owner.renderTeamsPage(slot, { navigate: mobileNavigate });
+    case 'tasks':     return owner.renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
+    case 'settings':  return owner.renderMobileSettingsPage(slot, { section: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
+    case 'hub':       return owner.renderHubPage(slot, { navigate: mobileNavigate });
     case 'subagents':
-      if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return renderSubagentChatPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate });
-      if (arg) return renderSubagentDetailPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate, initialTab: extra?.[0] || '' });
-      return renderSubagentsPage(slot, { navigate: mobileNavigate });
-    case 'proposals': return renderProposalsPage(slot, { proposalId: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
-    case 'more':      return renderMorePage(slot, { section: arg || '', navigate: mobileNavigate });
-    default:          return renderChatPage(slot, { navigate: mobileNavigate });
-  }
+      if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return owner.renderSubagentChatPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate });
+      if (arg) return owner.renderSubagentDetailPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate, initialTab: extra?.[0] || '' });
+      return owner.renderSubagentsPage(slot, { navigate: mobileNavigate });
+    case 'proposals': return owner.renderProposalsPage(slot, { proposalId: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });
+    case 'creative':  return owner.renderCreativePage(slot, { navigate: mobileNavigate });
+    case 'more':      return owner.renderMorePage(slot, { section: arg || '', navigate: mobileNavigate });
+    default:          return owner.renderChatPage(slot, { navigate: mobileNavigate });
+    }
+  });
 }
 
 function renderMobileBootError(err) {

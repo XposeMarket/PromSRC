@@ -1,8 +1,8 @@
 {
   "name": "Prometheus",
   "short_name": "Prometheus",
-  "id": "/?source=pwa#mobile/chat",
-  "start_url": "/?source=pwa#mobile/chat",
+  "id": "/mobile/chat",
+  "start_url": "/mobile/chat",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone"],
@@ -35,37 +35,37 @@
     {
       "name": "Main Chat",
       "short_name": "Chat",
-      "url": "/?source=pwa#mobile/chat",
+      "url": "/mobile/chat",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
       "name": "Voice",
       "short_name": "Voice",
-      "url": "/?source=pwa#mobile/voice",
+      "url": "/mobile/voice",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
       "name": "Tasks",
       "short_name": "Tasks",
-      "url": "/?source=pwa#mobile/tasks",
+      "url": "/mobile/tasks",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
       "name": "Schedule",
       "short_name": "Schedule",
-      "url": "/?source=pwa#mobile/schedule",
+      "url": "/mobile/schedule",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
       "name": "Teams",
       "short_name": "Teams",
-      "url": "/?source=pwa#mobile/teams",
+      "url": "/mobile/teams",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     },
     {
       "name": "Proposals",
       "short_name": "Proposals",
-      "url": "/?source=pwa#mobile/proposals",
+      "url": "/mobile/proposals",
       "icons": [{ "src": "/assets/Prometheus.png", "sizes": "192x192" }]
     }
   ]

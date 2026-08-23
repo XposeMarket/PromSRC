@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-skin="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-visual">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Prometheus">
+  <meta name="theme-color" content="#0b0b0d">
+  <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/assets/Prometheus.png">
+  <link rel="stylesheet" href="/static/styles/mobile.css">
+  <title>Prometheus</title>
+  <style>
+    html,body{margin:0;min-height:100%;background:#000;color:#f7f7f8}
+    #mobile-root:empty{min-height:100dvh;background:#000}
+  </style>
+<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>
+</head>
+<body class="pm-mobile-active pm-mobile-document-scroll">
+  <div id="mobile-root" aria-live="polite"></div>
+  <script>
+    window.__PROM_SHOULD_BOOT_MOBILE = () => true;
+    window.__PROM_MOBILE_ROUTER_READY = Promise.resolve(null);
+    try { localStorage.setItem('pm_force_mobile', '1'); } catch {}
+  </script>
+  <script type="module" src="/static/mobile/mobile-entry.js"></script>
+</body>
+</html>
