@@ -23,6 +23,16 @@ function toPosix(value) {
   return value.split(path.sep).join('/');
 }
 
+// String.prototype.localeCompare() is locale-sensitive and can order the same
+// path set differently on Windows and Linux. The production manifest/build id
+// must be byte-for-byte reproducible across developer and CI hosts, so every
+// digest-bearing sort uses deterministic UTF-16 code-unit ordering instead.
+function compareText(left, right) {
+  const a = String(left);
+  const b = String(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -45,7 +55,7 @@ function walkFiles(directory) {
       else if (entry.isFile()) output.push(absolute);
     }
   }
-  return output.sort((left, right) => toPosix(left).localeCompare(toPosix(right)));
+  return output.sort((left, right) => compareText(toPosix(left), toPosix(right)));
 }
 
 function computeSourceDigest() {
@@ -56,7 +66,7 @@ function computeSourceDigest() {
     path.join(ROOT, 'package.json'),
     path.join(ROOT, 'package-lock.json'),
     fileURLToPath(import.meta.url),
-  ].sort((left, right) => toPosix(left).localeCompare(toPosix(right)));
+  ].sort((left, right) => compareText(toPosix(left), toPosix(right)));
   for (const filePath of buildInputs) {
     const relative = toPosix(path.relative(ROOT, filePath));
     hash.update(`${relative}\0`);
@@ -446,7 +456,7 @@ async function buildProduction() {
   const moduleOutputObject = Object.fromEntries(
     [...moduleOutputs.entries()]
       .map(([source, output]) => [toPosix(path.relative(WEB_UI_ROOT, source)), output])
-      .sort(([left], [right]) => left.localeCompare(right)),
+      .sort(([left], [right]) => compareText(left, right)),
   );
   const manifest = {
     schemaVersion: 1,
