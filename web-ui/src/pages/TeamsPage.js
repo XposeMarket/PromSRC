@@ -2727,9 +2727,9 @@ function renderTeamsCanvas() {
     const hasPending = (team.pendingChanges || []).length > 0;
     const isPaused = team.manager?.paused === true;
     return `
-      <div class="team-house-wrap" data-team-id="${team.id}" 
-           onclick="openTeamBoard('${team.id}')" 
-           onmouseenter="showHousePopover(this, '${team.id}')" 
+      <div class="team-house-wrap" data-team-id="${team.id}"
+           onclick="openTeamBoard('${team.id}')"
+           onmouseenter="showHousePopover(this, '${team.id}')"
            onmouseleave="hideHousePopover()"
            style="display:inline-flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px;border-radius:16px;transition:all 0.2s;position:relative;${isActive ? 'transform:scale(1.05)' : ''};${isPaused ? 'opacity:0.72' : ''}">
         <div class="house-svg" style="position:relative">
@@ -3348,7 +3348,7 @@ function renderTeamBoard(teamId) {
   const tabNavHtml = teamBoardTab === 'chat' ? '' : `
     <div style="display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 16px;flex-shrink:0;background:var(--panel-2)">
       ${tabs.map(t => `
-        <button onclick="switchTeamTab('${t}','${teamId}')" 
+        <button onclick="switchTeamTab('${t}','${teamId}')"
           style="border:none;background:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;color:${t===teamBoardTab?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${t===teamBoardTab?'var(--brand)':'transparent'};transition:all 0.15s">
           ${tabLabels[t]}${t==='memory'&&pendingCount>0?` <span style="background:#e05c5c;color:#fff;border-radius:999px;font-size:10px;padding:1px 6px">${pendingCount}</span>`:''}
         </button>`).join('')}
@@ -5631,7 +5631,7 @@ async function openCreateTeamModal(prefill) {
   const agentList = document.getElementById('cteam-agents');
   agentList.innerHTML = _allAgentsForTeam.map(a => `
     <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:12px;background:var(--panel-2)">
-      <input type="checkbox" value="${a.id}" ${prefill?.candidateAgentIds?.includes(a.id)?'checked':''}> 
+      <input type="checkbox" value="${a.id}" ${prefill?.candidateAgentIds?.includes(a.id)?'checked':''}>
       <span style="font-weight:600">${escHtml(a.name||a.id)}</span>
       ${a.cronSchedule ? `<span style="color:var(--muted);font-size:11px">${escHtml(a.cronSchedule)}</span>` : ''}
     </label>`).join('');

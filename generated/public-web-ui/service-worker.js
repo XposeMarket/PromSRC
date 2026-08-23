@@ -17,12 +17,16 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
+const RELEASE_VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
+// The production builder replaces this sentinel with the deterministic source
+// digest. Raw-module development keeps its own cache namespace.
+const ASSET_BUILD_ID = '128fa49aed627f6b';
+const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
-// Files needed for the mobile shell to render offline.
-const PRECACHE = [
+// Files needed for raw-module development to render the mobile shell offline.
+const SOURCE_PRECACHE = [
   '/mobile/chat',
   '/static/styles/mobile.css',
   '/static/mobile/mobile-entry.js',
@@ -32,6 +36,32 @@ const PRECACHE = [
   '/assets/Prometheus.png',
   '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
 ];
+
+// Public builds inject their content-addressed boot closure here. Keeping the
+// arrays mutually exclusive prevents duplicate /static and /build identities.
+const BUILD_PRECACHE = [
+  "/asset-manifest.json",
+  "/assets/Prometheus.png",
+  "/build/chunks/chunk-3EPMIDRU.js",
+  "/build/chunks/chunk-4SUL4V4Z.js",
+  "/build/chunks/chunk-4WCZDNBS.js",
+  "/build/chunks/chunk-EPSJJCWL.js",
+  "/build/chunks/chunk-GBLBNUG2.js",
+  "/build/chunks/chunk-H2DMNJSM.js",
+  "/build/chunks/chunk-IPNQ4FF4.js",
+  "/build/chunks/chunk-IR5RKA7K.js",
+  "/build/chunks/chunk-JF4LWGNM.js",
+  "/build/chunks/chunk-KNSIM57N.js",
+  "/build/chunks/chunk-MGDZYTA3.js",
+  "/build/chunks/mobile-router-TLUCJZNV.js",
+  "/build/entries/mobile-MMF2IUBZ.js",
+  "/build/inline/mobile-inline-01-0b108e28f4b7.js",
+  "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
+  "/build/styles/mobile-7ZQJPCNM.css",
+  "/mobile.html",
+  "/mobile/chat",
+];
+const PRECACHE = BUILD_PRECACHE.length ? BUILD_PRECACHE : SOURCE_PRECACHE;
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -133,6 +163,8 @@ self.addEventListener('fetch', (event) => {
     || url.pathname === '/index.html'
     || url.pathname.startsWith('/src/')
     || url.pathname.startsWith('/static/')
+    || url.pathname.startsWith('/build/')
+    || url.pathname === '/asset-manifest.json'
   ) {
     event.respondWith(networkFirst(request, STATIC_CACHE).catch(() => {
       if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
@@ -199,7 +231,7 @@ self.addEventListener('push', (event) => {
     tag: payload.tag || 'prometheus-chat-response',
     actions: notificationActions(payload),
     data: {
-      url: payload.url || '/?source=pwa#mobile/chat',
+      url: payload.url || '/mobile/chat',
       ...(payload.data || {}),
     },
   };
@@ -215,7 +247,7 @@ self.addEventListener('notificationclick', (event) => {
     event.waitUntil(setBadge(getVisibleNotificationCount()));
     return;
   }
-  const rawUrl = event.notification?.data?.url || '/?source=pwa#mobile/chat';
+  const rawUrl = event.notification?.data?.url || '/mobile/chat';
   event.waitUntil((async () => {
     await setBadge(0);
     const targetUrl = new URL(rawUrl, self.location.origin).href;

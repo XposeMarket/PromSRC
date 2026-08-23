@@ -62,6 +62,10 @@
     "playwrightChromium"
   ],
   "requiredPublicWebAssets": [
+    "index.html",
+    "mobile.html",
+    "asset-manifest.json",
+    "service-worker.js",
     "vendor/codemirror/codemirror.min.css",
     "vendor/codemirror/theme/material-darker.min.css",
     "vendor/codemirror/codemirror.min.js",
