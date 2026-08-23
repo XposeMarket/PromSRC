@@ -30,7 +30,12 @@ assert.match(pressureModel, /history\.reduce\(\(total, message\) => total \+ est
 assert.match(pressureModel, /const activeHistory = history\.slice\(start\)/, 'compacted fallback must count every message after the summary checkpoint');
 assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persistedEstimate >= 0\)/, 'persisted session pressure should remain authoritative when available');
 
-assert.match(performance, /import '\.\/context-window-live-tracking\.js';/, 'desktop/mobile entry must load the shared context meter');
+// performance.js is shared by desktop and mobile. The context tracker is a
+// desktop-owned feature and must be requested only after the mobile predicate
+// resolves false; a top-level static import would make mobile parse/evaluate it.
+assert.match(performance, /const shouldBootMobile = window\.__PROM_SHOULD_BOOT_MOBILE\?\.\(\) === true;/, 'the shared entry must resolve the mobile predicate before feature loading');
+assert.match(performance, /if \(!shouldBootMobile\) \{[\s\S]*?import\('\.\/context-window-live-tracking\.js'\)/, 'desktop boot must lazily request the shared context meter');
+assert.doesNotMatch(performance, /^import ['"]\.\/context-window-live-tracking\.js['"];?$/m, 'mobile-safe shared boot must not statically import the context meter');
 assert.match(performance, /new CustomEvent\('prometheus:client-performance-mark', \{ detail: entry \}\)/, 'only scrubbed telemetry may be published to the live estimator');
 assert.equal(performance, generatedPerformance, 'performance source/generated mirrors must stay byte-identical');
 assert.equal(live, generatedLive, 'live-context source/generated mirrors must stay byte-identical');
