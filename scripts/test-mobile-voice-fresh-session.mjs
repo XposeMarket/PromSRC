@@ -76,5 +76,10 @@ assert.match(
   /if \(targetSessionId === MOBILE_CHAT_SESSION_ID\)[\s\S]*?_ensureDurableMobileVoiceSession/,
   'the first utterance in a fresh Voice draft must materialize a new durable session',
 );
+assert.match(
+  voicePage,
+  /if \(voiceNewChatDraft\) \{[\s\S]*?__pmChat\.activeSessionId = targetSessionId;[\s\S]*?_rememberMobileLastChatSession\?\.\(targetSessionId\);[\s\S]*?pm-mobile-voice-first-turn-materialized/,
+  'a spoken first turn must promote the new-chat draft into the durable chat and notify the chat surface',
+);
 
 console.log('mobile Voice fresh-session checks passed');

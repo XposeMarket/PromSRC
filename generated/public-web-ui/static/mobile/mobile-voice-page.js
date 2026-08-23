@@ -4468,6 +4468,18 @@ void main() {
       const voiceTitle = String(finalText || 'New Chat').replace(/\s+/g, ' ').trim().slice(0, 72) || 'New Chat';
       targetSessionId = await context._ensureDurableMobileVoiceSession({ title: voiceTitle, source: 'mobile_voice_session_created' });
       _paintVoiceTarget?.();
+      // A spoken first turn is the same first message as a typed send. Once the
+      // durable session exists, leave new-chat/brain-card chrome behind and bind
+      // the visible chat to that session instead of keeping draft selectors up.
+      if (voiceNewChatDraft) {
+        context.__pmChat.activeSessionId = targetSessionId;
+        context._rememberMobileLastChatSession?.(targetSessionId);
+        try {
+          context.window.dispatchEvent(new CustomEvent('pm-mobile-voice-first-turn-materialized', {
+            detail: { sessionId: targetSessionId },
+          }));
+        } catch {}
+      }
     }
     context._prewarmMobileVoiceWorkerContext({ sessionId: targetSessionId, source: 'mobile_submit_speech_start', originalUserPrompt: finalText, force: true });
     const hadPendingInterruption = !!context.__pmVoice.pendingInterruptContext;
