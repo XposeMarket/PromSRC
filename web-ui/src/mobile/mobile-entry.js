@@ -45,7 +45,21 @@ window.__PROM_ENSURE_MARKDOWN_LIBS = () => {
   return markdownLibrariesPromise;
 };
 
+function renderOfflineBootstrapFallback() {
+  const root = document.getElementById('mobile-root');
+  if (!root) return;
+  root.innerHTML = `
+    <main role="status" style="box-sizing:border-box;display:grid;min-height:100dvh;place-items:center;padding:2rem;background:#101112;color:#f5efe7;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+      <section style="max-width:28rem">
+        <h1 style="margin:0 0 .75rem;font-size:1.4rem">Prometheus is offline</h1>
+        <p style="margin:0;line-height:1.5;color:#c9b8a7">The saved mobile entry is available, but the rest of this route has not been cached yet. Prometheus will reconnect when the gateway is reachable.</p>
+      </section>
+    </main>`;
+  window.addEventListener('online', () => window.location.reload(), { once: true });
+}
+
 window.__PROM_MOBILE_ROUTER_READY = import('./mobile-router.js').catch((error) => {
   console.error('[mobile] router import failed:', error);
-  throw error;
+  renderOfflineBootstrapFallback();
+  return null;
 });
