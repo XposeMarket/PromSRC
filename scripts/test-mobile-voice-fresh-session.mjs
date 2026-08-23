@@ -5,11 +5,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const voiceOwner = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8');
 const router = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-router.js'), 'utf8');
 
-const renderStart = pages.indexOf('export async function renderVoicePage');
-const renderEnd = pages.indexOf('\nexport ', renderStart + 1);
-const voicePage = pages.slice(renderStart, renderEnd > renderStart ? renderEnd : undefined);
+// The extracted owner receives former closure bindings through a live context.
+// Normalize that mechanical prefix so this legacy semantic contract continues
+// to inspect the Voice behavior rather than its module location.
+const voicePage = voiceOwner.replace(/\bcontext\./g, '');
+const renderStart = voicePage.indexOf('export async function renderVoicePage');
 assert.ok(renderStart >= 0, 'standalone Voice page renderer must exist');
 
 assert.match(

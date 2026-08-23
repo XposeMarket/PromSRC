@@ -9,7 +9,7 @@ import {
 } from '../web-ui/src/mobile/voice-preview-deck.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8').replace(/\bcontext\./g, '');
 const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8');
 
 const narrowCard = { left: 16, right: 374, top: 118, bottom: 410 };

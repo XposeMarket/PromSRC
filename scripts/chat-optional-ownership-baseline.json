@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "reference": {
+    "commit": "3782e525d12cc5742ebb0cceb81b2fc9e34ab516",
+    "title": "perf(web): add weighted keyed chat timeline",
+    "measuredAt": "2026-08-23",
+    "method": "production esbuild manifest, feature entry plus static import closure"
+  },
+  "baseline": {
+    "desktopPlainChat": {
+      "rawBytes": 1716807,
+      "gzipBytes": 491696,
+      "moduleCount": 13
+    },
+    "mobilePlainChat": {
+      "rawBytes": 1474175,
+      "gzipBytes": 442953,
+      "moduleCount": 22
+    }
+  },
+  "budgets": {
+    "desktopPlainChatRawBytesMax": 1420000,
+    "desktopPlainChatGzipBytesMax": 400000,
+    "desktopPlainChatModuleCountMax": 12,
+    "desktopMinimumGzipReductionRatio": 0.18,
+    "mobilePlainChatRawBytesMax": 1190000,
+    "mobilePlainChatGzipBytesMax": 350000,
+    "mobilePlainChatModuleCountMax": 22,
+    "mobileMinimumGzipReductionRatio": 0.2,
+    "mobileVoiceOwnerGzipBytesMax": 50000
+  }
+}

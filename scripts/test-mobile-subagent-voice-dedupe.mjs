@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const api = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-api.js'), 'utf8');
 const pages = [
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8'),
   fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-subagent-pages.js'), 'utf8'),
 ].join('\n');
 
@@ -26,7 +27,7 @@ assert.match(
   /async function _deliverSubagentVoiceReplyOnce[\s\S]*_claimSubagentVoiceReplyOnce[\s\S]*_realtimeAgentDataChannelOpen\(\)[\s\S]*_requestMobileRealtimeAgentFinalSummary[\s\S]*_ttsSpeak/,
   'one claimed delivery must choose realtime summary or TTS exclusively',
 );
-assert.equal((pages.match(/_deliverSubagentVoiceReplyOnce\(agentId, reply\)/g) || []).length, 1);
+assert.equal((pages.match(/(?:context\.)?_deliverSubagentVoiceReplyOnce\(agentId, reply\)/g) || []).length, 1);
 assert.equal((pages.match(/_deliverSubagentVoiceReplyOnce\(agent\.id, finalSubagentVoiceReply\)/g) || []).length, 1);
 
 console.log('mobile subagent voice dedupe contract: ok');

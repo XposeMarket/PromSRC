@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mobile = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const voice = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-voice-page.js'), 'utf8');
 
 const errorHelpers = mobile.slice(
   mobile.indexOf('function _mobileRealtimeBootstrapSupersededError'),
@@ -34,24 +35,24 @@ assert.match(
   'a bootstrap stopped without a successor must use the non-fatal cancellation sentinel',
 );
 
-const listenStartAt = mobile.indexOf('async function _startListening()');
-const listenStart = mobile.slice(
+const listenStartAt = voice.indexOf('async function _startListening()');
+const listenStart = voice.slice(
   listenStartAt,
-  mobile.indexOf('const mode = String(__pmVoice.settings?.voiceMode', listenStartAt),
+  voice.indexOf('const mode = String(context.__pmVoice.settings?.voiceMode', listenStartAt),
 );
 assert.ok(
-  listenStart.indexOf('_isMobileRealtimeBootstrapSupersededError(err)')
-    < listenStart.indexOf('pmToast(`Realtime agent failed:'),
+  listenStart.indexOf('context._isMobileRealtimeBootstrapSupersededError(err)')
+    < listenStart.indexOf('context.pmToast(`Realtime agent failed:'),
   'expected supersession must be handled before the fatal Realtime toast',
 );
 
-const targetPicker = mobile.slice(
-  mobile.indexOf('const activateTargetButton = async'),
-  mobile.indexOf('async function _openVoiceTargetPicker'),
+const targetPicker = voice.slice(
+  voice.indexOf('const activateTargetButton = async'),
+  voice.indexOf('async function _openVoiceTargetPicker'),
 );
 assert.match(
   targetPicker,
-  /const targetChanged = _voiceRoomCurrentTargetKey\(\) !== _voiceRoomParticipantKey\(participant\);[\s\S]*?restart: targetChanged/,
+  /const targetChanged = context\._voiceRoomCurrentTargetKey\(\) !== context\._voiceRoomParticipantKey\(participant\);[\s\S]*?restart: targetChanged/,
   'reselecting the active agent must not restart AVAS',
 );
 assert.match(

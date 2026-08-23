@@ -1,5 +1,6 @@
 import {
   acquireChatRuntime,
+  chatRuntimeRegistryStats,
   getChatRuntime,
   installChatRuntimeEvictionLoop,
 } from './chat-runtime.js';
@@ -26,6 +27,7 @@ export function createDesktopChatRuntimeAdapter({
   }
   const historyClient = createChatHistoryClient({ request: windowRef.fetch.bind(windowRef) });
   let activeLease = null;
+  const secondaryLeases = new Map();
 
   function identity(sessionId = windowRef.activeChatSessionId) {
     const gatewayId = String(
@@ -50,6 +52,37 @@ export function createDesktopChatRuntimeAdapter({
     const lease = acquireChatRuntime(resolved, 'desktop-primary-view');
     activeLease = { ...lease, key };
     return lease.runtime;
+  }
+
+  function retainSecondary(sessionId, owner = 'desktop-secondary-view') {
+    const resolved = identity(sessionId);
+    if (!resolved.sessionId) return null;
+    const key = `${resolved.gatewayId}::${resolved.sessionId}`;
+    const existing = secondaryLeases.get(key);
+    if (existing) return existing.runtime;
+    const lease = acquireChatRuntime(resolved, owner);
+    secondaryLeases.set(key, { ...lease, key, sessionId: resolved.sessionId });
+    return lease.runtime;
+  }
+
+  function releaseSecondary(sessionId = '') {
+    const sid = String(sessionId || '').trim();
+    let released = false;
+    for (const [key, lease] of secondaryLeases) {
+      if (sid && lease.sessionId !== sid) continue;
+      lease.release?.();
+      secondaryLeases.delete(key);
+      released = true;
+    }
+    return released;
+  }
+
+  function setSecondaryVisible(sessionId = '') {
+    const sid = String(sessionId || '').trim();
+    for (const lease of [...secondaryLeases.values()]) {
+      if (!sid || lease.sessionId !== sid) releaseSecondary(lease.sessionId);
+    }
+    return sid ? retainSecondary(sid) : null;
   }
 
   function sync(session, options = {}) {
@@ -206,8 +239,31 @@ export function createDesktopChatRuntimeAdapter({
   windowRef.addEventListener('beforeunload', () => {
     activeLease?.release?.();
     activeLease = null;
+    releaseSecondary();
   }, { once: true });
   windowRef.loadOlderDesktopChatHistory = loadOlder;
 
-  return Object.freeze({ identity, runtimeFor, bind, sync, queue, activeQueue, activate, applyInitialPage, requestInterruption, renderHistoryPager, loadOlder });
+  const diagnostics = () => ({
+    ...chatRuntimeRegistryStats(),
+    primarySessionId: activeLease?.runtime?.sessionId || '',
+    secondarySessionIds: [...secondaryLeases.values()].map((lease) => lease.sessionId).sort(),
+  });
+
+  return Object.freeze({
+    identity,
+    runtimeFor,
+    bind,
+    retainSecondary,
+    releaseSecondary,
+    setSecondaryVisible,
+    sync,
+    queue,
+    activeQueue,
+    activate,
+    applyInitialPage,
+    requestInterruption,
+    renderHistoryPager,
+    loadOlder,
+    diagnostics,
+  });
 }

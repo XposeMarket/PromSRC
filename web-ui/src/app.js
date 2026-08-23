@@ -960,6 +960,9 @@ function activateLoadedPageMode(mode) {
   if (mode === 'memory' && typeof window.memoryPageActivate === 'function') window.memoryPageActivate();
   if (mode === 'hub' && typeof window.hubPageActivate === 'function') window.hubPageActivate();
   if (mode === 'plugins' && typeof window.pluginsPageActivate === 'function') window.pluginsPageActivate();
+  try {
+    window.dispatchEvent(new CustomEvent('prometheus:page-activated', { detail: { mode } }));
+  } catch {}
 }
 
 export function setMode(mode) {

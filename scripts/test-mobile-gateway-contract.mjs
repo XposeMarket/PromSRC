@@ -53,6 +53,7 @@ function assertContractFiles() {
   const pairing = read('src/gateway/routes/pairing.router.ts');
   const auth = read('src/gateway/gateway-auth.ts');
   const pages = read('web-ui/src/mobile/mobile-pages.js');
+  const voicePage = read('web-ui/src/mobile/mobile-voice-page.js');
   const pairingPage = read('web-ui/src/mobile/mobile-pairing-page.js');
   const gatewaysPage = read('web-ui/src/mobile/mobile-gateways-page.js');
   const mobileApi = read('web-ui/src/mobile/mobile-api.js');
@@ -100,7 +101,7 @@ function assertContractFiles() {
   assert.match(pages, /selectedGateway\.status !== MOBILE_GATEWAY_STATUS\.ONLINE/, 'chat sends must fail closed for every non-online target state');
   assert.match(pages, /probeGateway\(selectedGateway\)/, 'chat sends must verify target liveness before admission');
   assert.match(pages, /gatewayExecutionRefresh\.then\(\(\) => loadMobileChatSession/, 'opening a stale remote chat must refresh execution metadata before loading history');
-  assert.match(pages, /refreshedVoiceGateway/, 'selecting a stale remote chat as a Voice target must refresh execution metadata first');
+  assert.match(voicePage, /refreshedVoiceGateway/, 'selecting a stale remote chat as a Voice target must refresh execution metadata first');
   assert.match(pages, /targetNamespacedId\(selectedGateway\?\.gatewayId, actualSessionId\)/, 'new remote chats must keep their gateway in the route after the first send');
   assert.match(pages, /_saveMobileLastChatContext\(\{[\s\S]*gatewayId: selectedGateway\.gatewayId/, 'chat sends must persist the selected gateway for legacy bare routes');
   assert.match(mobileApi, /_isCurrentMobileRequestTarget/);

@@ -91,14 +91,23 @@ try {
   requestedPaths.length = 0;
   await page.goto(`${origin}/desktop-fixture`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__fixtureReady === true);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('prometheus:page-activated', { detail: { mode: 'chat' } }));
+  });
   await page.waitForTimeout(100);
   const desktopRequests = requestedPaths.slice();
   for (const expected of [
-    '/src/features/chat/multi-chat-workspace-v2.js',
-    '/src/features/chat/canonical-desktop-composer.js',
+    '/src/features/chat/multi-chat-intent.js',
     '/src/context-window-live-tracking.js',
   ]) {
-    assert.equal(desktopRequests.includes(expected), true, `desktop boot did not request ${expected}`);
+    assert.equal(desktopRequests.includes(expected), true, `desktop Chat activation did not request ${expected}`);
+  }
+  for (const forbidden of [
+    '/src/features/chat/multi-chat-workspace-v2.js',
+    '/src/features/chat/canonical-desktop-composer.js',
+    '/src/features/chat/desktop-turn-file-diff.js',
+  ]) {
+    assert.equal(desktopRequests.includes(forbidden), false, `desktop Chat activation eagerly requested ${forbidden}`);
   }
   await context.close();
 } finally {

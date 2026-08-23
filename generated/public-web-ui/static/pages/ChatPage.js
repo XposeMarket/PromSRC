@@ -3,10 +3,8 @@ import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSr
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
-import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
-import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
-import { renderUnifiedDiffMarkup } from '../components/coding-diff.js';
-import { buildSourcePanelEnvironmentState } from '../source-panel-environment.mjs';
+import { createDormantSceneDocument, loadCreativeSceneGraph } from '../features/chat/optional/creative-scene-runtime.js';
+import { loadCodingDiffRenderer, loadProcessRunCards, loadSourcePanelEnvironment } from '../features/chat/optional/chat-detail-runtime.js';
 import {
   appendCommandTerminalChunkToDom,
   applyCommandProcessEvent,
@@ -16,7 +14,7 @@ import {
   renderToolActivityEntry,
   setToolActivityDisclosureState,
   toolActivitySummary,
-} from '../tool-activity.js';
+} from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
@@ -28,7 +26,7 @@ import {
   reconcileKeyedTimelineRows,
 } from '../features/chat/timeline/keyed-dom.js';
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
-import { mountThinkingOrb } from '../vendor/thinking-orb.js';
+import { mountThinkingOrbWhenReady } from '../features/chat/optional/thinking-orb-runtime.js';
 import {
   SOURCE_PANEL_SURFACE,
   normalizeSourcePanelContext,
@@ -48,6 +46,61 @@ import {
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
 
+let creativeSceneGraph = null;
+let CREATIVE_LIBRARY_PACKS = [];
+let CREATIVE_SIZE_PRESETS = {};
+let CREATIVE_STYLE_PRESETS = [];
+
+function requireCreativeSceneGraph(name) {
+  if (!creativeSceneGraph) throw new Error(`Creative scene feature is not ready (${name}).`);
+  return creativeSceneGraph[name];
+}
+
+function createSceneDocument(input = {}) {
+  return creativeSceneGraph
+    ? creativeSceneGraph.createSceneDocument(input)
+    : createDormantSceneDocument(input);
+}
+
+function applySceneGraphOps(...args) { return requireCreativeSceneGraph('applySceneGraphOps')(...args); }
+function executeSceneGraphOps(...args) { return requireCreativeSceneGraph('executeSceneGraphOps')(...args); }
+function buildSceneSelectionContext(...args) { return requireCreativeSceneGraph('buildSceneSelectionContext')(...args); }
+function parseCreativeOpsFromText(...args) { return requireCreativeSceneGraph('parseCreativeOpsFromText')(...args); }
+function getCreativePatchInstruction(...args) { return requireCreativeSceneGraph('getCreativePatchInstruction')(...args); }
+function resolveElementAtTime(...args) { return requireCreativeSceneGraph('resolveElementAtTime')(...args); }
+function measureTextBlock(...args) { return requireCreativeSceneGraph('measureTextBlock')(...args); }
+function buildTextFontSpec(...args) { return requireCreativeSceneGraph('buildTextFontSpec')(...args); }
+function getCreativeElementLibrary(...args) { return creativeSceneGraph ? creativeSceneGraph.getCreativeElementLibrary(...args) : {}; }
+function getCreativeAnimationPresetCatalog(...args) { return creativeSceneGraph ? creativeSceneGraph.getCreativeAnimationPresetCatalog(...args) : []; }
+function getEnabledCreativeLibraryIds(...args) { return creativeSceneGraph ? creativeSceneGraph.getEnabledCreativeLibraryIds(...args) : []; }
+function getCreativeLibraryPackCatalog(...args) { return creativeSceneGraph ? creativeSceneGraph.getCreativeLibraryPackCatalog(...args) : []; }
+function setCreativeLibraryRuntimePacks(...args) { return creativeSceneGraph ? creativeSceneGraph.setCreativeLibraryRuntimePacks(...args) : []; }
+function validateCreativeSceneLayout(...args) {
+  return creativeSceneGraph
+    ? creativeSceneGraph.validateCreativeSceneLayout(...args)
+    : { valid: true, issues: [], errors: [], warnings: [], issueCount: 0, errorCount: 0, warnCount: 0 };
+}
+
+async function hydrateCreativeSceneGraph() {
+  if (creativeSceneGraph) return creativeSceneGraph;
+  const module = await loadCreativeSceneGraph();
+  creativeSceneGraph = module;
+  CREATIVE_LIBRARY_PACKS = module.CREATIVE_LIBRARY_PACKS;
+  CREATIVE_SIZE_PRESETS = module.CREATIVE_SIZE_PRESETS;
+  CREATIVE_STYLE_PRESETS = module.CREATIVE_STYLE_PRESETS;
+  creativeSceneDoc = module.createSceneDocument(creativeSceneDoc || window.prometheusCreativeScene || {});
+  window.prometheusCreativeScene = creativeSceneDoc;
+  if (window.prometheusCreativeCore) {
+    Object.assign(window.prometheusCreativeCore, {
+      elementLibrary: module.getCreativeElementLibrary(),
+      libraryPacks: module.getCreativeLibraryPackCatalog(),
+      enabledLibraryIds: module.getEnabledCreativeLibraryIds([]),
+      sizePresets: module.CREATIVE_SIZE_PRESETS,
+    });
+  }
+  return module;
+}
+
 let creativeFeatureRuntime = null;
 let creativeFeatureRuntimePromise = null;
 let creativeFeatureUiRequestToken = 0;
@@ -63,8 +116,12 @@ function ensureCreativeFeatureRuntime() {
   if (creativeFeatureRuntime) return Promise.resolve(creativeFeatureRuntime);
   if (!creativeFeatureRuntimePromise) {
     window.__PROM_CREATIVE_FEATURE_RUNTIME_STATE = 'loading';
-    creativeFeatureRuntimePromise = import('../components/creative/featureRuntime.js')
-      .then((runtime) => {
+    creativeFeatureRuntimePromise = Promise.all([
+      hydrateCreativeSceneGraph(),
+      import('../components/creative/featureRuntime.js'),
+      loadCreativeWorkspaceRuntime(),
+    ])
+      .then(([, runtime]) => {
         creativeFeatureRuntime = runtime;
         initializeCreativeFeatureClients(runtime);
         window.__PROM_CREATIVE_FEATURE_RUNTIME_STATE = 'ready';
@@ -134,6 +191,8 @@ const {
   queue: getSessionQueuedPrompts,
   activeQueue: getActiveQueuedPrompts,
   activate: activateDesktopChatRuntime,
+  setSecondaryVisible: setDesktopSecondaryChatRuntime,
+  diagnostics: getDesktopChatRuntimeDiagnostics,
   applyInitialPage: applyDesktopInitialHistoryPage,
   requestInterruption: requestGatewayMainChatAbort,
   renderHistoryPager: renderDesktopHistoryPager,
@@ -365,6 +424,12 @@ window.editingUserMessageIndex = Number.isInteger(window.editingUserMessageIndex
 let voicePendingTurnSeq = 0;
 let voicePendingProcessing = false;
 
+function dispatchDesktopChatLifecycle(name, detail = {}) {
+  try {
+    window.dispatchEvent(new CustomEvent(`prometheus:${name}`, { detail }));
+  } catch {}
+}
+
 
 function generateSessionId() {
   return (crypto?.randomUUID?.() || ('sess_' + Math.random().toString(36).slice(2)));
@@ -512,8 +577,10 @@ function showSideChatSplit(sideChatId = window.activeSideChatId) {
   if (!link) {
     window.sideChatSplitOpen = false;
     window.activeSideChatId = '';
+    setDesktopSecondaryChatRuntime('');
     updateSideChatChrome();
     renderChatMessages();
+    dispatchDesktopChatLifecycle('side-chat-state', { open: false, sessionId: '' });
     return false;
   }
   link.closed = false;
@@ -521,15 +588,22 @@ function showSideChatSplit(sideChatId = window.activeSideChatId) {
   window.backgroundAgentDetailId = '';
   window.activeSideChatId = link.id;
   window.sideChatSplitOpen = true;
+  const sideSession = getChatSessionById(link.id);
+  setDesktopSecondaryChatRuntime(link.id);
+  if (sideSession) syncDesktopChatRuntime(sideSession, { source: 'desktop-secondary-view' });
   saveSideChatLinks();
   renderChatMessages();
+  dispatchDesktopChatLifecycle('side-chat-state', { open: true, sessionId: link.id, parentSessionId: link.parentSessionId });
   return true;
 }
 
 function closeSideChatSplit() {
+  const sessionId = String(window.activeSideChatId || '').trim();
   window.sideChatSplitOpen = false;
+  setDesktopSecondaryChatRuntime('');
   updateSideChatChrome();
   renderChatMessages();
+  dispatchDesktopChatLifecycle('side-chat-state', { open: false, sessionId });
 }
 
 async function syncSessionHistoryToServerById(sessionId, history = [], options = {}) {
@@ -4291,453 +4365,95 @@ function renderNativeBrowserTabs(state, nativeProvider) {
   <button class="browser-native-tab-new" type="button" title="New tab" aria-label="New tab" onclick="newNativeBrowserCanvasTab()">+</button>`;
 }
 
-function renderBrowserCanvasSurface() {
-  const state = getBrowserCanvasState();
-  const mode = normalizeBrowserInteractionMode(state.interactionMode);
-  const designMode = isBrowserDesignMode(state);
-  const meta = getBrowserInteractionMeta(mode);
-  const selectedKey = getSelectedBrowserElementKey(state.selectedElement);
-  if (selectedKey && state.elementNameDraftKey !== selectedKey) {
-    state.elementNameDraftKey = selectedKey;
-    state.elementNameDraft = suggestBrowserElementName(state.selectedElement);
-  } else if (!selectedKey && state.elementNameDraftKey) {
-    state.elementNameDraftKey = '';
-    state.elementNameDraft = '';
-  }
-  const urlEl = document.getElementById('browser-canvas-url');
-  const stageTitle = document.getElementById('browser-canvas-stage-title');
-  const stageCopy = document.getElementById('browser-canvas-stage-copy');
-  const emptyState = document.getElementById('browser-canvas-empty');
-  const frameWrap = document.getElementById('browser-canvas-frame-wrap');
-  const frameEl = document.getElementById('browser-canvas-frame');
-  const frameMeta = document.getElementById('browser-canvas-frame-meta');
-  const frameCaption = document.getElementById('browser-canvas-frame-caption');
-  const frameSize = document.getElementById('browser-canvas-frame-size');
-  const selectionBox = document.getElementById('browser-canvas-selection-box');
-  const clickHighlight = document.getElementById('browser-canvas-click-highlight');
-  const agentCursor = document.getElementById('browser-canvas-agent-cursor');
-  const selectionCard = document.getElementById('browser-canvas-selection-card');
-  const annotationsEl = document.getElementById('browser-canvas-annotations');
-  const selectionLabel = document.getElementById('browser-canvas-selection-label');
-  const selectionText = document.getElementById('browser-canvas-selection-text');
-  const modeTitleEl = document.getElementById('browser-canvas-mode-title');
-  const backBtn = document.getElementById('browser-canvas-back-btn');
-  const forwardBtn = document.getElementById('browser-canvas-forward-btn');
-  const reloadBtn = document.getElementById('browser-canvas-reload-btn');
-  const openBtn = document.getElementById('browser-canvas-open-btn');
-  const addressInput = document.getElementById('browser-canvas-address-input');
-  const namePanel = document.getElementById('browser-canvas-name-panel');
-  const nameInput = document.getElementById('browser-canvas-name-input');
-  const savedWrap = document.getElementById('browser-canvas-saved-elements');
-  const sessionEl = document.getElementById('browser-canvas-session');
-  const pageTitleEl = document.getElementById('browser-canvas-page-title');
-  const lastToolEl = document.getElementById('browser-canvas-last-tool');
-  const lastUpdatedEl = document.getElementById('browser-canvas-last-updated');
-  const modeCopyEl = document.getElementById('browser-canvas-mode-copy');
-  const taskPanel = document.getElementById('browser-canvas-task-panel');
-  const taskCopyEl = document.getElementById('browser-canvas-task-copy');
-  const teachPanel = document.getElementById('browser-canvas-teach-panel');
-  const teachStatusEl = document.getElementById('browser-canvas-teach-status');
-  const teachStartBtn = document.getElementById('browser-canvas-teach-start-btn');
-  const teachCompleteBtn = document.getElementById('browser-canvas-teach-complete-btn');
-  const teachCancelBtn = document.getElementById('browser-canvas-teach-cancel-btn');
-  const teachApprovalActions = document.getElementById('browser-canvas-teach-approval-actions');
-  const teachStopStepInput = document.getElementById('browser-canvas-teach-stop-step-input');
-  const teachPendingCard = document.getElementById('browser-canvas-teach-pending');
-  const teachPendingTitle = document.getElementById('browser-canvas-teach-pending-title');
-  const teachPendingCopy = document.getElementById('browser-canvas-teach-pending-copy');
-  const teachContinueBtn = document.getElementById('browser-canvas-teach-continue-btn');
-  const teachDiscardBtn = document.getElementById('browser-canvas-teach-discard-btn');
-  const teachStepsWrap = document.getElementById('browser-canvas-teach-steps');
-  const visibleSessionId = getBrowserCanvasVisibleSessionId();
-  const visibleRecord = getBrowserSessionRecord(visibleSessionId, state);
-  const visibleTaskPrompt = String(visibleRecord?.browserTaskPrompt || '').trim();
-  if (taskPanel) taskPanel.style.display = visibleTaskPrompt ? 'block' : 'none';
-  // Sidebar order: (1) Task when watching a subagent, (2) Mode Notes, (3) Selected element, (4) Last Tool Call.
-  if (modeTitleEl && sessionEl && selectionCard) {
-    const modeCard = modeTitleEl.parentElement;
-    const lastToolCard = sessionEl.closest('div[style*="border"]') || sessionEl.parentElement;
-    const sidebar = lastToolCard?.parentElement;
-    if (sidebar && modeCard && lastToolCard) {
-      if (taskPanel && taskPanel.style.display !== 'none') {
-        if (sidebar.firstElementChild !== taskPanel) sidebar.insertBefore(taskPanel, sidebar.firstElementChild);
-        if (taskPanel.nextElementSibling !== modeCard) sidebar.insertBefore(modeCard, taskPanel.nextElementSibling);
-      } else if (sidebar.firstElementChild !== modeCard) {
-        sidebar.insertBefore(modeCard, sidebar.firstElementChild);
-      }
-      if (modeCard.nextElementSibling !== selectionCard) sidebar.insertBefore(selectionCard, modeCard.nextElementSibling);
-      if (selectionCard.nextElementSibling !== lastToolCard) sidebar.insertBefore(lastToolCard, selectionCard.nextElementSibling);
-    }
-  }
-  if (teachPendingCard && modeTitleEl) {
-    const modeCard = modeTitleEl.parentElement;
-    if (modeCard && (teachPendingCard.parentElement !== modeCard || modeCard.firstElementChild !== teachPendingCard)) {
-      modeCard.insertBefore(teachPendingCard, modeCard.firstElementChild);
-    }
-    teachPendingCard.style.marginTop = '0';
-    teachPendingCard.style.marginBottom = '12px';
-  }
-  const nativeProvider = isBrowserCanvasInHouseProvider(state);
-  const hasFrame = !!String(state.frameBase64 || '').trim();
-  const hasVisualSurface = hasFrame || (nativeProvider && state.active);
-  const controlCaptured = state.controlCaptured === true && state.controlOwner === 'user';
-  const followingDetachedSession = isFollowingDetachedBrowserCanvasSession(state);
-  const restoreHint = getBrowserCanvasRestoreHint(state);
-  const canReopenLastPage = !followingDetachedSession && isRestorableBrowserCanvasUrl(restoreHint.restoreUrl);
-  const teach = getBrowserTeachSession(state);
-  const teachActive = hasActiveBrowserTeachSession(state);
-  const teachRecording = isBrowserTeachRecording(state);
-  const teachAwaitingApproval = isBrowserTeachAwaitingApproval(state);
-  const teachVerified = isBrowserTeachVerified(state);
-  const pendingTeachStep = teach.pendingStep && typeof teach.pendingStep === 'object' ? teach.pendingStep : null;
-  const recordedTeachSteps = Array.isArray(teach.steps) ? teach.steps : [];
-  const teachVerification = teachVerified && teach.verification && typeof teach.verification === 'object' ? teach.verification : null;
-  const streamDescriptor = state.streamActive
-    ? `${String(state.streamTransport || 'stream').toUpperCase()} live`
-    : (nativeProvider && state.active ? 'NATIVE live' : '');
+let browserSurfaceRendererModule = null;
+let browserSurfaceRendererPromise = null;
+let browserSurfaceRenderQueued = false;
 
-  ensureBrowserCanvasControlBindings();
-  ensureBrowserCanvasGlobalControlBindings();
-  renderNativeBrowserTabs(state, nativeProvider);
-  if (urlEl) urlEl.textContent = state.url || restoreHint.restoreUrl || 'No active browser session';
-  if (addressInput && document.activeElement !== addressInput) {
-    addressInput.value = state.url || restoreHint.restoreUrl || '';
-    addressInput.placeholder = state.active ? 'Search or enter URL' : 'Open a URL...';
+function shouldLoadBrowserSurfaceRenderer() {
+  const state = getBrowserCanvasState();
+  const activeTab = getActiveCanvasTab();
+  return !!(
+    state?.active
+    || state?.loading
+    || state?.lastError
+    || state?.url
+    || state?.selectedElement
+    || browserCanvasStream?.active
+    || nativeBrowserSurface?.active
+    || (canvasOpen && activeTab?.mode === 'browser')
+  );
+}
+
+function loadBrowserSurfaceRenderer() {
+  if (browserSurfaceRendererModule) return Promise.resolve(browserSurfaceRendererModule);
+  if (!browserSurfaceRendererPromise) {
+    browserSurfaceRendererPromise = import('../features/chat/optional/browser-surface-renderer.js')
+      .then((module) => {
+        browserSurfaceRendererModule = module;
+        return module;
+      })
+      .catch((error) => {
+        browserSurfaceRendererPromise = null;
+        throw error;
+      });
   }
-  [backBtn, forwardBtn, reloadBtn, openBtn].forEach((btn) => {
-    if (!btn) return;
-    btn.disabled = !state.active && btn !== openBtn;
-    btn.style.opacity = btn.disabled ? '0.45' : '1';
-    btn.style.cursor = btn.disabled ? 'not-allowed' : 'pointer';
-  });
-  if (stageTitle) {
-    stageTitle.textContent = state.active
-      ? (state.title || state.url || 'Browser session active')
-      : 'Browser canvas is standing by';
+  return browserSurfaceRendererPromise;
+}
+
+const browserSurfaceRendererContext = Object.freeze(Object.defineProperties({}, {
+  "cloneBrowserDesignSelection": { enumerable: true, get: () => cloneBrowserDesignSelection },
+  "ensureBrowserCanvasControlBindings": { enumerable: true, get: () => ensureBrowserCanvasControlBindings },
+  "ensureBrowserCanvasFrameMetaResizeObserver": { enumerable: true, get: () => ensureBrowserCanvasFrameMetaResizeObserver },
+  "ensureBrowserCanvasGlobalControlBindings": { enumerable: true, get: () => ensureBrowserCanvasGlobalControlBindings },
+  "ensureBrowserCanvasHoverBindings": { enumerable: true, get: () => ensureBrowserCanvasHoverBindings },
+  "escHtml": { enumerable: true, get: () => escHtml },
+  "formatBrowserCanvasTimestamp": { enumerable: true, get: () => formatBrowserCanvasTimestamp },
+  "getBrowserCanvasRestoreHint": { enumerable: true, get: () => getBrowserCanvasRestoreHint },
+  "getBrowserCanvasState": { enumerable: true, get: () => getBrowserCanvasState },
+  "getBrowserCanvasVisibleSessionId": { enumerable: true, get: () => getBrowserCanvasVisibleSessionId },
+  "getBrowserDesignAnnotationSelections": { enumerable: true, get: () => getBrowserDesignAnnotationSelections },
+  "getBrowserInteractionMeta": { enumerable: true, get: () => getBrowserInteractionMeta },
+  "getBrowserSessionRecord": { enumerable: true, get: () => getBrowserSessionRecord },
+  "getBrowserTeachSession": { enumerable: true, get: () => getBrowserTeachSession },
+  "getSelectedBrowserElementKey": { enumerable: true, get: () => getSelectedBrowserElementKey },
+  "hasActiveBrowserTeachSession": { enumerable: true, get: () => hasActiveBrowserTeachSession },
+  "isBrowserCanvasInHouseProvider": { enumerable: true, get: () => isBrowserCanvasInHouseProvider },
+  "isBrowserDesignMode": { enumerable: true, get: () => isBrowserDesignMode },
+  "isBrowserTeachAwaitingApproval": { enumerable: true, get: () => isBrowserTeachAwaitingApproval },
+  "isBrowserTeachRecording": { enumerable: true, get: () => isBrowserTeachRecording },
+  "isBrowserTeachVerified": { enumerable: true, get: () => isBrowserTeachVerified },
+  "isFollowingDetachedBrowserCanvasSession": { enumerable: true, get: () => isFollowingDetachedBrowserCanvasSession },
+  "isRestorableBrowserCanvasUrl": { enumerable: true, get: () => isRestorableBrowserCanvasUrl },
+  "normalizeBrowserInteractionMode": { enumerable: true, get: () => normalizeBrowserInteractionMode },
+  "queueNativeBrowserSurfaceSync": { enumerable: true, get: () => queueNativeBrowserSurfaceSync },
+  "renderNativeBrowserTabs": { enumerable: true, get: () => renderNativeBrowserTabs },
+  "renderSourcesMinimizedPanel": { enumerable: true, get: () => renderSourcesMinimizedPanel },
+  "suggestBrowserElementName": { enumerable: true, get: () => suggestBrowserElementName },
+  "summarizeBrowserTeachTarget": { enumerable: true, get: () => summarizeBrowserTeachTarget },
+  "syncBrowserCanvasFrameLayout": { enumerable: true, get: () => syncBrowserCanvasFrameLayout },
+  "syncBrowserCanvasStream": { enumerable: true, get: () => syncBrowserCanvasStream },
+  "syncNativeBrowserDesignMode": { enumerable: true, get: () => syncNativeBrowserDesignMode },
+  "syncNativeBrowserTeachCapture": { enumerable: true, get: () => syncNativeBrowserTeachCapture },
+  "truncateBrowserPreview": { enumerable: true, get: () => truncateBrowserPreview },
+  "updateBrowserAgentCursorOverlay": { enumerable: true, get: () => updateBrowserAgentCursorOverlay },
+  "updateBrowserHoverOverlay": { enumerable: true, get: () => updateBrowserHoverOverlay },
+  "updateBrowserSelectionOverlay": { enumerable: true, get: () => updateBrowserSelectionOverlay },
+  "updateBrowserTransientHighlight": { enumerable: true, get: () => updateBrowserTransientHighlight },
+  "updateCreativeModeControls": { enumerable: true, get: () => updateCreativeModeControls },
+  "updateDesignSelectionChip": { enumerable: true, get: () => updateDesignSelectionChip },
+}));
+
+function renderBrowserCanvasSurface() {
+  if (browserSurfaceRendererModule) {
+    return browserSurfaceRendererModule.renderBrowserCanvasSurface(browserSurfaceRendererContext);
   }
-  if (stageCopy) {
-    stageCopy.textContent = state.active
-      ? (followingDetachedSession
-        ? `Teach verification is running in a detached browser tab so your original page stays intact. You can watch it here, then jump back to the main tab whenever you want.`
-         : (designMode
-           ? 'Design mode lets you hover, select, annotate, and send a selected browser element to the chat.'
-           : `${meta.label} mode is active for this browser session. ${state.lastTool ? `Last tool: ${state.lastTool}.` : ''}`))
-      : 'When Prometheus opens or updates a browser session, the browser canvas will follow it here and keep the current session, page title, and interaction mode in sync.';
-  }
-  if (sessionEl) {
-    const fullLastTool = followingDetachedSession
-      ? `Following verifier session ${visibleSessionId}`
-      : (state.lastTool || 'No browser tools used yet');
-    sessionEl.textContent = truncateBrowserPreview(fullLastTool, 80);
-    sessionEl.title = fullLastTool;
-    sessionEl.style.wordBreak = 'break-word';
-  }
-  if (pageTitleEl) {
-    pageTitleEl.textContent = state.active
-      ? (state.title || state.url || 'Browser session active')
-      : 'Open a site with the browser tools to wake this surface up.';
-  }
-  if (lastToolEl) {
-    if (state.streamActive) lastToolEl.textContent = `${state.statusLabel || 'Browser active'} · ${streamDescriptor}`;
-    else if (state.statusLabel) lastToolEl.textContent = state.statusLabel;
-    else lastToolEl.textContent = state.active ? 'Browser active' : 'Browser idle';
-  }
-  if (lastUpdatedEl) {
-    lastUpdatedEl.textContent = formatBrowserCanvasTimestamp(
-      state.streamActive && state.streamLastFrameAt ? state.streamLastFrameAt : state.updatedAt,
-    );
-  }
-  if (taskPanel) taskPanel.style.display = visibleTaskPrompt ? 'block' : 'none';
-  if (taskCopyEl) {
-    taskCopyEl.textContent = visibleTaskPrompt || '';
-    taskCopyEl.title = visibleTaskPrompt;
-  }
-  updateBrowserAgentCursorOverlay(agentCursor, frameEl, state);
-  const showTeachNaming = mode === 'teach' && !!state.selectedElement && !followingDetachedSession;
-  if (modeTitleEl) {
-    if (mode === 'teach' && pendingTeachStep) modeTitleEl.textContent = 'Confirm This Step';
-    else if (mode === 'teach' && showTeachNaming) modeTitleEl.textContent = 'Name This Element';
-    else if (mode === 'teach' && teachAwaitingApproval) modeTitleEl.textContent = 'Teach Review';
-    else if (mode === 'teach' && teachVerified) modeTitleEl.textContent = 'Teach Verification';
-    else if (mode === 'teach' && teachActive) modeTitleEl.textContent = 'Teach Session';
-    else if (designMode) modeTitleEl.textContent = 'Design Mode';
-    else modeTitleEl.textContent = 'Mode Notes';
-  }
-  if (modeCopyEl) {
-    if (mode === 'teach' && pendingTeachStep) {
-      modeCopyEl.textContent = 'Teach pauses each step before it reaches the live browser. Rename, save, or discard anything you want, then continue when the step looks right.';
-    } else if (mode === 'teach' && showTeachNaming) {
-      modeCopyEl.textContent = 'Give this element a name you would naturally use later. Prometheus will keep it as reusable browser memory for this site.';
-    } else if (mode === 'teach' && teachAwaitingApproval) {
-      modeCopyEl.textContent = 'The workflow is recorded. Prometheus will summarize it, flag risky steps, and ask how far you want verification to go before it runs anything.';
-    } else if (mode === 'teach' && teachVerified) {
-      modeCopyEl.textContent = 'Prometheus has replayed the taught workflow. The next response should explain what happened, what the workflow appears to be for, and ask you to confirm that understanding before anything gets packaged.';
-    } else if (mode === 'teach' && teachActive) {
-      modeCopyEl.textContent = 'Teach mode is capturing a reusable workflow. Start from the current page, stage each step, and keep the log clean enough for Prometheus to replay later.';
-    } else if (designMode) {
-      modeCopyEl.textContent = 'Hover to highlight page elements. Click one to inspect it, add it to a multi-selection, or chat with Prometheus about what should change.';
-    } else {
-      modeCopyEl.textContent = meta.copy;
-    }
-  }
-  // Browser-mode layout: the live browser owns the canvas below the outer mode
-  // header. Teach keeps its workflow controls; Agent, Co-pilot, and Design use
-  // the full-width native surface.
-  const sideCol = document.getElementById('browser-canvas-side-col');
-  const browserLayoutGrid = document.getElementById('browser-canvas-layout');
-  const showSidePanels = mode === 'teach';
-  if (sideCol) sideCol.style.display = showSidePanels ? 'flex' : 'none';
-  // The grid columns are governed by a CSS rule keyed on this attribute because
-  // #browser-canvas-layout sets grid-template-columns with !important, which an
-  // inline style cannot override. data-side-panels="0" collapses to one column.
-  if (browserLayoutGrid) browserLayoutGrid.dataset.sidePanels = showSidePanels ? '1' : '0';
-  if (namePanel) namePanel.style.display = showTeachNaming ? 'block' : 'none';
-  if (nameInput && nameInput.value !== state.elementNameDraft) nameInput.value = state.elementNameDraft || '';
-  if (teachPanel) teachPanel.style.display = mode === 'teach' ? 'block' : 'none';
-  if (teachStatusEl) {
-    if (!teachActive) {
-      teachStatusEl.textContent = state.active
-        ? 'Capture the current page as the starting point, then stage each browser action one step at a time.'
-        : 'Open a browser session first, then start Teach mode from the page you want to teach.';
-    } else if (teachRecording) {
-      teachStatusEl.textContent = `Recording from ${teach.startTitle || teach.startUrl || 'the current page'} with ${recordedTeachSteps.length} confirmed step${recordedTeachSteps.length === 1 ? '' : 's'}.`;
-    } else if (teachAwaitingApproval) {
-      teachStatusEl.textContent = `Recorded ${recordedTeachSteps.length} step${recordedTeachSteps.length === 1 ? '' : 's'} from ${teach.startTitle || teach.startUrl || 'the starting page'}. Waiting for verification approval.`;
-    } else if (teachVerified && teachVerification) {
-      const label = String(teachVerification.status || 'verified').trim().toLowerCase();
-      const readable = label === 'partial' ? 'completed with issues' : (label === 'failed' ? 'failed' : 'passed');
-      teachStatusEl.textContent = `Verification ${readable}. Prometheus should now summarize what happened and ask you to confirm what this workflow is for before creating anything reusable.`;
-    } else {
-      teachStatusEl.textContent = 'Teach mode is ready.';
-    }
-  }
-  if (teachStartBtn) {
-    teachStartBtn.textContent = teachAwaitingApproval ? 'Resume Recording' : (teachActive ? 'Restart Teach' : 'Start Teach');
-    teachStartBtn.style.display = teachRecording ? 'none' : 'inline-flex';
-    teachStartBtn.disabled = !state.active;
-    teachStartBtn.style.opacity = state.active ? '1' : '0.55';
-  }
-  if (teachCompleteBtn) {
-    teachCompleteBtn.style.display = teachRecording ? 'inline-flex' : 'none';
-    teachCompleteBtn.disabled = !teachRecording || !!pendingTeachStep || !!teach.executingStepId || recordedTeachSteps.length === 0;
-    teachCompleteBtn.style.opacity = teachCompleteBtn.disabled ? '0.55' : '1';
-  }
-  if (teachCancelBtn) teachCancelBtn.style.display = teachActive ? 'inline-flex' : 'none';
-  if (teachApprovalActions) teachApprovalActions.style.display = teachAwaitingApproval ? 'block' : 'none';
-  if (teachStopStepInput) {
-    const maxSteps = Math.max(1, recordedTeachSteps.length || 1);
-    teachStopStepInput.max = String(maxSteps);
-    if (!teachAwaitingApproval) teachStopStepInput.value = '';
-  }
-  if (teachPendingCard) teachPendingCard.style.display = mode === 'teach' && pendingTeachStep ? 'block' : 'none';
-  if (teachPendingTitle) {
-    teachPendingTitle.textContent = pendingTeachStep
-      ? (pendingTeachStep.summary || pendingTeachStep.title || 'Pending teach step')
-      : 'No pending teach step';
-  }
-  if (teachPendingCopy) {
-    const toolPreviewFull = pendingTeachStep?.toolPreview || pendingTeachStep?.toolName || 'browser step';
-    const selectorFull = pendingTeachStep?.selection?.selector || pendingTeachStep?.selection?.text || pendingTeachStep?.pageUrl || 'Use Continue to send this step to the browser.';
-    teachPendingCopy.innerHTML = pendingTeachStep
-      ? `<div style="font-size:11px;color:#f8fafc;font-weight:700;word-break:break-word" title="${escHtml(toolPreviewFull)}">${escHtml(truncateBrowserPreview(toolPreviewFull, 70))}</div>
-         <div style="margin-top:6px;font-size:11px;line-height:1.6;color:#cbd5e1;word-break:break-word" title="${escHtml(selectorFull)}">${escHtml(truncateBrowserPreview(selectorFull, 80))}</div>
-         ${pendingTeachStep.risk === 'high' ? '<div style="margin-top:8px;font-size:10px;font-weight:700;color:#fca5a5;letter-spacing:0.04em;text-transform:uppercase">Risky step</div>' : ''}`
-      : 'Stage a click, scroll, shortcut, or text input to see it here before it runs.';
-  }
-  if (teachContinueBtn) teachContinueBtn.style.display = pendingTeachStep ? 'inline-flex' : 'none';
-  if (teachDiscardBtn) teachDiscardBtn.style.display = pendingTeachStep ? 'inline-flex' : 'none';
-  if (teachStepsWrap) {
-    if (mode === 'teach' && recordedTeachSteps.length) {
-      teachStepsWrap.style.display = 'block';
-      teachStepsWrap.innerHTML = `
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">Teach Steps</div>
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
-          ${recordedTeachSteps.map((step, idx) => {
-            const stepId = String(step?.id || '').trim();
-            const status = String(step?.status || 'recorded').trim().toLowerCase();
-            const statusColor = status === 'error' ? '#fca5a5' : (status === 'executing' ? '#fde68a' : '#86efac');
-            const removeAttr = JSON.stringify(stepId);
-            return `
-              <div style="border:1px solid rgba(148,163,184,0.14);border-radius:8px;padding:10px;background:rgba(15,23,42,0.42)">
-                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-                  <div style="min-width:0">
-                    <div style="font-size:12px;font-weight:800;color:#f8fafc;word-break:break-word">${escHtml(`${idx + 1}. ${step.summary || step.title || step.toolName || 'Teach step'}`)}</div>
-                    <div style="margin-top:5px;font-size:11px;color:#93c5fd;word-break:break-word">${escHtml(step.toolPreview || step.toolName || 'browser step')}</div>
-                  </div>
-                  <button onclick="removeBrowserTeachStep(${removeAttr})" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(248,113,113,0.2);background:rgba(248,113,113,0.08);color:#fda4af;border-radius:8px;padding:5px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0">Remove</button>
-                </div>
-                <div style="margin-top:8px;font-size:10px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:${statusColor}">${escHtml(status.replace(/_/g, ' '))}${step.risk === 'high' ? ' · high risk' : ''}</div>
-                ${step.resultSummary ? `<div style="margin-top:6px;font-size:11px;line-height:1.6;color:#cbd5e1;word-break:break-word">${escHtml(step.resultSummary)}</div>` : ''}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
-    } else {
-      teachStepsWrap.style.display = 'none';
-      teachStepsWrap.innerHTML = '';
-    }
-  }
-  if (savedWrap) {
-    const saved = Array.isArray(state.namedElements) ? state.namedElements : [];
-    const itemRoots = Array.isArray(state.itemRoots) ? state.itemRoots : [];
-    const extractionSchemas = Array.isArray(state.extractionSchemas) ? state.extractionSchemas : [];
-    if (saved.length || itemRoots.length || extractionSchemas.length) {
-      savedWrap.style.display = 'block';
-      const renderMemoryList = (title, items, accentColor = '#93c5fd') => `
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">${escHtml(title)}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
-          ${items.map((entry) => {
-            const fullSelector = entry.selector || entry.tagName || 'element';
-            const truncatedSelector = fullSelector.length > 60
-              ? fullSelector.substring(0, 60) + '...'
-              : fullSelector;
-            return `
-            <div style="border:1px solid rgba(148,163,184,0.14);border-radius:8px;padding:8px 10px;background:rgba(15,23,42,0.42)">
-              <div style="font-size:12px;font-weight:700;color:#f8fafc;word-break:break-word">${escHtml(entry.name)}</div>
-              <div style="margin-top:4px;font-size:11px;color:${accentColor};word-break:break-word;font-family:monospace;font-size:10px" title="${escHtml(fullSelector)}">${escHtml(truncatedSelector)}</div>
-            </div>
-          `;
-          }).join('')}
-        </div>
-      `;
-      const renderSchemaList = (title, items) => `
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">${escHtml(title)}</div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
-          ${items.map((entry) => {
-            const fields = entry?.fields && typeof entry.fields === 'object' ? Object.keys(entry.fields) : [];
-            const detailBits = [
-              entry.itemRoot ? `root: ${entry.itemRoot}` : '',
-              entry.dedupeKey ? `dedupe: ${entry.dedupeKey}` : '',
-              entry.limit ? `limit: ${entry.limit}` : '',
-            ].filter(Boolean);
-            return `
-              <div style="border:1px solid rgba(148,163,184,0.14);border-radius:8px;padding:8px 10px;background:rgba(15,23,42,0.42)">
-                <div style="font-size:12px;font-weight:700;color:#f8fafc;word-break:break-word">${escHtml(entry.name)}</div>
-                <div style="margin-top:4px;font-size:11px;color:#67e8f9;word-break:break-word">${escHtml(fields.join(', ') || 'No fields')}</div>
-                ${detailBits.length ? `<div style="margin-top:4px;font-size:10px;color:#94a3b8;word-break:break-word">${escHtml(detailBits.join(' • '))}</div>` : ''}
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `;
-      savedWrap.innerHTML = `
-        ${saved.length ? renderMemoryList('Saved Elements For This Site', saved, '#93c5fd') : ''}
-        ${saved.length && (itemRoots.length || extractionSchemas.length) ? '<div style="height:12px"></div>' : ''}
-        ${itemRoots.length ? renderMemoryList('Saved Item Roots For This Site', itemRoots, '#c4b5fd') : ''}
-        ${itemRoots.length && extractionSchemas.length ? '<div style="height:12px"></div>' : ''}
-        ${extractionSchemas.length ? renderSchemaList('Saved Extraction Schemas For This Site', extractionSchemas) : ''}
-      `;
-    } else {
-      savedWrap.style.display = 'none';
-      savedWrap.innerHTML = '';
-    }
-  }
-  if (frameWrap) frameWrap.style.display = hasVisualSurface ? 'flex' : 'none';
-  if (emptyState) emptyState.style.display = hasVisualSurface ? 'none' : 'block';
-  if (frameEl) {
-    frameEl.style.display = nativeProvider ? 'none' : 'block';
-    frameEl.style.cursor = designMode
-      ? (followingDetachedSession ? 'default' : 'crosshair')
-      : mode === 'teach'
-      ? (followingDetachedSession ? 'default' : 'crosshair')
-      : (mode === 'copilot' ? ((controlCaptured && !followingDetachedSession) ? 'text' : 'pointer') : 'default');
-  }
-  if (frameEl && hasFrame) {
-    // Prefer object-URL transport: each new frame is decoded once (no base64 string churn,
-    // no data-URL re-parse). The blob URL is created in the WS handler and revoked
-    // when superseded, so we just point the <img> at the current one here.
-    if (state.frameBlobUrl) {
-      if (frameEl.dataset.frameBlobUrl !== state.frameBlobUrl) {
-        frameEl.src = state.frameBlobUrl;
-        frameEl.dataset.frameBlobUrl = state.frameBlobUrl;
-      }
-    } else if (state.frameBase64) {
-      const mime = String(state.frameFormat || 'png').toLowerCase() === 'jpeg' ? 'image/jpeg' : 'image/png';
-      frameEl.src = `data:${mime};base64,${state.frameBase64}`;
-      frameEl.dataset.frameBlobUrl = '';
-    }
-  }
-  if (frameMeta) frameMeta.style.display = nativeProvider && state.active ? 'none' : (hasVisualSurface ? 'flex' : 'none');
-  if (frameCaption) {
-    frameCaption.textContent = nativeProvider && state.active
-      ? 'Prometheus in-house browser'
-      : (state.streamActive
-      ? `${streamDescriptor} browser feed`
-      : (state.title || state.url || 'Latest browser frame'));
-  }
-  if (frameSize) {
-    const width = Number(state.frameWidth || 0);
-    const height = Number(state.frameHeight || 0);
-    frameSize.textContent = nativeProvider && state.active
-      ? 'Native Electron surface'
-      : (width > 0 && height > 0 ? `${width} × ${height}` : 'Viewport frame');
-  }
-  const annotationSelections = designMode
-    ? getBrowserDesignAnnotationSelections(state)
-    : (mode === 'teach' && state.selectedElement ? [cloneBrowserDesignSelection(state.selectedElement)].filter(Boolean) : []);
-  if (selectionCard) selectionCard.style.display = ((mode === 'teach' || designMode) && annotationSelections.length && !followingDetachedSession && !nativeProvider) ? 'block' : 'none';
-  if (annotationsEl) {
-    annotationsEl.style.display = annotationSelections.length ? 'flex' : 'none';
-    annotationsEl.innerHTML = annotationSelections.map((annotation, index) => {
-      const selector = annotation.selector
-        || (annotation.id ? `#${annotation.id}` : '')
-        || annotation.tagName
-        || 'element';
-      const summary = summarizeBrowserTeachTarget(annotation, state);
-      return `<div class="browser-canvas-annotation-row">
-        <span class="browser-canvas-annotation-index">Annotation ${index + 1}</span>
-        <strong title="${escHtml(summary)}">${escHtml(truncateBrowserPreview(summary, 72))}</strong>
-        <small title="${escHtml(selector)}">${escHtml(truncateBrowserPreview(selector, 96))}</small>
-      </div>`;
-    }).join('');
-  }
-  if (frameSize && state.streamActive) {
-    const width = Number(state.frameWidth || 0);
-    const height = Number(state.frameHeight || 0);
-    if (width > 0 && height > 0) {
-      frameSize.textContent = `${width} x ${height} · ${String(state.streamFocus || 'passive')}`;
-    }
-  }
-  if (selectionLabel) {
-    selectionLabel.textContent = annotationSelections.length
-      ? `${annotationSelections.length} annotation${annotationSelections.length === 1 ? '' : 's'} attached`
-      : 'No annotation selected';
-  }
-  if (selectionText) {
-    const fullSelectorText = annotationSelections.length
-      ? (annotationSelections.length > 1
-        ? `${annotationSelections.length} browser annotations are attached to the next chat turn.`
-        : (annotationSelections[0].selector || (annotationSelections[0].id ? `#${annotationSelections[0].id}` : annotationSelections[0].tagName || 'element')))
-       : (designMode
-         ? 'Hover over the live browser frame and click an element to open its Design actions.'
-         : 'Enter Teach mode and click the live browser frame to capture a real page element.');
-    selectionText.textContent = annotationSelections.length ? truncateBrowserPreview(fullSelectorText, 120) : fullSelectorText;
-    selectionText.title = fullSelectorText;
-  }
-  const stageEl = frameEl?.parentElement || document.getElementById('browser-canvas-frame-stage');
-  const nativeSurfaceActive = nativeProvider && state.active;
-  const nativeSurfaceValue = nativeSurfaceActive ? '1' : '0';
-  if (stageEl) stageEl.dataset.nativeBrowserSurface = nativeSurfaceValue;
-  if (frameWrap) frameWrap.dataset.nativeBrowserSurface = nativeSurfaceValue;
-  const liveCard = document.getElementById('browser-canvas-live-card');
-  if (liveCard) liveCard.dataset.nativeBrowserSurface = nativeSurfaceValue;
-  const layoutGrid = document.getElementById('browser-canvas-layout');
-  if (layoutGrid) layoutGrid.dataset.nativeBrowserSurface = nativeSurfaceValue;
-  syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
-  ensureBrowserCanvasHoverBindings();
-  ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl);
-  updateBrowserSelectionOverlay(selectionBox, frameEl, state);
-  updateBrowserTransientHighlight(clickHighlight, frameEl, state);
-  updateBrowserHoverOverlay();
-  syncBrowserCanvasStream();
-  queueNativeBrowserSurfaceSync();
-  syncNativeBrowserTeachCapture(state);
-  syncNativeBrowserDesignMode(state);
-  updateDesignSelectionChip();
-  updateCreativeModeControls();
-  const miniSources = document.getElementById('sources-minimized-panel');
-  if (miniSources?.classList.contains('is-visible')) renderSourcesMinimizedPanel();
+  if (!shouldLoadBrowserSurfaceRenderer() || browserSurfaceRenderQueued) return undefined;
+  browserSurfaceRenderQueued = true;
+  void loadBrowserSurfaceRenderer()
+    .then((module) => module.renderBrowserCanvasSurface(browserSurfaceRendererContext))
+    .catch((error) => console.warn('[Browser Canvas] optional renderer failed to load:', error))
+    .finally(() => { browserSurfaceRenderQueued = false; });
+  return undefined;
 }
 
 function setBrowserCanvasSurface(surface, options = {}) {
@@ -8167,6 +7883,20 @@ async function mainGoalAction(action) {
 function syncActiveChat() {
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
   activateDesktopChatRuntime(sess);
+  const visibleSideLink = window.sideChatSplitOpen ? getActiveSideChatLink() : null;
+  if (!visibleSideLink) {
+    const staleSideSessionId = String(window.activeSideChatId || '').trim();
+    setDesktopSecondaryChatRuntime('');
+    if (window.sideChatSplitOpen) {
+      window.sideChatSplitOpen = false;
+      window.activeSideChatId = '';
+      dispatchDesktopChatLifecycle('side-chat-state', { open: false, sessionId: staleSideSessionId });
+    }
+  } else {
+    setDesktopSecondaryChatRuntime(visibleSideLink.id);
+    const visibleSideSession = getChatSessionById(visibleSideLink.id);
+    if (visibleSideSession) syncDesktopChatRuntime(visibleSideSession, { source: 'desktop-secondary-session-switch' });
+  }
   syncChatTopbarTitle();
   // Model/reasoning is per chat. Refresh it on every session switch instead of
   // letting the global provider-health poll overwrite the composer label.
@@ -8284,6 +8014,10 @@ function syncActiveChat() {
   if (typeof window.setButtonState === 'function') window.setButtonState(activeSessThinking);
   updateQueuedPromptUI();
   scheduleChatContextWindowRefresh(250);
+  dispatchDesktopChatLifecycle('chat-session-activated', {
+    sessionId: String(sess?.id || ''),
+    sideSessionId: window.sideChatSplitOpen ? String(window.activeSideChatId || '') : '',
+  });
 }
 
 function refreshVisibleChannelsList() {
@@ -14210,6 +13944,7 @@ function renderChatMessages() {
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     renderDesktopNewChatContextDock();
     renderChatMessageNavigator();
+    dispatchDesktopChatLifecycle('chat-rendered', { sessionId: window.activeChatSessionId, split: false, empty: true });
     return;
   }
 
@@ -14252,6 +13987,7 @@ function renderChatMessages() {
     restoreApprovalProcessState(_approvalProcessState);
     renderDesktopNewChatContextDock();
     renderChatMessageNavigator();
+    dispatchDesktopChatLifecycle('chat-rendered', { sessionId: window.activeChatSessionId, split: true });
     return;
   }
 
@@ -14269,7 +14005,12 @@ function renderChatMessages() {
   restoreApprovalProcessState(_approvalProcessState);
   renderDesktopNewChatContextDock();
   renderChatMessageNavigator();
+  dispatchDesktopChatLifecycle('chat-rendered', { sessionId: window.activeChatSessionId, split: false });
 }
+
+window.addEventListener('prometheus:tool-activity-ready', () => {
+  if (window.currentMode === 'chat') renderChatMessages();
+});
 
 function renderChatMessageNavigator() {
   const chatView = document.getElementById('chat-view');
@@ -19135,7 +18876,9 @@ function openBackgroundAgentDetail(id) {
   const cleanId = String(id || '').trim();
   if (!cleanId || !backgroundSpawnDetailRecord(cleanId)) return;
   window.sideChatSplitOpen = false;
+  setDesktopSecondaryChatRuntime('');
   window.backgroundAgentDetailId = cleanId;
+  dispatchDesktopChatLifecycle('side-chat-state', { open: false, sessionId: String(window.activeSideChatId || '') });
   refreshBackgroundAgentStream(cleanId);
   if (backgroundAgentStreamPollTimer) clearInterval(backgroundAgentStreamPollTimer);
   backgroundAgentStreamPollTimer = setInterval(() => {
@@ -20032,8 +19775,37 @@ function sourcePanelCountLabel(value) {
   return count.toLocaleString();
 }
 
+let sourcePanelEnvironmentFeature = null;
+let sourcePanelEnvironmentRequest = null;
+
+function sourcePanelEnvironmentIsVisible() {
+  return document.getElementById('right-panel')?.classList.contains('open') === true
+    || document.body?.classList.contains('sources-minimized-open') === true;
+}
+
+function ensureSourcePanelEnvironmentFeature() {
+  if (sourcePanelEnvironmentFeature) return Promise.resolve(sourcePanelEnvironmentFeature);
+  if (!sourcePanelEnvironmentRequest) {
+    sourcePanelEnvironmentRequest = loadSourcePanelEnvironment()
+      .then((module) => {
+        sourcePanelEnvironmentFeature = module;
+        if (sourcePanelEnvironmentIsVisible()) renderSourcePanel();
+        return module;
+      })
+      .catch((error) => {
+        sourcePanelEnvironmentRequest = null;
+        throw error;
+      });
+  }
+  return sourcePanelEnvironmentRequest;
+}
+
 function sourcePanelEnvironmentItems(data = {}) {
-  const state = buildSourcePanelEnvironmentState({
+  if (!sourcePanelEnvironmentFeature) {
+    if (sourcePanelEnvironmentIsVisible()) void ensureSourcePanelEnvironmentFeature().catch(() => {});
+    return [];
+  }
+  const state = sourcePanelEnvironmentFeature.buildSourcePanelEnvironmentState({
     context: sourcePanelState.codingContext,
     loaded: sourcePanelState.gitLoaded,
     loading: sourcePanelState.gitLoading,
@@ -20938,6 +20710,8 @@ async function loadCodingDiffFile(item, view = 'working') {
     if (token !== sourcePanelState.diffRequestToken) return;
     const baseline = data?.baselineKind === 'none' ? 'No baseline' : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot' ? 'Snapshot' : data?.baselineKind === 'git-index' ? 'Staged' : 'Git working tree';
     if (meta) meta.textContent = `${baseline} · ${data?.insertions || 0} additions · ${data?.deletions || 0} deletions`;
+    const { renderUnifiedDiffMarkup } = await loadCodingDiffRenderer();
+    if (token !== sourcePanelState.diffRequestToken) return;
     host.innerHTML = renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined });
   } catch (error) {
     host.textContent = error?.message || 'Unable to load diff.';
@@ -22092,15 +21866,19 @@ function ensureDesktopVoiceOrbDock() {
   if (composer) chatView.insertBefore(dock, composer);
   else chatView.appendChild(dock);
   desktopVoiceOrbDock = dock;
-  try {
-    const host = dock.querySelector('#desktop-thinking-orb-host');
-    desktopVoiceOrbController = host
-      ? mountThinkingOrb(host, { state: 'thinking', size: 64, theme: 'auto' })
-      : null;
-  } catch (error) {
-    desktopVoiceOrbController = null;
-    console.warn('[desktop voice] thinking orb failed to mount:', error);
-  }
+  const host = dock.querySelector('#desktop-thinking-orb-host');
+  void mountThinkingOrbWhenReady(host, { state: 'thinking', size: 64, theme: 'auto' })
+    .then((controller) => {
+      if (dock !== desktopVoiceOrbDock) {
+        try { controller?.destroy?.(); } catch {}
+        return;
+      }
+      desktopVoiceOrbController = controller;
+    })
+    .catch((error) => {
+      desktopVoiceOrbController = null;
+      console.warn('[desktop voice] thinking orb failed to mount:', error);
+    });
   dock.querySelector('.desktop-voice-orb-trigger')?.addEventListener('click', toggleDesktopVoiceRoomPopover);
   renderDesktopVoiceRoomPopover();
   return dock;
@@ -36545,764 +36323,191 @@ function renderCreativeHtmlMotionLintCardStudioV3() {
   `;
 }
 
-function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timeline, timelineTracks, timelineMeta, title, subtitle, mode, skipStageRender = false }) {
-  ensureCreativeAssetsHydrated(mode);
-  ensureCreativeLibrariesHydrated(mode);
-  if (mode === 'video' && creativeLibraryNavTab === 'blocks') ensureCreativeHtmlMotionBlocksHydrated();
-  shell.style.display = 'flex';
-  shell.style.position = 'relative';
-  shell.style.zIndex = '2';
-  shell.dataset.creativeMode = mode;
-  if (title) title.textContent = mode === 'video' ? 'Prometheus Video Studio' : 'Prometheus Image Studio';
-  if (subtitle) subtitle.textContent = mode === 'video'
-    ? 'Build HTML Motion, HyperFrames, and Remotion clips with deterministic frame QA.'
-    : 'Build still compositions on a focused studio canvas with the shared scene graph underneath.';
+let creativeWorkspaceRuntimeModule = null;
+let creativeWorkspaceRuntimePromise = null;
 
-  const selected = getSelectedCreativeElement();
-  const selectedContext = selected ? buildSceneSelectionContext(creativeSceneDoc, selected.id) : null;
-  const selectedRendered = selected ? getRenderedCreativeElement(selected, mode) : null;
-  const propertyElement = mode === 'video' && selectedRendered ? { ...selected, ...selectedRendered } : selected;
-  const libraryPackCatalog = getCreativeLibraryPackCatalogState();
-  const filteredLibrary = getFilteredCreativeLibrarySections();
-  const libraryFilterOptions = libraryPackCatalog
-    .filter((pack) => getActiveCreativeLibraryIds().includes(String(pack?.id || '').trim().toLowerCase()))
-    .map((pack) => ({ id: String(pack.id), label: pack.label || pack.id, source: pack.source || 'builtin' }));
-
-  const _libNavTabs = [
-    ...(mode === 'video' ? [] : [
-      { id: 'elements', icon: 'solar:layers-minimalistic-bold-duotone', label: 'Elements' },
-    ]),
-    ...(mode === 'video' ? [{ id: 'blocks', icon: 'solar:widget-add-bold-duotone', label: 'Blocks' }] : []),
-    { id: 'icons', icon: 'solar:sticker-smile-circle-2-bold-duotone', label: 'Icons' },
-    { id: 'libraries', icon: 'solar:widget-add-bold-duotone', label: 'Packs' },
-  ];
-  const _libNavStrip = `
-    <nav class="creative-lib-nav">
-      ${_libNavTabs.map((t) => `
-        <button class="creative-lib-nav-btn${creativeLibraryNavTab === t.id ? ' active' : ''}"
-                onclick="canvasSetCreativeLibraryNavTab('${t.id}')"
-                title="${t.label}">
-          <iconify-icon icon="${t.icon}" width="20" height="20"></iconify-icon>
-          <span>${t.label}</span>
-        </button>
-      `).join('')}
-    </nav>
-  `;
-
-  // Elements panel — category grid or expanded items
-  const _elementCategories = [
-    { id: 'text', label: 'Text', icon: 'solar:text-bold-duotone' },
-    { id: 'shapes', label: 'Shapes', icon: 'solar:shapes-bold-duotone' },
-    { id: 'icons', label: 'Icons', icon: 'solar:stars-bold-duotone' },
-    { id: 'images', label: 'Images', icon: 'solar:gallery-wide-bold-duotone' },
-    { id: 'components', label: 'Components', icon: 'solar:widget-4-bold-duotone' },
-    { id: 'animations', label: 'Lottie', icon: 'solar:film-roll-bold-duotone' },
-  ];
-  const _allSections = filteredLibrary.sections.reduce((acc, s) => { acc[s.section.toLowerCase()] = s.items; return acc; }, {});
-  const _activeLibraryCat = creativeLibraryActiveCategory;
-  const _libPanelElements = _activeLibraryCat
-    ? (() => {
-        const catData = _elementCategories.find((c) => c.id === _activeLibraryCat);
-        const items = _allSections[_activeLibraryCat] || [];
-        return `
-          <div class="creative-lib-panel-header">
-            <button class="creative-lib-cat-back" onclick="canvasSetCreativeLibraryCategory(null)">
-              <iconify-icon icon="solar:arrow-left-bold-duotone" width="14" height="14"></iconify-icon>
-              ${catData ? catData.label : _activeLibraryCat}
-            </button>
-          </div>
-          <div class="creative-lib-cat-items">
-            ${items.length ? items.map((item) => `
-              <button onclick="canvasAddCreativeLibraryItem('${escHtml(_activeLibraryCat)}','${escHtml(item.kind)}')" class="creative-lib-tile">
-                <span class="creative-lib-tile-icon"><iconify-icon icon="${escHtml(getCreativeLibraryItemIconStudioV3(_activeLibraryCat, item))}" width="22" height="22"></iconify-icon></span>
-                <span class="creative-lib-tile-label">${escHtml(item.label)}</span>
-              </button>
-            `).join('') : `<div class="creative-asset-empty" style="padding:16px">No items in this category. Install a library pack to add more.</div>`}
-          </div>
-        `;
-      })()
-    : `
-      <div class="creative-lib-panel-header">
-        <div class="creative-lib-panel-title">Elements</div>
-        <div class="creative-lib-panel-sub">Click a category to add to canvas.</div>
-      </div>
-      <div class="creative-lib-cat-grid">
-        ${_elementCategories.map((cat) => `
-          <button class="creative-lib-cat-btn" onclick="canvasSetCreativeLibraryCategory('${cat.id}')">
-            <iconify-icon icon="${cat.icon}" width="24" height="24"></iconify-icon>
-            <span>${cat.label}</span>
-          </button>
-        `).join('')}
-      </div>
-      <div style="padding:10px 12px 0">
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:#6b7280;margin-bottom:8px">Quick add</div>
-        <div class="creative-lib-cat-items" style="grid-template-columns:repeat(2,1fr)">
-          ${(filteredLibrary.sections.slice(0,1).flatMap((s) => s.items.slice(0,4))).map((item) => `
-            <button onclick="canvasAddCreativeLibraryItem('${escHtml(filteredLibrary.sections[0]?.section || 'text')}','${escHtml(item.kind)}')" class="creative-lib-tile">
-              <span class="creative-lib-tile-icon"><iconify-icon icon="${escHtml(getCreativeLibraryItemIconStudioV3(filteredLibrary.sections[0]?.section || 'text', item))}" width="18" height="18"></iconify-icon></span>
-              <span class="creative-lib-tile-label">${escHtml(item.label)}</span>
-            </button>
-          `).join('')}
-        </div>
-      </div>
-    `;
-
-  // Iconify search panel
-  const _iconifyQuery = escHtml(creativeIconifySearch.query || '');
-  const _libPanelIconify = `
-    <div class="creative-lib-panel-header">
-      <div class="creative-lib-panel-title">Icon Search</div>
-      <div class="creative-lib-panel-sub">Search 150k+ icons from all sets.</div>
-    </div>
-    <div style="padding:10px 10px 0">
-      <div style="display:flex;gap:6px;align-items:center">
-        <input
-          class="creative-form-input"
-          type="search"
-          placeholder="star, arrow, user..."
-          value="${_iconifyQuery}"
-          oninput="canvasSearchIconify(this.value)"
-          style="flex:1;min-width:0"
-        />
-      </div>
-    </div>
-    ${creativeIconifySearch.loading ? `<div class="creative-asset-empty" style="padding:16px">Searching...</div>` : ''}
-    ${creativeIconifySearch.error ? `<div class="creative-asset-empty" style="padding:16px;color:#fca5a5">${escHtml(creativeIconifySearch.error)}</div>` : ''}
-    ${!creativeIconifySearch.loading && creativeIconifySearch.results.length ? `
-      <div class="creative-iconify-grid">
-        ${creativeIconifySearch.results.map((iconName) => `
-          <button class="creative-iconify-tile" onclick="canvasAddIconifyIcon('${escHtml(iconName)}')" title="${escHtml(iconName)}">
-            <iconify-icon icon="${escHtml(iconName)}" width="24" height="24"></iconify-icon>
-          </button>
-        `).join('')}
-      </div>
-    ` : (!creativeIconifySearch.loading && !creativeIconifySearch.query ? `
-      <div style="padding:12px 12px 0">
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:#6b7280;margin-bottom:8px">Popular sets</div>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${[['Solar', 'solar:stars-bold-duotone','solar:'],['Material','mdi:material-design','mdi:'],['Phosphor','ph:star-duotone','ph:'],['Tabler','tabler:star','tabler:'],['Heroicons','heroicons:star-solid','heroicons:'],['Lucide','lucide:star','lucide:']].map(([label, icon, prefix]) => `
-            <button class="creative-lib-cat-back" style="justify-content:flex-start;gap:8px;padding:7px 8px" onclick="canvasSearchIconify('${prefix}')">
-              <iconify-icon icon="${escHtml(icon)}" width="16" height="16" style="color:#fb923c"></iconify-icon>
-              <span style="font-size:11px;font-weight:600;color:#d6d3d1">${escHtml(label)}</span>
-              <span style="font-size:10px;color:#6b7280;margin-left:auto">${escHtml(prefix)}*</span>
-            </button>
-          `).join('')}
-        </div>
-      </div>
-    ` : '')}
-  `;
-
-  const _libPanelLibraries = `
-    <div class="creative-lib-panel-header">
-      <div class="creative-lib-panel-title">Library Packs</div>
-      <div class="creative-lib-panel-sub">Install icon sets, shapes &amp; motion presets.</div>
-    </div>
-    ${renderCreativeLibraryPacksStudioV3()}
-  `;
-
-  const _libPanelHtmlMotionBlocks = mode === 'video' ? `
-    <div style="padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.06)">
-      <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasOpenHyperframesCatalog()" style="width:100%;justify-content:center">
-        <iconify-icon icon="solar:widget-add-bold-duotone" width="14" height="14"></iconify-icon>
-        HyperFrames Catalog
-      </button>
-    </div>
-    ${renderCreativeHtmlMotionBlocksPanelStudioV3()}
-  ` : '';
-
-  // Typography panel takes over the library when a text element is selected.
-  const _libPanelTypography = (selected && selected.type === 'text') ? `
-    <div class="creative-lib-panel-header">
-      <div class="creative-lib-panel-title">Typography</div>
-      <div class="creative-lib-panel-sub">Editing the selected text layer.</div>
-    </div>
-    <div style="padding:12px">
-      ${renderCreativePropertyTextareaStudioV3('Content', 'meta.content', selected.meta?.content || '')}
-      <div class="creative-field-grid" style="margin-top:12px">
-        ${renderCreativePropertyFieldStudioV3('Font size', 'meta.fontSize', selected.meta?.fontSize || 24)}
-        ${renderCreativePropertyFieldStudioV3('Weight', 'meta.fontWeight', selected.meta?.fontWeight || 700)}
-        ${renderCreativePropertyFieldStudioV3('Font family', 'meta.fontFamily', selected.meta?.fontFamily || 'Manrope', 'text')}
-        <label class="creative-form-field">
-          <span class="creative-form-label">Align</span>
-          <select class="creative-form-select" onchange="canvasUpdateCreativeProperty('meta.textAlign', this.value, 'text')">
-            ${['left', 'center', 'right'].map((align) => `<option value="${align}" ${String(selected.meta?.textAlign || 'left') === align ? 'selected' : ''}>${align}</option>`).join('')}
-          </select>
-        </label>
-        ${renderCreativePropertyFieldStudioV3('Line height', 'meta.lineHeight', selected.meta?.lineHeight || 1.2, 'number', { step: '0.1' })}
-        ${renderCreativePropertyFieldStudioV3('Letter spacing', 'meta.letterSpacing', selected.meta?.letterSpacing || 0, 'number', { step: '0.5' })}
-        ${renderCreativePropertyFieldStudioV3('Color', 'meta.color', selected.meta?.color || '#111827', 'color')}
-      </div>
-    </div>
-  ` : '';
-
-  const _libCollapsed = !creativeLibraryNavTab && !_libPanelTypography;
-  shell.classList.toggle('is-library-collapsed', _libCollapsed);
-  let _libPanelInner;
-  if (_libPanelTypography) _libPanelInner = _libPanelTypography;
-  else if (creativeLibraryNavTab === 'icons') _libPanelInner = _libPanelIconify;
-  else if (creativeLibraryNavTab === 'libraries') _libPanelInner = _libPanelLibraries;
-  else if (creativeLibraryNavTab === 'blocks') _libPanelInner = _libPanelHtmlMotionBlocks;
-  else if (creativeLibraryNavTab === 'elements') _libPanelInner = _libPanelElements;
-  else _libPanelInner = '';
-  library.innerHTML = `
-    ${_libNavStrip}
-    ${_libPanelInner ? `<div class="creative-lib-panel">${_libPanelInner}</div>` : ''}
-  `;
-  library.style.minWidth = '0';
-
-  const audioTrack = getCreativeAudioTrackConfig();
-  const hasAudioTrack = hasCreativeAudioTrack();
-  const audioLabel = audioTrack.label || (audioTrack.source ? String(audioTrack.source).split('/').pop() : 'No track loaded');
-
-  stage.style.width = `${creativeSceneDoc.width}px`;
-  stage.style.height = `${creativeSceneDoc.height}px`;
-  stage.style.background = creativeSceneDoc.background || '#ffffff';
-  stage.style.maxWidth = 'none';
-  stage.style.flex = '0 0 auto';
-  if (!skipStageRender) renderCreativeStageStudioV3(stage, mode);
-  else syncCreativeFabricSelectionFromState({ render: true });
-
-  const stageWrap = document.getElementById('canvas-creative-stage-wrap');
-  const stageCaption = document.getElementById('canvas-creative-stage-caption');
-  const stageStatus = document.getElementById('canvas-creative-stage-status');
-  const stageSize = document.getElementById('canvas-creative-stage-size');
-  const stageFooter = document.getElementById('canvas-creative-stage-footer');
-  const stageScroll = document.getElementById('canvas-creative-stage-scroll');
-  const stageLiveStatus = document.getElementById('canvas-creative-stage-live-status');
-  const stageZoomLabel = document.getElementById('canvas-creative-stage-zoom');
-  const toolbarGifBtn = document.getElementById('canvas-creative-export-gif-btn');
-  const toolbarMp4Btn = document.getElementById('canvas-creative-export-mp4-btn');
-  const toolbarWebmBtn = document.getElementById('canvas-creative-export-webm-btn');
-  const toolbarCancelBtn = document.getElementById('canvas-creative-export-cancel-btn');
-  const exportPercent = getCreativeActiveExportPercent();
-  const exportStatus = String(creativeActiveExport?.status || '').trim().toLowerCase();
-  if (stageWrap) {
-    stageWrap.style.minWidth = '0';
-    stageWrap.style.position = 'relative';
-    stageWrap.style.isolation = 'isolate';
+function loadCreativeWorkspaceRuntime() {
+  if (creativeWorkspaceRuntimeModule) return Promise.resolve(creativeWorkspaceRuntimeModule);
+  if (!creativeWorkspaceRuntimePromise) {
+    creativeWorkspaceRuntimePromise = import('../features/chat/optional/creative-workspace-runtime.js')
+      .then((module) => {
+        creativeWorkspaceRuntimeModule = module;
+        return module;
+      })
+      .catch((error) => {
+        creativeWorkspaceRuntimePromise = null;
+        throw error;
+      });
   }
-  if (stageCaption) {
-    stageCaption.textContent = creativeHtmlMotionClip
-      ? 'HTML/CSS motion clip preview. Use sampled frame QA before MP4 export.'
-      : mode === 'video'
-      ? 'Motion-ready frame with timeline-aware editing at the current playhead.'
-      : 'Framed composition surface for posters, social assets, and export-ready stills.';
-  }
-  if (stageStatus) stageStatus.style.display = 'none';
-  if (stageSize) stageSize.style.display = 'none';
-  if (stageLiveStatus) stageLiveStatus.textContent = isCreativeExportActive()
-    ? `${String(creativeActiveExport?.format || 'export').toUpperCase()} ${exportPercent}%`
-    : (creativeHtmlMotionClip ? 'HTML motion' : (mode === 'video' ? 'Timeline live' : 'Live canvas'));
-  if (stageZoomLabel) stageZoomLabel.textContent = `${Math.round(clampCreativeStageZoom(creativeStageZoom) * 100)}%`;
-  const renderExportMenuItem = (iconName, label, hint) => `<iconify-icon icon="${iconName}" width="16" height="16"></iconify-icon><span>${escHtml(label)}</span><span class="creative-export-menu-hint">${escHtml(hint)}</span>`;
-  if (toolbarGifBtn) {
-    const showGif = mode === 'video' && !!getCreativeGifExportConfig();
-    const isGifExporting = isCreativeExportActive('gif');
-    toolbarGifBtn.style.display = showGif ? 'grid' : 'none';
-    toolbarGifBtn.disabled = isCreativeExportActive();
-    if (showGif) toolbarGifBtn.innerHTML = renderExportMenuItem('solar:gallery-favourite-bold-duotone', isGifExporting ? `GIF ${exportPercent}%` : 'GIF', 'Animation');
-  }
-  if (toolbarMp4Btn) {
-    const mp4Config = getCreativeVideoExportConfig('mp4');
-    const showMp4 = mode === 'video' && !!mp4Config;
-    const isMp4Exporting = isCreativeExportActive('mp4');
-    toolbarMp4Btn.style.display = showMp4 ? 'grid' : 'none';
-    toolbarMp4Btn.disabled = isCreativeExportActive();
-    if (showMp4) toolbarMp4Btn.innerHTML = renderExportMenuItem('solar:videocamera-record-bold-duotone', isMp4Exporting ? `MP4 ${exportPercent}%` : 'MP4', 'Video');
-  }
-  if (toolbarWebmBtn) {
-    const showWebm = mode === 'video';
-    const isWebmExporting = isCreativeExportActive('webm');
-    toolbarWebmBtn.style.display = showWebm ? 'grid' : 'none';
-    toolbarWebmBtn.disabled = isCreativeExportActive();
-    if (showWebm) toolbarWebmBtn.innerHTML = renderExportMenuItem('solar:clapperboard-play-bold-duotone', isWebmExporting ? `WEBM ${exportPercent}%` : 'WEBM', 'Video');
-  }
-  if (toolbarCancelBtn) {
-    const showCancel = mode === 'video' && isCreativeExportActive();
-    toolbarCancelBtn.style.display = showCancel ? 'grid' : 'none';
-    toolbarCancelBtn.disabled = creativeActiveExport?.cancelRequested === true;
-    if (showCancel) toolbarCancelBtn.innerHTML = renderExportMenuItem('solar:close-circle-bold-duotone', creativeActiveExport?.cancelRequested ? 'Stopping...' : 'Cancel export', '');
-  }
-  if (stageFooter) {
-    stageFooter.textContent = isCreativeExportActive('gif')
-      ? (creativeActiveExport?.cancelRequested
-        ? 'Stopping the GIF export now. The current frame or encoder step will finish and then your edit state will be restored.'
-        : `Rendering the animated GIF now. ${exportStatus === 'encoding' ? 'Encoding frames into GIF.' : exportStatus === 'capturing' ? 'Capturing timeline frames.' : 'Finalizing the file now.'} Progress ${exportPercent}%.`)
-      : isCreativeExportActive('webm')
-      ? (creativeActiveExport?.cancelRequested
-        ? 'Stopping the WebM export now. The current frame pass will finish and then your edit state will be restored.'
-        : `${creativeActiveExport?.audioEnabled ? 'Recording audio + video to WebM now.' : (creativeActiveExport?.audioRequested ? 'Recording video to WebM now. The audio lane could not be attached in this browser, so this export is silent.' : 'Recording the full video draft to WebM now.')} ${exportStatus === 'finalizing' ? 'Finalizing the file now.' : `Progress ${exportPercent}%.`}`)
-      : isCreativeExportActive('mp4')
-        ? (creativeActiveExport?.cancelRequested
-          ? 'Stopping the MP4 export now. The current frame pass will finish and then your edit state will be restored.'
-          : `${creativeActiveExport?.audioEnabled ? 'Recording audio + video to MP4 now.' : (creativeActiveExport?.audioRequested ? 'Recording video to MP4 now. The audio lane could not be attached in this browser, so this export is silent.' : 'Recording the full video draft to MP4 now.')} ${exportStatus === 'finalizing' ? 'Finalizing the file now.' : `Progress ${exportPercent}%.`}`)
-        : selected
-          ? `${selected.type} selected. Drag on the frame or use the corner handle for quick edits.`
-          : mode === 'video'
-          ? (hasAudioTrack ? 'Move or resize elements at the playhead to create keyframes while the audio lane stays aligned underneath.' : 'Move or resize elements at the playhead to create animation keyframes on the frame.')
-          : 'Select an element to style it or pull new pieces from the studio rail.';
-  }
+  return creativeWorkspaceRuntimePromise;
+}
 
-  props.style.minWidth = '0';
-  props.style.overflowX = 'hidden';
-  props.style.overflowY = 'auto';
-  const renderedX = Math.round(Number(propertyElement?.x ?? selected?.x ?? 0) || 0);
-  const renderedY = Math.round(Number(propertyElement?.y ?? selected?.y ?? 0) || 0);
-  const renderedWidth = Math.round(Number(propertyElement?.width ?? selected?.width ?? 0) || 0);
-  const renderedHeight = Math.round(Number(propertyElement?.height ?? selected?.height ?? 0) || 0);
-  const inspectorTabs = renderCreativeInspectorTabsStudioV3();
-  const audioCard = mode === 'video' ? `
-    <section class="creative-inspector-card">
-      <div class="creative-section-heading">
-        <div class="creative-card-title">Audio lane</div>
-        <div class="creative-card-subtitle">Attach a soundtrack or VO file now so timing lives with the scene document before the full audio engine lands.</div>
-      </div>
-      ${renderCreativePropertyFieldStudioV3('Audio source', 'audioTrack.source', audioTrack.source || '', 'text', { handler: 'canvasUpdateCreativeDocumentProperty' })}
-      <div class="creative-field-grid" style="margin-top:12px">
-        ${renderCreativePropertyFieldStudioV3('Label', 'audioTrack.label', audioTrack.label || '', 'text', { handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Start (ms)', 'audioTrack.startMs', audioTrack.startMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Duration (ms)', 'audioTrack.durationMs', audioTrack.durationMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Volume', 'audioTrack.volume', audioTrack.volume ?? 1, 'number', { min: '0', max: '1', step: '0.05', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyToggleStudioV3('Muted', 'audioTrack.muted', audioTrack.muted === true, { handler: 'canvasUpdateCreativeDocumentProperty' })}
-      </div>
-      <div class="creative-section-heading" style="margin-top:16px">
-        <div class="creative-card-title">Trim &amp; fade</div>
-        <div class="creative-card-subtitle">Clip the source file and shape the volume envelope. These values feed directly into the audio engine timing.</div>
-      </div>
-      <div class="creative-field-grid">
-        ${renderCreativePropertyFieldStudioV3('Trim start (ms)', 'audioTrack.trimStartMs', audioTrack.trimStartMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Trim end (ms)', 'audioTrack.trimEndMs', audioTrack.trimEndMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Fade in (ms)', 'audioTrack.fadeInMs', audioTrack.fadeInMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-        ${renderCreativePropertyFieldStudioV3('Fade out (ms)', 'audioTrack.fadeOutMs', audioTrack.fadeOutMs || 0, 'number', { min: '0', step: '50', handler: 'canvasUpdateCreativeDocumentProperty' })}
-      </div>
-      ${audioTrack.analysis?.durationMs ? `<div class="creative-info-note" style="margin-top:10px">Source duration: ${escHtml(formatCreativeTimelineTime(audioTrack.analysis.durationMs))}${audioTrack.analysis?.codec ? ` · ${escHtml(audioTrack.analysis.codec)}` : ''}${audioTrack.analysis?.sampleRate ? ` · ${Math.round(audioTrack.analysis.sampleRate / 1000)}kHz` : ''}</div>` : ''}
-      <div class="creative-info-note">${escHtml(hasAudioTrack ? `Current lane: ${audioLabel}` : 'Drop in a path or URL now and the lane will show up in the timeline immediately.')}</div>
-      <div class="creative-pill-row" style="margin-top:12px">
-        <button onclick="canvasClearCreativeAudioTrack()" class="creative-chip-btn">Clear audio</button>
-      </div>
-    </section>
-  ` : '';
+const creativeWorkspaceRuntimeContext = Object.freeze(Object.defineProperties({}, {
+  "CREATIVE_SIZE_PRESETS": { enumerable: true, get: () => CREATIVE_SIZE_PRESETS },
+  "CREATIVE_STYLE_PRESETS": { enumerable: true, get: () => CREATIVE_STYLE_PRESETS },
+  "addProcessEntry": { enumerable: true, get: () => addProcessEntry },
+  "api": { enumerable: true, get: () => api },
+  "applyCreativeAddAssetCommand": { enumerable: true, get: () => applyCreativeAddAssetCommand },
+  "applyCreativeArrangeCommand": { enumerable: true, get: () => applyCreativeArrangeCommand },
+  "applyCreativeFitAssetCommand": { enumerable: true, get: () => applyCreativeFitAssetCommand },
+  "applyCreativeHtmlMotionTemplate": { enumerable: true, get: () => applyCreativeHtmlMotionTemplate },
+  "applyCreativeStyleCommand": { enumerable: true, get: () => applyCreativeStyleCommand },
+  "applyCreativeTemplateCommand": { enumerable: true, get: () => applyCreativeTemplateCommand },
+  "applyCreativeTimelineCommand": { enumerable: true, get: () => applyCreativeTimelineCommand },
+  "buildCreativeMotionTemplateSceneElements": { enumerable: true, get: () => buildCreativeMotionTemplateSceneElements },
+  "buildCreativeQualityReport": { enumerable: true, get: () => buildCreativeQualityReport },
+  "buildCreativeTimelineTicksStudioV3": { enumerable: true, get: () => buildCreativeTimelineTicksStudioV3 },
+  "buildSceneSelectionContext": { enumerable: true, get: () => buildSceneSelectionContext },
+  "canvasExportCreative": { enumerable: true, get: () => canvasExportCreative },
+  "canvasInstallCreativeStageSelectionClear": { enumerable: true, get: () => canvasInstallCreativeStageSelectionClear },
+  "canvasInstallCreativeStageWheelZoom": { enumerable: true, get: () => canvasInstallCreativeStageWheelZoom },
+  "canvasOpen": { enumerable: true, get: () => canvasOpen },
+  "canvasRedoCreativeChange": { enumerable: true, get: () => canvasRedoCreativeChange },
+  "canvasSaveCreativeSceneSnapshot": { enumerable: true, get: () => canvasSaveCreativeSceneSnapshot },
+  "canvasUndoCreativeChange": { enumerable: true, get: () => canvasUndoCreativeChange },
+  "captureCreativeSnapshot": { enumerable: true, get: () => captureCreativeSnapshot },
+  "checkCreativeAudioSync": { enumerable: true, get: () => checkCreativeAudioSync },
+  "checkCreativeCaptionTiming": { enumerable: true, get: () => checkCreativeCaptionTiming },
+  "checkCreativeKeyframes": { enumerable: true, get: () => checkCreativeKeyframes },
+  "clampCreativeStageZoom": { enumerable: true, get: () => clampCreativeStageZoom },
+  "clearCreativeHtmlMotionClip": { enumerable: true, get: () => clearCreativeHtmlMotionClip },
+  "commitCreativeHistorySnapshot": { enumerable: true, get: () => commitCreativeHistorySnapshot },
+  "compositionAddClip": { enumerable: true, get: () => compositionAddClip },
+  "compositionAddTrack": { enumerable: true, get: () => compositionAddTrack },
+  "compositionDeleteClip": { enumerable: true, get: () => compositionDeleteClip },
+  "compositionLint": { enumerable: true, get: () => compositionLint },
+  "compositionMoveClip": { enumerable: true, get: () => compositionMoveClip },
+  "compositionSetTransition": { enumerable: true, get: () => compositionSetTransition },
+  "compositionSplitClip": { enumerable: true, get: () => compositionSplitClip },
+  "compositionTrimClip": { enumerable: true, get: () => compositionTrimClip },
+  "createBlankCreativeScene": { enumerable: true, get: () => createBlankCreativeScene },
+  "createCreativeHtmlMotionClip": { enumerable: true, get: () => createCreativeHtmlMotionClip },
+  "createSceneDocument": { enumerable: true, get: () => createSceneDocument },
+  "creativeActiveExport": { enumerable: true, get: () => creativeActiveExport },
+  "creativeAssetsState": { enumerable: true, get: () => creativeAssetsState },
+  "creativeAudioAnalysisRequestToken": { enumerable: true, get: () => creativeAudioAnalysisRequestToken, set: (value) => { creativeAudioAnalysisRequestToken = value; } },
+  "creativeComposition": { enumerable: true, get: () => creativeComposition },
+  "creativeHistoryFuture": { enumerable: true, get: () => creativeHistoryFuture, set: (value) => { creativeHistoryFuture = value; } },
+  "creativeHistoryPast": { enumerable: true, get: () => creativeHistoryPast },
+  "creativeHtmlMotionClip": { enumerable: true, get: () => creativeHtmlMotionClip, set: (value) => { creativeHtmlMotionClip = value; } },
+  "creativeIconifySearch": { enumerable: true, get: () => creativeIconifySearch },
+  "creativeInspectorTab": { enumerable: true, get: () => creativeInspectorTab },
+  "creativeLayerExtractionBusy": { enumerable: true, get: () => creativeLayerExtractionBusy },
+  "creativeLibraryActiveCategory": { enumerable: true, get: () => creativeLibraryActiveCategory },
+  "creativeLibraryNavTab": { enumerable: true, get: () => creativeLibraryNavTab },
+  "creativeMotionTemplateClient": { enumerable: true, get: () => creativeMotionTemplateClient },
+  "creativeSceneDoc": { enumerable: true, get: () => creativeSceneDoc, set: (value) => { creativeSceneDoc = value; } },
+  "creativeSelectedId": { enumerable: true, get: () => creativeSelectedId, set: (value) => { creativeSelectedId = value; } },
+  "creativeStageZoom": { enumerable: true, get: () => creativeStageZoom },
+  "creativeStageZoomMode": { enumerable: true, get: () => creativeStageZoomMode },
+  "creativeTimelineMs": { enumerable: true, get: () => creativeTimelineMs, set: (value) => { creativeTimelineMs = value; } },
+  "detectCreativeEmptyRegions": { enumerable: true, get: () => detectCreativeEmptyRegions },
+  "diffCreativeFrameTraces": { enumerable: true, get: () => diffCreativeFrameTraces },
+  "drawCreativeWaveformCanvas": { enumerable: true, get: () => drawCreativeWaveformCanvas },
+  "encodeInlineJsString": { enumerable: true, get: () => encodeInlineJsString },
+  "ensureCreativeAssetsHydrated": { enumerable: true, get: () => ensureCreativeAssetsHydrated },
+  "ensureCreativeCommandSessionActive": { enumerable: true, get: () => ensureCreativeCommandSessionActive },
+  "ensureCreativeComposition": { enumerable: true, get: () => ensureCreativeComposition },
+  "ensureCreativeFeatureRuntime": { enumerable: true, get: () => ensureCreativeFeatureRuntime },
+  "ensureCreativeHtmlMotionBlocksHydrated": { enumerable: true, get: () => ensureCreativeHtmlMotionBlocksHydrated },
+  "ensureCreativeLibrariesHydrated": { enumerable: true, get: () => ensureCreativeLibrariesHydrated },
+  "ensureCreativeSceneForMode": { enumerable: true, get: () => ensureCreativeSceneForMode },
+  "ensureCreativeStageResizeObserver": { enumerable: true, get: () => ensureCreativeStageResizeObserver },
+  "ensureHyperframesElementSourceHtml": { enumerable: true, get: () => ensureHyperframesElementSourceHtml },
+  "escHtml": { enumerable: true, get: () => escHtml },
+  "executeSceneGraphOps": { enumerable: true, get: () => executeSceneGraphOps },
+  "exportCreativeHtmlMotionClip": { enumerable: true, get: () => exportCreativeHtmlMotionClip },
+  "formatCreativeTimelineTime": { enumerable: true, get: () => formatCreativeTimelineTime },
+  "getActiveChatSessionRecord": { enumerable: true, get: () => getActiveChatSessionRecord },
+  "getActiveCreativeAnimationPresetCatalog": { enumerable: true, get: () => getActiveCreativeAnimationPresetCatalog },
+  "getActiveCreativeLibraryIds": { enumerable: true, get: () => getActiveCreativeLibraryIds },
+  "getChatSessionById": { enumerable: true, get: () => getChatSessionById },
+  "getCreativeActiveExportPercent": { enumerable: true, get: () => getCreativeActiveExportPercent },
+  "getCreativeAspectLockEnabled": { enumerable: true, get: () => getCreativeAspectLockEnabled },
+  "getCreativeAudioTrackConfig": { enumerable: true, get: () => getCreativeAudioTrackConfig },
+  "getCreativeCommandSelectedElement": { enumerable: true, get: () => getCreativeCommandSelectedElement },
+  "getCreativeContrastDetails": { enumerable: true, get: () => getCreativeContrastDetails },
+  "getCreativeElementBounds": { enumerable: true, get: () => getCreativeElementBounds },
+  "getCreativeElementDisplayLabelStudioV3": { enumerable: true, get: () => getCreativeElementDisplayLabelStudioV3 },
+  "getCreativeElementInventory": { enumerable: true, get: () => getCreativeElementInventory },
+  "getCreativeElementsBounds": { enumerable: true, get: () => getCreativeElementsBounds },
+  "getCreativeFrameTraceAt": { enumerable: true, get: () => getCreativeFrameTraceAt },
+  "getCreativeGifExportConfig": { enumerable: true, get: () => getCreativeGifExportConfig },
+  "getCreativeHtmlMotionTimelineTracks": { enumerable: true, get: () => getCreativeHtmlMotionTimelineTracks },
+  "getCreativeLibraryItemIconStudioV3": { enumerable: true, get: () => getCreativeLibraryItemIconStudioV3 },
+  "getCreativeLibraryPackCatalogState": { enumerable: true, get: () => getCreativeLibraryPackCatalogState },
+  "getCreativeOverlapDetails": { enumerable: true, get: () => getCreativeOverlapDetails },
+  "getCreativeTextOverflowDetails": { enumerable: true, get: () => getCreativeTextOverflowDetails },
+  "getCreativeTimelineElementIconStudioV3": { enumerable: true, get: () => getCreativeTimelineElementIconStudioV3 },
+  "getCreativeVideoExportConfig": { enumerable: true, get: () => getCreativeVideoExportConfig },
+  "getFilteredCreativeLibrarySections": { enumerable: true, get: () => getFilteredCreativeLibrarySections },
+  "getHyperframesElementById": { enumerable: true, get: () => getHyperframesElementById },
+  "getRenderedCreativeElement": { enumerable: true, get: () => getRenderedCreativeElement },
+  "getSelectedCreativeElement": { enumerable: true, get: () => getSelectedCreativeElement },
+  "getStructuredCreativeModeLabel": { enumerable: true, get: () => getStructuredCreativeModeLabel },
+  "hasCreativeAudioTrack": { enumerable: true, get: () => hasCreativeAudioTrack },
+  "hashCreativeObject": { enumerable: true, get: () => hashCreativeObject },
+  "isCreativeExportActive": { enumerable: true, get: () => isCreativeExportActive },
+  "isCreativePlaybackActive": { enumerable: true, get: () => isCreativePlaybackActive },
+  "isStructuredCreativeMode": { enumerable: true, get: () => isStructuredCreativeMode },
+  "listCreativeHtmlMotionTemplates": { enumerable: true, get: () => listCreativeHtmlMotionTemplates },
+  "normalizeCreativeCommandOps": { enumerable: true, get: () => normalizeCreativeCommandOps },
+  "normalizeCreativeCommandPatch": { enumerable: true, get: () => normalizeCreativeCommandPatch },
+  "normalizeCreativeHtmlMotionClip": { enumerable: true, get: () => normalizeCreativeHtmlMotionClip },
+  "normalizeCreativeMode": { enumerable: true, get: () => normalizeCreativeMode },
+  "patchCreativeHtmlMotionClip": { enumerable: true, get: () => patchCreativeHtmlMotionClip },
+  "persistActiveChat": { enumerable: true, get: () => persistActiveChat },
+  "persistCompositionState": { enumerable: true, get: () => persistCompositionState },
+  "readCreativeHtmlMotionClip": { enumerable: true, get: () => readCreativeHtmlMotionClip },
+  "renderCompositionTimelineStrip": { enumerable: true, get: () => renderCompositionTimelineStrip },
+  "renderCreativeExportCanvas": { enumerable: true, get: () => renderCreativeExportCanvas },
+  "renderCreativeHtmlMotionBlocksPanelStudioV3": { enumerable: true, get: () => renderCreativeHtmlMotionBlocksPanelStudioV3 },
+  "renderCreativeHtmlMotionLintCardStudioV3": { enumerable: true, get: () => renderCreativeHtmlMotionLintCardStudioV3 },
+  "renderCreativeHtmlMotionSnapshot": { enumerable: true, get: () => renderCreativeHtmlMotionSnapshot },
+  "renderCreativeInspectorTabsStudioV3": { enumerable: true, get: () => renderCreativeInspectorTabsStudioV3 },
+  "renderCreativeKeyframeSectionStudioV3": { enumerable: true, get: () => renderCreativeKeyframeSectionStudioV3 },
+  "renderCreativeLayersPanelStudioV3": { enumerable: true, get: () => renderCreativeLayersPanelStudioV3 },
+  "renderCreativeLibraryPacksStudioV3": { enumerable: true, get: () => renderCreativeLibraryPacksStudioV3 },
+  "renderCreativePropertyFieldStudioV3": { enumerable: true, get: () => renderCreativePropertyFieldStudioV3 },
+  "renderCreativePropertyTextareaStudioV3": { enumerable: true, get: () => renderCreativePropertyTextareaStudioV3 },
+  "renderCreativePropertyToggleStudioV3": { enumerable: true, get: () => renderCreativePropertyToggleStudioV3 },
+  "renderCreativeQuickExportCardStudioV3": { enumerable: true, get: () => renderCreativeQuickExportCardStudioV3 },
+  "renderCreativeSavedAssetsCardStudioV3": { enumerable: true, get: () => renderCreativeSavedAssetsCardStudioV3 },
+  "renderCreativeStageStudioV3": { enumerable: true, get: () => renderCreativeStageStudioV3 },
+  "renderCreativeWorkspace": { enumerable: true, get: () => renderCreativeWorkspace },
+  "renderHyperframesInspector": { enumerable: true, get: () => renderHyperframesInspector },
+  "resolveElementAtTime": { enumerable: true, get: () => resolveElementAtTime },
+  "restoreCreativeHtmlMotionClipRevision": { enumerable: true, get: () => restoreCreativeHtmlMotionClipRevision },
+  "restoreCreativeSnapshot": { enumerable: true, get: () => restoreCreativeSnapshot },
+  "saveChatSessions": { enumerable: true, get: () => saveChatSessions },
+  "scheduleCreativeStageViewportSync": { enumerable: true, get: () => scheduleCreativeStageViewportSync },
+  "sendCreativeCommandResult": { enumerable: true, get: () => sendCreativeCommandResult },
+  "setAgentSessionId": { enumerable: true, get: () => setAgentSessionId },
+  "setCreativeSceneDoc": { enumerable: true, get: () => setCreativeSceneDoc },
+  "setCreativeSelection": { enumerable: true, get: () => setCreativeSelection },
+  "setCreativeTimelinePosition": { enumerable: true, get: () => setCreativeTimelinePosition },
+  "showToast": { enumerable: true, get: () => showToast },
+  "stopCreativeAudioPreview": { enumerable: true, get: () => stopCreativeAudioPreview },
+  "summarizeComposition": { enumerable: true, get: () => summarizeComposition },
+  "summarizeCreativeSceneForCommand": { enumerable: true, get: () => summarizeCreativeSceneForCommand },
+  "syncActiveChat": { enumerable: true, get: () => syncActiveChat },
+  "syncCreativeAudioTrackAnalysis": { enumerable: true, get: () => syncCreativeAudioTrackAnalysis },
+  "syncCreativeFabricSelectionFromState": { enumerable: true, get: () => syncCreativeFabricSelectionFromState },
+  "syncCreativeVideoElementsToTimeline": { enumerable: true, get: () => syncCreativeVideoElementsToTimeline },
+  "toggleCanvas": { enumerable: true, get: () => toggleCanvas },
+  "validateCreativeSceneLayout": { enumerable: true, get: () => validateCreativeSceneLayout },
+  "waitForCreativeExportPaint": { enumerable: true, get: () => waitForCreativeExportPaint },
+  "window": { enumerable: true, get: () => window },
+}));
 
-  if (creativeInspectorTab === 'layers') {
-    props.innerHTML = `
-      ${inspectorTabs}
-      ${renderCreativeLayersPanelStudioV3(mode)}
-    `;
-  } else if (selected) {
-    const selectionSummary = `
-      <div class="creative-inspector-summary">
-        <span class="creative-summary-pill">x ${renderedX}</span>
-        <span class="creative-summary-pill">y ${renderedY}</span>
-        <span class="creative-summary-pill">${renderedWidth} x ${renderedHeight}</span>
-        <span class="creative-summary-pill">opacity ${Number(propertyElement?.opacity ?? selected.opacity ?? 1).toFixed(2)}</span>
-        ${getCreativeAspectLockEnabled(selected) ? `<span class="creative-summary-pill">aspect locked</span>` : ''}
-        ${mode === 'video' ? `<span class="creative-summary-pill">${Array.isArray(selected.meta?.keyframes) ? selected.meta.keyframes.length : 0} keyframes</span>` : ''}
-      </div>
-    `;
-
-    const transformCard = `
-      <section class="creative-inspector-card">
-        <div class="creative-section-heading">
-          <div class="creative-card-title">Transform</div>
-          <div class="creative-card-subtitle">Position, sizing, and layer visibility for the selected element.</div>
-        </div>
-        <div class="creative-field-grid">
-          ${renderCreativePropertyFieldStudioV3('X', 'x', propertyElement?.x ?? selected.x)}
-          ${renderCreativePropertyFieldStudioV3('Y', 'y', propertyElement?.y ?? selected.y)}
-          ${renderCreativePropertyFieldStudioV3('Width', 'width', propertyElement?.width ?? selected.width)}
-          ${renderCreativePropertyFieldStudioV3('Height', 'height', propertyElement?.height ?? selected.height)}
-          ${renderCreativePropertyFieldStudioV3('Rotation', 'rotation', propertyElement?.rotation ?? selected.rotation)}
-          ${renderCreativePropertyFieldStudioV3('Opacity', 'opacity', propertyElement?.opacity ?? selected.opacity, 'number', { step: '0.1', min: '0', max: '1' })}
-          ${renderCreativePropertyFieldStudioV3('Z index', 'zIndex', selected.zIndex)}
-          ${renderCreativePropertyToggleStudioV3('Aspect lock', 'meta.aspectLocked', getCreativeAspectLockEnabled(selected))}
-          ${renderCreativePropertyToggleStudioV3('Visible', 'visible', selected.visible !== false)}
-          ${renderCreativePropertyToggleStudioV3('Locked', 'locked', selected.locked === true)}
-        </div>
-      </section>
-    `;
-
-    let typeSpecificCard = '';
-    if (selected.type === 'text') {
-      typeSpecificCard = `
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Typography</div>
-            <div class="creative-card-subtitle">Content, type settings, and measured layout data for this text layer.</div>
-          </div>
-          ${renderCreativePropertyTextareaStudioV3('Content', 'meta.content', selected.meta?.content || '')}
-          <div class="creative-field-grid" style="margin-top:12px">
-            ${renderCreativePropertyFieldStudioV3('Font size', 'meta.fontSize', selected.meta?.fontSize || 24)}
-            ${renderCreativePropertyFieldStudioV3('Weight', 'meta.fontWeight', selected.meta?.fontWeight || 700)}
-            ${renderCreativePropertyFieldStudioV3('Font family', 'meta.fontFamily', selected.meta?.fontFamily || 'Manrope', 'text')}
-            <label class="creative-form-field">
-              <span class="creative-form-label">Align</span>
-              <select class="creative-form-select" onchange="canvasUpdateCreativeProperty('meta.textAlign', this.value, 'text')">
-                ${['left', 'center', 'right'].map((align) => `<option value="${align}" ${String(selected.meta?.textAlign || 'left') === align ? 'selected' : ''}>${align}</option>`).join('')}
-              </select>
-            </label>
-            ${renderCreativePropertyFieldStudioV3('Line height', 'meta.lineHeight', selected.meta?.lineHeight || 1.2, 'number', { step: '0.1' })}
-            ${renderCreativePropertyFieldStudioV3('Letter spacing', 'meta.letterSpacing', selected.meta?.letterSpacing || 0, 'number', { step: '0.5' })}
-            ${renderCreativePropertyFieldStudioV3('Color', 'meta.color', selected.meta?.color || '#111827', 'color')}
-          </div>
-          <div class="creative-info-note">
-            <div><strong>Measurement:</strong> ${escHtml(selected.meta?.pretextMeasured ? 'Pretext' : (selected.meta?.measurement?.kind || 'fallback'))}</div>
-            <div><strong>Lines:</strong> ${escHtml(String(selected.meta?.measurement?.lineCount || 1))} | <strong>Height:</strong> ${escHtml(String(Math.round(Number(selected.meta?.measurement?.height || selected.height || 0))))} px</div>
-          </div>
-        </section>
-      `;
-    } else if (selected.type === 'shape') {
-      typeSpecificCard = `
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Shape styling</div>
-            <div class="creative-card-subtitle">Update geometry, fill, stroke, and corner treatment for the selected shape.</div>
-          </div>
-          <div class="creative-field-grid">
-            <label class="creative-form-field">
-              <span class="creative-form-label">Shape</span>
-              <select class="creative-form-select" onchange="canvasUpdateCreativeProperty('meta.shape', this.value, 'text')">
-                ${['rect', 'circle', 'triangle', 'polygon', 'line', 'arrow'].map((shapeOption) => `<option value="${shapeOption}" ${String(selected.meta?.shape || 'rect') === shapeOption ? 'selected' : ''}>${shapeOption}</option>`).join('')}
-              </select>
-            </label>
-            ${renderCreativePropertyFieldStudioV3('Fill', 'meta.fill', selected.meta?.fill || '#111827', 'color')}
-            ${renderCreativePropertyFieldStudioV3('Stroke', 'meta.stroke', selected.meta?.stroke || '#111827', 'color')}
-            ${renderCreativePropertyFieldStudioV3('Radius', 'meta.radius', selected.meta?.radius || 0)}
-            ${renderCreativePropertyFieldStudioV3('Stroke width', 'meta.strokeWidth', selected.meta?.strokeWidth || 0)}
-            ${String(selected.meta?.shape || 'rect') === 'polygon' ? renderCreativePropertyFieldStudioV3('Sides', 'meta.sides', selected.meta?.sides || 6, 'number', { min: '5', max: '8', step: '1' }) : ''}
-          </div>
-        </section>
-      `;
-    } else if (selected.type === 'icon') {
-      typeSpecificCard = `
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Icon</div>
-            <div class="creative-card-subtitle">Swap the icon name or recolor the current glyph.</div>
-          </div>
-          ${renderCreativePropertyFieldStudioV3('Icon name', 'meta.iconName', selected.meta?.iconName || 'solar:stars-bold-duotone', 'text')}
-          <div class="creative-field-grid" style="margin-top:12px">
-            ${renderCreativePropertyFieldStudioV3('Color', 'meta.color', selected.meta?.color || '#111827', 'color')}
-          </div>
-        </section>
-      `;
-      } else if (selected.type === 'image' || selected.type === 'video') {
-        typeSpecificCard = `
-          <section class="creative-inspector-card">
-            <div class="creative-section-heading">
-              <div class="creative-card-title">${selected.type === 'video' ? 'Video layer' : 'Image layer'}</div>
-              <div class="creative-card-subtitle">Control source, fit mode, frame radius, and asset timing for the selected media block.</div>
-            </div>
-            ${renderCreativePropertyFieldStudioV3('Source', 'meta.source', selected.meta?.source || '', 'text')}
-            ${selected.type === 'image' ? `<div class="creative-pill-row" style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;">
-              <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasOpenExtractLayersDialog(${encodeInlineJsString(selected.meta?.source || '')})" ${creativeLayerExtractionBusy || !selected.meta?.source ? 'disabled' : ''}>
-                <iconify-icon icon="solar:layers-bold-duotone" width="14" height="14"></iconify-icon>${escHtml(creativeLayerExtractionBusy ? 'Extracting...' : 'Extract layers')}
-              </button>
-              ${(selected.meta?.extraction?.samCutout || selected.meta?.extraction?.cutoutBbox) ? `<button type="button" class="creative-chip-btn" onclick="canvasStartRefineSelectedMask()" title="Click in the layer to keep, shift-click to remove, Enter to apply">
-                <iconify-icon icon="solar:magic-stick-3-bold-duotone" width="14" height="14"></iconify-icon>Refine mask
-              </button>` : ''}
-            </div>` : ''}
-            <div class="creative-field-grid" style="margin-top:12px">
-              ${renderCreativePropertyFieldStudioV3('Fit', 'meta.fit', selected.meta?.fit || 'cover', 'text')}
-              ${renderCreativePropertyFieldStudioV3('Radius', 'meta.radius', selected.meta?.radius || 18)}
-            </div>
-            ${selected.type === 'video' ? `<div class="creative-field-grid" style="margin-top:12px">
-              ${renderCreativePropertyFieldStudioV3('Start Ms', 'meta.timelineStartMs', selected.meta?.timelineStartMs || 0)}
-              ${renderCreativePropertyFieldStudioV3('Duration Ms', 'meta.timelineDurationMs', selected.meta?.timelineDurationMs || creativeSceneDoc.durationMs)}
-              ${renderCreativePropertyFieldStudioV3('Trim Start', 'meta.trimStartMs', selected.meta?.trimStartMs || 0)}
-              ${renderCreativePropertyFieldStudioV3('Volume', 'meta.volume', selected.meta?.volume || 0, 'number', { step: '0.05', min: '0', max: '1' })}
-            </div>` : ''}
-          </section>
-        `;
-    } else if (selected.type === 'group') {
-      typeSpecificCard = `
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Component</div>
-            <div class="creative-card-subtitle">Starter component metadata for the selected grouped element.</div>
-          </div>
-          <label class="creative-form-field">
-            <span class="creative-form-label">Component</span>
-            <select class="creative-form-select" onchange="canvasUpdateCreativeProperty('meta.component', this.value, 'text')">
-              ${['card', 'button', 'badge', 'divider', 'stat', 'quote'].map((componentName) => `<option value="${componentName}" ${String(selected.meta?.component || 'card') === componentName ? 'selected' : ''}>${componentName}</option>`).join('')}
-            </select>
-          </label>
-          <div class="creative-field-grid" style="margin-top:12px">
-            ${renderCreativePropertyFieldStudioV3('Background', 'meta.background', selected.meta?.background || '#111827', 'color')}
-            ${renderCreativePropertyFieldStudioV3('Text color', 'meta.textColor', selected.meta?.textColor || '#f8fafc', 'color')}
-            ${renderCreativePropertyFieldStudioV3('Accent', 'meta.accent', selected.meta?.accent || '#f97316', 'color')}
-            ${renderCreativePropertyFieldStudioV3('Radius', 'meta.radius', selected.meta?.radius || 18)}
-          </div>
-          ${['card'].includes(String(selected.meta?.component || 'card')) ? renderCreativePropertyFieldStudioV3('Title', 'meta.title', selected.meta?.title || 'Feature card', 'text') : ''}
-          ${['card'].includes(String(selected.meta?.component || 'card')) ? renderCreativePropertyTextareaStudioV3('Body', 'meta.body', selected.meta?.body || 'Use starter components to block in polished layouts quickly.') : ''}
-          ${['button', 'badge', 'divider', 'stat'].includes(String(selected.meta?.component || 'card')) ? renderCreativePropertyFieldStudioV3('Label', 'meta.label', selected.meta?.label || 'Label', 'text') : ''}
-          ${String(selected.meta?.component || 'card') === 'stat' ? renderCreativePropertyFieldStudioV3('Value', 'meta.value', selected.meta?.value || '24%', 'text') : ''}
-          ${String(selected.meta?.component || 'card') === 'quote' ? renderCreativePropertyTextareaStudioV3('Quote', 'meta.quote', selected.meta?.quote || 'Design the system, then let it move.') : ''}
-          ${String(selected.meta?.component || 'card') === 'quote' ? renderCreativePropertyFieldStudioV3('Author', 'meta.author', selected.meta?.author || 'Prometheus', 'text') : ''}
-        </section>
-      `;
-    } else if (selected.type === 'hyperframes') {
-      typeSpecificCard = renderHyperframesInspector(selected);
-    } else if (selected.type === 'lottie') {
-      typeSpecificCard = `
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Lottie Animation</div>
-            <div class="creative-card-subtitle">Paste a LottieFiles URL or any .json animation URL. Find free animations at lottiefiles.com.</div>
-          </div>
-          ${renderCreativePropertyFieldStudioV3('Source URL', 'meta.source', selected.meta?.source || '', 'text')}
-          <div class="creative-field-grid" style="margin-top:12px">
-            ${renderCreativePropertyFieldStudioV3('Speed', 'meta.speed', selected.meta?.speed ?? 1, 'number', { step: '0.1', min: '0.1', max: '4' })}
-            ${renderCreativePropertyToggleStudioV3('Loop', 'meta.loop', selected.meta?.loop !== false)}
-            ${renderCreativePropertyToggleStudioV3('Autoplay', 'meta.autoplay', selected.meta?.autoplay !== false)}
-          </div>
-          <div class="creative-info-note">Browse 50,000+ free animations at <strong>lottiefiles.com</strong> — copy the Lottie JSON URL and paste above.</div>
-        </section>
-      `;
-    }
-
-    const actionCard = `
-      <section class="creative-inspector-card">
-        <div class="creative-section-heading">
-          <div class="creative-card-title">Layer actions</div>
-          <div class="creative-card-subtitle">Delete the layer or move it forward and backward in the stack.</div>
-        </div>
-        <div class="creative-pill-row">
-          <button onclick="canvasDeleteCreativeSelection()" class="creative-chip-btn creative-chip-btn--danger"><iconify-icon icon="solar:trash-bin-trash-bold-duotone" width="14" height="14"></iconify-icon>Delete</button>
-          <button onclick="canvasNudgeCreativeZ(1)" class="creative-chip-btn"><iconify-icon icon="solar:arrow-up-bold-duotone" width="14" height="14"></iconify-icon>Forward</button>
-          <button onclick="canvasNudgeCreativeZ(-1)" class="creative-chip-btn"><iconify-icon icon="solar:arrow-down-bold-duotone" width="14" height="14"></iconify-icon>Back</button>
-        </div>
-      </section>
-    `;
-
-    const focusCard = '';
-
-    props.innerHTML = `
-      ${inspectorTabs}
-      <div class="creative-inspector-body">
-        <section class="creative-inspector-card creative-inspector-card--hero">
-          <div class="creative-inspector-card-header">
-            <div>
-              <div class="creative-inspector-kicker">Selected layer</div>
-              <div class="creative-inspector-card-title">${escHtml(selected.type)}</div>
-              <div class="creative-inspector-subtext">${escHtml(selected.id)}</div>
-            </div>
-            <div class="creative-inspector-badge">${mode === 'video' ? 'Timeline linked' : 'Live frame'}</div>
-          </div>
-          ${selectionSummary}
-        </section>
-        ${mode === 'video' ? renderCreativeHtmlMotionLintCardStudioV3() : ''}
-        ${actionCard}
-        ${selected.type === 'text' ? '' : typeSpecificCard}
-        ${selected.type === 'text' ? '' : transformCard}
-        ${mode === 'video' ? renderCreativeKeyframeSectionStudioV3(selected) : ''}
-        ${audioCard}
-        ${renderCreativeQuickExportCardStudioV3()}
-        ${renderCreativeSavedAssetsCardStudioV3()}
-        ${focusCard}
-      </div>
-    `;
-  } else {
-    props.innerHTML = `
-      ${inspectorTabs}
-      <div class="creative-inspector-body">
-        <section class="creative-inspector-card creative-inspector-card--hero">
-          <div class="creative-inspector-card-header">
-            <div>
-              <div class="creative-inspector-kicker">Scene</div>
-              <div class="creative-inspector-card-title">${escHtml(mode === 'video' ? 'Motion workspace' : 'Image workspace')}</div>
-              <div class="creative-inspector-subtext">No element is selected yet. Tune the frame, choose a preset, or pull pieces in from the studio rail.</div>
-            </div>
-            <div class="creative-inspector-badge">${creativeSceneDoc.elements.length} elements</div>
-          </div>
-          <div class="creative-inspector-summary">
-            <span class="creative-summary-pill">${creativeSceneDoc.width} x ${creativeSceneDoc.height}</span>
-            <span class="creative-summary-pill">${escHtml(mode === 'video' ? 'Timeline enabled' : 'Still frame')}</span>
-            <span class="creative-summary-pill">${escHtml(creativeSceneDoc.background || '#ffffff')}</span>
-          </div>
-        </section>
-        ${mode === 'video' ? renderCreativeHtmlMotionLintCardStudioV3() : ''}
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Canvas setup</div>
-            <div class="creative-card-subtitle">Choose a frame size and update the scene document properties directly.</div>
-          </div>
-          <label class="creative-form-field" style="margin-bottom:12px">
-            <span class="creative-form-label">Canvas preset</span>
-            <select class="creative-form-select" onchange="canvasApplyCreativeSizePreset(this.value)">
-              <option value="">Choose a preset...</option>
-              ${Object.entries(CREATIVE_SIZE_PRESETS).map(([presetKey, preset]) => `
-                <option value="${escHtml(presetKey)}">${escHtml(`${preset.label} | ${preset.width} x ${preset.height}`)}</option>
-              `).join('')}
-            </select>
-          </label>
-          <div class="creative-field-grid">
-            ${renderCreativePropertyFieldStudioV3('Canvas width', 'width', creativeSceneDoc.width, 'number', { handler: 'canvasUpdateCreativeDocumentProperty' })}
-            ${renderCreativePropertyFieldStudioV3('Canvas height', 'height', creativeSceneDoc.height, 'number', { handler: 'canvasUpdateCreativeDocumentProperty' })}
-            ${renderCreativePropertyFieldStudioV3('Background', 'background', creativeSceneDoc.background || '#ffffff', 'color', { handler: 'canvasUpdateCreativeDocumentProperty' })}
-            ${mode === 'video' ? renderCreativePropertyFieldStudioV3('Duration (ms)', 'durationMs', creativeSceneDoc.durationMs || 12000, 'number', { min: '1000', step: '250', handler: 'canvasUpdateCreativeDocumentProperty' }) : ''}
-            ${mode === 'video' ? renderCreativePropertyFieldStudioV3('Frame rate', 'frameRate', creativeSceneDoc.frameRate || 60, 'number', { min: '60', step: '1', handler: 'canvasUpdateCreativeDocumentProperty' }) : ''}
-          </div>
-        </section>
-        ${mode === 'video' ? `
-          <section class="creative-inspector-card">
-            <div class="creative-section-heading">
-              <div class="creative-card-title">Playback</div>
-              <div class="creative-card-subtitle">Scrub the current draft and preview the motion timing from the inspector.</div>
-            </div>
-            <div class="creative-info-note">Playhead ${escHtml(formatCreativeTimelineTime(creativeTimelineMs))} of ${escHtml(formatCreativeTimelineTime(Math.max(1000, Number(creativeSceneDoc.durationMs) || 12000)))}</div>
-          <input type="range" data-creative-timeline-range="true" min="0" max="${Math.max(1000, Number(creativeSceneDoc.durationMs) || 12000)}" step="50" value="${creativeTimelineMs}" oninput="canvasSetCreativeTimeline(this.value)" style="width:100%;margin-top:12px">
-            <div class="creative-pill-row" style="margin-top:12px">
-              <button onclick="toggleCreativePlayback()" class="creative-chip-btn creative-chip-btn--accent">${isCreativePlaybackActive() ? 'Pause' : 'Play'}</button>
-              <button onclick="stopCreativePlayback({ reset: true, persist: true })" class="creative-chip-btn">Reset</button>
-            </div>
-          </section>
-        ` : ''}
-        ${audioCard}
-        ${renderCreativeQuickExportCardStudioV3()}
-        ${renderCreativeSavedAssetsCardStudioV3()}
-        <section class="creative-inspector-card">
-          <div class="creative-section-heading">
-            <div class="creative-card-title">Studio note</div>
-            <div class="creative-card-subtitle">Drag elements directly on the frame. In video mode, frame edits at the playhead become keyframes, and timeline diamonds can be retimed in place.</div>
-          </div>
-          <div class="creative-info-note">The outer app header stays untouched while this canvas shell carries the focused Image and Video studio styling.</div>
-        </section>
-      </div>
-    `;
+function renderCreativeWorkspaceStudioV3(options) {
+  if (creativeWorkspaceRuntimeModule) {
+    return creativeWorkspaceRuntimeModule.renderCreativeWorkspaceStudioV3(creativeWorkspaceRuntimeContext, options);
   }
-
-  if (timeline && timelineTracks && timelineMeta) {
-    const isVideo = mode === 'video';
-    timeline.style.display = isVideo ? 'flex' : 'none';
-    if (isVideo) {
-      const durationMs = Math.max(1000, Number(creativeSceneDoc.durationMs) || 12000);
-      const playheadLeft = Math.max(0, Math.min(100, (creativeTimelineMs / durationMs) * 100));
-      const ticks = buildCreativeTimelineTicksStudioV3(durationMs, 7);
-      const htmlMotionTracks = (creativeSceneDoc.elements.length === 0)
-        ? getCreativeHtmlMotionTimelineTracks(durationMs)
-        : [];
-      const totalTrackCount = creativeSceneDoc.elements.length + htmlMotionTracks.length;
-      const compositionSummary = creativeComposition ? summarizeComposition(creativeComposition) : null;
-      const visibleTrackCount = totalTrackCount + (compositionSummary?.trackCount || 0);
-      timelineMeta.textContent = `${visibleTrackCount} tracks | ${formatCreativeTimelineTime(durationMs)} | ${Number(creativeSceneDoc.frameRate) || 60} fps | playhead ${formatCreativeTimelineTime(creativeTimelineMs)}${hasAudioTrack ? ' | audio armed' : ''}`;
-      const audioStartMs = Math.max(0, Number(audioTrack.startMs) || 0);
-      const audioDurationMs = Math.max(0, Number(audioTrack.durationMs) || 0) || Math.max(0, durationMs - audioStartMs);
-      const audioLeft = Math.max(0, Math.min(100, (audioStartMs / durationMs) * 100));
-      const audioWidth = hasAudioTrack
-        ? Math.max(8, Math.min(100 - audioLeft, (audioDurationMs / durationMs) * 100))
-        : 0;
-      timelineTracks.innerHTML = `
-        <div class="creative-timeline-scroll-inner">
-          <div class="creative-timeline-controls">
-            <div class="creative-timeline-controls-left">
-              <button onclick="toggleCreativePlayback()" class="creative-chip-btn creative-chip-btn--accent">${isCreativePlaybackActive() ? 'Pause' : 'Play'}</button>
-              <button onclick="stopCreativePlayback({ reset: true, persist: true })" class="creative-chip-btn">Reset</button>
-            </div>
-            <div><input type="range" data-creative-timeline-range="true" min="0" max="${durationMs}" step="50" value="${creativeTimelineMs}" oninput="canvasSetCreativeTimeline(this.value)" style="width:100%"></div>
-          </div>
-          <div class="creative-timeline-ruler">
-            ${ticks.map((tick) => `<div class="creative-timeline-ruler-tick" style="left:${tick.left}%">${escHtml(tick.label)}</div>`).join('')}
-          </div>
-          ${renderCompositionTimelineStrip()}
-        ` + creativeSceneDoc.elements.map((element, idx) => {
-          const label = getCreativeElementDisplayLabelStudioV3(element, idx);
-          const keyframes = Array.isArray(element.meta?.keyframes) ? element.meta.keyframes.slice().sort((a, b) => (a.atMs || 0) - (b.atMs || 0)) : [];
-          const hasMultiKeyframes = keyframes.length >= 2;
-          const firstAt = keyframes.length ? Math.max(0, Number(keyframes[0].atMs) || 0) : 0;
-          const lastAt = hasMultiKeyframes ? Math.max(firstAt, Number(keyframes[keyframes.length - 1].atMs) || 0) : durationMs;
-          const left = keyframes.length ? Math.max(0, Math.min(100, (firstAt / durationMs) * 100)) : 0;
-          const width = hasMultiKeyframes
-            ? Math.max(0.5, Math.min(100 - left, ((lastAt - firstAt) / durationMs) * 100))
-            : (keyframes.length === 1 ? Math.max(0.5, 100 - left) : 100);
-          const firstKfId = keyframes.length ? keyframes[0].id : '';
-          const lastKfId = keyframes.length ? keyframes[keyframes.length - 1].id : '';
-          const hfTrackCount = element.type === 'hyperframes' && Array.isArray(element.meta?.tracks) ? element.meta.tracks.length : 0;
-          const trackMetaLine = hfTrackCount
-            ? `${hfTrackCount} HyperFrames tracks`
-            : (keyframes.length ? `${keyframes.length} keyframes` : 'Static layer');
-          return `
-            <div class="creative-timeline-track">
-              <button type="button" class="creative-timeline-track-label ${element.id === creativeSelectedId ? 'is-selected' : ''}" onclick="canvasSelectCreativeElement('${element.id}')">
-                <span class="creative-timeline-track-icon"><iconify-icon icon="${escHtml(getCreativeTimelineElementIconStudioV3(element.type))}" width="16" height="16"></iconify-icon></span>
-                <span class="creative-timeline-track-copy">
-                  <span class="creative-timeline-track-title">${escHtml(String(label).slice(0, 42))}</span>
-                  <span class="creative-timeline-track-meta-line">${escHtml(trackMetaLine)}</span>
-                </span>
-              </button>
-              <div class="creative-timeline-track-lane" onmousedown="canvasHandleCreativeTimelineLanePointer(event, '${element.id}', this)">
-                <div class="creative-timeline-track-fill ${element.id === creativeSelectedId ? 'is-selected' : ''}" style="left:${left}%;width:${width}%">
-                  ${hasMultiKeyframes ? `
-                    <div class="creative-timeline-track-edge creative-timeline-track-edge--start" title="Trim start" onmousedown="canvasBeginCreativeTrimGesture(event, '${element.id}', '${firstKfId}', 'start', this.closest('.creative-timeline-track-lane'))"></div>
-                    <div class="creative-timeline-track-edge creative-timeline-track-edge--end" title="Trim end" onmousedown="canvasBeginCreativeTrimGesture(event, '${element.id}', '${lastKfId}', 'end', this.closest('.creative-timeline-track-lane'))"></div>
-                  ` : ''}
-                </div>
-                ${keyframes.map((keyframe) => {
-                  const dotLeft = Math.max(0, Math.min(100, ((Number(keyframe.atMs) || 0) / durationMs) * 100));
-                  const isActive = Number(keyframe.atMs) === Number(creativeTimelineMs);
-                  return `<div class="creative-timeline-keyframe ${isActive ? 'is-active' : ''}" title="${escHtml(`${formatCreativeTimelineTime(keyframe.atMs)} | drag to retime`)}" style="left:${dotLeft}%" onmousedown="canvasBeginCreativeKeyframeDrag(event, '${element.id}', '${keyframe.id}', this.parentElement)"></div>`;
-                }).join('')}
-                <div class="creative-timeline-playhead" style="left:calc(${playheadLeft}% - 0.5px)"></div>
-              </div>
-            </div>
-          `;
-        }).join('') + htmlMotionTracks.map((track) => {
-          const left = Math.max(0, Math.min(100, (track.startMs / durationMs) * 100));
-          const widthRaw = ((track.endMs - track.startMs) / durationMs) * 100;
-          const width = Math.max(0.5, Math.min(100 - left, widthRaw));
-          const isSelected = track.isSelected;
-          const selectorAttr = encodeURIComponent(track.selector || '');
-          return `
-            <div class="creative-timeline-track" data-html-motion-track="true">
-              <button type="button" class="creative-timeline-track-label ${isSelected ? 'is-selected' : ''}" onclick="canvasSelectCreativeHtmlMotionBySelector('${selectorAttr}')">
-                <span class="creative-timeline-track-icon"><iconify-icon icon="${escHtml(track.icon)}" width="16" height="16"></iconify-icon></span>
-                <span class="creative-timeline-track-copy">
-                  <span class="creative-timeline-track-title">${escHtml(String(track.label).slice(0, 42))}</span>
-                  <span class="creative-timeline-track-meta-line">${escHtml(track.metaLine)}</span>
-                </span>
-              </button>
-              <div class="creative-timeline-track-lane" data-html-motion-selector="${escHtml(selectorAttr)}" onmousedown="canvasHandleCreativeHtmlMotionLanePointer(event, '${selectorAttr}', this)">
-                <div class="creative-timeline-track-fill ${isSelected ? 'is-selected' : ''}" style="left:${left}%;width:${width}%"></div>
-                <div class="creative-timeline-keyframe" title="${escHtml(`Start ${formatCreativeTimelineTime(track.startMs)}`)}" style="left:${left}%"></div>
-                <div class="creative-timeline-keyframe" title="${escHtml(`End ${formatCreativeTimelineTime(track.endMs)}`)}" style="left:${Math.max(0, Math.min(100, (track.endMs / durationMs) * 100))}%"></div>
-                <div class="creative-timeline-playhead" style="left:calc(${playheadLeft}% - 0.5px)"></div>
-              </div>
-            </div>
-          `;
-        }).join('') + `
-          <div class="creative-timeline-track creative-timeline-track--audio">
-            <button type="button" class="creative-timeline-track-label ${hasAudioTrack ? 'is-audio' : ''}" onclick="canvasSelectCreativeInspectorTab('properties')">
-              <span class="creative-timeline-track-icon"><iconify-icon icon="solar:music-notes-bold-duotone" width="16" height="16"></iconify-icon></span>
-              <span class="creative-timeline-track-copy">
-                <span class="creative-timeline-track-title">${escHtml(audioLabel)}</span>
-                <span class="creative-timeline-track-meta-line">${escHtml(hasAudioTrack ? `starts ${formatCreativeTimelineTime(audioStartMs)} | volume ${audioTrack.volume.toFixed(2)}` : 'Add an audio source in the inspector to arm the lane.')}</span>
-              </span>
-            </button>
-            <div class="creative-timeline-track-lane creative-timeline-track-lane--audio" onmousedown="canvasHandleCreativeAudioLanePointer(event, this)">
-              ${hasAudioTrack ? `
-                <div class="creative-timeline-track-fill creative-timeline-track-fill--audio" style="left:${audioLeft}%;width:${audioWidth}%">
-                  <div class="creative-timeline-track-edge creative-timeline-track-edge--start" title="Trim audio start" onmousedown="canvasBeginCreativeAudioTrimGesture(event, 'start', this.closest('.creative-timeline-track-lane'))"></div>
-                  <div class="creative-timeline-track-edge creative-timeline-track-edge--end" title="Trim audio end" onmousedown="canvasBeginCreativeAudioTrimGesture(event, 'end', this.closest('.creative-timeline-track-lane'))"></div>
-                </div>
-                <canvas class="creative-timeline-audio-wave-canvas" data-audio-left="${audioLeft}" data-audio-width="${audioWidth}"></canvas>
-              ` : `<div class="creative-timeline-audio-empty">No audio on the timeline yet — add a source in the inspector</div>`}
-              <div class="creative-timeline-playhead" style="left:calc(${playheadLeft}% - 0.5px)"></div>
-            </div>
-          </div>
-        </div>
-      `;
-    } else {
-      timelineTracks.innerHTML = '';
-      timelineMeta.textContent = '';
-    }
-  }
-  ensureCreativeStageResizeObserver(stageScroll);
-  canvasInstallCreativeStageWheelZoom();
-  canvasInstallCreativeStageSelectionClear();
-  scheduleCreativeStageViewportSync({ center: creativeStageZoomMode !== 'manual' });
-  // Draw real waveform on the canvas element after innerHTML is committed
-  if (timeline && timeline.style.display !== 'none') {
-    requestAnimationFrame(() => drawCreativeWaveformCanvas(audioTrack));
-  }
+  void loadCreativeWorkspaceRuntime()
+    .then((module) => module.renderCreativeWorkspaceStudioV3(creativeWorkspaceRuntimeContext, options))
+    .catch((error) => console.warn('[Creative] optional workspace failed to load:', error));
+  return undefined;
 }
 
 function canvasAddCreativeLibraryItem(section, kind) {
@@ -39489,974 +38694,8 @@ function compositionLint(comp) {
 
 async function handleCreativeCommandMessage(message) {
   await ensureCreativeFeatureRuntime();
-  const previousActiveSessionId = String(window.activeChatSessionId || '').trim();
-  const previousAgentSessionId = String(window.agentSessionId || '').trim();
-  const previousCreativeMode = window.currentCreativeMode;
-  const previousSuppress = window.__pmSuppressCreativeAutoOpen;
-  if (!(await ensureCreativeCommandSessionActive(message, { previousActiveSessionId }))) {
-    sendCreativeCommandResult(message, {
-      success: false,
-      error: 'Creative command target session is not available in this UI client.',
-    });
-    return;
-  }
-  const backgroundCommand = previousActiveSessionId && String(message?.sessionId || '').trim() !== previousActiveSessionId;
-  try {
-    const command = String(message?.command || '').trim();
-    const payload = message?.payload && typeof message.payload === 'object' ? message.payload : {};
-    const mode = normalizeCreativeMode(window.currentCreativeMode);
-    if (!isStructuredCreativeMode(mode)) {
-      sendCreativeCommandResult(message, {
-        success: false,
-        error: 'No Image or Video creative workspace is active in this UI session.',
-      });
-      return;
-    }
-    ensureCreativeSceneForMode(mode);
-
-    let data = null;
-    if (command === 'get_state') {
-    data = {
-      scene: summarizeCreativeSceneForCommand(),
-      selectedElement: getCreativeCommandSelectedElement(),
-      selectionContext: creativeSelectedId ? buildSceneSelectionContext(creativeSceneDoc, creativeSelectedId) : null,
-        htmlMotionClip: normalizeCreativeHtmlMotionClip(creativeHtmlMotionClip),
-        audioTrack: getCreativeAudioTrackConfig(),
-        creativeLibraries: normalizeCreativeMode(mode) === 'video'
-          ? {
-              videoSurface: 'Prometheus Video editor supports editable scene-graph media layers plus HTML Motion, HyperFrames, Remotion, and Pretext clips.',
-              htmlMotionAccess: 'Create with creative_create_html_motion_clip or creative_apply_html_motion_template, edit existing clips with creative_read_html_motion_clip plus creative_patch_html_motion_clip, inspect with creative_render_html_motion_snapshot, then export with creative_export_html_motion_clip.',
-              hyperframesAccess: 'Use hyperframes_browse_catalog, hyperframes_insert_clip, hyperframes_apply_patch, hyperframes_lint, hyperframes_qa, and hyperframes_export for component-driven video systems. Use creative_* HyperFrames tools only for legacy compatibility.',
-              remotionAccess: 'Use creative_list_motion_templates, creative_preview_motion_template, creative_apply_motion_template, and creative_generate_motion_variants for Remotion-backed video systems.',
-              elementTypes: ['text', 'shape', 'icon', 'image', 'video', 'audio', 'group', 'hyperframes'],
-              assetAccess: 'Generated and imported Creative assets hydrate into the Prometheus Video editor asset panel. Use creative_add_asset/add_element or generation tools to place durable workspace-backed media layers.',
-            }
-          : {
-              iconSystem: 'Iconify',
-              iconAccess: 'Any valid Iconify icon name is accepted in meta.iconName, such as solar:..., lucide:..., mdi:..., simple-icons:..., tabler:..., ph:..., heroicons:..., logos:..., etc.',
-              elementTypes: ['text', 'shape', 'icon', 'image', 'video', 'group'],
-              assetAccess: 'Uploaded image/video workspace paths can be placed as editable layers with creative_add_asset. Image layers use meta.source/fit/radius. Video layers use meta.source/fit/radius/timelineStartMs/timelineDurationMs/trimStartMs/volume/muted and can still be moved, resized, rotated, faded, layered, and animated.',
-              shapeKinds: ['rect', 'circle', 'triangle', 'polygon', 'line', 'arrow'],
-              fontAccess: 'Use any installed/web-safe font family by setting text meta.fontFamily. Manrope is the default.',
-              commonFonts: ['Manrope', 'Inter', 'Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Courier New', 'Montserrat', 'Poppins', 'Bebas Neue'],
-              animationPresetIds: getActiveCreativeAnimationPresetCatalog()
-                .map((preset) => preset.id)
-                .slice(0, 80),
-              animationAccess: 'Use any available built-in or enabled custom animation preset id with creative_apply_animation or add-animation-preset.',
-              stylePresets: CREATIVE_STYLE_PRESETS.map((preset) => ({
-                id: preset.id,
-                label: preset.label,
-                fonts: preset.fonts,
-                colors: preset.colors,
-                recommendedMotion: preset.motion,
-              })),
-              componentPresets: ['cta-card', 'caption-block', 'feature-card', 'logo-lockup', 'lower-third', 'product-callout'],
-            },
-        assets: {
-          storageRoot: creativeAssetsState?.storageRoot || '',
-          exports: Array.isArray(creativeAssetsState?.exports) ? creativeAssetsState.exports.length : 0,
-          scenes: Array.isArray(creativeAssetsState?.scenes) ? creativeAssetsState.scenes.length : 0,
-          indexedAssets: Array.isArray(creativeAssetsState?.indexedAssets) ? creativeAssetsState.indexedAssets.length : 0,
-      },
-    };
-  } else if (command === 'reset_scene') {
-    const previousHash = hashCreativeObject(creativeSceneDoc);
-    const hasSceneWork = !!creativeHtmlMotionClip
-      || (Array.isArray(creativeSceneDoc?.elements) && creativeSceneDoc.elements.length > 0)
-      || (Array.isArray(creativeSceneDoc?.motionTemplates) && creativeSceneDoc.motionTemplates.length > 0)
-      || (Array.isArray(creativeSceneDoc?.captions) && creativeSceneDoc.captions.length > 0);
-    if (hasSceneWork && payload.force !== true) {
-      throw new Error('reset_scene refused because the current scene has work in it. Save a creative_checkpoint first, or call reset_scene with force=true only for an explicit fresh start.');
-    }
-    commitCreativeHistorySnapshot(captureCreativeSnapshot());
-    creativeHistoryFuture = [];
-    creativeSceneDoc = createBlankCreativeScene(mode);
-    creativeSelectedId = null;
-    creativeTimelineMs = 0;
-    creativeHtmlMotionClip = null;
-    stopCreativeAudioPreview({ reset: true, dispose: true });
-    setCreativeSceneDoc(creativeSceneDoc, { render: false, persist: false, allowBlankOverwrite: true });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = {
-      reset: true,
-      mode,
-      previousHash,
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-    };
-  } else if (command === 'purge_scene') {
-    const targets = Array.isArray(payload.targets) && payload.targets.length
-      ? payload.targets.map((target) => String(target || '').trim().toLowerCase())
-      : ['hidden', 'offscreen', 'empty_text', 'duplicate_ids'];
-    const doc = creativeSceneDoc || createSceneDocument();
-    const width = Math.max(1, Number(doc.width) || 1080);
-    const height = Math.max(1, Number(doc.height) || 1080);
-    const seenIds = new Set();
-    const removed = [];
-    const keep = [];
-    (Array.isArray(doc.elements) ? doc.elements : []).forEach((element) => {
-      const id = String(element?.id || '').trim();
-      const bounds = {
-        right: (Number(element?.x) || 0) + (Number(element?.width) || 0),
-        bottom: (Number(element?.y) || 0) + (Number(element?.height) || 0),
-        left: Number(element?.x) || 0,
-        top: Number(element?.y) || 0,
-      };
-      const reasons = [];
-      if (targets.includes('duplicate_ids') && id && seenIds.has(id)) reasons.push('duplicate_id');
-      if (targets.includes('hidden') && (element.visible === false || Number(element.opacity) === 0)) reasons.push('hidden');
-      if (targets.includes('offscreen') && (bounds.right < 0 || bounds.bottom < 0 || bounds.left > width || bounds.top > height)) reasons.push('offscreen');
-      if (targets.includes('empty_text') && element.type === 'text' && !String(element.meta?.content || '').trim()) reasons.push('empty_text');
-      if (reasons.length) removed.push({ id, type: element.type, label: element.meta?.content || element.meta?.iconName || element.type, reasons });
-      else keep.push(element);
-      if (id) seenIds.add(id);
-    });
-    const nextDoc = createSceneDocument({ ...doc, elements: keep });
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    if (creativeSelectedId && !keep.some((element) => element.id === creativeSelectedId)) creativeSelectedId = keep[keep.length - 1]?.id || null;
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = {
-      targets,
-      removedCount: removed.length,
-      removed,
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-    };
-  } else if (command === 'element_inventory') {
-    data = {
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      inventory: getCreativeElementInventory({ includeHidden: payload.includeHidden !== false }),
-      motionTemplates: Array.isArray(creativeSceneDoc?.motionTemplates) ? creativeSceneDoc.motionTemplates : [],
-      captions: Array.isArray(creativeSceneDoc?.captions) ? creativeSceneDoc.captions : [],
-      validation: validateCreativeSceneLayout(creativeSceneDoc, { mode }),
-    };
-  } else if (command === 'frame_trace') {
-    const durationMs = Math.max(1000, Number(creativeSceneDoc?.durationMs) || 12000);
-    const times = Array.isArray(payload.timesMs) && payload.timesMs.length
-      ? payload.timesMs
-      : [Number.isFinite(Number(payload.atMs)) ? Number(payload.atMs) : creativeTimelineMs];
-    data = {
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      traces: times
-        .map((value) => Math.max(0, Math.min(durationMs, Number(value) || 0)))
-        .slice(0, 12)
-        .map((atMs) => getCreativeFrameTraceAt(atMs)),
-    };
-  } else if (command === 'frame_diff') {
-    const leftAtMs = Math.max(0, Number(payload.leftAtMs ?? payload.fromMs) || 0);
-    const rightAtMs = Math.max(0, Number(payload.rightAtMs ?? payload.toMs) || Math.max(0, leftAtMs + 1000));
-    const left = getCreativeFrameTraceAt(leftAtMs);
-    const right = getCreativeFrameTraceAt(rightAtMs);
-    data = {
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      leftAtMs,
-      rightAtMs,
-      changed: diffCreativeFrameTraces(left, right),
-      leftActiveIds: left.elements.filter((element) => element.active).map((element) => element.id),
-      rightActiveIds: right.elements.filter((element) => element.active).map((element) => element.id),
-    };
-  } else if (command === 'history_status') {
-    data = {
-      canUndo: creativeHistoryPast.length > 0,
-      canRedo: creativeHistoryFuture.length > 0,
-      undoCount: creativeHistoryPast.length,
-      redoCount: creativeHistoryFuture.length,
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-      htmlMotionClip: normalizeCreativeHtmlMotionClip(creativeHtmlMotionClip),
-    };
-  } else if (command === 'undo') {
-    if (!creativeHistoryPast.length) throw new Error('No creative history entry is available to undo.');
-    canvasUndoCreativeChange();
-    data = {
-      undone: true,
-      canUndo: creativeHistoryPast.length > 0,
-      canRedo: creativeHistoryFuture.length > 0,
-      undoCount: creativeHistoryPast.length,
-      redoCount: creativeHistoryFuture.length,
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-      htmlMotionClip: normalizeCreativeHtmlMotionClip(creativeHtmlMotionClip),
-    };
-  } else if (command === 'redo') {
-    if (!creativeHistoryFuture.length) throw new Error('No creative history entry is available to redo.');
-    canvasRedoCreativeChange();
-    data = {
-      redone: true,
-      canUndo: creativeHistoryPast.length > 0,
-      canRedo: creativeHistoryFuture.length > 0,
-      undoCount: creativeHistoryPast.length,
-      redoCount: creativeHistoryFuture.length,
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-      htmlMotionClip: normalizeCreativeHtmlMotionClip(creativeHtmlMotionClip),
-    };
-  } else if (command === 'checkpoint') {
-    const action = String(payload.action || 'save').trim().toLowerCase();
-    const session = getActiveChatSessionRecord();
-    const checkpoints = Array.isArray(session?.creativeCheckpoints) ? session.creativeCheckpoints : [];
-    if (action === 'restore') {
-      const id = String(payload.id || '').trim();
-      const checkpoint = checkpoints.find((entry) => String(entry?.id || '') === id) || checkpoints[checkpoints.length - 1];
-      if (!checkpoint) throw new Error('No creative checkpoint found to restore.');
-      commitCreativeHistorySnapshot(captureCreativeSnapshot());
-      restoreCreativeSnapshot(checkpoint.snapshot, { render: true, persist: true });
-      data = { restored: true, id: checkpoint.id, label: checkpoint.label || '', sceneHash: hashCreativeObject(creativeSceneDoc) };
-    } else {
-      const checkpoint = {
-        id: `creative_checkpoint_${Date.now().toString(36)}`,
-        label: String(payload.label || '').trim() || `Checkpoint ${checkpoints.length + 1}`,
-        createdAt: new Date().toISOString(),
-        sceneHash: hashCreativeObject(creativeSceneDoc),
-        snapshot: captureCreativeSnapshot(),
-      };
-      if (session) {
-        session.creativeCheckpoints = [...checkpoints, checkpoint].slice(-20);
-        saveChatSessions();
-      }
-      data = {
-        saved: true,
-        id: checkpoint.id,
-        label: checkpoint.label,
-        sceneHash: checkpoint.sceneHash,
-        checkpointCount: session?.creativeCheckpoints?.length || 1,
-      };
-    }
-  } else if (command === 'export_trace') {
-    const exports = Array.isArray(creativeAssetsState?.exports) ? creativeAssetsState.exports.slice(0, 10) : [];
-    data = {
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      currentScene: summarizeCreativeSceneForCommand(),
-      activeExport: creativeActiveExport || null,
-      recentExports: exports,
-      renderJobs: Array.isArray(creativeAssetsState?.renderJobs) ? creativeAssetsState.renderJobs.slice(0, 10) : [],
-      validation: validateCreativeSceneLayout(creativeSceneDoc, { mode }),
-    };
-  } else if (command === 'quality_report') {
-    data = buildCreativeQualityReport({
-      sampleTimesMs: payload.sampleTimesMs,
-      includeHidden: payload.includeHidden !== false,
-    });
-  } else if (command === 'video_analyze_timeline') {
-    const durationMs = Math.max(1000, Number(creativeSceneDoc?.durationMs) || 12000);
-    const sampleTimes = Array.isArray(payload.sampleTimesMs) && payload.sampleTimesMs.length
-      ? payload.sampleTimesMs.map((value) => Math.max(0, Math.min(durationMs, Number(value) || 0))).slice(0, 12)
-      : [0, Math.round(durationMs / 2), Math.max(0, durationMs - 250)];
-    const traces = sampleTimes.map((atMs) => getCreativeFrameTraceAt(atMs));
-    data = {
-      sceneHash: hashCreativeObject(creativeSceneDoc),
-      scene: summarizeCreativeSceneForCommand(),
-      inventory: getCreativeElementInventory({ includeHidden: payload.includeHidden !== false }),
-      validation: validateCreativeSceneLayout(creativeSceneDoc, { mode }),
-      keyframes: checkCreativeKeyframes(),
-      captions: checkCreativeCaptionTiming(),
-      audioSync: checkCreativeAudioSync(),
-      traces,
-      diffs: traces.slice(1).map((trace, index) => ({
-        leftAtMs: traces[index].atMs,
-        rightAtMs: trace.atMs,
-        changed: diffCreativeFrameTraces(traces[index], trace),
-      })),
-    };
-  } else if (command === 'video_check_keyframes') {
-    data = checkCreativeKeyframes();
-  } else if (command === 'video_check_caption_timing') {
-    data = checkCreativeCaptionTiming();
-  } else if (command === 'video_check_audio_sync') {
-    data = checkCreativeAudioSync();
-  } else if (command === 'image_get_element_at_point') {
-    const x = Number(payload.x);
-    const y = Number(payload.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('image_get_element_at_point requires numeric x and y.');
-    const atMs = Number.isFinite(Number(payload.atMs)) ? Number(payload.atMs) : creativeTimelineMs;
-    const matches = (Array.isArray(creativeSceneDoc?.elements) ? creativeSceneDoc.elements : [])
-      .map((element, index) => {
-        const rendered = mode === 'video' ? (resolveElementAtTime(element, atMs) || element) : element;
-        return { element: rendered, index, bounds: getCreativeElementBounds(rendered) };
-      })
-      .filter(({ element, bounds }) => element.visible !== false && Number(element.opacity ?? 1) > 0.001 && x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom)
-      .sort((a, b) => (Number(b.element.zIndex || 0) - Number(a.element.zIndex || 0)) || (b.index - a.index))
-      .map(({ element, bounds }) => ({
-        id: element.id,
-        type: element.type,
-        label: element.meta?.content || element.meta?.iconName || element.meta?.source || element.type,
-        zIndex: element.zIndex,
-        bounds,
-      }));
-    data = { x, y, atMs, topElement: matches[0] || null, matches };
-  } else if (command === 'image_get_overlaps') {
-    data = {
-      threshold: Math.max(0, Number(payload.threshold ?? 0.02) || 0.02),
-      atMs: Number.isFinite(Number(payload.atMs)) ? Number(payload.atMs) : creativeTimelineMs,
-      overlaps: getCreativeOverlapDetails(payload),
-      validation: validateCreativeSceneLayout(creativeSceneDoc, { mode }),
-    };
-  } else if (command === 'image_get_bounds_summary') {
-    const doc = creativeSceneDoc || createSceneDocument();
-    const elements = getCreativeElementInventory({ includeHidden: payload.includeHidden !== false }).map((entry) => ({
-      ...entry,
-      bounds: getCreativeElementBounds(entry),
-      offCanvas: entry.x + entry.width < 0 || entry.y + entry.height < 0 || entry.x > doc.width || entry.y > doc.height,
-    }));
-    const union = getCreativeElementsBounds(elements);
-    data = {
-      canvas: { width: doc.width, height: doc.height },
-      elementCount: elements.length,
-      unionBounds: union,
-      offCanvas: elements.filter((entry) => entry.offCanvas),
-      elements,
-    };
-  } else if (command === 'image_check_text_overflow') {
-    const details = getCreativeTextOverflowDetails();
-    data = {
-      ok: !details.some((entry) => entry.overflow),
-      issueCount: details.filter((entry) => entry.overflow).length,
-      textCount: details.length,
-      details,
-    };
-  } else if (command === 'image_check_contrast') {
-    const details = getCreativeContrastDetails();
-    data = {
-      ok: !details.some((entry) => entry.passesAA === false),
-      issueCount: details.filter((entry) => entry.passesAA === false).length,
-      textCount: details.length,
-      details,
-    };
-  } else if (command === 'image_detect_empty_regions') {
-    data = detectCreativeEmptyRegions(payload);
-  } else if (command === 'attach_audio') {
-    if (mode !== 'video') throw new Error('attach_audio is only available in Video mode.');
-    const incomingTrack = payload?.audioTrack && typeof payload.audioTrack === 'object' && !Array.isArray(payload.audioTrack)
-      ? payload.audioTrack
-      : payload;
-    const normalizedTrack = getCreativeAudioTrackConfig(incomingTrack || {});
-    if (!normalizedTrack.source) throw new Error('attach_audio requires audioTrack.source.');
-    creativeAudioAnalysisRequestToken += 1;
-    const nextDoc = createSceneDocument({
-      ...creativeSceneDoc,
-      audioTrack: normalizedTrack,
-    });
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    addProcessEntry('info', `${getStructuredCreativeModeLabel('video')}: attached audio lane ${normalizedTrack.label || normalizedTrack.source}.`);
-    void syncCreativeAudioTrackAnalysis(nextDoc, { force: true, silent: true });
-    data = {
-      audioTrack: normalizedTrack,
-      sourceUrl: payload?.sourceUrl || null,
-      asset: payload?.asset || null,
-    };
-  } else if (command === 'apply_ops') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    const { ops, canvasPatch } = normalizeCreativeCommandOps(payload);
-    if (!ops.length && !Object.keys(canvasPatch).length) throw new Error('apply_ops requires a non-empty ops or operations array.');
-    const beforeIds = new Set((creativeSceneDoc.elements || []).map((element) => element.id));
-    const sourceDoc = Object.keys(canvasPatch).length ? createSceneDocument({ ...creativeSceneDoc, ...canvasPatch }) : creativeSceneDoc;
-    const nextDoc = ops.length ? executeSceneGraphOps(sourceDoc, ops) : sourceDoc;
-    const added = nextDoc.elements.find((element) => !beforeIds.has(element.id));
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    if (added?.id) setCreativeSelection(added.id, { render: false });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = { appliedOps: ops.length, canvasPatch };
-  } else if (command === 'select_element') {
-    const id = String(payload.id || '').trim();
-    if (!id) throw new Error('select_element requires id.');
-    setCreativeSelection(id);
-    persistActiveChat();
-    data = { selectedId: id };
-    } else if (command === 'set_canvas') {
-      const patch = {};
-      ['width', 'height', 'durationMs', 'frameRate'].forEach((key) => {
-        if (Number.isFinite(Number(payload[key]))) patch[key] = Number(payload[key]);
-      });
-      if (mode === 'video') patch.frameRate = Math.max(60, Number(patch.frameRate) || Number(creativeSceneDoc?.frameRate) || 60);
-      if (typeof payload.background === 'string' && payload.background.trim()) patch.background = payload.background.trim();
-    if (!Object.keys(patch).length) throw new Error('set_canvas requires at least one canvas property.');
-    setCreativeSceneDoc(createSceneDocument({ ...creativeSceneDoc, ...patch }), { recordHistory: true });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = { patch };
-    } else if (command === 'add_element') {
-      clearCreativeHtmlMotionClip({ render: false, persist: false });
-      const type = String(payload.type || '').trim().toLowerCase();
-      if (!['text', 'shape', 'icon', 'image', 'video', 'audio', 'group'].includes(type)) throw new Error('add_element requires type text, shape, icon, image, video, audio, or group.');
-      const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{
-        op: 'add',
-      type,
-      x: Number.isFinite(Number(payload.x)) ? Number(payload.x) : 120,
-      y: Number.isFinite(Number(payload.y)) ? Number(payload.y) : 120,
-      width: Number.isFinite(Number(payload.width)) ? Number(payload.width) : 320,
-      height: Number.isFinite(Number(payload.height)) ? Number(payload.height) : 160,
-      rotation: Number.isFinite(Number(payload.rotation)) ? Number(payload.rotation) : 0,
-      opacity: Number.isFinite(Number(payload.opacity)) ? Number(payload.opacity) : 1,
-      zIndex: Number.isFinite(Number(payload.zIndex)) ? Number(payload.zIndex) : (creativeSceneDoc.elements || []).length,
-      meta: payload.meta && typeof payload.meta === 'object' ? payload.meta : {},
-    }]);
-    const added = nextDoc.elements[nextDoc.elements.length - 1] || null;
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    if (added?.id) setCreativeSelection(added.id, { render: false });
-      renderCreativeWorkspace();
-      persistActiveChat();
-      data = { addedId: added?.id || null };
-    } else if (command === 'add_asset') {
-      data = applyCreativeAddAssetCommand(payload);
-    } else if (command === 'search_icons') {
-      const query = String(payload.query || '').trim();
-      if (!query) throw new Error('search_icons requires query.');
-      const limit = Math.max(1, Math.min(64, Number(payload.limit) || 24));
-      const fallbackIcons = [
-        'lucide:flame', 'solar:fire-bold-duotone', 'mdi:fire', 'ph:flame-bold',
-        'lucide:bot', 'lucide:sparkles', 'solar:stars-bold-duotone', 'tabler:sparkles',
-        'lucide:zap', 'solar:bolt-bold-duotone', 'mdi:lightning-bolt', 'ph:lightning-bold',
-        'lucide:cpu', 'lucide:terminal-square', 'tabler:automation', 'mdi:robot',
-        'simple-icons:openai', 'logos:openai-icon',
-      ];
-      let iconData = {};
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6500);
-        const response = await fetch(`https://api.iconify.design/search?query=${encodeURIComponent(query)}&limit=${limit}`, { signal: controller.signal });
-        clearTimeout(timer);
-        iconData = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(iconData?.error || `Iconify search failed with HTTP ${response.status}`);
-      } catch (err) {
-        iconData = {
-          icons: fallbackIcons.filter((icon) => {
-            const haystack = icon.toLowerCase().replace(/[:-]/g, ' ');
-            const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-            return terms.some((term) => haystack.includes(term)) || terms.some((term) => ['ai', 'operator', 'automation', 'tech', 'logo', 'prometheus', 'brand'].includes(term));
-          }).slice(0, limit),
-          total: fallbackIcons.length,
-          fallback: true,
-          error: String(err?.message || err || 'Iconify search timed out'),
-        };
-      }
-      if (!Array.isArray(iconData.icons) || iconData.icons.length === 0) {
-        const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const relevantFallbacks = fallbackIcons.filter((icon) => {
-          const haystack = icon.toLowerCase().replace(/[:-]/g, ' ');
-          return terms.some((term) => haystack.includes(term))
-            || terms.some((term) => ['spark', 'motion', 'template', 'caption', 'video', 'creative', 'ai', 'automation', 'tech', 'bold', 'cta'].includes(term));
-        });
-        iconData = {
-          ...iconData,
-          icons: (relevantFallbacks.length ? relevantFallbacks : fallbackIcons).slice(0, limit),
-          total: relevantFallbacks.length || fallbackIcons.length,
-          fallback: true,
-        };
-      }
-      data = {
-        query,
-        limit,
-        icons: Array.isArray(iconData.icons) ? iconData.icons.slice(0, limit) : [],
-        total: Number(iconData.total) || 0,
-        fallback: iconData.fallback === true,
-        error: iconData.error || null,
-        usage: 'Use one returned value as meta.iconName on an icon element.',
-      };
-    } else if (command === 'search_animations') {
-      const query = String(payload.query || '').trim().toLowerCase();
-      const target = String(payload.target || '').trim().toLowerCase();
-      const limit = Math.max(1, Math.min(64, Number(payload.limit) || 24));
-      const presets = getActiveCreativeAnimationPresetCatalog(target)
-        .filter((preset) => {
-          if (!query) return true;
-          const terms = query.split(/\s+/).filter(Boolean);
-          const haystack = [
-            preset.id,
-            preset.label,
-            preset.libraryId,
-            ...(Array.isArray(preset.targets) ? preset.targets : []),
-          ].join(' ').toLowerCase();
-          return terms.some((term) => haystack.includes(term));
-        })
-        .slice(0, limit);
-      data = {
-        query,
-        target: target || null,
-        limit,
-        presets,
-        usage: 'Use one returned preset id with creative_apply_animation or add-animation-preset.',
-      };
-  } else if (command === 'update_element') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    const id = String(payload.id || '').trim();
-    if (!id) throw new Error('update_element requires id.');
-    const patch = normalizeCreativeCommandPatch(payload);
-    if (!Object.keys(patch).length) throw new Error('update_element requires patch.');
-    const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{ op: 'set', id, patch }]);
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    setCreativeSelection(id, { render: false });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = { updatedId: id, patch };
-  } else if (command === 'delete_element') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    const id = String(payload.id || '').trim();
-    if (!id) throw new Error('delete_element requires id.');
-    const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{ op: 'delete', id }]);
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    setCreativeSelection(nextDoc.elements[nextDoc.elements.length - 1]?.id || null, { render: false });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = { deletedId: id };
-  } else if (command === 'apply_animation') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    const id = String(payload.id || '').trim();
-    const preset = String(payload.preset || '').trim();
-    if (!id || !preset) throw new Error('apply_animation requires id and preset.');
-    const nextDoc = executeSceneGraphOps(creativeSceneDoc, [{
-      op: 'add-animation-preset',
-      id,
-      preset,
-      startMs: Number.isFinite(Number(payload.startMs)) ? Number(payload.startMs) : creativeTimelineMs,
-      durationMs: Number.isFinite(Number(payload.durationMs)) ? Number(payload.durationMs) : 500,
-    }]);
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    setCreativeSelection(id, { render: false });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    data = { animatedId: id, preset };
-  } else if (command === 'arrange') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativeArrangeCommand(payload);
-  } else if (command === 'apply_style') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativeStyleCommand(payload);
-  } else if (command === 'fit_asset') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativeFitAssetCommand(payload);
-  } else if (command === 'apply_template') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativeTemplateCommand(payload);
-  } else if (command === 'validate_layout') {
-    const validation = validateCreativeSceneLayout(creativeSceneDoc, { mode });
-    data = {
-      validation,
-      ok: validation.ok,
-      issueCount: validation.issueCount,
-      errorCount: validation.errorCount,
-      warnCount: validation.warnCount,
-      usage: validation.ok
-        ? 'Layout validation passed. Continue with visual frame QA before export.'
-        : 'Fix error-level layout issues before export, then run creative_render_snapshot for visual QA.',
-    };
-  } else if (command === 'create_html_motion_clip') {
-    if (mode !== 'video') throw new Error('create_html_motion_clip requires the video workspace.');
-    data = await createCreativeHtmlMotionClip(payload);
-  } else if (command === 'list_html_motion_templates') {
-    if (mode !== 'video') throw new Error('list_html_motion_templates requires the video workspace.');
-    data = await listCreativeHtmlMotionTemplates();
-  } else if (command === 'apply_html_motion_template') {
-    if (mode !== 'video') throw new Error('apply_html_motion_template requires the video workspace.');
-    data = await applyCreativeHtmlMotionTemplate(payload);
-  } else if (command === 'read_html_motion_clip') {
-    if (mode !== 'video') throw new Error('read_html_motion_clip requires the video workspace.');
-    data = await readCreativeHtmlMotionClip(payload);
-  } else if (command === 'patch_html_motion_clip') {
-    if (mode !== 'video') throw new Error('patch_html_motion_clip requires the video workspace.');
-    data = await patchCreativeHtmlMotionClip(payload);
-  } else if (command === 'restore_html_motion_revision') {
-    if (mode !== 'video') throw new Error('restore_html_motion_revision requires the video workspace.');
-    data = await restoreCreativeHtmlMotionClipRevision(payload);
-  } else if (command === 'render_html_motion_snapshot') {
-    if (mode !== 'video') throw new Error('render_html_motion_snapshot requires the video workspace.');
-    const snapshotData = await renderCreativeHtmlMotionSnapshot({ ...payload, includeDataUrl: true });
-    const snapshots = (Array.isArray(snapshotData.frames) ? snapshotData.frames : []).map((frame) => ({
-      width: frame.width,
-      height: frame.height,
-      atMs: frame.atMs,
-      mimeType: frame.mimeType || 'image/png',
-      dataUrl: frame.dataUrl || '',
-    }));
-    data = {
-      ...snapshotData,
-      frames: snapshots.map(({ width, height, atMs, mimeType }) => ({ width, height, atMs, mimeType })),
-    };
-    sendCreativeCommandResult(message, {
-      success: true,
-      data,
-      snapshot: snapshots.length === 1 ? snapshots[0] : null,
-      snapshots,
-    });
-    return;
-  } else if (command === 'export_html_motion_clip') {
-    if (mode !== 'video') throw new Error('export_html_motion_clip requires the video workspace.');
-    data = await exportCreativeHtmlMotionClip(payload);
-  } else if (command === 'apply_motion_template') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    const prepared = await creativeMotionTemplateClient.prepareCreativeMotionTemplate(payload);
-    const validation = prepared?.validation || {};
-    if (Array.isArray(validation.blockers) && validation.blockers.length) {
-      throw new Error(validation.blockers.join('; '));
-    }
-    const instance = prepared?.instance;
-    if (!instance || typeof instance !== 'object') throw new Error('Motion template preparation did not return an instance.');
-    const materialized = buildCreativeMotionTemplateSceneElements(instance);
-    const sourceDoc = createSceneDocument({
-      ...creativeSceneDoc,
-      durationMs: Math.max(Number(creativeSceneDoc?.durationMs) || 0, Number(materialized.durationMs) || 0, Number(instance.durationMs) || 0, 12000),
-      frameRate: Math.max(Number(creativeSceneDoc?.frameRate) || 0, Number(instance.input?.fps) || 0, 60),
-      width: Number(materialized.width) || Number(instance.input?.width) || creativeSceneDoc?.width,
-      height: Number(materialized.height) || Number(instance.input?.height) || creativeSceneDoc?.height,
-      background: materialized.background || creativeSceneDoc?.background,
-      captions: instance.input?.captions ? [instance.input.captions] : creativeSceneDoc?.captions,
-      brandKit: instance.input?.brand || creativeSceneDoc?.brandKit || null,
-    });
-    const shouldReplace = payload.replace !== false;
-    const baseDoc = shouldReplace
-      ? createSceneDocument({
-          ...sourceDoc,
-          elements: [],
-          motionTemplates: [],
-        })
-      : sourceDoc;
-    const nextDoc = executeSceneGraphOps(baseDoc, [
-      { op: 'add-motion-template', instance },
-      ...(Array.isArray(materialized.elements) ? materialized.elements : []),
-    ]);
-    setCreativeSceneDoc(nextDoc, { render: false, recordHistory: true });
-    setCreativeTimelinePosition(0, { render: false, persist: false });
-    renderCreativeWorkspace();
-    persistActiveChat();
-    addProcessEntry('info', `${getStructuredCreativeModeLabel(mode)}: applied motion template ${prepared?.template?.name || instance.templateId}${materialized.elements?.length ? ` with ${materialized.elements.length} rendered layers` : ''}.`);
-    showToast('Motion template applied', prepared?.template?.name || instance.templateId, 'success');
-    data = {
-      template: prepared?.template || null,
-      instance,
-      validation,
-      renderedLayerCount: Array.isArray(materialized.elements) ? materialized.elements.length : 0,
-      motionTemplateCount: Array.isArray(nextDoc.motionTemplates) ? nextDoc.motionTemplates.length : 0,
-      elementCount: Array.isArray(nextDoc.elements) ? nextDoc.elements.length : 0,
-    };
-  } else if (command === 'timeline') {
-    clearCreativeHtmlMotionClip({ render: false, persist: false });
-    data = applyCreativeTimelineCommand(payload);
-  } else if (command === 'render_snapshot') {
-    if (mode === 'video' && creativeHtmlMotionClip) {
-      const snapshotData = await renderCreativeHtmlMotionSnapshot({ ...payload, includeDataUrl: true });
-      const snapshots = (Array.isArray(snapshotData.frames) ? snapshotData.frames : []).map((frame) => ({
-        width: frame.width,
-        height: frame.height,
-        atMs: frame.atMs,
-        mimeType: frame.mimeType || 'image/png',
-        dataUrl: frame.dataUrl || '',
-      }));
-      data = {
-        ...snapshotData,
-        frames: snapshots.map(({ width, height, atMs, mimeType }) => ({ width, height, atMs, mimeType })),
-      };
-      sendCreativeCommandResult(message, {
-        success: true,
-        data,
-        snapshot: snapshots.length === 1 ? snapshots[0] : null,
-        snapshots,
-      });
-      return;
-    }
-    if (mode === 'video') {
-      const requestedClipId = String(payload.clipId || payload.clip_id || payload.elementId || payload.element_id || '').trim();
-      const hyperframesClip = requestedClipId
-        ? getHyperframesElementById(requestedClipId)
-        : (getSelectedCreativeElement()?.type === 'hyperframes'
-            ? getSelectedCreativeElement()
-            : (creativeSceneDoc.elements || []).find((element) => element?.type === 'hyperframes' && element.visible !== false));
-      if (hyperframesClip && (hyperframesClip?.meta?.html || hyperframesClip?.meta?.projectPath)) {
-        const html = await ensureHyperframesElementSourceHtml(hyperframesClip);
-        if (!html.trim()) throw new Error('HyperFrames source HTML is missing.');
-        const durationMs = Math.max(1000, Number(payload.durationMs || payload.duration_ms) || Number(hyperframesClip.meta.durationMs) || Number(creativeSceneDoc.durationMs) || 6000);
-        let sampleTimes = Array.isArray(payload.sampleTimesMs)
-          ? payload.sampleTimesMs.map((value) => Number(value)).filter((value) => Number.isFinite(value))
-          : [];
-        if (payload.contactSheet === true && sampleTimes.length === 0) {
-          sampleTimes = [0, Math.round(durationMs / 2), Math.max(0, durationMs - 50)];
-        }
-        if (!sampleTimes.length && Number.isFinite(Number(payload.atMs))) sampleTimes = [Number(payload.atMs)];
-        const qa = await api('/api/canvas/hyperframes/qa', {
-          method: 'POST',
-          body: {
-            html,
-            width: Number(payload.width) || Number(hyperframesClip.width) || Number(creativeSceneDoc.width) || 1080,
-            height: Number(payload.height) || Number(hyperframesClip.height) || Number(creativeSceneDoc.height) || 1920,
-            durationMs,
-            samplePoints: sampleTimes,
-            timeoutMs: Number(payload.timeoutMs || payload.timeout_ms) || undefined,
-          },
-        });
-        if (!qa?.success) throw new Error(qa?.error || 'HyperFrames snapshot QA failed.');
-        const report = qa.report || {};
-        const snapshots = (Array.isArray(report.samples) ? report.samples : []).map((frame) => ({
-          width: Number(payload.width) || Number(hyperframesClip.width) || Number(creativeSceneDoc.width) || 1080,
-          height: Number(payload.height) || Number(hyperframesClip.height) || Number(creativeSceneDoc.height) || 1920,
-          atMs: Number(frame.timeMs) || 0,
-          mimeType: 'image/png',
-          screenshotPath: frame.screenshotPath || '',
-          dataUrl: '',
-        }));
-        data = {
-          success: true,
-          hyperframes: true,
-          clipId: hyperframesClip.id,
-          ok: report.ok !== false,
-          sampleCount: snapshots.length,
-          frames: snapshots.map(({ width, height, atMs, mimeType, screenshotPath }) => ({ width, height, atMs, mimeType, screenshotPath })),
-          qa: report,
-        };
-        sendCreativeCommandResult(message, {
-          success: true,
-          data,
-          snapshot: snapshots.length === 1 ? snapshots[0] : null,
-          snapshots,
-        });
-        return;
-      }
-    }
-    const previousTimeline = creativeTimelineMs;
-    const includeDataUrl = true;
-    const durationMs = Math.max(0, Number(creativeSceneDoc?.durationMs) || 0);
-    const frameRate = Math.max(1, Number(creativeSceneDoc?.frameRate) || 60);
-    const maxFrameSamples = Math.max(1, Math.min(600, Math.floor(Number(payload.maxFrames) || 600)));
-    let sampleTimes = mode === 'video' && Array.isArray(payload.sampleTimesMs)
-      ? payload.sampleTimesMs
-          .map((value) => Number(value))
-          .filter((value) => Number.isFinite(value))
-      : [];
-    if (mode === 'video' && payload.contactSheet === true && sampleTimes.length === 0) {
-      sampleTimes = [0, Math.round(Math.max(1000, durationMs || 8000) / 2), Math.max(0, Math.round((durationMs || 8000) - 250))];
-    }
-    if (mode === 'video' && payload.sampleEveryFrame === true) {
-      const frameStepMs = Math.max(1, Math.round(1000 / frameRate));
-      const startMs = Math.max(0, Number(payload.startMs) || 0);
-      const endMs = Math.max(startMs, Math.min(durationMs || startMs, Number.isFinite(Number(payload.endMs)) ? Number(payload.endMs) : durationMs));
-      sampleTimes = [];
-      for (let atMs = startMs; atMs <= endMs && sampleTimes.length < maxFrameSamples; atMs += frameStepMs) {
-        sampleTimes.push(Math.min(endMs, Math.round(atMs)));
-      }
-      if (durationMs > 0 && sampleTimes.length < maxFrameSamples && sampleTimes[sampleTimes.length - 1] !== endMs) {
-        sampleTimes.push(endMs);
-      }
-    } else if (mode === 'video' && sampleTimes.length === 0 && Number.isFinite(Number(payload.frameStepMs)) && Number(payload.frameStepMs) > 0) {
-      const frameStepMs = Math.max(1, Number(payload.frameStepMs));
-      const startMs = Math.max(0, Number(payload.startMs) || 0);
-      const endMs = Math.max(startMs, Math.min(durationMs || startMs, Number.isFinite(Number(payload.endMs)) ? Number(payload.endMs) : durationMs));
-      sampleTimes = [];
-      for (let atMs = startMs; atMs <= endMs && sampleTimes.length < maxFrameSamples; atMs += frameStepMs) {
-        sampleTimes.push(Math.min(endMs, Math.round(atMs)));
-      }
-    }
-    if (mode === 'video' && sampleTimes.length > maxFrameSamples) {
-      sampleTimes = sampleTimes.slice(0, maxFrameSamples);
-    }
-    const buildReviewDataUrl = (canvas) => {
-      const maxSide = 960;
-      const width = Math.max(1, Number(canvas?.width) || 1);
-      const height = Math.max(1, Number(canvas?.height) || 1);
-      const scale = Math.min(1, maxSide / Math.max(width, height));
-      if (scale >= 0.999) return canvas.toDataURL('image/jpeg', 0.78);
-      const reviewCanvas = document.createElement('canvas');
-      reviewCanvas.width = Math.max(1, Math.round(width * scale));
-      reviewCanvas.height = Math.max(1, Math.round(height * scale));
-      const ctx = reviewCanvas.getContext('2d');
-      ctx.drawImage(canvas, 0, 0, reviewCanvas.width, reviewCanvas.height);
-      return reviewCanvas.toDataURL('image/jpeg', 0.78);
-    };
-    const renderOne = async (atMsValue) => {
-      if (mode === 'video' && Number.isFinite(Number(atMsValue))) {
-        setCreativeTimelinePosition(Number(atMsValue), { render: false, persist: false });
-      }
-      renderCreativeWorkspace();
-      await waitForCreativeExportPaint(1);
-      await syncCreativeVideoElementsToTimeline({ atMs: mode === 'video' ? Number(atMsValue ?? previousTimeline) : creativeTimelineMs });
-      const canvas = await renderCreativeExportCanvas('png');
-      return {
-        width: canvas.width,
-        height: canvas.height,
-        atMs: mode === 'video' ? Number(atMsValue ?? previousTimeline) : null,
-        mimeType: 'image/jpeg',
-        dataUrl: includeDataUrl ? buildReviewDataUrl(canvas) : '',
-      };
-    };
-    const snapshots = sampleTimes.length
-      ? []
-      : [await renderOne(Number.isFinite(Number(payload.atMs)) ? Number(payload.atMs) : previousTimeline)];
-    for (const atMs of sampleTimes) {
-      snapshots.push(await renderOne(atMs));
-    }
-    if (mode === 'video') {
-      setCreativeTimelinePosition(previousTimeline, { render: false, persist: false });
-      renderCreativeWorkspace();
-    }
-    const first = snapshots[0] || {};
-    data = {
-      width: first.width || 0,
-      height: first.height || 0,
-      atMs: first.atMs ?? null,
-      sampleCount: snapshots.length,
-      sampleEveryFrame: payload.sampleEveryFrame === true,
-      truncated: mode === 'video' && (
-        (Array.isArray(payload.sampleTimesMs) && payload.sampleTimesMs.length > snapshots.length)
-        || (payload.sampleEveryFrame === true && durationMs > 0 && snapshots.length >= maxFrameSamples)
-      ),
-      maxFrameSamples,
-      frames: snapshots.map(({ width, height, atMs }) => ({ width, height, atMs })),
-    };
-    sendCreativeCommandResult(message, {
-      success: true,
-      data,
-      snapshot: snapshots.length === 1 ? snapshots[0] : null,
-      snapshots,
-    });
-    return;
-    } else if (command === 'export') {
-      const format = String(payload.format || '').trim().toLowerCase();
-      if (!format) throw new Error('export requires format.');
-      if (mode === 'video' && creativeHtmlMotionClip && format === 'mp4') {
-        data = await exportCreativeHtmlMotionClip(payload);
-        sendCreativeCommandResult(message, { success: true, data });
-        return;
-      }
-      const preExportValidation = validateCreativeSceneLayout(creativeSceneDoc, { mode });
-      if (!preExportValidation.ok && payload.force !== true) {
-        throw new Error(`Creative layout validation blocked export: ${preExportValidation.issues.slice(0, 3).map((issue) => issue.message).join('; ')}`);
-      }
-      const exportResult = await canvasExportCreative(format, { skipDownload: payload.download !== true, workspaceOnly: payload.workspaceOnly !== false });
-      data = { format, activeExport: creativeActiveExport || null, export: exportResult || null, preExportValidation };
-  } else if (command === 'save_scene') {
-    data = await canvasSaveCreativeSceneSnapshot({ filename: payload.filename });
-  } else if (command === 'composition_get') {
-    const comp = ensureCreativeComposition();
-    data = { composition: comp, summary: comp ? summarizeComposition(comp) : null };
-  } else if (command === 'composition_add_track') {
-    const comp = ensureCreativeComposition();
-    if (!comp) throw new Error('Composition not available.');
-    const kind = String(payload.kind || 'video').trim().toLowerCase();
-    if (!['video', 'audio', 'caption'].includes(kind)) throw new Error('kind must be video, audio, or caption');
-    const track = compositionAddTrack(comp, kind, payload.label);
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { track, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_add_clip') {
-    const comp = ensureCreativeComposition();
-    if (!comp) throw new Error('Composition not available.');
-    const clip = compositionAddClip(comp, payload || {});
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { clip, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_move_clip') {
-    const comp = ensureCreativeComposition();
-    const clip = compositionMoveClip(comp, payload.clipId, payload || {});
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { clip, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_trim_clip') {
-    const comp = ensureCreativeComposition();
-    const clip = compositionTrimClip(comp, payload.clipId, payload.edge, payload.toMs);
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { clip, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_split_at') {
-    const comp = ensureCreativeComposition();
-    const result = compositionSplitClip(comp, payload.clipId, Number(payload.atMs) || 0);
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { left: result.left, right: result.right, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_delete_clip') {
-    const comp = ensureCreativeComposition();
-    const removed = compositionDeleteClip(comp, payload.clipId, { ripple: payload.ripple === true });
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { removed, summary: summarizeComposition(comp) };
-  } else if (command === 'composition_set_transition') {
-    const comp = ensureCreativeComposition();
-    const clip = compositionSetTransition(comp, payload.clipId, payload.edge, payload.transition || null);
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { clip };
-  } else if (command === 'composition_select_clip') {
-    const comp = ensureCreativeComposition();
-    if (!comp) throw new Error('Composition not available.');
-    const clipId = payload.clipId == null ? null : String(payload.clipId);
-    if (clipId !== null && !comp.clips.find((c) => c.id === clipId)) throw new Error(`Unknown clipId: ${clipId}`);
-    comp.selectedClipId = clipId;
-    persistCompositionState();
-    renderCreativeWorkspace?.();
-    data = { selectedClipId: clipId };
-  } else if (command === 'composition_lint') {
-    const comp = ensureCreativeComposition();
-    data = compositionLint(comp);
-  } else if (command === 'composition_save') {
-    const comp = ensureCreativeComposition();
-    if (!comp) throw new Error('Composition not available.');
-    const sid = window.currentChatSessionId || 'default';
-    const root = (window.canvasProjectRoot || '').toString();
-    const filename = String(payload.filename || '').trim();
-    const response = await fetch('/api/canvas/composition', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: sid,
-        root,
-        mode,
-        composition: comp,
-        ...(filename ? { filename } : {}),
-      }),
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
-    data = { path: json.path, absPath: json.absPath, summary: json.summary };
-  } else if (command === 'composition_render') {
-    const comp = ensureCreativeComposition();
-    if (!comp) throw new Error('Composition not available.');
-    const sid = window.currentChatSessionId || 'default';
-    const root = (window.canvasProjectRoot || '').toString();
-    const format = String(payload.format || 'mp4').toLowerCase();
-    const filename = String(payload.filename || '').trim();
-    const response = await fetch('/api/canvas/composition/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: sid,
-        root,
-        composition: comp,
-        format,
-        ...(filename ? { filename } : {}),
-      }),
-    });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
-    data = {
-      path: json.path,
-      absPath: json.absPath,
-      format: json.format,
-      durationMs: json.durationMs,
-      width: json.width,
-      height: json.height,
-      frameRate: json.frameRate,
-      clipCount: json.clipCount,
-      audioTrackCount: json.audioTrackCount,
-      elapsedMs: json.elapsedMs,
-    };
-  } else {
-    throw new Error(`Unknown creative command: ${command}`);
-  }
-
-    sendCreativeCommandResult(message, { success: true, data });
-  } finally {
-    window.__pmSuppressCreativeAutoOpen = previousSuppress;
-    if (backgroundCommand && previousActiveSessionId && getChatSessionById(previousActiveSessionId)) {
-      window.activeChatSessionId = previousActiveSessionId;
-      if (previousAgentSessionId) setAgentSessionId(previousAgentSessionId);
-      else setAgentSessionId(previousActiveSessionId);
-      window.currentCreativeMode = previousCreativeMode;
-      syncActiveChat();
-      if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
-      if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
-      if (canvasOpen) toggleCanvas(false, { force: true });
-    }
-  }
+  const module = creativeWorkspaceRuntimeModule || await loadCreativeWorkspaceRuntime();
+  return module.handleCreativeCommandMessage(creativeWorkspaceRuntimeContext, message);
 }
 
 function buildBrowserTeachCallerContext(latestMessage = '') {
@@ -46632,8 +44871,10 @@ async function loadApprovalProcessRun(id, options = {}) {
       if (run) break;
       if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+    const processRunCards = run ? await loadProcessRunCards() : null;
+    if (processRunCards) processRunCards.installProcessRunCardHandlers(document);
     body.innerHTML = run
-      ? renderProcessRunCard(run)
+      ? processRunCards.renderProcessRunCard(run)
       : '<div class="chat-approval-subdetail">No linked command run yet. It will appear here after execution starts.</div>';
   } catch (err) {
     body.innerHTML = `<div class="chat-approval-subdetail">Could not load command run: ${escHtml(err?.message || err)}</div>`;
@@ -46934,11 +45175,6 @@ if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelIn
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
 if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
-if (!window.__promProcessRunHandlersInstalled) {
-  window.__promProcessRunHandlersInstalled = true;
-  installProcessRunCardHandlers(document);
-}
-
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.generateSessionId = generateSessionId;
 window.setAgentSessionId = setAgentSessionId;
@@ -46969,6 +45205,7 @@ window.saveChatSessions = saveChatSessions;
 window.makeSessionTitle = makeSessionTitle;
 window.loadChatSessions = loadChatSessions;
 window._loadSessionFromServer = _loadSessionFromServer;
+window.getDesktopChatRuntimeDiagnostics = getDesktopChatRuntimeDiagnostics;
 window.refreshChatContextWindow = refreshChatContextWindow;
 window.scheduleChatContextWindowRefresh = scheduleChatContextWindowRefresh;
 window.toggleChatContextWindowPopover = toggleChatContextWindowPopover;
