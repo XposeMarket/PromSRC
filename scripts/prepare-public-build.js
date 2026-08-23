@@ -1,5 +1,6 @@
 'use strict';
 
+const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -136,6 +137,14 @@ function expectedPublicWebUiFiles() {
   for (const name of ['manifest.webmanifest', 'service-worker.js']) {
     if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
   }
+  const assetManifestPath = path.join(OUT_ROOT, 'asset-manifest.json');
+  if (fs.existsSync(assetManifestPath)) {
+    expected.add('asset-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(assetManifestPath, 'utf8'));
+    for (const asset of manifest.assets || []) {
+      expected.add(String(asset.path || '').replace(/^\/+/, ''));
+    }
+  }
   return expected;
 }
 
@@ -225,7 +234,7 @@ function writeLocalFontCss() {
     }
     writeFileIfChanged(path.join(fontsDir, filename), fs.readFileSync(src));
     declarations.push(
-      `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};font-display:swap;src:url('./fonts/${filename}') format('woff2');}`,
+      `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};font-display:swap;src:url('../fonts/${filename}') format('woff2');}`,
     );
   }
   writeFileIfChanged(path.join(OUT_STATIC, 'styles', 'fonts.css'), `${declarations.join('\n')}\n`);
@@ -405,6 +414,18 @@ function buildPublicWebUi() {
       copyFileForPublicBuild(srcFile, path.join(OUT_ROOT, name), { normalizeText: true });
     }
   }
+
+  const productionBuild = childProcess.spawnSync(
+    process.execPath,
+    [path.join(ROOT, 'scripts', 'build-web-ui-production.mjs')],
+    { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' },
+  );
+  if (productionBuild.status !== 0) {
+    throw new Error(
+      `[prepare-public-build] Production module build failed.\n${productionBuild.stdout || ''}${productionBuild.stderr || ''}`,
+    );
+  }
+  if (productionBuild.stdout) process.stdout.write(productionBuild.stdout);
 
   removeStalePublicWebUiFiles();
 }

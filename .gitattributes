@@ -1,0 +1,5 @@
+# Content-addressed Web UI output must retain the exact bytes recorded in
+# asset-manifest.json on every checkout, including Windows with core.autocrlf.
+generated/public-web-ui/asset-manifest.json text eol=lf
+generated/public-web-ui/build/**/*.js text eol=lf
+generated/public-web-ui/build/**/*.css text eol=lf

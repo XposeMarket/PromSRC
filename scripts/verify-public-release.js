@@ -282,6 +282,12 @@ function verifyRuntimeDependencies(appEntries) {
   for (const assetPath of manifest.requiredPublicWebAssets || []) {
     assertAsarEntry(appEntries, `generated/public-web-ui/${assetPath}`);
   }
+  const webAssetManifestText = readAsarText('generated/public-web-ui/asset-manifest.json');
+  if (!webAssetManifestText) throw new Error('Public Web UI asset manifest is unreadable in app.asar.');
+  const webAssetManifest = JSON.parse(webAssetManifestText);
+  for (const asset of webAssetManifest.assets || []) {
+    assertAsarEntry(appEntries, `generated/public-web-ui/${String(asset.path || '').replace(/^\/+/, '')}`);
+  }
   assertAsarEntry(appEntries, 'runtime-dependencies.public.json');
 
   const unpackedNodeModules = path.join(RESOURCES_DIR, 'app.asar.unpacked', 'node_modules');

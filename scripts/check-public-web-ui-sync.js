@@ -72,18 +72,6 @@ function toPosix(value) {
   return value.split(path.sep).join('/');
 }
 
-function transformHtml(html) {
-  return html
-    .replace(/(["'])\/src\//g, '$1/static/')
-    .replace(/(["'])src\//g, '$1static/')
-    .replace(/(["'])\.\/(src)\//g, '$1./static/')
-    .replace(/(EXTRACTED to )src\//g, '$1static/')
-    .replace(
-      '</head>',
-      '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
-    );
-}
-
 function compareBuffer(expectedPath, actualPath, expectedBuffer) {
   if (!fs.existsSync(actualPath)) {
     fail(`Missing generated file: ${toPosix(path.relative(ROOT, actualPath))}`);
@@ -112,8 +100,7 @@ function verifyGeneratedWebUiIsCurrent() {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;
     expectedFiles.add(name);
-    const expectedHtml = Buffer.from(transformHtml(fs.readFileSync(sourcePath, 'utf8')), 'utf8');
-    compareBuffer(sourcePath, path.join(OUT_ROOT, name), expectedHtml);
+    if (!fs.existsSync(path.join(OUT_ROOT, name))) fail(`Missing generated document: ${name}`);
   }
   for (const sourcePath of walkFiles(SRC_WEB_UI_SRC)) {
     const relative = path.relative(SRC_WEB_UI_SRC, sourcePath);
@@ -132,13 +119,30 @@ function verifyGeneratedWebUiIsCurrent() {
   }
 
   // PWA assets that live at the site root, not under static/.
-  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js'];
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest'];
   for (const name of ROOT_LEVEL_FILES) {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;
     const generatedPath = path.join(OUT_ROOT, name);
     expectedFiles.add(name);
     compareBuffer(sourcePath, generatedPath, fs.readFileSync(sourcePath));
+  }
+  expectedFiles.add('service-worker.js');
+  if (!fs.existsSync(path.join(OUT_ROOT, 'service-worker.js'))) fail('Missing generated service-worker.js');
+
+  const assetManifestPath = path.join(OUT_ROOT, 'asset-manifest.json');
+  expectedFiles.add('asset-manifest.json');
+  if (!fs.existsSync(assetManifestPath)) {
+    fail('Missing generated asset-manifest.json');
+  } else {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(assetManifestPath, 'utf8'));
+      for (const asset of manifest.assets || []) {
+        expectedFiles.add(String(asset.path || '').replace(/^\/+/, ''));
+      }
+    } catch (error) {
+      fail(`Invalid generated asset-manifest.json: ${error.message}`);
+    }
   }
 
   for (const generatedPath of walkFiles(OUT_ROOT)) {
@@ -242,13 +246,25 @@ function verifySourceWebUi() {
 }
 
 function verifyGeneratedWebUi() {
-  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'index.html'), 'static');
-  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'mobile.html'), 'static');
+  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'index.html'), 'build');
+  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'mobile.html'), 'build');
+}
+
+function verifyProductionManifest() {
+  const result = childProcess.spawnSync(
+    process.execPath,
+    [path.join(ROOT, 'scripts', 'build-web-ui-production.mjs'), '--check'],
+    { cwd: ROOT, encoding: 'utf8' },
+  );
+  if (result.status !== 0) {
+    fail(`Production module build is stale:\n${result.stdout || ''}${result.stderr || ''}`);
+  }
 }
 
 verifySourceWebUi();
 verifyGeneratedWebUiIsCurrent();
 verifyGeneratedWebUi();
+verifyProductionManifest();
 
 if (failures.length > 0) {
   console.error('[check-public-web-ui-sync] Web UI check failed:');

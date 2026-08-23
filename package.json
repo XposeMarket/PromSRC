@@ -13,6 +13,7 @@
     "build": "npm run build:backend && npm run build:web",
     "build:backend": "tsc && node scripts/copy-creative-renderers.js && node scripts/copy-runtime-prompt-assets.js && node scripts/copy-extension-descriptors.js",
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",
+    "build:web-production": "node scripts/build-web-ui-production.mjs",
     "build:web": "npm run check:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js",
     "sync:web-ui": "npm run build:thinking-orb && node scripts/prepare-public-build.js --web-only && npm run check:web-ui",
@@ -95,6 +96,7 @@
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
     "test:mobile-route-chunks": "node scripts/test-mobile-route-chunks.mjs",
+    "test:web-ui-production": "node scripts/test-web-ui-production-build.mjs && node scripts/test-web-ui-production-smoke.mjs",
     "test:background-agent-steering": "tsx src/gateway/tasks/background-agent-stream.regression.ts && node scripts/test-background-agent-side-chat-contract.mjs",
     "test:mobile-gateway": "node scripts/test-mobile-gateway-contract.mjs",
     "test:funnel-routing": "tsx src/gateway/routes/funnel-routing.regression.ts",
@@ -234,6 +236,7 @@
     "@typescript-eslint/parser": "^7.0.0",
     "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.27.3",
     "eslint": "^8.57.0",
     "rcedit": "^4.0.1",
     "tsx": "^4.7.0"

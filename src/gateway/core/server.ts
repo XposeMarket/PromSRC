@@ -98,6 +98,9 @@ function getRawStaticCacheControl(req: http.IncomingMessage, filePath: string): 
   if (pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')) {
     return 'no-cache';
   }
+  // Production /build filenames contain a content hash and are immutable. HTML,
+  // the asset manifest, and the service worker remain revalidated below.
+  if (pathname.startsWith('/build/')) return 'public, max-age=31536000, immutable';
   // Generated /static module filenames are stable rather than content-hashed.
   // Always revalidate them so an app update cannot leave a browser executing
   // yesterday's JS/CSS under a still-fresh 24-hour HTTP cache entry.

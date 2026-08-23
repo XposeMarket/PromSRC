@@ -8,6 +8,8 @@ import { chromium } from 'playwright';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const publicRoot = path.join(root, 'generated', 'public-web-ui');
+const assetManifest = JSON.parse(fs.readFileSync(path.join(publicRoot, 'asset-manifest.json'), 'utf8'));
+const mobileOutput = (filename) => assetManifest.moduleOutputs[`src/mobile/${filename}`];
 const ownerFiles = [
   'mobile-schedule-pages.js',
   'mobile-teams-pages.js',
@@ -16,7 +18,7 @@ const ownerFiles = [
   'mobile-tasks-pages.js',
   'mobile-creative-pages.js',
   'mobile-subagent-pages.js',
-];
+].map(mobileOutput);
 
 const mime = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -97,7 +99,7 @@ function requestMetrics(paths) {
   const unique = [...new Set(paths)];
   const totals = { jsRawBytes: 0, jsGzipBytes: 0, cssRawBytes: 0, cssGzipBytes: 0, moduleCount: 0 };
   for (const pathname of unique) {
-    if (!pathname.startsWith('/static/')) continue;
+    if (!pathname.startsWith('/static/') && !pathname.startsWith('/build/')) continue;
     const file = safeFile(publicRoot, pathname);
     if (!file || !fs.existsSync(file)) continue;
     const extension = path.extname(file).toLowerCase();
@@ -139,19 +141,20 @@ async function inspectRoute(browser, baseUrl, { route, paired, expectedOwner, fo
   const navigation = await page.goto(`${baseUrl}${route}`, { waitUntil: 'domcontentloaded' });
   assert(navigation, `${route}: missing navigation response`);
   const documentHtml = await navigation.text();
-  assert(documentHtml.includes('/static/mobile/mobile-entry.js'), `${route}: mobile entry document was not served`);
+  assert(documentHtml.includes(assetManifest.entries.mobile.js), `${route}: production mobile entry document was not served`);
   assert(!documentHtml.includes('id="ember-canvas"'), `${route}: desktop shell leaked into mobile document`);
   assert(documentHtml.length < 10_000, `${route}: mobile document is unexpectedly large (${documentHtml.length} bytes)`);
 
-  await waitFor(() => requests.slice(start).some((pathname) => pathname.endsWith(expectedOwner)));
+  await waitFor(() => requests.slice(start).includes(expectedOwner));
   await page.waitForSelector(selector, { timeout: 8_000 });
   await page.waitForTimeout(250);
   const observed = requests.slice(start);
 
-  assert(observed.includes('/static/styles/mobile.css'), `${route}: mobile stylesheet was not requested`);
-  assert(!observed.some((pathname) => /\/static\/styles\/(?:base|components|settings|multi-chat-workspace)\.css$/.test(pathname)), `${route}: desktop stylesheet was requested`);
+  assert(observed.includes(assetManifest.entries.mobile.css), `${route}: mobile stylesheet was not requested`);
+  assert(!observed.includes(assetManifest.entries.desktop.css), `${route}: desktop stylesheet was requested`);
+  assert(!observed.some((pathname) => /\/static\/styles\/(?:base|components|settings|multi-chat-workspace)\.css$/.test(pathname)), `${route}: raw desktop stylesheet was requested`);
   for (const owner of forbiddenOwners) {
-    assert(!observed.some((pathname) => pathname.endsWith(owner)), `${route}: fetched unrelated owner ${owner}`);
+    assert(!observed.includes(owner), `${route}: fetched unrelated owner ${owner}`);
   }
   for (const apiPath of forbiddenApis) {
     assert(!observed.some((pathname) => pathname.startsWith(apiPath)), `${route}: issued unrelated API request ${apiPath}`);
@@ -172,32 +175,32 @@ try {
   const pair = await inspectRoute(browser, baseUrl, {
     route: '/mobile/pair',
     paired: false,
-    expectedOwner: 'mobile-pairing-page.js',
-    forbiddenOwners: ['mobile-pages.js', ...ownerFiles],
+    expectedOwner: mobileOutput('mobile-pairing-page.js'),
+    forbiddenOwners: [mobileOutput('mobile-pages.js'), ...ownerFiles],
   });
   const chat = await inspectRoute(browser, baseUrl, {
     route: '/mobile/chat',
     paired: true,
-    expectedOwner: 'mobile-pages.js',
+    expectedOwner: mobileOutput('mobile-pages.js'),
     forbiddenOwners: ownerFiles,
     forbiddenApis: ['/api/bg-tasks', '/api/schedules', '/api/teams', '/api/subagents'],
   });
   const schedule = await inspectRoute(browser, baseUrl, {
     route: '/mobile/schedule',
     paired: true,
-    expectedOwner: 'mobile-schedule-pages.js',
-    forbiddenOwners: ['mobile-pages.js', ...ownerFiles.filter((file) => file !== 'mobile-schedule-pages.js')],
+    expectedOwner: mobileOutput('mobile-schedule-pages.js'),
+    forbiddenOwners: [mobileOutput('mobile-pages.js'), ...ownerFiles.filter((file) => file !== mobileOutput('mobile-schedule-pages.js'))],
     selector: '#pm-sched-body',
   });
 
   const routeContracts = [
-    { route: '/mobile/settings', expectedOwner: 'mobile-settings.js', allowed: [], selector: '.pm-settings-body' },
-    { route: '/mobile/creative', expectedOwner: 'mobile-creative-pages.js', allowed: ['mobile-creative-pages.js'], selector: '#pm-creative-body' },
-    { route: '/mobile/teams', expectedOwner: 'mobile-teams-pages.js', allowed: ['mobile-teams-pages.js'], selector: '#pm-teams-body' },
-    { route: '/mobile/tasks', expectedOwner: 'mobile-tasks-pages.js', allowed: ['mobile-tasks-pages.js', 'mobile-teams-pages.js'], selector: '#pm-tasks-body' },
-    { route: '/mobile/hub', expectedOwner: 'mobile-hub-pages.js', allowed: ['mobile-hub-pages.js'], selector: '#pm-hub-body' },
-    { route: '/mobile/proposals', expectedOwner: 'mobile-proposals-pages.js', allowed: ['mobile-proposals-pages.js', 'mobile-hub-pages.js'], selector: '#pm-proposals-body' },
-    { route: '/mobile/subagents', expectedOwner: 'mobile-subagent-pages.js', allowed: ['mobile-subagent-pages.js', 'mobile-teams-pages.js', 'mobile-tasks-pages.js'], selector: '#pm-subagents-body' },
+    { route: '/mobile/settings', expectedOwner: mobileOutput('mobile-settings.js'), allowed: [], selector: '.pm-settings-body' },
+    { route: '/mobile/creative', expectedOwner: mobileOutput('mobile-creative-pages.js'), allowed: [mobileOutput('mobile-creative-pages.js')], selector: '#pm-creative-body' },
+    { route: '/mobile/teams', expectedOwner: mobileOutput('mobile-teams-pages.js'), allowed: [mobileOutput('mobile-teams-pages.js')], selector: '#pm-teams-body' },
+    { route: '/mobile/tasks', expectedOwner: mobileOutput('mobile-tasks-pages.js'), allowed: [mobileOutput('mobile-tasks-pages.js'), mobileOutput('mobile-teams-pages.js')], selector: '#pm-tasks-body' },
+    { route: '/mobile/hub', expectedOwner: mobileOutput('mobile-hub-pages.js'), allowed: [mobileOutput('mobile-hub-pages.js')], selector: '#pm-hub-body' },
+    { route: '/mobile/proposals', expectedOwner: mobileOutput('mobile-proposals-pages.js'), allowed: [mobileOutput('mobile-proposals-pages.js'), mobileOutput('mobile-hub-pages.js')], selector: '#pm-proposals-body' },
+    { route: '/mobile/subagents', expectedOwner: mobileOutput('mobile-subagent-pages.js'), allowed: [mobileOutput('mobile-subagent-pages.js'), mobileOutput('mobile-teams-pages.js'), mobileOutput('mobile-tasks-pages.js')], selector: '#pm-subagents-body' },
   ];
   for (const contract of routeContracts) {
     await inspectRoute(browser, baseUrl, {

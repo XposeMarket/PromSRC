@@ -902,25 +902,29 @@ const PAGE_TITLES = {
   plugins: ['Plugins', 'Connectors, integrations, and MCP access'],
 };
 
-const PAGE_MODULES = {
-  chat: './pages/ChatPage.js',
-  bgtasks: './pages/TasksPage.js',
-  schedule: './pages/SchedulePage.js',
-  teams: './pages/TeamsPage.js',
-  subagents: './pages/SubagentsPage.js',
-  proposals: './pages/ProposalsPage.js',
-  audit: './pages/AuditPage.js',
-  memory: './pages/MemoryPage.js',
-  hub: './pages/HubPage.js',
-  plugins: './pages/ConnectionsPage.js',
-};
+// Keep every route import syntactically explicit. Raw-module development still
+// gets native browser imports, while the production builder can now discover
+// and name each feature-owned lazy chunk instead of preserving a runtime-only
+// `import(variable)` that points outside the hashed build.
+const PAGE_MODULE_LOADERS = Object.freeze({
+  chat: () => import('./pages/ChatPage.js'),
+  bgtasks: () => import('./pages/TasksPage.js'),
+  schedule: () => import('./pages/SchedulePage.js'),
+  teams: () => import('./pages/TeamsPage.js'),
+  subagents: () => import('./pages/SubagentsPage.js'),
+  proposals: () => import('./pages/ProposalsPage.js'),
+  audit: () => import('./pages/AuditPage.js'),
+  memory: () => import('./pages/MemoryPage.js'),
+  hub: () => import('./pages/HubPage.js'),
+  plugins: () => import('./pages/ConnectionsPage.js'),
+});
 const _pageModulePromises = new Map();
 
 function ensurePageModule(mode) {
-  const src = PAGE_MODULES[mode];
-  if (!src) return Promise.resolve();
+  const load = PAGE_MODULE_LOADERS[mode];
+  if (!load) return Promise.resolve();
   if (!_pageModulePromises.has(mode)) {
-    _pageModulePromises.set(mode, import(src).catch((err) => {
+    _pageModulePromises.set(mode, load().catch((err) => {
       _pageModulePromises.delete(mode);
       console.error(`[app] Failed to load page module for ${mode}:`, err);
       throw err;
