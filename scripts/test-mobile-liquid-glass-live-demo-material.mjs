@@ -52,6 +52,8 @@ assert.match(mobileBase, /--pm-mobile-composer-gap:\s*11px;/,
   'historical mobile composer spacing token must stay 11px');
 assert.match(mobileBase, /\.pm-tabbar\s*\{[\s\S]*?height:\s*56px;[\s\S]*?padding:\s*4px;/,
   'historical tabbar body must stay 56px tall with 4px internal padding');
+assert.match(mobileBase, /\.pm-tabbar\s*\{[\s\S]*?box-sizing:\s*border-box;[\s\S]*?height:\s*56px;/,
+  'historical 56px tabbar height must describe the outer border-box footprint');
 assert.match(mobileBase, /\.pm-composer\s*\{[\s\S]*?bottom:\s*calc\(var\(--pm-tabbar-h\) \+ env\(safe-area-inset-bottom\) \+ var\(--pm-mobile-composer-gap, 22px\)\);/,
   'composer must remain positioned from the historical tabbar reservation and gap');
 

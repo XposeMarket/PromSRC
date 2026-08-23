@@ -1681,12 +1681,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   .pm-voice-snap-arrow-down { animation: none; }
 }
 
-/* ---------- bottom tab nav ---------- */
 .pm-tabbar {
   position: absolute;
   left: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left));
   right: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right));
   bottom: calc(env(safe-area-inset-bottom) + var(--pm-mobile-tabbar-bottom, 10px));
+  box-sizing: border-box;
   height: 56px;
   padding: 4px;
   display: grid;
