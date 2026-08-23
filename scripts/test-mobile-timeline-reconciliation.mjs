@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { getChatRuntime, resetChatRuntimeRegistryForTests } from '../web-ui/src/features/chat/runtime/chat-runtime.js';
 import { createMobileTimelineView } from '../web-ui/src/features/chat/timeline/mobile-timeline-view.js';
+
+const sourceTimeline = fs.readFileSync('web-ui/src/features/chat/timeline/mobile-timeline-view.js', 'utf8');
+const generatedTimeline = fs.readFileSync('generated/public-web-ui/static/features/chat/timeline/mobile-timeline-view.js', 'utf8');
+assert.equal(
+  generatedTimeline,
+  sourceTimeline,
+  'mobile timeline source and generated public-web mirror must stay identical',
+);
 
 resetChatRuntimeRegistryForTests();
 const runtime = getChatRuntime({ gatewayId: 'gateway-test', sessionId: 'mobile-session' });
