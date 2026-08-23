@@ -24,7 +24,9 @@ assert.doesNotMatch(index, /__connectionsBootstrapped/, 'Chat boot must not fetc
 
 assert.match(app, /'plugins'/, 'plugins must be a valid desktop mode');
 assert.match(app, /plugins:\s*\['Plugins',/, 'plugins must have page title metadata');
-assert.match(app, /plugins:\s*'\.\/pages\/ConnectionsPage\.js'/, 'plugins must lazy-load ConnectionsPage');
+assert.match(app, /const PAGE_MODULE_LOADERS = Object\.freeze\(/, 'desktop pages must use explicit lazy loader ownership');
+assert.match(app, /plugins:\s*\(\)\s*=>\s*import\('\.\/pages\/ConnectionsPage\.js'\)/, 'plugins must lazy-load ConnectionsPage through an explicit production-discoverable loader');
+assert.doesNotMatch(app, /import\(src\)/, 'desktop page loading must not regress to an opaque variable import');
 assert.match(app, /plugins:\s*'plugins-view'/, 'plugins mode must show the Plugins view');
 assert.match(app, /window\.pluginsPageActivate\(\)/, 'Plugins mode must activate its page loader');
 assert.match(app, /closeConnectorView\(\)/, 'mode changes must close the shared detail surface');
