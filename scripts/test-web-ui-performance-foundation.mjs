@@ -80,6 +80,8 @@ try {
     '/src/features/chat/multi-chat-workspace-v2.js',
     '/src/features/chat/canonical-desktop-composer.js',
     '/src/context-window-live-tracking.js',
+    '/src/bot-create.js',
+    '/src/bot-create-settings-bridge.js',
   ]) {
     assert.equal(mobileRequests.includes(forbidden), false, `mobile boot requested desktop module ${forbidden}`);
   }
@@ -109,6 +111,12 @@ try {
   ]) {
     assert.equal(desktopRequests.includes(forbidden), false, `desktop Chat activation eagerly requested ${forbidden}`);
   }
+  requestedPaths.length = 0;
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('prometheus:page-activated', { detail: { mode: 'subagents' } }));
+  });
+  await page.waitForTimeout(100);
+  assert.equal(requestedPaths.includes('/src/bot-create.js'), true, 'desktop Subagents activation did not request the Bot creation owner');
   await context.close();
 } finally {
   await browser?.close().catch(() => {});

@@ -19,8 +19,7 @@ assert.equal(sourceBridge, generatedBridge, 'bot-create-settings-bridge.js sourc
 assert.equal(sourcePerf, generatedPerf, 'performance.js source/generated mirror drifted');
 
 assert.match(sourcePerf, /const shouldBootMobile = window\.__PROM_SHOULD_BOOT_MOBILE\?\.\(\) === true;/, 'shared boot must resolve the mobile surface before desktop feature requests');
-assert.match(sourcePerf, /if \(!shouldBootMobile\) \{[\s\S]*?import\('\.\/bot-create\.js'\)/, 'Bot creation must stay outside the mobile/PWA runtime');
-assert.match(sourcePerf, /if \(!shouldBootMobile\) \{[\s\S]*?import\('\.\/bot-create-settings-bridge\.js'\)/, 'desktop shell must unify the Settings creation entry point');
+assert.match(sourcePerf, /startDesktopFeature\('Bot Create', \(\) => import\('\.\/bot-create\.js'\)[\s\S]*?\.then\(\(\) => import\('\.\/bot-create-settings-bridge\.js'\)\)\)/, 'desktop Bot intent must own creation and the Settings bridge');
 assert.doesNotMatch(sourcePerf, /^import ['"]\.\/bot-create(?:-settings-bridge)?\.js['"];?$/m, 'Bot creation modules must not be static shared-entry imports');
 
 assert.match(sourceCreate, /What is this Bot for\?/, 'creation flow must expose the purpose question');
