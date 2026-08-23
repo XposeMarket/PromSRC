@@ -1,4 +1,5 @@
 import './mobile-pwa.js';
+import './mobile-voice-motion-orb.js';
 
 document.body.classList.add('pm-mobile-active', 'pm-mobile-document-scroll');
 document.body.classList.remove('auth-pending');
