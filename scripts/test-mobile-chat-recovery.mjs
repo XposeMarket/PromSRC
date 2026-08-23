@@ -61,6 +61,16 @@ assert.ok(
   composerRafDeclaration < firstComposerSpaceCall && composerShiftDeclaration < firstComposerSpaceCall,
   'composer animation state must initialize before startup can call updateChatComposerSpace',
 );
+assert.match(
+  pages,
+  /_pmVisualViewport\.addEventListener\('scroll', _onVvScroll, \{ passive: true \}\)/,
+  'the keyboard composer must follow iOS visual-viewport pans while chat history scrolls',
+);
+assert.match(
+  pages,
+  /_pmVisualViewport\.removeEventListener\('scroll', _onVvScroll\)/,
+  'the keyboard visual-viewport scroll listener must be removed during chat cleanup',
+);
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
 assert.match(api, /const fullProcess = options\.fullProcess === undefined \? force : options\.fullProcess === true/, 'forced recovery hydration must request complete process entries by default');

@@ -14795,10 +14795,16 @@ void main() {
     if (!_pmKbPinRaf) _pmKbPinRaf = requestAnimationFrame(_pmKbPinLoop);
   }
   const _onVvResize = () => { _scheduleKeyboardOffset(); _startKbPinLoop(400); };
+  // iOS pans visualViewport.offsetTop (without necessarily resizing it) when
+  // the user scrolls chat history while the keyboard stays open. Re-run the
+  // same anchoring pass so the fixed composer remains locked to the keyboard
+  // edge throughout that pan instead of drifting with the document.
+  const _onVvScroll = () => { _scheduleKeyboardOffset(); };
   const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
     _pmVisualViewport.addEventListener('resize', _onVvResize);
+    _pmVisualViewport.addEventListener('scroll', _onVvScroll, { passive: true });
   }
   window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
   const _onComposerFocusKb = () => {
@@ -14870,6 +14876,7 @@ void main() {
     _pmKbPinUntil = 0;
     if (_pmVisualViewport) {
       _pmVisualViewport.removeEventListener('resize', _onVvResize);
+      _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
     }
     window.removeEventListener('resize', _onWindowKeyboardResize);
     page.removeEventListener('focusin', _onComposerFocusInKb);
