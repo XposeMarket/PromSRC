@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "capturedFrom": "f19b299b82dfc2feb10ea1b6a4a7a02f81a46da9",
+  "scenarioVersion": 1,
+  "capturedAt": "2026-08-22T21:31:42-04:00",
+  "referenceEnvironment": {
+    "os": "Windows 11 10.0.26200",
+    "node": "20.20.2",
+    "chromium": "145.0.7632.6",
+    "classification": "diagnostic reference; deterministic structural caps are the CI gates"
+  },
+  "scenarios": [
+    {
+      "id": "desktop-100-rich-stream",
+      "measurements": {
+        "initialRenderMs": 2.3,
+        "totalRunMs": 849.8,
+        "domNodes": 496,
+        "transcriptCommits": 220,
+        "inputLatencyP95Ms": 16.4,
+        "inputLatencyP99Ms": 17,
+        "updateToPaintP95Ms": 31,
+        "longTaskMaxMs": 0,
+        "jsHeapAfterBytes": 1826262
+      }
+    },
+    {
+      "id": "mobile-500-window-pressure",
+      "measurements": {
+        "initialRenderMs": 5.2,
+        "totalRunMs": 1045.5,
+        "domNodes": 2263,
+        "transcriptCommits": 389,
+        "inputLatencyP95Ms": 16.9,
+        "inputLatencyP99Ms": 18.2,
+        "updateToPaintP95Ms": 30.8,
+        "longTaskMaxMs": 56,
+        "jsHeapAfterBytes": 2909426
+      }
+    },
+    {
+      "id": "desktop-1200-multipane-switch",
+      "measurements": {
+        "initialRenderMs": 14.3,
+        "totalRunMs": 1325.7,
+        "domNodes": 5814,
+        "transcriptCommits": 606,
+        "inputLatencyP95Ms": 17,
+        "inputLatencyP99Ms": 17.8,
+        "updateToPaintP95Ms": 27.8,
+        "longTaskMaxMs": 113,
+        "jsHeapAfterBytes": 6850163
+      }
+    }
+  ]
+}

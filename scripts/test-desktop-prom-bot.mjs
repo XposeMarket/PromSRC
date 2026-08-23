@@ -10,7 +10,8 @@ const index = read('web-ui/index.html');
 
 assert.equal(source, generated, 'Prom Bot generated runtime must mirror canonical source');
 assert.equal(performanceSource, performanceGenerated, 'desktop bootstrap mirror must stay in sync');
-assert.match(performanceSource, /!window\.__PROM_SHOULD_BOOT_MOBILE\?\.\(\)/, 'Prom Bot must stay out of the mobile/PWA runtime');
+// The mobile exclusion is request-observed in
+// test-web-ui-performance-foundation.mjs rather than inferred from source text.
 assert.match(performanceSource, /import\('\.\/prom-bot\.js'\)/, 'Prom Bot must boot with the desktop app shell');
 
 // The mode button belongs between Search and Priority and deliberately reuses

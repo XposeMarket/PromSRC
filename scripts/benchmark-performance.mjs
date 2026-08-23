@@ -5,6 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { performance as nodePerformance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { runDeterministicBrowserScenarios } from './lib/browser-performance-harness.mjs';
+import {
+  createStandardWebUiPerformanceScenarios,
+  validateWebUiPerformanceScenario,
+} from './lib/web-ui-performance-scenarios.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultUrl = process.env.PROMETHEUS_BENCHMARK_URL || 'http://127.0.0.1:18789/';
@@ -34,6 +39,13 @@ const phase = String(argument('phase', process.env.PROMETHEUS_BENCHMARK_PHASE ||
 const sourceMode = String(argument('source', 'working-tree'));
 const skipMobile = hasFlag('skip-mobile');
 const skipSyntheticChat = hasFlag('skip-synthetic-chat');
+const deterministicOnly = hasFlag('deterministic-only');
+const skipDeterministic = hasFlag('skip-deterministic');
+const enforceBudgets = hasFlag('enforce');
+const selectedScenarioIds = String(argument('scenarios', ''))
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 const GIT_SOURCE_FILES = {
   '/': 'web-ui/index.html',
@@ -227,12 +239,95 @@ function summarizeResources(metrics) {
     }));
   return {
     count: resources.length,
+    moduleCount: new Set(scripts.map((entry) => safePath(entry.name))).size,
     transferBytes: resources.reduce((sum, entry) => sum + Number(entry.transferSize || 0), 0),
     encodedBytes: resources.reduce((sum, entry) => sum + Number(entry.encodedBodySize || 0), 0),
     decodedBytes: resources.reduce((sum, entry) => sum + Number(entry.decodedBodySize || 0), 0),
     scriptDecodedBytes: scripts.reduce((sum, entry) => sum + Number(entry.decodedBodySize || 0), 0),
     largest: bySize,
   };
+}
+
+async function installLivePerformanceObservers(page) {
+  await page.addInitScript(() => {
+    const state = window.__PROM_BENCHMARK_OBSERVED = {
+      longTasks: [],
+      transcriptCommitCount: 0,
+      mutationBatches: 0,
+      mutationRecords: 0,
+    };
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) state.longTasks.push(entry.duration);
+      });
+      observer.observe({ type: 'longtask', buffered: true });
+    } catch {}
+    addEventListener('DOMContentLoaded', () => {
+      try {
+        const observer = new MutationObserver((records) => {
+          state.mutationBatches += 1;
+          state.mutationRecords += records.length;
+          if (records.some((record) => {
+            const target = record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement;
+            return target?.closest?.('#chat-messages, .pm-chat-thread, [data-prometheus-transcript]');
+          })) state.transcriptCommitCount += 1;
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+      } catch {}
+    }, { once: true });
+  });
+}
+
+function summarizeCoverage(entries) {
+  const modules = [];
+  let sourceBytes = 0;
+  let evaluatedBytes = 0;
+  for (const entry of entries || []) {
+    if (!entry?.url || !entry.text) continue;
+    const ranges = (entry.ranges || [])
+      .map((range) => [Math.max(0, range.start), Math.max(0, range.end)])
+      .filter(([start, end]) => end > start)
+      .sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const range of ranges) {
+      const previous = merged.at(-1);
+      if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1]);
+      else merged.push(range.slice());
+    }
+    const used = merged.reduce((sum, [start, end]) => sum + end - start, 0);
+    sourceBytes += entry.text.length;
+    evaluatedBytes += used;
+    modules.push({ path: safePath(entry.url), sourceBytes: entry.text.length, evaluatedBytes: used });
+  }
+  return {
+    moduleCount: modules.length,
+    sourceBytes,
+    evaluatedBytes,
+    modules: modules.sort((a, b) => b.evaluatedBytes - a.evaluatedBytes).slice(0, 12),
+  };
+}
+
+async function liveDiagnostics(page) {
+  return pageEvaluation(page, () => {
+    const observed = window.__PROM_BENCHMARK_OBSERVED || {};
+    const sorted = (observed.longTasks || []).slice().sort((a, b) => a - b);
+    const percentile = (fraction) => sorted.length
+      ? sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))]
+      : null;
+    return {
+      domNodes: document.querySelectorAll('*').length,
+      transcriptCommitCount: Number(observed.transcriptCommitCount || 0),
+      mutationBatches: Number(observed.mutationBatches || 0),
+      mutationRecords: Number(observed.mutationRecords || 0),
+      longTasks: {
+        n: sorted.length,
+        p95: percentile(0.95),
+        p99: percentile(0.99),
+        max: sorted.at(-1) || null,
+      },
+      jsHeapUsedBytes: performance.memory?.usedJSHeapSize || null,
+    };
+  }, null);
 }
 
 async function clientState(page) {
@@ -276,12 +371,22 @@ async function runSyntheticChat(page) {
         await route.continue();
         return;
       }
+      const tokenEvents = Array.from({ length: 64 }, (_, index) => ({
+        type: 'token',
+        text: `${index ? ' ' : ''}benchmark-token-${index + 1}`,
+        seq: index + 3,
+        streamId: 'benchmark-stream',
+      }));
       const events = [
         { type: 'ui_preflight', traceId: 'benchmark-trace', clientRequestId: 'benchmark-client' },
         { type: 'latency_mark', stage: 'request_received', elapsedMs: 1, traceId: 'benchmark-trace' },
-        { type: 'token', text: 'ok', seq: 1, streamId: 'benchmark-stream' },
-        { type: 'final', text: 'ok', seq: 2, streamId: 'benchmark-stream', traceId: 'benchmark-trace' },
-        { type: 'done', seq: 3, streamId: 'benchmark-stream', traceId: 'benchmark-trace' },
+        { type: 'reasoning', text: 'Inspecting the deterministic benchmark fixture.', seq: 2, streamId: 'benchmark-stream' },
+        ...tokenEvents.slice(0, 22),
+        { type: 'tool_start', tool: 'read_file', toolCallId: 'benchmark-tool', seq: 25, streamId: 'benchmark-stream' },
+        { type: 'tool_result', tool: 'read_file', toolCallId: 'benchmark-tool', result: 'deterministic result', seq: 26, streamId: 'benchmark-stream' },
+        ...tokenEvents.slice(22).map((event, index) => ({ ...event, seq: index + 27 })),
+        { type: 'final', text: tokenEvents.map((event) => event.text).join(''), seq: 69, streamId: 'benchmark-stream', traceId: 'benchmark-trace' },
+        { type: 'done', seq: 70, streamId: 'benchmark-stream', traceId: 'benchmark-trace' },
       ];
       const body = events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('');
       await route.fulfill({
@@ -339,6 +444,12 @@ async function runDesktopSample(index) {
       serviceWorkers: 'block',
     });
     page = await context.newPage();
+    await installLivePerformanceObservers(page);
+    let coverageStarted = false;
+    try {
+      await page.coverage.startJSCoverage({ resetOnNavigation: false, reportAnonymousScripts: false });
+      coverageStarted = true;
+    } catch {}
     if (gitSources) {
       await page.route('**/*', async (route) => {
         const pathname = new URL(route.request().url()).pathname;
@@ -442,6 +553,10 @@ async function runDesktopSample(index) {
     const syntheticChat = skipSyntheticChat
       ? { available: false, reason: 'skipped by flag' }
       : await runSyntheticChat(page);
+    const diagnostics = await liveDiagnostics(page);
+    const coverage = coverageStarted
+      ? summarizeCoverage(await page.coverage.stopJSCoverage().catch(() => []))
+      : null;
 
     return {
       sample: index + 1,
@@ -469,6 +584,8 @@ async function runDesktopSample(index) {
       threadOpen: threadResult,
       routes: routeResults,
       syntheticChat,
+      diagnostics,
+      coverage,
     };
   } catch {
     return {
@@ -501,7 +618,14 @@ async function runMobileSample() {
       hasTouch: true,
     });
     page = await context.newPage();
+    await installLivePerformanceObservers(page);
+    let coverageStarted = false;
+    try {
+      await page.coverage.startJSCoverage({ resetOnNavigation: false, reportAnonymousScripts: false });
+      coverageStarted = true;
+    } catch {}
     page.on('crash', () => { crashed = true; });
+    const ledger = attachRequestLedger(page);
     const startedAt = nodePerformance.now();
     let navigationFailed = false;
     try {
@@ -511,12 +635,17 @@ async function runMobileSample() {
     }
     const navigationWallMs = round(nodePerformance.now() - startedAt);
     await waitBriefly(page, mobileWaitMs);
+    const metrics = await collectPageMetrics(page);
     const shell = await pageEvaluation(page, () => ({
       rootPresent: Boolean(document.getElementById('mobile-root')),
       loadingPresent: /Loading Prometheus Mobile/i.test(document.body?.textContent || ''),
       mode: String(window.currentMode || ''),
       bodyTextLength: String(document.body?.textContent || '').length,
     }), null);
+    const diagnostics = await liveDiagnostics(page);
+    const coverage = coverageStarted
+      ? summarizeCoverage(await page.coverage.stopJSCoverage().catch(() => []))
+      : null;
     return {
       available: true,
       pairedJourney: false,
@@ -525,6 +654,14 @@ async function runMobileSample() {
       navigationFailed,
       crashed,
       shell,
+      page: metrics ? {
+        navigation: metrics.navigation,
+        fcpMs: round(metrics.fcpMs),
+        resources: summarizeResources(metrics),
+      } : null,
+      api: summarizeApiCalls(ledger.slice(0)),
+      diagnostics,
+      coverage,
     };
   } catch {
     return {
@@ -671,17 +808,37 @@ function summarizeDesktopSamples(rows) {
     bgtasksRouteWallMs: field(rows, (row) => row.routes?.find((route) => route.route === 'bgtasks')?.result?.wallMs),
     chatRouteWallMs: field(rows, (row) => row.routes?.find((route) => route.route === 'chat')?.result?.wallMs),
     syntheticChatWallMs: field(rows, (row) => row.syntheticChat?.wallMs),
+    evaluatedScriptBytes: field(rows, (row) => row.coverage?.evaluatedBytes),
+    loadedScriptSourceBytes: field(rows, (row) => row.coverage?.sourceBytes),
+    domNodes: field(rows, (row) => row.diagnostics?.domNodes),
+    transcriptCommitCount: field(rows, (row) => row.diagnostics?.transcriptCommitCount),
+    longTaskP95Ms: field(rows, (row) => row.diagnostics?.longTasks?.p95),
   };
 }
 
+const generatedScenarios = skipDeterministic
+  ? []
+  : createStandardWebUiPerformanceScenarios(selectedScenarioIds);
+const scenarioValidation = generatedScenarios.map((scenario) => ({
+  id: scenario.id,
+  ...validateWebUiPerformanceScenario(scenario),
+}));
+const deterministic = skipDeterministic
+  ? { skipped: true }
+  : await runDeterministicBrowserScenarios(generatedScenarios);
+
 const desktop = [];
-for (let index = 0; index < samples; index += 1) {
-  desktop.push(await runDesktopSample(index));
+if (!deterministicOnly) {
+  for (let index = 0; index < samples; index += 1) {
+    desktop.push(await runDesktopSample(index));
+  }
 }
 
-const mobile = skipMobile ? { skipped: true } : await runMobileSample();
-const server = await readServerSnapshot();
-const turnTiming = readTurnTimingSummary(numberArgument('log-days', 7, 1, 30));
+const mobile = deterministicOnly || skipMobile ? { skipped: true } : await runMobileSample();
+const server = deterministicOnly ? { skipped: true } : await readServerSnapshot();
+const turnTiming = deterministicOnly
+  ? { skipped: true }
+  : readTurnTimingSummary(numberArgument('log-days', 7, 1, 30));
 
 let browserVersion = null;
 try {
@@ -690,7 +847,72 @@ try {
   await browser.close();
 } catch {}
 
-console.log(JSON.stringify({
+function loadJsonArgument(name, fallbackPath = '') {
+  const requested = String(argument(name, fallbackPath)).trim();
+  if (!requested) return null;
+  const absolute = path.isAbsolute(requested) ? requested : path.join(root, requested);
+  try {
+    return { path: path.relative(root, absolute).replaceAll('\\', '/'), value: JSON.parse(fs.readFileSync(absolute, 'utf8')) };
+  } catch (error) {
+    return { path: requested, error: String(error?.message || error) };
+  }
+}
+
+function evaluateDeterministicBudgets(results, validation, budgetDocument) {
+  const failures = validation.flatMap((entry) => entry.failures.map((failure) => `${entry.id}: ${failure}`));
+  if (!results?.available) failures.push(`deterministic browser scenarios unavailable: ${results?.reason || 'unknown error'}`);
+  const caps = budgetDocument?.hard?.deterministicScenarios || {};
+  for (const row of results?.scenarios || []) {
+    const measurements = row.measurements || {};
+    const expected = row.expected || {};
+    const cap = caps[row.id] || {};
+    if (measurements.transcriptRows !== expected.turns + expected.foregroundStreams) {
+      failures.push(`${row.id}: rendered ${measurements.transcriptRows} foreground rows, expected ${expected.turns + expected.foregroundStreams}`);
+    }
+    if (measurements.toolCards !== expected.toolCards) {
+      failures.push(`${row.id}: rendered ${measurements.toolCards} tool cards, expected ${expected.toolCards}`);
+    }
+    if (measurements.composerLength !== expected.typingEvents) {
+      failures.push(`${row.id}: delivered ${measurements.composerLength} typing events, expected ${expected.typingEvents}`);
+    }
+    if (measurements.inputLatencyMs?.n !== expected.typingEvents) {
+      failures.push(`${row.id}: sampled ${measurements.inputLatencyMs?.n || 0} typing events, expected ${expected.typingEvents}`);
+    }
+    if ((measurements.updateToPaintMs?.n || 0) < expected.streams * 3) {
+      failures.push(`${row.id}: insufficient update-to-paint samples`);
+    }
+    if (Number.isFinite(cap.maxDomNodes) && measurements.domNodes > cap.maxDomNodes) {
+      failures.push(`${row.id}: ${measurements.domNodes} DOM nodes exceeds staged cap ${cap.maxDomNodes}`);
+    }
+    if (Number.isFinite(cap.maxTranscriptCommits) && measurements.transcriptCommits > cap.maxTranscriptCommits) {
+      failures.push(`${row.id}: ${measurements.transcriptCommits} commits exceeds staged cap ${cap.maxTranscriptCommits}`);
+    }
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+function compareDeterministicBaseline(results, baselineDocument) {
+  if (!baselineDocument || !results?.available) return null;
+  const baselineRows = new Map((baselineDocument.scenarios || []).map((row) => [row.id, row.measurements || {}]));
+  const metrics = ['initialRenderMs', 'totalRunMs', 'domNodes', 'transcriptCommits', 'jsHeapAfterBytes'];
+  return (results.scenarios || []).map((row) => {
+    const baseline = baselineRows.get(row.id) || {};
+    const changes = {};
+    for (const metric of metrics) {
+      const before = Number(baseline[metric]);
+      const after = Number(row.measurements?.[metric]);
+      changes[metric] = Number.isFinite(before) && before !== 0 && Number.isFinite(after)
+        ? { before: round(before), after: round(after), percent: round(((after - before) / before) * 100) }
+        : { before: Number.isFinite(before) ? round(before) : null, after: Number.isFinite(after) ? round(after) : null };
+    }
+    return { id: row.id, changes };
+  });
+}
+
+const budgets = loadJsonArgument('budgets', 'scripts/web-ui-performance-budgets.json');
+const baseline = loadJsonArgument('compare', '');
+const budgetResult = evaluateDeterministicBudgets(deterministic, scenarioValidation, budgets?.value);
+const report = {
   benchmark: 'prometheus-performance',
   phase,
   capturedAt: new Date().toISOString(),
@@ -707,6 +929,18 @@ console.log(JSON.stringify({
     browser: browserVersion,
     playwright: 'playwright',
     desktopServiceWorkers: 'blocked',
+    deterministicOnly,
+    scenarioVersion: generatedScenarios[0]?.version || null,
+  },
+  deterministic: {
+    ...deterministic,
+    validation: scenarioValidation,
+    budgets: {
+      source: budgets?.path || null,
+      ...budgetResult,
+    },
+    comparison: compareDeterministicBaseline(deterministic, baseline?.value),
+    comparisonSource: baseline?.path || null,
   },
   desktop: {
     samples: desktop,
@@ -715,4 +949,14 @@ console.log(JSON.stringify({
   mobile,
   server,
   turnTiming,
-}, null, 2));
+};
+
+const serializedReport = JSON.stringify(report, null, 2);
+const outputPath = String(argument('output', '')).trim();
+if (outputPath) {
+  const absolute = path.isAbsolute(outputPath) ? outputPath : path.join(root, outputPath);
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, `${serializedReport}\n`, 'utf8');
+}
+console.log(serializedReport);
+if (enforceBudgets && !budgetResult.ok) process.exitCode = 1;

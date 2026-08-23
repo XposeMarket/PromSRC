@@ -5,7 +5,7 @@ import {
   escapeHtml,
   renderMobileHeader,
   wireHeaderActions,
-} from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+} from './mobile-shell.js';
 import {
   gatewayStatusLabel,
   getGatewayFilter,

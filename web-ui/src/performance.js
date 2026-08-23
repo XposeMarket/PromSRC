@@ -1,8 +1,14 @@
-import './features/chat/multi-chat-workspace-v2.js';
-import './features/chat/canonical-desktop-composer.js';
-import './context-window-live-tracking.js';
+const shouldBootMobile = window.__PROM_SHOULD_BOOT_MOBILE?.() === true;
 
-if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+// performance.js is shared by both documents. Resolve the surface before any
+// desktop module is requested so the mobile entry never parses or evaluates a
+// composer, side-chat workspace, context tracker, or optional desktop feature.
+if (!shouldBootMobile) {
+  void Promise.all([
+    import('./features/chat/multi-chat-workspace-v2.js'),
+    import('./features/chat/canonical-desktop-composer.js'),
+    import('./context-window-live-tracking.js'),
+  ]).catch((error) => console.warn('[Chat] Desktop workspace failed to load:', error));
   void import('./features/chat/desktop-turn-file-diff.js')
     .catch((error) => console.warn('[Turn Diff] Desktop file diff bridge failed to load:', error));
   void import('./prom-bot.js')
@@ -75,7 +81,7 @@ window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
 
 // Bot creation is a desktop shell affordance. performance.js is also imported
 // by the mobile router, so keep these modules completely out of the PWA runtime.
-if (!window.__PROM_SHOULD_BOOT_MOBILE?.()) {
+if (!shouldBootMobile) {
   void import('./bot-create.js')
     .then(() => import('./bot-create-settings-bridge.js'))
     .catch((error) => {

@@ -1858,7 +1858,7 @@ function updateSubagentReasoningTrigger(agent) {
 async function ensureUnifiedDesktopChatRenderer() {
   if (window.__PROM_UNIFIED_DESKTOP_CHAT) return window.__PROM_UNIFIED_DESKTOP_CHAT;
   if (!unifiedDesktopChatRendererPromise) {
-    unifiedDesktopChatRendererPromise = import('./ChatPage.js?v=desktop-sidebar-priority-v2')
+    unifiedDesktopChatRendererPromise = import('./ChatPage.js')
       .then(() => window.__PROM_UNIFIED_DESKTOP_CHAT || null)
       .catch((error) => {
         unifiedDesktopChatRendererPromise = null;

@@ -105,12 +105,12 @@ assert.match(mobilePages, /public Realtime v2 fallback is disabled/, 'mobile Cha
 assert.match(mobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'mobile must fail an invalid v3 bridge response instead of falling through to v2');
 assert.match(mobilePages, /if \(useCodexOauthBridge\)[\s\S]{0,2500}?else \{[\s\S]{0,3000}?mobileGatewayTextFetch/s, 'mobile public Realtime fallbacks must stay outside the selected v3 bridge path');
 assert.match(generatedMobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'generated mobile UI must keep the v3-only bridge path');
-assert.match(mobileShell, /mobile-codex-live-v3-v15-room-context/, 'mobile entrypoint must invalidate the prior natural-address bundle');
-assert.match(mobileRouter, /mobile-codex-live-v3-v15-room-context/, 'mobile router must invalidate the prior natural-address modules');
+assert.match(mobileShell, /import\('\.\/src\/mobile\/mobile-router\.js'\)/, 'mobile entrypoint must use the canonical router module identity');
+assert.doesNotMatch(mobileRouter, /\.js\?v=/, 'mobile router must not create query-string module aliases');
 assert.match(mobilePages, /Codex Voice \/ Live/, 'mobile must label the OAuth app-server transport as Codex Voice / Live');
-assert.match(mobileServiceWorker, /const VERSION = 'pm-v\d+-2026-07-29-[^']+'/, 'mobile service worker must carry a versioned cache revision that purges pre-v3 bundles');
+assert.match(mobileServiceWorker, /const VERSION = 'pm-v\d+-2026-08-22-[^']+'/, 'mobile service worker must carry the current versioned cache revision');
 assert.doesNotMatch(mobileServiceWorker, /pm-v210-2026-07-29-mobile-realtime-v3/, 'mobile service worker must not retain the pre-v3 cache revision');
-assert.match(generatedMobileServiceWorker, /const VERSION = 'pm-v\d+-2026-07-29-[^']+'/, 'generated service worker must carry the current cache revision');
+assert.match(generatedMobileServiceWorker, /const VERSION = 'pm-v\d+-2026-08-22-[^']+'/, 'generated service worker must carry the current cache revision');
 assert.doesNotMatch(generatedMobileServiceWorker, /pm-v210-2026-07-29-mobile-realtime-v3/, 'generated service worker must not retain the pre-v3 cache revision');
 assert.match(mobilePages, /function _appendMobileRealtimeTranscriptDelta\(/, 'streamed transcript deltas must retain word boundaries');
 assert.match(mobilePages, /voiceRealtimeMediaLastTime/, 'lyric timing must use a per-turn media playback clock');

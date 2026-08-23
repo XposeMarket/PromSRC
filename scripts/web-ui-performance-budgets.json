@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "capturedFrom": "f19b299b82dfc2feb10ea1b6a4a7a02f81a46da9",
+  "scenarioVersion": 1,
+  "hard": {
+    "deterministicScenarios": {
+      "desktop-100-rich-stream": {
+        "maxDomNodes": 1400,
+        "maxTranscriptCommits": 240
+      },
+      "mobile-500-window-pressure": {
+        "maxDomNodes": 5600,
+        "maxTranscriptCommits": 400
+      },
+      "desktop-1200-multipane-switch": {
+        "maxDomNodes": 13200,
+        "maxTranscriptCommits": 760
+      }
+    }
+  },
+  "endState": {
+    "mobileChatInitialGzipJsBytes": 256000,
+    "mobileChatInitialGzipCssBytes": 102400,
+    "mobileChatUnrelatedRouteApiCalls": 0,
+    "typingLatencyP95Ms": 16,
+    "typingLatencyP99Ms": 32,
+    "streamUpdateToPaintP95Ms": 75,
+    "recurringLongTaskMaxMs": 100,
+    "warmSessionSwitchP95Ms": 100,
+    "coldCachedSessionSwitchP95Ms": 250,
+    "additionalChatRouters": 0,
+    "additionalChatSockets": 0
+  },
+  "policy": {
+    "hardSignals": "deterministic scenario integrity, bounded structural work, boot requests, import identity, and route/API ownership",
+    "diagnostics": "hardware-sensitive latency, long tasks, heap, and live gateway timings remain reported until a pinned runner is available"
+  }
+}

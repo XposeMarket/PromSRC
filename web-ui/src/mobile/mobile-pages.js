@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+} from './mobile-shell.js';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   applyMobileDraftModelRouteToSession,
@@ -13,8 +13,8 @@ import {
   pmHaptic,
   resetMobileDraftModelRoute,
   setMobileSubagentReasoningContext,
-} from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v266-2026-08-11-new-project-popover';
+} from './mobile-model-badge.js';
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import { formatModelWithReasoning } from '../model-display.js';
 import {
   SOURCE_PANEL_SURFACE,
@@ -62,7 +62,7 @@ import {
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
- } from './mobile-api.js?v=pm-v291-2026-08-13-mobile-syntax-recovery';
+ } from './mobile-api.js';
 import {
   getGateway,
   loadGatewayCatalog,
@@ -15784,7 +15784,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'model_reverted': {
         // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
-        import('./mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover').then(({ refreshMobileModelBadge }) => {
+        import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
           refreshMobileModelBadge(true, null).catch(() => {});
         }).catch(() => {});
         return 'streaming';

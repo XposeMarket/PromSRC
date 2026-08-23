@@ -23,11 +23,11 @@ assert.doesNotMatch(
 );
 assert.match(index, /applySettingsTabFallback/, 'settings tabs need an immediate shell fallback');
 assert.match(index, /window\.closeSettings = closeSettingsShim/, 'the lazy settings shell must always be closable');
-assert.match(index, /SettingsPage\.js\?v=settings-boot-recovery-v12/, 'desktop must load the repaired settings module version');
-assert.match(mobileRouter, /SettingsPage\.js\?v=settings-boot-recovery-v12/, 'mobile must load the repaired settings module version');
+assert.match(index, /import\('\.\/src\/pages\/SettingsPage\.js'\)/, 'desktop must load the canonical settings module identity');
+assert.match(mobileRouter, /import\('\.\.\/pages\/SettingsPage\.js'\)/, 'mobile must share the canonical settings module identity');
 assert.match(mobileRouter, /document\.body\.appendChild\(modal\)/, 'mobile must lift the shared modal out of the hidden desktop app shell');
 assert.match(mobileRouter, /window\.openSettings\(tab \|\| undefined\)/, 'mobile must open the shared desktop settings controller');
-assert.match(serviceWorker, /pm-v242-2026-08-08-mobile-overlay-hit-target-fix/, 'PWA cache must roll forward for the mobile overlay hit-target fix');
+assert.match(serviceWorker, /pm-v303-2026-08-22-canonical-precache/, 'PWA cache must roll forward for canonical module identities');
 
 const showModalAt = index.indexOf("modal.style.display = 'flex'", index.indexOf('const openSettingsShim'));
 const awaitControllerAt = index.indexOf('await window.__PROM_LOAD_SETTINGS()', index.indexOf('const openSettingsShim'));

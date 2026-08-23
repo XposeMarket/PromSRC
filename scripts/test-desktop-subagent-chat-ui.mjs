@@ -47,7 +47,7 @@ assert.match(chat, /renderComposer: renderUnifiedDesktopComposerHtml/);
 
 assert.equal(performance, performanceGenerated, 'performance source/generated copies must match');
 assert.equal(canonical, canonicalGenerated, 'canonical composer source/generated copies must match');
-assert.match(performance, /import '\.\/features\/chat\/canonical-desktop-composer\.js';/,
+assert.match(performance, /import\('\.\/features\/chat\/canonical-desktop-composer\.js'\)/,
   'desktop bootstrap must install canonical main-composer reuse');
 
 // One visual source of truth: clone the composer already mounted in #chat-view.

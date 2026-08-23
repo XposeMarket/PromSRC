@@ -134,7 +134,7 @@
       };
     };
 
-    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js?v=settings-boot-recovery-v12'));
+    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js'));
     window.__PROM_LOAD_CONNECTIONS = makeModuleLoader(() => import('./static/pages/ConnectionsPage.js'));
 
     const SETTINGS_TABS = ['system', 'appearance', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
@@ -9508,7 +9508,7 @@ let _errBackdrop = null;
     './static/api.js',
     './static/utils.js',
     './static/ws.js',
-    './static/app.js?v=desktop-sidebar-priority-v2',
+    './static/app.js',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
@@ -9705,7 +9705,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v291-2026-08-13-mobile-syntax-recovery')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
