@@ -1572,15 +1572,6 @@ export async function loadBgTasks({ force = false } = {}) {
   }, cacheScope);
 }
 
-export function prefetchMobileSecondaryPages() {
-  return Promise.allSettled([
-    loadBgTasks({ force: true }),
-    loadMobileSchedules({ force: true }),
-    loadMobileTeams({ force: true }),
-    loadMobileSubagents({ force: true }),
-  ]);
-}
-
 export async function loadBgTaskDetail(taskId) {
   return api(`/api/bg-tasks/${encodeURIComponent(taskId)}`);
 }

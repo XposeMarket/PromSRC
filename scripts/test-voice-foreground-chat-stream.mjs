@@ -12,7 +12,7 @@ assert.match(mobile, /_voiceWorkerLocalTurn: true,\s*_clientRequestId: workerCli
 assert.match(mobile, /streamChat\(\{ message: finalText, sessionId: targetSessionId, callerContext, clientRequestId: workerClientRequestId \}/);
 assert.match(mobile, /clientRequestId: workerClientRequestId,\s*\};\s*__pmChat\.busy = true;/s);
 assert.match(mobile, /String\(msg\._clientRequestId \|\| ''\)\.trim\(\) === candidateRequestId/);
-assert.match(mobile, /String\(msg\.messageKind \|\| ''\)\.trim\(\) === 'voice_foreground_worker'/);
+assert.match(mobile, /\['voice_foreground_worker', 'internal_watch_review'\]\.includes\(String\(msg\.messageKind \|\| ''\)\.trim\(\)\)/);
 assert.match(mobile, /if \(\(msgRequestId \|\| previousRequestId\) && \(!msgRequestId \|\| msgRequestId !== previousRequestId\)\) continue/);
 assert.match(mobile, /function _mergeMobileThreadLocalArtifacts[\s\S]*insertForegroundWorkerAfterHandoff[\s\S]*next\.splice\(anchorIndex \+ 1, 0, candidate\)/);
 assert.match(mobile, /if \(handoffIndex >= 0\) activeThread\.splice\(handoffIndex \+ 1, 0, aiTurn\)/);

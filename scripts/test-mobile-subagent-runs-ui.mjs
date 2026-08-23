@@ -3,7 +3,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 
 const root = process.cwd();
-const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-pages.js'), 'utf8');
+const pages = fs.readFileSync(path.join(root, 'web-ui/src/mobile/mobile-subagent-pages.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'web-ui/src/styles/mobile.css'), 'utf8');
 
 function assert(condition, message) {

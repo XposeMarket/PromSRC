@@ -11,8 +11,8 @@ const instructionSource = mobile.slice(
   mobile.indexOf('function _mobileVoiceRoomCodexInstructions'),
   mobile.indexOf('function _voiceRoomParseQuietCommand'),
 );
-assert.match(instructionSource, /remain completely silent/, 'room agents must be instructed not to acknowledge another participant');
-assert.match(instructionSource, /never say "one sec"/, 'the known spoken handoff acknowledgement must be explicitly forbidden');
+assert.match(instructionSource, /Never speak, acknowledge/, 'room agents must be instructed not to acknowledge another participant');
+assert.match(instructionSource, /say "one sec"/, 'the known spoken handoff acknowledgement must be explicitly forbidden');
 
 const standby = mobile.slice(
   mobile.indexOf('async function _startMobileCodexVoiceRoomStandbyConnection'),

@@ -24,13 +24,13 @@ assert.match(chatRouter, /createHash\('sha256'\)\.update\(rosterKey\)/);
 assert.match(chatRouter, /post\('\/api\/voice-rooms\/:id\/transcript'/);
 assert.match(chatRouter, /voiceSpeaker/);
 
-assert.match(mobileApi, /\{ key: 'voice_room', label: 'Voice Rooms' \}/);
+assert.match(mobileApi, /channel: String\(s\?\.channel \|\| 'web'\)/, 'the unified mobile session feed must preserve voice-room channel identity');
 assert.match(mobilePages, /_resolveDurableMobileVoiceRoom/);
 assert.match(mobilePages, /_loadDurableMobileVoiceRoom/);
 assert.match(mobilePages, /appendMobileVoiceRoomTranscript/);
 assert.match(mobilePages, /pm-voice-room-agent-settings/);
 assert.match(mobilePages, /pm-voice-room-file-input/);
-assert.match(mobileRouter, /#mobile\/voice\/\$\{encodeURIComponent\(sessionId\)\}/);
+assert.match(mobileRouter, /#mobile\/voice\/\$\{encodeURIComponent\(openSessionId\)\}/);
 assert.match(mobileShell, /data-session-channel/);
 
 assert.match(index, /key: 'voice_room', label: 'Voice Rooms'/);

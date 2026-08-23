@@ -3477,9 +3477,8 @@ export function wireHeaderActions(pageEl, { onLeft, onSettings, onBack, onNewCha
       if (a === 'menu') openDrawer();
       else if (a === 'back' && onBack) onBack();
       else if (a === 'settings') {
-        // Open the full desktop Settings modal in place (no route change) so
-        // closing it returns the user to the page they were on. Falls back to
-        // the settings route only if the desktop modal helper is unavailable.
+        // The mobile entry has its own route-owned settings surface. Keep the
+        // legacy desktop helper as a fallback for older embedded documents.
         if (onSettings) onSettings();
         else if (typeof window.pmOpenSettings === 'function') window.pmOpenSettings();
         else if (typeof window.openSettings === 'function') window.openSettings();

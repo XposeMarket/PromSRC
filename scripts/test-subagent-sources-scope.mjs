@@ -43,7 +43,10 @@ assert.equal(sourcePanelResourceBelongsToContext({ title: 'unowned legacy source
 
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const subagents = read('web-ui/src/pages/SubagentsPage.js');
-const mobile = read('web-ui/src/mobile/mobile-pages.js');
+const mobile = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-subagent-pages.js'),
+].join('\n');
 const resourceStore = read('src/gateway/resources/resource-store.ts');
 
 assert.match(desktop, /showSourcesMinimizedPanel[\s\S]{0,500}!sourcePanelContextIsActive\(\)/);

@@ -127,6 +127,7 @@ function listFiles(root) {
 
 function expectedPublicWebUiFiles() {
   const expected = new Set(['index.html', ...PUBLIC_WEB_VENDOR_FILES]);
+  if (fs.existsSync(path.join(SRC_WEB_UI, 'mobile.html'))) expected.add('mobile.html');
   const sourceRoot = path.join(SRC_WEB_UI, 'src');
   for (const sourcePath of listFiles(sourceRoot)) {
     const relative = path.relative(sourceRoot, sourcePath).replace(/\\/g, '/');
@@ -373,20 +374,24 @@ function buildPublicWebUi() {
   // incremental and can leave the output tree half-deleted after EBUSY.
   mkdirp(OUT_STATIC);
 
-  const indexPath = path.join(SRC_WEB_UI, 'index.html');
-  let html = fs.readFileSync(indexPath, 'utf-8');
+  for (const name of ['index.html', 'mobile.html']) {
+    const sourcePath = path.join(SRC_WEB_UI, name);
+    if (!fs.existsSync(sourcePath)) continue;
+    let html = fs.readFileSync(sourcePath, 'utf-8');
 
-  // Replace attribute-style references: href="src/..." and src="src/..."
-  html = html.replace(/(["'])src\//g, '$1static/');
-  // Replace inline ES module import paths: from './src/...' and import('./src/...')
-  html = html.replace(/(["'])\.\/(src)\//g, '$1./static/');
-  html = html.replace(/(EXTRACTED to )src\//g, '$1static/');
-  html = html.replace(
-    '</head>',
-    '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
-  );
+    // Replace both document-relative and root-relative source references.
+    // Root-relative references are required by /mobile/* history routes.
+    html = html.replace(/(["'])\/src\//g, '$1/static/');
+    html = html.replace(/(["'])src\//g, '$1static/');
+    html = html.replace(/(["'])\.\/(src)\//g, '$1./static/');
+    html = html.replace(/(EXTRACTED to )src\//g, '$1static/');
+    html = html.replace(
+      '</head>',
+      '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
+    );
 
-  writeFileIfChanged(path.join(OUT_ROOT, 'index.html'), html);
+    writeFileIfChanged(path.join(OUT_ROOT, name), html);
+  }
   copyRecursive(path.join(SRC_WEB_UI, 'src'), OUT_STATIC);
   copyPublicWebVendorAssets();
 

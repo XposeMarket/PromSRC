@@ -77,7 +77,7 @@ const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mob
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
 const allowedMobileDataLines = [
   "export * from './mobile-data-base.js';",
-  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js?v=pm-v302-2026-08-22-status-edge-theme-sync';",
+  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';",
   'initMobileStatusBarTheme();',
 ];
 assert.deepEqual(sourceData.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean), allowedMobileDataLines,

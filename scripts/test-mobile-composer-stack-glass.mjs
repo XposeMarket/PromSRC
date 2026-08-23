@@ -8,13 +8,16 @@ const mobileCss = read('web-ui/src/styles/mobile.css');
 const generatedMobileCss = read('generated/public-web-ui/static/styles/mobile.css');
 const data = read('web-ui/src/mobile/mobile-data.js');
 const generatedData = read('generated/public-web-ui/static/mobile/mobile-data.js');
+const dataBase = read('web-ui/src/mobile/mobile-data-base.js');
+const generatedDataBase = read('generated/public-web-ui/static/mobile/mobile-data-base.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
 
 assert.equal(generatedCss, css, 'generated composer-stack CSS must mirror source exactly');
 assert.equal(generatedData, data, 'generated mobile-data loader must mirror source exactly');
-assert.match(data, /new URL\(`\.\.\/styles\/mobile-composer-stack\.css\?v=\$\{PM_COMPOSER_STACK_STYLE_VERSION\}`,[\s\S]*?import\.meta\.url\)/, 'mobile boot must load composer-stack CSS relative to the active source/generated module');
-assert.match(data, /ensureMobileComposerStackStyles\(\);/, 'composer-stack CSS loader must run during mobile shell bootstrap');
+assert.equal(generatedDataBase, dataBase, 'generated mobile-data base must mirror source exactly');
+assert.match(dataBase, /new URL\(`\.\.\/styles\/mobile-composer-stack\.css\?v=\$\{PM_COMPOSER_STACK_STYLE_VERSION\}`,[\s\S]*?import\.meta\.url\)/, 'mobile boot must load composer-stack CSS relative to the active source/generated module');
+assert.match(dataBase, /ensureMobileComposerStackStyles\(\);/, 'composer-stack CSS loader must run during mobile shell bootstrap');
 
 for (const token of [
   '--pm-composer-stack-gap',
