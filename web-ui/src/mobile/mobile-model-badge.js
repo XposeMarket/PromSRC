@@ -264,6 +264,19 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   proxy.addEventListener('pointermove', onPointerMove, true);
   proxy.addEventListener('pointerup', finish, true);
   proxy.addEventListener('pointercancel', (event) => finish(event, true), true);
+  // Pointer capture is not guaranteed to survive an iOS viewport gesture,
+  // app backgrounding, or browser-chrome transition. Treat every lifecycle
+  // escape hatch as cancellation so visual pressed state cannot remain stuck.
+  const onLostPointerCapture = () => queueMicrotask(cancelGesture);
+  const onWindowBlur = () => cancelGesture();
+  const onPageHide = () => cancelGesture();
+  const onVisibilityChange = () => {
+    if (document.hidden) cancelGesture();
+  };
+  input.addEventListener('lostpointercapture', onLostPointerCapture, true);
+  window.addEventListener('blur', onWindowBlur);
+  window.addEventListener('pagehide', onPageHide);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   // The native input is only a gesture sensor. Keep its real click behavior
   // intact for iOS haptics, but do not forward it to delegated app handlers.
   proxy.addEventListener('click', (event) => event.stopPropagation(), true);
@@ -289,10 +302,15 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   }
 
   const dispose = () => {
+    cancelGesture();
     disposed = true;
     surfaceStateObserver?.disconnect?.();
     surfaceStateObserver = null;
     releaseCapture();
+    input.removeEventListener('lostpointercapture', onLostPointerCapture, true);
+    window.removeEventListener('blur', onWindowBlur);
+    window.removeEventListener('pagehide', onPageHide);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     proxy.remove();
     if (surface.dataset) delete surface.dataset.pmHapticGestureSurface;
     _hapticGestureDisposers.delete(dispose);

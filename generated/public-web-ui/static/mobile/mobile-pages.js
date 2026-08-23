@@ -1630,6 +1630,21 @@ function _reconcileMobileThreadOrder(thread) {
   const list = Array.isArray(thread) ? thread : [];
   _pruneMobileRoleGroupedDuplicateTail(list);
   _dedupeMobileAssistantTurns(list);
+  // A recovery refresh can briefly return the completed assistant before the
+  // matching user record. Stable request identity makes the intended pair
+  // unambiguous, so restore user -> assistant ordering before rendering.
+  for (let userIndex = 0; userIndex < list.length; userIndex += 1) {
+    const user = list[userIndex];
+    if (user?.role !== 'user') continue;
+    const requestId = String(user._clientRequestId || '').trim();
+    if (!requestId) continue;
+    const assistantIndex = list.findIndex((message, index) => index < userIndex
+      && _isMobileAssistantMessage(message)
+      && String(message._clientRequestId || '').trim() === requestId);
+    if (assistantIndex < 0) continue;
+    list.splice(userIndex, 1);
+    list.splice(assistantIndex, 0, user);
+  }
   _repairMobileRealtimeExchangeOrder(list);
   _reindexMobileThread(list);
   return list;
@@ -2673,8 +2688,24 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
   const list = Array.isArray(thread) ? thread : [];
   _pruneMobileStaleStreamingTraceTurns(list);
   const seen = new Map();
+  const seenRequests = new Map();
   for (let i = 0; i < list.length; i += 1) {
     const msg = list[i];
+    const requestId = _isMobileAssistantMessage(msg) ? String(msg._clientRequestId || '').trim() : '';
+    const previousRequestTurn = requestId ? seenRequests.get(requestId) : null;
+    const requestIndex = previousRequestTurn ? list.indexOf(previousRequestTurn) : -1;
+    if (requestIndex >= 0) {
+      const previous = previousRequestTurn;
+      const keepCurrent = _mobileAssistantRichnessScore(msg) > _mobileAssistantRichnessScore(previous);
+      const keepIndex = keepCurrent ? i : requestIndex;
+      const dropIndex = keepCurrent ? requestIndex : i;
+      _mergeMobileAssistantTurnDetails(list[keepIndex], list[dropIndex]);
+      list.splice(dropIndex, 1);
+      seenRequests.set(requestId, list[keepCurrent ? dropIndex : requestIndex]);
+      i -= 1;
+      continue;
+    }
+    if (requestId) seenRequests.set(requestId, msg);
     const key = _mobileAssistantContentKey(msg);
     if (!key) {
       if (msg?.role === 'user') seen.clear();
@@ -5184,7 +5215,6 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     next.splice(anchorIndex + 1, 0, candidate);
     return true;
   };
-  const hasServerHistory = next.some((msg) => msg?.role === 'user' || msg?.role === 'ai');
   for (const msg of local) {
     if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) continue;
     if (_isMobileHiddenVoiceDraftMessage(msg, -1)) continue;
@@ -5193,7 +5223,11 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
       && msg.streaming !== true
       && _mobileAssistantHasVisibleAnswer(msg)
       && Date.now() - Number(msg.workEndedAt || msg.timestamp || 0) < 45_000;
-    const isPendingUser = !hasServerHistory && msg.role === 'user' && !hasMatchingTurn(msg);
+    const pendingUserAge = Date.now() - Number(msg.timestamp || 0);
+    const isPendingUser = msg.role === 'user'
+      && !hasMatchingTurn(msg)
+      && (msg._pmOptimistic === true || !!String(msg._clientRequestId || '').trim())
+      && pendingUserAge < 45_000;
     const isVoiceShowUiCard = _isMobileVoiceShowUiCard(msg);
     if ((isPendingAssistant || isRecentCompletedAssistant || isPendingUser || isVoiceShowUiCard) && !hasMatchingTurn(msg)) {
       if (!insertForegroundWorkerAfterHandoff(msg)) next.push(msg);
@@ -11452,6 +11486,8 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     const popover = targetPopover?.dataset?.popoverType === 'new-project' ? targetPopover : null;
     if (!popover) return;
     const open = keyboardOpen === true;
+    const visualHeight = Math.max(0, Number(window.visualViewport?.height || visualBottom || window.innerHeight || 0) - 16);
+    if (visualHeight) popover.style.setProperty('--pm-new-project-available-height', `${Math.round(visualHeight)}px`);
     popover.classList.toggle('pm-new-project-keyboard-open', open);
     if (!open) {
       popover.style.removeProperty('--pm-new-project-keyboard-shift');
@@ -11505,6 +11541,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     document.body.classList.add('pm-mobile-context-popover-open');
     document.body.classList.add('pm-new-project-dialog-open');
     targetPopover = wrapper;
+    syncNewProjectPopoverToKeyboard(false, Number(window.visualViewport?.height || window.innerHeight || 0), Number(window.innerHeight || 0));
     projectChip.setAttribute('aria-expanded', 'true');
     const nameInput = wrapper.querySelector('#pm-new-project-name');
     const errorEl = wrapper.querySelector('.pm-new-project-error');
@@ -16246,6 +16283,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       ? options.attachments.slice()
       : getPendingAttachments().slice().concat(stagedVoiceImages);
     if (!msg && files.length === 0) return;
+    // Claim this physical send before any gateway/recovery await. Previously
+    // rapid taps could all pass the guard while the first probe was pending,
+    // admitting duplicate turns before busy state or the user bubble existed.
+    const sendAttemptKey = `${busySessionId}|${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
+    const previousSendAttempt = __pmChat.lastMobileSendAttempt;
+    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 1200) return;
+    __pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };
     let selectedGateway = currentChatGateway();
     if (!selectedGateway) {
       pmToast(
@@ -16269,10 +16313,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       pmToast(`${selectedGateway.name} is ${selectedGateway.status}. Sending is blocked until it reconnects or is repaired.`, 'error');
       return;
     }
-    const sendAttemptKey = `${requestedSession}|${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
-    const previousSendAttempt = __pmChat.lastMobileSendAttempt;
-    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 1200) return;
-    __pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };
     const fromQueue = options.fromQueue === true;
     const excludedSkillIds = fromQueue && Array.isArray(options.excludedSkillIds)
       ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)

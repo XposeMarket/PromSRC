@@ -804,6 +804,7 @@ body.pm-model-badge-pressing * {
   max-height: var(--pm-msheet-max-height, min(70vh, 560px));
   display: flex; flex-direction: column;
   min-height: 0;
+  font-family: var(--pm-font);
   padding: 14px;
   border-radius: 28px;
   background:
@@ -1887,7 +1888,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 0;
   min-width: 0;
-  color: #fff !important;
+  color: rgba(34,26,20,.68);
   font-size: 10px; font-weight: 800;
   cursor: pointer;
   padding: 4px 2px;
@@ -1910,7 +1911,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pm-tab.active { color: #fff !important; }
+.pm-tab.active { color: rgba(34,26,20,.68); }
 /* The real magnify is now the spatial lens layer (.pm-tab-magnify), which
    enlarges only the icon pixels physically under the glass. Keep just a gentle
    resting lift on the selected icon so it reads as "raised", and DON'T binary
@@ -2026,8 +2027,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   text-shadow: 0 1px 2px rgba(0,0,0,.5);
 }
 
-:root[data-theme="dark"] .pm-tab { color: #fff !important; text-shadow: 0 1px 2px rgba(0,0,0,.34); }
-:root[data-theme="dark"] .pm-tab.active { color: #fff !important; }
+:root[data-theme="dark"] .pm-tab { color: rgba(242,238,231,.66); text-shadow: 0 1px 2px rgba(0,0,0,.34); }
+:root[data-theme="dark"] .pm-tab.active { color: rgba(242,238,231,.66); }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .pm-tabbar {
@@ -2053,6 +2054,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   top: 0; bottom: 0; left: 0;
   width: var(--pm-drawer-width);
   max-width: 330px;
+  box-sizing: border-box;
   background: #050506;
   border-right: 0;
   opacity: 0;
@@ -3997,10 +3999,12 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  /* A sent-image row may be wider than the text. Do not let the preview's
-     intrinsic width stretch the actual message bubble. */
   width: fit-content;
   max-width: 100%;
+  min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
+}
+.pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, span, strong, em, a) {
+  max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
 }
 .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   background: color-mix(in srgb, var(--pm-orange-soft), var(--pm-surface) 42%);
@@ -15320,8 +15324,6 @@ body.pm-mobile-active:is(.pm-mobile-context-popover-open, .pm-keyboard-open) .pm
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Compact, opaque model/reasoning controls. The slider stays touch-friendly;
-   the surrounding labels, rows, and sheets carry the visual weight instead. */
 body.pm-mobile-active .pm-model-badge {
   font-size: 11px;
   font-weight: 600;
@@ -17548,9 +17550,6 @@ body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row:active {
 .pm-chat-target-option small { display: block; color: var(--pm-muted); font-size: 10px; }
 .pm-camera-more-pair-action { min-height: 34px; padding: 7px 9px; border: 1px solid var(--pm-border); border-radius: 9px; background: var(--pm-bg-soft); color: var(--pm-text); font: 700 11px/1.1 var(--pm-font); white-space: nowrap; }
 
-/* New-chat routing lives above the composer on the brain-card page. These
-   selectors intentionally reuse the same glass/popover treatment as the
-   header settings menu. */
 .pm-new-chat-context-dock { position: fixed; left: var(--pm-mobile-chrome-inset, 22px); right: var(--pm-mobile-chrome-inset, 22px); bottom: var(--pm-context-dock-bottom, calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom, 0px) + 30px + var(--pm-composer-live-height, 86px))); display: grid; gap: 2px; margin: 0; z-index: 10040; isolation: isolate; pointer-events: none; }
 body.pm-mobile-active .pm-new-chat-context-dock.pm-chat-context-dock-voice-hidden { display: none !important; }
 body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-new-chat-context-dock { left: 10px; right: 10px; }
@@ -17569,8 +17568,8 @@ body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-ne
 .pm-new-chat-context-chevron { flex: 0 0 18px; display: grid; place-items: center; color: var(--pm-muted); }
 .pm-new-chat-context-chevron svg { width: 15px; height: 15px; }
 .pm-new-chat-context-popover { position: absolute; top: auto; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 1; width: auto; max-width: none; max-height: min(56dvh, 420px); overflow: auto; isolation: isolate; pointer-events: auto !important; touch-action: manipulation; }
-.pm-new-project-popover { position: fixed !important; top: 50%; right: auto; bottom: auto; left: 50%; width: min(calc(100vw - 24px), 420px) !important; max-width: 420px !important; max-height: min(72dvh, 520px); transform: translate3d(-50%, -50%, 0); z-index: 2; }
-.pm-new-project-popover.pm-new-project-keyboard-open { top: auto; bottom: 8px; max-height: min(72dvh, calc(100dvh - 16px)); transform: translate3d(-50%, var(--pm-new-project-keyboard-shift, 0px), 0); }
+.pm-new-project-popover { position: fixed !important; top: 50%; right: auto; bottom: auto; left: 50%; width: min(calc(100vw - 24px), 420px) !important; max-width: 420px !important; max-height: min(72dvh, 520px, var(--pm-new-project-available-height, calc(100dvh - 24px))); box-sizing: border-box; overflow-y: auto; transform: translate3d(-50%, -50%, 0); z-index: 2; }
+.pm-new-project-popover.pm-new-project-keyboard-open { top: auto; bottom: 8px; max-height: min(72dvh, var(--pm-new-project-available-height, calc(100dvh - 16px))); transform: translate3d(-50%, var(--pm-new-project-keyboard-shift, 0px), 0); }
 .pm-new-chat-context-popover-title { padding: 8px 10px 6px; color: var(--pm-text); font-size: 15px; line-height: 1.15; font-weight: 700; white-space: nowrap; }
 .pm-new-chat-context-popover-subtitle { padding: 0 10px 7px; color: var(--pm-muted); font-size: 11px; line-height: 1.35; }
 .pm-new-chat-context-option {
@@ -17602,7 +17601,7 @@ body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-ne
 .pm-new-chat-context-popover .pm-haptic-host > .pm-new-project-option { flex: 1 1 auto; min-width: 0; }
 .pm-new-project-form { display: grid; gap: 8px; padding: 2px 10px 6px; }
 .pm-new-project-label { color: var(--pm-text-soft); font-size: 11px; font-weight: 700; }
-.pm-new-project-input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--pm-border); border-radius: 12px; background: rgba(0,0,0,.16); color: var(--pm-text); font: inherit; font-size: 15px; outline: none; }
+.pm-new-project-input { width: 100%; min-height: 42px; max-height: 48px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--pm-border); border-radius: 12px; background: rgba(0,0,0,.16); color: var(--pm-text); font: inherit; font-size: 15px; outline: none; }
 .pm-new-project-input:focus { border-color: color-mix(in srgb, var(--pm-orange) 70%, var(--pm-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-orange) 18%, transparent); }
 .pm-new-project-error { color: var(--pm-red, #ff7b72); font-size: 11px; line-height: 1.3; }
 .pm-new-project-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; }
@@ -17618,9 +17617,6 @@ body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-ne
 body.pm-mobile-context-popover-open .pm-chat-body { pointer-events: none !important; }
 body.pm-new-project-dialog-open .pm-composer { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
 
-/* Shared mobile hierarchy: page headings and chat titles stay crisp white on
-   every skin, while the drawer's gateway label remains the single source for
-   the pinned/session/unread accent color. */
 body.pm-mobile-active .pm-page .pm-title,
 body.pm-mobile-active .pm-page .pm-detail-head h1 {
   color: #fff !important;
@@ -17654,9 +17650,6 @@ body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
   .pm-gateway-card-actions .pm-btn { flex: 1 1 calc(50% - 7px); }
 }
 
-/* Restore the pre-dial mobile reasoning control. Desktop subagent controls
-   retain the shared wheel markup; only the mobile model sheet presents it as
-   the original horizontal segmented slider. */
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-selector {
   position: static;
   display: grid;
@@ -17771,8 +17764,6 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control.is-dragging 
   transition: none;
 }
 
-/* Keep the reasoning sheet aligned with the bottom tab bar, while giving the
-   advanced provider/model/intelligence/speed lists enough room to breathe. */
 body.pm-mobile-active .pm-msheet.is-reasoning {
   height: 252px;
   max-height: calc(100dvh - var(--pm-tabbar-h, 60px) - env(safe-area-inset-bottom, 0px) - 12px);
@@ -17872,12 +17863,14 @@ body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-sessio
 }
 body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
   font-weight: 750;
+  font-family: var(--pm-font);
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
   font-weight: 650;
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
   font-weight: 750;
+  font-family: var(--pm-font);
 }
 
 
