@@ -10,6 +10,9 @@ const TILT_TRAVEL_X_PX = 13;
 const TILT_TRAVEL_Y_PX = 12;
 const MAX_TRAVEL_PX = 22;
 const MAX_ROTATION_DEG = 7;
+const ORIENTATION_CHANGE_EPSILON = 0.004;
+const ACCELERATION_NOISE_FLOOR = 0.35;
+const ROTATION_RATE_NOISE_FLOOR = 3;
 
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, Number(value) || 0));
@@ -70,6 +73,26 @@ export function computeShakeEnergy(acceleration = {}) {
 
 export function createOrbPhysicsState() {
   return { x: 0, y: 0, vx: 0, vy: 0, rotation: 0, vRotation: 0, shake: 0 };
+}
+
+export function isOrbPhysicsSettled(state, input = {}) {
+  const current = state || createOrbPhysicsState();
+  const tiltX = clamp(input?.tiltX, -1, 1);
+  const tiltY = clamp(input?.tiltY, -1, 1);
+  const targetX = tiltX * TILT_TRAVEL_X_PX;
+  const targetY = tiltY * TILT_TRAVEL_Y_PX;
+  const targetRotation = tiltX * MAX_ROTATION_DEG;
+  return Math.abs(current.x - targetX) < 0.08
+    && Math.abs(current.y - targetY) < 0.08
+    && Math.abs(current.rotation - targetRotation) < 0.05
+    && Math.abs(current.vx) < 0.15
+    && Math.abs(current.vy) < 0.15
+    && Math.abs(current.vRotation) < 0.18
+    && current.shake < 0.002
+    && Math.abs(Number(input?.impulseX) || 0) < 0.01
+    && Math.abs(Number(input?.impulseY) || 0) < 0.01
+    && Math.abs(Number(input?.rotationImpulse) || 0) < 0.01
+    && (Number(input?.shake) || 0) < 0.002;
 }
 
 export function stepOrbPhysics(state, input, deltaSeconds) {
@@ -231,6 +254,11 @@ function createBrowserController() {
     input.rotationImpulse = 0;
     input.shake = 0;
     writeMotionStyles(activeControl, physics);
+    if (isOrbPhysicsSettled(physics, input)) {
+      frameId = 0;
+      lastFrameAt = 0;
+      return;
+    }
     frameId = requestAnimationFrame(drawFrame);
   };
 
@@ -254,6 +282,9 @@ function createBrowserController() {
       return;
     }
     const mapped = mapOrientationDelta(beta, gamma, neutral.beta, neutral.gamma, screenAngle);
+    const changed = Math.abs(mapped.x - input.tiltX) >= ORIENTATION_CHANGE_EPSILON
+      || Math.abs(mapped.y - input.tiltY) >= ORIENTATION_CHANGE_EPSILON;
+    if (!changed) return;
     input.tiltX = mapped.x;
     input.tiltY = mapped.y;
     ensureFrame();
@@ -261,18 +292,29 @@ function createBrowserController() {
 
   function onMotion(event) {
     if (!activeControl?.isConnected || supportsReducedMotion()) return;
+    let shouldWake = false;
     const acceleration = event?.acceleration;
     if (acceleration) {
       const mapped = mapAccelerationToScreen(acceleration, currentScreenAngle());
-      input.impulseX += clamp(mapped.x, -14, 14);
-      input.impulseY += clamp(-mapped.y, -14, 14);
-      input.shake = Math.max(input.shake, computeShakeEnergy(acceleration));
+      const impulseX = Math.abs(mapped.x) >= ACCELERATION_NOISE_FLOOR ? clamp(mapped.x, -14, 14) : 0;
+      const impulseY = Math.abs(mapped.y) >= ACCELERATION_NOISE_FLOOR ? clamp(-mapped.y, -14, 14) : 0;
+      const shake = computeShakeEnergy(acceleration);
+      if (impulseX || impulseY || shake > 0) {
+        input.impulseX += impulseX;
+        input.impulseY += impulseY;
+        input.shake = Math.max(input.shake, shake);
+        shouldWake = true;
+      }
     }
     const rotationRate = event?.rotationRate;
     if (rotationRate) {
-      input.rotationImpulse += Number(rotationRate.gamma ?? rotationRate.alpha) || 0;
+      const rotationImpulse = Number(rotationRate.gamma ?? rotationRate.alpha) || 0;
+      if (Math.abs(rotationImpulse) >= ROTATION_RATE_NOISE_FLOOR) {
+        input.rotationImpulse += rotationImpulse;
+        shouldWake = true;
+      }
     }
-    ensureFrame();
+    if (shouldWake) ensureFrame();
   }
 
   const attachSensors = () => {
@@ -344,14 +386,16 @@ function createBrowserController() {
     }
   };
 
-  document.addEventListener('pointerdown', handleGesture, { capture: true, passive: true });
-  document.addEventListener('touchstart', handleGesture, { capture: true, passive: true });
+  // WebKit grants transient activation for a finger on pointerup/touchend,
+  // not pointerdown/touchstart. Request sensor access at gesture completion.
+  document.addEventListener('pointerup', handleGesture, { capture: true, passive: true });
+  document.addEventListener('touchend', handleGesture, { capture: true, passive: true });
   document.addEventListener('visibilitychange', handleVisibility);
 
   return {
     destroy() {
-      document.removeEventListener('pointerdown', handleGesture, true);
-      document.removeEventListener('touchstart', handleGesture, true);
+      document.removeEventListener('pointerup', handleGesture, true);
+      document.removeEventListener('touchend', handleGesture, true);
       document.removeEventListener('visibilitychange', handleVisibility);
       deactivate();
     },

@@ -23292,9 +23292,35 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     pc.addEventListener('connectionstatechange', () => logState('connectionstatechange'));
     pc.addEventListener('iceconnectionstatechange', () => logState('iceconnectionstatechange'));
     pc.addEventListener('signalingstatechange', () => logState('signalingstatechange'));
+    let transientDisconnectTimer = null;
+    const clearTransientDisconnectTimer = () => {
+      if (transientDisconnectTimer) clearTimeout(transientDisconnectTimer);
+      transientDisconnectTimer = null;
+    };
     pc.addEventListener('connectionstatechange', () => {
-      if (['closed', 'failed', 'disconnected'].includes(pc.connectionState) && __pmRealtimeAgent.conn?.pc === pc) {
-        _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: pc.connectionState });
+      if (__pmRealtimeAgent.conn?.pc !== pc) {
+        clearTransientDisconnectTimer();
+        return;
+      }
+      const state = pc.connectionState;
+      if (state === 'connected') {
+        clearTransientDisconnectTimer();
+        return;
+      }
+      if (state === 'disconnected') {
+        if (!transientDisconnectTimer) {
+          transientDisconnectTimer = setTimeout(() => {
+            transientDisconnectTimer = null;
+            if (__pmRealtimeAgent.conn?.pc !== pc || pc.connectionState !== 'disconnected') return;
+            _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: 'rtc_disconnected_timeout' });
+            _stopMobileRealtimeAgentSession();
+          }, 5000);
+        }
+        return;
+      }
+      if (state === 'closed' || state === 'failed') {
+        clearTransientDisconnectTimer();
+        _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: state });
         _stopMobileRealtimeAgentSession();
       }
     });

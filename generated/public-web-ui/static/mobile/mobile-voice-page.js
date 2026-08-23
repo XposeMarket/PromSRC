@@ -585,7 +585,7 @@ export async function renderVoicePage(context, page, ctx) {
   const orbParticleCanvas = page.querySelector('#pm-voice-orb-particles');
   const thinkingOrbHost = page.querySelector('#pm-thinking-orb-host');
   let mobileThinkingOrb = null;
-  void context.mountThinkingOrbWhenReady(thinkingOrbHost, { state: 'thinking', size: 64, theme: 'auto' })
+  void context.mountThinkingOrbWhenReady(thinkingOrbHost, { state: 'thinking', size: 64, theme: 'auto', speed: 0.5 })
     .then((controller) => {
       if (!_isActiveVoiceRender()) {
         try { controller?.destroy?.(); } catch {}
