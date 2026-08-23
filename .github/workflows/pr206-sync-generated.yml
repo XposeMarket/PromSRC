@@ -1,0 +1,39 @@
+name: PR 206 generated web sync
+
+on:
+  push:
+    branches:
+      - feat/mobile-voice-orb-device-motion
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/mobile-voice-orb-device-motion
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Regenerate tracked public web build
+        run: npm run sync:web-ui
+      - name: Commit generated artifacts and remove helper workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/pr206-sync-generated.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: sync generated mobile web build"
+          git push origin HEAD:feat/mobile-voice-orb-device-motion
