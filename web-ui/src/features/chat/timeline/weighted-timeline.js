@@ -13,11 +13,6 @@ function listLength(value) {
   return Array.isArray(value) ? value.length : 0;
 }
 
-function compactJson(value, maximum = 720) {
-  if (value == null) return '';
-  try { return JSON.stringify(value).slice(0, maximum); } catch { return String(value).slice(0, maximum); }
-}
-
 function hashText(value) {
   let hash = 0x811c9dc5;
   const text = String(value ?? '');
@@ -26,6 +21,13 @@ function hashText(value) {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
+}
+
+function jsonFingerprint(value) {
+  if (value == null) return '';
+  let text = '';
+  try { text = JSON.stringify(value); } catch { text = String(value); }
+  return `${text.length}:${hashText(text)}`;
 }
 
 function tailRecord(value) {
@@ -60,21 +62,23 @@ export function chatTurnRenderWeight(message = {}) {
 
 // This signature intentionally ignores disclosure/open state. A row is patched
 // only when render-bearing message state changes, so selections, terminals,
-// decoded media, and open details survive unrelated transcript updates.
+// decoded media, and open details survive unrelated transcript updates. Rich
+// collections use full-content fingerprints so updates to any member, including
+// non-tail tool/process records, cannot accidentally reuse stale DOM.
 export function chatTimelineRowSignature(message = {}) {
   const parts = [
     message.role,
     message.status,
     message.streaming === true ? 1 : 0,
     message.content || message.body?.text || '',
-    compactJson(message.body, 1_500),
+    jsonFingerprint(message.body),
     message.workflowPart,
     message.messageKind,
     message.workStartedAt,
-    compactJson(message.approvalRequest),
-    compactJson(message.questionRequest),
-    compactJson(message.voiceWorkgroup),
-    compactJson(message.errorPresentation),
+    jsonFingerprint(message.approvalRequest),
+    jsonFingerprint(message.questionRequest),
+    jsonFingerprint(message.voiceWorkgroup),
+    jsonFingerprint(message.errorPresentation),
   ];
   for (const field of [
     'liveTraceEntries', 'processEntries', 'toolCalls', 'steps', 'commandRuns',
@@ -82,7 +86,7 @@ export function chatTimelineRowSignature(message = {}) {
     'canvasFiles', 'fileChanges', 'artifacts', 'visualArtifacts', 'productCarousel',
   ]) {
     const value = message[field];
-    parts.push(field, listLength(value), compactJson(tailRecord(value), 420));
+    parts.push(field, listLength(value), jsonFingerprint(value));
   }
   return hashText(parts.join('\u0000'));
 }

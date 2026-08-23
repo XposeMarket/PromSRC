@@ -129,12 +129,17 @@ assert.deepEqual(promptTools.create(' next ', [{ name: 'a.txt' }], {
 const desktopSession = {
   id: 'desktop-session',
   history: [{ messageId: 'desktop-1', role: 'user', content: 'desktop', timestamp: 1 }],
-  historyPage: { olderCursor: null, hasOlder: false, totalCount: 1 },
+  historyPage: { olderCursor: 'desktop-cursor', hasOlder: true, totalCount: 2 },
 };
+let desktopRawFetchCalls = 0;
+let desktopSharedRequestCalls = 0;
 const desktopWindow = {
   activeChatSessionId: desktopSession.id,
   location: { origin: 'https://desktop.test' },
-  fetch: async () => ({ ok: true, json: async () => ({ items: [], pageInfo: {} }) }),
+  fetch: async () => {
+    desktopRawFetchCalls += 1;
+    throw new Error('desktop history must not bypass the shared API transport');
+  },
   document: { getElementById: () => null },
   addEventListener: () => {},
   _sessionQueuedPrompts: {},
@@ -144,7 +149,15 @@ const desktopWindow = {
 const desktopAdapter = createDesktopChatRuntimeAdapter({
   windowRef: desktopWindow,
   getSession: () => desktopSession,
-  request: async () => ({ success: true }),
+  request: async (requestPath) => {
+    desktopSharedRequestCalls += 1;
+    assert.match(requestPath, /^\/api\/sessions\/desktop-session\/history-page\?/);
+    return {
+      sessionId: desktopSession.id,
+      items: [{ messageId: 'desktop-0', role: 'assistant', content: 'older desktop', timestamp: 0 }],
+      pageInfo: { olderCursor: null, hasOlder: false, totalCount: 2 },
+    };
+  },
 });
 assert.equal(desktopAdapter.sync(desktopSession).getTurns()[0].content, 'desktop');
 desktopAdapter.queue(desktopSession.id).push({ message: 'queued' });
@@ -158,6 +171,10 @@ desktopAdapter.setSecondaryVisible('desktop-other-side');
 assert.deepEqual(desktopAdapter.diagnostics().secondarySessionIds, ['desktop-other-side'], 'only the visible secondary lease should remain retained');
 assert.equal(desktopAdapter.releaseSecondary('desktop-other-side'), true);
 assert.deepEqual(desktopAdapter.diagnostics().secondarySessionIds, []);
+assert.equal(await desktopAdapter.loadOlder(desktopSession.id), true, 'desktop cursor paging should succeed through the injected transport');
+assert.equal(desktopSharedRequestCalls, 1, 'desktop cursor paging must use the shared API transport exactly once');
+assert.equal(desktopRawFetchCalls, 0, 'desktop cursor paging must never call raw window.fetch');
+assert.deepEqual(desktopSession.history.map((message) => message.messageId), ['desktop-0', 'desktop-1']);
 
 const mobileState = {
   activeSessionId: 'mobile-session',

@@ -91,6 +91,39 @@ function messages(count, { rich = false } = {}) {
     chatTimelineRowSignature({ ...base, liveTraceEntries: [{ id: 'tool-1', status: 'done' }] }),
     'tool transitions must revise a row',
   );
+  const longPrefix = `prefix-${'x'.repeat(900)}`;
+  const longToolA = {
+    ...base,
+    liveTraceEntries: [{ id: 'tool-long', status: 'running', payload: `${longPrefix}-tail-a` }],
+  };
+  const longToolB = {
+    ...base,
+    liveTraceEntries: [{ id: 'tool-long', status: 'running', payload: `${longPrefix}-tail-b` }],
+  };
+  assert.notEqual(
+    chatTimelineRowSignature(longToolA),
+    chatTimelineRowSignature(longToolB),
+    'rich record changes beyond the old truncation boundary must revise the keyed row',
+  );
+  const twoToolsRunning = {
+    ...base,
+    liveTraceEntries: [
+      { id: 'tool-first', status: 'running', output: 'working' },
+      { id: 'tool-tail', status: 'done', output: 'stable tail' },
+    ],
+  };
+  const twoToolsDone = {
+    ...base,
+    liveTraceEntries: [
+      { id: 'tool-first', status: 'done', output: 'finished' },
+      { id: 'tool-tail', status: 'done', output: 'stable tail' },
+    ],
+  };
+  assert.notEqual(
+    chatTimelineRowSignature(twoToolsRunning),
+    chatTimelineRowSignature(twoToolsDone),
+    'mutating a non-tail rich record must revise the keyed row even when length and tail stay unchanged',
+  );
 }
 
 {
