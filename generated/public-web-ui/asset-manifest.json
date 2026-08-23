@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "1b54e0e72d35722c",
-  "sourceDigest": "1b54e0e72d35722c92ec90fa93bc11aef276ab3b8911fef9e60b0c9863b72832",
+  "buildId": "f14cd667374bcb63",
+  "sourceDigest": "f14cd667374bcb63043bd3a1b4184b4f871b2d5f45ab278a7d07cfc7002f45b6",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -18,7 +18,7 @@
     },
     "mobile": {
       "html": "/mobile.html",
-      "js": "/build/entries/mobile-KUFK5JLT.js",
+      "js": "/build/entries/mobile-XVQ5VFMZ.js",
       "css": "/build/styles/mobile-DEGVMVJT.css",
       "modulePreloads": []
     }
@@ -46,7 +46,7 @@
     "src/features/chat/optional/creative-workspace-runtime.js": "/build/chunks/creative-workspace-runtime-XLIYLRIM.js",
     "src/mobile/mobile-api.js": "/build/chunks/mobile-api-HM2RPGGS.js",
     "src/mobile/mobile-creative-pages.js": "/build/chunks/mobile-creative-pages-M5SOOPKA.js",
-    "src/mobile/mobile-entry.js": "/build/entries/mobile-KUFK5JLT.js",
+    "src/mobile/mobile-entry.js": "/build/entries/mobile-XVQ5VFMZ.js",
     "src/mobile/mobile-gateways-page.js": "/build/chunks/mobile-gateways-page-656WBOSQ.js",
     "src/mobile/mobile-hub-pages.js": "/build/chunks/mobile-hub-pages-AWKXCLZL.js",
     "src/mobile/mobile-model-badge.js": "/build/chunks/mobile-model-badge-6P323HJ6.js",
@@ -125,16 +125,16 @@
         "/build/chunks/chunk-MGDZYTA3.js",
         "/build/chunks/chunk-YMT6MSCC.js",
         "/build/chunks/mobile-router-6TZFNL4U.js",
-        "/build/entries/mobile-KUFK5JLT.js",
+        "/build/entries/mobile-XVQ5VFMZ.js",
         "/build/inline/mobile-inline-01-0b108e28f4b7.js",
         "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
         "/build/styles/mobile-DEGVMVJT.css"
       ],
       "files": 17,
-      "bytes": 761181,
-      "gzipBytes": 165879,
-      "jsBytes": 287715,
-      "jsGzipBytes": 89511,
+      "bytes": 767046,
+      "gzipBytes": 168033,
+      "jsBytes": 293580,
+      "jsGzipBytes": 91665,
       "cssBytes": 473466,
       "cssGzipBytes": 76368
     }
@@ -2626,10 +2626,10 @@
       ]
     },
     {
-      "path": "/build/entries/mobile-KUFK5JLT.js",
-      "bytes": 2714,
-      "gzipBytes": 1278,
-      "sha256": "f83e374bfd2e3f169929f711523987f383d61910da10bb1e9e2aff2cfbb2fc9c",
+      "path": "/build/entries/mobile-XVQ5VFMZ.js",
+      "bytes": 8579,
+      "gzipBytes": 3432,
+      "sha256": "b0d3e8634615793644b12414288a8eeb517976bc74c2c52af19134d4c9bca896",
       "entryPoint": "web-ui/src/mobile/mobile-entry.js",
       "imports": [
         {
