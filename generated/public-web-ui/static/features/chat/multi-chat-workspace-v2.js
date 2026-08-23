@@ -259,9 +259,10 @@ function patchNativeSplitHeaders() {
   patchPaneHeader(root?.querySelector('.side-chat-pane .side-chat-header'), sid);
 }
 
-function revealNativeSide(attempt = 0) {
+function revealNativeSide(attempt = 0, expectedSessionId = state.sideSessionId) {
   const sid = clean(state.sideSessionId);
-  if (!sid) return false;
+  const expectedSid = clean(expectedSessionId);
+  if (!sid || !expectedSid || sid !== expectedSid) return false;
   const parentSessionId = currentMainSessionId();
   if (!parentSessionId || sid === parentSessionId) return false;
   ensureNativeSideLink(sid);
@@ -275,7 +276,15 @@ function revealNativeSide(attempt = 0) {
   }
   if (attempt < 30) {
     window.clearTimeout(nativeSideRetryTimer);
-    nativeSideRetryTimer = window.setTimeout(() => revealNativeSide(attempt + 1), 100);
+    nativeSideRetryTimer = window.setTimeout(() => revealNativeSide(attempt + 1, expectedSid), 100);
+    return false;
+  }
+  if (pendingSideSessionId === expectedSid && state.sideSessionId === expectedSid) {
+    pendingSideSessionId = '';
+    state.sideSessionId = '';
+    persistState();
+    renderTabStrip();
+    document.body?.classList?.remove('prom-multi-chat-native-split');
   }
   return false;
 }
