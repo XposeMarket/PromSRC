@@ -78,10 +78,18 @@ for (const module of ['mobile/mobile-status-bar-theme.js', 'mobile/mobile-hambur
 }
 
 const mobileCss = read(source('styles/mobile.css'));
+const settingsCss = read(source('styles/mobile-settings.css'));
+const proposalsPage = read(source('mobile/mobile-proposals-pages.js'));
 assert.doesNotMatch(mobileCss, /\/\* ---------- settings ---------- \*\//,
   'settings-only block must not remain in the shared mobile route stylesheet');
 assert.doesNotMatch(mobileCss, /The standalone voice page is two deliberate, full-screen stops/,
   'standalone Voice snap block must not remain in the shared mobile route stylesheet');
+assert.match(mobileCss, /\.pm-select\s*\{[\s\S]*?appearance:\s*none[\s\S]*?background-image:/,
+  'shared select presentation must remain available to every route that renders .pm-select');
+assert.doesNotMatch(settingsCss, /(?:^|\n)\s*\.pm-select\s*\{/,
+  'Settings CSS must not claim the shared .pm-select component');
+assert.match(proposalsPage, /class=\\"pm-select\\"/,
+  'Proposals must remain covered by the shared .pm-select component owner');
 
 const manifestPath = path.join(root, 'generated', 'public-web-ui', 'asset-manifest.json');
 const manifest = JSON.parse(read(manifestPath));
