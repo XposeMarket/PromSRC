@@ -13,6 +13,7 @@ const desktop = read('web-ui/index.html');
 const baseCss = read('web-ui/src/styles/base.css');
 const slashCommands = read('web-ui/src/features/chat/core/slash-commands.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedVoicePage = read('generated/public-web-ui/static/mobile/mobile-voice-page.js');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
 const generatedDesktop = read('generated/public-web-ui/index.html');
 
@@ -112,6 +113,11 @@ assert.match(pages, /staged-frame-not-current/);
 assert.match(pages, /realtime-agent-model-request-start/);
 assert.match(pages, /realtime-agent-model-inference-start/);
 assert.match(pages, /realtime-agent-model-response-finished/);
+assert.match(pages, /_startMobileRealtimeLiveCameraVision\('chat_camera_opened'\)/);
+assert.match(pages, /_startMobileRealtimeLiveCameraVision\('realtime_backend_ready'\)/);
+assert.match(pages, /_startMobileRealtimeLiveCameraVision\('camera_response_finished'\)/);
+assert.match(pages, /function _mobileRealtimeCameraSessionIsOpen\(\)/);
+assert.match(pages, /"_sendMobileRealtimeAgentCameraSnapshot": \{ enumerable: true/);
 assert.match(pages, /xaiVisionResponse/);
 assert.match(pages, /resumeAfterXaiVisionResponse/);
 assert.match(pages, /function _mobileRealtimeXaiLiveCameraCanResume\(\)/);
@@ -148,6 +154,13 @@ const liveAssociationBody = liveAssociation.slice(0, liveAssociationEnd);
 assert.ok(liveAssociationBody.includes('_stageMobileRealtimeAgentImage('), 'live camera must use the shared staged-image path');
 assert.ok(liveAssociationBody.includes('_flushMobileRealtimeAgentPendingImages('), 'live camera must use the shared image flush path');
 assert.doesNotMatch(liveAssociationBody, /provider === 'xai'\s*\n\s*\?/);
+const chatVoiceCamera = pages.slice(pages.indexOf('async function openVoiceCameraCaptureFromSheet'));
+assert.match(chatVoiceCamera, /_sendMobileRealtimeAgentCameraSnapshot\(/, 'chat voice shutter must send the snapshot immediately');
+assert.doesNotMatch(
+  chatVoiceCamera.slice(0, chatVoiceCamera.indexOf('onVideoCapture:')),
+  /_stageMobileRealtimeAgentImage\(/,
+  'chat voice still capture must not only stage the image',
+);
 const release = pages.slice(pages.indexOf('function _mobileRealtimeAgentPttRelease()'));
 assert.match(release, /await Promise\.resolve\(_prepareMobileRealtimeLiveCameraForTurn\('ptt_release'\)\)/);
 const publicPttRelease = release.slice(release.indexOf('const flushThenCommit = async'));
@@ -176,6 +189,9 @@ assert.match(generatedPages, /installMobileContextPopoverGuard/);
 assert.match(generatedPages, /realtime-agent-live-camera-frame-associated/);
 assert.match(generatedPages, /asyncReader\(\{ force: true, reason, turnId \}\)/);
 assert.match(generatedPages, /realtime-agent-live-camera-attachment-visible/);
+assert.match(generatedPages, /_startMobileRealtimeLiveCameraVision\('chat_camera_opened'\)/);
+assert.match(generatedPages, /_startMobileRealtimeLiveCameraVision\('realtime_backend_ready'\)/);
+assert.match(generatedPages, /_startMobileRealtimeLiveCameraVision\('camera_response_finished'\)/);
 assert.match(generatedPages, /xaiVisionResponse/);
 assert.match(generatedPages, /resumeAfterXaiVisionResponse/);
 assert.match(generatedPages, /function _mobileRealtimeXaiLiveCameraCanResume\(\)/);
@@ -197,6 +213,8 @@ assert.match(generatedPages, /realtime-agent-user-turn-held-open/);
 assert.match(generatedPages, /realtime-agent-user-turn-continued-after-pause/);
 assert.match(generatedPages, /dismissNewChatContextDock/);
 assert.match(generatedPages, /pm-chat-slash-loading/);
+assert.match(generatedVoicePage, /_startMobileRealtimeLiveCameraVision\('voice_page_camera_opened'\)/);
+assert.match(generatedVoicePage, /_sendMobileRealtimeAgentCameraSnapshot\(/);
 assert.match(generatedCss, /body\.pm-mobile-context-popover-open \.pm-chat-body/);
 assert.match(generatedCss, /--pm-mobile-chrome-top-offset: 16px/);
 assert.match(generatedCss, /--pm-mobile-context-chip-top: calc\(/);
