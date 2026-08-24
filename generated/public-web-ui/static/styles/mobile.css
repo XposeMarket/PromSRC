@@ -2671,9 +2671,14 @@ html.pm-session-context-open * {
   border-radius: 12px;
   background-color: rgba(255,250,241,.96);
   color: var(--pm-text);
-  padding: 0 10px;
+  padding: 0 34px 0 10px;
   font: 800 12px var(--pm-font);
   color-scheme: light;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--pm-muted) 50%), linear-gradient(135deg, var(--pm-muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 52%, calc(100% - 12px) 52%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
 }
 :root[data-theme="dark"] .pm-select {
   background-color: #1c1f24;
