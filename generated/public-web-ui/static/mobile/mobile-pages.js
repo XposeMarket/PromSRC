@@ -3213,11 +3213,18 @@ function _handleMobileCleanThought(message, evt) {
   if (visibility === 'private') return false;
   const text = String(evt?.thinking || evt?.text || '').trim();
   if (!text) return false;
-  // Agent-thought packets are operational progress narration (for example,
-  // "planning" and "preparing"), not standalone reasoning prose. Keep the
-  // latest one only as the collapsed live tool-stream label.
+  // Agent-thought packets are the curated reasoning/progress channel used by
+  // the main chat. Keep the latest narration slot for the compact live view,
+  // and also journal the concrete thought in the expandable process stream so
+  // background-agent details do not collapse down to summary-only output.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
-  return _setMobileLiveProgressNarration(message, text, { replace: true, visibility });
+  const updated = _setMobileLiveProgressNarration(message, text, { replace: true, visibility });
+  _pushMobileStreamProcessEntry(message, 'think', text, {
+    ...evt,
+    source: String(evt?.source || '').trim() || 'agent_progress',
+    visibility,
+  }, false);
+  return updated || true;
 }
 
 function _handleMobileThinkingCallback(message, text, meta = null) {
@@ -31279,6 +31286,18 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   return true;
 }
 
+function _reconcileMobileBackgroundSpawnDockMarkup(host, markup) {
+  if (!host) return;
+  reconcileKeyedTimelineRows(host, markup, {
+    scroller: host,
+    setContents: (current, next) => {
+      const detailsState = _captureMobileTraceDetailsState(current);
+      current.innerHTML = next.innerHTML;
+      _restoreMobileTraceDetailsState(current, detailsState);
+    },
+  });
+}
+
 function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessionId) {
   const host = dock || document.getElementById('pm-background-spawn-dock');
   if (!host) return;
@@ -31317,14 +31336,15 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
   host.classList.toggle('is-collapsed', !dockOpen);
   host.closest?.('.pm-page')?.classList.toggle('pm-bg-agents-open', dockOpen);
   if (!dockOpen) {
-    host.innerHTML = `
+    _reconcileMobileBackgroundSpawnDockMarkup(host, `
       <button type="button" class="pm-background-spawn-pill" data-pm-bg-open aria-label="Open ${lanes.length} background agents">
         <span class="pm-background-spawn-pill-dot" aria-hidden="true"></span>
         <strong>${lanes.length} ${lanes.length === 1 ? 'Agent' : 'Agents'}</strong>
         <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
       </button>
-    `;
-    host.querySelector('[data-pm-bg-open]')?.addEventListener('click', () => {
+    `);
+    const openButton = host.querySelector('[data-pm-bg-open]');
+    if (openButton) openButton.onclick = () => {
       try { pmHaptic(16); } catch {}
       const planState = _mobileMainPlanState(activeSession);
       if (planState.open) {
@@ -31334,11 +31354,11 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       _setMobileBackgroundSpawnDockOpen(activeSession, true);
       _renderMobileBackgroundSpawnDock(host, sessionId);
       try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
-    });
+    };
     _syncMobileRuntimePillPair(host);
     return;
   }
-  host.innerHTML = `
+  _reconcileMobileBackgroundSpawnDockMarkup(host, `
     <button type="button" class="pm-background-spawn-close" data-pm-bg-close aria-label="Collapse background agents">&times;<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
     ${lanes.map((lane) => {
     const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
@@ -31359,7 +31379,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
     const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
     return `
-      <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}">
+      <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}" data-pm-row-key="background:${escapeHtml(lane.id)}">
         <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(lane.agentName || 'background agent')} background work">
           <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(String(lane.agentName || 'Agent').slice(0, 2).toUpperCase())}</span>
           <span class="pm-background-spawn-main">
@@ -31374,21 +31394,22 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       </section>
     `;
     }).join('')}
-  `;
-  host.querySelector('[data-pm-bg-close]')?.addEventListener('click', () => {
+  `);
+  const closeButton = host.querySelector('[data-pm-bg-close]');
+  if (closeButton) closeButton.onclick = () => {
     try { pmHaptic(16); } catch {}
     _setMobileBackgroundSpawnDockOpen(activeSession, false);
     _renderMobileBackgroundSpawnDock(host, sessionId);
     try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
-  });
+  };
   host.querySelectorAll('[data-pm-bg-open-detail]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.onclick = () => {
       try { pmHaptic(12); } catch {}
       window.__pmMobileBackgroundAgentDetail?.(btn.getAttribute('data-pm-bg-open-detail') || '');
-    });
+    };
   });
   host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-    btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
+    btn.onclick = () => _resolveMobileApprovalButton(btn);
   });
   _wireMobileProcessRunActions(host);
   host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {

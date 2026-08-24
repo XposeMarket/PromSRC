@@ -82,7 +82,8 @@ body.pm-mobile-active :is(
   .pm-mobile-queued-prompts,
   .pm-mobile-queued-popover,
   .pm-main-plan-popover,
-  .pm-background-spawn-lane
+  .pm-background-spawn-lane,
+  .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel
 ) {
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
   background:
@@ -104,7 +105,8 @@ body.pm-mobile-active :is(
   .pm-mobile-queued-prompts,
   .pm-mobile-queued-popover,
   .pm-main-plan-popover,
-  .pm-background-spawn-lane
+  .pm-background-spawn-lane,
+  .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel
 ) {
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
   background:
@@ -285,6 +287,81 @@ body.pm-mobile-active .pm-main-plan-popover {
 
 body.pm-mobile-active .pm-background-spawn-lane {
   border-radius: 18px;
+}
+
+/* The background-agent detail sheet is the expanded form of the same runtime
+   surface. Keep its large card on the composer's baked material instead of the
+   older opaque skin-specific panel so opening an agent does not change the
+   visual language of the composer stack. */
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel {
+  border-radius: 34px 34px 0 0;
+  overflow: hidden;
+}
+
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.32),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16);
+}
+
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Match the regular composer's resting row geometry. The side composer is
+   intentionally always in the single-line steer layout, so it must opt out of
+   the main composer's focused grid rules explicitly. */
+body.pm-mobile-active .pm-mobile-side-composer.pm-composer {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 54px;
+  min-height: 54px;
+  max-height: 54px;
+  align-items: stretch;
+}
+
+body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row {
+  width: 100%;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  margin: 0;
+  transform: translateY(-5px);
+}
+
+body.pm-mobile-active .pm-mobile-side-composer .pm-composer-input-wrap {
+  height: 28px;
+  min-height: 28px;
+  align-items: center;
+}
+
+body.pm-mobile-active .pm-mobile-side-composer .pm-composer-input {
+  width: 100%;
+  height: 28px !important;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 2px 4px;
+  line-height: 24px;
+  align-self: center;
+  overflow: hidden;
+}
+
+body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row > .pm-icon-btn,
+body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row > .pm-send {
+  align-self: center;
+  margin: 0;
+  padding: 0;
 }
 
 /* Small controls on the glass use the same header-button material. */

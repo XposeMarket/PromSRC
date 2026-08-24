@@ -17,6 +17,9 @@ assert.match(work, /seq/);
 assert.match(desktop, /\/api\/background-agents\/steer/);
 assert.match(desktop, /data-main-composer-parity="\$\{mainComposerParity \? '1' : '0'\}"/);
 assert.match(desktop, /refreshBackgroundAgentStream/);
+const desktopBackgroundEventListener = desktop.match(/wsEventBus\.on\('bg_agent_event'[\s\S]*?\n\}\);/)?.[0] || '';
+assert.ok(desktopBackgroundEventListener, 'desktop background-agent event listener must remain present');
+assert.doesNotMatch(desktopBackgroundEventListener, /_showChannelActivityToast\(/, 'background progress frames must not create desktop toasts');
 assert.match(mobile, /sendMobileBackgroundSteer\(backgroundId, msg\)/);
 assert.match(mobile, /loadMobileBackgroundStreamReplay\(cleanId, currentLane\?\.lastSeq \|\| 0\)/);
 assert.match(mobile, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
@@ -35,6 +38,8 @@ assert.match(read('web-ui/src/mobile/mobile-shell.js'), /!_isDrawerHiddenRuntime
 assert.match(api, /\/api\/background\/\$\{encodeURIComponent\(id\)\}\/stream/);
 assert.match(api, /\/api\/background-agents\/steer/);
 assert.match(mobileStyles, /\.pm-background-spawn-dock\s*\{[\s\S]*?position: fixed;/);
+assert.match(mobile, /_pushMobileStreamProcessEntry\(message, 'think', text/);
+assert.match(read('web-ui/src/styles/mobile-composer-stack.css'), /pm-mobile-side-sheet\.background-agent-detail-mode \.pm-mobile-side-panel/);
 assert.match(router, /reasoning_summary_delta/);
 assert.match(taskRunner, /appendBackgroundSseTrace/);
 assert.match(taskRunner, /persistBackgroundSessionCheckpoint/);
