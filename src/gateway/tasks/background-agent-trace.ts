@@ -21,11 +21,12 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   const eventType = String(event || '').trim();
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
   const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
-  const userVisibleReasoning = eventType === 'reasoning_summary_delta'
+  const explicitlyPrivateReasoning = visibility === 'private' || visibility === 'internal';
+  const userVisibleReasoning = !explicitlyPrivateReasoning && (eventType === 'reasoning_summary_delta'
     || eventType === 'reasoning_summary'
     || eventType === 'reasoning_delta'
     || source === 'reasoning_summary'
-    || visibility === 'user';
+    || visibility === 'user');
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
     || (eventType === 'thinking_delta' && !userVisibleReasoning)) return null;
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
@@ -37,6 +38,11 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
   };
+  if (explicitlyPrivateReasoning && (eventType === 'thinking_delta'
+    || eventType === 'reasoning_summary_delta'
+    || eventType === 'reasoning_summary'
+    || eventType === 'reasoning_delta'
+    || source === 'reasoning_summary')) return null;
   if (userVisibleReasoning && (eventType === 'thinking_delta'
     || eventType === 'reasoning_summary_delta'
     || eventType === 'reasoning_summary'
