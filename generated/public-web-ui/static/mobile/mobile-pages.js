@@ -371,6 +371,16 @@ function _markMobileRealtimeAgentBackendReady(conn, detail = {}) {
   conn.backendReady = true;
   conn.backendReadyAt = Number(conn.backendReadyAt || 0) || Date.now();
   if (__pmRealtimeAgent?.conn !== conn) return false;
+  // The camera can be opened before WebRTC/AVAS finishes booting. Once the
+  // data channel is ready, attach the live vision loop immediately instead of
+  // waiting for the first spoken turn to notice the camera reader.
+  if (
+    conn.dc?.readyState === 'open'
+    && __pmRealtimeAgent.cameraRuntime?.open === true
+    && typeof __pmRealtimeAgent.liveCameraFrameReader === 'function'
+  ) {
+    _startMobileRealtimeLiveCameraVision('realtime_backend_ready');
+  }
   const ptt = __pmRealtimeAgent.ptt || {};
   const shouldEnableMic = __pmVoice?.listening === true
     && (String(conn.listenMode || '') === 'always_listening'
@@ -12876,6 +12886,7 @@ void main() {
     __pmRealtimeAgent.liveCameraFrameReader = voiceCameraLiveFrameReader;
     __pmRealtimeAgent.liveCameraFrameAsyncReader = refreshVoiceCameraFrameCache;
     _setMobileRealtimeCameraRuntime(true, { source: 'chat_camera', reason: 'chat_camera_opened' });
+    _startMobileRealtimeLiveCameraVision('chat_camera_opened');
     // Disable server-VAD auto responses before the first camera turn reaches
     // speech_stopped. Sending this at camera-open time closes the race where
     // response.created arrives before the per-turn camera gate can be applied.
@@ -12993,8 +13004,8 @@ void main() {
         try {
           await onCapture(normalized, { file, dataUrl: normalized.dataUrl, blob });
         } finally {
-          // The callback owns the voice delivery queue. Do not invalidate its
-          // connection/reader before the captured image has been staged.
+          // The callback owns voice delivery. Do not invalidate its
+          // connection/reader until the captured image has been delivered.
           stopCameraCapture();
         }
       } else {
@@ -15109,12 +15120,16 @@ void main() {
         target: 'voice',
         onCapture: async (normalized, extra) => {
           const dataUrl = extra?.dataUrl || normalized?.dataUrl || '';
-          _stageMobileRealtimeAgentImage({
+          const delivered = await _sendMobileRealtimeAgentCameraSnapshot({
             dataUrl,
             name: extra?.file?.name || normalized?.name || 'Camera snapshot',
             mimeType: normalized?.mimeType || extra?.file?.type || 'image/jpeg',
             base64: normalized?.base64,
-          }, sid);
+          }, {
+            source: 'chat_voice_camera_shutter',
+            sessionId: sid,
+          });
+          if (!delivered) throw new Error('Could not send camera snapshot to voice.');
         },
         onVideoCapture: async (payload) => {
           const frames = Array.isArray(payload?.frames) ? payload.frames : [];
@@ -21761,10 +21776,12 @@ const __pmRealtimeAgent = {
   // Camera/photo staging: a captured image is held here (NOT sent to the model)
   // and shown in the chat bubble. It is flushed to the model as an attachment to
   // the user's NEXT spoken turn (flush on speech_started / PTT release), so the
-  // user can "take a pic, then say 'look at this'".
+  // user can "take a pic, then say 'look at this'". Voice-camera shutter paths
+  // use the direct snapshot helper when the photo is the current voice input.
   pendingImages: [],                 // [{ dataUrl, name, mimeType, base64 }]
-  // Live camera vision is latest-frame-only. The preview can run continuously,
-  // but frames are delivered only while a real voice turn is active.
+  // Live camera vision is latest-frame-only. While the camera surface is open
+  // and the realtime data channel is ready, the loop delivers frames across
+  // response boundaries instead of waiting for another spoken turn.
   liveCameraFrameReader: null,
   // Refresh immediately before delivery when the camera surface can encode
   // asynchronously. The sync reader remains the audio-safe cached fallback.
@@ -21916,6 +21933,13 @@ function _mobileRealtimeCameraFeedIsOpen() {
   return runtime.open === true
     || typeof __pmRealtimeAgent?.liveCameraFrameReader === 'function'
     || live.active === true;
+}
+
+function _mobileRealtimeCameraSessionIsOpen() {
+  const runtime = __pmRealtimeAgent?.cameraRuntime || {};
+  return runtime.open === true
+    && typeof __pmRealtimeAgent?.liveCameraFrameReader === 'function'
+    && __pmRealtimeAgent?.conn?.dc?.readyState === 'open';
 }
 
 function _mobileRealtimeCameraRuntimeIsActive() {
@@ -23477,6 +23501,10 @@ function _stopMobileRealtimeAgentSession(options = {}) {
   if (options.preserveRoomPool !== true) _clearMobileCodexVoiceRoomWarmPool('realtime_session_stopped');
   _stopMobileRealtimeAudioQualityMonitor();
   _stopMobileCodexBridgeRealtimeEventPoll();
+  // Preserve an open camera stream across reconnects, but invalidate the old
+  // frame generation and timer. The next backend-ready callback starts a
+  // fresh camera turn against the new data channel.
+  _stopMobileRealtimeLiveCameraVision('realtime_session_stopped');
   __pmRealtimeAgent.conn = null;
   __pmRealtimeAgent.connecting = null;
   __pmRealtimeAgent.connectingSessionId = '';
@@ -25306,7 +25334,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     // timer does not die permanently after its first injected frame.
     cameraState.resumeAfterXaiVisionResponse = xaiVisionResponse
       && _mobileRealtimeXaiLiveCameraCanResume();
-    _stopMobileRealtimeLiveCameraVision(xaiVisionResponse ? 'xai_vision_response_created' : 'response_created');
+    _stopMobileRealtimeLiveCameraVision(xaiVisionResponse ? 'xai_vision_response_created' : 'response_created', {
+      preserveCameraSession: _mobileRealtimeCameraSessionIsOpen(),
+    });
     _finalizeMobileRealtimeUserTurn(sessionId, 'response_created');
     if (cameraGateRace) {
       // The server can beat the session.update(create_response:false) packet
@@ -25746,7 +25776,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       : 0,
     });
     _finalizeMobileRealtimeUserTurn(sessionId, 'response_finished');
-    _stopMobileRealtimeLiveCameraVision('response_finished');
+    _stopMobileRealtimeLiveCameraVision('response_finished', {
+      preserveCameraSession: _mobileRealtimeCameraSessionIsOpen(),
+    });
     if (
       typeof __pmRealtimeAgent.liveCameraFrameReader === 'function'
       && (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
@@ -25757,6 +25789,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
     __pmRealtimeAgent.activeResponse = false;
     __pmVoice.realtimeSpeechActiveResponse = false;
+    if (_mobileRealtimeCameraSessionIsOpen()) {
+      _startMobileRealtimeLiveCameraVision('camera_response_finished');
+    }
     __pmRealtimeAgent.quiet.suppressResponse = false;
     _releaseMobileVoiceRoomHandoffAckGuard('response_done');
     if (__pmRealtimeAgent.quiet.active && _isMobileCodexV3RealtimeConnection()) {
@@ -27566,9 +27601,10 @@ async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
   return !!sent;
 }
 
-function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
+function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished', options = {}) {
   const state = _mobileRealtimeLiveVisionState();
-  const restoreResponseCreation = state.responseGateActive === true;
+  const preserveCameraSession = options.preserveCameraSession === true && _mobileRealtimeCameraSessionIsOpen();
+  const restoreResponseCreation = state.responseGateActive === true && !preserveCameraSession;
   state.active = false;
   state.generation = Number(state.generation || 0) + 1;
   state.queuedFrame = null;
@@ -27578,6 +27614,9 @@ function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
   state.preparationReady = false;
   state.pendingAttachmentPreparation = null;
   state.audioCommitted = false;
+  if (!preserveCameraSession) {
+    state.resumeAfterXaiVisionResponse = false;
+  }
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
   if (restoreResponseCreation) _sendMobileRealtimeAgentCreateResponseFlag(true);
@@ -27896,7 +27935,7 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
       });
       const summary = String(vision?.summary || '').trim();
       if (!summary) throw new Error(vision?.error || 'xAI vision returned no camera summary.');
-      dc.send(JSON.stringify({
+      const contextSent = _sendMobileRealtimeDataChannelEvent(dc, {
         type: 'conversation.item.create',
         item: {
           type: 'message',
@@ -27913,14 +27952,17 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
             },
           ],
         },
-      }));
-      dc.send(JSON.stringify({ type: 'response.create' }));
+      });
+      if (!contextSent) throw new Error('xAI realtime did not accept the camera context.');
+      if (!_sendMobileRealtimeDataChannelEvent(dc, { type: 'response.create' })) {
+        throw new Error('xAI realtime did not accept the camera response request.');
+      }
       __pmRealtimeAgent.enqueuePreviews?.([{ kind: 'image', name, dataUrl, mimeType: fileLike?.mimeType || 'image/jpeg' }], { transient: true });
       _voiceDebug('xai-realtime-agent-camera-summary-sent', { name, summaryLen: summary.length });
       return true;
     }
     const snapshotImageUrl = await _downscaleDataUrlForRealtime(dataUrl);
-    dc.send(JSON.stringify({
+    const contextSent = _sendMobileRealtimeDataChannelEvent(dc, {
       type: 'conversation.item.create',
       item: {
         type: 'message',
@@ -27936,11 +27978,14 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
           },
         ],
       },
-    }));
+    });
+    if (!contextSent) throw new Error('Realtime voice did not accept the camera context.');
     if (provider === 'xai') {
-      dc.send(JSON.stringify({ type: 'response.create' }));
+      if (!_sendMobileRealtimeDataChannelEvent(dc, { type: 'response.create' })) {
+        throw new Error('Realtime voice did not accept the camera response request.');
+      }
     } else {
-      dc.send(JSON.stringify({
+      if (!_sendMobileRealtimeDataChannelEvent(dc, {
         type: 'response.create',
         response: {
           output_modalities: ['audio'],
@@ -27951,7 +27996,7 @@ async function _sendMobileRealtimeAgentCameraSnapshot(fileLike = {}, options = {
             'Do not claim the image was saved to the phone. It is an in-app frame capture.',
           ].join('\n'),
         },
-      }));
+      })) throw new Error('Realtime voice did not accept the camera response request.');
     }
     __pmRealtimeAgent.enqueuePreviews?.([{ kind: 'image', name, dataUrl, mimeType: fileLike?.mimeType || 'image/jpeg' }], { transient: true });
     _voiceDebug('realtime-agent-camera-snapshot-sent', { provider, name, bytes: Number(fileLike?.size || 0) || 0 });
@@ -29466,6 +29511,7 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_saveVoiceSettings": { enumerable: true, get: () => _saveVoiceSettings },
   "_scheduleMobileCodexVoiceRoomPrewarm": { enumerable: true, get: () => _scheduleMobileCodexVoiceRoomPrewarm },
   "_sendMobileRealtimeAgentCreateResponseFlag": { enumerable: true, get: () => _sendMobileRealtimeAgentCreateResponseFlag },
+  "_sendMobileRealtimeAgentCameraSnapshot": { enumerable: true, get: () => _sendMobileRealtimeAgentCameraSnapshot },
   "_serverVoiceFallback": { enumerable: true, get: () => _serverVoiceFallback },
   "_setMobileRealtimeAgentMicEnabled": { enumerable: true, get: () => _setMobileRealtimeAgentMicEnabled },
   "_setMobileRealtimeCameraRuntime": { enumerable: true, get: () => _setMobileRealtimeCameraRuntime },
@@ -29482,6 +29528,7 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "_stopMobileRealtimeAgentContextRefreshLoop": { enumerable: true, get: () => _stopMobileRealtimeAgentContextRefreshLoop },
   "_stopMobileRealtimeAgentSession": { enumerable: true, get: () => _stopMobileRealtimeAgentSession },
   "_stopMobileRealtimeLiveCameraVision": { enumerable: true, get: () => _stopMobileRealtimeLiveCameraVision },
+  "_startMobileRealtimeLiveCameraVision": { enumerable: true, get: () => _startMobileRealtimeLiveCameraVision },
   "_trySubmitVoiceAsLiveSteer": { enumerable: true, get: () => _trySubmitVoiceAsLiveSteer },
   "_ttsSpeak": { enumerable: true, get: () => _ttsSpeak },
   "_ttsStop": { enumerable: true, get: () => _ttsStop },

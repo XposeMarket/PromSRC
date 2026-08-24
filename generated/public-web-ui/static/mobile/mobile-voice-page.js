@@ -482,6 +482,7 @@ export async function renderVoicePage(context, page, ctx) {
       context.__pmRealtimeAgent.liveCameraFrameReader = voicePageCameraFrameReader;
       context.__pmRealtimeAgent.liveCameraFrameAsyncReader = readVoicePageLiveCameraFrameAsync;
       context._setMobileRealtimeCameraRuntime(true, { source: 'voice_page_camera', reason: 'voice_page_camera_opened' });
+      context._startMobileRealtimeLiveCameraVision('voice_page_camera_opened');
       setVoicePageCameraStatus('');
     } catch (error) {
       stopVoicePageCamera();
@@ -545,13 +546,13 @@ export async function renderVoicePage(context, page, ctx) {
       if (!sid || sid === context.MOBILE_CHAT_SESSION_ID) {
         sid = await context._ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'voice_page_camera_session_created' });
       }
-      context._stageMobileRealtimeAgentImage({
+      const delivered = await context._sendMobileRealtimeAgentCameraSnapshot({
         dataUrl: normalized.dataUrl,
         name: normalized.name || 'Voice camera photo',
         mimeType: normalized.mimeType || 'image/jpeg',
         base64: normalized.base64,
-      }, sid);
-      stopVoicePageCamera();
+      }, { source: 'voice_page_camera_shutter', sessionId: sid });
+      if (!delivered) throw new Error('Could not send camera snapshot to voice.');
       context.pmToast('Snapshot sent to voice.', 'success');
     } catch (error) {
       setVoicePageCameraStatus('');
