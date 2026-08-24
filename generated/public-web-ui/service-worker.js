@@ -59,7 +59,7 @@ const BUILD_PRECACHE = [
   "/build/entries/mobile-JCGKQCX3.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-  "/build/styles/mobile-VHCNLH5W.css",
+  "/build/styles/mobile-CEQ2PJNZ.css",
   "/mobile.html",
   "/mobile/chat",
 ];

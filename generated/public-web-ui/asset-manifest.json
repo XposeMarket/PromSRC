@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-L6UXB4TU.js",
-      "css": "/build/styles/desktop-GY2Y344Y.css",
+      "css": "/build/styles/desktop-YCDWV2ED.css",
       "modulePreloads": [
         "/build/chunks/chunk-36KIJFV6.js",
         "/build/chunks/chunk-M5JONE3D.js"
@@ -20,7 +20,7 @@
     "mobile": {
       "html": "/mobile.html",
       "js": "/build/entries/mobile-JCGKQCX3.js",
-      "css": "/build/styles/mobile-VHCNLH5W.css",
+      "css": "/build/styles/mobile-CEQ2PJNZ.css",
       "modulePreloads": []
     }
   },
@@ -102,15 +102,15 @@
         "/build/inline/index-inline-08-7dfa54f94119.js",
         "/build/inline/index-inline-09-4550e6a395a8.js",
         "/build/inline/index-inline-10-d99079ff0017.js",
-        "/build/styles/desktop-GY2Y344Y.css"
+        "/build/styles/desktop-YCDWV2ED.css"
       ],
       "files": 14,
-      "bytes": 813660,
-      "gzipBytes": 146635,
+      "bytes": 813652,
+      "gzipBytes": 146631,
       "jsBytes": 188219,
       "jsGzipBytes": 50081,
-      "cssBytes": 625441,
-      "cssGzipBytes": 96554
+      "cssBytes": 625433,
+      "cssGzipBytes": 96550
     },
     "mobile": {
       "paths": [
@@ -131,15 +131,15 @@
         "/build/entries/mobile-JCGKQCX3.js",
         "/build/inline/mobile-inline-01-0b108e28f4b7.js",
         "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-        "/build/styles/mobile-VHCNLH5W.css"
+        "/build/styles/mobile-CEQ2PJNZ.css"
       ],
       "files": 18,
-      "bytes": 770010,
-      "gzipBytes": 169187,
+      "bytes": 770002,
+      "gzipBytes": 169183,
       "jsBytes": 296261,
       "jsGzipBytes": 92781,
-      "cssBytes": 473749,
-      "cssGzipBytes": 76406
+      "cssBytes": 473741,
+      "cssGzipBytes": 76402
     }
   },
   "assets": [
@@ -2884,10 +2884,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-GY2Y344Y.css",
-      "bytes": 625441,
-      "gzipBytes": 96554,
-      "sha256": "ee29d107d3135ac44967c269be4d497bcbd8a8ee15121bc3587f124307784def",
+      "path": "/build/styles/desktop-YCDWV2ED.css",
+      "bytes": 625433,
+      "gzipBytes": 96550,
+      "sha256": "59141be7e610f9b2892cc41571ad7bc5d4035d8232be3b7625fb03ec8965f684",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
@@ -2929,10 +2929,10 @@
       ]
     },
     {
-      "path": "/build/styles/mobile-VHCNLH5W.css",
-      "bytes": 473749,
-      "gzipBytes": 76406,
-      "sha256": "08dd81856d5c790177bc71ce0d47bf912e4f9dac6013a00e11c093e8c37f112d",
+      "path": "/build/styles/mobile-CEQ2PJNZ.css",
+      "bytes": 473741,
+      "gzipBytes": 76402,
+      "sha256": "5cb49a12d9461c1f07fc8b9567ff6ac7ccb72dfd813c9b9bb82b1426eddb1b04",
       "entryPoint": "web-ui/src/styles/mobile-entry.css",
       "imports": []
     }
