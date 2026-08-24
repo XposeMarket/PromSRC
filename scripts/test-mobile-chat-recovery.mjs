@@ -98,6 +98,9 @@ assert.match(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
+assert.match(api, /const _mobileHistoryWriteQueues = new Map\(\)/, 'mobile history writes must be serialized per session');
+assert.match(api, /const previous = _mobileHistoryWriteQueues\.get\(queueKey\) \|\| Promise\.resolve\(\)/, 'mobile history writes must wait for the prior snapshot');
+assert.match(api, /if \(_mobileHistoryWriteQueues\.get\(queueKey\) === write\) _mobileHistoryWriteQueues\.delete\(queueKey\)/, 'mobile history write queues must release only their own settled write');
 assert.match(api, /const fullProcess = options\.fullProcess === undefined \? force : options\.fullProcess === true/, 'forced recovery hydration must request complete process entries by default');
 assert.match(api, /\$\{fullProcess \? '&fullProcess=1' : ''\}\$\{force \? '&_fresh=1' : ''\}/, 'session hydration must independently encode fresh and full-process modes');
 assert.match(pages, /const PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE = 20/, 'mobile chat history must use bounded 20-message pages');
@@ -357,6 +360,9 @@ assert.match(
   /_clientRequestId: String\(m\?\._clientRequestId \|\| m\?\.clientRequestId \|\| ''\)\.trim\(\) \|\| undefined/,
   'server history hydration must preserve the request identity of steer continuations',
 );
+assert.match(pages, /function _mobileHistoryPageIsPartial\(session, history = \[\]\)/, 'mobile recovery must recognize bounded gateway history pages');
+assert.match(pages, /preserveLocalHistory: _mobileHistoryPageIsPartial\(session, history\)/, 'bounded recovery pages must preserve the existing local transcript');
+assert.match(pages, /mergeOlderHistory: _mergeMobileHistoryPageWithCurrent/, 'mobile older paging must use a non-destructive prepend merge');
 assert.match(
   pages,
   /function _findMobileRecoverableAssistantTurn[\s\S]{0,700}messageKind \|\| ''\)\.trim\(\) === 'steer_continuation'/,

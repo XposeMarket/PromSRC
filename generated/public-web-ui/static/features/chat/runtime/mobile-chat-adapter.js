@@ -15,6 +15,7 @@ export function createMobileChatRuntimeAdapter({
   getActiveGatewayId = () => '',
   loadHistoryPage,
   mergeHistory = (older, current) => [...older, ...current],
+  mergeOlderHistory = (_sessionId, older, current) => [...older, ...current],
   normalizeSkillIds,
   normalizeSkillRefs,
 } = {}) {
@@ -220,7 +221,10 @@ export function createMobileChatRuntimeAdapter({
       const older = Array.isArray(pageResult?.items) ? pageResult.items : [];
       const current = Array.isArray(state.threads?.[sid]) ? state.threads[sid] : [];
       const loadedCount = Math.max(Number(pagination.loadedHistoryCount || current.length) || 0, current.length);
-      const history = mergeHistory(sid, older, current);
+      // Hydration reconciliation may intentionally retain only optimistic or
+      // live local artifacts. Older paging is different: it must prepend the
+      // page without dropping already-loaded durable rows.
+      const history = mergeOlderHistory(sid, older, current);
       state.threads[sid] = history;
       const totalCount = Number(pageResult?.pageInfo?.totalCount || loadedCount + older.length) || loadedCount + older.length;
       state.historyPagination[sid] = {

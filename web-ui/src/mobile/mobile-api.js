@@ -1855,6 +1855,7 @@ export async function loadLatestUsableSession() {
 // ── Session cache (30s TTL, invalidated on history writes) ────────────────────
 const _sessionCache = new Map(); // scoped session id → { session, expiresAt }
 const _sessionRequests = new Map(); // scoped session/detail → in-flight Promise
+const _mobileHistoryWriteQueues = new Map(); // scoped session id → serialized write Promise
 const _SESSION_CACHE_TTL = 30_000; // ms
 const _mobileHistoryClients = new Map();
 
@@ -1993,21 +1994,31 @@ export async function reconcileMobileChatTurn(sessionId) {
 export async function updateMobileChatSessionHistory(sessionId, history = [], options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) throw new Error('Session id required');
+  const scope = _mobileGatewayCacheScope();
+  const queueKey = `${scope}::${sid}`;
+  const previous = _mobileHistoryWriteQueues.get(queueKey) || Promise.resolve();
   invalidateMobileChatSessionCache(sid); // stale after write
-  return mfetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
-    method: 'POST',
-    body: JSON.stringify({
-      history: Array.isArray(history) ? history : [],
-      resetCompaction: options.resetCompaction === true,
-      origin: {
-        channel: 'mobile',
-        surface: 'mobile_app',
-        device: 'phone',
-        source: 'mobile_history_sync',
-        ...(String(options.originReason || '').trim() ? { reason: String(options.originReason).trim() } : {}),
-      },
-    }),
-  });
+  const write = previous
+    .catch(() => null)
+    .then(() => mfetch(`/api/sessions/${encodeURIComponent(sid)}/history`, {
+      method: 'POST',
+      body: JSON.stringify({
+        history: Array.isArray(history) ? history : [],
+        resetCompaction: options.resetCompaction === true,
+        origin: {
+          channel: 'mobile',
+          surface: 'mobile_app',
+          device: 'phone',
+          source: 'mobile_history_sync',
+          ...(String(options.originReason || '').trim() ? { reason: String(options.originReason).trim() } : {}),
+        },
+      }),
+    }))
+    .finally(() => {
+      if (_mobileHistoryWriteQueues.get(queueKey) === write) _mobileHistoryWriteQueues.delete(queueKey);
+    });
+  _mobileHistoryWriteQueues.set(queueKey, write);
+  return write;
 }
 
 export async function markMobileEditRerunReset(sessionId) {
