@@ -81,10 +81,75 @@ function defer(operation) {
 function hasStructuredActivity(entries) {
   return (Array.isArray(entries) ? entries : []).some((entry) => (
     !!entry?.activity
-    || /^tool_(?:call|result|progress)$/i.test(String(entry?.eventType || entry?.extra?.event || entry?.type || ''))
+    || /^tool_(?:call|result|progress)$/i.test(String(entry?.eventType || entry?.event || entry?.extra?.event || entry?.kind || entry?.type || ''))
     || (String(entry?.extra?.action || entry?.extra?.toolName || entry?.action || entry?.toolName || '').trim()
       && ['tool', 'skill', 'result', 'error', 'progress'].includes(String(entry?.type || '').toLowerCase()))
   ));
+}
+
+function pendingToolActivityEntry(entry) {
+  if (!entry || typeof entry !== 'object' || entry.activity) return entry;
+  const normalized = normalizeLegacyToolActivityEntry(entry);
+  const type = String(normalized.type || '').toLowerCase();
+  const event = String(normalized.eventType || normalized.event || normalized.extra?.event || '').toLowerCase();
+  const resultLike = type === 'result' || type === 'error' || event === 'tool_result';
+  const action = String(
+    normalized.extra?.action
+      || normalized.extra?.toolName
+      || normalized.action
+      || normalized.toolName
+      || 'tool',
+  ).trim() || 'tool';
+  const args = normalized.extra?.args || normalized.args || {};
+  const result = resultLike
+    ? String(normalized.extra?.result ?? normalized.result ?? normalized.text ?? normalized.content ?? normalized.message ?? '')
+    : '';
+  return {
+    ...normalized,
+    type: resultLike ? (type === 'error' || normalized.extra?.error ? 'error' : 'result') : 'tool',
+    // Do not carry a multi-kilobyte recovered result into the fallback paint.
+    // The full result returns when the rich module is ready; the cold state
+    // only needs a compact label that matches the live activity card.
+    text: resultLike ? `${action}${type === 'error' || normalized.extra?.error ? ' failed' : ' complete'}` : `Preparing ${action}`,
+    activity: {
+      kind: resultLike ? 'result' : 'operation',
+      action,
+      technicalName: action,
+      args: args && typeof args === 'object' ? args : {},
+      status: resultLike ? (type === 'error' || normalized.extra?.error ? 'failed' : 'succeeded') : 'running',
+      ok: resultLike ? !(type === 'error' || normalized.extra?.error) : undefined,
+      result,
+    },
+  };
+}
+
+function normalizeLegacyToolActivityEntry(entry) {
+  if (!entry || typeof entry !== 'object' || entry.activity) return entry;
+  const rawType = String(entry.type || '').toLowerCase();
+  const event = String(entry.eventType || entry.event || entry.extra?.event || '').toLowerCase();
+  const isCall = rawType === 'tool_call' || event === 'tool_call';
+  const isResult = rawType === 'tool_result' || event === 'tool_result';
+  const isProgress = rawType === 'tool_progress' || event === 'tool_progress';
+  if (!isCall && !isResult && !isProgress) return entry;
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
+  return {
+    ...entry,
+    type: isCall ? 'tool' : isResult ? (entry.error === true || extra.error === true ? 'error' : 'result') : 'progress',
+    extra: {
+      ...extra,
+      ...(action ? { action, toolName: extra.toolName || action } : {}),
+      event: event || rawType,
+    },
+  };
+}
+
+function normalizeLegacyToolActivityEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).map(normalizeLegacyToolActivityEntry);
+}
+
+function pendingToolActivityEntries(entries) {
+  return normalizeLegacyToolActivityEntries(entries).map(pendingToolActivityEntry);
 }
 
 export function installToolActivityExpansionPersistence(root = typeof document !== 'undefined' ? document : null) {
@@ -114,9 +179,14 @@ export function applyCommandProcessEvent(entries, eventType, payload = {}) {
 }
 
 export function coalesceToolActivityEntries(entries) {
-  if (feature) return feature.coalesceToolActivityEntries(entries);
+  if (feature) return feature.coalesceToolActivityEntries(normalizeLegacyToolActivityEntries(entries));
   if (hasStructuredActivity(entries)) {
     void loadToolActivityFeature().catch(() => {});
+    // Never paint a recovered legacy tool/result as a giant raw protocol block
+    // while the rich renderer chunk is loading. The ready event will repaint
+    // these same entries through the full coalescer; this placeholder keeps the
+    // first recovery paint compact even on a cold mobile launch or cache miss.
+    return pendingToolActivityEntries(entries);
   }
   return Array.isArray(entries) ? entries : [];
 }

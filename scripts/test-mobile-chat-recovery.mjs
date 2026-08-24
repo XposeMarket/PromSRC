@@ -125,6 +125,39 @@ assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must ret
 assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
 assert.match(toolActivityRuntime, /entry\?\.extra\?\.action \|\| entry\?\.extra\?\.toolName/, 'cold recovery rows must load the existing tool activity renderer');
+assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy tool event-shaped rows must be normalized before rich coalescing');
+assert.match(pages, /rawType = String\(entry\.type \|\| entry\.kind \|\| ''\)\.toLowerCase\(\)/, 'mobile recovery must inspect legacy event-shaped trace types');
+assert.match(pages, /rawType === 'tool_result'/, 'mobile recovery must convert legacy tool_result rows into result rows');
+assert.match(pages, /__pmMobileBackgroundAgentDetailRender/, 'background detail recovery must repaint after the rich renderer loads');
+
+// The rich tool renderer is deliberately lazy. Recovered mobile history must
+// still be compact during that import window, then converge to the same
+// operation/result records used by live streaming once the chunk is ready.
+globalThis.__PROM_TOOL_ACTIVITY_IMPORT_FOR_TESTS = () => new Promise((resolve) => {
+  setTimeout(() => import('../web-ui/src/tool-activity.js').then(resolve), 20);
+});
+const recoveryRuntime = await import('../web-ui/src/features/chat/optional/tool-activity-runtime.js?mobile-recovery-race=1');
+const recoveredLegacyTrace = [
+  {
+    type: 'tool_call',
+    text: 'Preparing browser_scroll_collect',
+    extra: { event: 'tool_call', toolName: 'browser_scroll_collect', args: { direction: 'down' } },
+  },
+  {
+    type: 'tool_result',
+    text: 'Page: https://x.com/search?q=Hermes',
+    extra: { event: 'tool_result' },
+  },
+];
+const coldTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
+assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'operation'), 'cold recovery must not paint a raw tool_call block');
+assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'result'), 'cold recovery must not paint a raw tool_result block');
+assert.ok(coldTrace.every((entry) => String(entry.text || '').length < 180), 'cold recovery placeholders must stay compact');
+await new Promise((resolve) => setTimeout(resolve, 60));
+const readyTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
+assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'ready recovery must use the live operation renderer');
+assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'result'), 'ready recovery must use the live result renderer');
+assert.equal(readyTrace.find((entry) => entry.activity?.kind === 'result')?.activity?.action, 'browser_scroll_collect', 'unnamed recovered results must attach to the preceding operation');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
 assert.match(router, /router\.post\('\/api\/mobile\/chat\/reconcile\/:sessionId'/, 'mobile must have an explicit server reconciliation action');
 assert.match(router, /mergeHistoryWithExistingMessageMetadata\(existingHistory, rawHistory, \{[\s\S]{0,100}preserveAllExisting: isMobileHistorySyncRequest\(req\)/, 'mobile history sync must merge into durable server history rather than replacing it');
