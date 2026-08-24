@@ -7,6 +7,7 @@
  * edge. It deliberately applies NO blur/filter of its own.
  */
 
+@layer shell {
 :root {
   --pm-mobile-native-chrome-color: var(--pm-bg, #0b0b0d);
 }
@@ -53,4 +54,5 @@ body.pm-mobile-active .pm-app > .pm-mobile-status-edge-tint {
 
 body:not(.pm-mobile-active) .pm-mobile-status-edge-tint {
   display: none !important;
+}
 }

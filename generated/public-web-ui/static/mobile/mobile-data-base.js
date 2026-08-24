@@ -1,42 +1,5 @@
 // Mock data for the first mobile UI pass. Replace with real APIs later.
 
-// The runtime surfaces immediately above the composer have their own small
-// stylesheet so they can share one material/geometry contract without adding
-// more late overrides to the already-large mobile.css bundle. Resolve the URL
-// from this module so source and generated public-web-ui trees use the correct
-// sibling styles directory automatically.
-const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
-const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v305-2026-08-24-background-agent-polish';
-const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
-const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v303-2026-08-23-aug12-glass-crosscheck';
-
-function ensureMobileComposerStackStyles() {
-  if (typeof document === 'undefined') return;
-  try {
-    if (!document.getElementById(PM_COMPOSER_STACK_STYLE_ID)) {
-      const link = document.createElement('link');
-      link.id = PM_COMPOSER_STACK_STYLE_ID;
-      link.rel = 'stylesheet';
-      link.href = new URL(`../styles/mobile-composer-stack.css?v=${PM_COMPOSER_STACK_STYLE_VERSION}`, import.meta.url).href;
-      link.dataset.promMobileComposerStackStyle = '1';
-      document.head.appendChild(link);
-    }
-    let demoGlassLink = document.getElementById(PM_DEMO_GLASS_STYLE_ID);
-    if (!demoGlassLink) {
-      demoGlassLink = document.createElement('link');
-      demoGlassLink.id = PM_DEMO_GLASS_STYLE_ID;
-      demoGlassLink.rel = 'stylesheet';
-      demoGlassLink.dataset.promMobileDemoGlassStyle = '1';
-      document.head.appendChild(demoGlassLink);
-    }
-    // Refresh an existing link after a hot update so the corrected material
-    // cannot remain pinned to the prior cache key.
-    demoGlassLink.href = new URL(`../styles/mobile-liquid-glass-demo.css?v=${PM_DEMO_GLASS_STYLE_VERSION}&drawer-tabs=white-v1`, import.meta.url).href;
-  } catch {}
-}
-
-ensureMobileComposerStackStyles();
-
 export const chatMessages = [
   {
     role: 'ai',

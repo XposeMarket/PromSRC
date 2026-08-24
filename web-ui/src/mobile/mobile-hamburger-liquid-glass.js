@@ -49,7 +49,9 @@ function ensureStyles() {
   const link = document.createElement('link');
   link.id = STYLE_ID;
   link.rel = 'stylesheet';
-  link.href = new URL(`../styles/mobile-hamburger-liquid-glass.css?v=${STYLE_VERSION}`, import.meta.url).href;
+  const styleUrl = new URL(`../styles/mobile-hamburger-liquid-glass.css?v=${STYLE_VERSION}`, import.meta.url);
+  if (styleUrl.pathname.includes('/build/')) styleUrl.pathname = '/static/styles/mobile-hamburger-liquid-glass.css';
+  link.href = styleUrl.href;
   link.dataset.promMobileHamburgerLiquidGlass = '1';
   document.head.appendChild(link);
 }

@@ -25,6 +25,7 @@
  * routing, popovers, or page layout.
  */
 
+@layer shell {
 body.pm-mobile-active .pm-header {
   background: transparent !important;
   border-color: transparent !important;
@@ -152,4 +153,5 @@ body.pm-mobile-active .pm-drawer-list .pm-drawer-item > .pm-flex {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
   opacity: 1 !important;
+}
 }

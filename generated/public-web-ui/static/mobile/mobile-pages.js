@@ -121,6 +121,7 @@ import {
   getVoicePreviewGestureOutcome,
 } from './voice-preview-deck.mjs';
 import { mountThinkingOrbWhenReady } from '../features/chat/optional/thinking-orb-runtime.js';
+import { ensureMobileChatStyles } from './mobile-style-owners.js';
 
 const PM_MOBILE_BROWSE_CACHE_TTL_MS = 45_000;
 const pmMobileBrowseCache = new Map();
@@ -11056,6 +11057,7 @@ function _saveMobileLastChatContext(context = {}) {
 }
 
 export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
+  ensureMobileChatStyles();
   _installMobileApprovalBridge();
   // Chat recovery needs the same tool/result renderer as live streaming. Kick
   // off the optional chunk before history hydration so the first recovered

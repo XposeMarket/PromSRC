@@ -9,6 +9,7 @@
  * detaching from the composer when its height or keyboard offset changes.
  */
 
+@layer components {
 body.pm-mobile-active {
   --pm-composer-stack-gap: 8px;
   --pm-composer-stack-inset: var(--pm-mobile-chrome-inset, 22px);
@@ -433,4 +434,5 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   ) {
     background: color-mix(in srgb, var(--pm-surface-strong) 86%, transparent);
   }
+}
 }
