@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const source = readFileSync(new URL('../web-ui/src/mobile/mobile-pages.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../web-ui/src/mobile/mobile-voice-realtime-runtime.js', import.meta.url), 'utf8');
 const anchor = source.indexOf("pc.addEventListener('connectionstatechange', () => logState('connectionstatechange'))");
 assert.ok(anchor >= 0, 'realtime agent connection-state logging hook should exist');
 const block = source.slice(anchor, anchor + 4200);
