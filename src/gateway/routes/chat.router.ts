@@ -55,6 +55,7 @@ import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHist
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
+import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -1093,52 +1094,10 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
 function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] | undefined {
   const stream = getMainChatStream(sessionId);
   if (!stream) return undefined;
-  const entries: Record<string, any>[] = [];
-  for (const frame of stream.events) {
-    const data = frame.data && typeof frame.data === 'object' ? frame.data : {};
-    const action = String(data.action || data.name || data.toolName || 'tool').trim() || 'tool';
-    if (frame.type === 'tool_call') {
-      entries.push({
-        id: `trace_${stream.streamId}_${frame.seq}`,
-        type: 'tool',
-        text: action,
-        time: frame.at,
-        extra: data,
-      });
-      continue;
-    }
-    if (frame.type === 'tool_result') {
-      const result = String(data.result || data.output || '').trim().replace(/\s+/g, ' ').slice(0, 500);
-      entries.push({
-        id: `trace_${stream.streamId}_${frame.seq}`,
-        type: data.error ? 'error' : 'result',
-        text: `${action}${result ? ` -> ${result}` : ' complete'}`,
-        time: frame.at,
-        extra: data,
-      });
-      continue;
-    }
-    if (frame.type === 'vision_injected') {
-      const preview = data.preview && typeof data.preview === 'object' ? data.preview : null;
-      const dataUrl = String(preview?.dataUrl || data.dataUrl || '').trim();
-      if (!/^data:image\//i.test(dataUrl)
-        && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)
-        && !/^\/api\/canvas\/generated-image-preview\?cache=/i.test(dataUrl)
-        && !/^\/api\/chat\/desktop-screenshot-preview\//i.test(dataUrl)) continue;
-      const sourceValue = String(data.source || '').toLowerCase();
-      const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : sourceValue === 'generated_image' ? 'Generated image' : 'Desktop';
-      const previewTitle = String(data.previewTitle || preview?.title || `${source} preview`).trim();
-      entries.push({
-        id: `trace_${stream.streamId}_${frame.seq}`,
-        type: 'vision',
-        text: String(data.label || `Vision captured: ${action}`).trim(),
-        time: frame.at,
-        preview,
-        previewTitle,
-      });
-    }
-  }
-  return entries.some((entry) => entry.type === 'vision') ? entries : undefined;
+  // A tool trace is useful even when a turn contains no screenshot. The old
+  // vision-only gate silently discarded every recovered tool/result/thought
+  // entry for ordinary mobile turns.
+  return buildDurableChatTraceFromFrames(stream.events, `trace_${stream.streamId}`);
 }
 
 function truncateRuntimeProcessText(value: unknown, max = 4000): string {
@@ -1315,6 +1274,17 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       actor: 'Prom',
       content: truncateRuntimeProcessText(data?.thinking || data?.text || data?.message),
       extra: { source: String(data?.source || 'runtime_checkpoint'), event: eventType, visibility },
+    };
+  }
+  if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
+    const content = truncateRuntimeProcessText(data?.text || data?.summary || data?.message);
+    if (!content) return null;
+    return {
+      ts,
+      type: 'think',
+      actor: 'Prom',
+      content,
+      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user' },
     };
   }
   if (eventType === 'error' || eventType === 'warn') {
