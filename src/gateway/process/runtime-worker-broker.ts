@@ -115,7 +115,6 @@ export interface RuntimeWorkerDiagnosticWorker {
   pid?: number;
   activeRequestId?: string;
   resource?: RuntimeWorkerResourceStatus;
-  [key: string]: unknown;
 }
 
 export interface RuntimeWorkerDiagnostics {

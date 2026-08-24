@@ -447,6 +447,11 @@ const sessions = new Map<string, Session>();
 // protect sessions that are actively running or awaiting persistence.
 const SESSION_CACHE_MAX_ENTRIES = 256;
 const SESSION_CACHE_IDLE_MS = 30 * 60 * 1000;
+// Cache weights are deliberately approximate. Do not make every cache hit or
+// status poll recursively walk a retained transcript; a dirty estimate may be
+// refreshed once per interval, or immediately when the last estimate already
+// shows count/byte pressure.
+const SESSION_CACHE_REMEASURE_MIN_INTERVAL_MS = 5_000;
 function envSessionCacheBytes(): number {
   const parsed = Number(process.env.PROMETHEUS_SESSION_CACHE_MAX_BYTES);
   const fallback = 256 * 1024 * 1024;
@@ -459,6 +464,7 @@ const sessionCacheAccessAt = new Map<string, number>();
 const sessionCacheWeights = new Map<string, number>();
 const sessionCacheDirty = new Set<string>();
 let sessionCacheEstimatedBytes = 0;
+let sessionCacheLastMeasuredAt = 0;
 export const PRE_COMPACTION_MEMORY_FLUSH_PROMPT = [
   'SYSTEM: Context is getting long. Before we continue, do this NOW (be quick):',
   '1. memory(action="write") — save new facts/preferences/rules to the correct file: user, soul, or memory',
@@ -536,12 +542,15 @@ function markSessionCacheWeightDirty(sessionId: string): void {
   if (sessions.has(sessionId)) sessionCacheDirty.add(sessionId);
 }
 
-function refreshDirtySessionCacheWeights(): void {
+function refreshDirtySessionCacheWeights(force = false): void {
+  const now = Date.now();
+  if (!force && now - sessionCacheLastMeasuredAt < SESSION_CACHE_REMEASURE_MIN_INTERVAL_MS) return;
   for (const sessionId of sessionCacheDirty) {
     const session = sessions.get(sessionId);
     if (session) setSessionCacheWeight(sessionId, session);
     else sessionCacheDirty.delete(sessionId);
   }
+  sessionCacheLastMeasuredAt = now;
 }
 
 function deleteCachedSession(sessionId: string): void {
@@ -554,7 +563,12 @@ function deleteCachedSession(sessionId: string): void {
 }
 
 function pruneSessionCache(): void {
-  refreshDirtySessionCacheWeights();
+  const countPressure = sessions.size > SESSION_CACHE_MAX_ENTRIES;
+  const bytePressure = sessionCacheEstimatedBytes > SESSION_CACHE_MAX_BYTES;
+  const remeasureDue = sessionCacheDirty.size > 0
+    && Date.now() - sessionCacheLastMeasuredAt >= SESSION_CACHE_REMEASURE_MIN_INTERVAL_MS;
+  if (!countPressure && !bytePressure && !remeasureDue) return;
+  refreshDirtySessionCacheWeights(countPressure || bytePressure);
   if (sessions.size <= SESSION_CACHE_MAX_ENTRIES && sessionCacheEstimatedBytes <= SESSION_CACHE_MAX_BYTES) return;
   const now = Date.now();
   const liveSessionIds = new Set(
@@ -586,8 +600,8 @@ export function getSessionCacheStatus(): {
   estimatedBytes: number;
   maxBytes: number;
   byteBudgetExceeded: boolean;
+  estimateStale: boolean;
 } {
-  refreshDirtySessionCacheWeights();
   return {
     loaded: sessions.size,
     maxEntries: SESSION_CACHE_MAX_ENTRIES,
@@ -595,6 +609,7 @@ export function getSessionCacheStatus(): {
     estimatedBytes: sessionCacheEstimatedBytes,
     maxBytes: SESSION_CACHE_MAX_BYTES,
     byteBudgetExceeded: sessionCacheEstimatedBytes > SESSION_CACHE_MAX_BYTES,
+    estimateStale: sessionCacheDirty.size > 0,
   };
 }
 

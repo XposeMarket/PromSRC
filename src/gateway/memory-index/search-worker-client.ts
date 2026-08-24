@@ -91,8 +91,11 @@ const automaticBrokers = Array.from({ length: automaticWorkerCount }, (_, index)
   env: {
     PROMETHEUS_MEMORY_SEARCH_QUERY_WORKER: '1',
   },
-  maxRssBytes: recycleRssBytes,
-  idleTtlMs: automaticIdleTtlMs,
+  // Keep one worker permanently warm. Automatic retrieval has a much tighter
+  // deadline than explicit memory tools, so an idle retirement must never
+  // turn the next prompt into a child-process startup plus warmup query.
+  maxRssBytes: index === 0 ? 0 : recycleRssBytes,
+  idleTtlMs: index === 0 ? 0 : automaticIdleTtlMs,
 }));
 
 interface QueuedAutomaticSearch {
@@ -111,12 +114,14 @@ interface QueuedAutomaticSearch {
 interface AutomaticSearchSlot {
   broker: RuntimeWorkerBroker;
   active: boolean;
+  warmFloor: boolean;
 }
 
 const automaticQueue: QueuedAutomaticSearch[] = [];
-const automaticSlots: AutomaticSearchSlot[] = automaticBrokers.map((automaticBroker) => ({
+const automaticSlots: AutomaticSearchSlot[] = automaticBrokers.map((automaticBroker, index) => ({
   broker: automaticBroker,
   active: false,
+  warmFloor: index === 0,
 }));
 let automaticDrainScheduled = false;
 let automaticDraining = false;
@@ -210,7 +215,7 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
     if (cancelled || task.signal?.aborted) settleAutomatic(task, { error: abortError() });
     else {
       settleAutomatic(task, { value: result.serialized });
-      if (result.usedJsonFallback || Number(result.rssBytes || 0) >= recycleRssBytes) {
+      if (!slot.warmFloor && (result.usedJsonFallback || Number(result.rssBytes || 0) >= recycleRssBytes)) {
         await slot.broker.shutdown(1500);
       }
     }
@@ -236,8 +241,17 @@ async function drainAutomaticQueue(): Promise<void> {
   automaticDraining = true;
   try {
     while (!automaticShuttingDown) {
-      const slot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
       const task = automaticQueue.shift();
+      const readySlot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
+      // The floor handles the normal single-request path. If it is already
+      // busy and demand increases after the elastic slot retired, let that
+      // cold elastic slot take the real request directly. A separate warmup
+      // search would consume the same 250 ms deadline before useful work ran.
+      const slot = readySlot || automaticSlots.find((candidate) => (
+        !candidate.active
+        && !candidate.warmFloor
+        && ['stopped', 'failed'].includes(candidate.broker.getStatus().state)
+      ));
       if (!slot || !task) {
         if (task) {
           automaticQueue.unshift(task);

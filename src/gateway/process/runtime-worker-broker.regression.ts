@@ -62,7 +62,8 @@ async function main(): Promise<void> {
   });
   try {
     const first = await disposable.run<{ pid: number }>('echo', { disposable: 1 });
-    assert.ok(disposable.getStatus().resource?.rssBytes > 0, 'worker status should carry a resource sample');
+    const resourceSample = disposable.getStatus().resource;
+    assert.ok(resourceSample && resourceSample.rssBytes > 0, 'worker status should carry a resource sample');
     const deadline = Date.now() + 3_000;
     while (disposable.getStatus().state !== 'stopped' && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));

@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     assert.ok(status.estimatedBytes > 0);
     assert.ok(status.estimatedBytes <= status.maxBytes, 'byte-weighted pruning should release idle oversized sessions');
     assert.ok(status.loaded < 3, 'at least one idle oversized session should be evicted');
+    assert.equal(status.estimateStale, true, 'status should report a dirty estimate without remeasuring the retained session');
     console.log('session cache byte-budget regression: ok');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -25,7 +25,7 @@ Before the first isolation change, scheduled memory search maintenance used `set
 - `RuntimeWorkerBroker` now accepts opt-in `idleTtlMs`, `maxJobs`, `maxRssBytes`, `maxHeapUsedBytes`, and `oneShot` policies. Retirement happens only after an active job releases the broker, and `shutdown()` is idempotent so a retirement race cannot spawn duplicate children.
 - Child status samples include RSS, V8 heap total/used, external and ArrayBuffer memory, cumulative user/system CPU, and bounded V8 heap-space statistics. Broker status derives a CPU percentage from successive samples and exposes the policy, sample age, completed-job count, and retirement reason.
 - Gateway runtime status, event-loop stall records, and `/api/status` expose the aggregate generic-worker sample. Model workers expose the same resource classes in their per-slot status while retaining their RSS recycle counter.
-- Brain activity uses `oneShot` because package assembly is a heavy burst and does not benefit from a resident child. Automatic memory-search workers use an idle TTL (30 seconds by default) and the configured RSS threshold. Context/model workers remain warm where useful, but their initial warmup and model-slot expansion are demand-aware.
+- Brain activity uses `oneShot` because package assembly is a heavy burst and does not benefit from a resident child. Automatic memory-search keeps one floor worker warm for the 40–250 ms prompt-retrieval path; only the second elastic slot uses the idle TTL (30 seconds by default) and RSS threshold. Context/model workers remain warm where useful, but their initial warmup and model-slot expansion are demand-aware.
 
 ### Provider/model calls
 
@@ -50,6 +50,8 @@ Environment controls:
 - `PROMETHEUS_RUNTIME_WORKER_RESOURCE_SAMPLE_MS` — generic child resource heartbeat interval; default 5 seconds, clamped to 1–60 seconds.
 - `PROMETHEUS_CONTEXT_BUILD_WARM_WORKER_COUNT` — context workers warmed before listen; default 1, while later demand may use the configured pool.
 - `PROMETHEUS_CONTEXT_BUILD_MAX_HEAP_USED_BYTES` — optional context-child V8 heap-used retirement threshold; zero disables the threshold.
+- `PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_WORKERS` — automatic prompt-retrieval slots; default 2, clamped to 1–2. Slot one is the permanently warm latency floor; slot two is elastic.
+- `PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS` — idle retirement for elastic automatic-memory slots; default 30 seconds, clamped to 1 second–10 minutes.
 
 The worker pools provide process isolation, not workspace isolation. The normal shared workspace remains authoritative.
 
@@ -72,7 +74,7 @@ The worker pools provide process isolation, not workspace isolation. The normal 
 - Session history remains gateway-owned, but normal debounced saves and authoritative final-boundary saves now scrub/serialize/write/fsync cooperatively and atomically. Per-session generation fences retry overlapping mutations; a post-rename fence prevents an in-flight save from resurrecting a deleted session. Restart preflight and shutdown await the same asynchronous persistence path.
 - Runtime process entries are bounded (including encoded/large tool arguments), attached to the assistant message before the authoritative final flush, and therefore included in the committed session that precedes final/done publication.
 - Large prompt/profile reads, memory-index search, recent observation reads, and Creative reference image reads use async/bounded paths. Creative references use bounded aggregate/per-file bytes and limited concurrency rather than synchronous stat/read/base64 work on the gateway.
-- The session hot cache is bounded by both 256 entries and an estimated 256 MiB of UTF-8 serialized session state by default; the estimate includes full retained history/tool logs and artifact metadata, not just entry count. Entries must also be idle for 30 minutes and not live/pending before eviction. `PROMETHEUS_SESSION_CACHE_MAX_BYTES` controls the byte budget (16 MiB–4 GiB).
+- The session hot cache is bounded by both 256 entries and an estimated 256 MiB of UTF-8 serialized session state by default; the estimate includes full retained history/tool logs and artifact metadata, not just entry count. Entries must also be idle for 30 minutes and not live/pending before eviction. `getSessionCacheStatus()` returns the last estimate and an `estimateStale` flag; dirty sessions are recursively remeasured at most once per five seconds or when the last estimate shows pressure, so status polling does not walk a giant transcript on the gateway thread. `PROMETHEUS_SESSION_CACHE_MAX_BYTES` controls the byte budget (16 MiB–4 GiB).
 - Automatic project learning and model-generated titles are post-terminal maintenance. Project lookup uses async bounded metadata reads; title transcript selection stops after six visible messages, title work is one global/single-flight job, and an abortable eight-second default deadline prevents it from occupying the shared model pool indefinitely. Completion notifications are also scheduled only after final/done publication.
 
 ### Turn-context continuity and cancellation
