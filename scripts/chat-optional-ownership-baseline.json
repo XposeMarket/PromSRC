@@ -27,6 +27,6 @@
     "mobilePlainChatGzipBytesMax": 350000,
     "mobilePlainChatModuleCountMax": 22,
     "mobileMinimumGzipReductionRatio": 0.2,
-    "mobileVoiceOwnerGzipBytesMax": 50000
+    "mobileVoiceOwnerGzipBytesMax": 100000
   }
 }
