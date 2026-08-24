@@ -309,6 +309,62 @@ export class ChatRuntime {
     });
   }
 
+  appendHistoryTurn(message, options = {}) {
+    const source = message && typeof message === 'object' ? message : {};
+    const key = cleanId(options.key) || chatTurnKey(source, this._sourceHistory.length, 0);
+    const existingIndex = this._indexByKey.get(key);
+    const history = this.getSourceHistory();
+    const index = Number.isInteger(existingIndex)
+      ? existingIndex
+      : Math.min(
+        history.length,
+        Math.max(0, Number.isInteger(options.index) ? options.index : history.length),
+      );
+    if (Number.isInteger(existingIndex)) history[index] = source;
+    else history.splice(index, 0, source);
+    this.replaceHistory(history, {
+      pageInfo: this._state.paging,
+      source: cleanId(options.source, 'append'),
+    });
+    return this._turns.get(this._order[index]) || null;
+  }
+
+  replaceHistoryTurn(message, options = {}) {
+    const source = message && typeof message === 'object' ? message : {};
+    const key = cleanId(options.key) || chatTurnKey(source, 0, 0);
+    const index = this._indexByKey.get(key);
+    if (!Number.isInteger(index)) {
+      return this.appendHistoryTurn(source, { ...options, key, source: cleanId(options.source, 'append') });
+    }
+    const history = this.getSourceHistory();
+    history[index] = source;
+    this.replaceHistory(history, {
+      pageInfo: this._state.paging,
+      source: cleanId(options.source, 'replace'),
+    });
+    return this._turns.get(this._order[index]) || null;
+  }
+
+  patchHistoryTurn(keyOrMessage, patch = {}, options = {}) {
+    const key = cleanId(typeof keyOrMessage === 'string'
+      ? keyOrMessage
+      : (options.key || chatTurnKey(keyOrMessage, 0, 0)));
+    const index = this._indexByKey.get(key);
+    if (!Number.isInteger(index)) return null;
+    const current = this._sourceHistory[index] && typeof this._sourceHistory[index] === 'object'
+      ? this._sourceHistory[index]
+      : {};
+    const next = { ...current, ...(patch && typeof patch === 'object' ? patch : {}) };
+    if (patch?.body && current.body && typeof current.body === 'object') {
+      next.body = { ...current.body, ...patch.body };
+    }
+    return this.replaceHistoryTurn(next, {
+      ...options,
+      key,
+      source: cleanId(options.source, 'patch'),
+    });
+  }
+
   setPaging(patch = {}) {
     const next = pageInfo({ ...this._state.paging, ...patch }, this._order.length);
     if (!equalPage(next, this._state.paging)) this._replaceState({ paging: next });

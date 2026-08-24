@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 for (const relative of [
+  'features/chat/runtime/chat-runtime.js',
   'features/chat/runtime/mobile-chat-adapter.js',
   'features/chat/timeline/mobile-timeline-view.js',
 ]) {
