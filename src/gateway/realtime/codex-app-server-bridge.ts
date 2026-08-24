@@ -77,7 +77,7 @@ const REALTIME_START_TIMEOUT_MS = Math.max(10_000, Number(process.env.PROMETHEUS
 const STATUS_CACHE_TTL_MS = Math.max(2_000, Number(process.env.PROMETHEUS_CODEX_STATUS_CACHE_TTL_MS || 15_000) || 15_000);
 const REALTIME_CONVERSATION_VERSION = 'v3';
 const REALTIME_VOICE_CATALOG_VERSION = 'v1';
-const MIN_CODEX_LIVE_VERSION = [0, 146, 0] as const;
+const MIN_CODEX_LIVE_VERSION = [0, 149, 1] as const;
 
 function detectCodexRuntimeVersion(executable: string): string {
   const useShell = process.platform === 'win32' && /\.cmd$/i.test(executable);
@@ -196,7 +196,7 @@ export class CodexAppServerBridge {
     if (!supportsCodexLiveV3(this.runtimeVersion)) {
       throw new Error(
         `Codex ${this.runtimeVersion} is too old for Codex Voice/Live v3. `
-        + 'Upgrade @openai/codex to 0.146.0 or newer; refusing to fall back to public Realtime Voice v2.',
+        + 'Upgrade @openai/codex to 0.149.1 or newer; refusing to fall back to public Realtime Voice v2.',
       );
     }
     const child = spawn(

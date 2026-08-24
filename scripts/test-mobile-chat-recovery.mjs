@@ -281,8 +281,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /aiTurn\._pmFinalReceived = true;[\s\S]{0,180}aiTurn\.workEndedAt = Number\(aiTurn\.workEndedAt \|\| Date\.now\(\)\)/,
-  'the final frame must freeze the displayed work duration',
+  /aiTurn\._pmFinalReceived = true;[\s\S]{0,420}aiTurn\.workEndedAt = Number\(evt\.workEndedAt \|\| aiTurn\.workEndedAt \|\| Date\.now\(\)\)/,
+  'the final frame must freeze the authoritative displayed work duration',
 );
 assert.match(
   pages,

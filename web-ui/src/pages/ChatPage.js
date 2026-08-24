@@ -46862,8 +46862,8 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       applyToolActivityToStreamState(streamState, phase, payload),
     { finalize: true });
     if (content) {
-      const workEndedAt = Date.now();
-      const workStartedAt = Number(streamState.turnStartedAt || 0) || workEndedAt;
+      const workEndedAt = Number(evt.workEndedAt || 0) || Date.now();
+      const workStartedAt = Number(evt.workStartedAt || streamState.turnStartedAt || 0) || workEndedAt;
       const last = sess.history[sess.history.length - 1];
       if (!last || !isAssistantLikeMessage(last) || String(last.content || '') !== content) {
         let lastUserTimestamp = 0;
@@ -46880,7 +46880,9 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
           timestamp: lastUserTimestamp > 0 ? lastUserTimestamp + 1 : Date.now(),
           workStartedAt,
           workEndedAt,
-          workDurationMs: Math.max(0, workEndedAt - workStartedAt),
+          workDurationMs: Number.isFinite(Number(evt.workDurationMs))
+            ? Math.max(0, Number(evt.workDurationMs))
+            : Math.max(0, workEndedAt - workStartedAt),
           channel: inferChannelFromSessionId(sid),
           channelLabel: inferChannelFromSessionId(sid),
           artifacts: Array.isArray(evt.artifacts) && evt.artifacts.length ? evt.artifacts : undefined,

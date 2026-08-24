@@ -10776,6 +10776,7 @@ async function runInteractiveTurn(
     ].join('\n');
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
+    const assistantWorkEndedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
@@ -10783,6 +10784,9 @@ async function runInteractiveTurn(
       ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
       timestamp: Date.now(),
+      workStartedAt: turnTiming.startedAt,
+      workEndedAt: assistantWorkEndedAt,
+      workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
       toolLog: toolLogText || checkpointPacket,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
       turnProviderUsage,
@@ -10830,6 +10834,7 @@ async function runInteractiveTurn(
   } else {
     if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
+    const assistantWorkEndedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
@@ -10837,6 +10842,9 @@ async function runInteractiveTurn(
       ...threadSupervisionMessageIdentity,
       content: result.text,
       timestamp: Date.now(),
+      workStartedAt: turnTiming.startedAt,
+      workEndedAt: assistantWorkEndedAt,
+      workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
       artifacts: Array.isArray(result.artifacts) && result.artifacts.length ? result.artifacts : undefined,
       generatedImages: Array.isArray(result.generatedImages) && result.generatedImages.length ? result.generatedImages : undefined,
       generatedVideos: Array.isArray(result.generatedVideos) && result.generatedVideos.length ? result.generatedVideos : undefined,
@@ -21491,8 +21499,12 @@ router.post('/api/chat', async (req, res) => {
             clientRequestId,
           });
         const finalSendStartedAt = Date.now();
+        const clientWorkEndedAt = finalSendStartedAt;
 	      sendSSE('final', {
         text: result.text,
+        workStartedAt: turnTiming.startedAt,
+        workEndedAt: clientWorkEndedAt,
+        workDurationMs: Math.max(0, clientWorkEndedAt - turnTiming.startedAt),
         artifacts: result.artifacts,
         generatedImages: result.generatedImages,
         generatedVideos: result.generatedVideos,
@@ -21504,6 +21516,9 @@ router.post('/api/chat', async (req, res) => {
       });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
+        workStartedAt: turnTiming.startedAt,
+        workEndedAt: clientWorkEndedAt,
+        workDurationMs: Math.max(0, clientWorkEndedAt - turnTiming.startedAt),
         sections: [{ type: result.type === 'execute' ? 'tool_results' : 'text', content: result.text }],
         thinking: result.thinking,
         results: result.toolResults,

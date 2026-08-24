@@ -28,9 +28,9 @@ assert.match(index, /import\('\.\/src\/pages\/SettingsPage\.js'\)/, 'desktop mus
 assert.match(mobileRouter, /import\('\.\.\/pages\/SettingsPage\.js'\)/, 'mobile must share the canonical settings module identity');
 assert.match(mobileRouter, /document\.body\.appendChild\(modal\)/, 'mobile must lift the shared modal out of the hidden desktop app shell');
 assert.match(mobileRouter, /window\.openSettings\(tab \|\| undefined\)/, 'mobile must open the shared desktop settings controller');
-assert.match(serviceWorker, /pm-v307-2026-08-24-chat-row-key/, 'PWA cache must roll forward for the mobile chat row identity repair');
-assert.match(mobilePwa, /pm-v307-2026-08-24-chat-row-key/, 'mobile registration must request the new PWA release');
-assert.match(index, /pm-v307-2026-08-24-chat-row-key/, 'desktop/mobile shell registration must request the new PWA release');
+assert.match(serviceWorker, /pm-v308-2026-08-24-chat-voice-trace/, 'PWA cache must roll forward for the chat and Voice repair');
+assert.match(mobilePwa, /pm-v308-2026-08-24-chat-voice-trace/, 'mobile registration must request the new PWA release');
+assert.match(index, /pm-v308-2026-08-24-chat-voice-trace/, 'desktop/mobile shell registration must request the new PWA release');
 
 const showModalAt = index.indexOf("modal.style.display = 'flex'", index.indexOf('const openSettingsShim'));
 const awaitControllerAt = index.indexOf('await window.__PROM_LOAD_SETTINGS()', index.indexOf('const openSettingsShim'));
