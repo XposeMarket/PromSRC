@@ -1165,7 +1165,11 @@ export function createMobileChatRendererRuntime(context = {}) {
     _wireMobileChatEnhancements(threadEl);
     _scheduleMobileThreadCacheSave(sid);
     _renderMobileApprovalSheet();
-    if (!mobileFirstTranscriptPaintMarked) {
+    const hasTranscriptTurn = runtimeRows.some((row) => {
+      const message = row?.msg || row?.turn || null;
+      return Boolean(message && typeof message === 'object' && String(message.role || '').trim());
+    });
+    if (hasTranscriptTurn && !mobileFirstTranscriptPaintMarked) {
       mobileFirstTranscriptPaintMarked = true;
       context.markMobileLifecycle?.('firstTranscriptPaint');
     }
