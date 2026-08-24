@@ -100,8 +100,26 @@ function testReasoningSummaryTrace(): void {
   assert.equal(alternateEntry?.text, 'I am comparing the captured results.');
 }
 
+function testVisibleAgentThoughtTrace(): void {
+  const thoughtEntry = backgroundProcessEntryFromSseEvent('agent_thought', {
+    text: 'Inspecting the next workspace path.',
+    source: 'agent_progress',
+    visibility: 'user',
+  });
+  assert.equal(thoughtEntry?.type, 'think');
+  assert.equal(thoughtEntry?.text, 'Inspecting the next workspace path.');
+  assert.equal(thoughtEntry?.extra?.visibility, 'user');
+
+  const privateEntry = backgroundProcessEntryFromSseEvent('thinking', {
+    thinking: 'Provider-private chain of thought.',
+    visibility: 'private',
+  });
+  assert.equal(privateEntry, null);
+}
+
 testPersistentAccumulationAndReplay();
 testDirectSteerDelivery();
 testStructuredToolResultTrace();
 testReasoningSummaryTrace();
+testVisibleAgentThoughtTrace();
 console.log('background-agent-stream regression: ok');

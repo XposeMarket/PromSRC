@@ -48045,15 +48045,9 @@ wsEventBus.on('agent_paused', (msg) => {
 
 wsEventBus.on('bg_agent_event', (msg) => {
   pushBackgroundSpawnEvent(msg || {});
-  const sessionId = String(msg?.spawnerSessionId || msg?.sessionId || '').trim();
-  if (sessionId && sessionId !== window.activeChatSessionId && !_isMobileShellActive()) {
-    _showChannelActivityToast(
-      sessionId,
-      'Background agent',
-      msg?.message || msg?.taskPrompt || msg?.task || 'Working on a background task.',
-      { state: 'live', title: 'Background agent working' },
-    );
-  }
+  // Background progress already has a persistent dock/detail surface. Do not
+  // turn every tool, reasoning, or latency frame into a desktop toast; the
+  // single bg_agent_done notification below is the lifecycle notification.
 });
 
 // ─── Background agent late-completion injection ───────────────
