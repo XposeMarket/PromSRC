@@ -21,6 +21,7 @@ function asRecord(value: unknown): Record<string, any> {
 }
 
 function textValue(value: unknown, max = MAX_TRACE_TEXT): string {
+  if (value && typeof value === 'object') return '';
   const text = String(value ?? '').trim();
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)}...` : text;
