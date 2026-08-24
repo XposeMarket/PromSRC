@@ -55,6 +55,7 @@ try {
 
   assert(metrics.short.width < 180, `short bubble should remain intrinsic (${metrics.short.width}px)`);
   assert(metrics.normal.width > 250, `normal prose collapsed into a narrow min-content bubble (${metrics.normal.width}px)`);
+  assert(metrics.normal.width <= 310, `normal prose bubble exceeded the intended mobile width (${metrics.normal.width}px)`);
   assert(metrics.normalParagraph.height < 120, `normal prose wrapped into too many lines (${metrics.normalParagraph.height}px)`);
   assert(metrics.token.right <= metrics.viewportWidth, 'long token bubble escaped the viewport');
   assert(metrics.scrollWidth <= metrics.viewportWidth, `long token caused horizontal document overflow (${metrics.scrollWidth}px)`);

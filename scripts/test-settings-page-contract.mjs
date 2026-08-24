@@ -27,7 +27,7 @@ assert.match(index, /import\('\.\/src\/pages\/SettingsPage\.js'\)/, 'desktop mus
 assert.match(mobileRouter, /import\('\.\.\/pages\/SettingsPage\.js'\)/, 'mobile must share the canonical settings module identity');
 assert.match(mobileRouter, /document\.body\.appendChild\(modal\)/, 'mobile must lift the shared modal out of the hidden desktop app shell');
 assert.match(mobileRouter, /window\.openSettings\(tab \|\| undefined\)/, 'mobile must open the shared desktop settings controller');
-assert.match(serviceWorker, /pm-v305-2026-08-23-mobile-settings-streaming/, 'PWA cache must roll forward for the canonical settings handoff');
+assert.match(serviceWorker, /pm-v306-2026-08-24-mobile-chat-identity/, 'PWA cache must roll forward for the mobile chat identity repair');
 
 const showModalAt = index.indexOf("modal.style.display = 'flex'", index.indexOf('const openSettingsShim'));
 const awaitControllerAt = index.indexOf('await window.__PROM_LOAD_SETTINGS()', index.indexOf('const openSettingsShim'));

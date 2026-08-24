@@ -20,6 +20,23 @@ function isInterruptedAssistantMessage(msg: any): boolean {
     || /\b(?:stopped|interrupted|aborted) by user\b/i.test(content));
 }
 
+function matchingCanonicalAssistant(existing: any[], incoming: any): any | null {
+  const role = incoming?.role === 'assistant' || incoming?.role === 'ai' ? 'assistant' : '';
+  const requestId = String(incoming?.clientRequestId || incoming?._clientRequestId || '').trim();
+  const content = String(incoming?.content || '').replace(/\s+/g, ' ').trim();
+  const incomingAt = Number(incoming?.workEndedAt || incoming?.timestamp || 0) || 0;
+  if (role !== 'assistant' || !requestId || !content) return null;
+  return [...existing].reverse().find((candidate) => {
+    if (candidate?.role !== 'assistant' && candidate?.role !== 'ai') return false;
+    const candidateRequestId = String(candidate?.clientRequestId || candidate?._clientRequestId || '').trim();
+    if (candidateRequestId && candidateRequestId !== requestId) return false;
+    const candidateContent = String(candidate?.content || '').replace(/\s+/g, ' ').trim();
+    if (!candidateContent || candidateContent !== content) return false;
+    const candidateAt = Number(candidate?.workEndedAt || candidate?.timestamp || 0) || 0;
+    return !incomingAt || !candidateAt || Math.abs(candidateAt - incomingAt) < 2 * 60_000;
+  }) || null;
+}
+
 function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   if (!prior || typeof prior !== 'object' || !raw || typeof raw !== 'object') return raw;
   const next: any = { ...raw };
@@ -59,9 +76,23 @@ export function mergeHistoryWithExistingMessageMetadata(
     .sort((a: any, b: any) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
   const mergedIncoming: any[] = [];
   const incomingByKey = new Map<string, number>();
+  const representedExistingKeys = new Set<string>();
   for (const raw of incoming) {
     if (!raw || typeof raw !== 'object') { mergedIncoming.push(raw); continue; }
     let merged = byKey.get(historyMessageMergeKey(raw));
+    if (!merged) {
+      // The server is authoritative for transcript text while mobile owns rich
+      // visual/process metadata. Older canonical assistant rows omitted the
+      // request id, so a completed optimistic row came back under a different
+      // key and was appended as a duplicate. Join that exact, recent echo and
+      // mark the canonical key represented before preserving server-only rows.
+      const canonicalAssistant = matchingCanonicalAssistant(existing, raw);
+      if (canonicalAssistant) {
+        merged = canonicalAssistant;
+        const canonicalKey = historyMessageMergeKey(canonicalAssistant);
+        if (canonicalKey) representedExistingKeys.add(canonicalKey);
+      }
+    }
     merged = merged && typeof merged === 'object' ? mergeHistoryMetadataFromPrior(raw, merged) : raw;
     if (isInterruptedAssistantMessage(raw)) {
       const rawTs = Number(raw?.timestamp || 0);
@@ -77,7 +108,7 @@ export function mergeHistoryWithExistingMessageMetadata(
   for (const serverMessage of existing) {
     const key = historyMessageMergeKey(serverMessage);
     const serverOnly = String(serverMessage?.channel || '') === 'system' || !!serverMessage?.messageKind || !!serverMessage?.goalId || Array.isArray(serverMessage?.processEntries) || !!serverMessage?.toolLog;
-    if ((options.preserveAllExisting || serverOnly) && key && !represented.has(key)) { mergedIncoming.push(serverMessage); represented.add(key); }
+    if ((options.preserveAllExisting || serverOnly) && key && !represented.has(key) && !representedExistingKeys.has(key)) { mergedIncoming.push(serverMessage); represented.add(key); }
   }
   return mergedIncoming.sort((a: any, b: any) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0));
 }

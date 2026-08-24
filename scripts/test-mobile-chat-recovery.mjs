@@ -217,6 +217,12 @@ assert.match(pages, /const sendAttemptKey = `\$\{msg\}\|\$\{files\.map/, 'duplic
 assert.match(pages, /previousSendAttempt\?\.key === sendAttemptKey[\s\S]{0,100}< 8000/, 'one physical iOS send must remain suppressed through session promotion');
 assert.match(
   pages,
+  /Commit and paint the user row before camera summarization[\s\S]{0,900}activeThread\.push\(optimisticUserTurn\)[\s\S]{0,160}renderThreadNow\(\)[\s\S]{0,500}_clearMobileBackgroundSpawnDockForSession/,
+  'the optimistic user row must paint before optional mobile send preflight',
+);
+assert.match(router, /const assistantRequestIdentity =[\s\S]{0,260}clientRequestId:[\s\S]{0,9000}role: 'assistant',[\s\S]{0,100}\.\.\.assistantRequestIdentity/, 'canonical assistant history must retain the mobile request identity');
+assert.match(
+  pages,
   /const isPendingUser = msg\.role === 'user'[\s\S]{0,260}msg\._pmOptimistic === true[\s\S]{0,180}pendingUserAge < 45_000/,
   'recovery hydration must retain a recent optimistic user turn while server history catches up',
 );
@@ -247,8 +253,13 @@ assert.match(
 );
 assert.match(
   mobileCss,
-  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,520}width: max-content;[\s\S]{0,180}overflow-wrap: anywhere;[\s\S]{0,80}word-break: normal;/,
-  'user bubbles must use max-content sizing without collapsing prose to min-content width',
+  /\.pm-msg\.from-user\s*\{[\s\S]{0,260}width: fit-content;[\s\S]{0,220}max-inline-size:/,
+  'user messages must use a bounded fit-content container',
+);
+assert.match(
+  mobileCss,
+  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,260}width: 100%; inline-size: 100%;[\s\S]{0,180}overflow-wrap: anywhere;/,
+  'the inner user bubble must fill that bound and wrap its contents',
 );
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');

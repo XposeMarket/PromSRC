@@ -10266,6 +10266,9 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
+  const assistantRequestIdentity = normalizeClientRequestId(requestMeta?.clientRequestId)
+    ? { clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) }
+    : {};
   // Persist user-provided URLs and uploads before prompt construction. The
   // operation is idempotent, stores immutable snapshots separately from the
   // transcript, and never places raw base64 bytes in session history.
@@ -10332,7 +10335,7 @@ async function runInteractiveTurn(
       ? (buildMainChatGoalCompletionReport(command.goal, readModelUsageEventsForSession(sessionId), Date.now()) || undefined)
       : undefined;
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
-    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack', goalCompletionReport }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    addMessage(sessionId, { role: 'assistant', ...assistantRequestIdentity, content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack', goalCompletionReport }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
     if (command.shouldStartRunner) {
       broadcastMainChatGoalState(sessionId, 'launch_accepted', {
@@ -10549,7 +10552,7 @@ async function runInteractiveTurn(
   }
   if (followupHandled) {
     if (!abortSignal?.aborted) {
-      addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
+      addMessage(sessionId, { role: 'assistant', ...assistantRequestIdentity, content: followupHandled, timestamp: Date.now() });
       await maybeRefreshProjectLearning(sessionId);
     }
     const followupResult = { type: 'chat' as const, text: followupHandled };
@@ -10775,6 +10778,7 @@ async function runInteractiveTurn(
     const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
+      ...assistantRequestIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
@@ -10828,6 +10832,7 @@ async function runInteractiveTurn(
     const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
+      ...assistantRequestIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: result.text,
