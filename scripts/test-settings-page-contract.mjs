@@ -9,6 +9,7 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const settings = read('web-ui/src/pages/SettingsPage.js');
 const index = read('web-ui/index.html');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
+const mobilePwa = read('web-ui/src/mobile/mobile-pwa.js');
 const serviceWorker = read('web-ui/service-worker.js');
 
 assert.match(
@@ -27,7 +28,9 @@ assert.match(index, /import\('\.\/src\/pages\/SettingsPage\.js'\)/, 'desktop mus
 assert.match(mobileRouter, /import\('\.\.\/pages\/SettingsPage\.js'\)/, 'mobile must share the canonical settings module identity');
 assert.match(mobileRouter, /document\.body\.appendChild\(modal\)/, 'mobile must lift the shared modal out of the hidden desktop app shell');
 assert.match(mobileRouter, /window\.openSettings\(tab \|\| undefined\)/, 'mobile must open the shared desktop settings controller');
-assert.match(serviceWorker, /pm-v306-2026-08-24-mobile-chat-identity/, 'PWA cache must roll forward for the mobile chat identity repair');
+assert.match(serviceWorker, /pm-v307-2026-08-24-chat-row-key/, 'PWA cache must roll forward for the mobile chat row identity repair');
+assert.match(mobilePwa, /pm-v307-2026-08-24-chat-row-key/, 'mobile registration must request the new PWA release');
+assert.match(index, /pm-v307-2026-08-24-chat-row-key/, 'desktop/mobile shell registration must request the new PWA release');
 
 const showModalAt = index.indexOf("modal.style.display = 'flex'", index.indexOf('const openSettingsShim'));
 const awaitControllerAt = index.indexOf('await window.__PROM_LOAD_SETTINGS()', index.indexOf('const openSettingsShim'));

@@ -253,13 +253,13 @@ assert.match(
 );
 assert.match(
   mobileCss,
-  /\.pm-msg\.from-user\s*\{[\s\S]{0,260}width: fit-content;[\s\S]{0,220}max-inline-size:/,
-  'user messages must use a bounded fit-content container',
+  /\.pm-msg\s*\{[\s\S]{0,160}width: fit-content;[\s\S]{0,120}max-width: min\(86%, calc\(100vw - 28px\)\)/,
+  'the shared message row must retain the proven bounded fit-content sizing',
 );
 assert.match(
   mobileCss,
-  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,260}width: 100%; inline-size: 100%;[\s\S]{0,180}overflow-wrap: anywhere;/,
-  'the inner user bubble must fill that bound and wrap its contents',
+  /\.pm-msg\.from-user \.pm-bubble\s*\{[\s\S]{0,180}width: fit-content;[\s\S]{0,180}overflow-wrap: anywhere;/,
+  'the user bubble must use the prior fit-content sizing and wrap within the row bound',
 );
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');

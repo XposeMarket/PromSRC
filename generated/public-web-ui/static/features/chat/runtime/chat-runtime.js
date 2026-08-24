@@ -41,15 +41,15 @@ export function chatRuntimeKey({ gatewayId, sessionId } = {}) {
 }
 
 export function chatTurnKey(message, index = 0, occurrence = 0) {
-  const explicit = cleanId(
-    message?.messageId
-    || message?.turnId
-    || message?.clientRequestId
-    || message?._clientRequestId
-    || message?.id,
-  );
+  const explicit = cleanId(message?.messageId || message?.turnId || message?.id);
   if (explicit) return `id:${explicit}`;
   const role = canonicalRole(message?.role);
+  const clientRequestId = cleanId(message?.clientRequestId || message?._clientRequestId);
+  // A request id owns a user/assistant pair, not a single transcript row.
+  // Keeping the role in the fallback key prevents the keyed timeline from
+  // reusing the assistant DOM node for the optimistic user message while the
+  // mobile runtime is still synchronizing its role-scoped message ids.
+  if (clientRequestId) return `request:${role}:${clientRequestId}`;
   const timestamp = Number(message?.timestamp || message?.createdAt || message?.timeMs || 0) || 0;
   const content = String(message?.content ?? message?.body?.text ?? '');
   const source = cleanId(message?.source || message?.channel || message?.messageKind);
