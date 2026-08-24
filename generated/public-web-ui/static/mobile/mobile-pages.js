@@ -104,6 +104,23 @@ import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-
 import { createMobileTimelineView } from '../features/chat/timeline/mobile-timeline-view.js';
 import { captureKeyedScrollState, reconcileKeyedTimelineRows } from '../features/chat/timeline/keyed-dom.js';
 import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
+
+const MOBILE_LIFECYCLE_MARKS = Object.freeze({
+  navigation: 'mobile_navigation',
+  shellPaint: 'mobile_shell_paint',
+  gatewayReady: 'mobile_gateway_ready',
+  chatChunkRequested: 'mobile_chat_chunk_requested',
+  chatRuntimeHydrated: 'mobile_chat_runtime_hydrated',
+  firstTranscriptPaint: 'mobile_first_transcript_paint',
+  composerInteractive: 'mobile_composer_interactive',
+});
+
+function markMobileLifecycle(stage, details = {}) {
+  const name = MOBILE_LIFECYCLE_MARKS[stage];
+  if (!name) return 0;
+  try { return window.__PROM_PERF_MARK?.(name, { surface: 'mobile', ...details }) || 0; } catch { return 0; }
+}
+
 installToolActivityExpansionPersistence();
 import {
   renderAgentModelPicker as _renderAgentModelPicker,
@@ -8113,6 +8130,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "loadBgTaskDetail": { enumerable: true, get: () => loadBgTaskDetail },
   "mobileChatRuntimeAdapter": { enumerable: true, get: () => mobileChatRuntimeAdapter },
   "mobileGatewayFetch": { enumerable: true, get: () => mobileGatewayFetch },
+  "markMobileLifecycle": { enumerable: true, get: () => markMobileLifecycle },
   "mobileStreamRenderScheduler": { enumerable: true, get: () => mobileStreamRenderScheduler },
   "mobileTimelineController": { enumerable: true, get: () => mobileTimelineController },
   "pmHaptic": { enumerable: true, get: () => pmHaptic },
@@ -8171,6 +8189,7 @@ function loadMobileChatRendererRuntime() {
     mobileChatRendererRuntimePromise = import('./mobile-chat-renderer-runtime.js')
       .then(({ createMobileChatRendererRuntime }) => {
         mobileChatRendererRuntime = createMobileChatRendererRuntime(mobileChatRendererContext);
+        markMobileLifecycle('chatRuntimeHydrated');
         return mobileChatRendererRuntime;
       })
       .catch((error) => {
@@ -16700,6 +16719,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     resetChatDictationComposerState = () => {};
     cleanupChatPageBeforeDictation?.();
   };
+
+  if (form && input) markMobileLifecycle('composerInteractive');
 }
 
 /* ---------------- VOICE ---------------- */

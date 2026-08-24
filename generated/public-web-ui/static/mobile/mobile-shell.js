@@ -1413,6 +1413,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
 
   initMobileCanvasSheet();
 
+  try { window.__PROM_PERF_MARK?.('mobile_shell_paint', { surface: 'mobile' }); } catch {}
+
   return { app, page, tabbar };
 }
 
