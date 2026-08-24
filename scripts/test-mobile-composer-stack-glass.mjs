@@ -37,6 +37,7 @@ for (const selector of [
   '.pm-main-plan-popover',
   '.pm-background-spawn-pill',
   '.pm-background-spawn-lane',
+  '.pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel',
   '.pm-background-spawn-close',
   '.pm-chat-connection-status',
   '.pm-scroll-latest',
@@ -104,6 +105,26 @@ assert.match(
   generatedPages,
   /const overlayDockHeight = dockHeight;/,
   'generated chat geometry must keep the fixed background dock contract',
+);
+assert.match(
+  pages,
+  /function _reconcileMobileBackgroundSpawnDockMarkup\(host, markup\)[\s\S]*?reconcileKeyedTimelineRows\(host, markup/,
+  'background dock updates must reconcile keyed lanes instead of replacing the expanded card shell',
+);
+assert.match(
+  pages,
+  /data-pm-row-key="background:\$\{escapeHtml\(lane\.id\)\}"/,
+  'background lanes must have stable keys across live tool events',
+);
+assert.match(
+  pages,
+  /_pushMobileStreamProcessEntry\(message, 'think', text,[\s\S]*?visibility/,
+  'curated background thoughts must be retained in the expandable process stream',
+);
+assert.match(
+  css,
+  /body\.pm-mobile-active \.pm-mobile-side-composer\.pm-composer[\s\S]*?justify-content:\s*center[\s\S]*?height:\s*54px/,
+  'background-agent side composer must use the centered main-composer geometry',
 );
 
 console.log('[test-mobile-composer-stack-glass] passed: modern liquid glass and composer-locked runtime stack');
