@@ -122,6 +122,41 @@ export function createMobileChatRuntimeAdapter({
     return runtimeFor(sessionId).completeStream(String(text || ''), turn);
   }
 
+  function normalizeMobileMessage(message) {
+    return mobileRuntimeHistory([message])[0] || message;
+  }
+
+  function getTranscriptRows(sessionId) {
+    return runtimeFor(sessionId).getTurns().map((turn, index) => Object.freeze({
+      key: turn.key,
+      index,
+      msg: turn.source,
+      turn,
+    }));
+  }
+
+  function replaceTranscript(sessionId, history, options = {}) {
+    const runtime = runtimeFor(sessionId);
+    runtime.replaceHistory(mobileRuntimeHistory(history), options);
+    return runtime;
+  }
+
+  function appendTranscriptRow(sessionId, message, options = {}) {
+    return runtimeFor(sessionId).appendHistoryTurn(normalizeMobileMessage(message), options);
+  }
+
+  function replaceTranscriptRow(sessionId, message, options = {}) {
+    return runtimeFor(sessionId).replaceHistoryTurn(normalizeMobileMessage(message), options);
+  }
+
+  function patchTranscriptRow(sessionId, key, patch, options = {}) {
+    return runtimeFor(sessionId).patchHistoryTurn(key, patch, options);
+  }
+
+  function prependTranscriptPage(sessionId, messages, pageInfoPatch = {}) {
+    return runtimeFor(sessionId).prependHistoryPage(mobileRuntimeHistory(messages), pageInfoPatch);
+  }
+
   function requestInterruption(sessionId, source = 'mobile') {
     return runtimeFor(sessionId).requestInterruption(source);
   }
@@ -268,6 +303,12 @@ export function createMobileChatRuntimeAdapter({
   return Object.freeze({
     identity,
     runtimeFor,
+    getTranscriptRows,
+    replaceTranscript,
+    appendTranscriptRow,
+    replaceTranscriptRow,
+    patchTranscriptRow,
+    prependTranscriptPage,
     setRunning,
     setPaging,
     reconcileQuestion,
