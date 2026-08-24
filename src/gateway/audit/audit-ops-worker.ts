@@ -6,6 +6,10 @@ import {
   type RuntimeWorkerChildMessage,
   type RuntimeWorkerParentMessage,
 } from '../process/runtime-worker-protocol.js';
+import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from '../process/runtime-worker-resources.js';
 import { executePrometheusAuditOps } from './audit-ops.js';
 
 const workerName = String(process.env.PROMETHEUS_RUNTIME_WORKER_NAME || 'audit-ops');
@@ -84,6 +88,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error: any) {
       send({
@@ -115,4 +120,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

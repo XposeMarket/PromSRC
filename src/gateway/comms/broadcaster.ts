@@ -14,6 +14,7 @@ import { enqueueAsyncAppend, enqueueAsyncWrite } from '../../runtime/async-file-
 import { getTeamNotificationTargets } from '../teams/managed-teams';
 import { triggerManagerReview } from '../teams/team-manager-runner';
 import { getNodeRuntimeSnapshot } from '../runtime/node-runtime';
+import { getRuntimeWorkerDiagnostics } from '../process/runtime-worker-broker.js';
 
 // ─── Model-Busy Guard ──────────────────────────────────────────────────────────
 // Prevents cron scheduler from firing while user chat is in-flight.
@@ -138,6 +139,7 @@ function appendEventLoopStallDiagnostic(
       modelBusy: _modelBusyCount > 0,
       modelBusyAgeMs: _modelBusySince > 0 ? now - _modelBusySince : 0,
       lastMainSessionId: _lastMainSessionId,
+      runtimeWorkers: getRuntimeWorkerDiagnostics(),
       runtimes,
     };
     enqueueAsyncAppend(path.join(configDir, 'gateway-event-loop-stalls.ndjson'), `${JSON.stringify(record)}\n`);
@@ -165,6 +167,7 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
       heartbeatDriftMs,
       thresholdMs: EVENT_LOOP_STALL_RESTART_MS,
       memory: process.memoryUsage(),
+      runtimeWorkers: getRuntimeWorkerDiagnostics(),
       modelBusy: _modelBusyCount > 0,
       lastMainSessionId: _lastMainSessionId,
     };
@@ -256,6 +259,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
         external: memory.external,
         arrayBuffers: memory.arrayBuffers,
       },
+      runtimeWorkers: getRuntimeWorkerDiagnostics(),
     }));
     maybeScheduleEventLoopStallRecovery(heartbeatDriftMs, now);
   } catch {}

@@ -5,6 +5,10 @@ import crypto from 'crypto';
 import type { ModelStreamEvent } from '../../providers/LLMProvider.js';
 import { getInjectedMasterKey } from '../../security/vault-key-bootstrap.js';
 import {
+  registerRuntimeWorkerDiagnosticProvider,
+  type RuntimeWorkerDiagnosticWorker,
+} from './runtime-worker-broker.js';
+import {
   DEFAULT_MODEL_CALL_MAX_MESSAGE_BYTES,
   MODEL_CALL_WORKER_PROTOCOL_VERSION,
   boundedModelCallError,
@@ -16,6 +20,10 @@ import {
   type ModelCallWorkerRequest,
   type ModelCallWorkerResult,
 } from './model-call-worker-protocol.js';
+import {
+  deriveRuntimeWorkerResourceStatus,
+  type RuntimeWorkerResourceStatus,
+} from './runtime-worker-resources.js';
 
 export interface ModelCallCallbacks {
   onToken?: (value: string) => void;
@@ -92,6 +100,7 @@ interface WorkerSlot {
   task: Task | null;
   completedJobs: number;
   rssBytes: number;
+  resource?: RuntimeWorkerResourceStatus;
   lastHeartbeatAt: number;
   lastError?: string;
   lastStderrTail?: string;
@@ -118,6 +127,10 @@ export interface ModelCallWorkerPoolStatus {
   eventBatches: number;
   streamEvents: number;
   shuttingDown: boolean;
+  configuredWorkers: number;
+  recycleAfterJobs: number;
+  recycleRssBytes: number;
+  maxOldSpaceMb: number;
   lastError?: string;
   slots: Array<{
     id: number;
@@ -126,6 +139,7 @@ export interface ModelCallWorkerPoolStatus {
     requestId?: string;
     completedJobs: number;
     rssBytes: number;
+    resource?: RuntimeWorkerResourceStatus;
     lastHeartbeatAt?: number;
     lastError?: string;
     lastStderrTail?: string;
@@ -168,6 +182,7 @@ const defaultTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_TIMEOUT_MS', 15 * 60_00
 const startupTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_STARTUP_TIMEOUT_MS', 20_000, 1_000, 120_000);
 const cancelGraceMs = envInt('PROMETHEUS_MODEL_WORKER_CANCEL_GRACE_MS', 5_000, 100, 30_000);
 const heartbeatTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_HEARTBEAT_TIMEOUT_MS', 30_000, 5_000, 120_000);
+const heartbeatIntervalMs = envInt('PROMETHEUS_MODEL_WORKER_HEARTBEAT_MS', 5_000, 1_000, 30_000);
 const maxMessageBytes = envInt(
   'PROMETHEUS_MODEL_WORKER_MAX_MESSAGE_BYTES',
   DEFAULT_MODEL_CALL_MAX_MESSAGE_BYTES,
@@ -183,6 +198,7 @@ const recycleRssBytes = envInt(
   128 * 1024 * 1024,
   2_147_483_647,
 );
+const maxOldSpaceMb = envInt('PROMETHEUS_MODEL_WORKER_MAX_OLD_SPACE_MB', 1024, 128, 8 * 1024);
 
 const queue: Task[] = [];
 const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
@@ -194,6 +210,34 @@ const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
   rssBytes: 0,
   lastHeartbeatAt: 0,
 }));
+if (enabled) {
+  registerRuntimeWorkerDiagnosticProvider((): RuntimeWorkerDiagnosticWorker[] => slots
+    .filter((slot) => Boolean(slot.child?.pid))
+    .map((slot) => ({
+      name: `model-call-${slot.id}`,
+      state: slot.state,
+      pid: slot.child?.pid,
+      activeRequestId: slot.task?.id,
+      completedJobs: slot.completedJobs,
+      lastHeartbeatAt: slot.lastHeartbeatAt || undefined,
+      lastError: slot.lastError,
+      resource: slot.resource
+        ? {
+            ...slot.resource,
+            heapSpaces: slot.resource.heapSpaces.map((space) => ({ ...space })),
+            sampleAgeMs: Math.max(0, Date.now() - slot.resource!.at),
+          }
+        : undefined,
+      policy: {
+        idleTtlMs: 0,
+        maxJobs: recycleAfterJobs,
+        maxRssBytes: recycleRssBytes,
+        maxHeapUsedBytes: 0,
+        oneShot: false,
+        resourceSampleIntervalMs: heartbeatIntervalMs,
+      },
+    })));
+}
 let shuttingDown = false;
 let drainScheduled = false;
 let completed = 0;
@@ -207,6 +251,13 @@ let providerStartedCount = 0;
 let eventBatches = 0;
 let streamEvents = 0;
 let lastError = '';
+
+function modelWorkerExecArgv(): string[] {
+  if (process.execArgv.some((arg) => /^--max[-_]old[-_]space[-_]size(?:=|$)/.test(arg))) {
+    return process.execArgv;
+  }
+  return [...process.execArgv, `--max-old-space-size=${maxOldSpaceMb}`];
+}
 
 function cleanupTask(task: Task): void {
   if (task.timer) clearTimeout(task.timer);
@@ -321,6 +372,10 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
     slot.startupTimer = undefined;
     slot.state = 'ready';
     slot.lastHeartbeatAt = Date.now();
+    if (message.resourceSample) {
+      slot.resource = deriveRuntimeWorkerResourceStatus(slot.resource, message.resourceSample);
+      slot.rssBytes = message.resourceSample.rssBytes;
+    }
     slot.lastError = undefined;
     scheduleDrain();
     return;
@@ -328,6 +383,10 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   if (message.type === 'heartbeat') {
     slot.lastHeartbeatAt = message.at;
     slot.rssBytes = message.rssBytes;
+    if (message.resourceSample) {
+      slot.resource = deriveRuntimeWorkerResourceStatus(slot.resource, message.resourceSample);
+      slot.rssBytes = message.resourceSample.rssBytes;
+    }
     if (slot.task && !slot.task.settled) {
       noteWorkerStage(slot.task, 'provider_heartbeat', {
         rssBytes: message.rssBytes,
@@ -387,6 +446,10 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   if (message.type === 'result') {
     slot.completedJobs += 1;
     slot.rssBytes = message.rssBytes;
+    if (message.resourceSample) {
+      slot.resource = deriveRuntimeWorkerResourceStatus(slot.resource, message.resourceSample);
+      slot.rssBytes = message.resourceSample.rssBytes;
+    }
     noteWorkerStage(task, 'worker_completed', {
       rssBytes: message.rssBytes,
       resultBytes: modelCallMessageBytes(message.result),
@@ -408,6 +471,10 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
     return;
   }
   if (message.type === 'error') {
+    if (message.resourceSample) {
+      slot.resource = deriveRuntimeWorkerResourceStatus(slot.resource, message.resourceSample);
+      slot.rssBytes = message.resourceSample.rssBytes;
+    }
     const wasCancelled = message.code === 'MODEL_CALL_CANCELLED' || task.callbacks.signal?.aborted;
     if (wasCancelled) cancelled += 1;
     else failed += 1;
@@ -467,6 +534,7 @@ function spawnSlot(slot: WorkerSlot): void {
   // process after every subsequent model call.
   slot.completedJobs = 0;
   slot.rssBytes = 0;
+  slot.resource = undefined;
   slot.lastHeartbeatAt = 0;
   let entry: string;
   try {
@@ -491,8 +559,9 @@ function spawnSlot(slot: WorkerSlot): void {
         ...process.env,
         PROMETHEUS_RUNTIME_WORKER: '1',
         PROMETHEUS_MODEL_WORKER_SLOT: String(slot.id),
+        PROMETHEUS_RUNTIME_WORKER_RESOURCE_SAMPLE_MS: String(heartbeatIntervalMs),
       },
-      execArgv: process.execArgv,
+      execArgv: modelWorkerExecArgv(),
       serialization: 'json',
       stdio: [managedVaultKey !== null ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'],
     });
@@ -611,12 +680,23 @@ function scheduleDrain(): void {
       if (slot.state === 'ready' && slot.child?.connected && !slot.task) {
         const task = queue.shift();
         if (task) runTask(slot, task);
-      } else if (!slot.child && slot.state !== 'starting') {
-        spawnSlot(slot);
       }
     }
-    if (queue.length && slots.every((slot) => slot.state === 'failed' && !slot.child)) {
-      for (const slot of slots) spawnSlot(slot);
+    if (!queue.length) return;
+
+    // Expand only to meet current demand. The old loop spawned every
+    // configured slot as soon as the first request arrived, which made a
+    // nominally bounded pool pay the full resident-memory cost immediately.
+    const activeSlots = slots.filter((slot) => slot.state === 'busy' || Boolean(slot.task)).length;
+    const liveSlots = slots.filter((slot) => slot.child && slot.state !== 'stopping').length;
+    const desiredSlots = Math.min(workerCount, Math.max(1, activeSlots + queue.length));
+    let slotsToStart = Math.max(0, desiredSlots - liveSlots);
+    for (const slot of slots) {
+      if (!slotsToStart || !queue.length) break;
+      if (!slot.child && slot.state !== 'starting' && slot.state !== 'stopping') {
+        spawnSlot(slot);
+        slotsToStart -= 1;
+      }
     }
   });
 }
@@ -765,6 +845,10 @@ export function getModelCallWorkerPoolStatus(): ModelCallWorkerPoolStatus {
     eventBatches,
     streamEvents,
     shuttingDown,
+    configuredWorkers: workerCount,
+    recycleAfterJobs,
+    recycleRssBytes,
+    maxOldSpaceMb,
     lastError: lastError || undefined,
     slots: slots.map((slot) => ({
       id: slot.id,
@@ -773,6 +857,13 @@ export function getModelCallWorkerPoolStatus(): ModelCallWorkerPoolStatus {
       requestId: slot.task?.id,
       completedJobs: slot.completedJobs,
       rssBytes: slot.rssBytes,
+      resource: slot.resource
+        ? {
+            ...slot.resource,
+            heapSpaces: slot.resource.heapSpaces.map((space) => ({ ...space })),
+            sampleAgeMs: Math.max(0, Date.now() - slot.resource.at),
+          }
+        : undefined,
       lastHeartbeatAt: slot.lastHeartbeatAt || undefined,
       lastError: slot.lastError,
       lastStderrTail: slot.lastStderrTail,

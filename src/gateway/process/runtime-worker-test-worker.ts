@@ -5,6 +5,10 @@ import {
   type RuntimeWorkerChildMessage,
   type RuntimeWorkerParentMessage,
 } from './runtime-worker-protocol.js';
+import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from './runtime-worker-resources.js';
 
 function send(message: RuntimeWorkerChildMessage): void {
   if (process.connected && process.send) process.send(message);
@@ -47,6 +51,7 @@ process.on('message', (raw: unknown) => {
       requestId: message.requestId,
       result: { pid: process.pid, kind: message.kind, payload: message.payload },
       completedAt: Date.now(),
+      resourceSample: sampleRuntimeWorkerResources(),
     });
   } catch (error: any) {
     send({
@@ -65,5 +70,9 @@ send({
   type: 'ready',
   workerName: 'runtime-worker-regression',
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));
 

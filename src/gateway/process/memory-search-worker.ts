@@ -8,6 +8,10 @@ import {
   type RuntimeWorkerParentMessage,
 } from './runtime-worker-protocol.js';
 import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from './runtime-worker-resources.js';
+import {
   searchMemoryIndexAsync,
   searchMemoryTimeline,
   searchProjectMemory,
@@ -246,6 +250,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error: any) {
       send({
@@ -277,4 +282,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

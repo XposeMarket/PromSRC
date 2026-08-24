@@ -4,6 +4,7 @@ import type {
   GenerateResult,
   ModelStreamEvent,
 } from '../../providers/LLMProvider.js';
+import type { RuntimeWorkerResourceSample } from './runtime-worker-protocol.js';
 
 export const MODEL_CALL_WORKER_PROTOCOL_VERSION = 1 as const;
 export const DEFAULT_MODEL_CALL_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -86,6 +87,7 @@ export type ModelCallWorkerChildMessage =
       protocolVersion: typeof MODEL_CALL_WORKER_PROTOCOL_VERSION;
       type: 'ready';
       pid: number;
+      resourceSample?: RuntimeWorkerResourceSample;
     }
   | {
       protocolVersion: typeof MODEL_CALL_WORKER_PROTOCOL_VERSION;
@@ -112,6 +114,7 @@ export type ModelCallWorkerChildMessage =
       requestId: string;
       result: ModelCallWorkerResult;
       rssBytes: number;
+      resourceSample?: RuntimeWorkerResourceSample;
       completedAt: number;
     }
   | {
@@ -121,6 +124,7 @@ export type ModelCallWorkerChildMessage =
       code: string;
       message: string;
       providerStarted?: boolean;
+      resourceSample?: RuntimeWorkerResourceSample;
       completedAt: number;
     }
   | {
@@ -130,6 +134,7 @@ export type ModelCallWorkerChildMessage =
       at: number;
       requestId?: string;
       rssBytes: number;
+      resourceSample?: RuntimeWorkerResourceSample;
     };
 
 export function modelCallMessageBytes(value: unknown): number {

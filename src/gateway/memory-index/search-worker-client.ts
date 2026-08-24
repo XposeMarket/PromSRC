@@ -59,6 +59,7 @@ const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 8_000,
 const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 30_000, 2_000, 10 * 60_000);
 const warmupTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_WARMUP_TIMEOUT_MS', 2_000, 1_000, 10_000);
 const recycleRssBytes = envBytes('PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 4 * 1024 * 1024 * 1024);
+const automaticIdleTtlMs = envMs('PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS', 30_000, 1_000, 10 * 60_000);
 const maxQueued = 2;
 const broker = new RuntimeWorkerBroker({
   name: 'memory-search-query',
@@ -66,6 +67,7 @@ const broker = new RuntimeWorkerBroker({
   maxMessageBytes: 256 * 1024,
   startupTimeoutMs: envMs('PROMETHEUS_MEMORY_SEARCH_STARTUP_TIMEOUT_MS', 30_000, 1000, 2 * 60_000),
   defaultJobTimeoutMs: deepTimeoutMs,
+  maxRssBytes: recycleRssBytes,
   env: {
     PROMETHEUS_MEMORY_SEARCH_QUERY_WORKER: '1',
   },
@@ -89,6 +91,8 @@ const automaticBrokers = Array.from({ length: automaticWorkerCount }, (_, index)
   env: {
     PROMETHEUS_MEMORY_SEARCH_QUERY_WORKER: '1',
   },
+  maxRssBytes: recycleRssBytes,
+  idleTtlMs: automaticIdleTtlMs,
 }));
 
 interface QueuedAutomaticSearch {
@@ -204,7 +208,12 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
     });
     const result = await Promise.race([workerPromise, timeoutPromise]);
     if (cancelled || task.signal?.aborted) settleAutomatic(task, { error: abortError() });
-    else settleAutomatic(task, { value: result.serialized });
+    else {
+      settleAutomatic(task, { value: result.serialized });
+      if (result.usedJsonFallback || Number(result.rssBytes || 0) >= recycleRssBytes) {
+        await slot.broker.shutdown(1500);
+      }
+    }
   } catch (error: any) {
     const normalized = cancelled || task.signal?.aborted
       ? abortError()
@@ -230,7 +239,10 @@ async function drainAutomaticQueue(): Promise<void> {
       const slot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
       const task = automaticQueue.shift();
       if (!slot || !task) {
-        if (task) automaticQueue.unshift(task);
+        if (task) {
+          automaticQueue.unshift(task);
+          if (!slot) scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, 0);
+        }
         break;
       }
       if (task.settled || task.signal?.aborted) {
@@ -290,6 +302,7 @@ export async function warmAutomaticMemorySearchWorkers(workspacePath: string): P
     if (!automaticShuttingDown && automaticSlots.some((slot) => slot.broker.getStatus().state !== 'ready')) {
       scheduleAutomaticMemorySearchWorkerWarmup(resolvedWorkspacePath, 1_000);
     }
+    if (!automaticShuttingDown) scheduleAutomaticDrain();
   });
   await automaticWarmupPromise;
 }

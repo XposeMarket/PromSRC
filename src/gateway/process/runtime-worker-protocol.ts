@@ -10,6 +10,32 @@
 export const RUNTIME_WORKER_PROTOCOL_VERSION = 1 as const;
 export const DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES = 256 * 1024;
 
+/**
+ * A bounded, transport-safe snapshot of the child process resources. Keep
+ * this contract small enough to send with heartbeats while retaining the
+ * allocation classes that commonly make RSS diverge from V8 heap usage.
+ */
+export interface RuntimeWorkerHeapSpaceSample {
+  name: string;
+  sizeBytes: number;
+  usedBytes: number;
+  availableBytes: number;
+  physicalBytes: number;
+}
+
+export interface RuntimeWorkerResourceSample {
+  at: number;
+  pid: number;
+  rssBytes: number;
+  heapTotalBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  arrayBuffersBytes: number;
+  cpuUserMicros: number;
+  cpuSystemMicros: number;
+  heapSpaces: RuntimeWorkerHeapSpaceSample[];
+}
+
 export interface RuntimeWorkerRunMessage {
   protocolVersion: typeof RUNTIME_WORKER_PROTOCOL_VERSION;
   type: 'run';
@@ -31,6 +57,7 @@ export interface RuntimeWorkerReadyMessage {
   type: 'ready';
   workerName: string;
   pid: number;
+  resourceSample?: RuntimeWorkerResourceSample;
 }
 
 export interface RuntimeWorkerStartedMessage {
@@ -48,6 +75,7 @@ export interface RuntimeWorkerHeartbeatMessage {
   pid: number;
   at: number;
   activeRequestId?: string;
+  resourceSample?: RuntimeWorkerResourceSample;
 }
 
 export interface RuntimeWorkerResultMessage {
@@ -56,6 +84,7 @@ export interface RuntimeWorkerResultMessage {
   requestId: string;
   result: unknown;
   completedAt: number;
+  resourceSample?: RuntimeWorkerResourceSample;
 }
 
 export interface RuntimeWorkerErrorMessage {
@@ -65,6 +94,7 @@ export interface RuntimeWorkerErrorMessage {
   code: string;
   message: string;
   completedAt: number;
+  resourceSample?: RuntimeWorkerResourceSample;
 }
 
 export type RuntimeWorkerChildMessage =

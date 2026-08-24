@@ -8,6 +8,10 @@ import {
   type RuntimeWorkerChildMessage,
   type RuntimeWorkerParentMessage,
 } from '../process/runtime-worker-protocol.js';
+import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from '../process/runtime-worker-resources.js';
 
 const workerName = String(process.env.PROMETHEUS_RUNTIME_WORKER_NAME || 'session-history-search');
 const MAX_IPC_MESSAGE_BYTES = 2 * 1024 * 1024;
@@ -223,6 +227,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error: any) {
       send({
@@ -254,4 +259,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

@@ -7,6 +7,10 @@ import {
   type RuntimeWorkerParentMessage,
 } from '../process/runtime-worker-protocol.js';
 import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from '../process/runtime-worker-resources.js';
+import {
   buildThoughtActivityPackage,
   type BuildActivityPackageOptions,
   type BuiltActivityPackage,
@@ -133,6 +137,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error) {
       send({
@@ -154,4 +159,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

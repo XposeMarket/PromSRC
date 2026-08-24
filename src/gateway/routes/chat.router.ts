@@ -106,7 +106,7 @@ import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
-import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane } from '../runtime-admission';
+import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane, type RuntimeAdmissionBudget } from '../runtime-admission';
 import {
   browserOpen,
   browserSnapshot,
@@ -1848,6 +1848,12 @@ function runtimeAdmissionLaneForExecutionMode(executionMode: ExecutionMode): Run
   return 'system';
 }
 
+function runtimeAdmissionBudgetForExecutionMode(executionMode: ExecutionMode): RuntimeAdmissionBudget {
+  return executionMode === 'interactive'
+    ? { resourceWeight: 1 }
+    : { resourceWeight: 2 };
+}
+
 function resolveConfiguredAgentReasoning(
   executionMode: ExecutionMode,
   providerId: string | undefined,
@@ -2557,6 +2563,7 @@ async function handleChat(
   } else {
     ownedAdmissionLease = await gatewayRuntimeAdmission.acquire({
       lane: runtimeAdmissionLaneForExecutionMode(executionMode),
+      ...runtimeAdmissionBudgetForExecutionMode(executionMode),
       signal: abortSignal?.signal,
       metadata: { sessionId: String(sessionId), executionMode },
     });
@@ -10144,6 +10151,7 @@ async function runInteractiveTurn(
   const admissionWaitStartedAt = Date.now();
   runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
     lane: 'interactive',
+    resourceWeight: 1,
     signal: abortSignal?.signal,
     metadata: { sessionId: String(sessionId), executionMode: 'interactive' },
   });
