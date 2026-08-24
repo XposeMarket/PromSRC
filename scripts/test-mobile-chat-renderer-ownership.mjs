@@ -20,11 +20,15 @@ assert.match(sourcePages, /export async function renderChatPage/, 'Chat route mu
 assert.match(sourcePages, /await loadMobileChatRendererRuntime\(\)/, 'Chat route must hydrate before the first render');
 assert.match(sourcePages, /function _renderChatMessageHtml\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_renderChatMessageHtml', args\); \}/, 'rich-message construction must be a renderer facade');
 assert.match(sourcePages, /function _renderThread\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_renderThread', args\); \}/, 'transcript rendering must be a renderer facade');
+assert.match(sourcePages, /function _applyMobileAgentStreamEvent\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_applyMobileAgentStreamEvent', args\); \}/, 'stream reduction must be a renderer facade');
+assert.match(sourcePages, /function _renderMobileBackgroundSpawnDock\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_renderMobileBackgroundSpawnDock', args\); \}/, 'background-agent dock rendering must be a renderer facade');
 assert.doesNotMatch(sourcePages, /function _renderChatMessageHtml\(m,\s*index\s*=\s*-1/, 'rich-message construction must not remain in mobile-pages');
 assert.doesNotMatch(sourcePages, /function _renderThread\(threadEl,\s*sessionKey\s*=\s*''\)/, 'transcript rendering must not remain in mobile-pages');
 assert.doesNotMatch(sourcePages, /const PM_VOICE_SETTINGS_KEY\s*=/, 'Voice configuration must not remain in mobile-pages');
 assert.match(sourceRuntime, /function _renderChatMessageHtml\s*\(/, 'renderer runtime must own rich-message construction');
 assert.match(sourceRuntime, /function _renderThread\s*\(/, 'renderer runtime must own transcript rendering');
+assert.match(sourceRuntime, /function _applyMobileAgentStreamEvent\s*\(/, 'renderer runtime must own stream reduction');
+assert.match(sourceRuntime, /function _renderMobileBackgroundSpawnDock\s*\(/, 'renderer runtime must own background-agent dock rendering');
 
 function outputFor(source) {
   const output = manifest.moduleOutputs[source];
@@ -61,6 +65,6 @@ const measurements = {
   gzipBytes: records.reduce((total, record) => total + record.gzipBytes, 0),
   moduleCount: records.length,
 };
-assert(measurements.gzipBytes < 270000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+assert(measurements.gzipBytes < 250000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

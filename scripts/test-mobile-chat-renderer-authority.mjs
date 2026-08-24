@@ -5,7 +5,7 @@ const source = fs.readFileSync('web-ui/src/mobile/mobile-chat-renderer-runtime.j
 const rendererStart = source.indexOf('function _renderThread(');
 const rendererEnd = source.indexOf("if (!window.__pmToolActivityReadyBridgeInstalled)", rendererStart);
 const sessionRenderStart = source.indexOf('function _renderMobileChatSessionNow(');
-const sessionRenderEnd = source.indexOf('const runtime = Object.freeze({', sessionRenderStart);
+const sessionRenderEnd = source.indexOf('\n  // Background/process rendering and agent transcript presentation are Chat-owned optional work.', sessionRenderStart);
 assert.ok(rendererStart >= 0 && rendererEnd > rendererStart, 'main mobile renderer seam must remain discoverable');
 assert.ok(sessionRenderStart >= 0 && sessionRenderEnd > sessionRenderStart, 'mobile session renderer seam must remain discoverable');
 
