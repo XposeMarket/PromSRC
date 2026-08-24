@@ -74,14 +74,13 @@ export function createMobileChatRuntimeAdapter({
     return `mobile-request:${requestId}:${role}`;
   }
 
-  function cloneRuntimeValue(value, seen = new WeakMap(), depth = 0) {
+  function cloneRuntimeValue(value, seen = new WeakMap()) {
     if (!value || typeof value !== 'object') return value;
-    if (depth > 8) return value;
     if (seen.has(value)) return seen.get(value);
     if (Array.isArray(value)) {
       const next = [];
       seen.set(value, next);
-      value.forEach((item) => next.push(cloneRuntimeValue(item, seen, depth + 1)));
+      value.forEach((item) => next.push(cloneRuntimeValue(item, seen)));
       return next;
     }
     const prototype = Object.getPrototypeOf(value);
@@ -89,7 +88,7 @@ export function createMobileChatRuntimeAdapter({
     const next = {};
     seen.set(value, next);
     Object.entries(value).forEach(([key, item]) => {
-      next[key] = cloneRuntimeValue(item, seen, depth + 1);
+      next[key] = cloneRuntimeValue(item, seen);
     });
     return next;
   }
