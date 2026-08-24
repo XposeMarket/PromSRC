@@ -12,6 +12,7 @@ import {
   finishLiveRuntime,
   registerLiveRuntime,
 } from '../live-runtime-registry';
+import { backgroundProcessEntryFromSseEvent } from './background-agent-trace';
 
 function testPersistentAccumulationAndReplay(): void {
   const stream = createBackgroundAgentStream(1000);
@@ -60,6 +61,27 @@ function testDirectSteerDelivery(): void {
   }
 }
 
+function testStructuredToolResultTrace(): void {
+  const objectResult = { ok: true, files: ['README.md'], count: 1 };
+  const objectEntry = backgroundProcessEntryFromSseEvent('tool_result', {
+    name: 'workspace_read',
+    result: objectResult,
+  });
+  assert.equal(objectEntry?.text, 'workspace_read complete');
+  assert.deepEqual(objectEntry?.extra?.result, objectResult);
+  assert.equal(objectEntry?.extra?.resultType, 'object');
+
+  const arrayResult = [{ path: 'README.md' }, { path: 'package.json' }];
+  const arrayEntry = backgroundProcessEntryFromSseEvent('tool_result', {
+    name: 'workspace_search',
+    output: arrayResult,
+  });
+  assert.equal(arrayEntry?.text, 'workspace_search complete');
+  assert.deepEqual(arrayEntry?.extra?.result, arrayResult);
+  assert.equal(arrayEntry?.extra?.resultType, 'array');
+}
+
 testPersistentAccumulationAndReplay();
 testDirectSteerDelivery();
+testStructuredToolResultTrace();
 console.log('background-agent-stream regression: ok');

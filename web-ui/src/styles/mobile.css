@@ -7681,8 +7681,6 @@ html.pm-session-context-open * {
   .pm-tool-progress-spinner { animation-duration: 1.5s; }
 }
 .pm-background-spawn-dock {
-  /* Keep both the collapsed pill and expanded agent cards attached to the
-     composer while the chat body/document scrolls underneath them. */
   position: fixed;
   left: 10px;
   right: 10px;
