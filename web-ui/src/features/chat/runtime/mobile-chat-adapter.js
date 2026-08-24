@@ -126,7 +126,14 @@ export function createMobileChatRuntimeAdapter({
     return mobileRuntimeHistory([message])[0] || message;
   }
 
-  function getTranscriptRows(sessionId) {
+  function getTranscriptRows(sessionId, options = {}) {
+    if (options.syncCompatibility === true) {
+      // Transitional bridge for the renderer slice: existing send/recovery
+      // writers still update the compatibility cache until the write-path PR.
+      // The renderer receives rows from the runtime while this adapter keeps
+      // that cache synchronized at the boundary.
+      sync(sessionId, { source: String(options.source || 'mobile-render-compatibility-bridge') });
+    }
     return runtimeFor(sessionId).getTurns().map((turn, index) => Object.freeze({
       key: turn.key,
       index,
