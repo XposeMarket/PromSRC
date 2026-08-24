@@ -32,7 +32,7 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   const baseExtra = {
     source: source || 'background_sse',
     event: eventType,
-    ...(action ? { toolName: action } : {}),
+    ...(action ? { action, toolName: data?.toolName || action } : {}),
     ...(data?.args && typeof data.args === 'object' ? { args: data.args } : {}),
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
