@@ -17,6 +17,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '../features/chat/runtime/recovered-trace.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
@@ -7517,6 +7518,7 @@ async function _loadSessionFromServer(id, options = {}) {
       params.set('historyLimit', String(Math.max(20, Math.min(300, Number(options.historyLimit || 80)))));
       params.set('processLimit', String(Math.max(40, Math.min(500, Number(options.processLimit || 240)))));
       params.set('includeToolLog', '0');
+      if (options.fullProcess === true || options.recovery === true) params.set('fullProcess', '1');
     }
     const query = params.toString();
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, 3000);
@@ -7618,7 +7620,12 @@ async function loadChatSessions() {
   if (shouldRestoreRememberedSession) {
     window.activeChatSessionId = startupSessionId;
     setAgentSessionId(startupSessionId);
-    await _loadSessionFromServer(startupSessionId, { force: true, historyLimit: 80, processLimit: 240 });
+    await _loadSessionFromServer(startupSessionId, {
+      force: true,
+      historyLimit: 80,
+      processLimit: 240,
+      recovery: !!rememberedRun || rememberedSession.activeRun === true,
+    });
   } else {
     setDraftChatSession(startupSessionId);
   }
@@ -8241,7 +8248,10 @@ async function openSession(id) {
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
   if (sess) {
-    await _loadSessionFromServer(id, { force: true });
+    await _loadSessionFromServer(id, {
+      force: true,
+      recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
+    });
   }
   // A session is read when its conversation is actually opened. Clear this
   // after the server refresh so stale local/server merge state cannot put it
@@ -12161,7 +12171,8 @@ function isDesktopUserVisibleReasoningTraceEntry(entry) {
   if (type !== 'think') return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const source = String(extra.source || entry?.source || '').toLowerCase();
-  return source === 'reasoning_summary' || extra.visibility === 'user';
+  const visibility = String(extra.visibility || entry?.visibility || '').toLowerCase();
+  return source === 'reasoning_summary' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
@@ -12595,13 +12606,14 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
 function desktopWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
-  const liveSources = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  const liveSources = normalizeRecoveredTraceEntries(message?.liveTraceEntries);
   const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
   const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
   const finalText = String(message?.content || message?.body?.text || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
-    const normalizedEntry = normalizeProcessEntryForRender(entry) || entry;
+    const normalizedEntry = normalizeProcessEntryForRender(entry);
+    if (!normalizedEntry) return;
     if (isHiddenRuntimeProcessEntry(normalizedEntry)) return;
     let type = String(normalizedEntry.type || normalizedEntry.kind || fallbackType || 'info').toLowerCase();
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : null;
@@ -12685,10 +12697,10 @@ function renderCapturedChatSteerTrace(msg) {
 function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
   const existingKeys = new Set((Array.isArray(existingEntries) ? existingEntries : [])
     .map((entry) => `${String(entry?.type || '').toLowerCase()}|${String(entry?.content || entry?.text || '').replace(/\s+/g, ' ').trim()}`));
-  return (Array.isArray(entries) ? entries : [])
+  return normalizeRecoveredTraceEntries(entries)
     .map((entry) => {
       const type = String(entry?.type || 'info').toLowerCase();
-      const text = String(entry?.text || '').trim();
+      const text = String(entry?.text || entry?.content || '').trim();
       if (!text) return null;
       if (type !== 'preamble' && type !== 'think') return null;
       if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return null;
@@ -14901,7 +14913,7 @@ function isHiddenRuntimeProcessEntry(entry) {
 
 function processEntriesForMessage(msg) {
   if (Array.isArray(msg?.processEntries) && msg.processEntries.length) {
-    return msg.processEntries
+    return normalizeRecoveredTraceEntries(msg.processEntries)
       .filter((entry) => !isHiddenRuntimeProcessEntry(entry))
       .map(normalizeProcessEntryForRender)
       .filter(Boolean);
@@ -15102,6 +15114,7 @@ function chatMessageRichnessScore(msg) {
   if (!msg || typeof msg !== 'object') return 0;
   return [
     processEntriesForMessage(msg).length ? 100 : 0,
+    Array.isArray(msg.liveTraceEntries) ? Math.min(100, msg.liveTraceEntries.length) : 0,
     String(msg.toolLog || '').trim() ? 20 : 0,
     String(msg.thinking || '').trim() ? 8 : 0,
     Array.isArray(msg.artifacts) ? msg.artifacts.length : 0,
@@ -15115,9 +15128,70 @@ function chatMessageRichnessScore(msg) {
   ].reduce((sum, value) => sum + value, 0);
 }
 
+function recoveredTraceEntryKey(entry) {
+  if (!entry || typeof entry !== 'object') return '';
+  const id = String(entry.id || '').trim();
+  if (id) return `id:${id}`;
+  const activity = entry.activity && typeof entry.activity === 'object' ? entry.activity : {};
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const type = String(entry.type || activity.kind || '').toLowerCase();
+  const action = String(activity.action || extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
+  const text = String(entry.text || entry.content || entry.message || '').replace(/\s+/g, ' ').trim().slice(0, 320);
+  const time = String(entry.ts || entry.time || entry.timestamp || '').trim();
+  return `${type}|${action}|${text}|${time}`;
+}
+
+function mergeRecoveredTraceEntryValues(existing, incoming) {
+  if (!existing || typeof existing !== 'object') return incoming;
+  if (!incoming || typeof incoming !== 'object') return existing;
+  const existingActivity = existing.activity && typeof existing.activity === 'object' ? existing.activity : null;
+  const incomingActivity = incoming.activity && typeof incoming.activity === 'object' ? incoming.activity : null;
+  return {
+    ...existing,
+    ...incoming,
+    ...(existingActivity || incomingActivity
+      ? { activity: { ...(existingActivity || {}), ...(incomingActivity || {}) } }
+      : {}),
+    extra: {
+      ...(existing.extra && typeof existing.extra === 'object' ? existing.extra : {}),
+      ...(incoming.extra && typeof incoming.extra === 'object' ? incoming.extra : {}),
+    },
+  };
+}
+
+function mergeRecoveredTraceLists(...lists) {
+  const out = [];
+  const positions = new Map();
+  for (const list of lists) {
+    for (const entry of Array.isArray(list) ? list : []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const key = recoveredTraceEntryKey(entry);
+      if (!key) {
+        out.push(entry);
+        continue;
+      }
+      const existingIndex = positions.get(key);
+      if (existingIndex === undefined) {
+        positions.set(key, out.length);
+        out.push(entry);
+      } else {
+        out[existingIndex] = mergeRecoveredTraceEntryValues(out[existingIndex], entry);
+      }
+    }
+  }
+  return out;
+}
+
 function mergeChatMessageMetadata(target, source) {
   if (!target || !source) return target;
-  if (!target.processEntries?.length && source.processEntries?.length) target.processEntries = source.processEntries;
+  const mergeTraceField = (key, limit = 0) => {
+    const incoming = Array.isArray(source[key]) ? source[key] : [];
+    if (!incoming.length) return;
+    const merged = mergeRecoveredTraceLists(target[key], incoming);
+    target[key] = limit > 0 ? merged.slice(-limit) : merged;
+  };
+  mergeTraceField('processEntries', 500);
+  mergeTraceField('liveTraceEntries', 500);
   if (!target.toolLog && source.toolLog) target.toolLog = source.toolLog;
   if (!target.thinking && source.thinking) target.thinking = source.thinking;
   if (Array.isArray(source.artifacts) && source.artifacts.length && !target.artifacts?.length) target.artifacts = source.artifacts;
@@ -15297,11 +15371,13 @@ function normalizeProcessActor(rawActor, type, content, extra) {
 
 function normalizeProcessEntryForRender(entry) {
   if (!entry || typeof entry !== 'object') return null;
-  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
+  const normalized = normalizeRecoveredTraceEntry(entry);
+  if (!normalized || typeof normalized !== 'object') return null;
+  const extra = normalized.extra && typeof normalized.extra === 'object' ? normalized.extra : null;
   if (extra?.source === 'direct_response') return null;
-  const type = String(entry.type || 'info');
-  let content = String(entry.content ?? entry.text ?? '').trim();
-  const toolName = String(extra?.toolName || entry.toolName || '').trim();
+  const type = String(normalized.type || 'info').toLowerCase();
+  let content = String(normalized.content ?? normalized.text ?? normalized.message ?? '').trim();
+  const toolName = String(extra?.toolName || normalized.toolName || normalized.action || '').trim();
   if (!content && type === 'tool' && toolName) {
     let args = '';
     try {
@@ -15316,8 +15392,8 @@ function normalizeProcessEntryForRender(entry) {
   }
   if (!content && ['tool', 'result', 'error', 'info'].includes(type)) return null;
   return {
-    ...entry,
-    ts: entry.ts || entry.time || '',
+    ...normalized,
+    ts: normalized.ts || normalized.time || normalized.timestamp || '',
     type,
     content,
     extra,
@@ -46369,7 +46445,13 @@ async function catchUpMainChatStream(sessionId, options = {}) {
   if (!_isMainChatStreamCatchupSessionVisible(sid)) return null;
   try {
     if (options.fullRefresh === true) {
-      await _loadSessionFromServer(sid, { force: true, historyLimit: 300, processLimit: 500 });
+      await _loadSessionFromServer(sid, {
+        force: true,
+        historyLimit: 300,
+        processLimit: 500,
+        recovery: true,
+        fullProcess: true,
+      });
     }
     const rememberedRun = readDesktopActiveChatRun(sid);
     const knownStreamId = String(
