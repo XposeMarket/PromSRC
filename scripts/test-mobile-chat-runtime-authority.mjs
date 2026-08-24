@@ -41,6 +41,12 @@ const assistant = {
   body: { text: '' },
   processEntries: [{ kind: 'tool', status: 'running' }],
   liveTraceEntries: [{ kind: 'trace' }],
+  toolMetadata: (() => {
+    const leaf = { value: 'original' };
+    let nested = leaf;
+    for (let depth = 0; depth < 12; depth += 1) nested = { nested };
+    return nested;
+  })(),
   timestamp: 1_001,
   streaming: true,
   _clientRequestId: requestId,
@@ -63,6 +69,16 @@ assert.equal(
   adapter.getTranscriptRows(sessionId)[1].msg.body.text,
   '',
   'runtime history must be detached from compatibility cache object mutations',
+);
+let compatibilityLeaf = assistant.toolMetadata;
+for (let depth = 0; depth < 12; depth += 1) compatibilityLeaf = compatibilityLeaf.nested;
+compatibilityLeaf.value = 'compatibility-only deep mutation';
+let runtimeLeaf = adapter.getTranscriptRows(sessionId)[1].msg.toolMetadata;
+for (let depth = 0; depth < 12; depth += 1) runtimeLeaf = runtimeLeaf.nested;
+assert.equal(
+  runtimeLeaf.value,
+  'original',
+  'runtime history must clone metadata beyond the legacy depth limit',
 );
 
 adapter.replaceTranscriptRow(sessionId, {
