@@ -16,6 +16,7 @@ import {
   type TaskRecord,
 } from './tasks/task-store';
 import { collectTurnFileChangesFromProcessEntries } from './file-change-summary';
+import { buildDurableChatTraceFromProcessEntries } from './durable-chat-trace';
 import { addMessage, flushSession, getHistory, getWorkspace } from './session';
 import {
   finalizeMainChatGoalCrashRecovery,
@@ -260,6 +261,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     }).join('\n')
     : undefined;
   const toolLog = [recoveryPacket, processToolLog].filter(Boolean).join('\n\n');
+  const liveTraceEntries = buildDurableChatTraceFromProcessEntries(processEntries);
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
   const workStartedAt = Number(runtime.startedAt || 0) || Date.now();
@@ -280,6 +282,7 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     channel: runtime.source as any,
     channelLabel: runtime.source || 'system',
     processEntries: processEntries.length ? processEntries : undefined,
+    liveTraceEntries,
     toolLog: toolLog || undefined,
     fileChanges: fileChanges || undefined,
   }, {

@@ -81,7 +81,9 @@ function defer(operation) {
 function hasStructuredActivity(entries) {
   return (Array.isArray(entries) ? entries : []).some((entry) => (
     !!entry?.activity
-    || /^tool_(?:call|result|progress)$/i.test(String(entry?.eventType || entry?.type || ''))
+    || /^tool_(?:call|result|progress)$/i.test(String(entry?.eventType || entry?.extra?.event || entry?.type || ''))
+    || (String(entry?.extra?.action || entry?.extra?.toolName || entry?.action || entry?.toolName || '').trim()
+      && ['tool', 'skill', 'result', 'error', 'progress'].includes(String(entry?.type || '').toLowerCase()))
   ));
 }
 

@@ -1440,6 +1440,9 @@ function _mapServerHistoryToMobile(history) {
     const message = mapped[index];
     const text = String(message?.body?.text || message?.content || '').trim();
     const entries = Array.isArray(message?.processEntries) ? message.processEntries : [];
+    const recoveredTraceEntries = Array.isArray(message?.liveTraceEntries) && message.liveTraceEntries.length
+      ? message.liveTraceEntries
+      : entries;
     const hasRestartTool = entries.some((entry) => /prom_apply_dev_changes|gateway_restart/i.test(String(entry?.toolName || entry?.extra?.toolName || entry?.content || '')));
     const longGoalTrace = entries.length >= 20 || Number(message?.workDurationMs || 0) >= 30_000;
     if (!/^Started main-chat goal mode\b/i.test(text) || (!hasRestartTool && !longGoalTrace)) continue;
@@ -1459,6 +1462,7 @@ function _mapServerHistoryToMobile(history) {
       body: { sender: 'Prometheus', text: 'Recovered goal activity from before the gateway restart.' },
       content: 'Recovered goal activity from before the gateway restart.',
       processEntries: entries,
+      liveTraceEntries: recoveredTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean),
       streaming: false,
     });
     index += 1;
@@ -1547,7 +1551,9 @@ function _mapServerMessageToMobile(m, index = -1) {
     workflowLabel: String(m?.workflowLabel || ''),
     voiceInterruptionEventId: String(m?.voiceInterruptionEventId || '').trim() || undefined,
     processEntries: Array.isArray(m?.processEntries) ? m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean) : [],
-    liveTraceEntries: Array.isArray(m?.liveTraceEntries) && m.liveTraceEntries.length ? m.liveTraceEntries : undefined,
+    liveTraceEntries: Array.isArray(m?.liveTraceEntries) && m.liveTraceEntries.length
+      ? m.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
+      : undefined,
     _pmBackgroundImageGeneration: m?._pmBackgroundImageGeneration === true || undefined,
   };
 }
@@ -3263,6 +3269,76 @@ function _normalizeMobileProcessEntry(entry) {
   };
 }
 
+function _mobileRecoveredTraceInference(entry) {
+  const type = String(entry?.type || entry?.kind || '').toLowerCase();
+  if (!['tool', 'skill', 'result', 'error', 'progress'].includes(type)) return null;
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const existingAction = String(extra.action || extra.toolName || entry?.action || entry?.toolName || '').trim();
+  if (existingAction) return null;
+  const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const payload = _mobileTraceJsonPayload(text);
+  const commandMatch = text.match(/^(?:running|ran)\s+command\s*(?:·|:|->|=>|→)?\s*(.*)$/i);
+  if (commandMatch) {
+    const command = String(commandMatch[1] || '').trim();
+    return { action: 'workspace_run', args: command ? { command } : {} };
+  }
+  if (/^workspace\s+git\b/i.test(text)) {
+    return { action: 'workspace_git', args: payload && typeof payload === 'object' ? payload : {} };
+  }
+  if (/^request\s+tool\s+category\b/i.test(text)) {
+    return { action: 'request_tool_category', args: payload && typeof payload === 'object' ? payload : {} };
+  }
+  if (/^workspace\s+(?:read|write|edit|search)\b/i.test(text)) {
+    const label = text.match(/^workspace\s+([a-z]+)/i)?.[1] || 'read';
+    return { action: `workspace_${label}`, args: payload && typeof payload === 'object' ? payload : {} };
+  }
+  const payloadAction = payload && typeof payload === 'object'
+    ? String(payload.action || payload.toolName || payload.name || '').trim()
+    : '';
+  return payloadAction ? { action: payloadAction, args: payload } : null;
+}
+
+function typeIsResultOrError(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'result' || value === 'error';
+}
+
+function _normalizeMobileRecoveredTraceEntry(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const event = String(extra.event || entry.event || '').toLowerCase();
+  const text = String(entry.text || entry.content || entry.message || '').trim();
+  if ((event === 'reasoning_summary_delta' || event === 'reasoning_summary') && text) {
+    return {
+      ...entry,
+      type: 'think',
+      text,
+      extra: { ...extra, source: 'reasoning_summary', visibility: 'user', event },
+    };
+  }
+  if (event === 'token_narration_boundary' && text) {
+    return {
+      ...entry,
+      type: 'preamble',
+      text,
+      extra: { ...extra, source: 'agent_progress', visibility: 'user', event },
+    };
+  }
+  const inference = _mobileRecoveredTraceInference(entry);
+  if (!inference) return entry;
+  return {
+    ...entry,
+    extra: {
+      ...extra,
+      action: extra.action || inference.action,
+      toolName: extra.toolName || inference.action,
+      args: extra.args || inference.args || {},
+      ...(typeIsResultOrError(entry?.type) ? { result: extra.result || text } : {}),
+    },
+  };
+}
+
 function _mergeMobileProcessEntries(message, entries) {
   if (!message) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
@@ -3891,11 +3967,25 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   // channel. When the stream already supplied thought text, replaying the
   // same planning updates from processEntries produces duplicate prose rows.
   const hasExplicitLiveThought = liveSources.some((entry) => _isMobileUserVisibleReasoningTraceEntry(entry));
-  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
-  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
+  const structuredActions = new Set(liveSources.map((entry) => String(
+    entry?.activity?.action
+      || entry?.extra?.action
+      || entry?.extra?.toolName
+      || entry?.action
+      || entry?.toolName
+      || '',
+  ).trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(
+    entry?.activity?.callId
+      || entry?.extra?.toolCallId
+      || entry?.extra?.tool_call_id
+      || entry?.toolCallId
+      || '',
+  ).trim()).filter(Boolean));
   const finalText = String(message?.body?.text || message?.content || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
+    entry = _normalizeMobileRecoveredTraceEntry(entry);
     if (_isMobileHiddenRuntimeProcessEntry(entry)) return;
     let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
     let text = String(entry.text || entry.content || entry.message || '').trim();
@@ -4246,7 +4336,7 @@ function _compactMobileTraceThoughtEntries(message) {
 
 function _isMobileTraceThoughtType(type) {
   const value = String(type || '').toLowerCase();
-  return value === 'preamble' || value === 'think' || value === 'assistant';
+  return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
 }
 
 function _isMobileTraceReasoningSummaryType(type) {
@@ -4256,10 +4346,12 @@ function _isMobileTraceReasoningSummaryType(type) {
 function _isMobileUserVisibleReasoningTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   if (type === 'preamble' || type === 'assistant') return true;
-  if (type !== 'think') return false;
+  if (type !== 'think' && !_isMobileTraceReasoningSummaryType(type)) return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const source = String(extra.source || entry?.source || '').toLowerCase();
-  return source === 'reasoning_summary' || extra.visibility === 'user';
+  return type === 'reasoning_summary'
+    ? source === 'reasoning_summary' || extra.visibility === 'user' || extra.visibility === 'summary'
+    : source === 'reasoning_summary' || extra.visibility === 'user';
 }
 
 function _mobileTraceThoughtCoveredByEarlier(message, text, excludeEntry = null, candidateEntry = null) {
@@ -4468,7 +4560,7 @@ function _renderMobileLiveTrace(entries) {
 
 function _isMobileTraceThoughtEntry(entry) {
   const type = String(entry?.type || 'info').toLowerCase();
-  return type === 'preamble' || type === 'think' || type === 'assistant';
+  return type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type);
 }
 
 function _mobileTraceGroupStableKey(group, index = 0) {
