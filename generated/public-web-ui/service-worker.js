@@ -17,10 +17,10 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const RELEASE_VERSION = 'pm-v305-2026-08-23-mobile-settings-streaming';
+const RELEASE_VERSION = 'pm-v306-2026-08-24-mobile-chat-identity';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '67c85cceb9c10ac9';
+const ASSET_BUILD_ID = '0ce51ab98f545514';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -55,11 +55,11 @@ const BUILD_PRECACHE = [
   "/build/chunks/chunk-MVKGBY75.js",
   "/build/chunks/chunk-YMT6MSCC.js",
   "/build/chunks/chunk-YPZ3VTX5.js",
-  "/build/chunks/mobile-router-67HM4Q3G.js",
-  "/build/entries/mobile-NKLCCAAN.js",
+  "/build/chunks/mobile-router-MIYJVCL5.js",
+  "/build/entries/mobile-PEKH5FWZ.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-  "/build/styles/mobile-KL24EG7S.css",
+  "/build/styles/mobile-COHWDFJS.css",
   "/mobile.html",
   "/mobile/chat",
 ];

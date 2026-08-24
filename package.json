@@ -95,7 +95,7 @@
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
-    "test:mobile-regression-audit": "node scripts/test-mobile-chat-runtime-request-identity.mjs && node scripts/test-mobile-settings-return.mjs && node scripts/test-chat-progress-visibility.mjs && node scripts/test-realtime-voice-error-presentation.mjs && npx tsx src/gateway/realtime/codex-realtime-errors.regression.ts && node scripts/test-mobile-chat-bubble-layout.mjs && node scripts/test-mobile-voice-first-turn-transition.mjs && node scripts/test-mobile-generated-chat-parity.mjs",
+    "test:mobile-regression-audit": "node scripts/test-mobile-chat-runtime-request-identity.mjs && npx tsx src/gateway/history-reconciliation.regression.ts && node scripts/test-mobile-settings-return.mjs && node scripts/test-chat-progress-visibility.mjs && node scripts/test-realtime-voice-error-presentation.mjs && npx tsx src/gateway/realtime/codex-realtime-errors.regression.ts && node scripts/test-mobile-chat-bubble-layout.mjs && node scripts/test-mobile-voice-first-turn-transition.mjs && node scripts/test-mobile-generated-chat-parity.mjs",
     "test:mobile-route-chunks": "node scripts/test-mobile-route-chunks.mjs",
     "test:web-ui-production": "node scripts/test-web-ui-production-build.mjs && node scripts/test-web-ui-production-smoke.mjs",
     "test:background-agent-steering": "tsx src/gateway/tasks/background-agent-stream.regression.ts && node scripts/test-background-agent-side-chat-contract.mjs",

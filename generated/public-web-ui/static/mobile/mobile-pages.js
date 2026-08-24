@@ -16454,6 +16454,39 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
+    const clientRequestId = _newMobileClientRequestId(actualSessionId);
+    const activeTurnStartedAt = Date.now();
+    if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
+    __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
+    setBusy(true, actualSessionId);
+    if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+    __pmChat.activeRuns[actualSessionId] = {
+      ...(__pmChat.activeRuns[actualSessionId] || {}),
+      busy: true,
+      startedAt: activeTurnStartedAt,
+      lastSeq: 0,
+      streamId: '',
+      runtimeId: '',
+      clientRequestId,
+    };
+    _markMobileSessionRunning(actualSessionId, true);
+    _rememberMobileActiveRun(actualSessionId, { startedAt: activeTurnStartedAt, disconnected: false, lastSeq: 0, streamId: '', runtimeId: '', clientRequestId });
+    window.__pmMobileContextTurnStart?.({ sessionId: actualSessionId });
+
+    let optimisticUserTurn = null;
+    // Commit and paint the user row before camera summarization, attachment
+    // upload, or any other optional preflight. Those awaits can take seconds
+    // on a phone; the submitted text must remain visible throughout them.
+    if (options.skipUserBubble !== true) {
+      optimisticUserTurn = _makeMobileUserMessage(msg || 'Attached file(s)', files, { selectedSkillRefs });
+      optimisticUserTurn._clientRequestId = clientRequestId;
+      optimisticUserTurn._pmOptimistic = true;
+      optimisticUserTurn.uploadState = files.length ? 'uploading' : 'ready';
+      activeThread.push(optimisticUserTurn);
+    }
+    _reindexMobileThread(activeThread);
+    renderThreadNow();
+
     // Background-agent activity is a turn surface, not session history. Hide
     // any lanes from the prior turn before the next user turn begins; clearing
     // their ids also prevents delayed events from resurrecting an old dock.
@@ -16482,41 +16515,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       __pmChat.attachments[actualSessionId] = [];
       renderPendingAttachments();
     }
-    const clientRequestId = _newMobileClientRequestId(actualSessionId);
-    const activeTurnStartedAt = Date.now();
-    if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
-    __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
-    setBusy(true, actualSessionId);
-    if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
-    __pmChat.activeRuns[actualSessionId] = {
-      ...(__pmChat.activeRuns[actualSessionId] || {}),
-      busy: true,
-      startedAt: activeTurnStartedAt,
-      lastSeq: 0,
-      streamId: '',
-      runtimeId: '',
-      clientRequestId,
-    };
-    _markMobileSessionRunning(actualSessionId, true);
-    _rememberMobileActiveRun(actualSessionId, { startedAt: activeTurnStartedAt, disconnected: false, lastSeq: 0, streamId: '', runtimeId: '', clientRequestId });
-    window.__pmMobileContextTurnStart?.({ sessionId: actualSessionId });
-
-    let optimisticUserTurn = null;
-    // Push user bubble immediately. Upload and gateway work can be slow on mobile,
-    // but the message should never appear to vanish after the user presses send.
-    if (options.skipUserBubble !== true) {
-      optimisticUserTurn = _makeMobileUserMessage(msg || 'Attached file(s)', files, { selectedSkillRefs });
-      optimisticUserTurn._clientRequestId = clientRequestId;
-      optimisticUserTurn._pmOptimistic = true;
-      optimisticUserTurn.uploadState = files.length ? 'uploading' : 'ready';
-      activeThread.push(optimisticUserTurn);
-    }
-    _reindexMobileThread(activeThread);
-
     // Push streaming AI placeholder before attachment upload so the thread shows
     // an active turn even while workspace upload retries are still running.
+    const optimisticUserTimestamp = Number(optimisticUserTurn?.timestamp || 0) || activeTurnStartedAt;
     const aiTurn = {
-      role: 'ai', streaming: true, time: '', timestamp: activeTurnStartedAt,
+      role: 'ai', streaming: true, time: '', timestamp: Math.max(Date.now(), optimisticUserTimestamp + 1),
       workStartedAt: activeTurnStartedAt,
       body: { sender: '', text: '' },
       content: '',

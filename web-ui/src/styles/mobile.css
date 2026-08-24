@@ -3972,8 +3972,9 @@ html.pm-session-context-open * {
 .pm-msg.from-user {
   align-self: flex-end;
   align-items: flex-end;
-  width: max-content;
-  max-width: min(86%, calc(100vw - 28px));
+  width: fit-content;
+  inline-size: fit-content;
+  max-inline-size: min(86%, calc(100vw - 28px));
   min-width: 0;
 }
 .pm-workflow-transition-label {
@@ -4005,20 +4006,20 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  width: max-content; inline-size: max-content;
+  width: 100%; inline-size: 100%;
   max-width: 100%; max-inline-size: 100%;
-  min-width: 0; overflow-wrap: anywhere; word-break: normal; white-space: normal;
+  min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
 }
-.pm-msg.from-user .pm-bubble :where(.markdown-body, p, li, span, strong, em, a) {
-  min-width: 0; max-width: 100%; max-inline-size: 100%; word-break: normal; white-space: normal;
+.pm-msg.from-user .pm-bubble :where(.markdown-body, .markdown-body *) {
+  min-width: 0; max-width: 100%; max-inline-size: 100%; overflow-wrap: anywhere; word-break: break-word;
 }
 .pm-msg.from-user .pm-bubble .markdown-body {
-  width: auto;
-  inline-size: auto;
-  overflow-wrap: break-word;
+  width: 100%;
+  inline-size: 100%;
+  white-space: normal;
 }
-.pm-msg.from-user .pm-bubble :where(a, code) {
-  overflow-wrap: anywhere;
+.pm-msg.from-user .pm-bubble :where(pre, code) {
+  white-space: pre-wrap;
 }
 .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   background: color-mix(in srgb, var(--pm-orange-soft), var(--pm-surface) 42%);
