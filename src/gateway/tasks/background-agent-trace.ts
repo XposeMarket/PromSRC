@@ -23,6 +23,7 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
   const userVisibleReasoning = eventType === 'reasoning_summary_delta'
     || eventType === 'reasoning_summary'
+    || eventType === 'reasoning_delta'
     || source === 'reasoning_summary'
     || visibility === 'user';
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
@@ -36,7 +37,10 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
   };
-  if (userVisibleReasoning && (eventType === 'thinking_delta' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary')) {
+  if (userVisibleReasoning && (eventType === 'thinking_delta'
+    || eventType === 'reasoning_summary_delta'
+    || eventType === 'reasoning_summary'
+    || eventType === 'reasoning_delta')) {
     const text = backgroundTraceText(data?.text || data?.thinking || data?.summary || data?.message);
     return text ? {
       type: 'think',

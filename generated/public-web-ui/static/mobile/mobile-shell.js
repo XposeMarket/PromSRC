@@ -523,6 +523,28 @@ function _isDrawerSideChatSession(session) {
   return /^side_/i.test(id) || session?.sideChat === true || !!String(session?.parentSessionId || '').trim();
 }
 
+function _isDrawerBackgroundAgentSession(session) {
+  const id = String(session?.id || '').trim();
+  const kind = String(
+    session?.kind
+      || session?.executionMode
+      || session?.agentExecutionMode
+      || session?.messageKind
+      || '',
+  ).trim().toLowerCase();
+  return /^background_/i.test(id)
+    || session?.backgroundAgent === true
+    || !!String(session?.backgroundAgentId || '').trim()
+    || String(session?.channel || '').trim().toLowerCase() === 'background_agent'
+    || kind === 'background_agent'
+    || kind === 'background_task'
+    || kind === 'background_agent_run';
+}
+
+function _isDrawerHiddenRuntimeSession(session) {
+  return _isDrawerSideChatSession(session) || _isDrawerBackgroundAgentSession(session);
+}
+
 async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
   const state = _drawerPageStateFor();
   if (state.loading) return state.pending || state;
@@ -548,7 +570,7 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
         page = { sessions: [], total: 0, offset, hasMore: false };
       }
 
-      const incoming = (Array.isArray(page?.sessions) ? page.sessions : []).filter((session) => !_isDrawerSideChatSession(session));
+      const incoming = (Array.isArray(page?.sessions) ? page.sessions : []).filter((session) => !_isDrawerHiddenRuntimeSession(session));
       _syncPinnedCacheFromSessions(incoming);
       const seen = new Set(reset ? [] : state.sessions.map((s) => String(s?.id || '')));
       const merged = reset ? [] : state.sessions.slice();
@@ -1481,9 +1503,10 @@ function _sessionPageHtml(pageState, emptyText) {
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
   // Filter out pinned sessions — they appear in the dedicated pinned section above
   const projectSessionIds = new Set(_drawerProjects.flatMap((project) => (project.sessions || []).map((session) => String(session?.id || ''))));
+  const visibleSessions = sessions.filter((session) => !_isDrawerHiddenRuntimeSession(session));
   const unpinned = _drawerSessionView === 'settled'
-    ? sessions.filter((session) => !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project')
-    : sessions.filter((session) => !_isPinned(session?.id) && !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project');
+    ? visibleSessions.filter((session) => !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project')
+    : visibleSessions.filter((session) => !_isPinned(session?.id) && !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project');
   // Some gateway versions omit total/hasMore even when they return a full
   // page. Keep the explicit Load more affordance visible in that case; one
   // final click simply confirms there is no additional page.
@@ -1617,7 +1640,9 @@ function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
     ? pinnedOverride
     : (Array.isArray(pageState && pageState.sessions) ? pageState.sessions : []);
   var localOrder = _getPinnedSessionIds();
-  var pinnedSessions = sessions.filter(function(session) { return _isPinned(session && session.id); });
+  var pinnedSessions = sessions.filter(function(session) {
+    return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id);
+  });
   pinnedSessions.sort(function(a, b) {
     var timeDelta = Number(b && b.pinnedAt || 0) - Number(a && a.pinnedAt || 0);
     if (timeDelta) return timeDelta;
@@ -1799,7 +1824,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
       titleMatches = [];
     }
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
-    titleMatches = (Array.isArray(titleMatches) ? titleMatches : []).filter((session) => !_isDrawerSideChatSession(session));
+    titleMatches = (Array.isArray(titleMatches) ? titleMatches : []).filter((session) => !_isDrawerHiddenRuntimeSession(session));
     if (titleMatches.length) renderMatches(titleMatches);
 
     try {
@@ -1809,7 +1834,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
       matches = titleMatches;
     }
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
-    matches = (Array.isArray(matches) ? matches : []).filter((session) => !_isDrawerSideChatSession(session));
+    matches = (Array.isArray(matches) ? matches : []).filter((session) => !_isDrawerHiddenRuntimeSession(session));
     if (!matches.length) matches = await _localSessionSearchFallback(loadSessions, query);
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
 
@@ -1833,7 +1858,7 @@ async function _localSessionSearchFallback(loadSessions, query) {
   const all = Array.isArray(data?.sessions)
     ? data.sessions
     : (Array.isArray(data?.mobile) ? data.mobile : []);
-  return all.filter((s) => !_isDrawerSideChatSession(s)).filter((s) => {
+  return all.filter((s) => !_isDrawerHiddenRuntimeSession(s)).filter((s) => {
     const title = String(s?.title || '').toLowerCase();
     const preview = String(s?.preview || '').toLowerCase();
     return title.includes(q) || preview.includes(q);

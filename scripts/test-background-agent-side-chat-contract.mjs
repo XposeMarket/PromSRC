@@ -22,7 +22,16 @@ assert.match(mobile, /loadMobileBackgroundStreamReplay\(cleanId, currentLane\?\.
 assert.match(mobile, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
 assert.match(mobile, /sideThreadRendered/);
 assert.match(mobile, /scheduleSideRenderSoon\(\)/);
+assert.match(mobile, /syncMobileBackgroundSpawnDockToComposer/);
+assert.match(mobile, /form\.getBoundingClientRect/);
+assert.match(mobile, /syncBackgroundDockOnScroll/);
+assert.match(mobile, /_isMobileReasoningSummaryTraceEntry/);
+assert.match(mobile, /session\.liveTraceEntries/);
+assert.match(mobile, /session\.history/);
+assert.match(mobile, /msg\.eventName/);
 assert.doesNotMatch(mobile, /openMobileSideChat\(msg\)/);
+assert.match(read('web-ui/src/mobile/mobile-shell.js'), /_isDrawerBackgroundAgentSession/);
+assert.match(read('web-ui/src/mobile/mobile-shell.js'), /!_isDrawerHiddenRuntimeSession\(session\)/);
 assert.match(api, /\/api\/background\/\$\{encodeURIComponent\(id\)\}\/stream/);
 assert.match(api, /\/api\/background-agents\/steer/);
 assert.match(mobileStyles, /\.pm-background-spawn-dock\s*\{[\s\S]*?position: fixed;/);

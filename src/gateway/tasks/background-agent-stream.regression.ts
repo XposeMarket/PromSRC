@@ -82,7 +82,26 @@ function testStructuredToolResultTrace(): void {
   assert.equal(arrayEntry?.extra?.resultType, 'array');
 }
 
+function testReasoningSummaryTrace(): void {
+  const deltaEntry = backgroundProcessEntryFromSseEvent('reasoning_summary_delta', {
+    text: 'I am checking the available sources first.',
+    source: 'reasoning_summary',
+    visibility: 'user',
+  });
+  assert.equal(deltaEntry?.type, 'think');
+  assert.equal(deltaEntry?.extra?.source, 'reasoning_summary');
+  assert.equal(deltaEntry?.extra?.visibility, 'user');
+
+  const alternateEntry = backgroundProcessEntryFromSseEvent('reasoning_delta', {
+    summary: 'I am comparing the captured results.',
+    visibility: 'user',
+  });
+  assert.equal(alternateEntry?.type, 'think');
+  assert.equal(alternateEntry?.text, 'I am comparing the captured results.');
+}
+
 testPersistentAccumulationAndReplay();
 testDirectSteerDelivery();
 testStructuredToolResultTrace();
+testReasoningSummaryTrace();
 console.log('background-agent-stream regression: ok');
