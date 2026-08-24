@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8');
+const source = fs.readFileSync('web-ui/src/mobile/mobile-chat-renderer-runtime.js', 'utf8');
 const rendererStart = source.indexOf('function _renderThread(');
 const rendererEnd = source.indexOf("if (!window.__pmToolActivityReadyBridgeInstalled)", rendererStart);
 const sessionRenderStart = source.indexOf('function _renderMobileChatSessionNow(');
-const sessionRenderEnd = source.indexOf('const mobileSourceState =', sessionRenderStart);
+const sessionRenderEnd = source.indexOf('const runtime = Object.freeze({', sessionRenderStart);
 assert.ok(rendererStart >= 0 && rendererEnd > rendererStart, 'main mobile renderer seam must remain discoverable');
 assert.ok(sessionRenderStart >= 0 && sessionRenderEnd > sessionRenderStart, 'mobile session renderer seam must remain discoverable');
 
