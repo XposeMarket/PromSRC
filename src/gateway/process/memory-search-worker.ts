@@ -43,6 +43,14 @@ const MAX_QUERY_CHARS = 16_000;
 const MAX_SERIALIZED_RESULT_BYTES = 192 * 1024;
 let activeRequestId = '';
 
+function reportedRssBytes(): number {
+  if (process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS === '1') {
+    const override = Number(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_RSS_BYTES);
+    if (Number.isFinite(override) && override > 0) return Math.floor(override);
+  }
+  return process.memoryUsage().rss;
+}
+
 function send(message: RuntimeWorkerChildMessage): void {
   if (!process.send || !process.connected) return;
   const bytes = runtimeWorkerMessageBytes(message);
@@ -155,7 +163,7 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
       serialized: 'x'.repeat(DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES),
       backend: 'test',
       usedJsonFallback: false,
-      rssBytes: process.memoryUsage().rss,
+      rssBytes: reportedRssBytes(),
     };
   }
 
@@ -196,7 +204,7 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
   return {
     serialized: serializeBoundedMemorySearchResult(result),
     ...resultMetadata(result),
-    rssBytes: process.memoryUsage().rss,
+    rssBytes: reportedRssBytes(),
   };
 }
 

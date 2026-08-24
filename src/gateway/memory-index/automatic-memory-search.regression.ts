@@ -14,10 +14,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
 async function main(): Promise<void> {
   // These must be set before the search-worker client is imported because its
   // worker policy is intentionally fixed for the lifetime of the gateway.
+  const recycleRssBytes = 4 * 1024 * 1024 * 1024;
   process.env.PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_WORKERS = '2';
   process.env.PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS = '1000';
+  process.env.PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES = String(recycleRssBytes);
   process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS = '1';
-  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_CPU_MS = '0';
+  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_TIMEOUT_CEILING_MS = '1000';
+  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_CPU_MS = '50';
+  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_RSS_BYTES = String(recycleRssBytes + 1);
 
   const {
     closeSqliteMemoryConnections,
@@ -60,6 +64,7 @@ async function main(): Promise<void> {
     assert.equal(warmed.workerCount, 2);
     assert.equal(warmed.ready, 2, 'both automatic slots should be warm before exercising retirement');
     assert.equal(warmed.workers[0]?.policy.idleTtlMs, 0, 'the warm-floor worker must not have an idle TTL');
+    assert.equal(warmed.workers[0]?.policy.maxRssBytes, recycleRssBytes, 'the warm-floor worker must retain the RSS ceiling');
     assert.equal(warmed.workers[1]?.policy.idleTtlMs, 1000, 'the elastic worker should retain its idle TTL');
 
     const params = {
@@ -69,12 +74,33 @@ async function main(): Promise<void> {
       rerank: false,
       queryRoute: 'automatic_memory_worker_regression',
     };
+    const initialFloorPid = warmed.workers[0]?.pid;
+    assert.ok(initialFloorPid, 'the warm-floor worker should expose a PID');
+
+    // The current warm child reports a synthetic RSS breach. The replacement
+    // inherits the cleared override below, making the rotation observable and
+    // preventing the test from repeatedly recycling every later lookup.
+    process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_RSS_BYTES = '0';
     const first = await searchMemoryAutomaticallyInWorker(
       'memory_search',
       { workspacePath, params },
       { timeoutMs: 250 },
     );
     assert.ok(JSON.parse(first), 'the warmed automatic worker should serve the first retrieval');
+    await waitFor(() => {
+      const status = getAutomaticMemorySearchWorkerStatus();
+      return status.workers[0]?.state === 'ready' && status.workers[0]?.pid !== initialFloorPid;
+    }, 5_000);
+    const rotated = getAutomaticMemorySearchWorkerStatus();
+    assert.equal(rotated.ready >= 1, true, 'RSS rotation should restore at least one ready automatic worker');
+    assert.notEqual(rotated.workers[0]?.pid, initialFloorPid, 'RSS breach should replace the warm-floor process');
+
+    const afterRssRotation = await searchMemoryAutomaticallyInWorker(
+      'memory_search',
+      { workspacePath, params },
+      { timeoutMs: 250 },
+    );
+    assert.ok(JSON.parse(afterRssRotation), 'automatic retrieval should succeed after warm-floor RSS rotation');
 
     await waitFor(() => {
       const status = getAutomaticMemorySearchWorkerStatus();
@@ -92,6 +118,35 @@ async function main(): Promise<void> {
     assert.ok(elapsedMs <= 250, `warm-floor retrieval exceeded the automatic SLA (elapsed=${elapsedMs}ms)`);
     const afterRetirement = getAutomaticMemorySearchWorkerStatus();
     assert.equal(afterRetirement.workers[0]?.state, 'ready', 'the warm-floor worker must remain ready');
+
+    // The floor is deliberately held busy so the next request must use the
+    // retired elastic slot. The elastic child receives the real request
+    // directly, with no separate warmup search consuming its SLA.
+    const lead = searchMemoryAutomaticallyInWorker(
+      'memory_search',
+      { workspacePath, params: { ...params, query: '__PROMETHEUS_TEST_CPU__' } },
+      { timeoutMs: 250 },
+    );
+    await waitFor(() => getAutomaticMemorySearchWorkerStatus().workers[0]?.state === 'busy');
+    const concurrentStartedAt = Date.now();
+    const concurrent = searchMemoryAutomaticallyInWorker(
+      'memory_search',
+      { workspacePath, params },
+      // A cold process cannot be expected to fit the production 250 ms
+      // budget on every host; the test-only ceiling observes direct service
+      // without accepting the old dummy-warmup path.
+      { timeoutMs: 1_000 },
+    );
+    let concurrentResult: string;
+    try {
+      [, concurrentResult] = await Promise.all([lead, concurrent]);
+    } catch (error) {
+      throw new Error(`concurrent cold-elastic lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const concurrentElapsedMs = Date.now() - concurrentStartedAt;
+    assert.ok(JSON.parse(concurrentResult), 'cold elastic demand should serve the real concurrent lookup');
+    assert.ok(concurrentElapsedMs <= 1_000, `cold elastic lookup exceeded the bounded cold-start test window (elapsed=${concurrentElapsedMs}ms)`);
+    await waitFor(() => getAutomaticMemorySearchWorkerStatus().workers[0]?.state === 'ready');
   } finally {
     await shutdownMemorySearchWorker();
     await shutdownMemoryIndexRefreshWorker();
