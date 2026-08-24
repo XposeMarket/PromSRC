@@ -17,7 +17,7 @@ import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
-import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
+import { getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -105,6 +105,115 @@ export interface EphemeralBackgroundStatus {
 }
 
 export type ProgressCallback = (event: string, data: any) => void;
+
+function backgroundTraceText(value: unknown, max = 4_000): string {
+  const text = String(value ?? '').trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function backgroundProcessEntryFromSseEvent(event: string, data: any): Record<string, any> | null {
+  const eventType = String(event || '').trim();
+  const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
+  const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
+  const userVisibleReasoning = eventType === 'reasoning_summary_delta'
+    || eventType === 'reasoning_summary'
+    || source === 'reasoning_summary'
+    || visibility === 'user';
+  if (!eventType || eventType === 'heartbeat' || eventType === 'token'
+    || (eventType === 'thinking_delta' && !userVisibleReasoning)) return null;
+  const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  const baseExtra = {
+    source: source || 'background_sse',
+    event: eventType,
+    ...(action ? { toolName: action } : {}),
+    ...(data?.args && typeof data.args === 'object' ? { args: data.args } : {}),
+    ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
+    ...(data?.error ? { error: true } : {}),
+  };
+  if (userVisibleReasoning && (eventType === 'thinking_delta' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary')) {
+    const text = backgroundTraceText(data?.text || data?.thinking || data?.summary || data?.message);
+    return text ? {
+      type: 'think',
+      actor: 'Prom',
+      text,
+      extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'user' },
+    } : null;
+  }
+  if (eventType === 'tool_call') {
+    const text = backgroundTraceText(action ? `Preparing ${action}` : data?.message || 'Preparing tool');
+    return text ? { type: 'tool', actor: 'Prom', text, extra: baseExtra } : null;
+  }
+  if (eventType === 'tool_result') {
+    const result = backgroundTraceText(data?.result || data?.output || (action ? `${action} complete` : 'Tool complete'), 4_000);
+    return result ? { type: data?.error ? 'error' : 'result', actor: 'Prom', text: `${action}${result && action && !result.startsWith(action) ? ` -> ${result}` : result}`, extra: baseExtra } : null;
+  }
+  if (eventType === 'model_stream_event') {
+    const modelEvent = data?.event && typeof data.event === 'object' ? data.event : {};
+    const modelType = String(modelEvent.type || '').trim().toLowerCase();
+    if (!/^tool_call_(?:start|done)$/.test(modelType)) return null;
+    const modelAction = String(modelEvent.name || modelEvent.toolName || action || 'tool').trim();
+    return { type: 'info', actor: 'Prom', text: `${modelType.endsWith('start') ? 'Preparing' : 'Prepared'} ${modelAction}`, extra: { ...baseExtra, source: 'model_stream_event', modelType, toolName: modelAction } };
+  }
+  if (eventType === 'progress_state') {
+    const items = Array.isArray(data?.items)
+      ? data.items.map((item: any) => String(item?.label || item?.text || item?.title || '').trim()).filter(Boolean).slice(-8)
+      : [];
+    const content = [String(data?.reason || '').trim(), items.length ? items.join(' | ') : ''].filter(Boolean).join(': ');
+    return content ? { type: 'info', actor: 'Prom', text: `Progress: ${content}`, extra: baseExtra } : null;
+  }
+  if (eventType === 'thinking' || eventType === 'agent_thought') {
+    if (visibility === 'private' || visibility === 'internal') return null;
+    const text = backgroundTraceText(data?.thinking || data?.text || data?.message);
+    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, visibility: visibility || 'user' } } : null;
+  }
+  const text = backgroundTraceText(data?.message || data?.text || data?.result || data?.summary, 2_000);
+  if (!text) return null;
+  return { type: eventType === 'error' ? 'error' : eventType === 'warn' ? 'warn' : 'info', actor: 'Prom', text, extra: baseExtra };
+}
+
+function appendBackgroundSseTrace(
+  processEntries: Record<string, any>[],
+  liveTraceEntries: Record<string, any>[],
+  event: string,
+  data: any,
+  frame: BackgroundAgentStreamFrame,
+): void {
+  const raw = backgroundProcessEntryFromSseEvent(event, data);
+  if (!raw) return;
+  const at = Number(frame.at || Date.now()) || Date.now();
+  const streamId = String(frame.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(frame.seq || 0)) || 0);
+  const id = streamId && seq ? `trace_${streamId}_${seq}` : `trace_background_${processEntries.length + 1}`;
+  const entry = {
+    ...raw,
+    id,
+    at,
+    ...(streamId ? { streamId } : {}),
+    ...(seq ? { seq } : {}),
+    time: new Date(at).toLocaleTimeString(),
+  };
+  processEntries.push(entry);
+  if (processEntries.length > 500) processEntries.splice(0, processEntries.length - 500);
+  const trace = {
+    id,
+    type: raw.type,
+    text: raw.text,
+    time: at,
+    ...(streamId ? { streamId } : {}),
+    ...(seq ? { seq } : {}),
+    extra: raw.extra,
+  };
+  const previous = liveTraceEntries[liveTraceEntries.length - 1];
+  if (raw.type === 'think' && String(raw.extra?.source || '').toLowerCase() === 'reasoning_summary'
+    && previous?.type === 'think'
+    && String(previous.extra?.source || '').toLowerCase() === 'reasoning_summary') {
+    previous.text = `${String(previous.text || '')}${String(raw.text || '')}`.slice(-12_000);
+    previous.time = at;
+  } else {
+    liveTraceEntries.push(trace);
+    if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
+  }
+}
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
@@ -731,6 +840,55 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.modelSource = modelRouting.source;
       record.reasoningEffort = modelRouting.reasoningEffort;
       const toolCallLog: string[] = [];
+      const backgroundProcessEntries: Record<string, any>[] = [];
+      const backgroundLiveTraceEntries: Record<string, any>[] = [];
+      let lastSessionCheckpointAt = 0;
+      const persistBackgroundSessionCheckpoint = (terminal = false, finalText = '', reasoningSummary = '') => {
+        const now = Date.now();
+        if (!terminal && now - lastSessionCheckpointAt < 1200) return;
+        try {
+          const session = getSession(sessionId);
+          const history = Array.isArray(session.history) ? session.history.slice() : [];
+          const promptKey = String(prompt || '').replace(/\s+/g, ' ').trim();
+          const hasUserPrompt = history.some((entry: any) => entry?.role === 'user'
+            && String(entry.content || '').replace(/\s+/g, ' ').trim() === promptKey);
+          if (!hasUserPrompt) {
+            history.push({
+              role: 'user',
+              content: prompt,
+              timestamp: Number(record.startedAt || now) || now,
+              channel: 'background_agent',
+              channelLabel: 'Background agent',
+            } as any);
+          }
+          const assistantIndex = history.findIndex((entry: any) => entry?.role === 'assistant'
+            && String(entry.backgroundAgentId || '') === String(record.id));
+          const content = terminal
+            ? String(finalText || record.error || 'Background task completed with no textual output.').trim()
+            : 'Background agent is working...';
+          const assistant = {
+            role: 'assistant',
+            content,
+            timestamp: now,
+            backgroundAgentId: record.id,
+            messageKind: 'background_agent_run',
+            channel: 'background_agent',
+            channelLabel: 'Background agent',
+            streaming: !terminal,
+            workStartedAt: Number(record.startedAt || now) || now,
+            ...(terminal ? { workEndedAt: now, workDurationMs: Math.max(0, now - Number(record.startedAt || now)) } : {}),
+            processEntries: backgroundProcessEntries.slice(-500),
+            liveTraceEntries: backgroundLiveTraceEntries.slice(-500),
+            reasoningSummary: String(reasoningSummary || '').trim() || undefined,
+          };
+          if (assistantIndex >= 0) history[assistantIndex] = assistant as any;
+          else history.push(assistant as any);
+          replaceHistory(sessionId, history as any, { historyChangeSource: 'replace_history' });
+          lastSessionCheckpointAt = now;
+        } catch (error: any) {
+          console.warn(`[Background Agent] ${record.id} session trace checkpoint failed: ${error?.message || error}`);
+        }
+      };
 
       if (spawnerSessionId) {
         broadcastWS({
@@ -749,6 +907,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
         const frame = appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
+        appendBackgroundSseTrace(backgroundProcessEntries, backgroundLiveTraceEntries, event, data, frame);
+        persistBackgroundSessionCheckpoint();
         if (spawnerSessionId) {
           const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
           broadcastWS({
@@ -807,6 +967,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.error = 'Aborted by operator.';
           record.state = 'failed';
           record.completedAt = Date.now();
+          persistBackgroundSessionCheckpoint(true, '', String((chatResult as any)?.reasoningSummary || ''));
           finishBackgroundAgentStream(record.backgroundStream);
           persistBackgroundVoiceWorker(record);
           if (spawnerSessionId) {
@@ -822,6 +983,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.result = (finalText || 'Background task completed with no textual output.') + toolSummary;
         record.state = 'completed';
         record.completedAt = Date.now();
+        persistBackgroundSessionCheckpoint(true, finalText, String((chatResult as any)?.reasoningSummary || ''));
         finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);
@@ -834,6 +996,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
         record.completedAt = Date.now();
+        persistBackgroundSessionCheckpoint(true, '', '');
         finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);

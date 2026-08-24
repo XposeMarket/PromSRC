@@ -9,6 +9,7 @@ export {
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
   normalizeBackgroundAgentWork,
   persistBackgroundAgentWork,
   readBackgroundAgentWork,
