@@ -77,6 +77,7 @@ const REALTIME_START_TIMEOUT_MS = Math.max(10_000, Number(process.env.PROMETHEUS
 const STATUS_CACHE_TTL_MS = Math.max(2_000, Number(process.env.PROMETHEUS_CODEX_STATUS_CACHE_TTL_MS || 15_000) || 15_000);
 const REALTIME_CONVERSATION_VERSION = 'v3';
 const REALTIME_VOICE_CATALOG_VERSION = 'v1';
+const REALTIME_CODEX_MODEL = 'gpt-live-1-codex';
 const MIN_CODEX_LIVE_VERSION = [0, 149, 1] as const;
 
 function detectCodexRuntimeVersion(executable: string): string {
@@ -548,6 +549,7 @@ export class CodexAppServerBridge {
         threadId,
         // Frameless Bidi v3 uses the original Codex Voice (`v1`) catalog.
         version: REALTIME_CONVERSATION_VERSION,
+        model: REALTIME_CODEX_MODEL,
         outputModality: 'audio',
         voice: resolvedVoice,
         prompt: input.prompt,

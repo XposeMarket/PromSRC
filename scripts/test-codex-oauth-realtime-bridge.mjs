@@ -27,7 +27,9 @@ assert.match(bridge, /'ChatGPT\.app', 'Contents', 'Resources', 'codex'/, 'bridge
 assert.match(bridge, /'Codex\.app', 'Contents', 'Resources', 'codex'/, 'bridge must discover the Codex executable bundled with Codex on macOS');
 assert.match(bridge, /this\.request\('thread\/realtime\/start'/, 'bridge must use thread/realtime/start');
 assert.match(bridge, /version: REALTIME_CONVERSATION_VERSION/, 'bridge must explicitly select the AVAS Realtime protocol instead of inheriting the app-server v1 default');
+assert.match(bridge, /model: REALTIME_CODEX_MODEL/, 'bridge must not inherit the generic realtime model rejected by Codex Voice');
 assert.match(bridge, /REALTIME_CONVERSATION_VERSION = 'v3'/, 'bridge must use the current AVAS-compatible Realtime v3 protocol');
+assert.match(bridge, /REALTIME_CODEX_MODEL = 'gpt-live-1-codex'/, 'bridge must select the Codex Live model accepted by the AVAS endpoint');
 assert.match(bridge, /REALTIME_VOICE_CATALOG_VERSION = 'v1'/, 'AVAS conversation v3 must preserve the Codex v1 voice catalog');
 assert.match(bridge, /voicesResult\?\.voices\?\.v1/, 'bridge status must advertise Codex voices accepted by AVAS conversation v3');
 assert.match(bridge, /defaultV1/, 'bridge status must advertise the v3-compatible Codex default voice');
