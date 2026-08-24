@@ -74,12 +74,33 @@ export function createMobileChatRuntimeAdapter({
     return `mobile-request:${requestId}:${role}`;
   }
 
+  function cloneRuntimeValue(value, seen = new WeakMap(), depth = 0) {
+    if (!value || typeof value !== 'object') return value;
+    if (depth > 8) return value;
+    if (seen.has(value)) return seen.get(value);
+    if (Array.isArray(value)) {
+      const next = [];
+      seen.set(value, next);
+      value.forEach((item) => next.push(cloneRuntimeValue(item, seen, depth + 1)));
+      return next;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const next = {};
+    seen.set(value, next);
+    Object.entries(value).forEach(([key, item]) => {
+      next[key] = cloneRuntimeValue(item, seen, depth + 1);
+    });
+    return next;
+  }
+
   function mobileRuntimeHistory(thread) {
     return (Array.isArray(thread) ? thread : []).map((message) => {
       if (!message || typeof message !== 'object') return message;
-      if (message.messageId || message.turnId || message.id) return message;
-      const turnId = mobileRuntimeTurnId(message);
-      return turnId ? { ...message, messageId: turnId } : message;
+      const next = cloneRuntimeValue(message);
+      if (next.messageId || next.turnId || next.id) return next;
+      const turnId = mobileRuntimeTurnId(next);
+      return turnId ? { ...next, messageId: turnId } : next;
     });
   }
 
@@ -126,14 +147,7 @@ export function createMobileChatRuntimeAdapter({
     return mobileRuntimeHistory([message])[0] || message;
   }
 
-  function getTranscriptRows(sessionId, options = {}) {
-    if (options.syncCompatibility === true) {
-      // Transitional bridge for the renderer slice: existing send/recovery
-      // writers still update the compatibility cache until the write-path PR.
-      // The renderer receives rows from the runtime while this adapter keeps
-      // that cache synchronized at the boundary.
-      sync(sessionId, { source: String(options.source || 'mobile-render-compatibility-bridge') });
-    }
+  function getTranscriptRows(sessionId) {
     return runtimeFor(sessionId).getTurns().map((turn, index) => Object.freeze({
       key: turn.key,
       index,
@@ -261,13 +275,25 @@ export function createMobileChatRuntimeAdapter({
         return { applied: false, pageResult };
       }
       const older = Array.isArray(pageResult?.items) ? pageResult.items : [];
-      const current = Array.isArray(state.threads?.[sid]) ? state.threads[sid] : [];
+      const runtimeBeforePage = runtimeFor(sid);
+      // A caller can request paging before mounting the visible mobile view
+      // (for example a restored scroll handler). Seed a never-hydrated runtime
+      // once from the compatibility cache, then keep all paging mutations in
+      // the runtime command path.
+      if (runtimeBeforePage.snapshot.history.revision === 0
+        && Array.isArray(state.threads?.[sid])
+        && state.threads[sid].length) {
+        sync(sid, {
+          source: 'mobile-older-page-hydration',
+          pageInfo: pagination,
+        });
+      }
+      const current = runtimeBeforePage.getSourceHistory();
       const loadedCount = Math.max(Number(pagination.loadedHistoryCount || current.length) || 0, current.length);
       // Hydration reconciliation may intentionally retain only optimistic or
       // live local artifacts. Older paging is different: it must prepend the
       // page without dropping already-loaded durable rows.
       const history = mergeOlderHistory(sid, older, current);
-      state.threads[sid] = history;
       const totalCount = Number(pageResult?.pageInfo?.totalCount || loadedCount + older.length) || loadedCount + older.length;
       state.historyPagination[sid] = {
         loading: false,
@@ -276,7 +302,15 @@ export function createMobileChatRuntimeAdapter({
         historyTruncated: pageResult?.pageInfo?.hasOlder === true,
         olderCursor: String(pageResult?.pageInfo?.olderCursor || '').trim() || null,
       };
-      syncOlder(sid, pageResult, history);
+      const runtime = replaceTranscript(sid, history, {
+        source: 'mobile-older-page',
+        pageInfo: {
+          ...(pageResult?.pageInfo || {}),
+          loadedCount: history.length,
+          loadingOlder: false,
+        },
+      });
+      state.threads[sid] = runtime.getSourceHistory();
       return { applied: true, pageResult, history };
     } catch (error) {
       pagination.loading = false;

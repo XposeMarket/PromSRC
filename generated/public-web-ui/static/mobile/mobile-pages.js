@@ -577,10 +577,7 @@ const {
   rowSignature: chatTimelineRowSignature,
 } = createMobileTimelineView({
   runtimeFor: mobileChatRuntimeAdapter.runtimeFor,
-  getRows: (sessionId) => mobileChatRuntimeAdapter.getTranscriptRows(sessionId, {
-    syncCompatibility: true,
-    source: 'mobile-timeline-compatibility-bridge',
-  }),
+  getRows: mobileChatRuntimeAdapter.getTranscriptRows,
   isHiddenMessage: _isMobileHiddenVoiceDraftMessage,
 });
 
@@ -2280,6 +2277,7 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   const bodyEl = document.getElementById('pm-chat-body');
   if (threadEl && String(__pmChat.activeSessionId || '') === sid) {
     __pmChat.thread = thread;
+    _commitMobileTranscriptCache(sid, 'mobile-steer-commit');
     _renderThread(threadEl);
     _scrollChat(bodyEl);
   }
@@ -8467,6 +8465,16 @@ function _mobileSessionIdForRenderKey(key = '') {
   return String(key || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
 }
 
+function _commitMobileTranscriptCache(sessionId, source = 'mobile-render-commit') {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+  return mobileChatRuntimeAdapter.replaceTranscript(sid, thread, {
+    source,
+    pageInfo: __pmChat.historyPagination?.[sid],
+  });
+}
+
 function _findMobileVoiceWorkgroupMessage(workgroupId) {
   const id = String(workgroupId || '').trim();
   if (!id) return null;
@@ -8837,10 +8845,7 @@ function _isMobileSessionRenderCurrent(key = '') {
 
 function _renderThread(threadEl, sessionKey = '') {
   const sid = _mobileSessionIdForRenderKey(sessionKey);
-  const runtimeRows = mobileChatRuntimeAdapter.getTranscriptRows(sid, {
-    syncCompatibility: true,
-    source: 'mobile-render-compatibility-bridge',
-  });
+  const runtimeRows = mobileChatRuntimeAdapter.getTranscriptRows(sid);
   const thread = runtimeRows.map((row) => row.msg);
   __pmChat.thread = thread;
   const bodyEl = document.getElementById('pm-chat-body');
@@ -9427,11 +9432,14 @@ function _patchMobileThreadMessage(threadEl, message, index) {
 
 function _patchLatestMobileStreamingMessage(threadEl, bodyEl, key = 'chat') {
   if (!_isMobileSessionRenderCurrent(key)) return true;
-  const { thread } = _threadForMobileSessionKey(key);
-  const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+  const sid = _mobileSessionIdForRenderKey(key);
+  _commitMobileTranscriptCache(sid, 'mobile-stream-patch');
+  const rows = mobileChatRuntimeAdapter.getTranscriptRows(sid);
+  const messageRow = [...rows].reverse().find((row) => _isMobileAssistantMessage(row.msg) && row.msg.streaming === true);
+  const message = messageRow?.msg || null;
   if (!message) return false;
-  const messageIndex = thread.indexOf(message);
-  const timeline = mobileTimelineController.peek(`mobile:main:${String(key || 'chat')}`);
+  const messageIndex = messageRow.index;
+  const timeline = mobileTimelineController.peek(`mobile:main:${sid}`);
   if (!threadEl.querySelector(`[data-msg-index="${messageIndex}"]`)
     && timeline && !timeline.paintEntries.some((entry) => entry.originalIndex === messageIndex)) return true;
   const scrollSnapshot = _mobileChatScrollSnapshot(bodyEl);
@@ -9455,10 +9463,12 @@ function _scheduleMobileStreamingPatch(threadEl, bodyEl, key = 'chat', delay = 1
 }
 
 function _syncMobileWorkTimerLabel(threadEl) {
-  const thread = _activeMobileThread();
-  const message = [...thread].reverse().find((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+  const sid = _mobileSessionIdForRenderKey(__pmChat.activeSessionId);
+  const rows = mobileChatRuntimeAdapter.getTranscriptRows(sid);
+  const messageRow = [...rows].reverse().find((row) => _isMobileAssistantMessage(row.msg) && row.msg.streaming === true);
+  const message = messageRow?.msg || null;
   if (!message) return false;
-  const msgIndex = thread.indexOf(message);
+  const msgIndex = messageRow.index;
   const root = threadEl || document.getElementById('pm-chat-thread');
   if (!root) return false;
   const msgEl = root.querySelector(`[data-msg-index="${msgIndex}"]`);
@@ -9474,7 +9484,10 @@ function _syncMobileWorkTimerLabel(threadEl) {
 }
 
 function _syncMobileWorkTimer(threadEl, bodyEl, key = 'chat') {
-  const hasStreamingAssistant = _activeMobileThread().some((msg) => _isMobileAssistantMessage(msg) && msg.streaming === true);
+  const sid = _mobileSessionIdForRenderKey(key);
+  const hasStreamingAssistant = mobileChatRuntimeAdapter
+    .getTranscriptRows(sid)
+    .some((row) => _isMobileAssistantMessage(row.msg) && row.msg.streaming === true);
   if (hasStreamingAssistant) {
     if (!__pmChat.workTimer) {
       __pmChat.workTimer = setInterval(() => {
@@ -9851,6 +9864,7 @@ function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
   if (!threadEl) return;
   if (!_isMobileSessionRenderCurrent(key)) return;
   const timerKey = String(key || 'chat');
+  _commitMobileTranscriptCache(_mobileSessionIdForRenderKey(timerKey), 'mobile-scheduled-render');
   mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
   mobileStreamRenderScheduler.schedule(`mobile:thread:${timerKey}`, () => {
     if (!_isMobileSessionRenderCurrent(timerKey)) return;
@@ -9861,6 +9875,7 @@ function _scheduleThreadRender(threadEl, bodyEl, key = 'chat', delay = 90) {
 function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
   const timerKey = String(key || 'chat');
   if (!_isMobileSessionRenderCurrent(timerKey)) return;
+  _commitMobileTranscriptCache(_mobileSessionIdForRenderKey(timerKey), 'mobile-flush-render');
   mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
   mobileStreamRenderScheduler.flush(`mobile:thread:${timerKey}`, () => {
     _renderThread(threadEl, timerKey);
@@ -9872,10 +9887,7 @@ function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
 function _renderMobileChatSessionNow(sessionId) {
   const sid = String(sessionId || '').trim();
   const renderSid = sid || String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
-  const rows = mobileChatRuntimeAdapter.getTranscriptRows(renderSid, {
-    syncCompatibility: true,
-    source: 'mobile-session-render-compatibility-bridge',
-  });
+  const rows = mobileChatRuntimeAdapter.getTranscriptRows(renderSid);
   __pmChat.activeSessionId = renderSid;
   __pmChat.thread = rows.map((row) => row.msg);
   const threadEl = document.getElementById('pm-chat-thread');
@@ -13439,6 +13451,7 @@ void main() {
     if (cachedThread.length) {
       __pmChat.threads[requestedSession] = cachedThread;
       _activeMobileThread();
+      _commitMobileTranscriptCache(requestedSession, 'mobile-cache-hydration');
       _renderThread(threadEl);
       _scrollChat(body);
     } else {
@@ -14329,8 +14342,7 @@ void main() {
   let historyLoadInFlight = null;
   async function loadOlderMobileMessages() {
     if (historyLoadInFlight || __pmChat.activeSessionId !== requestedSession) return historyLoadInFlight;
-    const thread = __pmChat.threads?.[requestedSession] || [];
-    const timelineEntries = _mobileTimelineEntries(requestedSession, thread);
+    const timelineEntries = _mobileTimelineEntries(requestedSession);
     const timelineKey = `mobile:main:${requestedSession}`;
     if (mobileTimelineController.peek(timelineKey)?.omittedBefore > 0) {
       mobileTimelineController.stepEarlier(timelineKey, timelineEntries);
@@ -16075,7 +16087,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (evt.type !== 'error') _clearRecoveredMobileChatError(aiTurn);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
     const sharedRuntime = mobileChatRuntimeAdapter.observeStreamEvent(requestedSession, aiTurn, evt);
-    switch (evt.type) {
+    try {
+      switch (evt.type) {
       case 'final_response_start':
         beginFinalResponse(aiTurn);
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
@@ -16319,8 +16332,18 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         pmToast(aiTurn.errorPresentation);
         renderThreadNow();
         return 'error';
-      default:
-        return '';
+        default:
+          return '';
+      }
+    } finally {
+      // Rich process, trace, artifact, and lifecycle fields are updated by
+      // the mobile event helpers above. Commit the complete source row after
+      // each event so the runtime remains authoritative for the next paint.
+      const streamTurnKey = String(sharedRuntime?.snapshot?.stream?.turnKey || '').trim();
+      mobileChatRuntimeAdapter.replaceTranscriptRow(requestedSession, aiTurn, {
+        key: streamTurnKey || undefined,
+        source: `mobile-stream-event:${String(evt.type || 'unknown')}`,
+      });
     }
   }
 
@@ -16350,7 +16373,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
     mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
     const scrollSnapshot = _mobileChatScrollSnapshot(body);
-    const patchedFinal = _patchMobileThreadMessage(threadEl, aiTurn, _activeMobileThread().indexOf(aiTurn));
+    const committedFinalTurn = mobileChatRuntimeAdapter.replaceTranscriptRow(requestedSession, aiTurn, {
+      source: 'mobile-recovery-final',
+    });
+    const patchedFinal = _patchMobileThreadMessage(
+      threadEl,
+      committedFinalTurn?.source || aiTurn,
+      _activeMobileThread().indexOf(aiTurn),
+    );
     if (patchedFinal) {
       _syncMobileWorkTimer(threadEl, body, requestedSession);
       _restoreMobileChatScroll(body, scrollSnapshot);
@@ -17127,7 +17157,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       mobileStreamRenderScheduler.cancel(`mobile:thread:${timerKey}`);
       mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
-      const patchedFinal = _patchMobileThreadMessage(threadEl, targetAiTurn, activeThread.indexOf(targetAiTurn));
+      const committedFinalTurn = mobileChatRuntimeAdapter.replaceTranscriptRow(actualSessionId, targetAiTurn, {
+        source: 'mobile-send-final',
+      });
+      const patchedFinal = _patchMobileThreadMessage(
+        threadEl,
+        committedFinalTurn?.source || targetAiTurn,
+        activeThread.indexOf(targetAiTurn),
+      );
       if (patchedFinal) {
         _syncMobileWorkTimer(threadEl, body, actualSessionId);
         _restoreMobileChatScroll(body, scrollSnapshot);
