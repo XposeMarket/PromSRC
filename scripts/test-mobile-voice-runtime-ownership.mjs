@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+const sourcePages = read('web-ui/src/mobile/mobile-pages.js');
+const sourceVoicePage = read('web-ui/src/mobile/mobile-voice-page.js');
+const sourceRuntime = read('web-ui/src/mobile/mobile-voice-runtime.js');
+const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedVoicePage = read('generated/public-web-ui/static/mobile/mobile-voice-page.js');
+const generatedRuntime = read('generated/public-web-ui/static/mobile/mobile-voice-runtime.js');
+const manifest = JSON.parse(read('generated/public-web-ui/asset-manifest.json'));
+const assets = new Map(manifest.assets.map((asset) => [asset.path, asset]));
+
+assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedVoicePage, sourceVoicePage, 'generated mobile-voice-page.js must mirror source');
+assert.equal(generatedRuntime, sourceRuntime, 'generated mobile-voice-runtime.js must mirror source');
+
+assert.match(sourcePages, /import\('\.\/mobile-voice-runtime\.js'\)/, 'Chat should lazy-load the Voice runtime');
+assert.doesNotMatch(sourcePages, /from ['"]\.\/mobile-voice-runtime\.js['"]/, 'Chat must not statically import the Voice runtime');
+assert.doesNotMatch(sourcePages, /MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED/, 'realtime transport constants must not remain in Chat owner');
+assert.doesNotMatch(sourcePages, /function _startMobileOpenAiRealtimeWebSocketSession\s*\(/, 'OpenAI realtime transport must not remain in Chat owner');
+assert.doesNotMatch(sourcePages, /function _createMobileXaiPlayback\s*\(/, 'xAI realtime playback must not remain in Chat owner');
+assert.match(sourceVoicePage, /import \{ createMobileVoiceRuntime \} from ['"]\.\/mobile-voice-runtime\.js['"];/, 'Voice page must own runtime creation');
+assert.match(sourceVoicePage, /const runtime = createMobileVoiceRuntime\(baseContext\)/, 'Voice page must hydrate the runtime before rendering');
+assert.match(sourceRuntime, /MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED/, 'Voice runtime must contain realtime transport');
+assert.match(sourceRuntime, /function _startMobileOpenAiRealtimeWebSocketSession\s*\(/, 'Voice runtime must contain OpenAI realtime transport');
+
+function outputFor(source) {
+  const output = manifest.moduleOutputs[source];
+  assert(output, `production manifest is missing ${source}`);
+  return output;
+}
+
+function staticClosure(entryPath) {
+  const seen = new Set();
+  const queue = [entryPath];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+    for (const imported of assets.get(current)?.imports || []) {
+      if (imported.kind === 'import-statement') queue.push(imported.path);
+    }
+  }
+  return seen;
+}
+
+const chatOutput = outputFor('src/mobile/mobile-pages.js');
+const voiceOutput = outputFor('src/mobile/mobile-voice-page.js');
+const runtimeOutput = outputFor('src/mobile/mobile-voice-runtime.js');
+const chatClosure = staticClosure(chatOutput);
+const voiceClosure = staticClosure(voiceOutput);
+const runtimeClosure = staticClosure(runtimeOutput);
+
+assert(!chatClosure.has(runtimeOutput), 'Voice runtime entry leaked into the mobile Chat static closure');
+assert(
+  [...runtimeClosure].some((pathname) => voiceClosure.has(pathname)),
+  'Voice runtime implementation is missing from the Voice owner closure',
+);
+assert(
+  manifest.assets.some((asset) => asset.imports?.some((entry) => entry.kind === 'dynamic-import' && entry.path === runtimeOutput)),
+  'production manifest must record the Voice runtime as a dynamic import',
+);
+
+const chatRecords = [...chatClosure].map((pathname) => assets.get(pathname)).filter(Boolean);
+const voiceRecords = [...voiceClosure].map((pathname) => assets.get(pathname)).filter(Boolean);
+const measure = (records) => ({
+  rawBytes: records.reduce((total, record) => total + record.bytes, 0),
+  gzipBytes: records.reduce((total, record) => total + record.gzipBytes, 0),
+  moduleCount: records.length,
+});
+
+console.log(JSON.stringify({
+  buildId: manifest.buildId,
+  mobileChat: measure(chatRecords),
+  mobileVoice: measure(voiceRecords),
+  runtimeOutput,
+}, null, 2));
+console.log('Mobile Voice runtime ownership contract passed.');
