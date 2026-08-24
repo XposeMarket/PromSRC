@@ -98,6 +98,20 @@ function testReasoningSummaryTrace(): void {
   });
   assert.equal(alternateEntry?.type, 'think');
   assert.equal(alternateEntry?.text, 'I am comparing the captured results.');
+
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary', {
+    text: 'private summary must stay hidden',
+    source: 'reasoning_summary',
+    visibility: 'private',
+  }), null);
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary_delta', {
+    text: 'internal summary must stay hidden',
+    visibility: 'internal',
+  }), null);
+  assert.equal(backgroundProcessEntryFromSseEvent('reasoning_delta', {
+    summary: 'private alternate summary must stay hidden',
+    visibility: 'private',
+  }), null);
 }
 
 testPersistentAccumulationAndReplay();
