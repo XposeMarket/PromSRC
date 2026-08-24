@@ -10,7 +10,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
-import type { BrainRunStatus } from './brain-run-outcome';
+import { brainRunOutcomeError, type BrainRunStatus } from './brain-run-outcome';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,6 +25,8 @@ export interface BrainLatestState {
   lastThoughtStatus: BrainRunStatus;
   /** Last thought failure error, if any */
   lastThoughtError: string | null;
+  /** Explicit startup recovery marker for an attempt left idle by a gateway crash */
+  lastThoughtRecovery: string | null;
   /** HH-mm label of the last thought window (e.g. "06-00") */
   lastThoughtWindow: string | null;
   /** YYYY-MM-DD local date of the last dream run */
@@ -67,6 +69,13 @@ export interface BrainLatestState {
   dreamModel: string;
   /** Optional selectable reasoning effort for dream and cleanup runs. */
   dreamReasoning: string;
+}
+
+export const BRAIN_GATEWAY_RESTART_RECOVERY = 'recovered_after_gateway_restart' as const;
+
+export interface BrainStartupRecoveryResult {
+  thoughtRecovered: boolean;
+  previousThoughtAttemptAt: string | null;
 }
 
 export interface BrainThoughtEntry {
@@ -138,6 +147,7 @@ function defaultLatestState(): BrainLatestState {
     lastThoughtAttemptAt: null,
     lastThoughtStatus: 'idle',
     lastThoughtError: null,
+    lastThoughtRecovery: null,
     lastThoughtWindow: null,
     lastDreamDate: null,
     lastDreamCompletedAt: null,
@@ -191,6 +201,38 @@ export function resolveThoughtCoverageCursor(
     if (Number.isFinite(parsed.getTime())) return parsed;
   }
   return null;
+}
+
+/**
+ * A Thought writes `idle` before entering its model call. If the gateway dies
+ * before its finalizer runs, that value survives the restart and otherwise
+ * looks like an ordinary in-progress attempt forever. Reconcile that one
+ * durable marker before recording the new gateway epoch. The coverage cursor is
+ * intentionally untouched: only a verified submission may advance it.
+ */
+export function reconcileStaleThoughtAttemptAfterGatewayRestart(): BrainStartupRecoveryResult {
+  const state = loadLatestState();
+  const previousThoughtAttemptAt = state.lastThoughtAttemptAt;
+  const attemptMs = previousThoughtAttemptAt ? Date.parse(previousThoughtAttemptAt) : NaN;
+  if (
+    state.lastThoughtStatus !== 'idle'
+    || !previousThoughtAttemptAt
+    || !Number.isFinite(attemptMs)
+    || attemptMs > Date.now()
+  ) {
+    return { thoughtRecovered: false, previousThoughtAttemptAt: null };
+  }
+
+  state.lastThoughtStatus = 'aborted';
+  state.lastThoughtRecovery = BRAIN_GATEWAY_RESTART_RECOVERY;
+  state.lastThoughtError = brainRunOutcomeError(
+    'thought',
+    'aborted',
+    '',
+    BRAIN_GATEWAY_RESTART_RECOVERY,
+  );
+  saveLatestState(state);
+  return { thoughtRecovered: true, previousThoughtAttemptAt };
 }
 
 export function markGatewayStarted(): void {

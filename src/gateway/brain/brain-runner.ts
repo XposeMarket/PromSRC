@@ -45,6 +45,8 @@ import {
   fmtUtc,
   fmtLocal,
   resolveThoughtCoverageCursor,
+  reconcileStaleThoughtAttemptAfterGatewayRestart,
+  BRAIN_GATEWAY_RESTART_RECOVERY,
   type BrainLatestState,
 } from './brain-state';
 import {
@@ -436,6 +438,7 @@ export interface BrainJobStatus {
   lastAttempt?: string | null;
   lastOutcome?: BrainRunStatus;
   lastError?: string | null;
+  lastRecovery?: string | null;
   usage?: BrainJobUsageRecord | null;
 }
 
@@ -512,7 +515,10 @@ export class BrainRunner {
     const cadenceDueMs = lastThought
       ? Math.max(lastThought.getTime() + THOUGHT_INTERVAL_MS, now.getTime())
       : now.getTime();
-    const failedRetryDueMs = (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt
+    const recoveredAfterGatewayRestart = state.lastThoughtRecovery === BRAIN_GATEWAY_RESTART_RECOVERY;
+    const failedRetryDueMs = !recoveredAfterGatewayRestart
+      && (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle')
+      && state.lastThoughtAttemptAt
       ? new Date(state.lastThoughtAttemptAt).getTime() + THOUGHT_RETRY_BACKOFF_MS
       : 0;
     const nextThoughtMs = Math.max(cadenceDueMs, Number.isFinite(failedRetryDueMs) ? failedRetryDueMs : 0);
@@ -547,6 +553,7 @@ export class BrainRunner {
         lastAttempt: state.lastThoughtAttemptAt,
         lastOutcome: state.lastThoughtStatus,
         lastError: state.lastThoughtError,
+        lastRecovery: state.lastThoughtRecovery,
         usage: latestUsage('thought'),
       },
       dream: {
@@ -608,6 +615,7 @@ export class BrainRunner {
     if (this.ticker) return;
     this.shuttingDown = false;
     ensureBrainDirs();
+    const startupRecovery = reconcileStaleThoughtAttemptAfterGatewayRestart();
     markGatewayStarted();
 
     // Do not run model-backed brain jobs during gateway boot. Startup status and
@@ -621,6 +629,13 @@ export class BrainRunner {
 
     if (this.ticker && typeof (this.ticker as any).unref === 'function') {
       (this.ticker as any).unref();
+    }
+    if (startupRecovery.thoughtRecovered) {
+      const recoveryTimer = setTimeout(() => {
+        this._tick().catch((err) => console.warn('[BrainRunner] Startup Thought recovery failed:', err?.message || err));
+      }, 1000);
+      recoveryTimer.unref?.();
+      console.log(`[BrainRunner] Recovered stale Thought attempt from ${startupRecovery.previousThoughtAttemptAt}; retry scheduled from the last successful coverage cursor.`);
     }
     console.log('[BrainRunner] Started — checking every 15 min for thought/dream eligibility');
   }
@@ -718,6 +733,7 @@ export class BrainRunner {
   // ─── Tick ─────────────────────────────────────────────────────────────────
 
   private async _tick(): Promise<void> {
+    if (this.shuttingDown) return;
     const now      = new Date();
     const today    = getLocalDateStr(now);
     const daily    = loadDailyStatus(today);
@@ -906,8 +922,10 @@ export class BrainRunner {
     if (this._isDreamSoon(now) || this._isDreamEligible(now)) return null;
     // `idle` with a recent attempt means the previous gateway disappeared
     // before its finalizer could run. Treat it as unsettled and wait through
-    // the same backoff used for explicit failures/aborts.
-    if ((state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt) {
+    // the same backoff used for explicit failures/aborts, except for the
+    // explicit startup-recovery marker, which is retried immediately.
+    const recoveredAfterGatewayRestart = state.lastThoughtRecovery === BRAIN_GATEWAY_RESTART_RECOVERY;
+    if (!recoveredAfterGatewayRestart && (state.lastThoughtStatus === 'failed' || state.lastThoughtStatus === 'aborted' || state.lastThoughtStatus === 'idle') && state.lastThoughtAttemptAt) {
       const lastAttemptMs = new Date(state.lastThoughtAttemptAt).getTime();
       if (Number.isFinite(lastAttemptMs)) {
         const elapsedSinceAttempt = now.getTime() - lastAttemptMs;
@@ -1063,6 +1081,7 @@ export class BrainRunner {
     state.lastThoughtAttemptAt = new Date().toISOString();
     state.lastThoughtStatus = 'idle';
     state.lastThoughtError = null;
+    state.lastThoughtRecovery = null;
     saveLatestState(state);
 
     // Brain session IDs are date-based and can outlive a gateway instance.
@@ -1283,9 +1302,11 @@ export class BrainRunner {
       latestAfter.lastThoughtWindow = windowLabel;
       latestAfter.lastThoughtStatus = 'success';
       latestAfter.lastThoughtError = null;
+      latestAfter.lastThoughtRecovery = null;
       saveLatestState(latestAfter);
     } else {
       latestAfter.lastThoughtStatus = outcome;
+      latestAfter.lastThoughtRecovery = null;
       latestAfter.lastThoughtError = brainRunOutcomeError(
         'thought',
         outcome,
