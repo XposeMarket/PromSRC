@@ -7,6 +7,7 @@
  * imitation from the hamburger and layer the real button/icon above the canvas.
  */
 
+@layer shell {
 /*
  * The mobile header is floating chrome. Its safe-area/status strip must stay
  * optically clear so chat content can continue underneath it all the way to the
@@ -104,4 +105,5 @@ body.pm-mobile-active .pm-header :is(
 ) > .pm-icon {
   position: relative !important;
   z-index: 2 !important;
+}
 }
