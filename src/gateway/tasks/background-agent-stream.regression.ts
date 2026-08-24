@@ -67,6 +67,7 @@ function testStructuredToolResultTrace(): void {
     name: 'workspace_read',
     result: objectResult,
   });
+  assert.equal(objectEntry?.extra?.action, 'workspace_read');
   assert.equal(objectEntry?.text, 'workspace_read complete');
   assert.deepEqual(objectEntry?.extra?.result, objectResult);
   assert.equal(objectEntry?.extra?.resultType, 'object');

@@ -94,6 +94,7 @@ import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
   installToolActivityExpansionPersistence,
+  loadToolActivityFeature,
   renderToolActivityEntry,
   setToolActivityDisclosureState,
   toolActivitySummary,
@@ -3257,15 +3258,16 @@ function _isMobileHiddenRuntimeProcessEntry(entry) {
 
 function _normalizeMobileProcessEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
-  if (_isMobileHiddenRuntimeProcessEntry(entry)) return null;
-  const text = String(entry.text || entry.content || entry.message || '').trim();
+  const recovered = _normalizeMobileRecoveredTraceEntry(entry);
+  if (_isMobileHiddenRuntimeProcessEntry(recovered)) return null;
+  const text = String(recovered.text || recovered.content || recovered.message || '').trim();
   if (!text) return null;
   return {
-    id: entry.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    type: String(entry.type || 'info').toLowerCase(),
+    id: recovered.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: String(recovered.type || 'info').toLowerCase(),
     text,
-    extra: entry.extra || null,
-    time: entry.time || (entry.ts ? _formatChatTime(entry.ts) : ''),
+    extra: recovered.extra || null,
+    time: recovered.time || (recovered.ts ? _formatChatTime(recovered.ts) : ''),
   };
 }
 
@@ -3282,6 +3284,10 @@ function _mobileRecoveredTraceInference(entry) {
   if (commandMatch) {
     const command = String(commandMatch[1] || '').trim();
     return { action: 'workspace_run', args: command ? { command } : {} };
+  }
+  const namedAction = text.match(/\b((?:browser|desktop|workspace|web|file|skill|run|request_tool|background)_[a-z0-9_]+)\b/i);
+  if (namedAction?.[1]) {
+    return { action: String(namedAction[1]).toLowerCase(), args: payload && typeof payload === 'object' ? payload : {} };
   }
   if (/^workspace\s+git\b/i.test(text)) {
     return { action: 'workspace_git', args: payload && typeof payload === 'object' ? payload : {} };
@@ -3307,45 +3313,64 @@ function typeIsResultOrError(type) {
 function _normalizeMobileRecoveredTraceEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const event = String(extra.event || entry.event || '').toLowerCase();
+  const rawType = String(entry.type || entry.kind || '').toLowerCase();
+  const event = String(extra.event || entry.event || rawType || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
-  if ((event === 'reasoning_summary_delta' || event === 'reasoning_summary') && text) {
+  const normalizedType = event === 'tool_call' || rawType === 'tool_call'
+    ? 'tool'
+    : event === 'tool_result' || rawType === 'tool_result'
+      ? (entry.error === true || extra.error === true ? 'error' : 'result')
+      : event === 'tool_progress' || rawType === 'tool_progress'
+        ? 'progress'
+        : (event === 'reasoning_summary_delta' || event === 'reasoning_summary' || rawType === 'reasoning_summary_delta'
+          || (event === 'thinking_delta' && String(extra.source || entry.source || '').toLowerCase() === 'reasoning_summary')
+          || event === 'thinking' || event === 'agent_thought' || rawType === 'thinking' || rawType === 'agent_thought')
+          ? 'think'
+          : event === 'token_narration_boundary' || rawType === 'token_narration_boundary'
+            ? 'preamble'
+            : rawType;
+  const normalized = normalizedType && normalizedType !== rawType
+    ? { ...entry, type: normalizedType, extra: { ...extra, event: event || rawType } }
+    : entry;
+  const normalizedExtra = normalized.extra && typeof normalized.extra === 'object' ? normalized.extra : extra;
+  if ((event === 'reasoning_summary_delta' || event === 'reasoning_summary' || normalizedType === 'reasoning_summary') && text) {
     return {
-      ...entry,
+      ...normalized,
       type: 'think',
       text,
-      extra: { ...extra, source: 'reasoning_summary', visibility: 'user', event },
+      extra: { ...normalizedExtra, source: 'reasoning_summary', visibility: 'user', event: event || 'reasoning_summary' },
     };
   }
-  if (event === 'token_narration_boundary' && text) {
+  if ((event === 'token_narration_boundary' || normalizedType === 'preamble') && text) {
     return {
-      ...entry,
+      ...normalized,
       type: 'preamble',
       text,
-      extra: { ...extra, source: 'agent_progress', visibility: 'user', event },
+      extra: { ...normalizedExtra, source: 'agent_progress', visibility: 'user', event: event || 'token_narration_boundary' },
     };
   }
-  const inference = _mobileRecoveredTraceInference(entry);
-  if (!inference) return entry;
+  const inference = _mobileRecoveredTraceInference(normalized);
+  if (!inference) return normalized;
   return {
-    ...entry,
+    ...normalized,
     extra: {
-      ...extra,
-      action: extra.action || inference.action,
-      toolName: extra.toolName || inference.action,
-      args: extra.args || inference.args || {},
-      ...(typeIsResultOrError(entry?.type) ? { result: extra.result || text } : {}),
+      ...normalizedExtra,
+      action: normalizedExtra.action || inference.action,
+      toolName: normalizedExtra.toolName || inference.action,
+      args: normalizedExtra.args || inference.args || {},
+      ...(typeIsResultOrError(normalized?.type) ? { result: normalizedExtra.result || text } : {}),
     },
   };
 }
 
 function _mobileBackgroundStoredProcessEntries(record) {
   return (Array.isArray(record?.events) ? record.events : [])
-    .map((entry) => _normalizeMobileProcessEntry({
+    .map((entry) => _normalizeMobileRecoveredTraceEntry({
       ...entry,
       text: entry?.text || entry?.content || entry?.message,
       extra: entry?.extra || entry,
     }))
+    .map(_normalizeMobileProcessEntry)
     .filter(Boolean);
 }
 
@@ -8935,6 +8960,10 @@ if (!window.__pmToolActivityReadyBridgeInstalled) {
   window.addEventListener('prometheus:tool-activity-ready', () => {
     const sessionId = String(__pmChat.activeSessionId || '').trim();
     if (sessionId && document.getElementById('pm-chat-thread')) _renderMobileChatSessionNow(sessionId);
+    // Background-agent detail is rendered in the side sheet rather than the
+    // main chat thread. Repaint it when the optional rich renderer becomes
+    // available so a cold recovery cannot remain on raw TOOL RESULT blocks.
+    try { window.__pmMobileBackgroundAgentDetailRender?.(); } catch {}
   });
 }
 
@@ -10988,6 +11017,11 @@ function _saveMobileLastChatContext(context = {}) {
 
 export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
   _installMobileApprovalBridge();
+  // Chat recovery needs the same tool/result renderer as live streaming. Kick
+  // off the optional chunk before history hydration so the first recovered
+  // paint normally arrives already coalesced; the ready bridge above handles
+  // the remaining cold-cache race.
+  void loadToolActivityFeature().catch(() => {});
   // Composer picker state belongs to the mounted page. Resetting the active
   // slash command prevents a prior route's command chip from suppressing the
   // first `$` skill picker on the next mobile chat.
@@ -12070,6 +12104,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   }
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
   const previousBackgroundAgentDetailBridge = window.__pmMobileBackgroundAgentDetail;
+  const previousBackgroundAgentDetailRenderBridge = window.__pmMobileBackgroundAgentDetailRender;
   const previousToolProgressDockBridge = window.__pmMobileToolProgressDockChanged;
   const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
   const previousGoalBridge = window.__pmMobileGoalChanged;
@@ -12078,6 +12113,9 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     updateChatComposerSpace();
   };
   const currentBackgroundAgentDetailBridge = (id = '') => openMobileBackgroundAgentDetail(id);
+  const currentBackgroundAgentDetailRenderBridge = () => {
+    if (sideState.backgroundAgentId) renderMobileSideSheet();
+  };
   const currentQueuedPromptsBridge = () => {
     updateChatComposerSpace();
   };
@@ -12116,6 +12154,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const currentToolProgressDockBridge = () => updateChatComposerSpace();
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
   window.__pmMobileBackgroundAgentDetail = currentBackgroundAgentDetailBridge;
+  window.__pmMobileBackgroundAgentDetailRender = currentBackgroundAgentDetailRenderBridge;
   window.__pmMobileToolProgressDockChanged = currentToolProgressDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
   window.__pmMobileGoalChanged = currentGoalBridge;
@@ -14329,7 +14368,7 @@ void main() {
       ? lane.message.processEntries
       : _mobileBackgroundStoredProcessEntries(stored);
     const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
-      ? lane.message.liveTraceEntries
+      ? lane.message.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
       : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
     return {
       id: lane.id,
@@ -14379,8 +14418,8 @@ void main() {
       ? source.processEntries
       : _mobileBackgroundAgentDetailEvents(record);
     const liveTraceEntries = Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
-      ? source.liveTraceEntries.slice()
-      : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.slice() : []);
+      ? source.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
+      : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
     const finalText = String(record?.error || record?.result || '').trim();
     const displayText = running ? sourceText : (finalText || sourceText);
@@ -17587,6 +17626,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (window.__pmMobileBackgroundAgentDetail === currentBackgroundAgentDetailBridge) {
       window.__pmMobileBackgroundAgentDetail = previousBackgroundAgentDetailBridge;
+    }
+    if (window.__pmMobileBackgroundAgentDetailRender === currentBackgroundAgentDetailRenderBridge) {
+      window.__pmMobileBackgroundAgentDetailRender = previousBackgroundAgentDetailRenderBridge;
     }
     if (window.__pmMobileToolProgressDockChanged === currentToolProgressDockBridge) {
       window.__pmMobileToolProgressDockChanged = previousToolProgressDockBridge;

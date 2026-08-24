@@ -720,6 +720,23 @@ export function coalesceToolActivityEntries(entriesInput) {
       applyToolActivityEvent(out, 'result', payload);
       continue;
     }
+    if (type === 'result' || type === 'error') {
+      // Older persisted traces sometimes contain a result body without the
+      // tool name. Attach it to the most recent unfinished operation instead
+      // of creating a second anonymous raw result card.
+      const priorOperation = [...out].reverse().find((entry) => (
+        entry?.activity?.kind === 'operation' && entry.activity.resultAttached !== true
+      ));
+      if (priorOperation?.activity?.action) {
+        applyToolActivityEvent(out, 'result', {
+          ...payload,
+          action: priorOperation.activity.action,
+          args: priorOperation.activity.args,
+          callId: priorOperation.activity.callId,
+        });
+        continue;
+      }
+    }
     if ((event === 'tool_progress' || type === 'progress') && action) {
       applyToolActivityEvent(out, 'progress', { ...payload, message: text });
       continue;
