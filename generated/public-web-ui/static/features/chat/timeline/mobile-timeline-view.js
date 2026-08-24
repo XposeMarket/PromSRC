@@ -26,13 +26,20 @@ function alignedRuntimeKeys(runtime, list) {
   return runtimeOrder;
 }
 
-export function createMobileTimelineView({ runtimeFor, isHiddenMessage = () => false } = {}) {
+export function createMobileTimelineView({ runtimeFor, getRows, isHiddenMessage = () => false } = {}) {
   const controller = createWeightedTimelineController({ surface: 'mobile', stepWeight: 22 });
   const scheduler = createAdaptiveStreamScheduler({ floorMs: 16, ceilingMs: 220, hiddenMs: 180 });
-  function entries(sessionId, thread) {
-    const list = Array.isArray(thread) ? thread : [];
-    const runtime = runtimeFor?.(sessionId);
-    const keys = alignedRuntimeKeys(runtime, list);
+  function entries(sessionId, thread, providedRows = null) {
+    const runtimeRows = Array.isArray(providedRows)
+      ? providedRows
+      : (typeof getRows === 'function' ? getRows(sessionId) : []);
+    const usableRows = runtimeRows.filter((row) => row?.msg && typeof row.msg === 'object');
+    const list = usableRows.length
+      ? usableRows.map((row) => row.msg)
+      : (Array.isArray(thread) ? thread : []);
+    const keys = usableRows.length
+      ? usableRows.map((row) => row.key)
+      : alignedRuntimeKeys(runtimeFor?.(sessionId), list);
     return createTimelineEntries(list, { keys })
       .filter((entry) => !isHiddenMessage(entry.msg, entry.originalIndex));
   }

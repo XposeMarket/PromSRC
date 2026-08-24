@@ -577,6 +577,10 @@ const {
   rowSignature: chatTimelineRowSignature,
 } = createMobileTimelineView({
   runtimeFor: mobileChatRuntimeAdapter.runtimeFor,
+  getRows: (sessionId) => mobileChatRuntimeAdapter.getTranscriptRows(sessionId, {
+    syncCompatibility: true,
+    source: 'mobile-timeline-compatibility-bridge',
+  }),
   isHiddenMessage: _isMobileHiddenVoiceDraftMessage,
 });
 
@@ -8459,6 +8463,10 @@ function _threadForMobileSessionKey(key = '') {
   return { sid, thread: __pmChat.threads[sid] };
 }
 
+function _mobileSessionIdForRenderKey(key = '') {
+  return String(key || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+}
+
 function _findMobileVoiceWorkgroupMessage(workgroupId) {
   const id = String(workgroupId || '').trim();
   if (!id) return null;
@@ -8828,12 +8836,15 @@ function _isMobileSessionRenderCurrent(key = '') {
 }
 
 function _renderThread(threadEl, sessionKey = '') {
-  const { sid, thread } = _threadForMobileSessionKey(sessionKey);
+  const sid = _mobileSessionIdForRenderKey(sessionKey);
+  const runtimeRows = mobileChatRuntimeAdapter.getTranscriptRows(sid, {
+    syncCompatibility: true,
+    source: 'mobile-render-compatibility-bridge',
+  });
+  const thread = runtimeRows.map((row) => row.msg);
   __pmChat.thread = thread;
   const bodyEl = document.getElementById('pm-chat-body');
   const timelineScroll = captureKeyedScrollState(threadEl, _mobileChatScrollTarget(bodyEl));
-  _dedupeMobileAssistantTurns(thread);
-  _reindexMobileThread(thread);
   _captureMobileWorkerDeckViewState(threadEl);
   const openProc = {};
   const closedProc = new Set();
@@ -8888,7 +8899,7 @@ function _renderThread(threadEl, sessionKey = '') {
     });
   } catch {}
   const timelineKey = `mobile:main:${sid}`;
-  const timelineEntries = _mobileTimelineEntries(sid, thread);
+  const timelineEntries = _mobileTimelineEntries(sid, thread, runtimeRows);
   const previousTimeline = mobileTimelineController.peek(timelineKey);
   const timeline = mobileTimelineController.select(timelineKey, timelineEntries, {
     followTail: timelineScroll.nearBottom && !(previousTimeline?.omittedAfter > 0),
@@ -9860,16 +9871,16 @@ function _flushThreadRender(threadEl, bodyEl, key = 'chat', options = {}) {
 
 function _renderMobileChatSessionNow(sessionId) {
   const sid = String(sessionId || '').trim();
-  const thread = sid ? __pmChat.threads?.[sid] : null;
-  if (sid && Array.isArray(thread)) {
-    __pmChat.activeSessionId = sid;
-    __pmChat.thread = thread;
-  } else {
-    _activeMobileThread();
-  }
+  const renderSid = sid || String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const rows = mobileChatRuntimeAdapter.getTranscriptRows(renderSid, {
+    syncCompatibility: true,
+    source: 'mobile-session-render-compatibility-bridge',
+  });
+  __pmChat.activeSessionId = renderSid;
+  __pmChat.thread = rows.map((row) => row.msg);
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
-  if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || __pmChat.activeSessionId || 'chat');
+  if (threadEl) _flushThreadRender(threadEl, bodyEl, renderSid || 'chat');
 }
 
 const mobileSourceState = {
