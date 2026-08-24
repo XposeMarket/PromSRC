@@ -3304,12 +3304,22 @@ function typeIsResultOrError(type) {
   return value === 'result' || value === 'error';
 }
 
+function _isMobileReasoningSummaryTraceEntry(entry) {
+  const type = String(entry?.type || entry?.kind || '').trim().toLowerCase();
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const event = String(extra.event || entry?.event || '').trim().toLowerCase();
+  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  return ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
+    || source === 'reasoning_summary';
+}
+
 function _normalizeMobileRecoveredTraceEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const event = String(extra.event || entry.event || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
-  if ((event === 'reasoning_summary_delta' || event === 'reasoning_summary') && text) {
+  if (_isMobileReasoningSummaryTraceEntry(entry) && text) {
     return {
       ...entry,
       type: 'think',
@@ -14112,6 +14122,31 @@ void main() {
     updateChatComposerSpace();
   }
 
+  function syncMobileBackgroundSpawnDockToComposer(composerRect = null) {
+    if (!backgroundSpawnDock) return;
+    if (backgroundSpawnDock.hidden || !form) {
+      backgroundSpawnDock.style.removeProperty('bottom');
+      return;
+    }
+    const rect = composerRect || form.getBoundingClientRect?.();
+    const visualViewport = window.visualViewport;
+    const viewportHeight = Number(
+      visualViewport?.height
+        || window.innerHeight
+        || document.documentElement?.clientHeight
+        || 0,
+    );
+    const viewportTop = Number(visualViewport?.offsetTop || 0) || 0;
+    const composerTop = Number(rect?.top || 0) - viewportTop;
+    if (!Number.isFinite(viewportHeight) || viewportHeight <= 0 || !Number.isFinite(composerTop)) return;
+    // The dock is a separate fixed surface, so derived tab-bar/composer
+    // variables can drift when the document-scrolled mobile path or the iOS
+    // keyboard changes the composer geometry. Anchor its bottom edge to the
+    // measured composer top instead of guessing from those offsets.
+    const bottom = Math.max(0, Math.round(viewportHeight - composerTop + 8));
+    backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
+  }
+
   function updateChatComposerSpace() {
     if (chatComposerSpaceRaf) cancelAnimationFrame(chatComposerSpaceRaf);
     chatComposerSpaceRaf = requestAnimationFrame(() => {
@@ -14119,7 +14154,8 @@ void main() {
       if (!body || !form) return;
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
       const previousSpace = Math.max(0, Number.parseFloat(body.style.getPropertyValue('--pm-chat-composer-space')) || 170);
-      const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
+      const composerRect = form.getBoundingClientRect?.();
+      const height = Math.ceil(composerRect?.height || 0);
       const queuedPanel = page?.querySelector?.('#pm-mobile-queued-prompts');
       const queuedHeight = queuedPanel && !queuedPanel.hidden
         ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0)
@@ -14142,6 +14178,7 @@ void main() {
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
+      syncMobileBackgroundSpawnDockToComposer(composerRect);
       // The background-agent dock is a viewport-anchored chrome surface in
       // both nested and document-scroll modes. Reserve its measured height so
       // the composer and the latest-message affordance stay above the glass.
@@ -14230,6 +14267,7 @@ void main() {
     const { distanceFromBottom } = _mobileChatScrollSnapshot(body, 0);
     scrollLatestBtn.hidden = distanceFromBottom < 150;
   };
+  const syncBackgroundDockOnScroll = () => syncMobileBackgroundSpawnDockToComposer();
   let lastHistoryScrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);
   let historyLoadInFlight = null;
   async function loadOlderMobileMessages() {
@@ -14299,6 +14337,9 @@ void main() {
   body?.addEventListener('scroll', updateScrollLatestButton, { passive: true });
   document.addEventListener('scroll', updateScrollLatestButton, { passive: true });
   window.addEventListener('scroll', updateScrollLatestButton, { passive: true });
+  body?.addEventListener('scroll', syncBackgroundDockOnScroll, { passive: true });
+  document.addEventListener('scroll', syncBackgroundDockOnScroll, { passive: true });
+  window.addEventListener('scroll', syncBackgroundDockOnScroll, { passive: true });
   body?.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
   document.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
   threadEl?.addEventListener('click', onLoadOlderClick);
@@ -14368,6 +14409,32 @@ void main() {
         actor: String(entry?.actor || name).trim() || name,
       }))
       .filter((entry) => entry.text);
+  }
+
+  function _appendMobileBackgroundSnapshotTrace(message, entry) {
+    if (!message || !entry || typeof entry !== 'object') return false;
+    const text = String(entry.text || entry.content || entry.message || entry.thinking || entry.summary || '').trim();
+    if (!text) return false;
+    const type = String(entry.type || entry.kind || '').trim().toLowerCase();
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    if (_isMobileReasoningSummaryTraceEntry(entry)) {
+      _appendMobileReasoningSummary(message, text);
+      return true;
+    }
+    if (!['think', 'thinking', 'thought', 'agent_thought'].includes(type)) return false;
+    const visibility = String(extra.visibility || entry.visibility || '').trim().toLowerCase();
+    if (visibility === 'private' || visibility === 'internal') return false;
+    const explicitUserThought = type === 'agent_thought'
+      ? true
+      : _isMobileUserVisibleReasoningTraceEntry({
+        type: 'think',
+        extra: { ...extra, visibility },
+      });
+    if (!explicitUserThought) return false;
+    _appendMobileLiveTrace(message, 'think', text, {
+      extra: { ...extra, visibility: visibility || 'user' },
+    });
+    return true;
   }
 
   function _mobileBackgroundAgentDetailMessage(record) {
@@ -14465,15 +14532,30 @@ void main() {
       if (!text) continue;
       const before = Array.isArray(lane.message.processEntries) ? lane.message.processEntries.length : 0;
       const extra = entry.extra || entry;
-      const isReasoningSummary = type === 'think'
-        && String(extra?.source || '').toLowerCase() === 'reasoning_summary';
-      _pushMobileStreamProcessEntry(lane.message, type, text, extra, !isReasoningSummary);
+      const isReasoningSummary = _isMobileReasoningSummaryTraceEntry(entry);
+      const processType = isReasoningSummary ? 'think' : type;
+      const processExtra = isReasoningSummary
+        ? { ...(extra && typeof extra === 'object' ? extra : {}), source: 'reasoning_summary', visibility: 'user' }
+        : extra;
+      _pushMobileStreamProcessEntry(lane.message, processType, text, processExtra, !isReasoningSummary);
       if (isReasoningSummary) {
         const beforeTrace = Array.isArray(lane.message.liveTraceEntries) ? lane.message.liveTraceEntries.length : 0;
         const traceChanged = _appendMobileReasoningSummary(lane.message, text);
         changed = changed || traceChanged || (Array.isArray(lane.message.liveTraceEntries) && lane.message.liveTraceEntries.length > beforeTrace);
       }
       changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
+    }
+    const snapshotTraceEntries = [
+      ...(Array.isArray(session.liveTraceEntries) ? session.liveTraceEntries : []),
+      ...(Array.isArray(session.history) ? session.history : []).flatMap((turn) => [
+        ...(Array.isArray(turn?.liveTraceEntries) ? turn.liveTraceEntries : []),
+        ...(Array.isArray(turn?.body?.liveTraceEntries) ? turn.body.liveTraceEntries : []),
+      ]),
+    ];
+    for (const entry of snapshotTraceEntries) {
+      const beforeTrace = Array.isArray(lane.message.liveTraceEntries) ? lane.message.liveTraceEntries.length : 0;
+      if (!_appendMobileBackgroundSnapshotTrace(lane.message, entry)) continue;
+      changed = changed || (Array.isArray(lane.message.liveTraceEntries) && lane.message.liveTraceEntries.length > beforeTrace);
     }
     const history = _mapServerHistoryToMobile(session.history || []);
     const finalTurn = [...history].reverse().find((entry) => entry?.role === 'ai' && String(entry?.content || entry?.body?.text || '').trim());
@@ -17545,6 +17627,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     body?.removeEventListener('scroll', updateScrollLatestButton);
     document.removeEventListener('scroll', updateScrollLatestButton);
     window.removeEventListener('scroll', updateScrollLatestButton);
+    body?.removeEventListener('scroll', syncBackgroundDockOnScroll);
+    document.removeEventListener('scroll', syncBackgroundDockOnScroll);
+    window.removeEventListener('scroll', syncBackgroundDockOnScroll);
     body?.removeEventListener('scroll', maybeLoadOlderOnScroll);
     document.removeEventListener('scroll', maybeLoadOlderOnScroll);
     threadEl?.removeEventListener('click', onLoadOlderClick);
@@ -30862,17 +30947,27 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
 }
 
 function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
-  const eventType = String(msg.eventType || '').trim();
+  const payload = msg?.data && typeof msg.data === 'object' ? msg.data : {};
+  const wrapperType = typeof msg.type === 'string' && msg.type !== 'bg_agent_event' ? msg.type : '';
+  const eventType = String(
+    msg.eventType
+      || msg.eventName
+      || payload.eventType
+      || payload.eventName
+      || wrapperType
+      || '',
+  ).trim();
   if (!eventType) return null;
+  const source = { ...payload, ...msg };
   return {
-    ...msg,
+    ...source,
     type: eventType,
-    streamId: String(msg.streamId || msg.data?.streamId || '').trim(),
-    seq: Math.max(0, Math.floor(Number(msg.seq || msg.data?.seq || 0)) || 0),
-    at: Number(msg.at || msg.data?.at || 0) || undefined,
-    action: msg.action || msg.name || msg.toolName || '',
-    name: msg.name || msg.action || msg.toolName || '',
-    actor: msg.actor || 'Background Agent',
+    streamId: String(source.streamId || '').trim(),
+    seq: Math.max(0, Math.floor(Number(source.seq || 0)) || 0),
+    at: Number(source.at || 0) || undefined,
+    action: source.action || source.name || source.toolName || '',
+    name: source.name || source.action || source.toolName || '',
+    actor: source.actor || 'Background Agent',
   };
 }
 
