@@ -58,6 +58,21 @@ assert.equal(rows[0].msg.body.attachments[0].id, 'file-1', 'row descriptors must
 assert.equal(rows[1].msg.processEntries[0].status, 'running');
 assert.equal(rows[0].turn.source, rows[0].msg, 'the normalized turn and row descriptor must share the rich source record');
 
+assistant.body.text = 'compatibility-only mutation';
+assert.equal(
+  adapter.getTranscriptRows(sessionId)[1].msg.body.text,
+  '',
+  'runtime history must be detached from compatibility cache object mutations',
+);
+
+adapter.replaceTranscriptRow(sessionId, {
+  ...assistant,
+  body: { text: 'streamed through runtime' },
+  content: 'streamed through runtime',
+});
+assert.equal(adapter.getTranscriptRows(sessionId).length, 2, 'row replacement must not duplicate the assistant turn');
+assert.equal(adapter.getTranscriptRows(sessionId)[1].msg.body.text, 'streamed through runtime');
+
 const extra = adapter.appendTranscriptRow(sessionId, {
   role: 'assistant',
   messageId: 'assistant-extra',
