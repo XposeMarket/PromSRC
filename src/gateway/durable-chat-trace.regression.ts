@@ -52,6 +52,24 @@ assert.equal(streamTrace?.[1]?.text, 'Inspecting the workspace');
 assert.equal(streamTrace?.[1]?.extra?.source, 'reasoning_summary');
 assert.equal(streamTrace?.some((entry) => String(entry.text || '').includes('private provider')), false);
 
+const structuredResultTrace = buildDurableChatTraceFromFrames([
+  {
+    seq: 7,
+    type: 'tool_result',
+    at: 7,
+    data: {
+      action: 'workspace_git',
+      toolCallId: 'call-structured',
+      result: { branch: 'main', clean: true },
+      ok: true,
+    },
+  },
+]);
+
+assert.equal(structuredResultTrace?.[0]?.text, 'workspace_git complete');
+assert.deepEqual(structuredResultTrace?.[0]?.extra?.result, { branch: 'main', clean: true });
+assert.equal(structuredResultTrace?.[0]?.text.includes('[object Object]'), false);
+
 const checkpointTrace = buildDurableChatTraceFromProcessEntries([
   {
     type: 'info',
