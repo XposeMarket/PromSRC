@@ -27,7 +27,12 @@ assert.match(read(sourcePath('mobile-shell.js')), /__PROM_PERF_MARK\?\.\('mobile
 assert.match(read(sourcePath('mobile-api.js')), /__PROM_PERF_MARK\?\.\('mobile_gateway_ready'/);
 assert.match(read(sourcePath('mobile-pages.js')), /markMobileLifecycle\('chatRuntimeHydrated'\)/);
 assert.match(read(sourcePath('mobile-pages.js')), /markMobileLifecycle\('composerInteractive'\)/);
-assert.match(read(sourcePath('mobile-chat-renderer-runtime.js')), /context\.markMobileLifecycle\?\.\('firstTranscriptPaint'\)/);
+const rendererTelemetry = read(sourcePath('mobile-chat-renderer-runtime.js'));
+assert.match(rendererTelemetry, /const hasTranscriptTurn = runtimeRows\.some\(/,
+  'first transcript paint must be tied to an actual runtime transcript turn');
+assert.match(rendererTelemetry, /if \(hasTranscriptTurn && !mobileFirstTranscriptPaintMarked\)/,
+  'first transcript paint must not be emitted for an empty transcript container');
+assert.match(rendererTelemetry, /context\.markMobileLifecycle\?\.\('firstTranscriptPaint'\)/);
 assert.match(read(sourcePath('mobile-pages.js')), /"markMobileLifecycle": \{ enumerable: true/);
 
 for (const name of [
