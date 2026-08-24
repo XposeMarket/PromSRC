@@ -1,4 +1,4 @@
-const PM_PWA_VERSION = 'pm-v304-2026-08-22-mobile-entry-routes';
+const PM_PWA_VERSION = 'pm-v307-2026-08-24-chat-row-key';
 const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
 window.addEventListener('beforeinstallprompt', (event) => {

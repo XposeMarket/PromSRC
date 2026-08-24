@@ -3972,10 +3972,6 @@ html.pm-session-context-open * {
 .pm-msg.from-user {
   align-self: flex-end;
   align-items: flex-end;
-  width: fit-content;
-  inline-size: fit-content;
-  max-inline-size: min(86%, calc(100vw - 28px));
-  min-width: 0;
 }
 .pm-workflow-transition-label {
   max-width: 100%;
@@ -4006,16 +4002,15 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
-  width: 100%; inline-size: 100%;
-  max-width: 100%; max-inline-size: 100%;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal;
 }
 .pm-msg.from-user .pm-bubble :where(.markdown-body, .markdown-body *) {
-  min-width: 0; max-width: 100%; max-inline-size: 100%; overflow-wrap: anywhere; word-break: break-word;
+  min-width: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word;
 }
 .pm-msg.from-user .pm-bubble .markdown-body {
-  width: 100%;
-  inline-size: 100%;
+  width: auto;
   white-space: normal;
 }
 .pm-msg.from-user .pm-bubble :where(pre, code) {

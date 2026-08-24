@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import { createMobileChatRuntimeAdapter } from '../web-ui/src/features/chat/runtime/mobile-chat-adapter.js';
 import { resetChatRuntimeRegistryForTests } from '../web-ui/src/features/chat/runtime/chat-runtime.js';
+import { createTimelineEntries } from '../web-ui/src/features/chat/timeline/weighted-timeline.js';
 
 resetChatRuntimeRegistryForTests();
 
@@ -25,6 +26,13 @@ const assistantTurn = {
   _clientRequestId: clientRequestId,
   _pmAdmissionPending: true,
 };
+
+const fallbackEntries = createTimelineEntries([userTurn, assistantTurn]);
+assert.deepEqual(
+  fallbackEntries.map((entry) => entry.key),
+  [`request:user:${clientRequestId}`, `request:assistant:${clientRequestId}`],
+  'the compatibility timeline must not collapse the user/assistant pair while runtime keys are briefly stale',
+);
 const state = {
   activeSessionId: sessionId,
   threads: { [sessionId]: [userTurn, assistantTurn] },
