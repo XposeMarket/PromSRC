@@ -6,7 +6,7 @@
 // from this module so source and generated public-web-ui trees use the correct
 // sibling styles directory automatically.
 const PM_COMPOSER_STACK_STYLE_ID = 'pm-mobile-composer-stack-style';
-const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v296-2026-08-21-background-dock-flow';
+const PM_COMPOSER_STACK_STYLE_VERSION = 'pm-v304-2026-08-24-background-dock-composer-anchor';
 const PM_DEMO_GLASS_STYLE_ID = 'pm-mobile-demo-glass-style';
 const PM_DEMO_GLASS_STYLE_VERSION = 'pm-v303-2026-08-23-aug12-glass-crosscheck';
 

@@ -92,18 +92,18 @@ for (const generatedRule of [
 }
 assert.match(
   css,
-  /body\.pm-mobile-active \.pm-background-spawn-dock\.is-open\s*\{[\s\S]*?position:\s*relative;[\s\S]*?margin:[\s\S]*?--pm-composer-stack-base-bottom[\s\S]*?--pm-tool-progress-live-height[\s\S]*?transform:\s*none;/,
-  'expanded background docks must participate in normal page flow above the composer stack',
+  /body\.pm-mobile-active \.pm-background-spawn-dock\.is-open\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?bottom:\s*var\(--pm-composer-stack-base-bottom\);[\s\S]*?margin:\s*0;[\s\S]*?transform:\s*none;/,
+  'expanded background docks must remain fixed to the composer anchor',
 );
 assert.match(
   pages,
-  /const backgroundDockInFlow = backgroundSpawnDock\?\.classList\?\.contains\('is-open'\) === true;[\s\S]*?const overlayDockHeight = backgroundDockInFlow \? 0 : dockHeight;/,
-  'chat geometry must avoid double-counting an in-flow expanded background dock',
+  /const overlayDockHeight = dockHeight;/,
+  'chat geometry must reserve the fixed expanded background dock height',
 );
 assert.match(
   generatedPages,
-  /const backgroundDockInFlow = backgroundSpawnDock\?\.classList\?\.contains\('is-open'\) === true;[\s\S]*?const overlayDockHeight = backgroundDockInFlow \? 0 : dockHeight;/,
-  'generated chat geometry must keep the in-flow background dock contract',
+  /const overlayDockHeight = dockHeight;/,
+  'generated chat geometry must keep the fixed background dock contract',
 );
 
 console.log('[test-mobile-composer-stack-glass] passed: modern liquid glass and composer-locked runtime stack');

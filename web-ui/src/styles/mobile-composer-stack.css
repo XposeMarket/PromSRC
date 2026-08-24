@@ -162,26 +162,21 @@ body.pm-mobile-active .pm-background-spawn-dock:not(.is-collapsed) {
   right: var(--pm-composer-stack-inset);
 }
 
-/* An expanded background dock is a real page-flow section. The collapsed
-   count pill remains a floating control, but opening it reserves its own
-   vertical space so the chat history and fixed composer never sit beneath a
-   glass card. Keep the optional queue/goal/tool layers in the same stack gap. */
+/* The expanded background dock is still a viewport-anchored surface. The
+   collapsed count pill and the expanded agent cards must share one fixed
+   composer anchor; switching the open state to normal flow lets the card
+   drift under the composer as the chat document scrolls. */
 body.pm-mobile-active .pm-background-spawn-dock.is-open {
-  position: relative;
+  position: fixed;
   inset: auto;
-  left: auto;
-  right: auto;
-  bottom: auto;
-  align-self: stretch;
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  bottom: var(--pm-composer-stack-base-bottom);
+  align-self: auto;
   width: auto;
   max-width: none;
   min-width: 0;
-  margin: 0 var(--pm-composer-stack-inset) calc(
-    var(--pm-composer-stack-base-bottom)
-    + var(--pm-goal-live-height, 0px)
-    + var(--pm-queued-live-height, 0px)
-    + var(--pm-tool-progress-live-height, 0px)
-  );
+  margin: 0;
   overflow-x: hidden;
   overflow-y: auto;
   transform: none;
