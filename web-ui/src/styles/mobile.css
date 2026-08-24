@@ -7681,7 +7681,7 @@ html.pm-session-context-open * {
   .pm-tool-progress-spinner { animation-duration: 1.5s; }
 }
 .pm-background-spawn-dock {
-  position: absolute;
+  position: fixed;
   left: 10px;
   right: 10px;
   bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-composer-live-height, 72px) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + var(--pm-tool-progress-live-height, 0px) + 30px);
@@ -10670,6 +10670,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   gap: 18px;
   scrollbar-width: thin;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
 }
 .pm-mobile-side-thread .pm-msg {
   flex: 0 0 auto;

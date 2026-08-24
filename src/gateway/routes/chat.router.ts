@@ -1207,9 +1207,29 @@ function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
 
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
-  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
+  const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
+  const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
+  const isUserVisibleReasoning = eventType === 'reasoning_summary_delta'
+    || eventType === 'reasoning_summary'
+    || source === 'reasoning_summary'
+    || visibility === 'user';
+  if (!eventType
+    || eventType === 'heartbeat'
+    || eventType === 'token'
+    || (eventType === 'thinking_delta' && !isUserVisibleReasoning)) return null;
   const ts = new Date().toLocaleTimeString();
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  if (isUserVisibleReasoning && (eventType === 'thinking_delta' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary')) {
+    const content = truncateRuntimeProcessText(data?.text || data?.thinking || data?.summary || data?.message);
+    if (!content) return null;
+    return {
+      ts,
+      type: 'think',
+      actor: 'Prom',
+      content,
+      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user' },
+    };
+  }
   if (eventType === 'progress_state') {
     const items = Array.isArray(data?.items)
       ? data.items
@@ -1263,6 +1283,19 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         stepNum: data?.stepNum,
         ...compactRuntimeWorkspaceChangeMetadata(data),
       },
+    };
+  }
+  if (eventType === 'model_stream_event') {
+    const modelEvent = data?.event && typeof data.event === 'object' ? data.event : {};
+    const modelType = String(modelEvent.type || '').trim();
+    if (!modelType || !/^tool_call_(?:start|done)$/i.test(modelType)) return null;
+    const modelAction = String(modelEvent.name || modelEvent.toolName || action || 'tool').trim();
+    return {
+      ts,
+      type: 'info',
+      actor: 'Prom',
+      content: `${modelType.toLowerCase().endsWith('start') ? 'Preparing' : 'Prepared'} ${modelAction}`,
+      extra: { source: 'model_stream_event', event: eventType, modelType, toolName: modelAction, modelEvent },
     };
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {

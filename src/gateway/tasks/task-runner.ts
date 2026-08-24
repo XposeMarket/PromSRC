@@ -17,7 +17,7 @@ import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
-import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
+import { getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -30,6 +30,7 @@ import {
   type BackgroundAgentStreamFrame,
   type BackgroundAgentStreamState,
 } from './background-agent-stream';
+import { appendBackgroundSseTrace } from './background-agent-trace';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -731,6 +732,55 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.modelSource = modelRouting.source;
       record.reasoningEffort = modelRouting.reasoningEffort;
       const toolCallLog: string[] = [];
+      const backgroundProcessEntries: Record<string, any>[] = [];
+      const backgroundLiveTraceEntries: Record<string, any>[] = [];
+      let lastSessionCheckpointAt = 0;
+      const persistBackgroundSessionCheckpoint = (terminal = false, finalText = '', reasoningSummary = '') => {
+        const now = Date.now();
+        if (!terminal && now - lastSessionCheckpointAt < 1200) return;
+        try {
+          const session = getSession(sessionId);
+          const history = Array.isArray(session.history) ? session.history.slice() : [];
+          const promptKey = String(prompt || '').replace(/\s+/g, ' ').trim();
+          const hasUserPrompt = history.some((entry: any) => entry?.role === 'user'
+            && String(entry.content || '').replace(/\s+/g, ' ').trim() === promptKey);
+          if (!hasUserPrompt) {
+            history.push({
+              role: 'user',
+              content: prompt,
+              timestamp: Number(record.startedAt || now) || now,
+              channel: 'background_agent',
+              channelLabel: 'Background agent',
+            } as any);
+          }
+          const assistantIndex = history.findIndex((entry: any) => entry?.role === 'assistant'
+            && String(entry.backgroundAgentId || '') === String(record.id));
+          const content = terminal
+            ? String(finalText || record.error || 'Background task completed with no textual output.').trim()
+            : 'Background agent is working...';
+          const assistant = {
+            role: 'assistant',
+            content,
+            timestamp: now,
+            backgroundAgentId: record.id,
+            messageKind: 'background_agent_run',
+            channel: 'background_agent',
+            channelLabel: 'Background agent',
+            streaming: !terminal,
+            workStartedAt: Number(record.startedAt || now) || now,
+            ...(terminal ? { workEndedAt: now, workDurationMs: Math.max(0, now - Number(record.startedAt || now)) } : {}),
+            processEntries: backgroundProcessEntries.slice(-500),
+            liveTraceEntries: backgroundLiveTraceEntries.slice(-500),
+            reasoningSummary: String(reasoningSummary || '').trim() || undefined,
+          };
+          if (assistantIndex >= 0) history[assistantIndex] = assistant as any;
+          else history.push(assistant as any);
+          replaceHistory(sessionId, history as any, { historyChangeSource: 'replace_history' });
+          lastSessionCheckpointAt = now;
+        } catch (error: any) {
+          console.warn(`[Background Agent] ${record.id} session trace checkpoint failed: ${error?.message || error}`);
+        }
+      };
 
       if (spawnerSessionId) {
         broadcastWS({
@@ -749,6 +799,8 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       // Forward every SSE event to the spawner's UI session so the user sees activity in real time
       const sendSSE = (event: string, data: any) => {
         const frame = appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
+        appendBackgroundSseTrace(backgroundProcessEntries, backgroundLiveTraceEntries, event, data, frame);
+        persistBackgroundSessionCheckpoint();
         if (spawnerSessionId) {
           const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
           broadcastWS({
@@ -807,6 +859,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.error = 'Aborted by operator.';
           record.state = 'failed';
           record.completedAt = Date.now();
+          persistBackgroundSessionCheckpoint(true, '', String((chatResult as any)?.reasoningSummary || ''));
           finishBackgroundAgentStream(record.backgroundStream);
           persistBackgroundVoiceWorker(record);
           if (spawnerSessionId) {
@@ -822,6 +875,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.result = (finalText || 'Background task completed with no textual output.') + toolSummary;
         record.state = 'completed';
         record.completedAt = Date.now();
+        persistBackgroundSessionCheckpoint(true, finalText, String((chatResult as any)?.reasoningSummary || ''));
         finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);
@@ -834,6 +888,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
         record.completedAt = Date.now();
+        persistBackgroundSessionCheckpoint(true, '', '');
         finishBackgroundAgentStream(record.backgroundStream);
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);

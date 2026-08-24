@@ -6,8 +6,12 @@ const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const work = read('web-ui/src/features/chat/core/background-agent-work.js');
 const api = read('web-ui/src/mobile/mobile-api.js');
+const mobileStyles = read('web-ui/src/styles/mobile.css');
+const router = read('src/gateway/routes/chat.router.ts');
+const taskRunner = read('src/gateway/tasks/task-runner.ts');
 
 assert.match(work, /mergeBackgroundAgentEvents\(records\[index\]\.events, normalized\.events\)/);
+assert.match(work, /mergeBackgroundAgentTraceEntries\(records\[index\]\.liveTraceEntries, normalized\.liveTraceEntries\)/);
 assert.match(work, /streamId/);
 assert.match(work, /seq/);
 assert.match(desktop, /\/api\/background-agents\/steer/);
@@ -15,8 +19,15 @@ assert.match(desktop, /data-main-composer-parity="\$\{mainComposerParity \? '1' 
 assert.match(desktop, /refreshBackgroundAgentStream/);
 assert.match(mobile, /sendMobileBackgroundSteer\(backgroundId, msg\)/);
 assert.match(mobile, /loadMobileBackgroundStreamReplay\(cleanId, currentLane\?\.lastSeq \|\| 0\)/);
+assert.match(mobile, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
+assert.match(mobile, /sideThreadRendered/);
+assert.match(mobile, /scheduleSideRenderSoon\(\)/);
 assert.doesNotMatch(mobile, /openMobileSideChat\(msg\)/);
 assert.match(api, /\/api\/background\/\$\{encodeURIComponent\(id\)\}\/stream/);
 assert.match(api, /\/api\/background-agents\/steer/);
+assert.match(mobileStyles, /\.pm-background-spawn-dock\s*\{[\s\S]*?position: fixed;/);
+assert.match(router, /reasoning_summary_delta/);
+assert.match(taskRunner, /appendBackgroundSseTrace/);
+assert.match(taskRunner, /persistBackgroundSessionCheckpoint/);
 
 console.log('background-agent side-chat contract: ok');

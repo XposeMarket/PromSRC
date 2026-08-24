@@ -78,8 +78,28 @@ export function normalizeBackgroundAgentEvent(event = {}) {
     ts: String(source.ts || source.time || '').trim(),
     type: String(source.type || source.eventType || 'info').trim(),
     actor: String(source.actor || '').trim(),
+    text: content,
     content,
     ...(extra && Object.keys(extra).length ? { extra } : {}),
+  };
+}
+
+function normalizeBackgroundAgentTrace(entry = {}) {
+  if (!entry || typeof entry !== 'object') return null;
+  const text = String(entry.text || entry.content || entry.message || '').trim();
+  if (!text && !entry.activity && !entry.preview) return null;
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
+  const streamId = String(entry.streamId || extra?.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(entry.seq || extra?.seq || 0)) || 0);
+  const id = String(entry.id || (streamId && seq ? `background_trace_${streamId}_${seq}` : '')).trim();
+  return {
+    ...entry,
+    ...(id ? { id } : {}),
+    type: String(entry.type || entry.kind || 'info').trim().toLowerCase(),
+    ...(text ? { text } : {}),
+    ...(streamId ? { streamId } : {}),
+    ...(seq ? { seq } : {}),
+    time: String(entry.time || entry.ts || '').trim(),
   };
 }
 
@@ -111,9 +131,14 @@ export function normalizeBackgroundAgentWork(record = {}) {
   const events = (Array.isArray(record.events) ? record.events : Array.isArray(record.processEntries) ? record.processEntries : [])
     .map(normalizeBackgroundAgentEvent)
     .filter(Boolean);
+  const liveTraceEntries = mergeBackgroundAgentTraceEntries(
+    [],
+    Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : [],
+  );
   return {
     id,
     sessionId,
+    backgroundSessionId: String(record.backgroundSessionId || record.bgSessionId || '').trim(),
     agentName: String(record.agentName || record.name || '').trim(),
     agentColor: String(record.agentColor || record.color || '').trim(),
     task: String(record.task || record.prompt || '').trim(),
@@ -127,11 +152,52 @@ export function normalizeBackgroundAgentWork(record = {}) {
     streamId: String(record.streamId || stream.streamId || '').trim(),
     lastSeq: Math.max(0, Math.floor(Number(record.lastSeq || stream.lastSeq || 0)) || 0),
     events: mergeBackgroundAgentEvents([], events),
+    liveTraceEntries,
     steerMessages: (Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : [])
       .map(normalizeBackgroundAgentSteer)
       .filter(Boolean)
       .slice(-80),
   };
+}
+
+function backgroundAgentTraceKey(entry = {}) {
+  const streamId = String(entry.streamId || '').trim();
+  const seq = Math.max(0, Math.floor(Number(entry.seq || 0)) || 0);
+  if (streamId && seq) return `stream:${streamId}:${seq}`;
+  const id = String(entry.id || '').trim();
+  if (id) return `id:${id}`;
+  return [
+    String(entry.type || ''),
+    String(entry.extra?.source || ''),
+    String(entry.text || entry.content || '').replace(/\s+/g, ' ').trim(),
+    String(entry.time || entry.ts || ''),
+  ].join('|');
+}
+
+export function mergeBackgroundAgentTraceEntries(existing = [], incoming = []) {
+  const byKey = new Map();
+  const add = (entry) => {
+    const normalized = normalizeBackgroundAgentTrace(entry);
+    if (!normalized) return;
+    const key = backgroundAgentTraceKey(normalized);
+    const previous = byKey.get(key);
+    byKey.set(key, previous
+      ? { ...previous, ...normalized, extra: { ...(previous.extra || {}), ...(normalized.extra || {}) } }
+      : normalized);
+  };
+  (Array.isArray(existing) ? existing : []).forEach(add);
+  (Array.isArray(incoming) ? incoming : []).forEach(add);
+  return Array.from(byKey.values())
+    .sort((a, b) => {
+      const aStream = String(a.streamId || '');
+      const bStream = String(b.streamId || '');
+      if (aStream && aStream === bStream && Number(a.seq || 0) !== Number(b.seq || 0)) return Number(a.seq || 0) - Number(b.seq || 0);
+      if (aStream && !bStream) return -1;
+      if (!aStream && bStream) return 1;
+      return (Number(a.at || 0) || Date.parse(a.ts || '') || 0)
+        - (Number(b.at || 0) || Date.parse(b.ts || '') || 0);
+    })
+    .slice(-500);
 }
 
 function backgroundAgentEventKey(event = {}) {
@@ -218,7 +284,9 @@ export function persistBackgroundAgentWork(record = {}) {
       ...records[index],
       ...normalized,
       events: mergeBackgroundAgentEvents(records[index].events, normalized.events),
+      liveTraceEntries: mergeBackgroundAgentTraceEntries(records[index].liveTraceEntries, normalized.liveTraceEntries),
       steerMessages: normalized.steerMessages.length ? normalized.steerMessages : records[index].steerMessages,
+      backgroundSessionId: normalized.backgroundSessionId || records[index].backgroundSessionId,
       streamId: normalized.streamId || records[index].streamId,
       lastSeq: Math.max(Number(records[index].lastSeq || 0), Number(normalized.lastSeq || 0)),
     };
@@ -264,6 +332,7 @@ export function backgroundAgentRecordToMessage(record = {}) {
     content: result,
     body: { sender: String(record.agentName || 'Background agent'), text: result },
     processEntries: Array.isArray(record.events) ? record.events.slice() : [],
+    liveTraceEntries: Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.slice() : [],
     streaming: ['running', 'queued', 'in_progress'].includes(String(record.status || '').toLowerCase()),
     createdAt: Number(record.startedAt || Date.now()) || Date.now(),
     timestamp: Number(record.startedAt || Date.now()) || Date.now(),

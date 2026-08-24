@@ -3339,6 +3339,16 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
   };
 }
 
+function _mobileBackgroundStoredProcessEntries(record) {
+  return (Array.isArray(record?.events) ? record.events : [])
+    .map((entry) => _normalizeMobileProcessEntry({
+      ...entry,
+      text: entry?.text || entry?.content || entry?.message,
+      extra: entry?.extra || entry,
+    }))
+    .filter(Boolean);
+}
+
 function _mergeMobileProcessEntries(message, entries) {
   if (!message) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
@@ -9064,6 +9074,110 @@ function _patchMobileLiveTraceTimeline(currentTimeline, nextTimeline) {
   return true;
 }
 
+function _mobileSideThreadNearBottom(threadEl, threshold = 96) {
+  if (!threadEl) return true;
+  return threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight <= threshold;
+}
+
+function _mobileSideThreadChildKey(node, index = 0) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return `index:${index}`;
+  const backgroundId = String(node.getAttribute?.('data-pm-background-agent-message') || '').trim();
+  if (backgroundId) return `background:${backgroundId}`;
+  const rowKey = String(node.getAttribute?.('data-pm-row-key') || '').trim();
+  if (rowKey) return `row:${rowKey}`;
+  const messageIndex = String(node.getAttribute?.('data-msg-index') || '').trim();
+  if (messageIndex) return `message:${messageIndex}`;
+  return `index:${index}`;
+}
+
+function _mobileSideBubbleChildKey(node, index = 0) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) return `index:${index}`;
+  const traceKey = _mobileTraceNodeKey(node, index);
+  if (node.classList?.contains('pm-trace-timeline')) return 'trace-timeline';
+  if (node.classList?.contains('pm-work-timer')) return 'work-timer';
+  if (node.classList?.contains('pm-sender')) return 'sender';
+  if (node.classList?.contains('pm-time')) return 'time';
+  const className = String(node.className || '').trim();
+  return `child:${String(node.tagName || '').toLowerCase()}:${className}:${traceKey || index}`;
+}
+
+function _patchMobileSideElementContents(current, next) {
+  if (!current || !next) return;
+  _syncMobileTraceNodeAttributes(current, next);
+  if (current.innerHTML === next.innerHTML) return;
+  const detailsState = _captureMobileTraceDetailsState(current);
+  setInnerHTMLPreservingVisuals(current, next.innerHTML);
+  _restoreMobileTraceDetailsState(current, detailsState);
+}
+
+function _patchMobileBackgroundAgentBubble(currentBubble, nextBubble) {
+  if (!currentBubble || !nextBubble) return false;
+  _syncMobileTraceNodeAttributes(currentBubble, nextBubble);
+  const existing = new Map();
+  Array.from(currentBubble.children).forEach((node, index) => {
+    existing.set(_mobileSideBubbleChildKey(node, index), node);
+  });
+  const ordered = [];
+  Array.from(nextBubble.children).forEach((nextNode, index) => {
+    const key = _mobileSideBubbleChildKey(nextNode, index);
+    const currentNode = existing.get(key);
+    if (!currentNode || currentNode.tagName !== nextNode.tagName || currentNode.className !== nextNode.className) {
+      ordered.push(nextNode.cloneNode(true));
+      return;
+    }
+    if (nextNode.classList?.contains('pm-trace-timeline')) {
+      _patchMobileLiveTraceTimeline(currentNode, nextNode);
+      _syncMobileTraceNodeAttributes(currentNode, nextNode);
+    } else {
+      _patchMobileSideElementContents(currentNode, nextNode);
+    }
+    ordered.push(currentNode);
+  });
+  Array.from(currentBubble.children).forEach((node) => {
+    if (!ordered.includes(node)) node.remove();
+  });
+  ordered.forEach((node) => currentBubble.appendChild(node));
+  return true;
+}
+
+function _patchMobileBackgroundAgentMessage(currentMessage, nextMessage) {
+  if (!currentMessage || !nextMessage) return false;
+  _syncMobileTraceNodeAttributes(currentMessage, nextMessage);
+  const currentBubble = currentMessage.querySelector?.('.pm-bubble');
+  const nextBubble = nextMessage.querySelector?.('.pm-bubble');
+  if (!currentBubble || !nextBubble) return false;
+  return _patchMobileBackgroundAgentBubble(currentBubble, nextBubble);
+}
+
+function _reconcileMobileBackgroundAgentSideThread(threadEl, markup) {
+  if (!threadEl) return;
+  const nextWrap = document.createElement('div');
+  nextWrap.innerHTML = String(markup || '');
+  const existing = new Map();
+  Array.from(threadEl.children).forEach((node, index) => {
+    existing.set(_mobileSideThreadChildKey(node, index), node);
+  });
+  const ordered = [];
+  Array.from(nextWrap.children).forEach((nextNode, index) => {
+    const key = _mobileSideThreadChildKey(nextNode, index);
+    const currentNode = existing.get(key);
+    if (!currentNode || currentNode.tagName !== nextNode.tagName || currentNode.className !== nextNode.className) {
+      ordered.push(nextNode.cloneNode(true));
+      return;
+    }
+    if (nextNode.hasAttribute('data-pm-background-agent-message')) {
+      _patchMobileBackgroundAgentMessage(currentNode, nextNode);
+    } else {
+      _patchMobileSideElementContents(currentNode, nextNode);
+    }
+    ordered.push(currentNode);
+  });
+  Array.from(threadEl.children).forEach((node) => {
+    if (!ordered.includes(node)) node.remove();
+  });
+  ordered.forEach((node) => threadEl.appendChild(node));
+}
+
 function _patchMobileThreadMessage(threadEl, message, index) {
   if (!threadEl || !message) return false;
   _captureMobileWorkerDeckViewState(threadEl);
@@ -11338,6 +11452,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     backgroundAgentId: '',
     busy: false,
     abort: null,
+    sideThreadRendered: false,
   };
   // Composer sizing is invoked by startup bridges below. Keep its mutable
   // animation state initialized before any of those callbacks can run.
@@ -14027,12 +14142,10 @@ void main() {
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
-      // Open background docks are normal-flow sections on mobile. Their box
-      // already reduces the chat viewport, so do not add the same height to
-      // the chat's bottom padding a second time. Keep the measured height in
-      // the stack variables so fixed controls can still clear the glass.
-      const backgroundDockInFlow = backgroundSpawnDock?.classList?.contains('is-open') === true;
-      const overlayDockHeight = backgroundDockInFlow ? 0 : dockHeight;
+      // The background-agent dock is a viewport-anchored chrome surface in
+      // both nested and document-scroll modes. Reserve its measured height so
+      // the composer and the latest-message affordance stay above the glass.
+      const overlayDockHeight = dockHeight;
       const planDockHeight = mainPlanDock && !mainPlanDock.hidden
         ? Math.ceil(mainPlanDock.getBoundingClientRect?.().height || 0)
         : 0;
@@ -14212,26 +14325,35 @@ void main() {
       existingName: lane.agentName,
       existingColor: lane.agentColor,
     });
-    const processEntries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
+    const processEntries = Array.isArray(lane.message?.processEntries) && lane.message.processEntries.length
+      ? lane.message.processEntries
+      : _mobileBackgroundStoredProcessEntries(stored);
+    const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
+      ? lane.message.liveTraceEntries
+      : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
     return {
       id: lane.id,
       sessionId: lane.sessionId || requestedSession,
+      backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
       agentName: identity.name,
       agentColor: identity.color,
-      task: lane.task || lane.prompt || '',
-      status: lane.status || 'running',
-      startedAt: Number(lane.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
-      completedAt: Number(lane.completedAt || lane.message?.workEndedAt || 0) || 0,
-      updatedAt: Number(lane.updatedAt || Date.now()) || Date.now(),
+      task: lane.task || lane.prompt || stored?.task || '',
+      status: lane.status || stored?.status || 'running',
+      startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
+      completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
+      updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
       // `result` belongs solely to the completed background run. Live token
       // text remains on `message`, and tool results stay in processEntries.
-      result: String(lane.result || '').trim(),
-      error: String(lane.error || '').trim(),
+      result: String(lane.result || stored?.result || '').trim(),
+      error: String(lane.error || stored?.error || '').trim(),
       fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
       events: processEntries,
-      steerMessages: Array.isArray(lane.steerMessages) ? lane.steerMessages : [],
-      streamId: lane.streamId || '',
-      lastSeq: Number(lane.lastSeq || 0) || 0,
+      liveTraceEntries,
+      steerMessages: Array.isArray(lane.steerMessages) && lane.steerMessages.length
+        ? lane.steerMessages
+        : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
+      streamId: lane.streamId || stored?.streamId || '',
+      lastSeq: Number(lane.lastSeq || stored?.lastSeq || 0) || 0,
       message: lane.message || null,
     };
   }
@@ -14256,27 +14378,32 @@ void main() {
     const processEntries = Array.isArray(source.processEntries) && source.processEntries.length
       ? source.processEntries
       : _mobileBackgroundAgentDetailEvents(record);
+    const liveTraceEntries = Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
+      ? source.liveTraceEntries.slice()
+      : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.slice() : []);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
     const finalText = String(record?.error || record?.result || '').trim();
     const displayText = running ? sourceText : (finalText || sourceText);
-    const derivedTrace = _mobileWorkflowTraceEntriesForMessage({
+    const traceMessage = {
       ...source,
       content: displayText,
       body: { ...(source?.body || {}), text: displayText },
       processEntries,
-      liveTraceEntries: [],
-    });
+      liveTraceEntries,
+    };
+    // Keep the persisted live trace as the primary source, then add any
+    // process-log entries recovered after a gateway restart (tool calls,
+    // results, and explicit user-visible reasoning summaries).
+    _mergeMobileWorkflowTraceFromProcessEntries(traceMessage);
     return {
-      ...source,
+      ...traceMessage,
       role: 'ai',
       from: agentName,
       fromLabel: agentName,
       content: displayText,
       body: { ...(source?.body || {}), sender: agentName, text: displayText },
       processEntries,
-      liveTraceEntries: Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
-        ? source.liveTraceEntries
-        : derivedTrace,
+      liveTraceEntries: traceMessage.liveTraceEntries,
       streaming: running,
       _done: !running,
       _backgroundAgentLive: running,
@@ -14337,7 +14464,15 @@ void main() {
       const text = String(entry?.text || entry?.content || entry?.message || '').trim();
       if (!text) continue;
       const before = Array.isArray(lane.message.processEntries) ? lane.message.processEntries.length : 0;
-      _pushMobileStreamProcessEntry(lane.message, type, text, entry.extra || entry);
+      const extra = entry.extra || entry;
+      const isReasoningSummary = type === 'think'
+        && String(extra?.source || '').toLowerCase() === 'reasoning_summary';
+      _pushMobileStreamProcessEntry(lane.message, type, text, extra, !isReasoningSummary);
+      if (isReasoningSummary) {
+        const beforeTrace = Array.isArray(lane.message.liveTraceEntries) ? lane.message.liveTraceEntries.length : 0;
+        const traceChanged = _appendMobileReasoningSummary(lane.message, text);
+        changed = changed || traceChanged || (Array.isArray(lane.message.liveTraceEntries) && lane.message.liveTraceEntries.length > beforeTrace);
+      }
       changed = changed || (Array.isArray(lane.message.processEntries) && lane.message.processEntries.length > before);
     }
     const history = _mapServerHistoryToMobile(session.history || []);
@@ -14369,7 +14504,7 @@ void main() {
         loadMobileBackgroundStatus(cleanId).catch(() => null),
         loadMobileBackgroundStreamReplay(cleanId, currentLane?.lastSeq || 0).catch(() => null),
         currentLane?.bgSessionId
-          ? loadMobileChatSession(currentLane.bgSessionId, { force: true, historyLimit: 24, processLimit: 160, fullProcess: false }).catch(() => null)
+          ? loadMobileChatSession(currentLane.bgSessionId, { force: true, historyLimit: 24, processLimit: 500, fullProcess: true }).catch(() => null)
           : Promise.resolve(null),
       ]);
       const status = statusResponse?.status || statusResponse;
@@ -14380,8 +14515,13 @@ void main() {
       const refreshedRecord = _mobileBackgroundAgentDetailRecord(cleanId);
       if (refreshedRecord) {
         _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
-        if (sideState.backgroundAgentId === cleanId) renderMobileSideSheet();
-        if (!['queued', 'running', 'in_progress'].includes(String(refreshedRecord.status || '').toLowerCase())) {
+        const detailOpen = sideState.backgroundAgentId === cleanId;
+        const terminal = !['queued', 'running', 'in_progress'].includes(String(refreshedRecord.status || '').toLowerCase());
+        if (detailOpen) {
+          if (terminal) flushSideRender();
+          else scheduleSideRenderSoon();
+        }
+        if (terminal) {
           stopMobileBackgroundAgentDetailRefresh();
         }
       }
@@ -14406,6 +14546,7 @@ void main() {
     sideState.backgroundAgentId = cleanId;
     sideState.link = null;
     sideState.thread = [];
+    sideState.sideThreadRendered = false;
     setMobileSideBusy(false);
     if (sideTitleEl) sideTitleEl.textContent = record.agentName || 'Background work';
     if (sideSubtitleEl) {
@@ -14424,6 +14565,7 @@ void main() {
 
   function renderMobileSideSheet() {
     if (!sideThreadEl) return;
+    const shouldFollowTail = !sideState.sideThreadRendered || _mobileSideThreadNearBottom(sideThreadEl);
     const backgroundRecord = sideState.backgroundAgentId
       ? _mobileBackgroundAgentDetailRecord(sideState.backgroundAgentId)
       : null;
@@ -14442,10 +14584,11 @@ void main() {
         }))
         .filter((steer) => steer.content);
       const historyHtml = steerHistory.map((steer, index) => _renderChatMessageHtml(steer, index)).join('');
-      setInnerHTMLPreservingVisuals(sideThreadEl, `${historyHtml}${_renderMobileAgentChatBubble(message, {
+      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${historyHtml}${_renderMobileAgentChatBubble(message, {
         sender: agentName,
         live: running,
         keepLiveTraceVisible: true,
+        backgroundAgentId: backgroundRecord.id,
       })}`);
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
@@ -14454,9 +14597,10 @@ void main() {
         ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
         : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>');
     }
+    sideState.sideThreadRendered = true;
     _wireMobileProcessRunActions(sideThreadEl);
     _wireMobileChatEnhancements(sideThreadEl);
-    requestAnimationFrame(() => {
+    if (shouldFollowTail) requestAnimationFrame(() => {
       if (sideThreadEl) sideThreadEl.scrollTop = sideThreadEl.scrollHeight;
     });
   }
@@ -14562,6 +14706,7 @@ void main() {
     sideState.backgroundAgentId = '';
     sideState.link = result.link;
     sideState.thread = Array.isArray(result.thread) ? result.thread : [];
+    sideState.sideThreadRendered = false;
     setMobileSideBusy(false);
     sideInput?.setAttribute('placeholder', 'Follow up');
     if (sideTitleEl) sideTitleEl.textContent = result.link?.title || 'Side Chat';
@@ -14582,6 +14727,7 @@ void main() {
   function closeMobileSideChatSheet() {
     stopMobileBackgroundAgentDetailRefresh();
     sideState.backgroundAgentId = '';
+    sideState.sideThreadRendered = false;
     sideSheet?.classList.remove('background-agent-detail-mode');
     sideSheet?.classList.remove('open');
     sideSheet?.setAttribute('aria-hidden', 'true');
@@ -17317,7 +17463,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (__pmChat.activeSessionId !== requestedSession) return;
     if (!_pushMobileBackgroundSpawnEvent(msg, requestedSession)) return;
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
-    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) renderMobileSideSheet();
+    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) scheduleSideRenderSoon();
     updateChatComposerSpace();
   };
   const onBackgroundSpawnDone = (msg = {}) => {
@@ -17326,7 +17472,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const mergedLateFileChanges = _mergeMobileLatestAssistantBackgroundFileChanges(requestedSession);
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
     if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) {
-      renderMobileSideSheet();
+      flushSideRender();
       stopMobileBackgroundAgentDetailRefresh();
     }
     updateChatComposerSpace();
@@ -29886,8 +30032,11 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       inner += _renderMobileGeneratedImageLoadingCard();
     }
   }
+  const backgroundDetailAttr = options.backgroundAgentId
+    ? ` data-pm-background-agent-message="${escapeHtml(String(options.backgroundAgentId))}"`
+    : '';
   return `
-    <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg"${streaming && !fromUser ? ' data-streaming="1"' : ''}>
+    <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg"${streaming && !fromUser ? ' data-streaming="1"' : ''}${backgroundDetailAttr}>
       <div class="pm-bubble">
         ${inner}
         ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
@@ -30041,8 +30190,27 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const info = String(evt.message || evt.current_step || evt.state || '').trim();
       if (!info || /^processing$/i.test(info)) return false;
       message._progress = info.slice(0, 140);
-      _pushMobileStreamProcessEntry(message, 'info', info, evt.actor ? { actor: evt.actor } : null);
+      _pushMobileStreamProcessEntry(message, 'info', info, evt);
       return true;
+    }
+    case 'model_stream_event': {
+      const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
+      const modelType = String(modelEvent.type || '').trim();
+      if (!modelType) return false;
+      if (modelType === 'tool_call_start' || modelType === 'tool_call_done') {
+        _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
+        message.toolActivityStarted = true;
+        _applyMobileToolActivity(message, modelType === 'tool_call_start' ? 'prepare' : 'prepared', {
+          ...modelEvent,
+          action: modelEvent.name,
+          streamId: evt.streamId || modelEvent.streamId,
+          seq: evt.seq || modelEvent.seq,
+        });
+        return true;
+      }
+      // Argument deltas are intentionally not rendered as individual rows;
+      // the normalized tool_call frame carries the complete call.
+      return modelType === 'tool_call_delta';
     }
     case 'progress_state': {
       const items = Array.isArray(evt.items) ? evt.items : [];
@@ -30182,7 +30350,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       message._progress = '';
       message.streaming = false;
       message.workEndedAt = Number(message.workEndedAt || Date.now()) || Date.now();
-      _pushMobileStreamProcessEntry(message, 'error', err);
+      _pushMobileStreamProcessEntry(message, 'error', err, evt);
       return true;
     }
     default:
@@ -30595,6 +30763,14 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
       || sessionId
       || ''
   ).trim();
+  const stored = findBackgroundAgentWork(id, parentSessionId)
+    || findBackgroundAgentWork(id, rawSessionId)
+    || findBackgroundAgentWork(id);
+  const storedProcessEntries = _mobileBackgroundStoredProcessEntries(stored);
+  const storedLiveTraceEntries = Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries.slice() : [];
+  const storedStatus = String(stored?.status || '').toLowerCase();
+  const storedTerminal = ['completed', 'failed', 'timed_out'].includes(storedStatus);
+  const resolvedBgSessionId = bgSessionId || String(stored?.backgroundSessionId || '').trim();
   const eventType = String(msg.eventType || msg.type || '').trim().toLowerCase();
   // A background tool result is still only a timeline event. Treating it as
   // lane.result made mobile render the tool output as the agent's final answer
@@ -30606,44 +30782,53 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const lane = {
     id,
     sessionId: parentSessionId,
-    bgSessionId,
+    bgSessionId: resolvedBgSessionId,
     label: identity.name,
     agentName: identity.name,
     agentColor: identity.color,
-    task: prompt,
-    prompt,
-    status: String(msg.state || existing.status || 'running').trim(),
+    task: prompt || stored?.task || '',
+    prompt: prompt || stored?.task || '',
+    status: String(msg.state || existing.status || stored?.status || 'running').trim(),
     expanded: existing.expanded === true,
-    startedAt: Number(existing.startedAt || msg.startedAt || Date.now()),
-    completedAt: Number(msg.completedAt || existing.completedAt || 0) || null,
+    startedAt: Number(existing.startedAt || stored?.startedAt || msg.startedAt || Date.now()),
+    completedAt: Number(msg.completedAt || existing.completedAt || stored?.completedAt || 0) || null,
     updatedAt: Date.now(),
     message: existing.message || {
       role: 'ai',
       from: identity.name,
-      content: '',
-      body: { sender: identity.name, text: '' },
-      processEntries: [],
-      streaming: true,
-      createdAt: Date.now(),
-      workStartedAt: Date.now(),
+      content: storedTerminal ? String(stored?.result || stored?.error || '') : '',
+      body: { sender: identity.name, text: storedTerminal ? String(stored?.result || stored?.error || '') : '' },
+      processEntries: storedProcessEntries,
+      liveTraceEntries: storedLiveTraceEntries,
+      streaming: !storedTerminal,
+      createdAt: Number(stored?.startedAt || Date.now()) || Date.now(),
+      workStartedAt: Number(stored?.startedAt || Date.now()) || Date.now(),
     },
-    fileChanges: msg.fileChanges || existing.fileChanges || null,
+    fileChanges: msg.fileChanges || existing.fileChanges || stored?.fileChanges || null,
     plan: existing.plan || null,
-    result: streamedFinalResult || existing.result || '',
+    result: streamedFinalResult || existing.result || stored?.result || '',
     // Like result, a streamed error may describe one failed tool call rather
     // than the background run itself. The terminal bg_agent_done payload owns
     // the durable lane error.
-    error: existing.error || '',
+    error: existing.error || stored?.error || '',
     approvalRequest: existing.approvalRequest || null,
-    steerMessages: Array.isArray(existing.steerMessages) ? existing.steerMessages : [],
-    streamId: String(msg.streamId || msg.stream?.streamId || existing.streamId || '').trim(),
-    lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || 0)) || 0),
+    steerMessages: Array.isArray(existing.steerMessages) && existing.steerMessages.length
+      ? existing.steerMessages
+      : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
+    streamId: String(msg.streamId || msg.stream?.streamId || existing.streamId || stored?.streamId || '').trim(),
+    lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || stored?.lastSeq || 0)) || 0),
   };
   lanes[id] = lane;
   if (lane.message) {
     lane.message.from = lane.agentName;
     if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
     lane.message.body.sender = lane.agentName;
+    if (!Array.isArray(lane.message.processEntries) || !lane.message.processEntries.length) {
+      lane.message.processEntries = storedProcessEntries;
+    }
+    if (!Array.isArray(lane.message.liveTraceEntries) || !lane.message.liveTraceEntries.length) {
+      lane.message.liveTraceEntries = storedLiveTraceEntries;
+    }
   }
   return lane;
 }
@@ -30657,6 +30842,7 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
   return {
     id: lane.id,
     sessionId: lane.sessionId || __pmChat.activeSessionId,
+    backgroundSessionId: lane.bgSessionId || '',
     agentName: identity.name,
     agentColor: identity.color,
     task: lane.task || lane.prompt,
@@ -30668,6 +30854,7 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
     events: Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [],
+    liveTraceEntries: Array.isArray(lane.message?.liveTraceEntries) ? lane.message.liveTraceEntries : [],
     steerMessages: Array.isArray(lane.steerMessages) ? lane.steerMessages : [],
     streamId: lane.streamId,
     lastSeq: lane.lastSeq,
