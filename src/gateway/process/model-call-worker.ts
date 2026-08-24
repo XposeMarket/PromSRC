@@ -11,6 +11,7 @@ import {
   type ModelCallWorkerRequest,
   type ModelCallWorkerResult,
 } from './model-call-worker-protocol.js';
+import { sampleRuntimeWorkerResources } from './runtime-worker-resources.js';
 
 const workerMaxMessageBytes = envInt(
   'PROMETHEUS_MODEL_WORKER_MAX_MESSAGE_BYTES',
@@ -279,16 +280,19 @@ async function handleRun(message: Extract<ModelCallWorkerParentMessage, { type: 
     const request = validateRequest(message.request);
     const result = await execute(request, activeController.signal, batcher);
     batcher.finish();
+    const resourceSample = sampleRuntimeWorkerResources();
     send({
       protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
       type: 'result',
       requestId: message.requestId,
       result,
-      rssBytes: process.memoryUsage().rss,
+      rssBytes: resourceSample.rssBytes,
+      resourceSample,
       completedAt: Date.now(),
     });
   } catch (error) {
     batcher.flush();
+    const resourceSample = sampleRuntimeWorkerResources();
     send({
       protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
       type: 'error',
@@ -296,6 +300,7 @@ async function handleRun(message: Extract<ModelCallWorkerParentMessage, { type: 
       code: activeController.signal.aborted ? 'MODEL_CALL_CANCELLED' : 'MODEL_CALL_FAILED',
       message: boundedModelCallError(error),
       providerStarted,
+      resourceSample,
       completedAt: Date.now(),
     });
   } finally {
@@ -326,13 +331,15 @@ process.on('message', (raw: unknown) => {
 });
 
 const heartbeat = setInterval(() => {
+  const resourceSample = sampleRuntimeWorkerResources();
   send({
     protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
     type: 'heartbeat',
     pid: process.pid,
     at: Date.now(),
     requestId: activeRequestId || undefined,
-    rssBytes: process.memoryUsage().rss,
+    rssBytes: resourceSample.rssBytes,
+    resourceSample,
   });
 }, heartbeatIntervalMs);
 heartbeat.unref?.();
@@ -341,4 +348,5 @@ send({
   protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
   type: 'ready',
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });

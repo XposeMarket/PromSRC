@@ -200,6 +200,8 @@ import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool, warmCo
 import { prepareTaskReplyLookupIndex } from './tasks/task-store';
 import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
 import { getBrainActivityWorkerStatus, shutdownBrainActivityWorker } from './brain/activity-package-worker-client';
+import { getRuntimeWorkerDiagnostics } from './process/runtime-worker-broker.js';
+import { gatewayRuntimeAdmission } from './runtime-admission';
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
@@ -801,6 +803,8 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
       sessionCache: getSessionCacheStatus(),
       chatAuditPersistence: getChatAuditPersistenceStatus(),
       runtimePersistence: getLiveRuntimePersistenceStatus(),
+      runtimeWorkers: getRuntimeWorkerDiagnostics(),
+      runtimeAdmission: gatewayRuntimeAdmission.snapshot(),
     },
   });
 });
@@ -956,6 +960,8 @@ const getGatewayQueueStatus = () => ({
   sessionCache: getSessionCacheStatus(),
   chatAuditPersistence: getChatAuditPersistenceStatus(),
   runtimePersistence: getLiveRuntimePersistenceStatus(),
+  runtimeWorkers: getRuntimeWorkerDiagnostics(),
+  runtimeAdmission: gatewayRuntimeAdmission.snapshot(),
   memory: {
     searchWorker: getMemorySearchWorkerStatus(),
     automaticSearchWorkers: getAutomaticMemorySearchWorkerStatus(),

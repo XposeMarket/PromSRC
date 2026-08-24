@@ -97,7 +97,12 @@ async function main(): Promise<void> {
       'the worker result should be read from the persisted package artifact',
     );
     assert.equal(getBrainActivityWorkerStatus().isolation, 'child_process');
-    assert(Number(getBrainActivityWorkerStatus().broker.pid || 0) > 0, 'activity assembly must run in a child process');
+    assert(Number(getBrainActivityWorkerStatus().broker.resource?.pid || 0) > 0, 'activity assembly must run in a child process');
+    const retirementDeadline = Date.now() + 3_000;
+    while (getBrainActivityWorkerStatus().broker.state !== 'stopped' && Date.now() < retirementDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(getBrainActivityWorkerStatus().broker.state, 'stopped', 'Brain activity workers should retire after a package build');
     assert(pkg.unresolvedWork.some((item) => item.id === 'id:task-1'), 'running task should be listed as unresolved');
     assert(pkg.sourceCoverage.some((source) => source.source === 'tasks' && source.status === 'partial'), 'invalid source data should be visible as partial');
     const dateInput = await buildThoughtActivityPackage({

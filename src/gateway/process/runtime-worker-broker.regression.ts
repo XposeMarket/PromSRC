@@ -1,5 +1,5 @@
 import assert from 'assert';
-import { RuntimeWorkerBroker } from './runtime-worker-broker.js';
+import { getRuntimeWorkerDiagnostics, RuntimeWorkerBroker } from './runtime-worker-broker.js';
 
 async function main(): Promise<void> {
   const broker = new RuntimeWorkerBroker({
@@ -19,6 +19,9 @@ async function main(): Promise<void> {
       /already running a job/,
     );
     const busyResult = await busyRun;
+    const diagnostics = getRuntimeWorkerDiagnostics();
+    assert.ok(diagnostics.aggregate.workers >= 1, 'active brokers should appear in aggregate diagnostics');
+    assert.ok(diagnostics.aggregate.rssBytes > 0, 'aggregate diagnostics should include child RSS');
     const elapsedMs = Date.now() - startedAt;
     clearInterval(ticker);
 
@@ -48,6 +51,44 @@ async function main(): Promise<void> {
   }
 
   assert.equal(broker.getStatus().state, 'stopped');
+
+  const disposable = new RuntimeWorkerBroker({
+    name: 'runtime-worker-disposable-regression',
+    entryBasename: 'runtime-worker-test-worker',
+    startupTimeoutMs: 15_000,
+    defaultJobTimeoutMs: 10_000,
+    oneShot: true,
+    idleTtlMs: 0,
+  });
+  try {
+    const first = await disposable.run<{ pid: number }>('echo', { disposable: 1 });
+    const resourceSample = disposable.getStatus().resource;
+    assert.ok(resourceSample && resourceSample.rssBytes > 0, 'worker status should carry a resource sample');
+    const deadline = Date.now() + 3_000;
+    while (disposable.getStatus().state !== 'stopped' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(disposable.getStatus().state, 'stopped', 'one-shot worker should retire after its job');
+    const second = await disposable.run<{ pid: number }>('echo', { disposable: 2 });
+    assert.notEqual(second.pid, first.pid, 'one-shot worker should respawn for the next job');
+  } finally {
+    await disposable.shutdown();
+  }
+
+  const idle = new RuntimeWorkerBroker({
+    name: 'runtime-worker-idle-regression',
+    entryBasename: 'runtime-worker-test-worker',
+    startupTimeoutMs: 15_000,
+    defaultJobTimeoutMs: 10_000,
+    idleTtlMs: 100,
+  });
+  try {
+    await idle.warmup();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(idle.getStatus().state, 'stopped', 'idle TTL should retire a warm worker');
+  } finally {
+    await idle.shutdown();
+  }
 }
 
 main().then(() => {

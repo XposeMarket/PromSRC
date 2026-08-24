@@ -8,6 +8,10 @@ import {
   type RuntimeWorkerParentMessage,
 } from './runtime-worker-protocol.js';
 import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from './runtime-worker-resources.js';
+import {
   searchMemoryIndexAsync,
   searchMemoryTimeline,
   searchProjectMemory,
@@ -38,6 +42,14 @@ const workerName = String(process.env.PROMETHEUS_RUNTIME_WORKER_NAME || 'memory-
 const MAX_QUERY_CHARS = 16_000;
 const MAX_SERIALIZED_RESULT_BYTES = 192 * 1024;
 let activeRequestId = '';
+
+function reportedRssBytes(): number {
+  if (process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS === '1') {
+    const override = Number(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_RSS_BYTES);
+    if (Number.isFinite(override) && override > 0) return Math.floor(override);
+  }
+  return process.memoryUsage().rss;
+}
 
 function send(message: RuntimeWorkerChildMessage): void {
   if (!process.send || !process.connected) return;
@@ -151,7 +163,7 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
       serialized: 'x'.repeat(DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES),
       backend: 'test',
       usedJsonFallback: false,
-      rssBytes: process.memoryUsage().rss,
+      rssBytes: reportedRssBytes(),
     };
   }
 
@@ -192,7 +204,7 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
   return {
     serialized: serializeBoundedMemorySearchResult(result),
     ...resultMetadata(result),
-    rssBytes: process.memoryUsage().rss,
+    rssBytes: reportedRssBytes(),
   };
 }
 
@@ -246,6 +258,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error: any) {
       send({
@@ -277,4 +290,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

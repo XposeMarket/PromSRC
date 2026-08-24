@@ -59,6 +59,13 @@ const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 8_000,
 const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 30_000, 2_000, 10 * 60_000);
 const warmupTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_WARMUP_TIMEOUT_MS', 2_000, 1_000, 10_000);
 const recycleRssBytes = envBytes('PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 4 * 1024 * 1024 * 1024);
+const automaticIdleTtlMs = envMs('PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS', 30_000, 1_000, 10 * 60_000);
+// Production automatic retrieval remains capped at 250 ms. The regression
+// suite may use a larger test-only window to observe a cold child's direct
+// request path without weakening the real prompt-retrieval SLA.
+const automaticTimeoutCeilingMs = String(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS || '').trim() === '1'
+  ? envMs('PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_TIMEOUT_CEILING_MS', 250, 250, 5_000)
+  : 250;
 const maxQueued = 2;
 const broker = new RuntimeWorkerBroker({
   name: 'memory-search-query',
@@ -66,6 +73,7 @@ const broker = new RuntimeWorkerBroker({
   maxMessageBytes: 256 * 1024,
   startupTimeoutMs: envMs('PROMETHEUS_MEMORY_SEARCH_STARTUP_TIMEOUT_MS', 30_000, 1000, 2 * 60_000),
   defaultJobTimeoutMs: deepTimeoutMs,
+  maxRssBytes: recycleRssBytes,
   env: {
     PROMETHEUS_MEMORY_SEARCH_QUERY_WORKER: '1',
   },
@@ -89,6 +97,11 @@ const automaticBrokers = Array.from({ length: automaticWorkerCount }, (_, index)
   env: {
     PROMETHEUS_MEMORY_SEARCH_QUERY_WORKER: '1',
   },
+  // Keep one worker logically warm, but still give its process the same RSS
+  // ceiling as the elastic slot. A floor process may rotate after a lookup;
+  // the client replaces it before treating the floor as healthy again.
+  maxRssBytes: recycleRssBytes,
+  idleTtlMs: index === 0 ? 0 : automaticIdleTtlMs,
 }));
 
 interface QueuedAutomaticSearch {
@@ -107,12 +120,14 @@ interface QueuedAutomaticSearch {
 interface AutomaticSearchSlot {
   broker: RuntimeWorkerBroker;
   active: boolean;
+  warmFloor: boolean;
 }
 
 const automaticQueue: QueuedAutomaticSearch[] = [];
-const automaticSlots: AutomaticSearchSlot[] = automaticBrokers.map((automaticBroker) => ({
+const automaticSlots: AutomaticSearchSlot[] = automaticBrokers.map((automaticBroker, index) => ({
   broker: automaticBroker,
   active: false,
+  warmFloor: index === 0,
 }));
 let automaticDrainScheduled = false;
 let automaticDraining = false;
@@ -162,6 +177,20 @@ function scheduleAutomaticDrain(): void {
   });
 }
 
+function hasRssRetirement(status: RuntimeWorkerBrokerStatus): boolean {
+  return String(status.retirementReason || '').startsWith('rss_limit_');
+}
+
+async function rotateAutomaticWarmFloor(slot: AutomaticSearchSlot, workspacePath: string): Promise<void> {
+  const elastic = automaticSlots.find((candidate) => !candidate.warmFloor);
+  // If the elastic slot is already covering another request, it is useful
+  // coverage during this rotation. Otherwise make it ready before retiring
+  // the floor so a concurrent request does not lose all capacity.
+  if (elastic && !elastic.active) await warmAutomaticSlot(elastic, workspacePath);
+  await slot.broker.shutdown(1500);
+  await warmAutomaticSlot(slot, workspacePath);
+}
+
 async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAutomaticSearch): Promise<void> {
   slot.active = true;
   if (task.timeoutHandle) {
@@ -179,6 +208,7 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
 
   let timedOut = false;
   let cancelled = false;
+  let rssRotationRequested = false;
   let removeSignalListener: (() => void) | undefined;
   const workerPromise = slot.broker.run<MemorySearchWorkerResult>(task.kind, task.payload, Math.max(1_000, remainingMs));
   const onAbort = () => {
@@ -204,7 +234,17 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
     });
     const result = await Promise.race([workerPromise, timeoutPromise]);
     if (cancelled || task.signal?.aborted) settleAutomatic(task, { error: abortError() });
-    else settleAutomatic(task, { value: result.serialized });
+    else {
+      settleAutomatic(task, { value: result.serialized });
+      const rssExceeded = Number(result.rssBytes || 0) >= recycleRssBytes;
+      const brokerStatus = slot.broker.getStatus();
+      rssRotationRequested = rssExceeded || hasRssRetirement(brokerStatus);
+      if (rssRotationRequested && slot.warmFloor) {
+        await rotateAutomaticWarmFloor(slot, task.payload.workspacePath);
+      } else if (rssRotationRequested || (!slot.warmFloor && result.usedJsonFallback)) {
+        await slot.broker.shutdown(1500);
+      }
+    }
   } catch (error: any) {
     const normalized = cancelled || task.signal?.aborted
       ? abortError()
@@ -216,7 +256,7 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
     removeSignalListener?.();
     slot.active = false;
     if (!automaticShuttingDown && slot.broker.getStatus().state !== 'ready') {
-      scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, 250);
+      scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, rssRotationRequested ? 0 : 250);
     }
     scheduleAutomaticDrain();
   }
@@ -227,10 +267,22 @@ async function drainAutomaticQueue(): Promise<void> {
   automaticDraining = true;
   try {
     while (!automaticShuttingDown) {
-      const slot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
       const task = automaticQueue.shift();
+      const readySlot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
+      // The floor handles the normal single-request path. If it is already
+      // busy and demand increases after the elastic slot retired, let that
+      // cold elastic slot take the real request directly. A separate warmup
+      // search would consume the same 250 ms deadline before useful work ran.
+      const slot = readySlot || automaticSlots.find((candidate) => (
+        !candidate.active
+        && !candidate.warmFloor
+        && ['stopped', 'failed', 'starting', 'stopping'].includes(candidate.broker.getStatus().state)
+      ));
       if (!slot || !task) {
-        if (task) automaticQueue.unshift(task);
+        if (task) {
+          automaticQueue.unshift(task);
+          if (!slot) scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, 0);
+        }
         break;
       }
       if (task.settled || task.signal?.aborted) {
@@ -290,6 +342,7 @@ export async function warmAutomaticMemorySearchWorkers(workspacePath: string): P
     if (!automaticShuttingDown && automaticSlots.some((slot) => slot.broker.getStatus().state !== 'ready')) {
       scheduleAutomaticMemorySearchWorkerWarmup(resolvedWorkspacePath, 1_000);
     }
+    if (!automaticShuttingDown) scheduleAutomaticDrain();
   });
   await automaticWarmupPromise;
 }
@@ -336,7 +389,7 @@ export function searchMemoryAutomaticallyInWorker(
   if (!workspacePath) return Promise.reject(new Error('Automatic memory search requires a workspace path.'));
   if (options.signal?.aborted) return Promise.reject(abortError());
   const configuredTimeout = Number(options.timeoutMs || 250);
-  const timeoutMs = Math.max(40, Math.min(250, Number.isFinite(configuredTimeout) ? Math.floor(configuredTimeout) : 250));
+  const timeoutMs = Math.max(40, Math.min(automaticTimeoutCeilingMs, Number.isFinite(configuredTimeout) ? Math.floor(configuredTimeout) : 250));
   if (automaticQueue.length >= automaticMaxQueued) {
     return Promise.reject(new Error('Automatic memory search worker pool is busy.'));
   }

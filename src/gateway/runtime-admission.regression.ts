@@ -7,6 +7,7 @@ async function main(): Promise<void> {
     maxBackgroundActive: 1,
     maxQueued: 2,
     maxWaitMs: 5_000,
+    reservedInteractiveSlots: 0,
   });
 
   const foreground = admission.tryAcquire('interactive');
@@ -46,6 +47,25 @@ async function main(): Promise<void> {
     (error: unknown) => error instanceof RuntimeAdmissionError && error.code === 'RUNTIME_ADMISSION_ABORTED',
   );
   blocked!.release();
+
+  const reserved = new RuntimeAdmissionController({
+    maxActive: 2,
+    maxBackgroundActive: 2,
+    reservedInteractiveSlots: 1,
+    maxResourceWeight: 3,
+  });
+  const system = reserved.tryAcquire('system', Date.now(), undefined, { resourceWeight: 2 });
+  assert.ok(system);
+  assert.equal(
+    reserved.tryAcquire('system', Date.now(), undefined, { resourceWeight: 1 }),
+    null,
+    'system work must leave one interactive slot reserved',
+  );
+  const interactive = reserved.tryAcquire('interactive', Date.now(), undefined, { resourceWeight: 1 });
+  assert.ok(interactive, 'interactive work must be able to use the reserved slot');
+  assert.equal(reserved.snapshot().activeResourceWeight, 3);
+  interactive!.release();
+  system!.release();
 
   console.log('runtime-admission regression passed');
 }

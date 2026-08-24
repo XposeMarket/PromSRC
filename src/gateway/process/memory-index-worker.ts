@@ -8,6 +8,10 @@ import {
   type RuntimeWorkerParentMessage,
 } from './runtime-worker-protocol.js';
 import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from './runtime-worker-resources.js';
+import {
   backfillSqliteMemoryEmbeddings,
   refreshMemoryIndexFromAudit,
   runAutomaticMemoryEmbeddingBackfill,
@@ -87,16 +91,6 @@ async function handleMessage(raw: unknown): Promise<void> {
     startedAt: Date.now(),
   });
 
-  const heartbeat = setInterval(() => {
-    send({
-      protocolVersion: RUNTIME_WORKER_PROTOCOL_VERSION,
-      type: 'heartbeat',
-      pid: process.pid,
-      at: Date.now(),
-      activeRequestId: message.requestId,
-    });
-  }, 5000);
-  heartbeat.unref?.();
   try {
     if (!workspacePath) throw new Error(`${message.kind} requires workspacePath.`);
     const result = message.kind === 'memory_index_refresh'
@@ -110,6 +104,7 @@ async function handleMessage(raw: unknown): Promise<void> {
       requestId: message.requestId,
       result,
       completedAt: Date.now(),
+      resourceSample: sampleRuntimeWorkerResources(),
     });
   } catch (error: any) {
     send({
@@ -121,7 +116,6 @@ async function handleMessage(raw: unknown): Promise<void> {
       completedAt: Date.now(),
     });
   } finally {
-    clearInterval(heartbeat);
     activeRequestId = '';
   }
 }
@@ -145,4 +139,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

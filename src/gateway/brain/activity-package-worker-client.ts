@@ -34,6 +34,8 @@ const broker = new RuntimeWorkerBroker({
   maxMessageBytes,
   startupTimeoutMs,
   defaultJobTimeoutMs: timeoutMs,
+  oneShot: true,
+  resourceSampleIntervalMs: envInt('PROMETHEUS_BRAIN_ACTIVITY_RESOURCE_SAMPLE_MS', 5_000, 1_000, 60_000),
 });
 let shuttingDown = false;
 

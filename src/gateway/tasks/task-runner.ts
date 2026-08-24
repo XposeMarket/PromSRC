@@ -649,6 +649,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
     try {
       runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
         lane: 'background',
+        resourceWeight: 2,
         signal: abortController.signal,
         metadata: { sessionId: 'background_' + record.id, backgroundId: record.id },
       });

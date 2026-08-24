@@ -12,6 +12,10 @@ import {
   type BuildPersonalityContextOptions,
   type PersonalityContextSnapshot,
 } from '../prompt-context.js';
+import {
+  sampleRuntimeWorkerResources,
+  startRuntimeWorkerResourceHeartbeat,
+} from './runtime-worker-resources.js';
 
 interface ContextBuildPayload {
   sessionId: string;
@@ -136,6 +140,7 @@ process.on('message', (raw: unknown) => {
         requestId: message.requestId,
         result,
         completedAt: Date.now(),
+        resourceSample: sampleRuntimeWorkerResources(),
       });
     } catch (error) {
       send({
@@ -157,4 +162,8 @@ send({
   type: 'ready',
   workerName,
   pid: process.pid,
+  resourceSample: sampleRuntimeWorkerResources(),
 });
+
+const resourceHeartbeat = startRuntimeWorkerResourceHeartbeat(send, () => activeRequestId || undefined);
+process.once('disconnect', () => clearInterval(resourceHeartbeat));

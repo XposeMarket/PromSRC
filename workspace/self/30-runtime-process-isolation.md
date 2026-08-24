@@ -1,6 +1,6 @@
 # 44) Gateway and Runtime Process Isolation
 
-Last source verification: 2026-08-01.
+Last source verification: 2026-08-24.
 
 ## Why this boundary exists
 
@@ -20,24 +20,38 @@ Before the first isolation change, scheduled memory search maintenance used `set
 - Automatic search/graph refresh, manual `memory_index_refresh`, explicit/automatic embedding backfill, the memory provider sync path, memory-note creation, the refresh API, Obsidian changes, and consolidation changes all use this boundary. Production gateway code no longer calls the synchronous audit refresh directly.
 - The legacy `scheduleOperationalIndexRefresh(...)` entry point also delegates to the child queue; `setImmediate(...)` is not treated as isolation.
 
+### Common worker lifecycle and resource telemetry
+
+- `RuntimeWorkerBroker` now accepts opt-in `idleTtlMs`, `maxJobs`, `maxRssBytes`, `maxHeapUsedBytes`, and `oneShot` policies. Retirement happens only after an active job releases the broker, and `shutdown()` is idempotent so a retirement race cannot spawn duplicate children.
+- Child status samples include RSS, V8 heap total/used, external and ArrayBuffer memory, cumulative user/system CPU, and bounded V8 heap-space statistics. Broker status derives a CPU percentage from successive samples and exposes the policy, sample age, completed-job count, and retirement reason.
+- Gateway runtime status, event-loop stall records, and `/api/status` expose the aggregate generic-worker sample. Model workers expose the same resource classes in their per-slot status while retaining their RSS recycle counter.
+- Brain activity uses `oneShot` because package assembly is a heavy burst and does not benefit from a resident child. Automatic memory-search keeps one floor worker warm for the 40–250 ms prompt-retrieval path; the floor still has the RSS ceiling and rotates through a replacement when it breaches it, while the second elastic slot also uses the idle TTL (30 seconds by default). Context/model workers remain warm where useful, but their initial warmup and model-slot expansion are demand-aware.
+
 ### Provider/model calls
 
 - `src/gateway/turn-workers/` defines a second, turn-oriented process protocol with start, ordered event, checkpoint, heartbeat, RPC, steer, cancel, final, error, and shutdown messages. Messages and payloads are byte-bounded, attempts carry an opaque fencing token, and a worker owns only one submitted job at a time.
 - `src/gateway/turn-workers/model-call-dispatcher.ts` runs provider/model calls made through `OllamaClient.chatWithThinking(...)` and `generateWithThinking(...)` in a bounded child-process pool. The child resolves the requested provider/model, streams token/thinking/reasoning/model events back to the gateway, and persists the complete result in the blob store rather than returning it inline.
 - The model envelope carries both provider ID and the selected provider account ID. `getProviderAccountId(...)` preserves the originating instance's credential identity, and the child rebuilds it through `buildProviderById(providerId, accountId)` instead of silently falling back to a different active/default OAuth or API-key account. Credentials themselves are not copied into the request blob. Rotating OpenAI Codex/xAI OAuth remains gateway-owned: the gateway preflights once at admission and again through a bounded child-to-gateway RPC when a queued worker actually starts. Runtime children only read the refreshed vault entry; migration writes are suppressed and refresh/save/clear operations are rejected in those children so parallel processes cannot race a rotating refresh token or overwrite the vault.
-- The default pool has three workers, is clamped to one through eight workers, queues at most 100 jobs, recycles a worker after ten completed model jobs, treats 45 seconds without a heartbeat as failure, and grants five seconds for cancellation before force termination. Each model child receives a 1,024 MiB V8 old-space ceiling by default (operator-clamped 256–4,096 MiB) so a bad worker allocation fails that child rather than inheriting an effectively unbounded heap. There is deliberately no fixed one-hour-style turn timeout.
+- The default pool has three configured workers, is clamped to one through four workers, queues at most 12 jobs, recycles a worker after 20 completed model jobs or 1 GiB RSS, treats 30 seconds without a heartbeat as failure, and grants five seconds for cancellation before force termination. The pool expands lazily with demand, so the first model request does not automatically start every configured slot. Each model child receives a 1,024 MiB V8 old-space ceiling by default (operator-clamped 128–8,192 MiB) unless an explicit inherited Node `--max-old-space-size` is already present. This limits V8 old space, not total RSS/native memory, so RSS recycling remains necessary. There is deliberately no fixed one-hour-style turn timeout.
 - A failed or recycled model worker does not take down the gateway. The pool replaces it, while the owning gateway turn receives the bounded error/cancellation result.
 - The model-call request sent over IPC contains blob-root/request references, not a copied conversation history. This keeps IPC bounded even when a turn has a large context.
 - Preparing turn attachments/admission payloads, central tool-effect results, and model requests no longer runs canonical JSON serialization, gzip, file write, and fsync as one synchronous gateway operation. Attachment writes use bounded concurrency; the large-value normalizer/serializer yields cooperatively; compression/write/fsync use the asynchronous blob path before referenced state is admitted, committed, or submitted.
 
 Environment controls:
 
-- `PROMETHEUS_TURN_WORKER_COUNT` or `PROMETHEUS_MODEL_WORKER_COUNT` — model worker count; default 3, clamped to 1–8.
-- `PROMETHEUS_MODEL_WORKER_RECYCLE_JOBS` — model calls completed before recycling a child; default 10.
-- `PROMETHEUS_MODEL_WORKER_MAX_OLD_SPACE_MB` — per-model-child V8 old-space ceiling; default 1,024 MiB, clamped to 256–4,096 MiB. An explicit inherited Node `--max-old-space-size` remains authoritative.
+- `PROMETHEUS_MODEL_WORKER_COUNT` — configured model worker count; default 3, clamped to 1–4. Slots are started lazily as queue demand requires.
+- `PROMETHEUS_MODEL_WORKER_MAX_QUEUE` — queued model requests; default 12, clamped to 0–100.
+- `PROMETHEUS_MODEL_WORKER_RECYCLE_JOBS` — model calls completed before recycling a child; default 20.
+- `PROMETHEUS_MODEL_WORKER_RECYCLE_RSS_BYTES` — per-child RSS recycle threshold; default 1 GiB.
+- `PROMETHEUS_MODEL_WORKER_MAX_OLD_SPACE_MB` — per-model-child V8 old-space ceiling; default 1,024 MiB, clamped to 128–8,192 MiB. An explicit inherited Node `--max-old-space-size` remains authoritative.
 - `PROMETHEUS_DISABLE_MODEL_WORKERS=1` — diagnostic fallback to provider calls in the gateway process. Child workers also disable redispatch automatically to prevent recursion.
 - `PROMETHEUS_MEMORY_REFRESH_WORKER_TIMEOUT_MS` — per-refresh timeout; default 15 minutes, minimum 30 seconds.
 - `PROMETHEUS_MEMORY_REFRESH_WORKER_STARTUP_TIMEOUT_MS` — maintenance-child readiness timeout; default 45 seconds, minimum 1 second.
+- `PROMETHEUS_RUNTIME_WORKER_RESOURCE_SAMPLE_MS` — generic child resource heartbeat interval; default 5 seconds, clamped to 1–60 seconds.
+- `PROMETHEUS_CONTEXT_BUILD_WARM_WORKER_COUNT` — context workers warmed before listen; default 1, while later demand may use the configured pool.
+- `PROMETHEUS_CONTEXT_BUILD_MAX_HEAP_USED_BYTES` — optional context-child V8 heap-used retirement threshold; zero disables the threshold.
+- `PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_WORKERS` — automatic prompt-retrieval slots; default 2, clamped to 1–2. Slot one is the permanently warm latency floor; slot two is elastic.
+- `PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS` — idle retirement for elastic automatic-memory slots; default 30 seconds, clamped to 1 second–10 minutes.
 
 The worker pools provide process isolation, not workspace isolation. The normal shared workspace remains authoritative.
 
@@ -60,6 +74,7 @@ The worker pools provide process isolation, not workspace isolation. The normal 
 - Session history remains gateway-owned, but normal debounced saves and authoritative final-boundary saves now scrub/serialize/write/fsync cooperatively and atomically. Per-session generation fences retry overlapping mutations; a post-rename fence prevents an in-flight save from resurrecting a deleted session. Restart preflight and shutdown await the same asynchronous persistence path.
 - Runtime process entries are bounded (including encoded/large tool arguments), attached to the assistant message before the authoritative final flush, and therefore included in the committed session that precedes final/done publication.
 - Large prompt/profile reads, memory-index search, recent observation reads, and Creative reference image reads use async/bounded paths. Creative references use bounded aggregate/per-file bytes and limited concurrency rather than synchronous stat/read/base64 work on the gateway.
+- The session hot cache is bounded by both 256 entries and an estimated 256 MiB of UTF-8 serialized session state by default; the estimate includes full retained history/tool logs and artifact metadata, not just entry count. Entries must also be idle for 30 minutes and not live/pending before eviction. `getSessionCacheStatus()` returns the last estimate and an `estimateStale` flag; dirty sessions are recursively remeasured at most once per five seconds or when the last estimate shows pressure, so status polling does not walk a giant transcript on the gateway thread. `PROMETHEUS_SESSION_CACHE_MAX_BYTES` controls the byte budget (16 MiB–4 GiB).
 - Automatic project learning and model-generated titles are post-terminal maintenance. Project lookup uses async bounded metadata reads; title transcript selection stops after six visible messages, title work is one global/single-flight job, and an abortable eight-second default deadline prevents it from occupying the shared model pool indefinitely. Completion notifications are also scheduled only after final/done publication.
 
 ### Turn-context continuity and cancellation
@@ -70,6 +85,12 @@ The worker pools provide process isolation, not workspace isolation. The normal 
 - In-flight tool effects remain uncertain in the packet and must be verified before retry. Progress-state events are reduced into the checkpoint so active plan state is retained as well as tool boundaries.
 
 Environment controls added by this layer include `PROMETHEUS_CONTEXT_FOOTPRINT_HEAP_MB`, `PROMETHEUS_CONTEXT_FOOTPRINT_MAX_SNAPSHOT_MB`, `PROMETHEUS_TOOL_OBSERVATION_HEAP_MB`, `PROMETHEUS_TOOL_OBSERVATION_MAX_SNAPSHOT_MB`, `PROMETHEUS_TOOL_OBSERVATION_WORKERS`, `PROMETHEUS_TOOL_OBSERVATION_FAST_PATH_MS`, `PROMETHEUS_TOOL_OBSERVATION_TAIL_MAX_BYTES`, `PROMETHEUS_TOOL_OBSERVATION_LINE_MAX_BYTES`, and `PROMETHEUS_AUTO_TITLE_TIMEOUT_MS`.
+
+### Runtime admission and reserved capacity
+
+- `runtime-admission.ts` separates interactive, system, and background lanes. Brain/cron work intentionally remains in the `system` lane; it is not mislabeled as background. Background work remains capped independently.
+- By default one active slot is reserved for interactive work (`PROMETHEUS_RUNTIME_RESERVED_INTERACTIVE_SLOTS=1`). Noninteractive leases also carry a relative resource weight (interactive 1, system/background 2), with optional process-wide weight and byte budgets. The reservation and budgets are visible in the admission snapshot; they do not replace worker RSS/heap caps.
+- Controls are `PROMETHEUS_RUNTIME_MAX_ACTIVE`, `PROMETHEUS_RUNTIME_MAX_BACKGROUND_ACTIVE`, `PROMETHEUS_RUNTIME_MAX_QUEUE`, `PROMETHEUS_RUNTIME_ADMISSION_MAX_WAIT_MS`, `PROMETHEUS_RUNTIME_RESERVED_INTERACTIVE_SLOTS`, `PROMETHEUS_RUNTIME_MAX_RESOURCE_WEIGHT`, and the optional `PROMETHEUS_RUNTIME_MAX_RESOURCE_BYTES`.
 
 ## Durable turn journal
 
@@ -121,6 +142,7 @@ These changes do not alter Prometheus's user-facing workflow, tools, shared work
 
 - `memoryMaintenance` — maintenance-worker isolation, state/PID, active kind, queue counts, and last-run timestamps.
 - `turnRuntime` — `model-process-pool+file-change-process+context-process+observation-process+durable-turn-journal`, configured model capacity plus file-change/context/observation worker capacity, heap/snapshot limits, queues and worker health; cooperative session-persistence status; shared-workspace/file-lease policy; journal queued/active/waiting counts; bounded lease-and-final recovery; and isolated retention state. Recovery status explicitly reports `turnRedispatch: false` and `channelRedelivery: false`.
+- `runtimeWorkers` — aggregate generic broker child count, RSS, heap, external/ArrayBuffer memory, CPU percentage, per-worker samples, lifecycle policy, and retirement state. This is also persisted in gateway runtime status and event-loop stall diagnostics.
 
 Runtime workers are internal gateway children, not user-managed command processes. They do not appear under `<configDir>/processes/`.
 
@@ -173,7 +195,7 @@ Do not fork `chat.router.ts` wholesale into every child. It still depends on gat
 ## P0-1 performance record — 2026-08-08
 
 - The full gateway remains the owner of request ingress, prompt/context assembly, session mutation, tool orchestration, approvals, and channel delivery. The performance pass did not move the complete turn loop into a child process.
-- Existing worker isolation and bounded stream delivery remain relevant to tail latency, but the current investigation found a separate gateway-owned risk: the session transcript cache was process-long and unbounded. The new 256-entry hot-cache bound is conservative and protects active/pending sessions.
+- Existing worker isolation and bounded stream delivery remain relevant to tail latency, but the current investigation found a separate gateway-owned risk: the session transcript cache was process-long and unbounded. The hot cache now has both a 256-entry bound and a byte-weighted default budget, while still protecting active/pending sessions.
 - The managed gateway restarts on 2026-08-08 replaced PID 21480 with PID 20108 and later PID 20108 with PID 23796; the replacement exposed memory byte fields and reported a clean bounded cache. Treat this as live-code/clean-start verification, not a completed leak soak.
 - Model/tool latency must be analyzed by unique turn and provider attempt. The local timing log has provider-request-start marks in the thousands because retries/attempts can occur inside fewer turns; do not report those marks as unique user requests.
 - `chat.router.ts` now keeps per-provider-round first-event and first-visible timestamps as well as turn-level marks. This prevents a later tool-round `providerWaitMs` or `provider_done` delta from subtracting the current round's start from an earlier round's event.

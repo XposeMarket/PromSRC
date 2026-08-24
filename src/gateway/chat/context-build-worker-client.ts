@@ -58,6 +58,7 @@ export interface ContextBuildWorkerPoolStatus {
   fallbackActive: number;
   lastError?: string;
   warmupState: 'idle' | 'warming' | 'ready' | 'failed';
+  warmWorkers: number;
   warmupStartedAt?: number;
   warmupCompletedAt?: number;
   warmupError?: string;
@@ -72,12 +73,14 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 const enabled = String(process.env.PROMETHEUS_CONTEXT_BUILD_WORKERS || '1').trim() !== '0';
 const fallbackEnabled = String(process.env.PROMETHEUS_CONTEXT_BUILD_IN_PROCESS_FALLBACK || '1').trim() !== '0';
 const workerCount = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_COUNT', 2, 1, 4);
+const warmWorkerCount = envInt('PROMETHEUS_CONTEXT_BUILD_WARM_WORKER_COUNT', 1, 0, workerCount);
 const maxQueued = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_MAX_QUEUE', 4, 0, 32);
 const timeoutMs = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_TIMEOUT_MS', 15_000, 1_000, 120_000);
 const startupTimeoutMs = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_STARTUP_TIMEOUT_MS', 15_000, 1_000, 120_000);
 const maxMessageBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_MESSAGE_BYTES', 2 * 1024 * 1024, 64 * 1024, 8 * 1024 * 1024);
 const recycleAfterJobs = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_JOBS', 100, 1, 10_000);
 const recycleRssBytes = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 2_147_483_647);
+const maxHeapUsedBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_HEAP_USED_BYTES', 0, 0, 8 * 1024 * 1024 * 1024);
 
 const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
   broker: new RuntimeWorkerBroker({
@@ -86,6 +89,9 @@ const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
     maxMessageBytes,
     startupTimeoutMs,
     defaultJobTimeoutMs: timeoutMs,
+    maxJobs: recycleAfterJobs,
+    maxRssBytes: recycleRssBytes,
+    maxHeapUsedBytes,
   }),
   active: null,
   completedJobs: 0,
@@ -412,7 +418,7 @@ export async function warmContextBuildWorkerPool(): Promise<void> {
   warmupState = 'warming';
   warmupStartedAt = Date.now();
   warmupError = '';
-  warmupPromise = Promise.all(slots.map((slot) => slot.broker.warmup()))
+  warmupPromise = Promise.all(slots.slice(0, warmWorkerCount).map((slot) => slot.broker.warmup()))
     .then(() => {
       warmupState = 'ready';
       warmupCompletedAt = Date.now();
@@ -443,6 +449,7 @@ export function getContextBuildWorkerPoolStatus(): ContextBuildWorkerPoolStatus 
     fallbackActive,
     lastError: lastError || undefined,
     warmupState,
+    warmWorkers: warmWorkerCount,
     warmupStartedAt,
     warmupCompletedAt,
     warmupError: warmupError || undefined,
