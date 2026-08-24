@@ -13783,7 +13783,7 @@ void main() {
   function _setChatVoiceActive(active) {
     const enabled = !!active;
     const thread = Array.isArray(__pmChat.threads?.[requestedSession]) ? __pmChat.threads[requestedSession] : [];
-    const newChatVoice = requestedSession === MOBILE_CHAT_SESSION_ID && thread.length === 0;
+    const newChatVoice = !thread.some((message) => ['user', 'ai', 'assistant'].includes(String(message?.role || '').toLowerCase()));
     const hideNewChatContext = enabled && newChatVoice;
     if (hideNewChatContext) closeTargetPopover();
     contextDock?.classList.toggle('pm-chat-context-dock-voice-hidden', hideNewChatContext);
@@ -15788,8 +15788,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         if (evt.goalCompletionReport) aiTurn.goalCompletionReport = evt.goalCompletionReport;
         aiTurn._pmFinalReceived = true;
-        aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
-        aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
+        aiTurn.workStartedAt = Number(evt.workStartedAt || aiTurn.workStartedAt || aiTurn.createdAt || Date.now()) || Date.now();
+        aiTurn.workEndedAt = Number(evt.workEndedAt || aiTurn.workEndedAt || Date.now()) || Date.now();
+        aiTurn.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
+          ? Math.max(0, Number(evt.workDurationMs))
+          : Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
         mobileChatRuntimeAdapter.completeStream(requestedSession, evt.text || aiTurn.body?.text || aiTurn.content, aiTurn);
@@ -15811,6 +15814,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         } else {
           _finishMobileVisualStreamText(aiTurn);
         }
+        aiTurn.workStartedAt = Number(evt.workStartedAt || aiTurn.workStartedAt || aiTurn.createdAt || Date.now()) || Date.now();
+        aiTurn.workEndedAt = Number(evt.workEndedAt || aiTurn.workEndedAt || Date.now()) || Date.now();
+        aiTurn.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
+          ? Math.max(0, Number(evt.workDurationMs))
+          : Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         mobileChatRuntimeAdapter.completeStream(requestedSession, evt.reply || aiTurn.body?.text || aiTurn.content, aiTurn);
         return 'done';

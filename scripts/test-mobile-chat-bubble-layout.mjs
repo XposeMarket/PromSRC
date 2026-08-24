@@ -30,7 +30,6 @@ try {
   await page.setContent(`<!doctype html><html><head><style>${css}</style><style>
     html, body { margin: 0; width: 390px; }
     .fixture { width: 358px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-    .fixture .markdown-body p { margin: 0; }
   </style></head><body class="pm-mobile-active"><main class="fixture pm-chat-body pm-chat-thread">
     <div id="short" class="pm-msg from-user"><div class="pm-bubble"><div class="markdown-body"><p>Sounds good</p></div></div></div>
     <div id="normal" class="pm-msg from-user"><div class="pm-bubble"><div class="markdown-body"><p>Please review the mobile app and make sure this message wraps naturally across the available width.</p></div></div></div>
@@ -54,6 +53,7 @@ try {
   });
 
   assert(metrics.short.width < 180, `short bubble should remain intrinsic (${metrics.short.width}px)`);
+  assert(metrics.short.height < 55, `short bubble should remain compact (${metrics.short.height}px)`);
   assert(metrics.normal.width > 250, `normal prose collapsed into a narrow min-content bubble (${metrics.normal.width}px)`);
   assert(metrics.normal.width <= 310, `normal prose bubble exceeded the intended mobile width (${metrics.normal.width}px)`);
   assert(metrics.normalParagraph.height < 120, `normal prose wrapped into too many lines (${metrics.normalParagraph.height}px)`);

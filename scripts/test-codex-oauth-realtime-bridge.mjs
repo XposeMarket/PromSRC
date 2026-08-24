@@ -31,7 +31,7 @@ assert.match(bridge, /REALTIME_CONVERSATION_VERSION = 'v3'/, 'bridge must use th
 assert.match(bridge, /REALTIME_VOICE_CATALOG_VERSION = 'v1'/, 'AVAS conversation v3 must preserve the Codex v1 voice catalog');
 assert.match(bridge, /voicesResult\?\.voices\?\.v1/, 'bridge status must advertise Codex voices accepted by AVAS conversation v3');
 assert.match(bridge, /defaultV1/, 'bridge status must advertise the v3-compatible Codex default voice');
-assert.match(bridge, /MIN_CODEX_LIVE_VERSION = \[0, 146, 0\]/, 'bridge must reject runtimes that predate Codex Voice/Live v3');
+assert.match(bridge, /MIN_CODEX_LIVE_VERSION = \[0, 149, 1\]/, 'bridge must reject runtimes with the obsolete AVAS session.model configuration');
 assert.match(bridge, /refusing to fall back to public Realtime Voice v2/, 'outdated runtimes must fail closed instead of silently selecting public Realtime Voice');
 assert.match(bridge, /voice: resolvedVoice/, 'bridge must normalize stale client voices before starting AVAS v3');
 assert.doesNotMatch(bridge, /clientManagedHandoffs: true/, 'v3 client-managed handoffs are not a Prometheus tool-delegation API');

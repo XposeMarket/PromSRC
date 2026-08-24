@@ -6,10 +6,13 @@ const voicePage = fs.readFileSync('web-ui/src/mobile/mobile-voice-page.js', 'utf
 
 assert.match(
   pages,
-  /requestedSession === MOBILE_CHAT_SESSION_ID[\s\S]{0,900}requestedSession = sid;[\s\S]{0,900}_setChatVoiceActive\(true\)/,
-  'the mounted chat must recompute draft Voice chrome when the first spoken turn materializes a session',
+  /const newChatVoice = !thread\.some\(\(message\) => \['user', 'ai', 'assistant'\]/,
+  'Voice must identify a pristine chat by visible turns instead of its transient session id',
 );
+assert.match(pages, /requestedSession = sid;[\s\S]{0,1200}_setChatVoiceActive\(true\)/, 'the mounted chat must recompute draft Voice chrome when the first spoken turn materializes a session');
 assert.match(voicePage, /context\._ensureDurableMobileVoiceSession\(/, 'Voice first turn must materialize a durable chat session');
+const mobileCss = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+assert.match(mobileCss, /pm-chat-voice-docked \.pm-composer\.is-voice-active \{ clip-path: inset\(1px 0 0\); outline: 0 !important; \}/, 'docked inline Voice must clip its former top-edge seam');
 assert.doesNotMatch(
   voicePage,
   /pm-mobile-voice-first-turn-materialized/,

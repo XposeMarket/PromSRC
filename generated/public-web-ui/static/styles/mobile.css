@@ -4827,10 +4827,8 @@ html.pm-session-context-open * {
   font-size: 12px;
   font-weight: 900;
 }
-.pm-msg.from-user .markdown-body p:last-child,
-.pm-msg.from-ai .markdown-body p:last-child {
-  margin-bottom: 0;
-}
+.pm-msg .markdown-body p:first-child { margin-top: 0; }
+.pm-msg .markdown-body p:last-child { margin-bottom: 0; }
 .pm-msg-actions {
   display: flex;
   align-items: center;
@@ -16912,6 +16910,7 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-cl
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked #pm-chat-thread {
   visibility: visible !important;
 }
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-composer.is-voice-active { clip-path: inset(1px 0 0); outline: 0 !important; }
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
   --pm-inline-orb-drag-y: 0px;
   position: fixed !important;
