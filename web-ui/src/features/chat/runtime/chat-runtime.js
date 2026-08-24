@@ -285,12 +285,17 @@ export class ChatRuntime {
     const combined = [...incoming, ...this._sourceHistory];
     const explicitSeen = new Set();
     const deduped = combined.filter((message, index) => {
+      const role = canonicalRole(message?.role);
       const explicit = cleanId(
         message?.messageId || message?.turnId || message?.clientRequestId || message?._clientRequestId || message?.id,
       );
       if (!explicit) return true;
-      if (explicitSeen.has(explicit)) return false;
-      explicitSeen.add(explicit);
+      // A client request owns a user/assistant pair. Scope page de-duplication
+      // by role so prepending a page cannot delete the user's row when the
+      // assistant row carries the same request identity.
+      const scopedExplicit = `${role}:${explicit}`;
+      if (explicitSeen.has(scopedExplicit)) return false;
+      explicitSeen.add(scopedExplicit);
       return true;
     });
     return this.replaceHistory(deduped, {
@@ -319,11 +324,19 @@ export class ChatRuntime {
 
   beginStreaming({ turnId, clientRequestId, text = '', reasoning = '', startedAt } = {}) {
     const now = Number(startedAt || this._now()) || this._now();
-    const identity = cleanId(turnId || clientRequestId);
-    const key = identity ? `id:${identity}` : `stream:${now}`;
+    const explicitTurnId = cleanId(turnId);
+    const requestId = cleanId(clientRequestId);
+    // Keep the stream cursor on the same role-scoped key used by
+    // `chatTurnKey`. A request id without an explicit turn id identifies the
+    // assistant row, not an arbitrary `id:<request>` row.
+    const key = explicitTurnId
+      ? `id:${explicitTurnId}`
+      : requestId
+        ? `request:assistant:${requestId}`
+        : `stream:${now}`;
     const source = {
-      messageId: cleanId(turnId) || undefined,
-      clientRequestId: cleanId(clientRequestId) || undefined,
+      messageId: explicitTurnId || undefined,
+      clientRequestId: requestId || undefined,
       role: 'assistant',
       content: String(text || ''),
       timestamp: now,

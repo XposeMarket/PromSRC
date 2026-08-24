@@ -200,7 +200,8 @@ const mobileAdapter = createMobileChatRuntimeAdapter({
     items: [{ messageId: 'old', role: 'user', content: 'old', timestamp: 1 }],
     pageInfo: { olderCursor: null, hasOlder: false, totalCount: 2 },
   }),
-  mergeHistory: (_sid, older, current) => [...older, ...current],
+  mergeHistory: () => [{ messageId: 'wrong-merge', role: 'assistant', content: 'wrong' }],
+  mergeOlderHistory: (_sid, older, current) => [...older, ...current],
 });
 mobileAdapter.setRunning('mobile-session', true);
 assert.ok(mobileState.drawerRunSessionIds.has('mobile-session'));
@@ -208,6 +209,16 @@ const mobilePage = await mobileAdapter.loadOlderPage('mobile-session', { before:
 assert.equal(mobilePage.applied, true);
 assert.deepEqual(mobileState.threads['mobile-session'].map((message) => message.messageId), ['old', 'new']);
 assert.equal(mobileState.historyPagination['mobile-session'].historyTruncated, false);
+
+runtime.prependHistoryPage([
+  { role: 'user', clientRequestId: 'same-request', content: 'paired prompt', timestamp: 0 },
+  { role: 'assistant', clientRequestId: 'same-request', content: 'paired answer', timestamp: 1 },
+], { olderCursor: null, hasOlder: false, totalCount: 7 });
+assert.deepEqual(
+  runtime.getTurns().slice(0, 2).map((turn) => turn.role),
+  ['user', 'assistant'],
+  'older-page de-duplication must retain both rows when user and assistant share a request id',
+);
 
 runtime.resolveApproval('approval-1', 'approved');
 runtime.resolveQuestion('question-1', 'answered');

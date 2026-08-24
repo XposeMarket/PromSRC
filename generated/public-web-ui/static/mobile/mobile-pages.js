@@ -553,6 +553,7 @@ const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
   getActiveGatewayId,
   loadHistoryPage: loadMobileChatHistoryPage,
   mergeHistory: _mergeMobileSessionThreadWithLocal,
+  mergeOlderHistory: _mergeMobileHistoryPageWithCurrent,
   normalizeSkillIds: _pmNormalizeSelectedSkillIds,
   normalizeSkillRefs: _pmNormalizeSelectedComposerSkillRefs,
 });
@@ -5256,9 +5257,89 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   return next;
 }
 
-function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread) {
+function _mobileHistoryTurnsRepresentSameTurn(a, b) {
+  if (!a || !b) return false;
+  const role = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'ai' || normalized === 'assistant' ? 'assistant' : normalized;
+  };
+  if (role(a.role) !== role(b.role)) return false;
+  if (_mobileMessagesRepresentSameTurn(a, b)) return true;
+  const aRequest = String(a._clientRequestId || a.clientRequestId || '').trim();
+  const bRequest = String(b._clientRequestId || b.clientRequestId || '').trim();
+  if (aRequest && bRequest && aRequest === bRequest) return true;
+  const aId = String(a.messageId || a.turnId || a.id || '').trim();
+  const bId = String(b.messageId || b.turnId || b.id || '').trim();
+  if (aId && bId && aId !== bId) return false;
+  const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
+  const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
+  return !!aText && aText === bText;
+}
+
+function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false } = {}) {
+  const next = [];
+  const append = (candidate, preferIncoming = false) => {
+    if (!candidate || typeof candidate !== 'object') return;
+    const existingIndex = next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, candidate));
+    if (existingIndex < 0) {
+      next.push(candidate);
+      return;
+    }
+    const existing = next[existingIndex];
+    const target = existing;
+    const source = preferIncoming ? candidate : existing;
+    if (target.role === 'ai') {
+      _mergeMobileAssistantTurnDetails(target, source);
+      _mergeMobileMediaIntoMessage(target, _collectMessageMedia(source));
+      _mergeMobileProductCarouselIntoMessage(target, source.productCarousel);
+    } else if (target.role === 'user') {
+      _mergeMobileUserTurnDetails(target, source);
+    }
+    if (preferIncoming && candidate.streaming === true && target.streaming !== false) target.streaming = true;
+  };
+  (Array.isArray(primary) ? primary : []).forEach((message) => append(message));
+  (Array.isArray(secondary) ? secondary : []).forEach((message) => append(message, true));
+  if (sortByTimestamp) {
+    const originalOrder = new Map(next.map((message, index) => [message, index]));
+    next.sort((a, b) => {
+      const at = Number(a?.timestamp || 0) || 0;
+      const bt = Number(b?.timestamp || 0) || 0;
+      if (at && bt && at !== bt) return at - bt;
+      return (originalOrder.get(a) || 0) - (originalOrder.get(b) || 0);
+    });
+  }
+  return next;
+}
+
+function _mobileHistoryPageIsPartial(session, history = []) {
+  const list = Array.isArray(history) ? history : [];
+  const totalCount = Number(session?.totalHistoryCount || session?.historyPage?.totalCount || 0) || 0;
+  return session?.historyTruncated === true
+    || session?.historyPage?.hasOlder === true
+    || (totalCount > 0 && totalCount > list.length);
+}
+
+function _mergeMobileHistoryPageWithCurrent(_sessionId, olderHistory, currentThread) {
+  const older = _mapServerHistoryToMobile(olderHistory);
+  const current = Array.isArray(currentThread) ? currentThread : [];
+  const merged = _mergeMobileHistoryRecords(older, current);
+  _dedupeMobileUserTurns(merged);
+  return _reconcileMobileThreadOrder(merged);
+}
+
+function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
-  const merged = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  const local = Array.isArray(localThread) ? localThread : [];
+  const durableLocal = local.filter((message, index) => message
+    && (message.role === 'user' || message.role === 'ai')
+    && !_isMobileHiddenVoiceDraftMessage(message, index));
+  // `/api/sessions/:id` deliberately returns a bounded tail on mobile. Keep
+  // every already-loaded local transcript row when that response advertises
+  // older history; otherwise a cold reopen can render and cache only the tail.
+  const base = options.preserveLocalHistory === true
+    ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
+    : mapped;
+  const merged = _mergeMobileThreadLocalArtifacts(base, local);
   _dedupeMobileUserTurns(merged);
   return _reconcileMobileThreadOrder(_mergeMobilePinnedCompletedTurn(sessionId, merged));
 }
@@ -5311,7 +5392,9 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
   const localThread = preserveActiveTurn ? localBeforeRefresh : (__pmChat.threads?.[sid] || []);
-  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
+  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread, {
+    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+  });
   const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
   for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
     const approvalSid = String(approval?.sessionId || approval?.sourceSessionId || '').trim();
@@ -5394,7 +5477,9 @@ async function _applyMobileScheduledNotification(msg = {}) {
   const session = await loadMobileChatSession(sid).catch(() => null);
   const history = Array.isArray(session?.history) ? session.history : [];
   const localThread = __pmChat.threads?.[sid] || [];
-  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
+  __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread, {
+    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+  });
   if (String(__pmChat.activeSessionId || '').trim() === sid) {
     _activeMobileThread();
     const threadEl = document.getElementById('pm-chat-thread');
@@ -5442,7 +5527,9 @@ function _scheduleMobileSessionFreshnessRefresh(sessionId, { delayMs = 180, atte
     if (!session || String(__pmChat.activeSessionId || '').trim() !== sid) return;
     const history = Array.isArray(session.history) ? session.history : [];
     const localThread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
-    __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
+    __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread, {
+      preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+    });
     __pmChat.thread = __pmChat.threads[sid];
     _renderMobileChatSessionNow(sid);
     _flushMobileThreadCacheSave(sid);
@@ -13114,7 +13201,9 @@ void main() {
           olderCursor: String(session?.historyPage?.olderCursor || '').trim() || null,
         };
         const localThread = __pmChat.threads[requestedSession] || [];
-        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
+          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+        });
         mobileChatRuntimeAdapter.syncInitial(requestedSession, session, __pmChat.threads[requestedSession]);
         _activeMobileThread();
         _renderThread(threadEl);
@@ -13240,12 +13329,14 @@ void main() {
 
       let recoveredSessionProcessLog = [];
       let recoveredSessionHistory = [];
+      let recoveredSessionHistoryPartial = false;
       if (fullRefresh || force) {
         const session = prefetchedSession;
         _rememberMobileSessionGoal(session, requestedSession);
         _renderMobileGoalPill(goalStrip, requestedSession);
         const history = Array.isArray(session?.history) ? session.history : [];
         recoveredSessionHistory = history;
+        recoveredSessionHistoryPartial = _mobileHistoryPageIsPartial(session, history);
         recoveredSessionProcessLog = Array.isArray(session?.processLog) ? session.processLog : [];
         // CRITICAL: do NOT replace the thread with server history while a run is
         // still active. Server history never includes the in-progress streaming turn,
@@ -13255,7 +13346,9 @@ void main() {
         // reconnect. Defer the history merge to after active-run recovery.
         if (history.length && !status?.active) {
           const localThread = __pmChat.threads[requestedSession] || [];
-          __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
+          __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
+            preserveLocalHistory: recoveredSessionHistoryPartial,
+          });
           _activeMobileThread();
         }
         // ── Parallel batch 2: approvals + questions (independent) ────────────────
@@ -13309,6 +13402,7 @@ void main() {
           requestedSession,
           recoveredSessionHistory,
           localThread,
+          { preserveLocalHistory: recoveredSessionHistoryPartial },
         ).filter((turn) => !(turn?.role === 'ai' && turn.streaming));
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
@@ -13613,7 +13707,9 @@ void main() {
       if (!isCurrentRecoveryTarget()) return;
       _clearMobileLiveRunForSession(requestedSession);
       if (history.length) {
-        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread);
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
+          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+        });
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
         if (!silent) pmToast('Recovered latest mobile chat result.', 'success');
