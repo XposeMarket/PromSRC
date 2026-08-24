@@ -117,6 +117,8 @@ export function createMobileChatRendererRuntime(context = {}) {
   _normalizeMobileFileChanges,
   } = context || {};
 
+  let mobileFirstTranscriptPaintMarked = false;
+
   function _mobileWorkflowTransitionLabel(message) {
     const groupId = String(message?.workflowGroupId || '');
     if (/^chat_steer_/i.test(groupId)) {
@@ -1163,6 +1165,10 @@ export function createMobileChatRendererRuntime(context = {}) {
     _wireMobileChatEnhancements(threadEl);
     _scheduleMobileThreadCacheSave(sid);
     _renderMobileApprovalSheet();
+    if (!mobileFirstTranscriptPaintMarked) {
+      mobileFirstTranscriptPaintMarked = true;
+      context.markMobileLifecycle?.('firstTranscriptPaint');
+    }
   }
   
   if (!window.__pmToolActivityReadyBridgeInstalled) {

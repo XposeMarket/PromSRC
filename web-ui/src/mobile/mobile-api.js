@@ -2072,7 +2072,9 @@ export async function sendMobileBackgroundSteer(backgroundId, message) {
 
 export async function loadGatewayStatus(opts = {}) {
   const timeoutMs = Math.max(5000, Math.floor(Number(opts.timeoutMs || 30000) || 30000));
-  return mfetch('/api/status', { method: 'GET', timeoutMs });
+  const status = await mfetch('/api/status', { method: 'GET', timeoutMs });
+  try { window.__PROM_PERF_MARK?.('mobile_gateway_ready', { surface: 'mobile' }); } catch {}
+  return status;
 }
 
 export async function loadMobileCommandModels() {
