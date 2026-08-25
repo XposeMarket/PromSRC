@@ -13,6 +13,24 @@ export const MAIN_CHAT_MAX_AGE_MS = Math.max(
   10 * 60 * 1000,
   Math.min(48 * 60 * 60 * 1000, Number(process.env.PROMETHEUS_MAIN_CHAT_MAX_AGE_MS || 6 * 60 * 60 * 1000)),
 );
+export const MAIN_CHAT_ABORT_SETTLE_GRACE_MS = 30_000;
+
+/**
+ * An abort signal is advisory: a provider/request promise may ignore it or
+ * take a long time to unwind.  Once this grace period expires, reconciliation
+ * must settle the runtime even if the visible stream has already closed.
+ */
+export function isMainChatAbortSettleExpired(input: {
+  now?: number;
+  abortRequestedAt?: number;
+  settleMs?: number;
+}): boolean {
+  const requestedAt = Number(input.abortRequestedAt || 0);
+  if (!requestedAt) return false;
+  const now = Number.isFinite(input.now) ? Number(input.now) : Date.now();
+  const settleMs = Math.max(1_000, Number(input.settleMs || MAIN_CHAT_ABORT_SETTLE_GRACE_MS));
+  return now - requestedAt > settleMs;
+}
 
 const NON_SEMANTIC_EVENTS = new Set([
   'heartbeat',

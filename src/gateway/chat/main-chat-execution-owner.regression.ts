@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import {
+  MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
   MAIN_CHAT_ORPHAN_GRACE_MS,
   isMainChatExecutionAgeExceeded,
+  isMainChatAbortSettleExpired,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -60,6 +62,19 @@ assert.equal(isMainChatSemanticProgressStalled({
   runtimeStatus: 'interrupted',
   stallMs: 60_000,
 }), false, 'interrupted owners are handled by restart recovery, not the live watchdog');
+
+assert.equal(isMainChatAbortSettleExpired({
+  now,
+  abortRequestedAt: now - MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
+}), false, 'an abort at the settle boundary still gets time to unwind');
+assert.equal(isMainChatAbortSettleExpired({
+  now,
+  abortRequestedAt: now - MAIN_CHAT_ABORT_SETTLE_GRACE_MS - 1,
+}), true, 'a deferred abort must be reconciled even after its stream has closed');
+assert.equal(isMainChatAbortSettleExpired({
+  now,
+  abortRequestedAt: undefined,
+}), false, 'runtimes without an abort request are not force-settled');
 
 assert.equal(isMainChatExecutionAgeExceeded({
   now,

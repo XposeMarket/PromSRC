@@ -109,8 +109,10 @@ import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } f
 import {
   MAIN_CHAT_MAX_AGE_MS,
   MAIN_CHAT_ORPHAN_GRACE_MS,
+  MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
   MAIN_CHAT_SEMANTIC_STALL_MS,
   isMainChatExecutionAgeExceeded,
+  isMainChatAbortSettleExpired,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -979,7 +981,6 @@ const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 // A stream/lease without a running runtime can exist briefly while a caller is
 // wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
-const MAIN_CHAT_ABORT_SETTLE_GRACE_MS = 30_000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
 const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
   'user_message',
@@ -1091,7 +1092,7 @@ function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStrea
   }
   appendMainChatStreamEvent(sessionId, stream.streamId, 'error', {
     code: 'MAIN_CHAT_RUNTIME_OWNER_LOST',
-    message: 'The active Chat execution owner was lost. Reconnect to resume the saved turn.',
+    message: 'The active Chat execution owner was lost. This turn was interrupted and must be retried.',
     reason: String(reason || 'runtime_owner_lost').slice(0, 160),
     runtimeId: stream.runtimeId,
   });
@@ -1210,9 +1211,8 @@ function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
   };
 }
 
-function reconcileMainChatExecutionOwners(): void {
+function reconcileMainChatExecutionOwners(now = Date.now()): void {
   pruneMainChatStreams();
-  const now = Date.now();
   const streams = Array.from(mainChatStreams.values()).filter((stream) => stream.active);
   for (const stream of streams) {
     const runtime = stream.runtimeId ? getLiveRuntime(stream.runtimeId) : null;
@@ -1301,10 +1301,30 @@ function reconcileMainChatExecutionOwners(): void {
 
   // If a terminal checkpoint was emitted but the request owner disappeared
   // before its finally block, let the watchdog perform the same idempotent
-  // cleanup that the request would have performed.
+  // cleanup that the request would have performed.  This pass must also settle
+  // an abort whose callback already closed the stream: a provider promise can
+  // ignore AbortSignal and leave the request finalizer permanently unreachable.
   for (const runtime of listLiveRuntimes()) {
     if ((runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') || !runtime.deferTerminalCleanup) continue;
     const stream = runtime.sessionId ? getMainChatStream(runtime.sessionId) : null;
+    if (isMainChatAbortSettleExpired({
+      now,
+      abortRequestedAt: runtime.abortRequestedAt,
+      settleMs: MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
+    })) {
+      if (runtime.abortSource === 'main_chat_owner_watchdog') {
+        // Keep watchdog-originated work in the durable interrupted ledger so a
+        // restart can retrigger it exactly once.  Do not require a live stream
+        // to still exist: the abort callback may have already closed it.
+        interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout');
+      } else {
+        // Explicit user/operator stops are terminal and must not be replayed.
+        finishLiveRuntime(runtime.id);
+      }
+      if (runtime.sessionId) mainChatTurnCoordinator.discard(runtime.sessionId, 'The aborted Chat execution owner did not settle.');
+      console.warn(`[main-chat-owner] deferred abort did not settle within ${MAIN_CHAT_ABORT_SETTLE_GRACE_MS}ms for runtime=${runtime.id} streamActive=${Boolean(stream?.active)}`);
+      continue;
+    }
     if (hasTerminalRuntimeCheckpoint(runtime) && !stream?.active) finishLiveRuntime(runtime.id);
   }
 }
