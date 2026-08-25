@@ -86,7 +86,7 @@
     "test:work-narrative": "npm run build:backend && node scripts/test-work-narrative-stream.mjs",
     "test:goal-restart": "npm run build:backend && node scripts/test-main-chat-goal-restart-contract.mjs && node scripts/test-main-chat-goal-crash-recovery.mjs && node scripts/test-main-chat-goal-steer-contract.mjs",
     "test:goal-continuity": "tsx src/gateway/main-chat-goal-continuity.regression.ts",
-    "test:restart-retrigger": "npm run build:backend && node scripts/test-main-chat-restart-retrigger.mjs && tsx src/cli/gateway-supervisor-policy.regression.ts",
+    "test:restart-retrigger": "npm run build:backend && node scripts/test-main-chat-restart-retrigger.mjs && tsx src/gateway/chat/main-chat-execution-owner.regression.ts && tsx src/gateway/live-runtime-persistence.regression.ts && tsx src/cli/gateway-supervisor-policy.regression.ts",
     "test:request-ops": "npm run build:backend && node scripts/test-prometheus-request-ops.mjs",
     "test:audit-ops": "tsx src/gateway/audit/audit-ops.regression.ts",
     "test:activity-package": "tsx src/gateway/brain/activity-package.regression.ts",

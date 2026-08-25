@@ -61,6 +61,8 @@ export interface LiveRuntimeRegistration {
   clientRequestId?: string;
   abortSignal?: { aborted: boolean; reason?: string };
   onAbort?: () => void;
+  /** Keep the live record until its owning request calls finishLiveRuntime(). */
+  deferTerminalCleanup?: boolean;
   recoveryPolicy?: 'resume' | 'rerun' | 'mark_interrupted' | 'do_not_resume';
   recoveryData?: Record<string, any>;
 }
@@ -82,6 +84,9 @@ export interface LiveRuntimeSnapshot {
   updatedAt?: number;
   abortable: boolean;
   abortRequestedAt?: number;
+  abortReason?: string;
+  abortSource?: string;
+  deferTerminalCleanup?: boolean;
   status?: 'running' | 'completed' | 'aborted' | 'interrupted';
   recoveryPolicy?: 'resume' | 'rerun' | 'mark_interrupted' | 'do_not_resume';
   recoveryData?: Record<string, any>;
@@ -126,11 +131,18 @@ export function hasTerminalRuntimeCheckpoint(runtime: Pick<LiveRuntimeSnapshot, 
   return TERMINAL_CHECKPOINT_EVENTS.has(event);
 }
 
-export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData'> | null | undefined): boolean {
+export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData' | 'abortRequestedAt' | 'abortSource'> | null | undefined): boolean {
   if (!runtime) return false;
   if (hasTerminalRuntimeCheckpoint(runtime)) return false;
   const recoveryData = runtime.recoveryData || {};
   if (recoveryData.recoveredAt || recoveryData.recovery) return false;
+  // An explicit operator/user cancellation is not an unexpected restart
+  // candidate. The owner may still be unwinding in-process, but it must not be
+  // replayed after a later gateway restart. The semantic-progress watchdog is
+  // different: it deliberately marks a stalled owner recoverable.
+  const abortRequestedAt = Number(runtime.abortRequestedAt || 0);
+  const abortSource = String(runtime.abortSource || '').trim();
+  if (abortRequestedAt > 0 && abortSource !== 'main_chat_owner_watchdog') return false;
   return runtime.status === 'running' || runtime.status === 'interrupted';
 }
 
@@ -171,6 +183,7 @@ export function isInterruptedByRestart(
 interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
   abortSignal?: { aborted: boolean; reason?: string };
   onAbort?: () => void;
+  deferTerminalCleanup?: boolean;
   pendingSteers?: RuntimeSteerEvent[];
 }
 
@@ -441,6 +454,9 @@ function toSnapshot(record: LiveRuntimeRecord): LiveRuntimeSnapshot {
     updatedAt: record.updatedAt,
     abortable: record.abortable,
     abortRequestedAt: record.abortRequestedAt,
+    abortReason: record.abortReason,
+    abortSource: record.abortSource,
+    deferTerminalCleanup: record.deferTerminalCleanup,
     status: record.status,
     recoveryPolicy: record.recoveryPolicy,
     recoveryData: record.recoveryData,
@@ -476,6 +492,7 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
     pid: process.pid,
     abortSignal: registration.abortSignal,
     onAbort: registration.onAbort,
+    deferTerminalCleanup: registration.deferTerminalCleanup === true,
   };
   activeRuntimes.set(id, record);
   registerRuntimeProgressLease({
@@ -503,6 +520,22 @@ export function finishLiveRuntime(id: string): void {
       activeRuntimes.delete(key);
       return;
     }
+    // A foreground owner watchdog deliberately aborts the in-flight request,
+    // but that abort must remain recoverable. The request's normal finally
+    // block can arrive before the periodic watchdog gets a chance to move the
+    // record into the interrupted ledger state, so do that transition here as
+    // part of the idempotent finalizer.
+    if (record.abortSource === 'main_chat_owner_watchdog') {
+      record.status = 'interrupted';
+      record.interruptedAt = Date.now();
+      record.interruptReason = String(record.abortReason || 'main_chat_owner_watchdog').slice(0, 200);
+      record.updatedAt = Date.now();
+      if (record.abortSignal) record.abortSignal.reason = record.interruptReason;
+      const snapshot = toSnapshot(record);
+      persistRuntime(snapshot, 'interrupted', { reason: record.interruptReason }, { full: true });
+      activeRuntimes.delete(key);
+      return;
+    }
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
     record.completedAt = Date.now();
     record.updatedAt = Date.now();
@@ -516,6 +549,11 @@ export function finishLiveRuntime(id: string): void {
 function pruneTerminalActiveRuntimes(): void {
   for (const [id, record] of activeRuntimes.entries()) {
     if (!hasTerminalRuntimeCheckpoint(record)) continue;
+    // Main-chat request handlers finish the stream, coordinator lease, and
+    // runtime together in their outer finally block. A terminal checkpoint can
+    // arrive just before that finally block; pruning here would recreate the
+    // runtime/stream divergence that caused the production incident.
+    if (record.deferTerminalCleanup) continue;
     cancelCheckpointFlush(id);
     finishRuntimeProgressLease(id);
     const snapshot = toSnapshot(record);
@@ -546,7 +584,11 @@ export function findLiveRuntime(
   return null;
 }
 
-export function abortLiveRuntime(id: string, reason = 'operator_abort'): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
+export type RuntimeAbortOptions = {
+  source?: string;
+};
+
+export function abortLiveRuntime(id: string, reason = 'operator_abort', options: RuntimeAbortOptions = {}): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
   const key = String(id || '');
   cancelCheckpointFlush(key);
   const record = activeRuntimes.get(key);
@@ -554,6 +596,8 @@ export function abortLiveRuntime(id: string, reason = 'operator_abort'): { ok: b
   if (!record.abortable) return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not abortable.' };
 
   record.abortRequestedAt = Date.now();
+  record.abortReason = String(reason || 'operator_abort').slice(0, 160);
+  record.abortSource = String(options.source || '').trim().slice(0, 120) || undefined;
   record.updatedAt = Date.now();
   if (record.abortSignal) {
     record.abortSignal.aborted = true;
@@ -562,7 +606,10 @@ export function abortLiveRuntime(id: string, reason = 'operator_abort'): { ok: b
 
   try {
     record.onAbort?.();
-    record.status = 'aborted';
+    // Deferred owners remain visible until their owning request settles. This
+    // prevents getLiveRuntime()/listLiveRuntimes() from pruning a record while
+    // its stream and execution promise are still alive.
+    if (!record.deferTerminalCleanup) record.status = 'aborted';
     record.updatedAt = Date.now();
     finishRuntimeProgressLease(key);
   } catch (err: any) {
@@ -619,8 +666,13 @@ export function abortLiveRuntime(id: string, reason = 'operator_abort'): { ok: b
     console.warn('[live-runtime] Failed to release aborted dev-edit coordination:', err?.message || err);
   }
 
-  persistRuntime(toSnapshot(record), 'abort_requested');
-  return { ok: true, runtime: toSnapshot(record) };
+  const abortSnapshot = toSnapshot(record);
+  persistRuntime(abortSnapshot, 'abort_requested', {
+    source: record.abortSource || 'unspecified',
+    reason: record.abortReason || 'operator_abort',
+  });
+  console.warn(`[live-runtime] abort requested runtime=${record.id} kind=${record.kind} session=${record.sessionId || 'none'} source=${record.abortSource || 'unspecified'} reason=${record.abortReason || 'operator_abort'}`);
+  return { ok: true, runtime: abortSnapshot };
 }
 
 export function addPendingRuntimeSteer(
@@ -783,7 +835,7 @@ function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): voi
 
 export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<string, any>): void {
   const record = activeRuntimes.get(String(id || ''));
-  if (!record) return;
+  if (!record || record.abortRequestedAt || record.status !== 'running') return;
   record.checkpoint = {
     ...(record.checkpoint || {}),
     ...checkpoint,
@@ -824,8 +876,32 @@ export function addPendingRuntimeSteerForTask(
 /** Record observed model/tool activity without expanding the durable checkpoint ledger. */
 export function markLiveRuntimeProgress(id: string, progress: RuntimeProgressLeaseRenewal = {}): void {
   const record = activeRuntimes.get(String(id || ''));
-  if (!record || record.status !== 'running') return;
+  if (!record || record.status !== 'running' || record.abortRequestedAt) return;
   renewRuntimeProgressLease(record.id, { ...progress, checkpoint: false });
+}
+
+/**
+ * Move a stalled foreground owner into the durable restart-recovery path and
+ * release the in-memory owner. The request promise may still unwind later;
+ * finishLiveRuntime() is intentionally idempotent for that late cleanup.
+ */
+export function interruptLiveRuntimeForRecovery(id: string, reason = 'runtime_owner_watchdog'): { ok: boolean; runtime?: LiveRuntimeSnapshot; error?: string } {
+  const key = String(id || '');
+  const record = activeRuntimes.get(key);
+  if (!record) return { ok: false, error: 'Runtime not found.' };
+  record.status = 'interrupted';
+  record.interruptedAt = Date.now();
+  record.interruptReason = String(reason || 'runtime_owner_watchdog').slice(0, 200);
+  record.updatedAt = Date.now();
+  if (record.abortSignal) {
+    record.abortSignal.aborted = true;
+    record.abortSignal.reason = record.interruptReason;
+  }
+  finishRuntimeProgressLease(key);
+  const snapshot = toSnapshot(record);
+  persistRuntime(snapshot, 'interrupted', { reason: record.interruptReason }, { full: true });
+  activeRuntimes.delete(key);
+  return { ok: true, runtime: snapshot };
 }
 
 export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
