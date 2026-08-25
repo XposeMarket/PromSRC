@@ -520,6 +520,22 @@ export function finishLiveRuntime(id: string): void {
       activeRuntimes.delete(key);
       return;
     }
+    // A foreground owner watchdog deliberately aborts the in-flight request,
+    // but that abort must remain recoverable. The request's normal finally
+    // block can arrive before the periodic watchdog gets a chance to move the
+    // record into the interrupted ledger state, so do that transition here as
+    // part of the idempotent finalizer.
+    if (record.abortSource === 'main_chat_owner_watchdog') {
+      record.status = 'interrupted';
+      record.interruptedAt = Date.now();
+      record.interruptReason = String(record.abortReason || 'main_chat_owner_watchdog').slice(0, 200);
+      record.updatedAt = Date.now();
+      if (record.abortSignal) record.abortSignal.reason = record.interruptReason;
+      const snapshot = toSnapshot(record);
+      persistRuntime(snapshot, 'interrupted', { reason: record.interruptReason }, { full: true });
+      activeRuntimes.delete(key);
+      return;
+    }
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
     record.completedAt = Date.now();
     record.updatedAt = Date.now();

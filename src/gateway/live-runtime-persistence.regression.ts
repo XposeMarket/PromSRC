@@ -67,18 +67,21 @@ async function main(): Promise<void> {
     const watchdogAbort = runtimeApi.abortLiveRuntime(watchdogRuntimeId, 'semantic_progress_stall', { source: 'main_chat_owner_watchdog' });
     assert.equal(watchdogAbort.ok, true);
     assert.equal(watchdogAbort.runtime?.status, 'running', 'the watchdog must leave the request-owned record visible while abort settles');
-    const watchdogInterrupt = runtimeApi.interruptLiveRuntimeForRecovery(watchdogRuntimeId, 'main_chat_owner_watchdog_timeout');
-    assert.equal(watchdogInterrupt.ok, true);
-    assert.equal(watchdogInterrupt.runtime?.status, 'interrupted');
+    // Exercise the same late request finalizer that runs after the abort hook;
+    // it must preserve the recovery record even when the periodic watchdog has
+    // not yet performed its fallback interrupt.
+    runtimeApi.finishLiveRuntime(watchdogRuntimeId);
+    const watchdogInterrupt = runtimeApi.listInterruptedRuntimes().find((runtime) => runtime.id === watchdogRuntimeId);
+    assert.ok(watchdogInterrupt, 'watchdog finalization must persist an interrupted recovery record');
+    assert.equal(watchdogInterrupt?.status, 'interrupted');
     assert.equal(
-      runtimeApi.isRuntimeRecoverableAfterRestart(watchdogInterrupt.runtime),
+      runtimeApi.isRuntimeRecoverableAfterRestart(watchdogInterrupt),
       true,
       'a watchdog interruption must remain eligible for exactly-once restart recovery',
     );
     await runtimeApi.flushLiveRuntimePersistence();
     ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
     assert.equal(ledger.runtimes[watchdogRuntimeId]?.status, 'interrupted');
-    assert.equal(runtimeApi.listInterruptedRuntimes().some((runtime) => runtime.id === watchdogRuntimeId), true);
     runtimeApi.markDurableRuntimeRecovered(watchdogRuntimeId, 'interrupted', { recovery: 'regression_cleanup' });
     runtimeApi.pruneDurableLedger();
     await runtimeApi.flushLiveRuntimePersistence();
