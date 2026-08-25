@@ -99,6 +99,8 @@ jobs:
         run: node scripts/test-mobile-chat-recovery.mjs
       - name: Verify foreground Chat owner restart reconciliation
         run: npm run test:restart-retrigger
+      - name: Verify gateway progress lease persistence
+        run: npm run test:gateway-progress-lease
       - name: Verify mobile and desktop chat regression audit
         run: npm run test:mobile-regression-audit
       - name: Verify mobile voice/media contract
