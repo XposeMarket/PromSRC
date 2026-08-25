@@ -32,6 +32,19 @@ export function isMainChatAbortSettleExpired(input: {
   return now - requestedAt > settleMs;
 }
 
+export type MainChatAbortSettlement = 'wait' | 'recover' | 'finish';
+
+/** Choose the terminal action independently of whether the delivery stream remains visible. */
+export function resolveMainChatAbortSettlement(input: {
+  now?: number;
+  abortRequestedAt?: number;
+  abortSource?: string;
+  settleMs?: number;
+}): MainChatAbortSettlement {
+  if (!isMainChatAbortSettleExpired(input)) return 'wait';
+  return input.abortSource === 'main_chat_owner_watchdog' ? 'recover' : 'finish';
+}
+
 const NON_SEMANTIC_EVENTS = new Set([
   'heartbeat',
   'keepalive',

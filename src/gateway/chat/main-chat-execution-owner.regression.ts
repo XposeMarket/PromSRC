@@ -4,6 +4,7 @@ import {
   MAIN_CHAT_ORPHAN_GRACE_MS,
   isMainChatExecutionAgeExceeded,
   isMainChatAbortSettleExpired,
+  resolveMainChatAbortSettlement,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -75,6 +76,16 @@ assert.equal(isMainChatAbortSettleExpired({
   now,
   abortRequestedAt: undefined,
 }), false, 'runtimes without an abort request are not force-settled');
+assert.equal(resolveMainChatAbortSettlement({
+  now,
+  abortRequestedAt: now - MAIN_CHAT_ABORT_SETTLE_GRACE_MS - 1,
+  abortSource: 'main_chat_owner_watchdog',
+}), 'recover', 'a closed stream must not prevent watchdog work from becoming durable recovery');
+assert.equal(resolveMainChatAbortSettlement({
+  now,
+  abortRequestedAt: now - MAIN_CHAT_ABORT_SETTLE_GRACE_MS - 1,
+  abortSource: 'mobile_stop_button',
+}), 'finish', 'an explicit stop must terminalize even when its request finalizer never arrives');
 
 assert.equal(isMainChatExecutionAgeExceeded({
   now,

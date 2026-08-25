@@ -112,7 +112,7 @@ import {
   MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
   MAIN_CHAT_SEMANTIC_STALL_MS,
   isMainChatExecutionAgeExceeded,
-  isMainChatAbortSettleExpired,
+  resolveMainChatAbortSettlement,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1307,12 +1307,14 @@ function reconcileMainChatExecutionOwners(now = Date.now()): void {
   for (const runtime of listLiveRuntimes()) {
     if ((runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') || !runtime.deferTerminalCleanup) continue;
     const stream = runtime.sessionId ? getMainChatStream(runtime.sessionId) : null;
-    if (isMainChatAbortSettleExpired({
+    const abortSettlement = resolveMainChatAbortSettlement({
       now,
       abortRequestedAt: runtime.abortRequestedAt,
+      abortSource: runtime.abortSource,
       settleMs: MAIN_CHAT_ABORT_SETTLE_GRACE_MS,
-    })) {
-      if (runtime.abortSource === 'main_chat_owner_watchdog') {
+    });
+    if (abortSettlement !== 'wait') {
+      if (abortSettlement === 'recover') {
         // Keep watchdog-originated work in the durable interrupted ledger so a
         // restart can retrigger it exactly once.  Do not require a live stream
         // to still exist: the abort callback may have already closed it.
