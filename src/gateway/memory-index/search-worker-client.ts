@@ -431,10 +431,12 @@ async function performAutomaticPrewarmQuery(slot: AutomaticSearchSlot, workspace
   } catch (error: any) {
     slot.prewarmStatus = 'failed';
     slot.prewarmError = String(error?.message || error).slice(0, 400);
+    if (slot.prewarmDemandCancelled) return;
     if (slot.broker.getStatus().state === 'ready' || slot.broker.getStatus().state === 'busy') {
       console.warn(`[memory-search-worker] automatic prewarm query failed after process readiness; keeping slot alive: ${slot.prewarmError}`);
       return;
     }
+    scheduleAutomaticMemorySearchWorkerWarmup(workspacePath, 1_000);
     throw error;
   }
 }
@@ -902,7 +904,7 @@ export async function warmMemorySearchWorker(workspacePath?: string, options: Me
           console.warn(`[memory-search-worker] prewarm query failed after process readiness; keeping worker alive: ${warmupDiagnostics.queryError}`);
           return;
         }
-        await recycleWorker();
+        await recycleWorker(resolvedWorkspacePath);
         throw error;
       }
     } finally {
