@@ -54,33 +54,39 @@ function classifyGatewaySupervisorObservation(observation) {
   const statusPid = finitePositive(runtimeStatus?.pid);
   const leasePid = finitePositive(progressLease?.pid);
   const childOwnsPort = !!childPid && portOwnerPids.includes(childPid);
-  // In source development (and on Windows in particular), the Electron
-  // child tracked by spawn() can be a tsx/launcher wrapper while the actual
-  // Node runtime owns the listening socket. Treat that runtime PID as the
-  // managed identity only when the fresh runtime status and the port-owner
-  // probe agree. This keeps stale/unrelated port owners from authorizing a
-  // kill while allowing the real gateway to be supervised.
-  const runtimeOwnsPort = statusPid !== null && portOwnerPids.includes(statusPid);
-  const managedRuntimeIdentity = runtimeOwnsPort || childOwnsPort;
-  const statusPidMatchesChild = pidMatches(runtimeStatus?.pid, childPid);
-  const statusIdentityMatches = statusPidMatchesChild || runtimeOwnsPort;
-  const leasePidMatchesChild = pidMatches(progressLease?.pid, childPid);
-  const leaseIdentityMatches = leasePidMatchesChild
-    || (runtimeOwnsPort && leasePid !== null && leasePid === statusPid);
-  const statusGenerationMatches = processStartedAtMatches(
-    runtimeStatus?.processStartedAt,
-    observation.expectedProcessStartedAt,
-  );
-  const leaseGenerationMatches = processStartedAtMatches(
-    progressLease?.processStartedAt,
-    observation.expectedProcessStartedAt,
-  );
   const statusIsRelevant = heartbeatAgeMs !== null && heartbeatAgeMs <= observation.heartbeatFreshMs;
   const progressIsFresh = progressAgeMs !== null && progressAgeMs <= maxProgressAgeMs;
   const leaseIsRelevant = progressLease?.state === 'active'
     && expiresAt !== null
     && expiresAt > now
     && progressIsFresh;
+  const expectedProcessStartedAt = finitePositive(observation.expectedProcessStartedAt);
+  const statusProcessGenerationConfirmed = processStartedAtMatches(
+    runtimeStatus?.processStartedAt,
+    observation.expectedProcessStartedAt,
+  ) && (expectedProcessStartedAt === null || finitePositive(runtimeStatus?.processStartedAt) !== null);
+  const leaseProcessGenerationConfirmed = processStartedAtMatches(
+    progressLease?.processStartedAt,
+    observation.expectedProcessStartedAt,
+  ) && (expectedProcessStartedAt === null || finitePositive(progressLease?.processStartedAt) !== null);
+  // In source development (and on Windows in particular), the Electron
+  // child tracked by spawn() can be a tsx/launcher wrapper while the actual
+  // Node runtime owns the listening socket. Treat that runtime PID as the
+  // managed identity only when a fresh runtime status with a confirmed process
+  // generation and the port-owner probe agree. This keeps stale/reused PIDs
+  // from authorizing a kill while allowing the real gateway to be supervised.
+  const runtimeOwnsPort = statusPid !== null
+    && portOwnerPids.includes(statusPid)
+    && statusIsRelevant
+    && statusProcessGenerationConfirmed;
+  const managedRuntimeIdentity = runtimeOwnsPort || childOwnsPort;
+  const statusPidMatchesChild = pidMatches(runtimeStatus?.pid, childPid);
+  const statusIdentityMatches = statusPidMatchesChild || runtimeOwnsPort;
+  const leasePidMatchesChild = pidMatches(progressLease?.pid, childPid);
+  const leaseIdentityMatches = leasePidMatchesChild
+    || (runtimeOwnsPort && leasePid !== null && leasePid === statusPid);
+  const statusGenerationMatches = statusProcessGenerationConfirmed;
+  const leaseGenerationMatches = leaseProcessGenerationConfirmed;
   const childIdentityConfirmed = managedRuntimeIdentity
     || (statusPid !== null && statusPidMatchesChild);
   const pidAgreement = childIdentityConfirmed

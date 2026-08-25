@@ -110,7 +110,57 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 {
   // Electron may track a tsx/launcher wrapper while the actual Node gateway
   // process owns the listening socket. A fresh runtime identity that owns the
-  // port must still be eligible for supervision and restart recovery.
+  // port must be accepted during a failed probe (the fresh heartbeat still
+  // grants the normal degraded grace period).
+  const decision = classifyGatewaySupervisorObservation(observation({
+    childPid: 20_228,
+    portOwnerPids: [20_488],
+    expectedProcessStartedAt: now - 10_000,
+    runtimeStatus: {
+      pid: 20_488,
+      processStartedAt: now - 10_000,
+      timestamp: now - 5_000,
+    },
+    progressLease: {
+      version: 1,
+      pid: 20_488,
+      processStartedAt: now - 10_000,
+      state: 'active',
+      lastProgressAt: now - 180_000,
+      expiresAt: now - 90_000,
+    },
+  }));
+  assert.equal(decision.state, 'degraded_progressing', 'wrapper/runtime PID split must not become an identity mismatch');
+  assert.equal(decision.action, 'wait');
+}
+
+{
+  const decision = classifyGatewaySupervisorObservation(observation({
+    childPid: 20_228,
+    portOwnerPids: [20_488],
+    expectedProcessStartedAt: now - 10_000,
+    runtimeStatus: {
+      pid: 20_488,
+      processStartedAt: now - 10_000,
+      timestamp: now - 5_000,
+    },
+    progressLease: {
+      version: 1,
+      pid: 20_488,
+      processStartedAt: now - 10_000,
+      state: 'active',
+      lastProgressAt: now - 1_000,
+      expiresAt: now + 89_000,
+    },
+  }));
+  assert.equal(decision.state, 'busy_progressing');
+  assert.equal(decision.action, 'wait');
+  assert.notEqual(decision.reasonCode, 'pid_identity_mismatch');
+}
+
+{
+  // A stale status file must not authorize a wrapper/runtime PID substitution
+  // just because a reused PID currently appears to own the port.
   const decision = classifyGatewaySupervisorObservation(observation({
     childPid: 20_228,
     portOwnerPids: [20_488],
@@ -129,32 +179,9 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
       expiresAt: now - 90_000,
     },
   }));
-  assert.equal(decision.state, 'stalled', 'wrapper/runtime PID split must not become an identity mismatch');
-  assert.equal(decision.action, 'restart');
-}
-
-{
-  const decision = classifyGatewaySupervisorObservation(observation({
-    childPid: 20_228,
-    portOwnerPids: [20_488],
-    expectedProcessStartedAt: now - 10_000,
-    runtimeStatus: {
-      pid: 20_488,
-      processStartedAt: now - 10_000,
-      timestamp: now - 60_000,
-    },
-    progressLease: {
-      version: 1,
-      pid: 20_488,
-      processStartedAt: now - 10_000,
-      state: 'active',
-      lastProgressAt: now - 1_000,
-      expiresAt: now + 89_000,
-    },
-  }));
-  assert.equal(decision.state, 'busy_progressing');
+  assert.equal(decision.state, 'identity_mismatch', 'stale runtime status must not confirm a port owner');
   assert.equal(decision.action, 'wait');
-  assert.notEqual(decision.reasonCode, 'pid_identity_mismatch');
+  assert.equal(decision.reasonCode, 'pid_identity_mismatch');
 }
 
 {
