@@ -13,7 +13,9 @@ export function chatProgressVisibility(event = {}) {
   // unless the gateway explicitly marks a curated packet user-visible.
   if (type === 'thinking') return visibility === 'user' ? 'user' : 'private';
   if (type === 'agent_thought') return 'user';
-  return visibility === 'user' ? 'user' : 'summary';
+  // Unknown progress channels must fail closed. New provider/runtime event types
+  // can carry raw reasoning, so they are only safe when explicitly curated.
+  return visibility === 'user' ? 'user' : 'private';
 }
 
 export function isUserSafeAgentProgress(event = {}) {
