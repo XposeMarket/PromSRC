@@ -11,9 +11,29 @@ assert.ok(sessionRenderStart >= 0 && sessionRenderEnd > sessionRenderStart, 'mob
 
 const renderer = source.slice(rendererStart, rendererEnd);
 const sessionRenderer = source.slice(sessionRenderStart, sessionRenderEnd);
-assert.doesNotMatch(renderer, /__pmChat\.threads/, 'main renderer must not read compatibility transcript threads');
-assert.doesNotMatch(sessionRenderer, /__pmChat\.threads/, 'session renderer must not read compatibility transcript threads');
+const transcriptAuthorityForbidden = /__pmChat\.threads|_activeMobileThread\(/;
+assert.doesNotMatch(renderer, transcriptAuthorityForbidden, 'main renderer must not read compatibility transcript threads');
+assert.doesNotMatch(sessionRenderer, transcriptAuthorityForbidden, 'session renderer must not read compatibility transcript threads');
 assert.match(renderer, /getTranscriptRows\(sid/, 'main renderer must consume runtime-backed rows');
 assert.match(sessionRenderer, /getTranscriptRows\(renderSid/, 'session renderer must consume runtime-backed rows');
+
+function sliceFunction(name, nextName) {
+  const start = source.indexOf(`function ${name}(`);
+  const end = source.indexOf(`function ${nextName}(`, start);
+  assert.ok(start >= 0 && end > start, `${name} seam must remain discoverable`);
+  return source.slice(start, end);
+}
+
+const streamingPatch = sliceFunction('_patchLatestMobileStreamingMessage', '_scheduleMobileStreamingPatch');
+const workTimerLabel = sliceFunction('_syncMobileWorkTimerLabel', '_syncMobileWorkTimer');
+const workTimer = sliceFunction('_syncMobileWorkTimer', '_installMobileTimestampReveal');
+for (const [name, body] of [
+  ['streaming patch', streamingPatch],
+  ['work timer label', workTimerLabel],
+  ['work timer', workTimer],
+]) {
+  assert.doesNotMatch(body, transcriptAuthorityForbidden, `${name} must not read compatibility transcript threads`);
+  assert.match(body, /getTranscriptRows\(/, `${name} must consume runtime-backed rows`);
+}
 
 console.log('Mobile chat renderer authority contract passed.');

@@ -153,7 +153,7 @@ const coldTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTra
 assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'operation'), 'cold recovery must not paint a raw tool_call block');
 assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'result'), 'cold recovery must not paint a raw tool_result block');
 assert.ok(coldTrace.every((entry) => String(entry.text || '').length < 180), 'cold recovery placeholders must stay compact');
-await new Promise((resolve) => setTimeout(resolve, 60));
+await recoveryRuntime.loadToolActivityFeature();
 const readyTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
 assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'ready recovery must use the live operation renderer');
 assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'result'), 'ready recovery must use the live result renderer');

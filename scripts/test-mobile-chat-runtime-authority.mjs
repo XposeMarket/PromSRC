@@ -41,6 +41,12 @@ const assistant = {
   body: { text: '' },
   processEntries: [{ kind: 'tool', status: 'running' }],
   liveTraceEntries: [{ kind: 'trace' }],
+  toolMetadata: (() => {
+    const leaf = { value: 'original' };
+    let nested = leaf;
+    for (let depth = 0; depth < 12; depth += 1) nested = { nested };
+    return nested;
+  })(),
   timestamp: 1_001,
   streaming: true,
   _clientRequestId: requestId,
@@ -57,6 +63,31 @@ assert.deepEqual(rows.map((row) => row.key), [
 assert.equal(rows[0].msg.body.attachments[0].id, 'file-1', 'row descriptors must retain rich source data');
 assert.equal(rows[1].msg.processEntries[0].status, 'running');
 assert.equal(rows[0].turn.source, rows[0].msg, 'the normalized turn and row descriptor must share the rich source record');
+
+assistant.body.text = 'compatibility-only mutation';
+assert.equal(
+  adapter.getTranscriptRows(sessionId)[1].msg.body.text,
+  '',
+  'runtime history must be detached from compatibility cache object mutations',
+);
+let compatibilityLeaf = assistant.toolMetadata;
+for (let depth = 0; depth < 12; depth += 1) compatibilityLeaf = compatibilityLeaf.nested;
+compatibilityLeaf.value = 'compatibility-only deep mutation';
+let runtimeLeaf = adapter.getTranscriptRows(sessionId)[1].msg.toolMetadata;
+for (let depth = 0; depth < 12; depth += 1) runtimeLeaf = runtimeLeaf.nested;
+assert.equal(
+  runtimeLeaf.value,
+  'original',
+  'runtime history must clone metadata beyond the legacy depth limit',
+);
+
+adapter.replaceTranscriptRow(sessionId, {
+  ...assistant,
+  body: { text: 'streamed through runtime' },
+  content: 'streamed through runtime',
+});
+assert.equal(adapter.getTranscriptRows(sessionId).length, 2, 'row replacement must not duplicate the assistant turn');
+assert.equal(adapter.getTranscriptRows(sessionId)[1].msg.body.text, 'streamed through runtime');
 
 const extra = adapter.appendTranscriptRow(sessionId, {
   role: 'assistant',
