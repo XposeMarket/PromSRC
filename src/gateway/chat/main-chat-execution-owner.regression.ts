@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   MAIN_CHAT_ORPHAN_GRACE_MS,
+  isMainChatExecutionAgeExceeded,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -12,6 +13,8 @@ assert.equal(isMainChatSemanticProgressEvent('heartbeat'), false, 'transport hea
 assert.equal(isMainChatSemanticProgressEvent('token'), true, 'model output must count as semantic progress');
 assert.equal(isMainChatSemanticProgressEvent('tool_result'), true, 'tool results must count as semantic progress');
 assert.equal(isMainChatSemanticProgressEvent('ui_preflight'), false, 'preflight must not reset the semantic watchdog');
+assert.equal(isMainChatSemanticProgressEvent('info'), false, 'informational progress must not reset the semantic watchdog');
+assert.equal(isMainChatSemanticProgressEvent('tool_progress'), false, 'tool transport progress must not reset the semantic watchdog');
 
 assert.equal(isMainChatStreamOwnerOrphaned({
   now,
@@ -58,5 +61,17 @@ assert.equal(isMainChatSemanticProgressStalled({
   stallMs: 60_000,
 }), false, 'interrupted owners are handled by restart recovery, not the live watchdog');
 
-console.log('main chat execution owner regression passed');
+assert.equal(isMainChatExecutionAgeExceeded({
+  now,
+  startedAt: now - 10 * 60 * 1000 - 1,
+  maxAgeMs: 10 * 60 * 1000,
+  streamActive: true,
+}), true, 'a foreground execution beyond its absolute age bound must be contained');
+assert.equal(isMainChatExecutionAgeExceeded({
+  now,
+  startedAt: now - 10 * 60 * 1000 - 1,
+  maxAgeMs: 10 * 60 * 1000,
+  streamActive: false,
+}), false, 'completed streams must not be age-aborted');
 
+console.log('main chat execution owner regression passed');

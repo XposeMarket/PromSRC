@@ -107,8 +107,10 @@ import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type R
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
 import {
+  MAIN_CHAT_MAX_AGE_MS,
   MAIN_CHAT_ORPHAN_GRACE_MS,
   MAIN_CHAT_SEMANTIC_STALL_MS,
+  isMainChatExecutionAgeExceeded,
   isMainChatSemanticProgressEvent,
   isMainChatSemanticProgressStalled,
   isMainChatStreamOwnerOrphaned,
@@ -1232,6 +1234,33 @@ function reconcileMainChatExecutionOwners(): void {
       continue;
     }
 
+    const streamAgeMs = Math.max(0, now - Number(stream.startedAt || now));
+    const semanticStallMs = Math.max(0, now - Number(stream.lastSemanticProgressAt || now));
+    const ageExceeded = isMainChatExecutionAgeExceeded({
+      now,
+      startedAt: stream.startedAt,
+      streamActive: stream.active,
+      maxAgeMs: MAIN_CHAT_MAX_AGE_MS,
+    });
+    if (ageExceeded) {
+      const memory = process.memoryUsage();
+      const diagnostic = {
+        reason: 'max_age_exceeded',
+        streamAgeMs,
+        semanticStallMs,
+        lastSemanticEvent: stream.lastSemanticEvent || 'unknown',
+        streamId: stream.streamId,
+        admissionLeaseId: stream.admissionLeaseId,
+        gatewayRssBytes: memory.rss,
+        gatewayHeapUsedBytes: memory.heapUsed,
+        gatewayExternalBytes: memory.external,
+      };
+      updateLiveRuntimeCheckpoint(runtime.id, { event: 'owner_watchdog_triggered', ...diagnostic });
+      console.warn(`[main-chat-owner] foreground execution exceeded ${MAIN_CHAT_MAX_AGE_MS}ms; aborting runtime=${runtime.id} session=${stream.sessionId} diagnostic=${JSON.stringify(diagnostic)}`);
+      abortLiveRuntime(runtime.id, 'max_age_exceeded', { source: 'main_chat_owner_watchdog' });
+      continue;
+    }
+
     if (isMainChatSemanticProgressStalled({
       now,
       lastSemanticProgressAt: stream.lastSemanticProgressAt,
@@ -1241,7 +1270,20 @@ function reconcileMainChatExecutionOwners(): void {
       abortRequestedAt: runtime.abortRequestedAt,
       stallMs: MAIN_CHAT_SEMANTIC_STALL_MS,
     })) {
-      console.warn(`[main-chat-owner] semantic progress stalled for ${now - stream.lastSemanticProgressAt}ms; aborting runtime=${runtime.id} session=${stream.sessionId} lastEvent=${stream.lastSemanticEvent || 'unknown'}`);
+      const memory = process.memoryUsage();
+      const diagnostic = {
+        reason: 'semantic_progress_stall',
+        streamAgeMs,
+        semanticStallMs,
+        lastSemanticEvent: stream.lastSemanticEvent || 'unknown',
+        streamId: stream.streamId,
+        admissionLeaseId: stream.admissionLeaseId,
+        gatewayRssBytes: memory.rss,
+        gatewayHeapUsedBytes: memory.heapUsed,
+        gatewayExternalBytes: memory.external,
+      };
+      updateLiveRuntimeCheckpoint(runtime.id, { event: 'owner_watchdog_triggered', ...diagnostic });
+      console.warn(`[main-chat-owner] semantic progress stalled for ${semanticStallMs}ms; aborting runtime=${runtime.id} session=${stream.sessionId} diagnostic=${JSON.stringify(diagnostic)}`);
       abortLiveRuntime(runtime.id, 'semantic_progress_stall', { source: 'main_chat_owner_watchdog' });
     }
   }
