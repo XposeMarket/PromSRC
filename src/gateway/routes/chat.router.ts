@@ -21528,6 +21528,9 @@ router.post('/api/chat', async (req, res) => {
     abortSignal.reason = normalizedReason;
     if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
   };
+  chatStream.abortExecution = (reason: string) => {
+    abortSignal.abort?.(reason);
+  };
   let requestCompleted = false;
   let mainChatAbortSettled = false;
   const settleMainChatAbort = (reason: string) => {
