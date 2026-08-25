@@ -23,6 +23,48 @@ async function main(): Promise<void> {
   });
 
   try {
+    const previousProcessStartedAt = process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT;
+    process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT = '777';
+    try {
+      const configuredStore = new RuntimeProgressLeaseStore({
+        filePath: path.join(root, 'configured-process.json'),
+        pid: 4243,
+        now: () => now,
+      });
+      assert.equal(configuredStore.snapshot().processStartedAt, 777, 'lease identity must use the gateway generation');
+    } finally {
+      if (previousProcessStartedAt === undefined) delete process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT;
+      else process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT = previousProcessStartedAt;
+    }
+
+    const originalRename = fs.promises.rename;
+    let renameAttempts = 0;
+    (fs.promises as any).rename = async (from: string, to: string) => {
+      renameAttempts += 1;
+      if (renameAttempts < 3) {
+        const error: any = new Error('simulated Windows file lock');
+        error.code = 'EPERM';
+        throw error;
+      }
+      return originalRename(from, to);
+    };
+    try {
+      const retryStore = new RuntimeProgressLeaseStore({
+        filePath: path.join(root, 'rename-retry.json'),
+        pid: 4244,
+        processStartedAt: 600,
+        ttlMs: 10_000,
+        writeThrottleMs: 0,
+        now: () => now,
+      });
+      retryStore.register({ runtimeId: 'rename-retry', kind: 'main_chat' });
+      await retryStore.flush();
+      assert.equal(renameAttempts, 3, 'transient Windows rename locks must be retried');
+      assert.equal(readGatewayProgressLease(path.join(root, 'rename-retry.json'))?.runtimeId, 'rename-retry');
+    } finally {
+      (fs.promises as any).rename = originalRename;
+    }
+
     const first = store.register({
       runtimeId: 'runtime-a',
       kind: 'main_chat',

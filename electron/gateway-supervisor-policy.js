@@ -51,10 +51,22 @@ function classifyGatewaySupervisorObservation(observation) {
   const leaseExpiresInMs = expiresAt === null ? null : expiresAt - now;
   const maxProgressAgeMs = finitePositive(observation.maxProgressAgeMs) || 120_000;
 
-  const childOwnsPort = !!childPid && portOwnerPids.includes(childPid);
   const statusPid = finitePositive(runtimeStatus?.pid);
-  const statusPidMatches = pidMatches(runtimeStatus?.pid, childPid);
-  const leasePidMatches = pidMatches(progressLease?.pid, childPid);
+  const leasePid = finitePositive(progressLease?.pid);
+  const childOwnsPort = !!childPid && portOwnerPids.includes(childPid);
+  // In source development (and on Windows in particular), the Electron
+  // child tracked by spawn() can be a tsx/launcher wrapper while the actual
+  // Node runtime owns the listening socket. Treat that runtime PID as the
+  // managed identity only when the fresh runtime status and the port-owner
+  // probe agree. This keeps stale/unrelated port owners from authorizing a
+  // kill while allowing the real gateway to be supervised.
+  const runtimeOwnsPort = statusPid !== null && portOwnerPids.includes(statusPid);
+  const managedRuntimeIdentity = runtimeOwnsPort || childOwnsPort;
+  const statusPidMatchesChild = pidMatches(runtimeStatus?.pid, childPid);
+  const statusIdentityMatches = statusPidMatchesChild || runtimeOwnsPort;
+  const leasePidMatchesChild = pidMatches(progressLease?.pid, childPid);
+  const leaseIdentityMatches = leasePidMatchesChild
+    || (runtimeOwnsPort && leasePid !== null && leasePid === statusPid);
   const statusGenerationMatches = processStartedAtMatches(
     runtimeStatus?.processStartedAt,
     observation.expectedProcessStartedAt,
@@ -69,10 +81,11 @@ function classifyGatewaySupervisorObservation(observation) {
     && expiresAt !== null
     && expiresAt > now
     && progressIsFresh;
-  const childIdentityConfirmed = childOwnsPort || (statusPid !== null && statusPidMatches);
+  const childIdentityConfirmed = managedRuntimeIdentity
+    || (statusPid !== null && statusPidMatchesChild);
   const pidAgreement = childIdentityConfirmed
-    && (!statusIsRelevant || statusPidMatches)
-    && (!leaseIsRelevant || leasePidMatches)
+    && (!statusIsRelevant || (statusIdentityMatches && statusGenerationMatches))
+    && (!leaseIsRelevant || (leaseIdentityMatches && leaseGenerationMatches))
     && (!statusIsRelevant || statusGenerationMatches)
     && (!leaseIsRelevant || leaseGenerationMatches);
 
@@ -105,9 +118,9 @@ function classifyGatewaySupervisorObservation(observation) {
   }
 
   if (
-    (portOwnerPids.length > 0 && !portOwnerPids.includes(childPid))
-    || (statusIsRelevant && !statusPidMatches)
-    || (leaseIsRelevant && !leasePidMatches)
+    (portOwnerPids.length > 0 && !managedRuntimeIdentity)
+    || (statusIsRelevant && !statusIdentityMatches)
+    || (leaseIsRelevant && !leaseIdentityMatches)
     // A stale snapshot from a previous process is evidence only while it is
     // still fresh. Once its heartbeat/lease has expired, it must not keep the
     // supervisor in an identity-mismatch wait loop forever.
@@ -141,7 +154,7 @@ function classifyGatewaySupervisorObservation(observation) {
     };
   }
 
-  const leaseFresh = leaseIsRelevant && leasePidMatches;
+  const leaseFresh = leaseIsRelevant && leaseIdentityMatches;
   if (leaseFresh) {
     return {
       state: 'busy_progressing',

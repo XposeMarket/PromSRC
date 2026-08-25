@@ -2,9 +2,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '../config/config';
+import { getNodeRuntimeSnapshot } from './runtime/node-runtime';
 
 export const GATEWAY_PROGRESS_LEASE_FILENAME = 'gateway-progress-lease.json';
 export const GATEWAY_PROGRESS_LEASE_VERSION = 1 as const;
+const LEASE_RENAME_RETRY_COUNT = 3;
+const LEASE_RENAME_RETRY_DELAY_MS = 50;
+const LEASE_WRITE_WARNING_INTERVAL_MS = 30_000;
 
 export type GatewayProgressLeaseState = 'active' | 'idle';
 
@@ -146,6 +150,7 @@ export class RuntimeProgressLeaseStore {
   private writeTimer: NodeJS.Timeout | null = null;
   private writeActive = false;
   private lastWriteAt = 0;
+  private lastWriteWarningAt = -LEASE_WRITE_WARNING_INTERVAL_MS;
   private idleWaiters = new Set<() => void>();
 
   constructor(options: RuntimeProgressLeaseStoreOptions) {
@@ -153,7 +158,7 @@ export class RuntimeProgressLeaseStore {
     this.pid = Number.isInteger(options.pid) && Number(options.pid) > 0 ? Number(options.pid) : process.pid;
     this.processStartedAt = Number.isFinite(options.processStartedAt)
       ? Number(options.processStartedAt)
-      : Date.now() - Math.floor(process.uptime() * 1000);
+      : getNodeRuntimeSnapshot().processStartedAt;
     this.ttlMs = boundedInt(options.ttlMs, 90_000, 10_000, 10 * 60_000);
     this.writeThrottleMs = boundedInt(options.writeThrottleMs, 500, 0, 5_000);
     this.now = options.now || Date.now;
@@ -271,8 +276,26 @@ export class RuntimeProgressLeaseStore {
         try {
           await fs.promises.mkdir(dir, { recursive: true });
           await fs.promises.writeFile(tempPath, JSON.stringify(snapshot), 'utf-8');
-          await fs.promises.rename(tempPath, this.filePath);
+          let renamed = false;
+          for (let attempt = 0; attempt < LEASE_RENAME_RETRY_COUNT; attempt += 1) {
+            try {
+              await fs.promises.rename(tempPath, this.filePath);
+              renamed = true;
+              break;
+            } catch (error: any) {
+              const retryable = ['EPERM', 'EACCES', 'EBUSY'].includes(String(error?.code || ''));
+              if (!retryable || attempt === LEASE_RENAME_RETRY_COUNT - 1) throw error;
+              await new Promise<void>((resolve) => setTimeout(resolve, LEASE_RENAME_RETRY_DELAY_MS * (attempt + 1)));
+            }
+          }
+          if (!renamed) throw new Error('progress lease rename did not complete');
           this.lastWriteAt = this.now();
+        } catch (error) {
+          // Do not silently lose the latest authoritative snapshot after a
+          // transient Windows file-lock/rename failure. The active map is
+          // still the source of truth; requeue it after logging below.
+          this.pending = this.pending || snapshot;
+          throw error;
         } finally {
           await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
         }
@@ -281,7 +304,11 @@ export class RuntimeProgressLeaseStore {
         }
       }
     } catch (error: any) {
-      console.warn('[gateway-progress-lease] Failed to persist progress lease:', error?.message || error);
+      const now = this.now();
+      if (now - this.lastWriteWarningAt >= LEASE_WRITE_WARNING_INTERVAL_MS) {
+        this.lastWriteWarningAt = now;
+        console.warn('[gateway-progress-lease] Failed to persist progress lease; will retry:', error?.message || error);
+      }
     } finally {
       this.writeActive = false;
       if (this.pending) this.queueCurrentSnapshot();
