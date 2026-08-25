@@ -66,7 +66,6 @@ func click(_ params: [String: Any]) throws {
             throw HelperError.generic("failed to create mouse event")
         }
         if !flags.isEmpty { down.flags = flags; up.flags = flags }
-        // Encode multi-click count so the OS recognizes double/triple clicks.
         down.setIntegerValueField(.mouseEventClickState, value: Int64(i))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(i))
         postEvent(down, pid: pid)
@@ -96,6 +95,9 @@ func drag(_ params: [String: Any]) throws {
     let pid = paramInt(params, "pid")
     let from = CGPoint(x: fx, y: fy)
 
+    // The background lane never warps the human cursor. Foreground compatibility
+    // retains the old behavior so applications that reject pid-scoped delivery
+    // can still be driven explicitly.
     if pid == nil { CGWarpMouseCursorPosition(from) }
     usleep(30_000)
     if let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left) {
@@ -119,6 +121,7 @@ func drag(_ params: [String: Any]) throws {
 func typeText(_ params: [String: Any]) throws {
     try requireAccessibility()
     let text = paramString(params, "text") ?? ""
+    let pid = paramInt(params, "pid")
     for ch in text {
         let s = String(ch)
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
@@ -126,8 +129,8 @@ func typeText(_ params: [String: Any]) throws {
         let utf16 = Array(s.utf16)
         down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
         up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        postEvent(down, pid: pid)
+        postEvent(up, pid: pid)
         usleep(2_000)
     }
 }
@@ -137,12 +140,13 @@ func pressKey(_ params: [String: Any]) throws {
     let key = (paramString(params, "key") ?? "").lowercased()
     let modifiers = (params["modifiers"] as? [String]) ?? []
     let flags = modifierFlags(modifiers)
+    let pid = paramInt(params, "pid")
 
     guard let code = keyCodeMap[key] else {
-        // Unknown named key with no keycode: fall back to typing it literally if
-        // there are no modifiers (e.g. a stray character).
         if modifiers.isEmpty && key.count == 1 {
-            try typeText(["text": key])
+            var literalParams: [String: Any] = ["text": key]
+            if let pid = pid { literalParams["pid"] = pid }
+            try typeText(literalParams)
             return
         }
         throw HelperError.generic("unmapped key: '\(key)'")
@@ -153,6 +157,6 @@ func pressKey(_ params: [String: Any]) throws {
         throw HelperError.generic("failed to create key event")
     }
     if !flags.isEmpty { down.flags = flags; up.flags = flags }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    postEvent(down, pid: pid)
+    postEvent(up, pid: pid)
 }
