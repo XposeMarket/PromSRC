@@ -29,6 +29,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify Brain provider diagnostics and bounded failures
+        run: npm run test:brain-provider-diagnostics
       - name: Verify proposal approval durability
         run: |
           npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts

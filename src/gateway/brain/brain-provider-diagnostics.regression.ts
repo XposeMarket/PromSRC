@@ -36,12 +36,13 @@ async function main(): Promise<void> {
           attempt: 2,
           retrying: false,
           durationMs: 250,
+          accountIndex: 1,
           rawResponse: 'secret prompt should not be stored',
         },
       });
       return diagnostics.finishBrainProviderDiagnostics(context, {
         outcome: 'failed',
-        error: 'response.completed contained no assistant text or tool calls',
+        error: 'API 400: SENTINEL_PRIVATE_PROVIDER_BODY',
         toolCount: 3,
         resultTextChars: 0,
       });
@@ -52,7 +53,14 @@ async function main(): Promise<void> {
     const records = diagnostics.readBrainProviderDiagnosticRecords();
     assert.equal(records.filter((record) => record.kind === 'run_summary').length, 2);
     assert.equal(records.filter((record) => record.kind === 'provider_event').length, 2);
+    const providerEvents = records.filter((record): record is Extract<typeof records[number], { kind: 'provider_event' }> => record.kind === 'provider_event');
+    const firstEvent = providerEvents[0];
+    assert.equal(firstEvent?.accountIndex, 1, 'provider diagnostics must retain the bounded account-pool index');
     assert.equal(JSON.stringify(records).includes('secret prompt'), false, 'provider diagnostics must not persist raw response/prompt payloads');
+    assert.equal(JSON.stringify(records).includes('SENTINEL_PRIVATE_PROVIDER_BODY'), false, 'provider diagnostics must not persist raw provider error bodies');
+    const summaries = records.filter((record): record is Extract<typeof records[number], { kind: 'run_summary' }> => record.kind === 'run_summary');
+    const firstSummary = summaries[0];
+    assert.equal(firstSummary?.error?.reason, 'provider_http_error', 'summary errors must use an allowlisted structural reason');
 
     const paused = diagnostics.shouldDeferAutomaticBrainJob('thought');
     assert.equal(paused.defer, true, 'repeated empty completions must pause automatic Thought runs');

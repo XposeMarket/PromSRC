@@ -13,6 +13,21 @@ import type { BrainJobKind, BrainJobUsageRecord } from './brain-usage';
  */
 
 export type BrainProviderFailureClass = 'missing_completed' | 'empty_completion';
+export type BrainProviderErrorReason =
+  | 'missing_completed'
+  | 'empty_completion'
+  | 'provider_http_error'
+  | 'aborted'
+  | 'provider_error';
+
+/** Structural error metadata only; arbitrary provider messages are excluded. */
+export interface BrainProviderErrorMetadata {
+  name?: string;
+  code?: string;
+  status?: number;
+  failureClass?: BrainProviderFailureClass;
+  reason: BrainProviderErrorReason;
+}
 
 export interface BrainProviderDiagnosticsContext {
   job: BrainJobKind;
@@ -40,6 +55,7 @@ export interface BrainProviderEventDiagnostic {
   outputItemCount?: number;
   finalTextChars?: number;
   toolCallCount?: number;
+  accountIndex?: number;
   attempt?: number;
   retrying?: boolean;
   durationMs?: number;
@@ -65,7 +81,7 @@ export interface BrainProviderRunSummary {
   activityPackageChars?: number;
   resultTextChars?: number;
   usage?: CompactProviderUsage;
-  error?: string;
+  error?: BrainProviderErrorMetadata;
 }
 
 export type BrainProviderDiagnosticRecord = BrainProviderEventDiagnostic | BrainProviderRunSummary;
@@ -107,6 +123,12 @@ function boundedCount(value: unknown, max = 1_000_000_000): number {
   return Number.isFinite(n) && n >= 0 ? Math.min(max, Math.round(n)) : 0;
 }
 
+function boundedOptionalCount(value: unknown, max = 1_000_000_000): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.min(max, Math.round(n)) : undefined;
+}
+
 function boundedList(value: unknown, maxItems = 40, maxItemChars = 80): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -129,6 +151,37 @@ function compactUsage(value: unknown): CompactProviderUsage | undefined {
     totalCostMicros: boundedCount(usage.totalCostMicros),
   };
   return Object.values(result).some((entry) => Number(entry) > 0) ? result : undefined;
+}
+
+function sanitizeDiagnosticError(error: unknown): BrainProviderErrorMetadata | undefined {
+  if (error === undefined || error === null || error === '') return undefined;
+  const value = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const nestedDiagnostics = value.diagnostics && typeof value.diagnostics === 'object'
+    ? value.diagnostics as Record<string, unknown>
+    : {};
+  const failureClass = nestedDiagnostics.failureClass === 'missing_completed' || nestedDiagnostics.failureClass === 'empty_completion'
+    ? nestedDiagnostics.failureClass
+    : value.failureClass === 'missing_completed' || value.failureClass === 'empty_completion'
+      ? value.failureClass
+      : undefined;
+  const message = typeof error === 'string'
+    ? error
+    : typeof value.message === 'string' ? value.message : '';
+  const normalizedMessage = message.toLowerCase();
+  const reason: BrainProviderErrorReason = failureClass
+    || (/response\.completed[^.]*no assistant text|empty completion/i.test(normalizedMessage) ? 'empty_completion'
+      : /ended before response\.completed|missing completed/i.test(normalizedMessage) ? 'missing_completed'
+        : /\bapi(?:\s+error)?\s+\d{3}\b|\bhttp(?:s)?\b|\bstatus\s*[:=]?\s*\d{3}\b/i.test(normalizedMessage) ? 'provider_http_error'
+          : /\babort(?:ed|ing)?\b|\bcancel(?:led|ed)?\b/i.test(normalizedMessage) ? 'aborted'
+            : 'provider_error');
+  const metadata: BrainProviderErrorMetadata = {
+    ...(boundedText(value.name, 80) ? { name: boundedText(value.name, 80) } : {}),
+    ...(boundedText(value.code, 80) ? { code: boundedText(value.code, 80) } : {}),
+    ...(boundedOptionalCount(value.status, 599) !== undefined ? { status: boundedOptionalCount(value.status, 599) } : {}),
+    ...(failureClass ? { failureClass } : {}),
+    reason,
+  };
+  return metadata;
 }
 
 function appendDiagnostic(record: BrainProviderDiagnosticRecord): void {
@@ -192,6 +245,7 @@ export function captureBrainProviderEvent(context: BrainProviderDiagnosticsConte
     ...(data.outputItemCount !== undefined ? { outputItemCount: boundedCount(data.outputItemCount) } : {}),
     ...(data.finalTextChars !== undefined ? { finalTextChars: boundedCount(data.finalTextChars) } : {}),
     ...(data.toolCallCount !== undefined ? { toolCallCount: boundedCount(data.toolCallCount) } : {}),
+    ...(data.accountIndex !== undefined ? { accountIndex: boundedOptionalCount(data.accountIndex, 64) } : {}),
     ...(data.attempt !== undefined ? { attempt: boundedCount(data.attempt, 10) } : {}),
     ...(typeof data.retrying === 'boolean' ? { retrying: data.retrying } : {}),
     ...(data.durationMs !== undefined ? { durationMs: boundedCount(data.durationMs, 24 * 60 * 60 * 1000) } : {}),
@@ -242,7 +296,7 @@ export function finishBrainProviderDiagnostics(
     ...(input.activityPackageChars !== undefined ? { activityPackageChars: boundedCount(input.activityPackageChars) } : {}),
     ...(input.resultTextChars !== undefined ? { resultTextChars: boundedCount(input.resultTextChars) } : {}),
     ...(usageForRecord(input.usage) ? { usage: usageForRecord(input.usage) } : {}),
-    ...(boundedText(input.error, 600) ? { error: boundedText(input.error, 600) } : {}),
+    ...(sanitizeDiagnosticError(input.error) ? { error: sanitizeDiagnosticError(input.error) } : {}),
   };
   appendDiagnostic(summary);
   return summary;

@@ -444,7 +444,11 @@ export class OpenAICodexAdapter implements LLMProvider {
             ok: false,
             error: text.slice(0, 400),
           });
-          throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
+          const providerError = new Error(`openai_codex API error ${response.status}`) as Error & { code?: string; status?: number };
+          providerError.name = 'CodexProviderHttpError';
+          providerError.code = 'CODEX_HTTP_ERROR';
+          providerError.status = response.status;
+          throw providerError;
         }
 
         const result = await this.parseSSEStream(response, requestedModel, options, resetIdleTimer);
