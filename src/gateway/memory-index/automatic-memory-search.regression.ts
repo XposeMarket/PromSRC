@@ -146,6 +146,10 @@ async function main(): Promise<void> {
     const concurrentElapsedMs = Date.now() - concurrentStartedAt;
     assert.ok(JSON.parse(concurrentResult), 'cold elastic demand should serve the real concurrent lookup');
     assert.ok(concurrentElapsedMs <= 1_000, `cold elastic lookup exceeded the bounded cold-start test window (elapsed=${concurrentElapsedMs}ms)`);
+    const afterColdElastic = getAutomaticMemorySearchWorkerStatus();
+    assert.ok(afterColdElastic.workers[1]?.lastColdStart, 'cold-elastic demand must expose bounded phase diagnostics');
+    assert.ok((afterColdElastic.workers[1]?.lastColdStart?.totalDurationMs || 0) >= 0);
+    assert.ok(afterColdElastic.workers[1]?.lastColdStart?.processStartupMs !== undefined, 'cold-elastic diagnostics must separate process startup from query time');
     await waitFor(() => getAutomaticMemorySearchWorkerStatus().workers[0]?.state === 'ready');
   } finally {
     await shutdownMemorySearchWorker();
