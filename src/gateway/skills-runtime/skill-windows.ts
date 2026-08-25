@@ -15,22 +15,13 @@ export function getSessionSkillWindows(sessionId: string): Map<string, SkillWind
 export const sessionCurrentTurn = new Map<string, number>();
 
 let _skillsManager: InstanceType<typeof SkillsManager> | null = null;
-let _skillsDir = '';
-let _fallbackSkillsDir = '';
 
 export function initSkillWindows(
   skillsManager: InstanceType<typeof SkillsManager>,
-  skillsDir: string,
-  fallbackSkillsDir: string,
+  _skillsDir: string,
+  _fallbackSkillsDir: string,
 ): void {
   _skillsManager = skillsManager;
-  _skillsDir = skillsDir;
-  _fallbackSkillsDir = fallbackSkillsDir;
-}
-
-function samePath(a: string, b: string): boolean {
-  const path = require('path');
-  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 }
 
 /** Legacy hook — multi-agent orchestration skill removed; always false. */
