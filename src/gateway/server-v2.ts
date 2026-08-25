@@ -1114,8 +1114,11 @@ async function startGatewayListeners(): Promise<void> {
   }
   const [contextWarmup, memoryWarmup, automaticMemoryWarmup] = await Promise.allSettled([
     warmContextBuildWorkerPool(),
-    warmMemorySearchWorker(getConfig().getWorkspacePath()),
-    warmAutomaticMemorySearchWorkers(getConfig().getWorkspacePath()),
+    // Listener readiness depends on the child processes being IPC-ready. The
+    // optional SQLite/FTS first-query prewarms continue asynchronously so a
+    // slow cold index cannot keep the gateway unavailable for 15 seconds.
+    warmMemorySearchWorker(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
+    warmAutomaticMemorySearchWorkers(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
   ]);
   if (contextWarmup.status === 'fulfilled') {
     console.log('[context-build] Worker pool prewarmed before accepting traffic.');
@@ -1127,16 +1130,16 @@ async function startGatewayListeners(): Promise<void> {
     startupMark('context build worker prewarm failed');
   }
   if (memoryWarmup.status === 'fulfilled') {
-    console.log('[memory-search] Query worker prewarmed before accepting traffic.');
-    startupMark('memory search worker prewarmed');
+    console.log('[memory-search] Query worker process ready; first-query prewarm running asynchronously.');
+    startupMark('memory search worker process ready');
   } else {
     // Search remains lazy and isolated if the optional prewarm cannot start.
     console.warn('[memory-search] Query worker prewarm failed before listen:', memoryWarmup.reason?.message || memoryWarmup.reason);
     startupMark('memory search worker prewarm failed');
   }
   if (automaticMemoryWarmup.status === 'fulfilled') {
-    console.log('[memory-search] Automatic query workers prewarmed before accepting traffic.');
-    startupMark('automatic memory search workers prewarmed');
+    console.log('[memory-search] Automatic query worker processes ready; first-query prewarms running asynchronously.');
+    startupMark('automatic memory search worker processes ready');
   } else {
     console.warn('[memory-search] Automatic query worker prewarm failed before listen:', automaticMemoryWarmup.reason?.message || automaticMemoryWarmup.reason);
     startupMark('automatic memory search worker prewarm failed');

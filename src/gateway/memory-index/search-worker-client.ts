@@ -42,6 +42,22 @@ export interface MemorySearchWorkerStatus {
   queued: number;
   shuttingDown: boolean;
   broker: RuntimeWorkerBrokerStatus;
+  warmup: MemorySearchWorkerWarmupStatus;
+}
+
+export interface MemorySearchWorkerWarmupStatus {
+  processReadyAt?: number;
+  processStartupMs?: number;
+  queryStartedAt?: number;
+  queryCompletedAt?: number;
+  queryDurationMs?: number;
+  queryStatus: 'not_started' | 'pending' | 'completed' | 'skipped' | 'failed';
+  queryError?: string;
+}
+
+export interface MemorySearchWarmupOptions {
+  /** Keep listener startup independent from the optional first-query prewarm. */
+  awaitPrewarm?: boolean;
 }
 
 function envMs(name: string, fallback: number, minimum: number, maximum: number): number {
@@ -58,6 +74,16 @@ const workerEnabled = String(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER || '1')
 const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 8_000, 1_000, 5 * 60_000);
 const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 30_000, 2_000, 10 * 60_000);
 const warmupTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_WARMUP_TIMEOUT_MS', 2_000, 1_000, 10_000);
+// Process readiness and first-query readiness are separate phases. A cold
+// SQLite/FTS open can legitimately exceed the automatic prompt SLA without
+// meaning that the child process is unhealthy. Keep the prewarm query bounded,
+// but do not let the old 2s gate kill a healthy worker before real demand.
+const prewarmQueryTimeoutMs = envMs(
+  'PROMETHEUS_MEMORY_SEARCH_PREWARM_TIMEOUT_MS',
+  15_000,
+  Math.max(1_000, warmupTimeoutMs),
+  60_000,
+);
 const recycleRssBytes = envBytes('PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 4 * 1024 * 1024 * 1024);
 const automaticIdleTtlMs = envMs('PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS', 30_000, 1_000, 10 * 60_000);
 // Production automatic retrieval remains capped at 250 ms. The regression
@@ -121,6 +147,19 @@ interface AutomaticSearchSlot {
   broker: RuntimeWorkerBroker;
   active: boolean;
   warmFloor: boolean;
+  prewarmStatus: 'not_started' | 'pending' | 'completed' | 'skipped' | 'failed';
+  prewarmError?: string;
+  processReadyAt?: number;
+  processStartupMs?: number;
+  prewarmPromise?: Promise<void>;
+  prewarmDemandCancelled?: boolean;
+  lastColdStart?: {
+    at: number;
+    processStartupMs?: number;
+    queryDurationMs?: number;
+    totalDurationMs: number;
+    outcome: 'success' | 'failed' | 'timeout';
+  };
 }
 
 const automaticQueue: QueuedAutomaticSearch[] = [];
@@ -128,12 +167,15 @@ const automaticSlots: AutomaticSearchSlot[] = automaticBrokers.map((automaticBro
   broker: automaticBroker,
   active: false,
   warmFloor: index === 0,
+  prewarmStatus: 'not_started',
 }));
 let automaticDrainScheduled = false;
 let automaticDraining = false;
 let automaticWarmupTimer: NodeJS.Timeout | null = null;
 let automaticWarmupPromise: Promise<void> | null = null;
+let automaticElasticWarmupPromise: Promise<void> | null = null;
 let automaticShuttingDown = false;
+let explicitPrewarmPromise: Promise<void> | null = null;
 
 const queue: QueuedSearch[] = [];
 let active: QueuedSearch | null = null;
@@ -191,6 +233,33 @@ async function rotateAutomaticWarmFloor(slot: AutomaticSearchSlot, workspacePath
   await warmAutomaticSlot(slot, workspacePath);
 }
 
+/**
+ * A busy floor is an early signal that a second automatic request may arrive.
+ * Start only the elastic process here; its real request remains the first
+ * query, so this path measures process startup separately from SQLite/FTS
+ * execution and avoids spending the request's deadline on a dummy query.
+ */
+function ensureElasticProcessReady(workspacePath: string): void {
+  const elastic = automaticSlots.find((candidate) => !candidate.warmFloor);
+  if (!elastic || automaticElasticWarmupPromise) return;
+  const state = elastic.broker.getStatus().state;
+  if (elastic.active || ['ready', 'busy', 'starting'].includes(state)) return;
+  const processStartedAt = Date.now();
+  automaticElasticWarmupPromise = (async () => {
+    try {
+      await elastic.broker.warmup();
+      elastic.processReadyAt = Date.now();
+      elastic.processStartupMs = Math.max(0, elastic.processReadyAt - processStartedAt);
+    } catch (error: any) {
+      console.warn(`[memory-search-worker] elastic process pre-start failed: ${String(error?.message || error).slice(0, 400)}`);
+    }
+  })().finally(() => {
+    automaticElasticWarmupPromise = null;
+    scheduleAutomaticDrain();
+  });
+  void automaticElasticWarmupPromise;
+}
+
 async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAutomaticSearch): Promise<void> {
   slot.active = true;
   if (task.timeoutHandle) {
@@ -206,6 +275,9 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
     return;
   }
 
+  const requestStartedAt = Date.now();
+  const brokerBeforeRequest = slot.broker.getStatus();
+  const coldStart = brokerBeforeRequest.state !== 'ready';
   let timedOut = false;
   let cancelled = false;
   let rssRotationRequested = false;
@@ -233,6 +305,24 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
       task.timeoutHandle.unref?.();
     });
     const result = await Promise.race([workerPromise, timeoutPromise]);
+    if (coldStart) {
+      const completedAt = Date.now();
+      const brokerAfterRequest = slot.broker.getStatus();
+      const workerStartedAt = Number(brokerAfterRequest.lastStartedAt || 0);
+      const measuredProcessStartupMs = workerStartedAt >= requestStartedAt
+        ? Math.max(0, workerStartedAt - requestStartedAt)
+        : undefined;
+      const queryStartedAt = measuredProcessStartupMs !== undefined ? workerStartedAt : requestStartedAt;
+      if (measuredProcessStartupMs !== undefined) slot.processStartupMs = measuredProcessStartupMs;
+      slot.lastColdStart = {
+        at: completedAt,
+        processStartupMs: measuredProcessStartupMs,
+        queryDurationMs: Math.max(0, completedAt - queryStartedAt),
+        totalDurationMs: Math.max(0, completedAt - requestStartedAt),
+        outcome: 'success',
+      };
+      console.info(`[memory-search-worker] automatic cold request slot=${brokerAfterRequest.name} processStartupMs=${measuredProcessStartupMs ?? 'unknown'} queryMs=${Math.max(0, completedAt - queryStartedAt)} totalMs=${Math.max(0, completedAt - requestStartedAt)}`);
+    }
     if (cancelled || task.signal?.aborted) settleAutomatic(task, { error: abortError() });
     else {
       settleAutomatic(task, { value: result.serialized });
@@ -246,6 +336,24 @@ async function runAutomaticSearchTask(slot: AutomaticSearchSlot, task: QueuedAut
       }
     }
   } catch (error: any) {
+    if (coldStart) {
+      const completedAt = Date.now();
+      const brokerAfterRequest = slot.broker.getStatus();
+      const workerStartedAt = Number(brokerAfterRequest.lastStartedAt || 0);
+      const measuredProcessStartupMs = workerStartedAt >= requestStartedAt
+        ? Math.max(0, workerStartedAt - requestStartedAt)
+        : undefined;
+      const queryStartedAt = measuredProcessStartupMs !== undefined ? workerStartedAt : requestStartedAt;
+      if (measuredProcessStartupMs !== undefined) slot.processStartupMs = measuredProcessStartupMs;
+      slot.lastColdStart = {
+        at: completedAt,
+        processStartupMs: measuredProcessStartupMs,
+        queryDurationMs: Math.max(0, completedAt - queryStartedAt),
+        totalDurationMs: Math.max(0, completedAt - requestStartedAt),
+        outcome: timedOut ? 'timeout' : 'failed',
+      };
+      console.warn(`[memory-search-worker] automatic cold request failed slot=${brokerAfterRequest.name} processStartupMs=${measuredProcessStartupMs ?? 'unknown'} totalMs=${Math.max(0, completedAt - requestStartedAt)} outcome=${timedOut ? 'timeout' : 'failed'}`);
+    }
     const normalized = cancelled || task.signal?.aborted
       ? abortError()
       : error instanceof Error ? error : new Error(String(error));
@@ -269,6 +377,7 @@ async function drainAutomaticQueue(): Promise<void> {
     while (!automaticShuttingDown) {
       const task = automaticQueue.shift();
       const readySlot = automaticSlots.find((candidate) => !candidate.active && candidate.broker.getStatus().state === 'ready');
+      const prewarmingSlot = automaticSlots.find((candidate) => !candidate.active && candidate.prewarmPromise);
       // The floor handles the normal single-request path. If it is already
       // busy and demand increases after the elastic slot retired, let that
       // cold elastic slot take the real request directly. A separate warmup
@@ -281,7 +390,15 @@ async function drainAutomaticQueue(): Promise<void> {
       if (!slot || !task) {
         if (task) {
           automaticQueue.unshift(task);
-          if (!slot) scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, 0);
+          if (!slot && prewarmingSlot) {
+            // A real request has priority over an optional prewarm. Stop the
+            // prewarm child so cold demand can use the slot directly instead
+            // of waiting for the 15s diagnostic query budget.
+            prewarmingSlot.prewarmDemandCancelled = true;
+            prewarmingSlot.broker.forceKill();
+          } else if (!slot) {
+            scheduleAutomaticMemorySearchWorkerWarmup(task.payload.workspacePath, 0);
+          }
         }
         break;
       }
@@ -289,6 +406,7 @@ async function drainAutomaticQueue(): Promise<void> {
         settleAutomatic(task, { error: abortError() });
         continue;
       }
+      if (slot.warmFloor) ensureElasticProcessReady(task.payload.workspacePath);
       void runAutomaticSearchTask(slot, task);
     }
   } finally {
@@ -297,26 +415,72 @@ async function drainAutomaticQueue(): Promise<void> {
   }
 }
 
-async function warmAutomaticSlot(slot: AutomaticSearchSlot, workspacePath: string): Promise<void> {
+async function performAutomaticPrewarmQuery(slot: AutomaticSearchSlot, workspacePath: string): Promise<void> {
+  try {
+    await slot.broker.run<MemorySearchWorkerResult>('memory_search', {
+      workspacePath: path.resolve(workspacePath),
+      params: {
+        query: 'memory search',
+        mode: 'quick',
+        limit: 4,
+        rerank: false,
+        queryRoute: 'startup_automatic_warmup',
+      },
+    }, prewarmQueryTimeoutMs);
+    slot.prewarmStatus = 'completed';
+  } catch (error: any) {
+    slot.prewarmStatus = 'failed';
+    slot.prewarmError = String(error?.message || error).slice(0, 400);
+    if (slot.prewarmDemandCancelled) return;
+    if (slot.broker.getStatus().state === 'ready' || slot.broker.getStatus().state === 'busy') {
+      console.warn(`[memory-search-worker] automatic prewarm query failed after process readiness; keeping slot alive: ${slot.prewarmError}`);
+      return;
+    }
+    scheduleAutomaticMemorySearchWorkerWarmup(workspacePath, 1_000);
+    throw error;
+  }
+}
+
+function startAutomaticPrewarmQuery(slot: AutomaticSearchSlot, workspacePath: string): Promise<void> {
+  if (slot.prewarmPromise) return slot.prewarmPromise;
+  slot.prewarmStatus = 'pending';
+  slot.prewarmError = undefined;
+  slot.prewarmDemandCancelled = false;
+  const query = performAutomaticPrewarmQuery(slot, workspacePath);
+  const tracked = query.then(
+    () => {
+      if (slot.prewarmPromise === tracked) slot.prewarmPromise = undefined;
+      scheduleAutomaticDrain();
+    },
+    (error) => {
+      if (slot.prewarmPromise === tracked) slot.prewarmPromise = undefined;
+      scheduleAutomaticDrain();
+      throw error;
+    },
+  );
+  slot.prewarmPromise = tracked;
+  return tracked;
+}
+
+async function warmAutomaticSlot(slot: AutomaticSearchSlot, workspacePath: string, options: MemorySearchWarmupOptions = {}): Promise<void> {
   // A healthy sibling does not mean this slot is warm. Rewarm only the
   // missing slot so recovery does not repeat an expensive query on every
   // already-ready worker.
-  if (slot.broker.getStatus().state === 'ready') return;
+  if (slot.broker.getStatus().state === 'ready') {
+    if (options.awaitPrewarm !== false && slot.prewarmPromise) await slot.prewarmPromise;
+    return;
+  }
+  const processStartedAt = Date.now();
   await slot.broker.warmup();
-  await slot.broker.run<MemorySearchWorkerResult>('memory_search', {
-    workspacePath: path.resolve(workspacePath),
-    params: {
-      query: 'memory search',
-      mode: 'quick',
-      limit: 4,
-      rerank: false,
-      queryRoute: 'startup_automatic_warmup',
-    },
-  }, warmupTimeoutMs);
+  slot.processReadyAt = Date.now();
+  slot.processStartupMs = Math.max(0, slot.processReadyAt - processStartedAt);
+  const prewarm = startAutomaticPrewarmQuery(slot, workspacePath);
+  if (options.awaitPrewarm !== false) await prewarm;
+  else void prewarm.catch(() => undefined);
 }
 
 /** Warm the isolated automatic-search slots without touching the explicit-search lane. */
-export async function warmAutomaticMemorySearchWorkers(workspacePath: string): Promise<void> {
+export async function warmAutomaticMemorySearchWorkers(workspacePath: string, options: MemorySearchWarmupOptions = {}): Promise<void> {
   if (!workerEnabled || automaticShuttingDown) return;
   const resolvedWorkspacePath = String(workspacePath || '').trim();
   if (!resolvedWorkspacePath) return;
@@ -325,7 +489,7 @@ export async function warmAutomaticMemorySearchWorkers(workspacePath: string): P
     return;
   }
   automaticWarmupPromise = (async () => {
-    const outcomes = await Promise.allSettled(automaticSlots.map((slot) => warmAutomaticSlot(slot, resolvedWorkspacePath)));
+    const outcomes = await Promise.allSettled(automaticSlots.map((slot) => warmAutomaticSlot(slot, resolvedWorkspacePath, options)));
     const failedOutcome = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
     if (failedOutcome) {
       // Do not tear down a sibling that stayed healthy while one slot failed
@@ -366,15 +530,30 @@ export function getAutomaticMemorySearchWorkerStatus(): {
   queued: number;
   ready: number;
   warming: boolean;
-  workers: RuntimeWorkerBrokerStatus[];
+  workers: Array<RuntimeWorkerBrokerStatus & {
+    warmFloor: boolean;
+    prewarmStatus: AutomaticSearchSlot['prewarmStatus'];
+    prewarmError?: string;
+    processReadyAt?: number;
+    processStartupMs?: number;
+    lastColdStart?: AutomaticSearchSlot['lastColdStart'];
+  }>;
 } {
   return {
     workerCount: automaticSlots.length,
     active: automaticSlots.filter((slot) => slot.active).length,
     queued: automaticQueue.length,
     ready: automaticSlots.filter((slot) => slot.broker.getStatus().state === 'ready').length,
-    warming: Boolean(automaticWarmupPromise || automaticWarmupTimer),
-    workers: automaticSlots.map((slot) => slot.broker.getStatus()),
+    warming: Boolean(automaticWarmupPromise || automaticWarmupTimer || automaticElasticWarmupPromise || automaticSlots.some((slot) => slot.prewarmPromise)),
+    workers: automaticSlots.map((slot) => ({
+      ...slot.broker.getStatus(),
+      warmFloor: slot.warmFloor,
+      prewarmStatus: slot.prewarmStatus,
+      ...(slot.prewarmError ? { prewarmError: slot.prewarmError } : {}),
+      ...(slot.processReadyAt ? { processReadyAt: slot.processReadyAt } : {}),
+      ...(slot.processStartupMs !== undefined ? { processStartupMs: slot.processStartupMs } : {}),
+      ...(slot.lastColdStart ? { lastColdStart: { ...slot.lastColdStart } } : {}),
+    })),
   };
 }
 
@@ -472,6 +651,7 @@ let warmupTimer: NodeJS.Timeout | null = null;
 let warmupPromise: Promise<void> | null = null;
 let warmupAttempts = 0;
 let warmupActive = false;
+let warmupDiagnostics: MemorySearchWorkerWarmupStatus = { queryStatus: 'not_started' };
 
 function scheduleWorkerWarmup(workspacePath: string, delayMs = 250): void {
   if (!workerEnabled || shuttingDown || warmupTimer || warmupPromise) return;
@@ -519,6 +699,17 @@ async function drainQueue(): Promise<void> {
       if (task.settled || task.signal?.aborted) {
         settle(task, { error: abortError() });
         continue;
+      }
+      if (explicitPrewarmPromise) {
+        // A real explicit query has priority over the optional startup
+        // prewarm. Abort the background query and let the broker restart cleanly
+        // for demand instead of making the request wait for its 15s budget.
+        broker.forceKill();
+        await explicitPrewarmPromise.catch(() => undefined);
+        if (task.settled || task.signal?.aborted) {
+          settle(task, { error: abortError() });
+          continue;
+        }
       }
       active = task;
       const remainingMs = task.deadlineAt - Date.now();
@@ -595,6 +786,19 @@ export function isMemorySearchWorkerReady(): boolean {
     && queue.length === 0;
 }
 
+async function runExplicitPrewarmQuery(workspacePath: string): Promise<void> {
+  await broker.run<MemorySearchWorkerResult>('memory_search', {
+    workspacePath: path.resolve(workspacePath),
+    params: {
+      query: 'memory search',
+      mode: 'quick',
+      limit: 4,
+      rerank: false,
+      queryRoute: 'startup_warmup',
+    },
+  }, prewarmQueryTimeoutMs);
+}
+
 export function searchMemoryInWorker(
   kind: MemorySearchWorkerKind,
   request: MemorySearchWorkerRequest,
@@ -653,32 +857,73 @@ export function searchMemoryInWorker(
  * child IPC loop started; it does not prove that the index can answer a
  * query within the automatic prompt budget.
  */
-export async function warmMemorySearchWorker(workspacePath?: string): Promise<void> {
+export async function warmMemorySearchWorker(workspacePath?: string, options: MemorySearchWarmupOptions = {}): Promise<void> {
   if (!workerEnabled || shuttingDown) return;
+  const processStartedAt = Date.now();
+  warmupDiagnostics = { queryStatus: 'not_started' };
   await broker.warmup();
+  warmupDiagnostics = {
+    processReadyAt: Date.now(),
+    processStartupMs: Math.max(0, Date.now() - processStartedAt),
+    queryStatus: 'skipped',
+  };
   const resolvedWorkspacePath = String(workspacePath || '').trim();
   if (!resolvedWorkspacePath) return;
-  warmupActive = true;
-  let releaseMemoryAccess: (() => void) | undefined;
-  try {
-    releaseMemoryAccess = await acquireMemoryAccess('search', { timeoutMs: warmupTimeoutMs });
-    await broker.run<MemorySearchWorkerResult>('memory_search', {
-      workspacePath: path.resolve(resolvedWorkspacePath),
-      params: {
-        query: 'memory search',
-        mode: 'quick',
-        limit: 4,
-        rerank: false,
-        queryRoute: 'startup_warmup',
-      },
-    }, warmupTimeoutMs);
-  } catch (error) {
-    await recycleWorker();
-    throw error;
-  } finally {
-    releaseMemoryAccess?.();
-    warmupActive = false;
+  if (explicitPrewarmPromise) {
+    if (options.awaitPrewarm !== false) await explicitPrewarmPromise;
+    return;
   }
+  warmupDiagnostics.queryStatus = 'pending';
+  const prewarm = (async () => {
+    warmupActive = true;
+    let releaseMemoryAccess: (() => void) | undefined;
+    try {
+      try {
+        releaseMemoryAccess = await acquireMemoryAccess('search', { timeoutMs: prewarmQueryTimeoutMs });
+      } catch (error: any) {
+        warmupDiagnostics.queryStatus = 'failed';
+        warmupDiagnostics.queryError = String(error?.message || error).slice(0, 400);
+        console.warn(`[memory-search-worker] prewarm skipped after process readiness because the search gate was unavailable: ${warmupDiagnostics.queryError}`);
+        return;
+      }
+      warmupDiagnostics.queryStartedAt = Date.now();
+      warmupDiagnostics.queryStatus = 'pending';
+      try {
+        await runExplicitPrewarmQuery(resolvedWorkspacePath);
+        warmupDiagnostics.queryCompletedAt = Date.now();
+        warmupDiagnostics.queryDurationMs = Math.max(0, warmupDiagnostics.queryCompletedAt - Number(warmupDiagnostics.queryStartedAt || warmupDiagnostics.queryCompletedAt));
+        warmupDiagnostics.queryStatus = 'completed';
+      } catch (error: any) {
+        warmupDiagnostics.queryCompletedAt = Date.now();
+        warmupDiagnostics.queryDurationMs = Math.max(0, warmupDiagnostics.queryCompletedAt - Number(warmupDiagnostics.queryStartedAt || warmupDiagnostics.queryCompletedAt));
+        warmupDiagnostics.queryError = String(error?.message || error).slice(0, 400);
+        const brokerState = broker.getStatus().state;
+        if (brokerState === 'ready' || brokerState === 'busy') {
+          // A query/index problem is not the same as a dead process. Keep the
+          // ready child available for the real explicit request and expose the
+          // failed prewarm phase in diagnostics.
+          console.warn(`[memory-search-worker] prewarm query failed after process readiness; keeping worker alive: ${warmupDiagnostics.queryError}`);
+          return;
+        }
+        await recycleWorker(resolvedWorkspacePath);
+        throw error;
+      }
+    } finally {
+      releaseMemoryAccess?.();
+      warmupActive = false;
+    }
+  })();
+  explicitPrewarmPromise = prewarm.then(
+    () => {
+      explicitPrewarmPromise = null;
+    },
+    (error) => {
+      explicitPrewarmPromise = null;
+      throw error;
+    },
+  );
+  if (options.awaitPrewarm !== false) await explicitPrewarmPromise;
+  else void explicitPrewarmPromise.catch(() => undefined);
 }
 
 export function getMemorySearchWorkerStatus(): MemorySearchWorkerStatus {
@@ -689,6 +934,7 @@ export function getMemorySearchWorkerStatus(): MemorySearchWorkerStatus {
     queued: queue.length,
     shuttingDown,
     broker: broker.getStatus(),
+    warmup: { ...warmupDiagnostics },
   };
 }
 
