@@ -476,6 +476,7 @@ async function warmAutomaticSlot(slot: AutomaticSearchSlot, workspacePath: strin
   slot.processStartupMs = Math.max(0, slot.processReadyAt - processStartedAt);
   const prewarm = startAutomaticPrewarmQuery(slot, workspacePath);
   if (options.awaitPrewarm !== false) await prewarm;
+  else void prewarm.catch(() => undefined);
 }
 
 /** Warm the isolated automatic-search slots without touching the explicit-search lane. */

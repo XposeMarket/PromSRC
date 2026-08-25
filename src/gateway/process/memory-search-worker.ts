@@ -189,6 +189,16 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
     // Simulate a slow first SQLite/FTS open without burning the gateway CPU.
     await new Promise<void>((resolve) => setTimeout(resolve, warmupDelayMs));
   }
+  if (
+    process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS === '1'
+    && queryRoute === 'startup_automatic_warmup'
+    && process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_AUTOMATIC_PREWARM_FAILURE === '1'
+  ) {
+    // Exercise hard background-prewarm failure handling without affecting
+    // production workers or the real automatic query path. Throwing here
+    // keeps the worker alive so the regression does not enter restart logic.
+    throw new Error('synthetic automatic prewarm failure');
+  }
 
   let result: MemorySearchResult;
   if (kind === 'memory_search') {

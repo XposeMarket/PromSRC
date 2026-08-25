@@ -44,6 +44,7 @@ jobs:
         run: |
           npm run test:memory-worker-readiness
           npm run test:automatic-memory-search
+          npx tsx src/gateway/memory-index/automatic-memory-prewarm.regression.ts
       - name: Verify connector/plugin tool-surface parity
         run: npx tsx scripts/verify-extensions.ts && npx tsx src/extensions/tool-contracts.regression.ts
       - name: Verify natural-language tool activation
