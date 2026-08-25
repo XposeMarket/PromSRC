@@ -11,6 +11,8 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
+const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const voiceRuntime = read('web-ui/src/mobile/mobile-voice-runtime.js');
 const toolActivityRuntime = read('web-ui/src/features/chat/optional/tool-activity-runtime.js');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
@@ -213,9 +215,9 @@ assert.doesNotMatch(
   'an orphaned background approval must not be attached to whichever chat happens to be open',
 );
 assert.match(
-  pages,
+  renderer,
   /_scheduleMobileThreadCacheSave\(sid\);\s*_renderMobileApprovalSheet\(\);/,
-  'every full chat repaint must restore the standalone approval fallback when needed',
+  'the deferred full chat renderer must restore the standalone approval fallback when needed',
 );
 assert.match(
   pages,
@@ -320,9 +322,9 @@ assert.match(
   'the final frame must switch the work timer to its completed expandable state before transport cleanup',
 );
 assert.match(
-  pages,
+  renderer,
   /const completedTraceEntries = \(!m\.streaming \|\| finalFrameReceived \|\| traceFrozenForSteer\) \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
-  'a final response or frozen pre-steer trace must expose its preserved tool trace immediately',
+  'the deferred renderer must expose a final response or frozen pre-steer trace immediately',
 );
 assert.match(
   pages,
@@ -406,12 +408,12 @@ assert.match(pages, /function _mobileHistoryPageIsPartial\(session, history = \[
 assert.match(pages, /preserveLocalHistory: _mobileHistoryPageIsPartial\(session, history\)/, 'bounded recovery pages must preserve the existing local transcript');
 assert.match(pages, /mergeOlderHistory: _mergeMobileHistoryPageWithCurrent/, 'mobile older paging must use a non-destructive prepend merge');
 assert.match(
-  pages,
+  voiceRuntime,
   /function _findMobileRecoverableAssistantTurn[\s\S]{0,700}messageKind \|\| ''\)\.trim\(\) === 'steer_continuation'/,
-  'recovery must resolve the durable post-steer assistant before creating another bubble',
+  'the Voice runtime must resolve the durable post-steer assistant before creating another bubble',
 );
 assert.match(
-  pages,
+  voiceRuntime,
   /messageKind: 'steer_continuation'[\s\S]{0,360}_clientRequestId: latestAi\._clientRequestId/,
   'a steer must create a durable request-owned continuation turn',
 );
@@ -464,14 +466,14 @@ assert.match(
   'a dev apply status must render immediately before its continuing tool-stream turn',
 );
 assert.match(
-  pages,
+  renderer,
   /currentBubble\.querySelectorAll\('img\[src\]'\)[\s\S]{0,320}stableImageNodes\.set\(src, nodes\)/,
-  'streaming bubble patches must retain already-decoded image nodes',
+  'deferred streaming bubble patches must retain already-decoded image nodes',
 );
 assert.match(
-  pages,
+  renderer,
   /stable\.isConnected === false\) node\.replaceWith\(stable\)/,
-  'stable image nodes must be restored synchronously after a streaming repaint',
+  'deferred streaming repaint must restore stable image nodes synchronously',
 );
 {
   const { document } = parseHTML('<!doctype html><html><body><main id="thread"><article data-pm-row-key="settled" data-pm-row-signature="1"><img src="stable.png"></article><article data-pm-row-key="active" data-pm-row-signature="1">working</article></main></body></html>');

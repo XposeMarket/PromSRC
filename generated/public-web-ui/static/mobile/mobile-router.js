@@ -51,6 +51,7 @@ const MOBILE_ROUTE_OWNER_LOADERS = Object.freeze({
 export function loadMobileRouteOwner(route) {
   const owner = Object.hasOwn(MOBILE_ROUTE_OWNER_LOADERS, route) ? route : 'chat';
   if (!mobileRouteOwnerPromises.has(owner)) {
+    if (owner === 'chat') markClientPerformance('mobile_chat_chunk_requested', { surface: 'mobile' });
     const pending = MOBILE_ROUTE_OWNER_LOADERS[owner]().catch((error) => {
       mobileRouteOwnerPromises.delete(owner);
       throw error;
@@ -256,6 +257,7 @@ function _repairNamespacedChatRoute(page, arg) {
 
 function render() {
   const renderGeneration = ++mobileRenderGeneration;
+  markClientPerformance('mobile_navigation', { surface: 'mobile' });
   try {
     navigator.serviceWorker?.controller?.postMessage('pm-clear-badge');
     navigator.clearAppBadge?.();
