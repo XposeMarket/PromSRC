@@ -2,6 +2,7 @@ import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobi
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 import { prettifyModelName } from './mobile-model-badge.js';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
+import { ensureMobileSettingsStyles } from './mobile-style-owners.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
@@ -172,6 +173,7 @@ function renderSectionNav(active = '') {
 }
 
 export function renderMobileSettingsPage(slot, { section = '', navigate } = {}) {
+  ensureMobileSettingsStyles();
   const current = SECTION_IDS.has(section) ? section : '';
   const title = current ? SECTIONS.find(s => s.id === current)?.title || 'Settings' : 'Settings';
   const leftIcon = current ? 'back' : 'menu';

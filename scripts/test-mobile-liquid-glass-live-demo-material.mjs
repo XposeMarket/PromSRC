@@ -109,18 +109,28 @@ const generatedData = fs.readFileSync('generated/public-web-ui/static/mobile/mob
 assert.equal(generatedData, sourceData, 'generated mobile-data wrapper must mirror source exactly');
 assert.deepEqual(sourceData.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean), [
   "export * from './mobile-data-base.js';",
-  "import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';",
-  'initMobileStatusBarTheme();',
-], 'mobile-data must keep the shared base module as its stylesheet owner');
+], 'mobile-data must remain a data-only compatibility export');
 const sourceDataBase = fs.readFileSync('web-ui/src/mobile/mobile-data-base.js', 'utf8');
 const generatedDataBase = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-data-base.js', 'utf8');
 assert.equal(generatedDataBase, sourceDataBase, 'generated mobile-data base must mirror source exactly');
-assert.match(sourceDataBase, /PM_DEMO_GLASS_STYLE_VERSION\s*=\s*'pm-v303-2026-08-23-aug12-glass-crosscheck'/,
+assert.doesNotMatch(sourceDataBase, /stylesheet|mobile-liquid-glass|mobile-composer-stack/,
+  'mobile-data-base must not own shell or route styles');
+const styleOwners = fs.readFileSync('web-ui/src/mobile/mobile-style-owners.js', 'utf8');
+const generatedStyleOwners = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-style-owners.js', 'utf8');
+assert.equal(generatedStyleOwners, styleOwners, 'generated mobile style-owner registry must mirror source exactly');
+assert.match(styleOwners, /shell:\s*Object\.freeze\(\[[\s\S]*?mobile-liquid-glass-demo\.css/,
+  'shell owner must load the persistent mobile glass restore layer');
+assert.match(styleOwners, /pm-v303-2026-08-23-aug12-glass-crosscheck/,
   'restored glass must use a fresh explicit cache key');
-assert.match(sourceDataBase, /getElementById\(PM_DEMO_GLASS_STYLE_ID\)[\s\S]*?mobile-liquid-glass-demo\.css\?v=\$\{PM_DEMO_GLASS_STYLE_VERSION\}/,
-  'the existing mobile-data-base owner must refresh the glass stylesheet link');
-assert.match(sourceData, /initMobileStatusBarTheme\(\);/,
-  'the isolated status-edge theme bridge must remain initialized');
+const sourceShell = fs.readFileSync('web-ui/src/mobile/mobile-shell.js', 'utf8');
+const generatedShell = fs.readFileSync('generated/public-web-ui/static/mobile/mobile-shell.js', 'utf8');
+assert.equal(generatedShell, sourceShell, 'generated mobile shell must mirror source exactly');
+assert.match(sourceShell, /import \{ ensureMobileShellStyles \} from '\.\/mobile-style-owners\.js';/,
+  'shell must import the shell stylesheet owner');
+assert.match(sourceShell, /ensureMobileShellStyles\(\);/,
+  'shell must activate the shell stylesheet owner');
+assert.match(sourceShell, /initMobileStatusBarTheme\(\);/,
+  'the isolated status-edge theme bridge must remain initialized by the shell');
 assert.doesNotMatch(sourceData, /mobile-hamburger-liquid-glass|initMobileHamburgerLiquidGlass/,
   'exact-canvas hamburger must not run on mobile boot');
 assert.match(sourceCode, /\.pm-hamburger-liquid-glass-canvas\s*\{[\s\S]*?display:\s*none !important;/,

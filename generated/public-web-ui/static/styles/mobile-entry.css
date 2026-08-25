@@ -1,1 +1,2 @@
-@import './mobile.css';
+@layer tokens, shell, route, components, state, compatibility;
+@import './mobile.css' layer(route);

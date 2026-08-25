@@ -20,6 +20,15 @@ const ownerFiles = [
   'mobile-creative-pages.js',
   'mobile-subagent-pages.js',
 ].map(mobileOutput);
+const ownerStyles = {
+  shell: [
+    '/static/styles/mobile-liquid-glass-demo.css',
+    '/static/styles/mobile-status-bar-theme.css',
+  ],
+  chat: ['/static/styles/mobile-composer-stack.css'],
+  voice: ['/static/styles/mobile-voice.css'],
+  settings: ['/static/styles/mobile-settings.css'],
+};
 
 const mime = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -121,7 +130,7 @@ function requestMetrics(paths) {
   return totals;
 }
 
-async function inspectRoute(browser, baseUrl, { route, paired, expectedOwner, forbiddenOwners, forbiddenApis = [], selector = '#mobile-root .pm-app' }) {
+async function inspectRoute(browser, baseUrl, { route, paired, expectedOwner, forbiddenOwners, forbiddenApis = [], expectedStyles = [], forbiddenStyles = [], selector = '#mobile-root .pm-app' }) {
   const start = requests.length;
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -156,6 +165,12 @@ async function inspectRoute(browser, baseUrl, { route, paired, expectedOwner, fo
   assert(observed.includes(assetManifest.entries.mobile.css), `${route}: mobile stylesheet was not requested`);
   assert(!observed.includes(assetManifest.entries.desktop.css), `${route}: desktop stylesheet was requested`);
   assert(!observed.some((pathname) => /\/static\/styles\/(?:base|components|settings|multi-chat-workspace)\.css$/.test(pathname)), `${route}: raw desktop stylesheet was requested`);
+  for (const style of expectedStyles) {
+    assert(observed.includes(style), `${route}: expected owned stylesheet ${style} was not requested`);
+  }
+  for (const style of forbiddenStyles) {
+    assert(!observed.includes(style), `${route}: fetched unrelated owned stylesheet ${style}`);
+  }
   for (const owner of forbiddenOwners) {
     assert(!observed.includes(owner), `${route}: fetched unrelated owner ${owner}`);
   }
@@ -209,6 +224,8 @@ try {
     paired: false,
     expectedOwner: mobileOutput('mobile-pairing-page.js'),
     forbiddenOwners: [mobileOutput('mobile-pages.js'), ...ownerFiles],
+    expectedStyles: ownerStyles.shell,
+    forbiddenStyles: [...ownerStyles.chat, ...ownerStyles.voice, ...ownerStyles.settings],
   });
   const chat = await inspectRoute(browser, baseUrl, {
     route: '/mobile/chat',
@@ -216,6 +233,8 @@ try {
     expectedOwner: mobileOutput('mobile-pages.js'),
     forbiddenOwners: ownerFiles,
     forbiddenApis: ['/api/bg-tasks', '/api/schedules', '/api/teams', '/api/subagents'],
+    expectedStyles: [...ownerStyles.shell, ...ownerStyles.chat],
+    forbiddenStyles: [...ownerStyles.voice, ...ownerStyles.settings],
   });
   const voiceOwner = mobileOutput('mobile-voice-page.js');
   const voice = await inspectRoute(browser, baseUrl, {
@@ -223,6 +242,8 @@ try {
     paired: true,
     expectedOwner: voiceOwner,
     forbiddenOwners: ownerFiles.filter((owner) => owner !== voiceOwner),
+    expectedStyles: [...ownerStyles.shell, ...ownerStyles.voice],
+    forbiddenStyles: [...ownerStyles.chat, ...ownerStyles.settings],
     selector: '#pm-voice-orb',
   });
   const schedule = await inspectRoute(browser, baseUrl, {
@@ -230,6 +251,8 @@ try {
     paired: true,
     expectedOwner: mobileOutput('mobile-schedule-pages.js'),
     forbiddenOwners: [mobileOutput('mobile-pages.js'), ...ownerFiles.filter((file) => file !== mobileOutput('mobile-schedule-pages.js'))],
+    expectedStyles: ownerStyles.shell,
+    forbiddenStyles: [...ownerStyles.chat, ...ownerStyles.voice, ...ownerStyles.settings],
     selector: '#pm-sched-body',
   });
 
@@ -246,6 +269,8 @@ try {
       ...contract,
       paired: true,
       forbiddenOwners: ownerFiles.filter((owner) => !contract.allowed.includes(owner)),
+      expectedStyles: ownerStyles.shell,
+      forbiddenStyles: [...ownerStyles.chat, ...ownerStyles.voice, ...ownerStyles.settings],
     });
   }
   await inspectSettingsHandoff(browser, baseUrl);

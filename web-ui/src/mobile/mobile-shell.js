@@ -1,5 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
+import { ensureMobileShellStyles } from './mobile-style-owners.js';
+import { initMobileStatusBarTheme } from './mobile-status-bar-theme.js';
 import { renderMd, timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
@@ -17,6 +19,9 @@ import {
   parseTargetNamespacedId,
   targetNamespacedId,
 } from './mobile-gateway-catalog.js';
+
+ensureMobileShellStyles();
+initMobileStatusBarTheme();
 
 // ── Pinned sessions ───────────────────────────────────────────────────────────
 // The gateway's session.pinnedAt field is the durable source of truth. The

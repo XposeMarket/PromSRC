@@ -11,7 +11,9 @@ function ensureStyles() {
   const link = document.createElement('link');
   link.id = STYLE_ID;
   link.rel = 'stylesheet';
-  link.href = new URL(`../styles/mobile-status-bar-theme.css?v=${STYLE_VERSION}`, import.meta.url).href;
+  const styleUrl = new URL(`../styles/mobile-status-bar-theme.css?v=${STYLE_VERSION}`, import.meta.url);
+  if (styleUrl.pathname.includes('/build/')) styleUrl.pathname = '/static/styles/mobile-status-bar-theme.css';
+  link.href = styleUrl.href;
   link.dataset.promMobileStatusBarTheme = '1';
   document.head.appendChild(link);
 }
