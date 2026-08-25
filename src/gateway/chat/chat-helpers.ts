@@ -14,7 +14,7 @@ import fs from 'fs';
 import { getAgentById, getConfig } from '../../config/config';
 import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, getActivatedToolCategories } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, deactivateToolCategory, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
 import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
@@ -91,6 +91,7 @@ import {
 import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
 import { isBrainThoughtRunActive } from '../brain/brain-thought-runtime.js';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
+import { verifyToolCategorySurface } from '../tool-category-provisioning';
 import { planMessageExtensionActivation } from '../../extensions/activation-planner.js';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
 import type { TurnTimingRecorder } from './turn-timing';
@@ -671,7 +672,13 @@ export function buildTools(sessionId?: string) {
 
 // ─── Auto-detect and activate tool categories on first turn ───────────────────
 // Maps detected intent categories to tool categories and silently activates them.
-export function autoActivateToolCategories(sessionId: string, message: string, historyLength: number): void {
+export interface AutoActivatedToolCategory {
+  category: string;
+  surfaceToolCountBefore: number;
+  surfaceToolCountAfter: number;
+}
+
+export function autoActivateToolCategories(sessionId: string, message: string, historyLength: number): AutoActivatedToolCategory[] {
   // Run on every turn so late-intent shifts (e.g., greeting first, then browser task)
   // still activate required tool categories in the same session.
   void historyLength; // retained for call-site compatibility
@@ -700,9 +707,26 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   for (const detected of cats) {
     normalizedDetectedCategories.add(normalizeManifestToolCategory(detected) || detected);
   }
+  const provisionedCategories: AutoActivatedToolCategory[] = [];
   for (const toolCategory of runtimeCategories) {
-    if (normalizedDetectedCategories.has(toolCategory)) activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
+    if (!normalizedDetectedCategories.has(toolCategory)) continue;
+    const wasActive = getActivatedToolCategories(sessionId).has(toolCategory);
+    const surfaceToolCountBefore = buildTools(sessionId).length;
+    activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
+    const surface = buildTools(sessionId);
+    const verification = verifyToolCategorySurface(toolCategory, surface, { unboundedTools: surface });
+    if (!verification.ok) {
+      if (!wasActive) deactivateToolCategory(sessionId, toolCategory);
+      console.warn('[tool-category-provisioning] automatic activation failed:', verification);
+      continue;
+    }
+    provisionedCategories.push({
+      category: toolCategory,
+      surfaceToolCountBefore,
+      surfaceToolCountAfter: surface.length,
+    });
   }
+  return provisionedCategories;
 }
 
 

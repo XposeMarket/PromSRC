@@ -17,6 +17,8 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
+import { formatToolCategoryProvisioningFailure, verifyToolCategorySurface } from '../tool-category-provisioning';
+import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
@@ -51,7 +53,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, deactivateToolCategory, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
@@ -2977,7 +2979,9 @@ async function handleChat(
   } catch (error: any) {
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
-  if (!isSupervisionLoop) autoActivateToolCategories(sessionId, message, history.length);
+  const automaticallyActivatedCategories = !isSupervisionLoop
+    ? autoActivateToolCategories(sessionId, message, history.length)
+    : [];
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
     recentMessages: history
@@ -3143,6 +3147,7 @@ async function handleChat(
     return toolDefs.filter((t: any) => !isVisionToolName(String(t?.function?.name || '')));
   };
   const builtToolSurfaceCache = new Map<string, any[]>();
+  let toolSurfaceGeneration = 0;
   const buildCurrentTurnBaseTools = (categoryOverride?: Set<string>): any[] => {
     if (isBootStartupTurn) {
       turnTiming.mark('runtime.tool_surface_build_done', {
@@ -3163,7 +3168,10 @@ async function handleChat(
     const surfaceStartedAt = Date.now();
     const allBuiltTools = builtToolSurfaceCache.get(cacheKey)
       || (categoryOverride ? _buildTools({ getMCPManager }, categoryOverride) : buildTools(sessionId));
-    if (!cacheHit) builtToolSurfaceCache.set(cacheKey, allBuiltTools);
+    if (!cacheHit) {
+      builtToolSurfaceCache.set(cacheKey, allBuiltTools);
+      toolSurfaceGeneration += 1;
+    }
 	    turnTiming.mark('runtime.tool_surface_build_done', {
       durationMs: Math.max(0, Date.now() - surfaceStartedAt),
       cacheHit,
@@ -3442,7 +3450,48 @@ async function handleChat(
     });
     return selected;
   };
+  const buildProviderToolSurface = (generationOverride: any = {
+    providerId: currentModelCapabilities.provider || providerOverride || '',
+    model: currentModelCapabilities.model || modelOverride || '',
+    source: 'current_turn',
+  }): { unbounded: any[]; provider: any[] } => {
+    const categoryOverride = generationOverride?.source === 'turn_override'
+      ? buildSwitchModelToolCategories()
+      : undefined;
+    const unbounded = buildCurrentTurnTools(categoryOverride);
+    return {
+      unbounded,
+      provider: capToolsForProvider(unbounded, generationOverride),
+    };
+  };
+  const recordToolCategoryProvisioning = (
+    verification: ReturnType<typeof verifyToolCategorySurface>,
+    source: 'keyword_or_extension_planner' | 'explicit_model_tool',
+    beforeCount: number,
+    afterCount: number,
+    providerCallIteration: number | null = currentProviderCallIteration,
+  ): void => {
+    const payload = {
+      category: verification.category,
+      activationSource: source,
+      providerCallIteration,
+      surfaceToolCountBefore: beforeCount,
+      surfaceToolCountAfter: afterCount,
+      surfaceGeneration: toolSurfaceGeneration,
+      expectedTools: verification.representativeTools,
+      missingExpectedTools: verification.missingTools,
+      actualCategoryToolCount: verification.actualCategoryTools.length,
+      unboundedCategoryToolCount: verification.unboundedCategoryTools.length,
+      providerCapped: verification.providerCapped,
+      requestFilterActive: verification.filteredByRequest,
+      finalState: verification.ok ? 'provisioned' : 'failed',
+      reason: verification.reason,
+    };
+    turnTiming.mark('tool_category_provisioning', payload);
+    sendSSE('tool_category_provisioning', payload);
+  };
   let tools: any[] = [];
+  let currentProviderCallIteration: number | null = null;
   const allToolResults: ToolResult[] = [];
   let midWorkflowCompactionsThisTurn = 0;
   const turnCanvasFiles = new Set<string>();
@@ -3701,7 +3750,25 @@ async function handleChat(
   currentModelSystemBlock = formatCurrentModelSystemBlock(initialGenerationOverride);
   htime('before initial tool build');
   sendSSE('ui_preflight', { message: 'Loading tool schemas...' });
-  tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
+  let initialToolSurface = buildProviderToolSurface(initialGenerationOverride);
+  tools = initialToolSurface.provider;
+  for (const activation of automaticallyActivatedCategories) {
+    const verification = verifyToolCategorySurface(activation.category, initialToolSurface.provider, {
+      unboundedTools: initialToolSurface.unbounded,
+      requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+    });
+    recordToolCategoryProvisioning(
+      verification,
+      'keyword_or_extension_planner',
+      activation.surfaceToolCountBefore,
+      initialToolSurface.provider.length,
+    );
+    if (!verification.ok) deactivateToolCategory(sessionId, activation.category);
+  }
+  if (automaticallyActivatedCategories.some((activation) => !getActivatedToolCategories(sessionId).has(activation.category))) {
+    initialToolSurface = buildProviderToolSurface(initialGenerationOverride);
+    tools = initialToolSurface.provider;
+  }
   htime('after initial tool build');
   htime('tools_built', { toolCount: tools.length });
   sendSSE('ui_preflight', { message: 'Tool schemas ready.' });
@@ -3847,7 +3914,7 @@ async function handleChat(
     return true;
   };
   if (seedProgressFromStoredGoalPlan()) {
-    tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
+    tools = buildProviderToolSurface(initialGenerationOverride).provider;
   }
 
   // Tools that gather information — do NOT advance the step cursor.
@@ -4417,10 +4484,44 @@ async function handleChat(
             'voice_dispatch',
             `voice_workgroup:${linkedVoiceWorkgroup.id}`,
           ])).slice(0, 12),
-        }
+      }
       : baseEffectiveToolArgs;
+    const requestedToolCategory = toolName === 'request_tool_category'
+      ? normalizeManifestToolCategory(effectiveToolArgs?.category)
+      : null;
+    const categoryWasActiveBeforeRequest = requestedToolCategory
+      ? getActivatedToolCategories(sessionId).has(requestedToolCategory)
+      : false;
     try {
-      const toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
+      let toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
+      if (requestedToolCategory && !toolResult.error) {
+        const previousSurfaceCount = tools.length;
+        const providerSurface = buildProviderToolSurface();
+        const verification = verifyToolCategorySurface(requestedToolCategory, providerSurface.provider, {
+          unboundedTools: providerSurface.unbounded,
+          requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+        });
+        recordToolCategoryProvisioning(
+          verification,
+          'explicit_model_tool',
+          previousSurfaceCount,
+          providerSurface.provider.length,
+        );
+        if (!verification.ok) {
+          if (!categoryWasActiveBeforeRequest) deactivateToolCategory(sessionId, requestedToolCategory);
+          toolResult = {
+            ...toolResult,
+            result: formatToolCategoryProvisioningFailure(verification),
+            error: true,
+          };
+        } else {
+          // Keep the exact verified provider-facing surface for the next model
+          // iteration. The normal generation preflight rebuilds it again, but
+          // assigning it here prevents a same-turn stale surface from being
+          // observed by intermediate loop guards or telemetry.
+          tools = providerSurface.provider;
+        }
+      }
       if (isBackgroundSpawn && linkedVoiceWorkgroup && !toolResult?.error) {
         try {
           const parsed = typeof toolResult.result === 'string' ? JSON.parse(toolResult.result) : toolResult.result;
@@ -6905,6 +7006,7 @@ RULES:
   })();
 
   for (let round = 0; ; round++) {
+    currentProviderCallIteration = round;
     if (round >= effectiveMaxToolRounds) {
       const allowExtendedFileOpLoop =
         fileOpV2Active
@@ -7293,7 +7395,8 @@ RULES:
 	        sendSSE('model_stream_event', { event });
 	      };
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
-      tools = capToolsForProvider(buildToolsForGeneration(generationOverride), generationOverride);
+      const providerToolSurface = buildProviderToolSurface(generationOverride);
+      tools = providerToolSurface.provider;
       currentModelSystemBlock = formatCurrentModelSystemBlock(generationOverride);
       if (generationOverride.source === 'turn_override') {
         // ── Local primary switch_model promotion ──────────────────────────────────
@@ -9618,7 +9721,12 @@ RULES:
             .map((t: any) => String(t?.function?.name || '').trim())
             .filter(Boolean),
         );
-        tools = buildCurrentTurnTools();
+        // request_tool_category has already been transactionally rebuilt and
+        // verified against the provider-facing surface above. Do not replace
+        // that capped surface with the unbounded builder result here.
+        if (toolName !== 'request_tool_category') {
+          tools = buildProviderToolSurface().provider;
+        }
         const newlyAvailable = tools
           .map((t: any) => String(t?.function?.name || '').trim())
           .filter((name: string) => name && !previousNames.has(name));
