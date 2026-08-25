@@ -75,6 +75,7 @@
     "test:integrations": "npm run build:backend && node scripts/test-integration-runtime-contract.mjs",
     "test:connections": "npm run build:backend && node scripts/test-connection-orchestrator.mjs",
     "test:plugin-tool-surface": "tsx src/connections/tool-surface.regression.ts",
+    "test:connection-ops-summary": "tsx src/connections/connection-ops-summary.regression.ts",
     "test:x-api-request-policy": "tsx src/gateway/tools/x-api-request-policy.regression.ts",
     "test:connector-oauth": "npm run build:backend && node scripts/test-connector-oauth-contract.mjs",
     "test:agents": "npm run build:backend && node scripts/test-agent-runtime-contract.mjs",
