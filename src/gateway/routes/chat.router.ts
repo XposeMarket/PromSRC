@@ -106,6 +106,13 @@ import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
+import {
+  MAIN_CHAT_ORPHAN_GRACE_MS,
+  MAIN_CHAT_SEMANTIC_STALL_MS,
+  isMainChatSemanticProgressEvent,
+  isMainChatSemanticProgressStalled,
+  isMainChatStreamOwnerOrphaned,
+} from '../chat/main-chat-execution-owner';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease, type RuntimeAdmissionLane, type RuntimeAdmissionBudget } from '../runtime-admission';
 import {
   browserOpen,
@@ -952,10 +959,15 @@ type MainChatStreamState = {
   streamId: string;
   startedAt: number;
   updatedAt: number;
+  lastSemanticProgressAt: number;
+  lastSemanticEvent?: string;
+  runtimeId?: string;
+  admissionLeaseId?: string;
   active: boolean;
   nextSeq: number;
   events: MainChatStreamFrame[];
   completedAt?: number;
+  terminalReason?: string;
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
@@ -963,7 +975,8 @@ const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 // A stream/lease without a running runtime can exist briefly while a caller is
 // wiring up SSE.  It must never become a permanent admission lock, though.
-const MAIN_CHAT_ORPHAN_GRACE_MS = 2 * 60 * 1000;
+const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
+const MAIN_CHAT_ABORT_SETTLE_GRACE_MS = 30_000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
 const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
   'user_message',
@@ -1000,7 +1013,7 @@ function pruneMainChatStreams(): void {
   }
 }
 
-function beginMainChatStream(sessionId: string): MainChatStreamState {
+function beginMainChatStream(sessionId: string, runtimeId?: string, admissionLeaseId?: string): MainChatStreamState {
   pruneMainChatStreams();
   const sid = String(sessionId || 'default').trim() || 'default';
   const stream: MainChatStreamState = {
@@ -1008,6 +1021,9 @@ function beginMainChatStream(sessionId: string): MainChatStreamState {
     streamId: crypto.randomUUID(),
     startedAt: Date.now(),
     updatedAt: Date.now(),
+    lastSemanticProgressAt: Date.now(),
+    runtimeId: runtimeId || undefined,
+    admissionLeaseId: admissionLeaseId || undefined,
     active: true,
     nextSeq: 1,
     events: [],
@@ -1058,6 +1074,18 @@ function finishMainChatStream(sessionId: string, streamId: string): void {
   if (latest) broadcastMainChatStreamUpdate(stream, latest);
 }
 
+function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStreamState, reason: string): void {
+  if (!stream.active) return;
+  appendMainChatStreamEvent(sessionId, stream.streamId, 'error', {
+    code: 'MAIN_CHAT_RUNTIME_OWNER_LOST',
+    message: 'The active Chat execution owner was lost. Reconnect to resume the saved turn.',
+    reason: String(reason || 'runtime_owner_lost').slice(0, 160),
+    runtimeId: stream.runtimeId,
+  });
+  stream.terminalReason = String(reason || 'runtime_owner_lost').slice(0, 160);
+  finishMainChatStream(sessionId, stream.streamId);
+}
+
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return null;
@@ -1073,6 +1101,10 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
   }
   stream.updatedAt = frame.at;
+  if (isMainChatSemanticProgressEvent(frame.type)) {
+    stream.lastSemanticProgressAt = frame.at;
+    stream.lastSemanticEvent = frame.type;
+  }
   if (MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
     try {
       broadcastWS({
@@ -1121,29 +1153,38 @@ type MainChatTurnReconciliation = {
  */
 function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
   const sid = String(sessionId || '').trim();
-  const runtime = listLiveRuntimes()
-    .filter((item) => isLiveRunningRuntime(item)
-      && (item.kind === 'main_chat' || item.kind === 'main_chat_goal')
+  const runtimeCandidates = listLiveRuntimes()
+    .filter((item) =>
+      (item.kind === 'main_chat' || item.kind === 'main_chat_goal')
       && String(item.sessionId || '') === sid)
-    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0));
+  const runtime = runtimeCandidates.find((item) => isLiveRunningRuntime(item)) || null;
+  const abortingRuntime = runtimeCandidates.find((item) => Number(item.abortRequestedAt || 0) > 0) || null;
   const stream = getMainChatStream(sid);
   if (runtime) return { active: true, runtime, stream, recovered: false };
+  // An explicit abort closes the visible stream immediately, but the owning
+  // request may still be unwinding. Keep the coordinator busy until its
+  // finally block (or the watchdog) releases it; do not admit a second model
+  // turn against the first one's still-running promise.
+  if (abortingRuntime) return { active: true, runtime: abortingRuntime, stream, recovered: false };
 
   const lease = mainChatTurnCoordinator.getActive(sid);
-  const latestOwnerActivity = Math.max(
-    Number(stream?.updatedAt || stream?.startedAt || 0) || 0,
-    Number(lease?.acquiredAt || 0) || 0,
-  );
   // Avoid racing a just-created stream from a non-HTTP caller.  The normal
   // HTTP path registers its runtime synchronously, so only a genuinely
   // abandoned owner can outlive this grace period.
-  if ((stream?.active || lease) && Date.now() - latestOwnerActivity <= MAIN_CHAT_ORPHAN_GRACE_MS) {
+  if ((stream?.active || lease) && !isMainChatStreamOwnerOrphaned({
+    streamActive: stream?.active === true,
+    runtimePresent: false,
+    startedAt: Number(stream?.startedAt || 0),
+    lastSemanticProgressAt: Number(stream?.lastSemanticProgressAt || 0),
+    leaseAcquiredAt: Number(lease?.acquiredAt || 0),
+  })) {
     return { active: true, runtime: null, stream, recovered: false };
   }
 
   let recovered = false;
   if (stream?.active) {
-    finishMainChatStream(sid, stream.streamId);
+    finishMainChatStreamAsOrphaned(sid, stream, 'orphaned_stream_or_lease');
     recovered = true;
   }
   if (lease) recovered = mainChatTurnCoordinator.discard(sid) || recovered;
@@ -1155,6 +1196,72 @@ function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
     ...(recovered ? { recoveryReason: 'orphaned_stream_or_lease' as const } : {}),
   };
 }
+
+function reconcileMainChatExecutionOwners(): void {
+  pruneMainChatStreams();
+  const now = Date.now();
+  const streams = Array.from(mainChatStreams.values()).filter((stream) => stream.active);
+  for (const stream of streams) {
+    const runtime = stream.runtimeId ? getLiveRuntime(stream.runtimeId) : null;
+    if (!runtime) {
+      if (isMainChatStreamOwnerOrphaned({
+        now,
+        streamActive: true,
+        runtimePresent: false,
+        startedAt: stream.startedAt,
+        lastSemanticProgressAt: stream.lastSemanticProgressAt,
+      })) {
+        finishMainChatStreamAsOrphaned(stream.sessionId, stream, 'runtime_missing');
+        mainChatTurnCoordinator.discard(stream.sessionId, 'The previous Chat execution owner was lost.');
+        console.warn(`[main-chat-owner] stream=${stream.streamId} session=${stream.sessionId} runtime owner missing after ${MAIN_CHAT_ORPHAN_GRACE_MS}ms; stream reconciled`);
+      }
+      continue;
+    }
+
+    if (runtime.abortRequestedAt) {
+      const age = now - Number(runtime.abortRequestedAt || now);
+      if (age > MAIN_CHAT_ABORT_SETTLE_GRACE_MS) {
+        if (runtime.abortSource === 'main_chat_owner_watchdog') {
+          interruptLiveRuntimeForRecovery(runtime.id, 'main_chat_owner_watchdog_timeout');
+        } else {
+          finishLiveRuntime(runtime.id);
+        }
+        mainChatTurnCoordinator.discard(stream.sessionId, 'The aborted Chat execution owner did not settle.');
+        console.warn(`[main-chat-owner] abort did not settle within ${MAIN_CHAT_ABORT_SETTLE_GRACE_MS}ms for runtime=${runtime.id}`);
+      }
+      continue;
+    }
+
+    if (isMainChatSemanticProgressStalled({
+      now,
+      lastSemanticProgressAt: stream.lastSemanticProgressAt,
+      streamActive: stream.active,
+      runtimePresent: true,
+      runtimeStatus: runtime.status,
+      abortRequestedAt: runtime.abortRequestedAt,
+      stallMs: MAIN_CHAT_SEMANTIC_STALL_MS,
+    })) {
+      console.warn(`[main-chat-owner] semantic progress stalled for ${now - stream.lastSemanticProgressAt}ms; aborting runtime=${runtime.id} session=${stream.sessionId} lastEvent=${stream.lastSemanticEvent || 'unknown'}`);
+      abortLiveRuntime(runtime.id, 'semantic_progress_stall', { source: 'main_chat_owner_watchdog' });
+    }
+  }
+
+  // If a terminal checkpoint was emitted but the request owner disappeared
+  // before its finally block, let the watchdog perform the same idempotent
+  // cleanup that the request would have performed.
+  for (const runtime of listLiveRuntimes()) {
+    if ((runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') || !runtime.deferTerminalCleanup) continue;
+    const stream = runtime.sessionId ? getMainChatStream(runtime.sessionId) : null;
+    if (hasTerminalRuntimeCheckpoint(runtime) && !stream?.active) finishLiveRuntime(runtime.id);
+  }
+}
+
+const mainChatExecutionOwnerWatchdog = setInterval(() => {
+  try { reconcileMainChatExecutionOwners(); } catch (error: any) {
+    console.warn('[main-chat-owner] watchdog failed:', error?.message || error);
+  }
+}, MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS);
+(mainChatExecutionOwnerWatchdog as any).unref?.();
 
 function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: unknown): void {
   const content = truncateRuntimeProcessText(value, 12_000);
@@ -1567,8 +1674,10 @@ import { sanitizeAgentId, normalizeAgentsForSave } from '../agents/agent-normali
 import {
   registerLiveRuntime,
   finishLiveRuntime,
+  hasTerminalRuntimeCheckpoint,
   updateLiveRuntimeCheckpoint,
   markLiveRuntimeProgress,
+  interruptLiveRuntimeForRecovery,
   listLiveRuntimes,
   getLiveRuntime,
   abortLiveRuntime,
@@ -9817,6 +9926,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           source: 'goal',
           detail: current.goal.slice(0, 160),
           abortSignal,
+          deferTerminalCleanup: true,
           onAbort: () => abortController.abort(),
         });
         const runtimeGoalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
@@ -9895,7 +10005,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             undefined,
             undefined,
             undefined,
-            { syntheticGoalContinuation: true } as any,
+            { syntheticGoalContinuation: true, runtimeId } as any,
           );
           const goalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
           const goalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
@@ -10222,7 +10332,7 @@ async function runInteractiveTurn(
       ? null
       : existingMainChatStream?.active
       ? null
-      : beginMainChatStream(sessionId);
+      : beginMainChatStream(sessionId, flags?.runtimeId, turnLease.leaseId);
   turnTiming.mark('stream_setup_done', {
     durationMs: Date.now() - streamSetupStartedAt,
     reusedActiveStream: !!existingMainChatStream?.active,
@@ -10989,6 +11099,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     detail: message.slice(0, 160),
     clientRequestId: runtime.clientRequestId || undefined,
     abortSignal,
+    deferTerminalCleanup: true,
     onAbort: () => abortController.abort(),
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
@@ -18620,7 +18731,8 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
       res.json({ success: false, message: 'No active main chat turn is currently running for this session.' });
       return;
     }
-    const result = abortLiveRuntime(target.id);
+    const source = String(req.body?.source || 'mobile_stop_now').trim().slice(0, 120) || 'mobile_stop_now';
+    const result = abortLiveRuntime(target.id, 'operator_abort', { source });
     res.json({
       success: result.ok,
       message: result.ok ? 'Main chat aborted.' : (result.error || 'Abort failed.'),
@@ -18644,7 +18756,8 @@ router.post('/api/mobile/commands/stop', (req, res) => {
       res.status(404).json({ success: false, error: 'Runtime is no longer active.' });
       return;
     }
-    const result = abortLiveRuntime(id);
+    const source = String(req.body?.source || 'mobile_stop').trim().slice(0, 120) || 'mobile_stop';
+    const result = abortLiveRuntime(id, 'operator_abort', { source });
     res.json({
       success: result.ok,
       message: result.ok ? 'Runtime aborted.' : (result.error || 'Abort failed.'),
@@ -21284,7 +21397,7 @@ router.post('/api/chat', async (req, res) => {
       return;
   }
 
-  const chatStream = beginMainChatStream(resolvedSessionId);
+  const chatStream = beginMainChatStream(resolvedSessionId, undefined, admissionLease.leaseId);
   turnTiming.mark('main_stream_started', { streamId: chatStream.streamId });
   if (clientRequestId) {
     mainChatRequestDedupe.set(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
@@ -21337,12 +21450,34 @@ router.post('/api/chat', async (req, res) => {
     } catch {}
     sendSSE('heartbeat', payload);
   }, 5000);
+  let stopMainChatHeartbeat = () => clearInterval(heartbeat);
 
   // ── Model busy guard — block cron scheduler while user chat is running ──
   setModelBusy(true);
 
   const abortController = new AbortController();
-  const abortSignal = { aborted: false, signal: abortController.signal };
+  const abortSignal: { aborted: boolean; signal: AbortSignal; reason?: string } = { aborted: false, signal: abortController.signal };
+  let requestCompleted = false;
+  let mainChatAbortSettled = false;
+  const settleMainChatAbort = (reason: string) => {
+    if (mainChatAbortSettled) return;
+    mainChatAbortSettled = true;
+    stopMainChatHeartbeat();
+    const payload = {
+      code: 'MAIN_CHAT_RUNTIME_ABORTED',
+      message: 'The active Chat turn was aborted before normal completion.',
+      reason: String(reason || 'operator_abort').slice(0, 160),
+      runtimeId: chatStream.runtimeId,
+    };
+    const frame = appendMainChatStreamEvent(resolvedSessionId, chatStream.streamId, 'error', payload);
+    try {
+      httpSendSSE('error', frame ? { ...payload, seq: frame.seq, streamId: chatStream.streamId } : payload);
+    } catch {}
+    finishMainChatStream(resolvedSessionId, chatStream.streamId);
+    if (!requestCompleted && !res.destroyed && !res.writableEnded) {
+      try { res.end(); } catch {}
+    }
+  };
   let writeImmediateAbortPacket: (() => void) | undefined;
   const runtimeId = registerLiveRuntime({
     kind: 'main_chat',
@@ -21352,6 +21487,7 @@ router.post('/api/chat', async (req, res) => {
     detail: String(message || '').slice(0, 160),
     clientRequestId: clientRequestId || undefined,
     abortSignal,
+    deferTerminalCleanup: true,
     onAbort: () => {
       abortController.abort();
       // Persist the same continuity shape immediately when the user presses
@@ -21359,6 +21495,7 @@ router.post('/api/chat', async (req, res) => {
       try { writeImmediateAbortPacket?.(); } catch (err: any) {
         console.warn('[context] Failed to persist immediate abort packet:', err?.message || err);
       }
+      settleMainChatAbort(abortSignal.reason ? String(abortSignal.reason) : 'operator_abort');
     },
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
@@ -21369,6 +21506,12 @@ router.post('/api/chat', async (req, res) => {
       label: turnOrigin.label,
       attachments: Array.isArray(attachments) ? attachments.map((a: any) => ({ name: a?.name, mimeType: a?.mimeType })) : [],
     },
+  });
+  chatStream.runtimeId = runtimeId;
+  updateLiveRuntimeCheckpoint(runtimeId, {
+    event: 'owner_attached',
+    streamId: chatStream.streamId,
+    admissionLeaseId: admissionLease.leaseId,
   });
   turnTiming.mark('runtime_registered', { runtimeId });
   sendSSE('runtime_registered', {
@@ -21471,7 +21614,6 @@ router.post('/api/chat', async (req, res) => {
     });
     recordWorkingContextPacket(resolvedSessionId, packet, { flush: true });
   };
-  let requestCompleted = false;
   res.on('close', () => {
     if (!requestCompleted && !abortSignal.aborted) {
       if (isMobileChatRequest) {

@@ -33,6 +33,58 @@ async function main(): Promise<void> {
     ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
     assert.equal(ledger.runtimes[runtimeId], undefined, 'terminal runtimes must be removed before graceful drain completes');
 
+    const deferredRuntimeId = runtimeApi.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'deferred terminal cleanup regression',
+      sessionId: 'runtime_deferred_terminal_cleanup_regression',
+      recoveryPolicy: 'mark_interrupted',
+      abortSignal: { aborted: false },
+      onAbort: () => undefined,
+      deferTerminalCleanup: true,
+    });
+    runtimeApi.updateLiveRuntimeCheckpoint(deferredRuntimeId, { event: 'done', message: 'final frame before request finally' });
+    await runtimeApi.flushLiveRuntimePersistence();
+    assert.ok(runtimeApi.getLiveRuntime(deferredRuntimeId), 'a main-chat owner must survive terminal checkpoint reads until its request settles');
+    const deferredAbort = runtimeApi.abortLiveRuntime(deferredRuntimeId, 'operator_abort', { source: 'mobile_stop_button' });
+    assert.equal(deferredAbort.ok, true);
+    assert.equal(deferredAbort.runtime?.status, 'running', 'deferred aborts remain owned until the request finalizer runs');
+    assert.ok(runtimeApi.getLiveRuntime(deferredRuntimeId), 'aborting a deferred owner must not allow a registry read to prune it');
+    runtimeApi.finishLiveRuntime(deferredRuntimeId);
+    await runtimeApi.flushLiveRuntimePersistence();
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    assert.equal(ledger.runtimes[deferredRuntimeId], undefined, 'the request finalizer must still remove the settled deferred owner');
+
+    const watchdogRuntimeId = runtimeApi.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'semantic watchdog recovery regression',
+      sessionId: 'runtime_watchdog_recovery_regression',
+      recoveryPolicy: 'mark_interrupted',
+      abortSignal: { aborted: false },
+      onAbort: () => undefined,
+      deferTerminalCleanup: true,
+    });
+    runtimeApi.updateLiveRuntimeCheckpoint(watchdogRuntimeId, { event: 'working', message: 'stalled before watchdog' });
+    const watchdogAbort = runtimeApi.abortLiveRuntime(watchdogRuntimeId, 'semantic_progress_stall', { source: 'main_chat_owner_watchdog' });
+    assert.equal(watchdogAbort.ok, true);
+    assert.equal(watchdogAbort.runtime?.status, 'running', 'the watchdog must leave the request-owned record visible while abort settles');
+    const watchdogInterrupt = runtimeApi.interruptLiveRuntimeForRecovery(watchdogRuntimeId, 'main_chat_owner_watchdog_timeout');
+    assert.equal(watchdogInterrupt.ok, true);
+    assert.equal(watchdogInterrupt.runtime?.status, 'interrupted');
+    assert.equal(
+      runtimeApi.isRuntimeRecoverableAfterRestart(watchdogInterrupt.runtime),
+      true,
+      'a watchdog interruption must remain eligible for exactly-once restart recovery',
+    );
+    await runtimeApi.flushLiveRuntimePersistence();
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    assert.equal(ledger.runtimes[watchdogRuntimeId]?.status, 'interrupted');
+    assert.equal(runtimeApi.listInterruptedRuntimes().some((runtime) => runtime.id === watchdogRuntimeId), true);
+    runtimeApi.markDurableRuntimeRecovered(watchdogRuntimeId, 'interrupted', { recovery: 'regression_cleanup' });
+    runtimeApi.pruneDurableLedger();
+    await runtimeApi.flushLiveRuntimePersistence();
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    assert.equal(ledger.runtimes[watchdogRuntimeId], undefined, 'recovery acknowledgement must make the watchdog record disposable');
+
     const restartRuntimeId = runtimeApi.registerLiveRuntime({
       kind: 'main_chat_goal',
       label: 'shutdown recovery regression',
