@@ -970,6 +970,7 @@ type MainChatStreamState = {
   events: MainChatStreamFrame[];
   completedAt?: number;
   terminalReason?: string;
+  abortExecution?: (reason: string) => void;
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
@@ -1078,6 +1079,16 @@ function finishMainChatStream(sessionId: string, streamId: string): void {
 
 function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStreamState, reason: string): void {
   if (!stream.active) return;
+  try {
+    // The durable runtime is already gone, so there is no registry abort hook
+    // left to call. Abort the request-owned controller directly before
+    // releasing the stream/coordinator; otherwise the provider promise could
+    // continue consuming memory behind a stream that the gateway considers
+    // finished.
+    stream.abortExecution?.(reason);
+  } catch (error: any) {
+    console.warn(`[main-chat-owner] failed to abort orphaned stream=${stream.streamId}:`, error?.message || error);
+  }
   appendMainChatStreamEvent(sessionId, stream.streamId, 'error', {
     code: 'MAIN_CHAT_RUNTIME_OWNER_LOST',
     message: 'The active Chat execution owner was lost. Reconnect to resume the saved turn.',
@@ -9961,6 +9972,11 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const prompt = buildMainChatGoalContinuationPrompt(current);
         const abortController = new AbortController();
         const abortSignal = { aborted: false, signal: abortController.signal };
+        (abortSignal as any).abort = (reason?: string) => {
+          const normalizedReason = String(reason || 'operator_abort').slice(0, 160);
+          abortSignal.aborted = true;
+          if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
+        };
         const runtimeId = registerLiveRuntime({
           kind: 'main_chat_goal',
           label: 'Main chat goal',
@@ -9969,7 +9985,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           detail: current.goal.slice(0, 160),
           abortSignal,
           deferTerminalCleanup: true,
-          onAbort: () => abortController.abort(),
+          onAbort: () => (abortSignal as any).abort?.('operator_abort'),
         });
         const runtimeGoalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
         const runtimeGoalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
@@ -10375,6 +10391,13 @@ async function runInteractiveTurn(
       : existingMainChatStream?.active
       ? null
       : beginMainChatStream(sessionId, flags?.runtimeId, turnLease.leaseId);
+  if (localMainChatStream && abortSignal) {
+    localMainChatStream.abortExecution = (reason: string) => {
+      if (abortSignal.aborted) return;
+      abortSignal.aborted = true;
+      try { (abortSignal as any).abort?.(reason); } catch {}
+    };
+  }
   turnTiming.mark('stream_setup_done', {
     durationMs: Date.now() - streamSetupStartedAt,
     reusedActiveStream: !!existingMainChatStream?.active,
@@ -21498,7 +21521,13 @@ router.post('/api/chat', async (req, res) => {
   setModelBusy(true);
 
   const abortController = new AbortController();
-  const abortSignal: { aborted: boolean; signal: AbortSignal; reason?: string } = { aborted: false, signal: abortController.signal };
+  const abortSignal: { aborted: boolean; signal: AbortSignal; reason?: string; abort?: (reason?: string) => void } = { aborted: false, signal: abortController.signal };
+  abortSignal.abort = (reason?: string) => {
+    const normalizedReason = String(reason || 'operator_abort').slice(0, 160);
+    abortSignal.aborted = true;
+    abortSignal.reason = normalizedReason;
+    if (!abortSignal.signal.aborted) abortController.abort(normalizedReason);
+  };
   let requestCompleted = false;
   let mainChatAbortSettled = false;
   const settleMainChatAbort = (reason: string) => {
@@ -21531,7 +21560,7 @@ router.post('/api/chat', async (req, res) => {
     abortSignal,
     deferTerminalCleanup: true,
     onAbort: () => {
-      abortController.abort();
+      abortSignal.abort?.(abortSignal.reason || 'operator_abort');
       // Persist the same continuity shape immediately when the user presses
       // stop. The normal turn finalizer may enrich/replace this packet later.
       try { writeImmediateAbortPacket?.(); } catch (err: any) {
