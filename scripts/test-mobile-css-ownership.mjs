@@ -88,7 +88,7 @@ assert.match(mobileCss, /\.pm-select\s*\{[\s\S]*?appearance:\s*none[\s\S]*?backg
   'shared select presentation must remain available to every route that renders .pm-select');
 assert.doesNotMatch(settingsCss, /(?:^|\n)\s*\.pm-select\s*\{/,
   'Settings CSS must not claim the shared .pm-select component');
-assert.match(proposalsPage, /class=\\"pm-select\\"/,
+assert.match(proposalsPage, /class="pm-select"/,
   'Proposals must remain covered by the shared .pm-select component owner');
 
 const manifestPath = path.join(root, 'generated', 'public-web-ui', 'asset-manifest.json');
