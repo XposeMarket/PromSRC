@@ -65,6 +65,7 @@ async function main(): Promise<void> {
   assert.match(adapterSource, /return runRequest\(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex\)/, 'the retry must disable itself after one attempt while staying on the same account');
   assert.match(adapterSource, /isRetryableAccountFailure\(response\.status, text\)/, 'quota and credential failures must advance to another configured account');
   assert.match(adapterSource, /accountId: activeAccountId/, 'the account that served the request must be recorded with usage');
+  assert.doesNotMatch(adapterSource, /error:\s*text\.slice\(0,\s*400\)/, 'provider response bodies must not be persisted as runtime error text');
 
   const chatSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
   const fallbackStart = chatSource.indexOf('if (!finalText || finalText.length < 5)');

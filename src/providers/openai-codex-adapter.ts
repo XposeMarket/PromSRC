@@ -442,7 +442,7 @@ export class OpenAICodexAdapter implements LLMProvider {
             configuredModel,
             requestedModel,
             ok: false,
-            error: text.slice(0, 400),
+            error: `HTTP_${response.status}`,
           });
           const providerError = new Error(`openai_codex API error ${response.status}`) as Error & { code?: string; status?: number };
           providerError.name = 'CodexProviderHttpError';
