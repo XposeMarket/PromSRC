@@ -31,12 +31,25 @@ const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 90
 const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 300_000, 60_000);
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
+export interface CodexStreamDiagnostics {
+  failureClass?: 'missing_completed' | 'empty_completion';
+  sawCompleted: boolean;
+  eventTypes: string[];
+  outputItemTypes: string[];
+  outputItemCount: number;
+  finalTextChars: number;
+  toolCallCount: number;
+  usage?: ModelUsage;
+}
+
 export class CodexIncompleteStreamError extends Error {
   readonly code = 'CODEX_INCOMPLETE_STREAM';
+  readonly diagnostics: CodexStreamDiagnostics;
 
-  constructor(message: string) {
+  constructor(message: string, diagnostics: CodexStreamDiagnostics) {
     super(message);
     this.name = 'CodexIncompleteStreamError';
+    this.diagnostics = diagnostics;
   }
 }
 
@@ -335,6 +348,7 @@ export class OpenAICodexAdapter implements LLMProvider {
         throw error;
       }
       const controller = new AbortController();
+      const requestStartedAt = Date.now();
       let abortReason = '';
       let requestTimeout: ReturnType<typeof setTimeout> | null = null;
       let idleTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -428,9 +442,13 @@ export class OpenAICodexAdapter implements LLMProvider {
             configuredModel,
             requestedModel,
             ok: false,
-            error: text.slice(0, 400),
+            error: `HTTP_${response.status}`,
           });
-          throw new Error(`openai_codex API error ${response.status}: ${text.slice(0, 400)}`);
+          const providerError = new Error(`openai_codex API error ${response.status}`) as Error & { code?: string; status?: number };
+          providerError.name = 'CodexProviderHttpError';
+          providerError.code = 'CODEX_HTTP_ERROR';
+          providerError.status = response.status;
+          throw providerError;
         }
 
         const result = await this.parseSSEStream(response, requestedModel, options, resetIdleTimer);
@@ -456,8 +474,38 @@ export class OpenAICodexAdapter implements LLMProvider {
           throw new Error(abortReason || 'openai_codex request aborted');
         }
         if (err instanceof CodexIncompleteStreamError && allowIncompleteStreamRetry) {
+          options?.onModelEvent?.({
+            type: 'provider_event',
+            nativeType: 'codex_incomplete_stream',
+            provider: this.id,
+            model: requestedModel,
+            data: {
+              ...err.diagnostics,
+              requestedModel,
+              accountIndex,
+              attempt: allowIncompleteStreamRetry ? 1 : 2,
+              retrying: allowIncompleteStreamRetry,
+              durationMs: Math.max(0, Date.now() - requestStartedAt),
+            },
+          });
           console.warn(`[openai_codex] ${err.message} Retrying once.`);
           return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex);
+        }
+        if (err instanceof CodexIncompleteStreamError) {
+          options?.onModelEvent?.({
+            type: 'provider_event',
+            nativeType: 'codex_incomplete_stream',
+            provider: this.id,
+            model: requestedModel,
+            data: {
+              ...err.diagnostics,
+              requestedModel,
+              accountIndex,
+              attempt: 2,
+              retrying: false,
+              durationMs: Math.max(0, Date.now() - requestStartedAt),
+            },
+          });
         }
         throw err;
       } finally {
@@ -482,9 +530,12 @@ export class OpenAICodexAdapter implements LLMProvider {
 		    let buffer = '';
 		    let finalContent = '';
 		    let thinking = '';
-		    let toolCalls: any[] = [];
-		    let usage: ModelUsage | undefined;
-		    let sawCompleted = false;
+	    let toolCalls: any[] = [];
+	    let usage: ModelUsage | undefined;
+	    let sawCompleted = false;
+	    const eventTypes: string[] = [];
+	    let outputItemTypes: string[] = [];
+	    let outputItemCount = 0;
 		    const toolCallByOutputIndex = new Map<number, any>();
 		    const toolCallByItemId = new Map<string, any>();
 		    const toolCallByCallId = new Map<string, any>();
@@ -532,6 +583,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           try {
             const event = JSON.parse(data);
             const type = event.type as string;
+            if (type && eventTypes.length < 40 && !eventTypes.includes(type)) eventTypes.push(type);
 
             // Accumulate text deltas
 	            if (type === 'response.output_text.delta') {
@@ -629,9 +681,12 @@ export class OpenAICodexAdapter implements LLMProvider {
 	            // response.completed contains the full final snapshot
             if (type === 'response.completed') {
               sawCompleted = true;
-              options?.onModelEvent?.({ type: 'provider_event', nativeType: type, provider: this.id, model });
               usage = parseUsage(event.response?.usage);
-              const outputs = event.response?.output || [];
+              const outputs = Array.isArray(event.response?.output) ? event.response.output : [];
+              outputItemCount = outputs.length;
+              outputItemTypes = outputs
+                .slice(0, 24)
+                .map((item: any) => String(item?.type || 'unknown').slice(0, 80));
               for (const item of outputs) {
 	                if (item.type === 'message') {
 	                  finalContent = (item.content || [])
@@ -668,6 +723,22 @@ export class OpenAICodexAdapter implements LLMProvider {
 	                  }
 	                }
 	              }
+              options?.onModelEvent?.({
+                type: 'provider_event',
+                nativeType: type,
+                provider: this.id,
+                model,
+                data: {
+                  sawCompleted: true,
+                  eventTypes: eventTypes.slice(),
+                  outputItemTypes: outputItemTypes.slice(),
+                  outputItemCount,
+                  finalTextChars: finalContent.trim().length,
+                  toolCallCount: toolCalls.length,
+                  usage,
+                  ...(finalContent.trim() || toolCalls.length > 0 ? {} : { failureClass: 'empty_completion' }),
+                },
+              });
             }
           } catch {
             // Skip malformed SSE lines
@@ -681,11 +752,27 @@ export class OpenAICodexAdapter implements LLMProvider {
     // Clean up internal tracking index
     toolCalls = toolCalls.map(({ _idx, ...tc }) => tc);
 
+    const diagnostics: CodexStreamDiagnostics = {
+      sawCompleted,
+      eventTypes: eventTypes.slice(),
+      outputItemTypes: outputItemTypes.slice(),
+      outputItemCount,
+      finalTextChars: finalContent.trim().length,
+      toolCallCount: toolCalls.length,
+      usage,
+    };
+
     if (!sawCompleted) {
-      throw new CodexIncompleteStreamError('openai_codex stream ended before response.completed.');
+      throw new CodexIncompleteStreamError('openai_codex stream ended before response.completed.', {
+        ...diagnostics,
+        failureClass: 'missing_completed',
+      });
     }
     if (!finalContent.trim() && toolCalls.length === 0) {
-      throw new CodexIncompleteStreamError('openai_codex response.completed contained no assistant text or tool calls.');
+      throw new CodexIncompleteStreamError('openai_codex response.completed contained no assistant text or tool calls.', {
+        ...diagnostics,
+        failureClass: 'empty_completion',
+      });
     }
 
     const message: ChatMessage = {

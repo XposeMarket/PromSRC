@@ -96,6 +96,12 @@ import {
   type BrainRunOutcome,
   type BrainRunStatus,
 } from './brain-run-outcome.js';
+import {
+  captureBrainProviderEvent,
+  createBrainProviderDiagnosticsContext,
+  finishBrainProviderDiagnostics,
+  shouldDeferAutomaticBrainJob,
+} from './brain-provider-diagnostics';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1040,6 +1046,17 @@ export class BrainRunner {
       console.log('[BrainRunner] Foreground chat became active; deferring Thought');
       return false;
     }
+    if (!options.allowForeground) {
+      const guard = shouldDeferAutomaticBrainJob('thought');
+      if (guard.defer) {
+        const state = loadLatestState();
+        state.lastThoughtStatus = 'failed';
+        state.lastThoughtError = guard.reason || 'Automatic Thought paused by provider reliability guard.';
+        saveLatestState(state);
+        console.warn(`[BrainRunner] ${guard.reason}`);
+        return false;
+      }
+    }
     this.thoughtRunning = true;
     const runStartedAt = Date.now();
 
@@ -1071,6 +1088,13 @@ export class BrainRunner {
       startedAt: runStartedAt,
       usageHandle,
       abortSignal,
+    });
+    const providerDiagnostics = createBrainProviderDiagnosticsContext({
+      job: 'thought',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
     });
 
     console.log(`[BrainRunner] Starting Thought ${thoughtNumber} — window ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`);
@@ -1168,6 +1192,7 @@ export class BrainRunner {
       });
 
     const sendSSE = (event: string, data: any) => {
+      if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_thought_sse', thoughtNumber, event, data });
@@ -1340,6 +1365,14 @@ export class BrainRunner {
       outcome,
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
     });
+    finishBrainProviderDiagnostics(providerDiagnostics, {
+      outcome,
+      error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
+      usage,
+      toolCount: toolResults.length,
+      activityPackageChars: builtActivityPackage.package.metrics.packageChars,
+      resultTextChars: resultText.length,
+    });
 
     // Broadcast completion
     this.deps.broadcast({
@@ -1388,6 +1421,17 @@ export class BrainRunner {
       console.log('[BrainRunner] Foreground chat became active; deferring Dream');
       return false;
     }
+    if (!options.allowForeground) {
+      const guard = shouldDeferAutomaticBrainJob('dream');
+      if (guard.defer) {
+        const state = loadLatestState();
+        state.lastDreamStatus = 'failed';
+        state.lastDreamError = guard.reason || 'Automatic Dream paused by provider reliability guard.';
+        saveLatestState(state);
+        console.warn(`[BrainRunner] ${guard.reason}`);
+        return false;
+      }
+    }
     this.dreamRunning = true;
     const runStartedAt = Date.now();
     const runId = crypto.randomUUID();
@@ -1421,6 +1465,13 @@ export class BrainRunner {
       usageHandle,
       abortSignal,
     });
+    const providerDiagnostics = createBrainProviderDiagnosticsContext({
+      job: 'dream',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
+    });
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
     checkpointBrainRuntime(runtimeId, 'dream_started', { phase: 'preparing' });
@@ -1451,6 +1502,7 @@ export class BrainRunner {
       });
 
     const sendSSE = (event: string, data: any) => {
+      if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_sse', date: dateStr, event, data });
@@ -1725,6 +1777,13 @@ export class BrainRunner {
       outcome,
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
     });
+    finishBrainProviderDiagnostics(providerDiagnostics, {
+      outcome,
+      error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
+      usage,
+      toolCount: toolResults.length,
+      resultTextChars: resultText.length,
+    });
 
     // Broadcast completion
     this.deps.broadcast({
@@ -1762,6 +1821,17 @@ export class BrainRunner {
       console.log('[BrainRunner] Foreground chat became active; deferring Dream cleanup');
       return false;
     }
+    if (!options.allowForeground) {
+      const guard = shouldDeferAutomaticBrainJob('dream_cleanup');
+      if (guard.defer) {
+        const state = loadLatestState();
+        state.lastDreamCleanupStatus = 'failed';
+        state.lastDreamCleanupError = guard.reason || 'Automatic Dream cleanup paused by provider reliability guard.';
+        saveLatestState(state);
+        console.warn(`[BrainRunner] ${guard.reason}`);
+        return false;
+      }
+    }
     this.dreamCleanupRunning = true;
     const runStartedAt = Date.now();
     const runId = crypto.randomUUID();
@@ -1795,6 +1865,13 @@ export class BrainRunner {
       usageHandle,
       abortSignal,
     });
+    const providerDiagnostics = createBrainProviderDiagnosticsContext({
+      job: 'dream_cleanup',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
+    });
 
     console.log(`[BrainRunner] Starting Dream cleanup for ${dateStr}`);
     checkpointBrainRuntime(runtimeId, 'dream_cleanup_started', { phase: 'preparing' });
@@ -1823,6 +1900,7 @@ export class BrainRunner {
     const prompt = this._buildDreamCleanupPromptV2({ dateStr, outFile: absOutFile });
 
     const sendSSE = (event: string, data: any) => {
+      if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_cleanup_sse', date: dateStr, event, data });
@@ -1971,6 +2049,13 @@ export class BrainRunner {
     const usage = finishBrainJobUsage(usageHandle, {
       outcome,
       error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+    });
+    finishBrainProviderDiagnostics(providerDiagnostics, {
+      outcome,
+      error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+      usage,
+      toolCount: toolResults.length,
+      resultTextChars: resultText.length,
     });
 
     this.deps.broadcast({

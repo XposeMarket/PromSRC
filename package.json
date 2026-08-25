@@ -93,6 +93,7 @@
     "test:brain-proposal-policy": "tsx src/gateway/brain/brain-proposal-policy.regression.ts",
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",
+    "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
     "test:process-hygiene": "tsx src/gateway/process-hygiene.regression.ts",
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
