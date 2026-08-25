@@ -15,9 +15,9 @@ function sseResponse(chunks: string[]): Response {
   });
 }
 
-async function parse(chunks: string[]) {
+async function parse(chunks: string[], options?: any) {
   const adapter = new OpenAICodexAdapter(process.cwd());
-  return (adapter as any).parseSSEStream(sseResponse(chunks), 'gpt-5.6-sol');
+  return (adapter as any).parseSSEStream(sseResponse(chunks), 'gpt-5.6-sol', options);
 }
 
 async function main(): Promise<void> {
@@ -39,12 +39,19 @@ async function main(): Promise<void> {
     'a stream that closes before response.completed must be retryable failure, not a partial final',
   );
 
+  const emptyProviderEvents: any[] = [];
   await assert.rejects(
-    () => parse(['data: {"type":"response.completed","response":{"output":[]}}\n\n']),
+    () => parse(['data: {"type":"response.completed","response":{"output":[]}}\n\n'], {
+      onModelEvent: (event: any) => emptyProviderEvents.push(event),
+    }),
     (error: unknown) => error instanceof CodexIncompleteStreamError
-      && /no assistant text or tool calls/.test(error.message),
-    'an empty completed response must be retryable failure',
+      && /no assistant text or tool calls/.test(error.message)
+      && error.diagnostics.failureClass === 'empty_completion'
+      && error.diagnostics.outputItemCount === 0,
+    'an empty completed response must be retryable failure with bounded diagnostics',
   );
+  assert.equal(emptyProviderEvents[0]?.data?.failureClass, 'empty_completion');
+  assert.deepEqual(emptyProviderEvents[0]?.data?.outputItemTypes, []);
 
   const toolCall = await parse([
     'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"example","arguments":""}}\n\n',
