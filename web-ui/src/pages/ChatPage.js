@@ -18,6 +18,11 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import {
+  normalizeQuestionRecord,
+} from '../features/chat/questions/question-model.js';
+import { createQuestionController } from '../features/chat/questions/question-controller.js';
+import { createDesktopQuestionTransport } from '../features/chat/questions/desktop-question-transport.js';
 import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '../features/chat/runtime/recovered-trace.js';
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
@@ -212,6 +217,74 @@ const {
   request: api,
   getStreamState: getSessionStreamState,
   recordProcess: addSessionProcessEntry,
+});
+
+const desktopQuestionTransport = createDesktopQuestionTransport({
+  request: api,
+  getActiveSessionId: () => window.activeChatSessionId,
+  switchSession: (sessionId) => {
+    window.activeChatSessionId = String(sessionId || '').trim();
+    setAgentSessionId(sessionId);
+  },
+  syncActiveChat: () => syncActiveChat(),
+  sendResume: (message, options) => sendChat(message, options),
+  createClientRequestId: (sessionId) => newChatClientRequestId(sessionId),
+  warn: (error) => console.warn('[ChatPage] could not fetch question details:', error),
+});
+
+const desktopQuestionController = createQuestionController({
+  runtimeFor: desktopChatRuntime,
+  getActiveSessionId: () => window.activeChatSessionId,
+  getSessionIds: () => (Array.isArray(window.chatSessions) ? window.chatSessions.map((session) => session?.id) : []),
+  getLegacyQuestion: (id, preferredSessionId = '') => {
+    const sessions = preferredSessionId
+      ? [getChatSessionById(preferredSessionId)]
+      : (Array.isArray(window.chatSessions) ? window.chatSessions : []);
+    for (const session of sessions) {
+      const message = (session?.history || []).find((item) => String(item?.questionRequest?.id || '') === String(id || ''));
+      if (message?.questionRequest) return { sessionId: session.id, record: message.questionRequest };
+    }
+    return null;
+  },
+  getLegacyQuestionSessionIds: () => (Array.isArray(window.chatSessions) ? window.chatSessions.map((session) => session?.id) : []),
+  transport: desktopQuestionTransport,
+  projectToLegacy: ({ sessionId, question, options = {} }) => {
+    const session = getChatSessionById(sessionId);
+    if (!session) return;
+    if (!Array.isArray(session.history)) session.history = [];
+    const matches = session.history.filter((message) => String(message?.questionRequest?.id || '') === String(question.id || ''));
+    const terminal = ['answered', 'cancelled', 'expired', 'resolved'].includes(String(question.status || '').trim().toLowerCase());
+    if (matches.length) {
+      matches.forEach((message) => { message.questionRequest = { ...question }; });
+    } else if (!terminal && options.create !== false) {
+      session.history.push({
+        role: 'assistant',
+        content: '',
+        questionRequest: { ...question },
+        timestamp: Date.now(),
+      });
+    }
+    if (window.activeChatSessionId === sessionId) {
+      window.chatHistory = session.history;
+      renderChatMessages();
+    } else {
+      const becameUnread = !session.unread;
+      session.unread = true;
+      if (becameUnread) window.scheduleSessionListRefresh?.();
+    }
+    persistSession(sessionId);
+  },
+  focusComposer: focusPrometheusQuestionComposer,
+  onValidationMissing: (missing) => {
+    const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
+    showToast('Answer required', `Use the composer to answer: ${labels}`, 'warning');
+  },
+  onSubmitSuccess: () => loadSessionApprovals(),
+  onCancelSuccess: () => loadSessionApprovals(),
+  onError: (error, details = {}) => {
+    const title = details.phase === 'cancel' ? 'Question cancel failed' : 'Question submit failed';
+    showToast(title, String(error?.message || error), 'error');
+  },
 });
 
 const {
@@ -15623,6 +15696,16 @@ function renderInlineRuntimePlanHtml(progressState) {
 // single surface above the composer prevents streaming/history rebuilds from
 // moving the question around or rendering duplicate copies.
 function findPendingPrometheusQuestionForSession(sessionId) {
+  const runtime = desktopChatRuntime(sessionId);
+  const runtimeQuestions = [...(runtime?.snapshot?.questions || [])];
+  const runtimeQuestion = runtimeQuestions
+    .reverse()
+    .find((question) => ['pending', 'submitting'].includes(String(question?.status || 'pending').toLowerCase()));
+  // Keep the existing actionable desktop host visible while the controller
+  // records the in-flight transition in ChatRuntime.questions.
+  if (runtimeQuestion?.status === 'submitting') return { ...runtimeQuestion, status: 'pending' };
+  if (runtimeQuestion) return runtimeQuestion;
+  if (runtimeQuestions.length || Number(runtime?.snapshot?.history?.revision || 0) > 0) return null;
   const sess = getChatSessionById(sessionId);
   if (!sess || !Array.isArray(sess.history)) return null;
   for (let i = sess.history.length - 1; i >= 0; i--) {
@@ -44692,28 +44775,6 @@ function renderInlineApprovalRequest(item) {
   </div>`;
 }
 
-function normalizePrometheusQuestionRecord(record = {}, fallback = {}) {
-  const id = String(record.id || record.questionId || fallback.id || fallback.questionId || '').trim();
-  const sessionId = String(record.sourceSessionId || record.sessionId || fallback.sourceSessionId || fallback.sessionId || '').trim();
-  const questions = Array.isArray(record.questions) ? record.questions : (Array.isArray(fallback.questions) ? fallback.questions : []);
-  return {
-    id,
-    sessionId,
-    questions: questions.slice(0, 5).map((q, index) => ({
-      id: String(q?.id || `q${index + 1}`).trim() || `q${index + 1}`,
-      label: String(q?.label || q?.question || '').trim(),
-      mode: ['single_select', 'multi_select', 'text'].includes(String(q?.mode || '').trim()) ? String(q.mode).trim() : 'single_select',
-      options: Array.isArray(q?.options) ? q.options.map((opt) => String(opt || '').trim()).filter(Boolean).slice(0, 8) : [],
-      allowOther: q?.allowOther !== false && q?.allow_other !== false,
-      required: q?.required !== false,
-    })).filter((q) => q.label),
-    allowGeneralOther: false,
-    status: String(record.status || fallback.status || 'pending').trim().toLowerCase() || 'pending',
-    answers: Array.isArray(record.answers) ? record.answers : [],
-    generalOther: String(record.generalOther || fallback.generalOther || '').trim(),
-  };
-}
-
 function cssEscapeValue(value) {
   const raw = String(value || '');
   if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(raw);
@@ -44722,7 +44783,7 @@ function cssEscapeValue(value) {
 
 function renderInlinePrometheusQuestion(item) {
   if (!item || !item.id) return '';
-  const question = normalizePrometheusQuestionRecord(item);
+  const question = normalizeQuestionRecord(item);
   if (!question.id) return '';
   const pending = question.status === 'pending';
   const idAttr = escHtml(question.id);
@@ -44807,190 +44868,42 @@ function collectPrometheusQuestionAnswers(question) {
   return { answers, generalOther };
 }
 
-function applyPrometheusQuestionComposerAnswer(question, payload, composerText = '') {
-  const text = String(composerText || '').trim();
-  if (!text || !question || !payload) return payload;
-  const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
-  const rawTarget = String(card?.getAttribute('data-question-compose-target') || '').trim();
-  const [targetId, targetKind] = rawTarget.split('::');
-  const targetQuestion = question.questions.find((item) => String(item.id) === String(targetId || ''))
-    || question.questions.find((item) => item.mode === 'text')
-    || question.questions.find((item) => item.allowOther)
-    || null;
-  const targetAnswer = targetQuestion
-    ? payload.answers.find((answer) => String(answer.id) === String(targetQuestion.id))
-    : null;
-  if (targetAnswer) {
-    if (targetKind === 'other' || (!targetKind && targetQuestion.mode !== 'text')) targetAnswer.other = text;
-    else targetAnswer.text = text;
-  } else if (question.allowGeneralOther) {
-    payload.generalOther = text;
-  } else if (payload.answers[0]) {
-    payload.answers[0].text = text;
-  }
-  return payload;
-}
-
-function getMissingPrometheusQuestionAnswers(question, payload) {
-  const answers = Array.isArray(payload?.answers) ? payload.answers : [];
-  return (question?.questions || []).filter((item) => {
-    if (item?.required === false) return false;
-    const answer = answers.find((candidate) => String(candidate?.id || '') === String(item?.id || ''));
-    return !answer || (
-      !(Array.isArray(answer.selected) && answer.selected.length)
-      && !String(answer.text || '').trim()
-      && !String(answer.other || '').trim()
-    );
-  });
-}
-
 function focusPrometheusQuestionComposer() {
   const input = document.getElementById('chat-input');
   if (!input) return;
   try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
 }
 
-function questionFromEventPayload(event = {}, status = '') {
-  const id = String(event.questionId || event.id || event.question?.id || '').trim();
-  const base = event.question && typeof event.question === 'object' ? event.question : {};
-  const question = normalizePrometheusQuestionRecord(base, { ...event, id, status: status || base.status || event.status || 'pending' });
-  if (!question.sessionId) question.sessionId = String(event.sessionId || window.activeChatSessionId || '').trim();
-  if (status) question.status = status;
-  return question;
-}
-
 function upsertInlinePrometheusQuestion(questionInput, options = {}) {
-  const question = normalizePrometheusQuestionRecord(questionInput);
-  if (!question.id) return false;
-  const sessionId = question.sessionId || String(window.activeChatSessionId || '').trim();
-  if (!sessionId) return false;
-  const sess = getChatSessionById(sessionId);
-  if (!sess) return false;
-  if (!Array.isArray(sess.history)) sess.history = [];
-  const existing = sess.history.find((msg) => String(msg?.questionRequest?.id || '') === question.id);
-  if (existing) {
-    existing.questionRequest = { ...(existing.questionRequest || {}), ...question };
-    existing.timestamp = Number(existing.timestamp) || Date.now();
-  } else if (options.create !== false) {
-    sess.history.push({
-      role: 'assistant',
-      content: '',
-      questionRequest: question,
-      timestamp: Date.now(),
-    });
-  }
-  try { desktopChatRuntime(sessionId)?.upsertQuestion(question); } catch {}
-  if (window.activeChatSessionId === sessionId) {
-    window.chatHistory = sess.history;
-    renderChatMessages();
-  } else {
-    const becameUnread = !sess.unread;
-    sess.unread = true;
-    if (becameUnread) window.scheduleSessionListRefresh?.();
-  }
-  persistSession(sessionId);
-  return true;
+  return desktopQuestionController.upsert(questionInput, options).accepted;
 }
 
 function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
-  const id = String(event.questionId || event.id || event.question?.id || '').trim();
-  if (!id) return;
-  const sessionId = String(event.sessionId || event.question?.sessionId || event.question?.sourceSessionId || window.activeChatSessionId || '').trim();
-  const targetSessions = sessionId ? [getChatSessionById(sessionId)].filter(Boolean) : (window.chatSessions || []);
-  targetSessions.forEach((sess) => {
-    const matches = (sess.history || []).filter((entry) => String(entry?.questionRequest?.id || '') === id);
-    if (!matches.length) return;
-    matches.forEach((msg) => {
-      msg.questionRequest = normalizePrometheusQuestionRecord(event.question || msg.questionRequest, { ...event, id, status });
-      msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
-    });
-    try {
-      const record = matches[0]?.questionRequest || { id, status };
-      if (status && status !== 'pending') desktopChatRuntime(sess.id)?.resolveQuestion(id, status, record);
-      else desktopChatRuntime(sess.id)?.upsertQuestion(record);
-    } catch {}
-    persistSession(sess.id);
-  });
-  if (window.activeChatSessionId === sessionId) renderChatMessages();
-}
-
-function findLocalPrometheusQuestionRecord(id) {
-  const qid = String(id || '').trim();
-  if (!qid) return null;
-  for (const sess of (window.chatSessions || [])) {
-    const msg = (sess.history || []).find((m) => String(m?.questionRequest?.id || '') === qid);
-    if (msg?.questionRequest) return msg.questionRequest;
-  }
-  return null;
+  return desktopQuestionController.transition(event, status);
 }
 
 async function submitInlinePrometheusQuestion(id, options = {}) {
-  // Prefer the locally-rendered question record so a slow/failed
-  // /api/questions fetch can't make Submit appear to do nothing. Fall back to
-  // the network only if the card isn't in local state.
-  const question = findLocalPrometheusQuestionRecord(id) || await fetchPrometheusQuestionDetailsById(id);
-  if (!question) {
+  const result = await desktopQuestionController.submit(id, {
+    ...options,
+    readAnswers: (question) => collectPrometheusQuestionAnswers(question),
+    getComposerTarget: (question) => {
+      const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
+      return String(card?.getAttribute('data-question-compose-target') || '').trim();
+    },
+    // Desktop keeps the existing actionable card visible while the request is
+    // in flight; the runtime still records the submitting transition.
+    projectSubmitting: false,
+  });
+  if (result.reason === 'missing' || result.reason === 'missing_id') {
     showToast('Question missing', 'Could not load the pending question.', 'error');
-    return;
-  }
-  const normalizedQuestion = normalizePrometheusQuestionRecord(question);
-  const payload = applyPrometheusQuestionComposerAnswer(
-    normalizedQuestion,
-    collectPrometheusQuestionAnswers(normalizedQuestion),
-    options.composerText,
-  );
-  const missing = getMissingPrometheusQuestionAnswers(normalizedQuestion, payload);
-  if (missing.length) {
-    focusPrometheusQuestionComposer();
-    const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
-    showToast('Answer required', `Use the composer to answer: ${labels}`, 'warning');
     return false;
   }
-  try {
-    const result = await api(`/api/questions/${encodeURIComponent(id)}/submit`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    const answeredQuestion = { ...(result?.question || question), answers: payload.answers, generalOther: payload.generalOther };
-    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: question.sessionId, question: answeredQuestion }, 'answered');
-    await loadSessionApprovals();
-    const resumePrompt = String(result?.resumePrompt || '').trim();
-    if (resumePrompt) {
-      const targetSessionId = String(result?.question?.sessionId || result?.question?.sourceSessionId || window.activeChatSessionId || '').trim();
-      if (targetSessionId && targetSessionId !== window.activeChatSessionId) {
-        window.activeChatSessionId = targetSessionId;
-        setAgentSessionId(targetSessionId);
-        syncActiveChat();
-      }
-      setTimeout(() => sendChat(resumePrompt, { clientRequestId: newChatClientRequestId(targetSessionId || window.activeChatSessionId) }), 100);
-    }
-    return true;
-  } catch (err) {
-    showToast('Question submit failed', String(err?.message || err), 'error');
-    return false;
-  }
+  return result.ok === true;
 }
 
 async function cancelInlinePrometheusQuestion(id) {
-  try {
-    const result = await api(`/api/questions/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' });
-    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: result?.question?.sessionId, question: result?.question }, 'cancelled');
-    await loadSessionApprovals();
-  } catch (err) {
-    showToast('Question cancel failed', String(err?.message || err), 'error');
-  }
-}
-
-async function fetchPrometheusQuestionDetailsById(id) {
-  const questionId = String(id || '').trim();
-  if (!questionId) return null;
-  try {
-    const data = await api('/api/questions?status=all');
-    return (data.questions || []).find((item) => String(item.id || '') === questionId) || null;
-  } catch (err) {
-    console.warn('[ChatPage] could not fetch question details:', err);
-    return null;
-  }
+  const result = await desktopQuestionController.cancel(id);
+  return result.ok === true;
 }
 
 async function loadApprovalProcessRun(id, options = {}) {
@@ -45252,11 +45165,13 @@ async function loadSessionApprovals() {
     }));
     const questionItems = (questionData.questions || [])
       .filter((q) => String(q.sourceSessionId || q.sessionId || '').trim() === currentSessionId)
-      .map((q) => ({ ...normalizePrometheusQuestionRecord(q), approvalType: 'question' }));
+      .map((q) => ({ ...normalizeQuestionRecord(q), approvalType: 'question' }));
     const all = [...questionItems, ...approvalItems, ...proposalItems];
     const runtime = desktopChatRuntime(currentSessionId);
     approvalItems.forEach((item) => { try { runtime?.upsertApproval(item); } catch {} });
-    questionItems.forEach((item) => { try { runtime?.upsertQuestion(item); } catch {} });
+    questionItems.forEach((item) => {
+      try { desktopQuestionController.upsert(item, { projectLegacy: false }); } catch {}
+    });
     const inlineStreamOwnsApprovals = Boolean(
       currentSessionId
       && window._sessionThinking?.[currentSessionId]
@@ -48324,8 +48239,7 @@ wsEventBus.on('coordinator_progress', (msg) => {
       // Insert into the question's OWN session (upsert handles non-active sessions
       // by marking unread) — do not gate on the currently-focused session, or
       // questions from background tasks / subagents never render.
-      const question = msg.question ? questionFromEventPayload(msg, 'pending') : normalizePrometheusQuestionRecord(await fetchPrometheusQuestionDetailsById(msg.questionId), { ...msg, status: 'pending' });
-      upsertInlinePrometheusQuestion(question);
+      await desktopQuestionController.ingest(msg, 'pending');
       return;
     }
     const statusByEvent = {
