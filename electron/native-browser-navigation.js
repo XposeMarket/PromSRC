@@ -5,6 +5,28 @@ function isNativeBrowserNavigationAbort(error) {
   return message.includes('ERR_ABORTED') || Number(error?.errno) === -3 || Number(error?.code) === -3;
 }
 
+function applyNativeBrowserNavigationFailureState(meta, {
+  errorCode,
+  description,
+  validatedURL,
+  currentURL,
+} = {}) {
+  // Electron reports ERR_ABORTED when a navigation is superseded. The event
+  // can arrive after the replacement navigation has already become current,
+  // so it must not write any state from the obsolete request.
+  if (Number(errorCode) === -3) {
+    return { authoritative: false, ignored: true };
+  }
+
+  const lastError = description || 'Native browser load failed.';
+  const url = validatedURL || currentURL || meta?.url;
+  if (meta && typeof meta === 'object') {
+    meta.lastError = lastError;
+    if (url) meta.url = url;
+  }
+  return { authoritative: true, ignored: false, lastError, url };
+}
+
 function createNativeBrowserNavigationController() {
   const inFlight = new Map();
 
@@ -32,4 +54,8 @@ function createNativeBrowserNavigationController() {
   return { load, inFlight };
 }
 
-module.exports = { createNativeBrowserNavigationController, isNativeBrowserNavigationAbort };
+module.exports = {
+  applyNativeBrowserNavigationFailureState,
+  createNativeBrowserNavigationController,
+  isNativeBrowserNavigationAbort,
+};

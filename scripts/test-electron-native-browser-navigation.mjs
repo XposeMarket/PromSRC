@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { createNativeBrowserNavigationController, isNativeBrowserNavigationAbort } from '../electron/native-browser-navigation.js';
+import {
+  applyNativeBrowserNavigationFailureState,
+  createNativeBrowserNavigationController,
+  isNativeBrowserNavigationAbort,
+} from '../electron/native-browser-navigation.js';
 
 assert.equal(isNativeBrowserNavigationAbort(new Error('ERR_ABORTED (-3) loading URL')), true);
 assert.equal(isNativeBrowserNavigationAbort({ errno: -3 }), true);
@@ -37,6 +41,36 @@ assert.deepEqual(urls, [
   'http://127.0.0.1:4173/first',
   'http://127.0.0.1:4173/second',
 ]);
+
+// A superseded A navigation may emit did-fail-load(-3) after B is already the
+// authoritative page. That late event must not overwrite B's URL or state.
+const currentState = {
+  url: 'http://127.0.0.1:4173/second',
+  title: 'Second page',
+  lastError: '',
+};
+const lateAbort = applyNativeBrowserNavigationFailureState(currentState, {
+  errorCode: -3,
+  description: 'ERR_ABORTED',
+  validatedURL: 'http://127.0.0.1:4173/first',
+  currentURL: 'http://127.0.0.1:4173/second',
+});
+assert.equal(lateAbort.authoritative, false, 'a late superseded failure must be ignored');
+assert.deepEqual(currentState, {
+  url: 'http://127.0.0.1:4173/second',
+  title: 'Second page',
+  lastError: '',
+}, 'a late A abort must not overwrite current B state');
+
+const genuineFailure = applyNativeBrowserNavigationFailureState(currentState, {
+  errorCode: -105,
+  description: 'NAME_NOT_RESOLVED',
+  validatedURL: 'http://invalid.test/',
+  currentURL: 'http://invalid.test/',
+});
+assert.equal(genuineFailure.authoritative, true, 'a genuine failure must remain authoritative');
+assert.equal(currentState.url, 'http://invalid.test/');
+assert.equal(currentState.lastError, 'NAME_NOT_RESOLVED');
 
 const failingView = {
   webContents: {

@@ -42,7 +42,10 @@ const {
   parseWindowsListeningPids,
 } = require('./security');
 const { getNativeBrowserViewImplementations } = require('./native-browser-view');
-const { createNativeBrowserNavigationController } = require('./native-browser-navigation');
+const {
+  applyNativeBrowserNavigationFailureState,
+  createNativeBrowserNavigationController,
+} = require('./native-browser-navigation');
 const {
   getChromeProfileCatalog,
   getImportedChromeProfile,
@@ -2748,11 +2751,13 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
   wc.on('did-navigate-in-page', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
   wc.on('page-title-updated', (_event, title) => { meta.title = title || wc.getTitle() || ''; onUpdate(); });
   wc.on('did-fail-load', (_event, errorCode, description, validatedURL) => {
-    // Electron uses ERR_ABORTED (-3) when a newer navigation supersedes the
-    // current one. The newer navigation owns the state, so do not leave a
-    // stale error on the browser canvas while it is settling.
-    meta.lastError = Number(errorCode) === -3 ? '' : (description || 'Native browser load failed.');
-    meta.url = validatedURL || wc.getURL() || meta.url;
+    const failure = applyNativeBrowserNavigationFailureState(meta, {
+      errorCode,
+      description,
+      validatedURL,
+      currentURL: wc.getURL(),
+    });
+    if (!failure.authoritative) return;
     onUpdate();
   });
 }
