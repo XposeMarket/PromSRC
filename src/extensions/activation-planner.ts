@@ -7,6 +7,7 @@ import {
   matchesActionableMention,
   normalizePromptSignalText,
 } from '../runtime/prompt-signal-matcher.js';
+import { isExplicitToolSuppression } from '../runtime/tool-category-keyword-router.js';
 
 function matchesPattern(value: string, pattern: string): boolean {
   if (pattern === value || pattern === '*') return true;
@@ -246,6 +247,9 @@ export function planMessageExtensionActivation(params: {
   connectedExtensionIds?: ReadonlySet<string>;
 }): MessageExtensionActivationPlan {
   if (!params.message?.trim()) {
+    return { entries: [], categories: [], blockedExtensionIds: [], hasConnectedExtension: false };
+  }
+  if (isExplicitToolSuppression(params.message)) {
     return { entries: [], categories: [], blockedExtensionIds: [], hasConnectedExtension: false };
   }
   if (!params.registry) ensurePrometheusExtensionRuntimeLoaded();

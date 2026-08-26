@@ -16,6 +16,7 @@ import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForCon
 import { hookBus } from './hooks';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import { listLiveRuntimes } from './live-runtime-registry';
+import { normalizeManifestToolCategory } from '../runtime/tool-category-manifest';
 import {
   formatTurnContextPacketsForPrompt,
   mergeTurnContextPackets,
@@ -811,13 +812,18 @@ function normalizeToolCategoryActivationScope(input: any): ToolCategoryActivatio
   return 'session';
 }
 
+function normalizeSessionToolCategory(input: unknown): string {
+  const raw = String(input || '').trim();
+  return normalizeManifestToolCategory(raw) || raw;
+}
+
 function normalizeScopedToolCategoryActivations(input: any, fallbackTurn?: number): ScopedToolCategoryActivation[] {
   if (!Array.isArray(input)) return [];
   const fallback = Number.isFinite(Number(fallbackTurn)) ? Math.max(0, Math.floor(Number(fallbackTurn))) : 0;
   const seen = new Set<string>();
   const normalized: ScopedToolCategoryActivation[] = [];
   for (const raw of input) {
-    const category = String(raw?.category || '').trim();
+    const category = normalizeSessionToolCategory(raw?.category);
     if (!category) continue;
     const scope = normalizeToolCategoryActivationScope(raw?.scope);
     if (scope === 'session') continue;
@@ -3761,7 +3767,7 @@ export function activateToolCategory(
   options: { scope?: ToolCategoryActivationScope; turns?: number } = {},
 ): void {
   const session = getSession(id);
-  const cleanCategory = String(category || '').trim();
+  const cleanCategory = normalizeSessionToolCategory(category);
   if (!cleanCategory) return;
   const scope = normalizeToolCategoryActivationScope(options.scope);
   const currentTurn = getSessionUserTurnCounter(session);
@@ -3807,7 +3813,7 @@ export function captureToolCategoryActivationState(
   category: string,
 ): ToolCategoryActivationSnapshot {
   const session = getSession(id);
-  const cleanCategory = String(category || '').trim();
+  const cleanCategory = normalizeSessionToolCategory(category);
   const changed = pruneScopedToolCategoryActivations(session);
   if (changed) saveSession(id);
   return {
@@ -3833,7 +3839,7 @@ export function restoreToolCategoryActivationState(
   snapshot: ToolCategoryActivationSnapshot,
 ): void {
   const session = getSession(id);
-  const cleanCategory = String(snapshot?.category || '').trim();
+  const cleanCategory = normalizeSessionToolCategory(snapshot?.category);
   if (!cleanCategory) return;
 
   const activeCategories = Array.isArray(session.activatedToolCategories)
@@ -3966,7 +3972,7 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
   const session = getSession(id);
   const next = Array.from(new Set(
     (categories || [])
-      .map((category) => String(category || '').trim())
+      .map((category) => normalizeSessionToolCategory(category))
       .filter(Boolean),
   ));
   session.activatedToolCategories = next;
@@ -3977,11 +3983,23 @@ export function setActivatedToolCategories(id: string, categories: string[]): vo
 export function getActivatedToolCategories(id: string): Set<string> {
   const session = getSession(id);
   const changed = pruneScopedToolCategoryActivations(session);
-  const active = new Set(session.activatedToolCategories || []);
-  for (const entry of session.scopedToolCategoryActivations || []) {
+  const persistent = Array.from(new Set(
+    (session.activatedToolCategories || [])
+      .map((category) => normalizeSessionToolCategory(category))
+      .filter(Boolean),
+  ));
+  const scoped = normalizeScopedToolCategoryActivations(session.scopedToolCategoryActivations, getSessionUserTurnCounter(session));
+  const categoriesChanged = JSON.stringify(persistent) !== JSON.stringify(session.activatedToolCategories || [])
+    || JSON.stringify(scoped) !== JSON.stringify(session.scopedToolCategoryActivations || []);
+  if (categoriesChanged) {
+    session.activatedToolCategories = persistent;
+    session.scopedToolCategoryActivations = scoped;
+  }
+  const active = new Set(persistent);
+  for (const entry of scoped) {
     active.add(entry.category);
   }
-  if (changed) saveSession(id);
+  if (changed || categoriesChanged) saveSession(id);
   return active;
 }
 

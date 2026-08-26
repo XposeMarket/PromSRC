@@ -26,6 +26,9 @@ const CASES: Case[] = [
   { id: 'negative-pr-concept', message: 'Explain what a pull request is.', negative: true },
   { id: 'negative-inbox-feeling', message: 'My inbox is overwhelming today.', negative: true },
   { id: 'negative-conversation-history', message: 'I had another conversation yesterday.', negative: true },
+  { id: 'negative-explicit-no-tools', message: 'Do not call any tools; just explain the routing policy.', negative: true },
+  { id: 'negative-explicit-no-tools-gerund', message: 'Without using any tools, just explain the routing policy.', negative: true },
+  { id: 'negative-explicit-no-tools-calling', message: 'Never calling tools here; summarize the routing policy.', negative: true },
 
   { id: 'workspace-readme', message: 'Read the README and tell me what this project does.', expected: ['workspace_write'] },
   { id: 'workspace-npm-test', message: 'Run npm test and report the failures.', expected: ['workspace_write'] },

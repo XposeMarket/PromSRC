@@ -37,6 +37,13 @@ function main(): void {
   assert.equal(liveNegative.file_edit_intent, false, 'explicit no-tool instruction must suppress an auto-activated write category');
   assert.equal(liveNegative.command_execution_intent, false, 'explicit no-tool instruction must suppress an auto-activated command category');
 
+  const canonicalWrapperIntents = detectStage4InstructionIntents({
+    message: 'Continue the requested operation.',
+    requiredTools: ['workspace_edit', 'workspace_run'],
+  });
+  assert.equal(canonicalWrapperIntents.file_edit_intent, true, 'workspace_edit must satisfy file-edit intent matching');
+  assert.equal(canonicalWrapperIntents.command_execution_intent, true, 'workspace_run must satisfy command intent matching');
+
   const scores = Object.fromEntries(IDS.map((id) => {
     const m = metrics[id];
     const precision = m.tp / Math.max(1, m.tp + m.fp);

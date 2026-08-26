@@ -88,6 +88,17 @@ function normalize(input: unknown): string {
 }
 
 /**
+ * Shared fail-closed guard for the two message-driven activation paths:
+ * native tool categories and extension-backed connectors.  Keeping this
+ * predicate here prevents a connector planner from re-introducing tools after
+ * the native keyword router has honored an explicit no-tool instruction.
+ */
+export function isExplicitToolSuppression(input: string): boolean {
+  const text = normalize(input);
+  return /\b(?:do not|don't|dont|never|without)\s+(?:call|calling|use|using|run|running|activate|activating|load|loading|invoke|invoking|execute|executing)\s+(?:any|the|a)?\s*tools?\b/i.test(text);
+}
+
+/**
  * Detect actionable tool-category intent on normal chat messages.
  */
 export function detectKeywordToolCategories(input: string): RoutingSet {
@@ -95,8 +106,7 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
   const categories: RoutingSet = new Set();
   if (!text) return categories;
 
-  const explicitNoTool = /\b(?:do not|don't|dont|never|without)\s+(?:call|use|run|activate|load)\s+(?:any|the|a)?\s*tools?\b/i.test(text);
-  if (explicitNoTool) return categories;
+  if (isExplicitToolSuppression(text)) return categories;
 
   const meaningQuestion = isQuestionAboutMeaning(text);
   const action = hasAction(text) || isExplicitToolName(text);
@@ -114,10 +124,12 @@ export function detectKeywordToolCategories(input: string): RoutingSet {
   const isPromSource = explicitPromSource || knownPrometheusSurfacePath || (promContext && sourcePath);
   const mediaTransferIntent = /\b(?:download|upload|analyze|extract|convert|transcode|fetch|retrieve)\b/.test(text)
     && (/(?:https?:\/\/|\b(?:image|photo|video|audio|media|asset|pdf)\b)/.test(text));
+  const browserFileTransfer = /\b(?:browser|web page|webpage|website|site|tab)\b/.test(text)
+    && /\bdownload\b/.test(text);
 
   if (sourcePath || /\b(?:workspace|repo|repository|file|files|folder|directory|path|readme)\b/.test(text)) {
     const fileAction = action || sourcePath || /\b(?:package\.json|tsconfig|\.env|dockerfile|makefile|\.gitignore|\.html?|\.css|\.jsx?|\.tsx?|\.json|\.md)\b/.test(text);
-    if (fileAction && !meaningQuestion && !mediaTransferIntent) add(categories, 'workspace_write');
+    if (fileAction && !meaningQuestion && !mediaTransferIntent && !browserFileTransfer) add(categories, 'workspace_write');
   }
 
   const commandIntent = isExplicitToolName(text)

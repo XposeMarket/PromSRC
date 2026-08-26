@@ -142,7 +142,7 @@ export function detectStage4InstructionIntents(input: Stage4IntentInput): Stage4
   if (explicitFileAction) mark('file_edit_intent', 'explicit_file_mutation');
   if (contextualFileFollowup) mark('file_edit_intent', 'contextual_file_mutation_followup');
   if (!explicitlyDisallowsTools && (active.has('workspace_write') || active.has('prometheus_source_write'))) mark('file_edit_intent', 'active_write_category');
-  if (requiredTools.some((tool) => /^(write_|create_file|apply_|find_replace|replace_lines|insert_after|delete_lines)/.test(tool))) mark('file_edit_intent', 'required_file_tool');
+  if (requiredTools.some((tool) => /^(?:workspace_edit|workspace_write|prometheus_source_write|source_write|file_ops|write_|create_file|apply_|find_replace|replace_lines|insert_after|delete_lines)/.test(tool))) mark('file_edit_intent', 'required_file_tool');
   if (/\b(file edit|source edit|code change|modify files?)\b/.test(caller)) mark('file_edit_intent', 'caller_file_requirement');
 
   const explanatoryCommandQuestion = /\b(explain|what is|what are|how (does|do)|did)\b[\s\S]{0,80}\b(npm|tests?|build|lint|terminal|command|process)\b/.test(message);
@@ -171,7 +171,7 @@ export function detectStage4InstructionIntents(input: Stage4IntentInput): Stage4
   if (contextualVerification) mark('command_execution_intent', 'contextual_verification_followup');
   if (contextualTestOut) mark('command_execution_intent', 'contextual_test_followup');
   if (contextualTestNow) mark('command_execution_intent', 'contextual_test_now');
-  if (requiredTools.some((tool) => /^(terminal|run_command|start_process|process_|run_tests|run_linter|run_typecheck)/.test(tool))) mark('command_execution_intent', 'required_command_tool');
+  if (requiredTools.some((tool) => /^(?:workspace_run|workspace_git|terminal|run_command|start_process|process_|run_tests|run_linter|run_typecheck)/.test(tool))) mark('command_execution_intent', 'required_command_tool');
   if (/\b(command|shell|terminal|build|test|process)\b/.test(caller)) mark('command_execution_intent', 'caller_command_requirement');
 
   const runtimeProposal = any(message, [
