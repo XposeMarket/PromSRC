@@ -159,8 +159,9 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 }
 
 {
-  // A stale status file must not authorize a wrapper/runtime PID substitution
-  // just because a reused PID currently appears to own the port.
+  // A matching generation remains identity evidence even after heartbeat and
+  // progress go stale. The supervisor must reach the recovery threshold rather
+  // than turning a hung wrapper/runtime split into a permanent mismatch wait.
   const decision = classifyGatewaySupervisorObservation(observation({
     childPid: 20_228,
     portOwnerPids: [20_488],
@@ -179,7 +180,50 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
       expiresAt: now - 90_000,
     },
   }));
-  assert.equal(decision.state, 'identity_mismatch', 'stale runtime status must not confirm a port owner');
+  assert.equal(decision.state, 'stalled', 'matching generation plus current port ownership must remain recoverable after liveness expires');
+  assert.equal(decision.action, 'restart');
+  assert.equal(decision.reasonCode, 'confirmed_stall_no_fresh_progress');
+}
+
+{
+  // A reused/runtime PID from another launch generation remains fail-closed,
+  // even when it currently owns the listening port.
+  const decision = classifyGatewaySupervisorObservation(observation({
+    childPid: 20_228,
+    portOwnerPids: [20_488],
+    expectedProcessStartedAt: now - 10_000,
+    runtimeStatus: {
+      pid: 20_488,
+      processStartedAt: now - 20_000,
+      timestamp: now - 60_000,
+    },
+    progressLease: {
+      version: 1,
+      pid: 20_488,
+      processStartedAt: now - 20_000,
+      state: 'active',
+      lastProgressAt: now - 180_000,
+      expiresAt: now - 90_000,
+    },
+  }));
+  assert.equal(decision.state, 'identity_mismatch');
+  assert.equal(decision.action, 'wait');
+  assert.equal(decision.reasonCode, 'pid_identity_mismatch');
+}
+
+{
+  // Missing launch-generation evidence must not authorize killing a port owner.
+  const decision = classifyGatewaySupervisorObservation(observation({
+    childPid: 20_228,
+    portOwnerPids: [20_488],
+    expectedProcessStartedAt: now - 10_000,
+    runtimeStatus: {
+      pid: 20_488,
+      timestamp: now - 60_000,
+    },
+    progressLease: null,
+  }));
+  assert.equal(decision.state, 'identity_mismatch');
   assert.equal(decision.action, 'wait');
   assert.equal(decision.reasonCode, 'pid_identity_mismatch');
 }

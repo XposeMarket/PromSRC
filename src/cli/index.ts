@@ -656,6 +656,13 @@ async function runSupervisedGateway(): Promise<void> {
   let launchInFlight = false;
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
+  // Keep one launch-scoped generation across child restarts. The supervisor
+  // uses this as identity evidence for a wrapper/runtime PID split; heartbeat
+  // freshness is evaluated separately as liveness.
+  const configuredGatewayGeneration = Number(process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT);
+  const expectedGatewayProcessStartedAt = Number.isFinite(configuredGatewayGeneration) && configuredGatewayGeneration > 0
+    ? Math.floor(configuredGatewayGeneration)
+    : Date.now();
   const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
     || path.join(getGatewayStateRoot(), '.prometheus');
 
@@ -734,6 +741,7 @@ async function runSupervisedGateway(): Promise<void> {
         ...process.env,
         PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1',
         PROMETHEUS_SUPERVISOR_STATE_DIR: supervisorStateDir,
+        PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(expectedGatewayProcessStartedAt),
         ...(explicitQuickRestart ? { PROMETHEUS_HOT_RESTART: '1' } : {}),
       },
       stdio: 'inherit',
@@ -763,6 +771,7 @@ async function runSupervisedGateway(): Promise<void> {
         restartEnabled: gatewaySupervisorRestartEnabled(),
         heartbeatFreshMs: 20_000,
         legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+        expectedProcessStartedAt: expectedGatewayProcessStartedAt,
         runtimeStatus,
         progressLease,
       });
@@ -869,6 +878,7 @@ async function runSupervisedGateway(): Promise<void> {
       restartEnabled: gatewaySupervisorRestartEnabled(),
       heartbeatFreshMs: 20_000,
       legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+      expectedProcessStartedAt: expectedGatewayProcessStartedAt,
       runtimeStatus,
       progressLease,
     });

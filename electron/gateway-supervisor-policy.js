@@ -71,13 +71,14 @@ function classifyGatewaySupervisorObservation(observation) {
   ) && (expectedProcessStartedAt === null || finitePositive(progressLease?.processStartedAt) !== null);
   // In source development (and on Windows in particular), the Electron
   // child tracked by spawn() can be a tsx/launcher wrapper while the actual
-  // Node runtime owns the listening socket. Treat that runtime PID as the
-  // managed identity only when a fresh runtime status with a confirmed process
-  // generation and the port-owner probe agree. This keeps stale/reused PIDs
-  // from authorizing a kill while allowing the real gateway to be supervised.
+  // Node runtime owns the listening socket. Heartbeat freshness is liveness,
+  // not identity: a hung runtime is expected to stop refreshing its heartbeat.
+  // A runtime PID may therefore remain the managed identity after its
+  // heartbeat goes stale, but only when its launch generation still matches
+  // the supervisor's expected generation and it currently owns the port. A
+  // mismatched generation remains fail-closed and cannot authorize a kill.
   const runtimeOwnsPort = statusPid !== null
     && portOwnerPids.includes(statusPid)
-    && statusIsRelevant
     && statusProcessGenerationConfirmed;
   const managedRuntimeIdentity = runtimeOwnsPort || childOwnsPort;
   const statusPidMatchesChild = pidMatches(runtimeStatus?.pid, childPid);
