@@ -186,6 +186,35 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 }
 
 {
+  // A prior supervised child may leave a fresh-looking status/lease behind
+  // while a later child owns the same port. A child-scoped generation must
+  // reject that prior record even when its liveness timestamps look healthy.
+  const previousChildGeneration = now - 20_000;
+  const currentChildGeneration = now - 10_000;
+  const decision = classifyGatewaySupervisorObservation(observation({
+    childPid: 20_228,
+    portOwnerPids: [20_488],
+    expectedProcessStartedAt: currentChildGeneration,
+    runtimeStatus: {
+      pid: 20_488,
+      processStartedAt: previousChildGeneration,
+      timestamp: now - 1_000,
+    },
+    progressLease: {
+      version: 1,
+      pid: 20_488,
+      processStartedAt: previousChildGeneration,
+      state: 'active',
+      lastProgressAt: now - 1_000,
+      expiresAt: now + 89_000,
+    },
+  }));
+  assert.equal(decision.state, 'identity_mismatch');
+  assert.equal(decision.action, 'wait');
+  assert.equal(decision.reasonCode, 'pid_identity_mismatch');
+}
+
+{
   // A reused/runtime PID from another launch generation remains fail-closed,
   // even when it currently owns the listening port.
   const decision = classifyGatewaySupervisorObservation(observation({
