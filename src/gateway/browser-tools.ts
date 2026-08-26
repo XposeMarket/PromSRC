@@ -2173,6 +2173,27 @@ export async function browserDoctor(sessionId: string): Promise<string> {
       } else {
         warn('Session', 'no active in-app browser tab; browser_open will create one');
       }
+      try {
+        const resource = await callInHouseBrowser<any>('metrics', { sessionId: resolved });
+        const sample = resource?.metrics;
+        if (!sample) {
+          warn('Native browser resources', 'no renderer sample is available yet');
+        } else {
+          const privateMb = sample.memory?.privateBytes == null
+            ? 'unknown'
+            : `${(Number(sample.memory.privateBytes) / (1024 * 1024)).toFixed(1)} MB private`;
+          const cpu = sample.cpuPercent == null ? 'unknown CPU' : `${Number(sample.cpuPercent).toFixed(1)}% CPU`;
+          const heap = sample.page?.jsHeapRatio == null
+            ? 'JS heap unavailable'
+            : `${(Number(sample.page.jsHeapRatio) * 100).toFixed(1)}% JS heap`;
+          const detail = `${cpu}, ${privateMb}, ${heap}, ${sample.visible ? 'visible' : 'background'}; background throttling=${sample.backgroundThrottling ? 'on' : 'off'}`;
+          if (sample.backgroundThrottling !== true) fail('Native browser resources', `${detail}; hidden-page throttling is disabled`);
+          else if (sample.pressure?.level === 'elevated') warn('Native browser resources', `${detail}; pressure=${(sample.pressure.reasons || []).join(',') || 'elevated'}`);
+          else ok('Native browser resources', detail);
+        }
+      } catch (err: any) {
+        warn('Native browser resources', `sample unavailable: ${String(err?.message || err)}`);
+      }
     } catch (err: any) {
       fail('Electron browser RPC', String(err?.message || err));
     }

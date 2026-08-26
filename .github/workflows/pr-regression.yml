@@ -117,6 +117,8 @@ jobs:
         run: node scripts/test-electron-gateway-relay.mjs
       - name: Verify Electron security boundary
         run: node scripts/test-electron-security-boundary.mjs
+      - name: Verify Electron native browser resource policy
+        run: npm run test:electron-browser-resource-policy
       - name: Verify plugins page contract
         run: node scripts/test-plugins-page-contract.mjs
       - name: Verify Hub goals contract
