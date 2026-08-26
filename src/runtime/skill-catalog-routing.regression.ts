@@ -12,7 +12,9 @@ const cases = [
   ['Inspect scheduled job history', 'scheduler-operations-playbook'],
   ['Market research for this category', 'market-research'],
   ['Research a customer segment for this product', 'market-research'],
-  ['The MCP server failed to connect', 'mcp-ops-troubleshooting'],
+  // The merged skill catalog keeps this canonical troubleshooting trigger;
+  // the older "failed to connect" wording was removed by the catalog contract.
+  ['The MCP server is not connecting', 'mcp-ops-troubleshooting'],
   ['Create an MCP server for this local service', 'mcp-server-builder'],
   ['Analyze one competitor company', 'competitor-profile'],
   ['Take a screenshot of the desktop app', 'desktop-automation-playbook'],
