@@ -13548,115 +13548,244 @@ body.pm-canvas-fullscreen-open {
   margin: 10px 0 2px;
 }
 .pm-chat-approval {
-  border: 1px solid color-mix(in srgb, var(--pm-accent) 46%, var(--pm-border));
-  background: color-mix(in srgb, var(--pm-accent) 7%, var(--pm-card));
-  border-radius: 14px;
-  padding: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--pm-text) 16%, var(--pm-border));
+  background: var(--pm-surface);
+  border-radius: 18px;
+  padding: 0;
   color: var(--pm-text);
-  box-shadow: 0 10px 24px rgba(28, 20, 12, .08);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .08);
 }
 .pm-chat-approval.compact {
   box-shadow: none;
   margin-top: 4px;
 }
 .pm-chat-approval.resolved {
-  padding: 10px 12px;
+  border-color: color-mix(in srgb, var(--pm-text) 12%, var(--pm-border));
   box-shadow: none;
 }
-.pm-chat-approval.resolved .pm-chat-approval-head {
-  margin-bottom: 5px;
-}
-.pm-chat-approval.resolved p {
-  margin-top: 4px;
-}
-.pm-chat-approval.resolved em {
-  margin-top: 5px;
-}
 .pm-chat-approval-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: .04em;
-  text-transform: uppercase;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 11px;
+  padding: 16px 16px 0;
+}
+.pm-chat-approval-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--pm-text) 12%, var(--pm-border));
+  border-radius: 11px;
   color: var(--pm-muted);
 }
-.pm-chat-approval-status {
-  border-radius: 999px;
-  padding: 3px 8px;
-  background: #f1e1c4;
-  color: #7b5520;
+.pm-chat-approval-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.pm-chat-approval-status.approved {
-  background: #d9f1df;
-  color: #1f7a3d;
+.pm-chat-approval-spinner {
+  width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--pm-blue, #3b82f6) 22%, transparent);
+  border-top-color: var(--pm-blue, #3b82f6);
+  border-radius: 50%;
+  animation: pm-chat-approval-spin .8s linear infinite;
 }
-.pm-chat-approval-status.denied,
-.pm-chat-approval-status.rejected,
-.pm-chat-approval-status.failed,
-.pm-chat-approval-status.expired {
-  background: #f6dddc;
-  color: #a2342f;
+@keyframes pm-chat-approval-spin {
+  to { transform: rotate(360deg); }
 }
-.pm-chat-approval strong {
+.pm-chat-approval-heading {
+  min-width: 0;
+}
+.pm-chat-approval-title {
   display: block;
-  font-size: 15px;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
   line-height: 1.25;
 }
+.pm-chat-approval-tool {
+  display: block;
+  min-width: 0;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--pm-muted);
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-chat-approval-status {
+  align-self: start;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--pm-orange, #f59e0b) 34%, transparent);
+  background: color-mix(in srgb, var(--pm-orange, #f59e0b) 12%, transparent);
+  color: var(--pm-orange, #f59e0b);
+  font-size: 11px;
+  font-weight: 700;
+}
+.pm-chat-approval-status-approved,
+.pm-chat-approval-status-complete,
+.pm-chat-approval-status-executed {
+  border-color: color-mix(in srgb, var(--pm-green, #22c55e) 34%, transparent);
+  background: color-mix(in srgb, var(--pm-green, #22c55e) 12%, transparent);
+  color: var(--pm-green, #22c55e);
+}
+.pm-chat-approval-status-denied,
+.pm-chat-approval-status-rejected,
+.pm-chat-approval-status-failed,
+.pm-chat-approval-status-expired,
+.pm-chat-approval-status-error {
+  border-color: color-mix(in srgb, var(--pm-red, #ef4444) 34%, transparent);
+  background: color-mix(in srgb, var(--pm-red, #ef4444) 12%, transparent);
+  color: var(--pm-red, #ef4444);
+}
+.pm-chat-approval-status-approving,
+.pm-chat-approval-status-running,
+.pm-chat-approval-status-executing {
+  border-color: color-mix(in srgb, var(--pm-blue, #3b82f6) 34%, transparent);
+  background: color-mix(in srgb, var(--pm-blue, #3b82f6) 12%, transparent);
+  color: var(--pm-blue, #3b82f6);
+}
 .pm-chat-approval p {
-  margin: 6px 0 0;
+  margin: 12px 16px 0;
   color: var(--pm-text-soft);
   font-size: 13px;
   line-height: 1.45;
 }
-.pm-chat-approval em,
-.pm-chat-approval small {
+.pm-chat-approval-details {
+  margin: 12px 16px 14px;
+  border-top: 0;
+  padding: 0;
+}
+.pm-chat-approval-details summary {
   display: inline-flex;
-  margin-top: 8px;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
   color: var(--pm-muted);
   font-size: 12px;
-  font-style: normal;
   font-weight: 700;
+  list-style: none;
 }
-.pm-chat-approval small {
-  margin-left: 8px;
+.pm-chat-approval-details summary::-webkit-details-marker {
+  display: none;
+}
+.pm-chat-approval-details summary span {
+  display: inline-block;
+  font-size: 15px;
+  line-height: 1;
+  transition: transform .2s ease;
+}
+.pm-chat-approval-details:not([open]) summary span {
+  transform: rotate(180deg);
+}
+.pm-chat-approval-parameters {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--pm-text) 9%, var(--pm-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pm-bg-soft) 68%, var(--pm-surface));
+}
+.pm-chat-approval-parameter {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 7rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  font-size: 12px;
+}
+.pm-chat-approval-parameter dt {
+  padding-top: 7px;
+  color: var(--pm-muted);
+}
+.pm-chat-approval-parameter dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--pm-text-soft);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.pm-chat-approval-parameter-value {
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.pm-chat-approval-parameter-value.code {
+  background: color-mix(in srgb, var(--pm-bg) 78%, var(--pm-surface));
+  color: var(--pm-text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.pm-chat-approval-parameter-value.multiline {
+  white-space: pre-wrap;
 }
 .pm-chat-approval-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 2px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--pm-text) 10%, var(--pm-border));
 }
 .pm-chat-approval-btn {
-  border: 0;
+  min-height: 36px;
+  border: 1px solid transparent;
   border-radius: 12px;
-  padding: 11px 10px;
-  font-size: 14px;
-  font-weight: 900;
+  padding: 8px 12px;
+  color: var(--pm-text);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity .15s ease, background-color .15s ease, border-color .15s ease;
 }
 .pm-chat-approval-btn.approve {
-  background: var(--pm-green, #2fae66);
-  color: #fff;
+  background: var(--pm-text);
+  color: var(--pm-bg);
 }
-.pm-chat-approval-btn.reject {
-  background: var(--pm-bg-soft);
-  color: var(--pm-text);
-  border: 1px solid var(--pm-border);
+.pm-chat-approval-btn.approve:active,
+.pm-chat-approval-btn.always:active,
+.pm-chat-approval-btn.session:active,
+.pm-chat-approval-btn.reject:active {
+  opacity: .7;
 }
 .pm-chat-approval-btn.session,
 .pm-chat-approval-btn.always {
-  background: var(--pm-surface);
-  color: var(--pm-text);
-  border: 1px solid var(--pm-border);
+  border-color: color-mix(in srgb, var(--pm-text) 12%, var(--pm-border));
+  background: transparent;
+}
+.pm-chat-approval-btn.reject {
+  color: var(--pm-muted);
+}
+.pm-chat-approval-btn:focus-visible,
+.pm-chat-approval-details summary:focus-visible {
+  outline: 2px solid var(--pm-blue, #4a82d1);
+  outline-offset: 2px;
+}
+.pm-chat-approval-btn:disabled {
+  cursor: wait;
+  opacity: .55;
 }
 .pm-chat-approval-done {
-  margin-top: 10px;
+  padding: 12px 16px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--pm-text) 10%, var(--pm-border));
   color: var(--pm-muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
 }
 .pm-process-approval-link {
   display: grid;

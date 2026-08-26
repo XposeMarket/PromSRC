@@ -6119,6 +6119,87 @@ function _normalizeMobileApproval(input = {}, fallback = {}) {
   };
 }
 
+function _pmApprovalStatusCopy(status = 'pending') {
+  const normalized = String(status || 'pending').toLowerCase();
+  if (normalized === 'pending') return 'Approval required';
+  if (normalized === 'approving') return 'Approving';
+  if (normalized === 'approved') return 'Approved';
+  if (normalized === 'rejected' || normalized === 'denied') return 'Denied';
+  if (normalized === 'running' || normalized === 'executing') return 'Running';
+  if (normalized === 'complete' || normalized === 'executed') return 'Completed';
+  if (normalized === 'failed' || normalized === 'error') return 'Failed';
+  if (normalized === 'expired') return 'Expired';
+  return normalized || 'Approval required';
+}
+
+function _pmApprovalStatusIcon(status = 'pending') {
+  const normalized = String(status || 'pending').toLowerCase();
+  if (normalized === 'approved' || normalized === 'complete' || normalized === 'executed') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7"/></svg>';
+  }
+  if (normalized === 'rejected' || normalized === 'denied' || normalized === 'failed' || normalized === 'error' || normalized === 'expired') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
+  }
+  if (normalized === 'approving' || normalized === 'running' || normalized === 'executing') {
+    return '<span class="pm-chat-approval-spinner" aria-hidden="true"></span>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>';
+}
+
+function _pmApprovalParameterHtml(label, value, { code = false, multiline = false } = {}) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  const valueClass = ['pm-chat-approval-parameter-value', code ? 'code' : '', multiline ? 'multiline' : ''].filter(Boolean).join(' ');
+  return `<div class="pm-chat-approval-parameter">
+    <dt>${escapeHtml(label)}</dt>
+    <dd class="${valueClass}">${escapeHtml(text)}</dd>
+  </div>`;
+}
+
+function _pmApprovalParametersHtml(approval, human, technicalText, {
+  risk = 0,
+  boundaryScope = '',
+  boundaryPaths = [],
+  sourceDirs = [],
+  devFiles = [],
+  devPlan = null,
+  evidence = [],
+  steps = [],
+  expectedWorkflow = [],
+} = {}) {
+  const args = approval?.toolArgs && typeof approval.toolArgs === 'object' ? approval.toolArgs : {};
+  const rows = [];
+  const command = String(args.command || '').trim();
+  const directory = String(args.cwd || args.directory || args.workdir || '').trim();
+  const path = String(approval?.pathAccess?.requestedPath || args.path || '').trim();
+  const detail = String(human?.detail || '').trim();
+  if (command) rows.push(_pmApprovalParameterHtml('Command', command, { code: true, multiline: true }));
+  if (directory) rows.push(_pmApprovalParameterHtml('Directory', directory, { code: true }));
+  if (path && path !== detail) rows.push(_pmApprovalParameterHtml('Path', path, { code: true, multiline: true }));
+  if (detail && detail !== command && detail !== path) rows.push(_pmApprovalParameterHtml(
+    approval?.approvalKind === 'path_access' ? 'Path' : command && detail === command ? 'Command' : 'Target',
+    detail,
+    { code: true, multiline: true },
+  ));
+  if (boundaryScope && boundaryScope !== 'workspace') {
+    rows.push(_pmApprovalParameterHtml('Boundary', `${boundaryScope.replace(/_/g, ' ')}${approval?.commandBoundary?.reason ? ` — ${approval.commandBoundary.reason}` : ''}`));
+  }
+  if (boundaryPaths.length) rows.push(_pmApprovalParameterHtml('External paths', boundaryPaths.slice(0, 8).join('\n'), { code: true, multiline: true }));
+  if (sourceDirs.length) rows.push(_pmApprovalParameterHtml('Workspace docs', sourceDirs.join(', '), { code: true, multiline: true }));
+  if (devFiles.length) rows.push(_pmApprovalParameterHtml('Files', devFiles.slice(0, 12).join('\n'), { code: true, multiline: true }));
+  if (devPlan?.reasoning) rows.push(_pmApprovalParameterHtml('Reasoning', devPlan.reasoning, { multiline: true }));
+  if (evidence.length) rows.push(_pmApprovalParameterHtml(
+    'Evidence',
+    evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} — ${item.finding || ''}`).join('\n'),
+    { multiline: true },
+  ));
+  if (steps.length) rows.push(_pmApprovalParameterHtml('Plan', steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
+  if (expectedWorkflow.length) rows.push(_pmApprovalParameterHtml('Expected workflow', expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'), { multiline: true }));
+  if (risk) rows.push(_pmApprovalParameterHtml('Risk', String(risk)));
+  if (!rows.length && technicalText) rows.push(_pmApprovalParameterHtml('Technical details', technicalText, { code: true, multiline: true }));
+  return rows.filter(Boolean).join('');
+}
+
 function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {}) {
   const approval = _normalizeMobileApproval(approvalInput);
   if (!approval.id) return '';
@@ -6127,9 +6208,11 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const status = String(approval.status || 'pending').toLowerCase();
   const pending = status === 'pending';
   const risk = Number(approval.riskScore || 0);
-  const statusLabel = status === 'rejected' ? 'denied' : status;
+  const statusLabel = _pmApprovalStatusCopy(status);
+  const toolName = String(approval.toolName || _pmApprovalToolLabel(approval.toolName) || 'tool').trim();
   const devPlan = approval?.devSourceEdit?.plan || null;
   const sourceDirs = Array.isArray(approval?.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
+  const devFiles = Array.isArray(approval?.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
   const evidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
   const steps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
   const boundary = approval.commandBoundary || null;
@@ -6138,30 +6221,40 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
   const expectedWorkflow = Array.isArray(devPlan?.expectedWorkflow)
     ? devPlan.expectedWorkflow
     : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
+  const parametersHtml = _pmApprovalParametersHtml(approval, human, technicalText, {
+    risk,
+    boundaryScope,
+    boundaryPaths,
+    sourceDirs,
+    devFiles,
+    devPlan,
+    evidence,
+    steps,
+    expectedWorkflow,
+  });
+  const title = pending ? 'Allow this tool to run?' : (human.title || 'Tool access');
+  const approveLabel = approval.approvalKind === 'dev_apply_live' ? 'Apply live' : 'Allow once';
   return `<div class="pm-chat-approval ${pending ? 'pending' : 'resolved'} ${compact ? 'compact' : ''}" data-pm-approval-id="${escapeHtml(approval.id)}">
     <div class="pm-chat-approval-head">
-      <span>${pending ? 'Approval needed' : 'Approval result'}</span>
-      <b class="pm-chat-approval-status ${escapeHtml(statusLabel)}">${escapeHtml(statusLabel)}</b>
+      <span class="pm-chat-approval-icon">${_pmApprovalStatusIcon(status)}</span>
+      <div class="pm-chat-approval-heading">
+        <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
+        <code class="pm-chat-approval-tool">${escapeHtml(toolName)}</code>
+      </div>
+      <b class="pm-chat-approval-status pm-chat-approval-status-${escapeHtml(status)}">${escapeHtml(statusLabel)}</b>
     </div>
-    <strong>${escapeHtml(human.title || _pmApprovalTitle(approval))}</strong>
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
-    ${human.detail ? `<em>${escapeHtml(human.detail)}</em>` : ''}
-    ${pending && risk ? `<small>Risk ${escapeHtml(String(risk))}</small>` : ''}
-    ${pending && boundaryScope && boundaryScope !== 'workspace' ? `<em>Boundary: ${escapeHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? ` - ${escapeHtml(String(boundary.reason))}` : ''}</em>` : ''}
-    ${pending && boundaryPaths.length ? `<details class="pm-approval-technical" open><summary>External paths</summary><pre>${escapeHtml(boundaryPaths.slice(0, 8).join('\n'))}</pre></details>` : ''}
-    ${pending && sourceDirs.length ? `<em>Workspace docs: ${escapeHtml(sourceDirs.join(', '))}</em>` : ''}
-    ${pending && devPlan?.reasoning ? `<em>${escapeHtml(String(devPlan.reasoning))}</em>` : ''}
-    ${pending && evidence.length ? `<details class="pm-approval-technical" open><summary>Evidence</summary><pre>${escapeHtml(evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} - ${item.finding || ''}`).join('\n'))}</pre></details>` : ''}
-    ${pending && steps.length ? `<details class="pm-approval-technical"><summary>Plan</summary><pre>${escapeHtml(steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-    ${pending && expectedWorkflow.length ? `<details class="pm-approval-technical" open><summary>Expected workflow after edits</summary><pre>${escapeHtml(expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-    ${pending && technicalText ? `<details class="pm-approval-technical"><summary>Technical details</summary><pre>${escapeHtml(technicalText)}</pre></details>` : ''}
+    ${parametersHtml ? `<details class="pm-approval-technical pm-chat-approval-details" open>
+      <summary>View details <span aria-hidden="true">⌃</span></summary>
+      <dl class="pm-chat-approval-parameters">${parametersHtml}</dl>
+    </details>` : ''}
     ${pending ? _pmRenderCommandRunLink(approval) : ''}
     ${pending ? `<div class="pm-chat-approval-actions">
-      <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Apply live' : 'Approve'}</button>
-      <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Keep verified' : 'Reject'}</button>
-      ${_pmApprovalCanSave(approval) ? `<button type="button" class="pm-chat-approval-btn session" data-pm-approval-action="approve_session" data-pm-approval-id="${escapeHtml(approval.id)}">Trust session</button>
-      <button type="button" class="pm-chat-approval-btn always" data-pm-approval-action="approve_always" data-pm-approval-id="${escapeHtml(approval.id)}">Always allow</button>` : ''}
-    </div>` : `<div class="pm-chat-approval-done">This request was ${escapeHtml(statusLabel)}.</div>`}
+      <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">${escapeHtml(approveLabel)}</button>
+      ${_pmApprovalCanSave(approval) ? `<button type="button" class="pm-chat-approval-btn always" data-pm-approval-action="approve_always" data-pm-approval-id="${escapeHtml(approval.id)}">Always allow</button>
+      <button type="button" class="pm-chat-approval-btn session" data-pm-approval-action="approve_session" data-pm-approval-id="${escapeHtml(approval.id)}">Allow this session</button>` : ''}
+      <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Keep verified' : 'Deny'}</button>
+    </div>` : `<div class="pm-chat-approval-done">${escapeHtml(statusLabel)}</div>`}
   </div>`;
 }
 
