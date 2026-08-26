@@ -13,35 +13,14 @@ const toolBuilderDeps = {
   skipDynamicExtensionTools: true,
 };
 
-function createExecutorDeps(): any {
-  const noop = () => undefined;
-  const deps = {
-    abortSignal: undefined,
-    isWindows: process.platform === 'win32',
-    SAFE_COMMANDS: {},
-    BLOCKED_PATTERNS: [],
-    executionPolicy: { mode: 'goal_autonomous', approvalMode: 'never' },
-    broadcastWS: noop,
-    sendSSE: noop,
-  };
-  return new Proxy(deps, {
-    get(target, property, receiver) {
-      if (property in target) return Reflect.get(target, property, receiver);
-      return noop;
-    },
-  });
-}
-
 async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-tool-category-activation-'));
   process.env.PROMETHEUS_DATA_DIR = root;
   process.env.PROMETHEUS_WORKSPACE_DIR = root;
-  const workspace = path.join(root, 'workspace');
-  fs.mkdirSync(workspace, { recursive: true });
 
   try {
     const sessionApi = await import('./session');
-    const { executeTool } = await import('./agents-runtime/subagent-executor');
+    const { handleRequestToolCategory } = await import('./tool-category-request');
     const sessionId = 'tool_category_activation_regression';
     const category = 'browser_automation';
     const representative = TOOL_CATEGORY_REPRESENTATIVE_TOOLS[category]?.[0];
@@ -52,11 +31,8 @@ async function main(): Promise<void> {
     // provider rebuild must not erase the older session-level activation.
     sessionApi.activateToolCategory(sessionId, category, { scope: 'session' });
     const stateBeforeRequest = sessionApi.captureToolCategoryActivationState(sessionId, category);
-    const requestResult = await executeTool(
-      'request_tool_category',
+    const requestResult = handleRequestToolCategory(
       { category, scope: 'turn' },
-      workspace,
-      createExecutorDeps(),
       sessionId,
     );
     assert.equal(requestResult.error, false, 'the real request_tool_category execution must succeed');
@@ -85,11 +61,8 @@ async function main(): Promise<void> {
 
     // A healthy same-turn rebuild keeps the activation and exposes the
     // callable category before activation evidence is considered complete.
-    const successfulRequest = await executeTool(
-      'request_tool_category',
+    const successfulRequest = handleRequestToolCategory(
       { category, scope: 'turn' },
-      workspace,
-      createExecutorDeps(),
       sessionId,
     );
     assert.equal(successfulRequest.error, false);

@@ -15,6 +15,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
 import { getToolPermissionMode, shouldBypassGenericToolApproval } from '../tool-approval-mode';
+import { handleRequestToolCategory } from '../tool-category-request';
 import { splitCsv, formatCompactSkillList, skillsCapabilityExecutor } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
@@ -338,12 +339,9 @@ import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
 import {
   ALL_TOOL_CATEGORIES,
-  getRuntimeToolCategories,
   normalizeScheduleJobAction,
   summarizeCronJob,
   normalizeDeliveryChannel,
-  normalizeToolCategory,
-  normalizeToolArgsForTool,
   parseJsonLike,
   parseLooseMap,
   toStringRecord,
@@ -21445,40 +21443,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
 
         if (name === 'request_tool_category') {
-	          const categoryArgs = normalizeToolArgsForTool(name, args);
-	          const rawCategory = String(categoryArgs?.category || '').trim().toLowerCase();
-	          const requestedCategory = normalizeToolCategory(rawCategory);
-          const rawScope = String(categoryArgs?.scope || 'turn').trim().toLowerCase();
-          const requestedScope = rawScope === 'session' || rawScope === 'next_turn' || rawScope === 'ttl' || rawScope === 'turn'
-            ? rawScope
-            : 'turn';
-          const requestedTurns = Math.max(1, Math.min(12, Math.floor(Number(categoryArgs?.turns) || 1)));
-	          const runtimeCategories = getRuntimeToolCategories();
-          if (!rawCategory) {
-            return { name, args, result: `request_tool_category requires category. Valid: ${runtimeCategories.join(', ')}`, error: true };
-          }
-	          if (!requestedCategory || !runtimeCategories.includes(requestedCategory as ToolCategory)) {
-	            return { name, args, result: `Invalid category "${rawCategory}". Valid: ${runtimeCategories.join(', ')}`, error: true };
-	          }
-	          if (requestedCategory === 'prometheus_source_write' && !isDevSourceWriteApprovedSession()) {
-	            return {
-	              name,
-	              args,
-	              result: 'BLOCKED: prometheus_source_write requires an approved dev source edit request or an approved dev src proposal task.',
-	              error: true,
-	            };
-	          }
-	          activateToolCategory(sessionId, requestedCategory, {
-            scope: requestedScope,
-            turns: requestedScope === 'ttl' ? requestedTurns : undefined,
+          return handleRequestToolCategory(args, sessionId, {
+            isDevSourceWriteApproved: isDevSourceWriteApprovedSession,
           });
-          // Keep category activation bounded. connector_list is the explicit inventory surface.
-          if (requestedCategory === 'external_apps') {
-            return { name, args, result: `Tool category "external_apps" activated for ${requestedScope} scope. Use connector_list only if inventory is needed.`, error: false };
-          }
-
-          const suffix = requestedScope === 'ttl' ? ` (${requestedTurns} user turns)` : '';
-          return { name, args, result: `Tool category "${requestedCategory}" activated with ${requestedScope} scope${suffix} in session ${sessionId}.`, error: false };
         }
 
         // ── Composite management and dynamic dispatch ─────────────────────
