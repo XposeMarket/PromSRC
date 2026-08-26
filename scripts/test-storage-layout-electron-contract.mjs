@@ -11,7 +11,12 @@ assert.equal(
 );
 assert.ok(source.includes("const LEGACY_RUNTIME_STATE_DIR = path.join(USER_DATA_DIR, '.prometheus');"));
 assert.ok(source.includes("const STORAGE_LAYOUT_V2_RUNTIME_DIR = path.join(USER_DATA_DIR, 'runtime');"));
+assert.ok(source.includes("const STORAGE_LAYOUT_V2_COPY_MARKER = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-copy-verified.json');"));
 assert.ok(source.includes("const STORAGE_LAYOUT_V2_READY_FILE = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-ready.json');"));
+assert.ok(source.includes('function isStorageLayoutV2CopyVerified()'));
+assert.ok(source.includes('Canonical copy already verified; live activation remains deferred'));
+assert.ok(source.includes('Canonical copy verification failed; continuing on legacy state'));
+assert.equal(source.includes('v2 migration did not activate; continuing on legacy state'), false);
 assert.ok(source.includes('runStorageLayoutV2Migration();'));
 assert.ok(source.includes('refreshStorageLayoutState();'));
 assert.ok(source.includes("PROMETHEUS_STORAGE_LAYOUT:  'canonical'"));

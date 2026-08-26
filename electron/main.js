@@ -193,6 +193,7 @@ const UPDATER_SETTINGS_FILE = path.join(USER_DATA_DIR, 'updater-settings.json');
 const LEGACY_RUNTIME_STATE_DIR = path.join(USER_DATA_DIR, '.prometheus');
 const STORAGE_LAYOUT_V2_RUNTIME_DIR = path.join(USER_DATA_DIR, 'runtime');
 const STORAGE_LAYOUT_V2_WORKSPACE_DIR = path.join(USER_DATA_DIR, 'workspace');
+const STORAGE_LAYOUT_V2_COPY_MARKER = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-copy-verified.json');
 const STORAGE_LAYOUT_V2_READY_FILE = path.join(STORAGE_LAYOUT_V2_RUNTIME_DIR, 'migrations', 'storage-layout-v2-ready.json');
 let STORAGE_LAYOUT_V2_ACTIVE = false;
 let RUNTIME_STATE_DIR = LEGACY_RUNTIME_STATE_DIR;
@@ -219,6 +220,18 @@ function isStorageLayoutV2Ready() {
   }
 }
 
+function isStorageLayoutV2CopyVerified() {
+  try {
+    const marker = JSON.parse(fs.readFileSync(STORAGE_LAYOUT_V2_COPY_MARKER, 'utf8'));
+    return marker?.copyVerified === true
+      && Number(marker?.layoutVersion) === 2
+      && sameStoragePath(marker?.targetRuntimeRoot, STORAGE_LAYOUT_V2_RUNTIME_DIR)
+      && sameStoragePath(marker?.targetWorkspaceRoot, STORAGE_LAYOUT_V2_WORKSPACE_DIR);
+  } catch {
+    return false;
+  }
+}
+
 function refreshStorageLayoutState() {
   STORAGE_LAYOUT_V2_ACTIVE = isStorageLayoutV2Ready();
   RUNTIME_STATE_DIR = STORAGE_LAYOUT_V2_ACTIVE ? STORAGE_LAYOUT_V2_RUNTIME_DIR : LEGACY_RUNTIME_STATE_DIR;
@@ -231,6 +244,10 @@ function refreshStorageLayoutState() {
 function runStorageLayoutV2Migration() {
   if (isStorageLayoutV2Ready()) return true;
   if (String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() === '0') return false;
+  if (isStorageLayoutV2CopyVerified()) {
+    console.log('[StorageMigration] Canonical copy already verified; live activation remains deferred and legacy readers remain active.');
+    return false;
+  }
   try {
     const commonArgs = ['--execute', '--app-data', USER_DATA_DIR, '--migration-id', 'desktop-auto-v2'];
     const env = { ...process.env, PROMETHEUS_DATA_DIR: USER_DATA_DIR };
@@ -258,9 +275,14 @@ function runStorageLayoutV2Migration() {
         maxBuffer: 16 * 1024 * 1024,
       });
     }
-    return isStorageLayoutV2Ready();
+    if (isStorageLayoutV2Ready()) return true;
+    if (isStorageLayoutV2CopyVerified()) {
+      console.log('[StorageMigration] Canonical copy verified; live activation remains deferred and legacy readers remain active.');
+      return false;
+    }
+    throw new Error('canonical copy-verification marker was not produced');
   } catch (error) {
-    console.error('[StorageMigration] v2 migration did not activate; continuing on legacy state:', error?.message || error);
+    console.warn('[StorageMigration] Canonical copy verification failed; continuing on legacy state:', error?.message || error);
     return false;
   }
 }
