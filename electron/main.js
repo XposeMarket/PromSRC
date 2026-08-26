@@ -53,6 +53,13 @@ const {
   killGatewayProcessTree: killManagedGatewayProcessTree,
 } = require('./gateway-process');
 const {
+  buildNativeBrowserProcessBreakdown,
+  buildNativeBrowserResourceRecord,
+  findNativeBrowserProcessMetric,
+  getNativeBrowserOSProcessId,
+  normalizeElectronProcessMetrics,
+} = require('./native-browser-resource-policy');
+const {
   appendGatewaySupervisorEvidence,
   buildGatewaySupervisorEvidence,
   classifyGatewaySupervisorObservation,
@@ -827,6 +834,12 @@ const nativeBrowserProfileSessions = new Map(); // imported profile id -> Electr
 let nativeBrowserTabSequence = 0;
 let presentedNativePartition = '';         // partition currently shown in the canvas
 let presentedNativeTabId = '';             // tab currently shown in the canvas
+const NATIVE_BROWSER_RESOURCE_SAMPLE_INTERVAL_MS = 10_000;
+const NATIVE_BROWSER_RESOURCE_QUERY_TIMEOUT_MS = 750;
+const NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS = 60_000;
+const NATIVE_BROWSER_RESOURCE_MAX_VIEWS_PER_SAMPLE = 16;
+let nativeBrowserResourceTimer = null;
+let nativeBrowserResourceSampleInFlight = false;
 const nativeBrowserState = {
   available: false,
   attached: false,
@@ -2283,6 +2296,12 @@ function nativeViewMeta(view) {
     sessionId: '',
     tabId: '',
     attached: false,
+    presented: false,
+    visible: false,
+    backgroundThrottling: true,
+    lastResourceMetrics: null,
+    lastResourceLogAt: 0,
+    lastResourcePressure: 'normal',
   };
   return view.__promMeta;
 }
@@ -2395,6 +2414,209 @@ function refreshNativeViewMeta(view) {
   return meta;
 }
 
+function buildNativeBrowserResourcePageScript() {
+  return `(() => {
+    try {
+      const memory = typeof performance !== 'undefined' && performance.memory ? performance.memory : null;
+      return {
+        visibilityState: String(document.visibilityState || ''),
+        hidden: document.hidden === true,
+        readyState: String(document.readyState || ''),
+        canvasCount: document.querySelectorAll('canvas').length,
+        devicePixelRatio: Number(window.devicePixelRatio || 0),
+        usedJSHeapBytes: memory ? Number(memory.usedJSHeapSize || 0) : null,
+        totalJSHeapBytes: memory ? Number(memory.totalJSHeapSize || 0) : null,
+        jsHeapLimitBytes: memory ? Number(memory.jsHeapSizeLimit || 0) : null,
+      };
+    } catch {
+      return { unavailable: true };
+    }
+  })()`;
+}
+
+async function readNativeBrowserPageResourceMetrics(wc) {
+  if (!wc || wc.isDestroyed?.()) return { unavailable: true };
+  let timeoutId = null;
+  try {
+    const timeout = new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve({ timedOut: true }), NATIVE_BROWSER_RESOURCE_QUERY_TIMEOUT_MS);
+    });
+    const query = Promise.resolve()
+      .then(() => wc.executeJavaScript(buildNativeBrowserResourcePageScript(), true))
+      .catch(() => ({ unavailable: true }));
+    return await Promise.race([query, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function readNativeBrowserProcessMetrics() {
+  try {
+    return typeof app.getAppMetrics === 'function'
+      ? normalizeElectronProcessMetrics(app.getAppMetrics())
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function readNativeBrowserGpuDiagnostics() {
+  let hardwareAccelerationEnabled = null;
+  let gpuFeatureStatus = null;
+  try {
+    if (typeof app.isHardwareAccelerationEnabled === 'function') {
+      hardwareAccelerationEnabled = app.isHardwareAccelerationEnabled() === true;
+    }
+  } catch {}
+  try {
+    if (typeof app.getGPUFeatureStatus === 'function') {
+      const status = app.getGPUFeatureStatus();
+      if (status && typeof status === 'object') gpuFeatureStatus = { ...status };
+    }
+  } catch {}
+  return { hardwareAccelerationEnabled, gpuFeatureStatus };
+}
+
+async function collectNativeBrowserResourceMetrics(
+  view,
+  processMetrics = readNativeBrowserProcessMetrics(),
+  gpu = readNativeBrowserGpuDiagnostics(),
+) {
+  if (!view || view.webContents?.isDestroyed?.()) return null;
+  const wc = view.webContents;
+  const meta = nativeViewMeta(view);
+  const processId = getNativeBrowserOSProcessId(wc);
+  const processMetric = findNativeBrowserProcessMetric(processMetrics, processId);
+  let processMemory = null;
+  if ((!processMetric?.memory || processMetric.memory.privateBytes == null)
+    && typeof wc.getProcessMemoryInfo === 'function') {
+    try {
+      const memory = await Promise.race([
+        wc.getProcessMemoryInfo(),
+        new Promise((resolve) => setTimeout(() => resolve(null), NATIVE_BROWSER_RESOURCE_QUERY_TIMEOUT_MS)),
+      ]);
+      if (memory) {
+        processMemory = {
+          privateBytes: Number(memory.private || 0) * 1024,
+          workingSetBytes: Number(memory.residentSet || 0) * 1024,
+        };
+      }
+    } catch {}
+  }
+  const page = await readNativeBrowserPageResourceMetrics(wc);
+  const processBreakdown = buildNativeBrowserProcessBreakdown(processMetrics, processId);
+  const record = buildNativeBrowserResourceRecord({
+    sampledAt: Date.now(),
+    sessionId: meta.sessionId,
+    tabId: meta.tabId,
+    presented: meta.presented,
+    visible: meta.visible,
+    attached: meta.attached,
+    backgroundThrottling: meta.backgroundThrottling,
+    processId,
+    processMetric,
+    processMemory,
+    processBreakdown,
+    gpu,
+    page,
+  });
+  meta.lastResourceMetrics = record;
+  const now = Date.now();
+  const processPressure = record.processBreakdown?.pressure || { level: 'normal', reasons: [] };
+  const pressureKey = `${record.pressure.level}:${processPressure.level}`;
+  if ((record.pressure.level !== 'normal' || processPressure.level !== 'normal')
+    && (meta.lastResourcePressure !== pressureKey
+      || now - Number(meta.lastResourceLogAt || 0) >= NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS)) {
+    writeGatewayLog(`[main][native-browser-resource] ${JSON.stringify({
+      sessionId: record.sessionId,
+      tabId: record.tabId,
+      presented: record.presented,
+      visible: record.visible,
+      attached: record.attached,
+      backgroundThrottling: record.backgroundThrottling,
+      processId: record.processId,
+      cpuPercent: record.cpuPercent,
+      privateBytes: record.memory.privateBytes,
+      electronCpuPercent: record.processBreakdown?.total?.cpuPercent,
+      gpuCpuPercent: record.processBreakdown?.gpu?.cpuPercent,
+      hardwareAccelerationEnabled: record.gpu?.hardwareAccelerationEnabled,
+      processPressure,
+      jsHeapRatio: record.page.jsHeapRatio,
+      canvasCount: record.page.canvasCount,
+      pressure: record.pressure,
+    })}\n`);
+    meta.lastResourceLogAt = now;
+  }
+  meta.lastResourcePressure = pressureKey;
+  return record;
+}
+
+async function sampleNativeBrowserResources() {
+  if (nativeBrowserResourceSampleInFlight || !nativeBrowserViews.size) return;
+  nativeBrowserResourceSampleInFlight = true;
+  try {
+    const processMetrics = readNativeBrowserProcessMetrics();
+    const gpu = readNativeBrowserGpuDiagnostics();
+    const views = Array.from(nativeBrowserViews.values()).slice(0, NATIVE_BROWSER_RESOURCE_MAX_VIEWS_PER_SAMPLE);
+    await Promise.allSettled(views.map((view) => collectNativeBrowserResourceMetrics(view, processMetrics, gpu)));
+  } finally {
+    nativeBrowserResourceSampleInFlight = false;
+  }
+}
+
+function startNativeBrowserResourceSampler() {
+  if (nativeBrowserResourceTimer) return;
+  nativeBrowserResourceTimer = setInterval(() => { void sampleNativeBrowserResources(); }, NATIVE_BROWSER_RESOURCE_SAMPLE_INTERVAL_MS);
+  nativeBrowserResourceTimer.unref?.();
+}
+
+function stopNativeBrowserResourceSamplerIfIdle() {
+  if (nativeBrowserViews.size || !nativeBrowserResourceTimer) return;
+  clearInterval(nativeBrowserResourceTimer);
+  nativeBrowserResourceTimer = null;
+}
+
+function applyNativeBrowserVisibilityPolicy(view, presented = false) {
+  if (!view) return;
+  const meta = nativeViewMeta(view);
+  meta.presented = presented === true;
+  meta.visible = meta.presented && nativeBrowserState.attached === true && nativeBrowserState.visible === true;
+  const wc = view.webContents;
+  if (!wc || wc.isDestroyed?.()) return;
+  try {
+    // Keep Chromium's background timer/animation throttling enabled for every
+    // native page. Detached tabs remain alive for automation, but must not run
+    // an unbounded foreground-style requestAnimationFrame loop in the background.
+    wc.setBackgroundThrottling(true);
+    meta.backgroundThrottling = wc.backgroundThrottling !== false;
+  } catch {
+    meta.backgroundThrottling = true;
+  }
+}
+
+async function getNativeBrowserResourceMetrics({ sessionId = '', tabId = '' } = {}) {
+  const sid = String(sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  const registry = getNativeTabRegistry(sid, partition, false);
+  const resolvedTabId = String(tabId || registry?.activeTabId || '').trim();
+  const view = resolvedTabId ? getNativeViewByPartition(partition, resolvedTabId) : null;
+  if (!view) {
+    return {
+      sessionId: sid,
+      tabId: resolvedTabId,
+      available: nativeBrowserState.available,
+      metrics: null,
+      timestamp: Date.now(),
+    };
+  }
+  const metrics = await collectNativeBrowserResourceMetrics(
+    view,
+    readNativeBrowserProcessMetrics(),
+    readNativeBrowserGpuDiagnostics(),
+  );
+  return { sessionId: sid, tabId: resolvedTabId, available: true, metrics, timestamp: Date.now() };
+}
+
 function nativeTabsForSession(sessionId, partition, activeTabId = '') {
   const registry = getNativeTabRegistry(sessionId, partition, false);
   const activeId = String(activeTabId || registry?.activeTabId || '').trim();
@@ -2490,6 +2712,10 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
   wc.on('preload-error', (_e, preloadPath, error) => {
     writeGatewayLog(`[main][inhouse-preload-error] ${preloadPath}: ${error && error.message ? error.message : error}\n`);
   });
+  wc.once('destroyed', () => {
+    nativeBrowserViews.delete(nativeTabKey(partition, tabId));
+    stopNativeBrowserResourceSamplerIfIdle();
+  });
   wc.setWindowOpenHandler(({ url }) => {
     try {
       const targetUrl = normalizeBrowserUrlForLoad(url);
@@ -2541,6 +2767,10 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
+    // Native tabs may remain alive while detached for background automation.
+    // Keep Chromium's Page Visibility/timer/animation throttling explicit so a
+    // hidden game cannot continue at an unbounded foreground cadence.
+    backgroundThrottling: true,
     preload: path.join(__dirname, 'inhouse-browser-preload.js'),
   };
   if (profileDescriptor.session) webPreferences.session = profileDescriptor.session;
@@ -2573,6 +2803,8 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   meta.tabId = tabId;
   wireNativeViewEvents(view, partition, sid, tabId);
   nativeBrowserViews.set(nativeTabKey(partition, tabId), view);
+  applyNativeBrowserVisibilityPolicy(view, false);
+  startNativeBrowserResourceSampler();
   return { view, partition, tabId };
 }
 
@@ -2600,6 +2832,7 @@ function presentNativeView(partition, tabId = '', sessionId = '') {
   for (const [, v] of nativeBrowserViews) {
     const meta = nativeViewMeta(v);
     const isSelected = meta.partition === partition && meta.tabId === selectedTabId;
+    applyNativeBrowserVisibilityPolicy(v, isSelected);
     if (isSelected) {
       attachNativeBrowserView(v);
     } else {
@@ -2627,6 +2860,7 @@ function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
   nativeBrowserState.visible = nativeBrowserState.attached && next.width > 8 && next.height > 8;
   const view = getNativeViewByPartition(partition, presentedNativeTabId);
   if (view) {
+    nativeViewMeta(view).visible = nativeBrowserState.visible;
     try {
       view.setBounds(nativeBrowserState.visible ? next : { ...NATIVE_BROWSER_EMPTY_BOUNDS });
     } catch (err) {
@@ -2641,6 +2875,7 @@ function hideNativeBrowserSurface(reason = '') {
   nativeBrowserState.visible = false;
   nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
   for (const [, view] of nativeBrowserViews) {
+    applyNativeBrowserVisibilityPolicy(view, false);
     try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {}
     detachNativeBrowserView(view);
   }
@@ -2756,6 +2991,7 @@ function destroyNativeBrowserView(partition, tabId, view) {
     if (view?.webContents && !view.webContents.isDestroyed()) view.webContents.destroy?.();
   } catch {}
   nativeBrowserViews.delete(key);
+  stopNativeBrowserResourceSamplerIfIdle();
 }
 
 function closeNativeBrowserTab({ sessionId = '', tabId = '', index = null } = {}) {
@@ -3091,6 +3327,7 @@ async function startNativeBrowserRpcServer() {
         const pathName = new URL(req.url || '/', 'http://127.0.0.1').pathname;
         let result;
         if (pathName === '/state') result = stateNativeBrowserSurface(payload);
+        else if (pathName === '/metrics') result = await getNativeBrowserResourceMetrics(payload);
         else if (pathName === '/tabs') result = listNativeBrowserTabs(payload);
         else if (pathName === '/select-tab') result = selectNativeBrowserTab(payload);
         else if (pathName === '/new-tab') result = await newNativeBrowserTab(payload);
