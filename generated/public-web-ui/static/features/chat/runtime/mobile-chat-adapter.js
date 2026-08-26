@@ -202,7 +202,6 @@ export function createMobileChatRuntimeAdapter({
       });
       for (const message of thread) {
         if (message?.approvalRequest?.id) runtime.upsertApproval(message.approvalRequest);
-        if (message?.questionRequest?.id) runtime.upsertQuestion(message.questionRequest);
       }
       const pending = Object.values(state.pendingApprovals || {})
         .flatMap((records) => (Array.isArray(records) ? records : [records]));

@@ -106,7 +106,6 @@ export function createDesktopChatRuntimeAdapter({
       });
       for (const message of history) {
         if (message?.approvalRequest?.id) runtime.upsertApproval(message.approvalRequest);
-        if (message?.questionRequest?.id) runtime.upsertQuestion(message.questionRequest);
       }
       for (const approval of Array.isArray(streamState.pendingApprovals) ? streamState.pendingApprovals : []) {
         try { runtime.upsertApproval(approval); } catch {}
