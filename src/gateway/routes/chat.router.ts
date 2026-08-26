@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
-import { formatToolCategoryProvisioningFailure, verifyToolCategorySurface } from '../tool-category-provisioning';
+import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
@@ -3335,12 +3335,10 @@ async function handleChat(
     );
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
-    const switchCategories = new Set<string>();
-    if (browserVisionModeActive) {
-      switchCategories.add('browser_automation');
-      switchCategories.add('browser');
-    }
-    return switchCategories;
+    return preserveActivatedToolCategoriesForTurnOverride(
+      getActivatedToolCategories(sessionId),
+      browserVisionModeActive,
+    );
   };
   const buildToolsForGeneration = (generationOverride: any): any[] => {
     const categoryOverride = generationOverride.source === 'turn_override'

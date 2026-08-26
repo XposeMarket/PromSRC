@@ -35,10 +35,31 @@ export const TOOL_CATEGORY_REPRESENTATIVE_TOOLS: Readonly<Partial<Record<ToolCat
   creative_video: ['creative_video_ops'],
   creative_hyperframes: ['creative_hyperframes_ops'],
   creative_quality: ['creative_quality_ops'],
-  skills: ['skill_inspect'],
+  // Skill inspection is an action on the model-facing skill_ops wrapper, not
+  // a standalone provider function. Verify the callable wrapper here; the
+  // executor validates the action inside its arguments.
+  skills: ['skill_ops'],
   model_management: ['get_agent_models'],
   business: ['list_entities'],
 });
+
+/**
+ * Preserve session/turn category activation when a model switch creates a
+ * turn-scoped tool-build override. The override is still useful for adding
+ * model-specific requirements (currently browser vision), but it must not
+ * silently replace categories the previous provider iteration activated.
+ */
+export function preserveActivatedToolCategoriesForTurnOverride(
+  activeCategories: Iterable<string> | undefined,
+  browserVisionModeActive: boolean,
+): Set<string> {
+  const categories = new Set<string>(activeCategories || []);
+  if (browserVisionModeActive) {
+    categories.add('browser_automation');
+    categories.add('browser');
+  }
+  return categories;
+}
 
 export interface ToolCategorySurfaceVerification {
   category: string;
