@@ -95,7 +95,7 @@ function normalize(input: unknown): string {
  */
 export function isExplicitToolSuppression(input: string): boolean {
   const text = normalize(input);
-  return /\b(?:do not|don't|dont|never|without)\s+(?:call|use|run|activate|load|invoke|execute)(?:ing)?\s+(?:any|the|a)?\s*tools?\b/i.test(text);
+  return /\b(?:do not|don't|dont|never|without)\s+(?:call|calling|use|using|run|running|activate|activating|load|loading|invoke|invoking|execute|executing)\s+(?:any|the|a)?\s*tools?\b/i.test(text);
 }
 
 /**

@@ -125,4 +125,11 @@ const suppressedPlan = planMessageExtensionActivation({
 assert.deepEqual(suppressedPlan.categories, [], 'explicit no-tool instructions must suppress connector activation');
 assert.deepEqual(suppressedPlan.entries, [], 'explicit no-tool instructions must not expose connector entries');
 
+const gerundSuppressedPlan = planMessageExtensionActivation({
+  message: 'Without using any tools, review my PR and summarize the risk.',
+  registry: fakeRegistry(['github']),
+});
+assert.deepEqual(gerundSuppressedPlan.categories, [], 'gerund no-tool instructions must suppress connector activation');
+assert.deepEqual(gerundSuppressedPlan.entries, [], 'gerund no-tool instructions must not expose connector entries');
+
 console.log('[activation-planner.regression] connected-only provider activation, domain triggers, setup routing, future-plugin metadata, and meaning-question suppression passed');
