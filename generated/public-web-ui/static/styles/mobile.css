@@ -425,6 +425,20 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-chip,
 body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-popover {
   position: fixed;
 }
+
+/* Document-scroll mode moves the page body while composer/tabbar chrome stays
+   fixed to the viewport. Paint every root-owned layer from the same theme
+   canvas so the shell cannot expose a second bottom surface above the tabbar
+   after a restore, reconnect, or manual scroll. */
+body.pm-mobile-active.pm-mobile-document-scroll,
+body.pm-mobile-active.pm-mobile-document-scroll::before,
+body.pm-mobile-active.pm-mobile-document-scroll #mobile-root,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-app,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-page,
+body.pm-mobile-active.pm-mobile-document-scroll .pm-body {
+  background-color: var(--pm-bg) !important;
+  background-image: none !important;
+}
 body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
   transform: translate3d(var(--pm-drawer-width), 0, 0);
   will-change: transform, border-radius;
