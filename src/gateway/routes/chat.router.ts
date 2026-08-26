@@ -53,7 +53,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, deactivateToolCategory, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
@@ -3763,7 +3763,6 @@ async function handleChat(
       activation.surfaceToolCountBefore,
       initialToolSurface.provider.length,
     );
-    if (!verification.ok) deactivateToolCategory(sessionId, activation.category);
   }
   if (automaticallyActivatedCategories.some((activation) => !getActivatedToolCategories(sessionId).has(activation.category))) {
     initialToolSurface = buildProviderToolSurface(initialGenerationOverride);
@@ -4489,9 +4488,9 @@ async function handleChat(
     const requestedToolCategory = toolName === 'request_tool_category'
       ? normalizeManifestToolCategory(effectiveToolArgs?.category)
       : null;
-    const categoryWasActiveBeforeRequest = requestedToolCategory
-      ? getActivatedToolCategories(sessionId).has(requestedToolCategory)
-      : false;
+    const activationStateBeforeRequest = requestedToolCategory
+      ? captureToolCategoryActivationState(sessionId, requestedToolCategory)
+      : null;
     try {
       let toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
       if (requestedToolCategory && !toolResult.error) {
@@ -4508,7 +4507,9 @@ async function handleChat(
           providerSurface.provider.length,
         );
         if (!verification.ok) {
-          if (!categoryWasActiveBeforeRequest) deactivateToolCategory(sessionId, requestedToolCategory);
+          if (activationStateBeforeRequest) {
+            restoreToolCategoryActivationState(sessionId, activationStateBeforeRequest);
+          }
           toolResult = {
             ...toolResult,
             result: formatToolCategoryProvisioningFailure(verification),

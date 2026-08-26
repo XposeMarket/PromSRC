@@ -14,7 +14,7 @@ import fs from 'fs';
 import { getAgentById, getConfig } from '../../config/config';
 import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, deactivateToolCategory, getActivatedToolCategories } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, captureToolCategoryActivationState, getActivatedToolCategories, restoreToolCategoryActivationState, type ToolCategoryActivationSnapshot } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
 import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
@@ -676,6 +676,7 @@ export interface AutoActivatedToolCategory {
   category: string;
   surfaceToolCountBefore: number;
   surfaceToolCountAfter: number;
+  activationStateBefore: ToolCategoryActivationSnapshot;
 }
 
 export function autoActivateToolCategories(sessionId: string, message: string, historyLength: number): AutoActivatedToolCategory[] {
@@ -710,13 +711,13 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   const provisionedCategories: AutoActivatedToolCategory[] = [];
   for (const toolCategory of runtimeCategories) {
     if (!normalizedDetectedCategories.has(toolCategory)) continue;
-    const wasActive = getActivatedToolCategories(sessionId).has(toolCategory);
+    const activationStateBefore = captureToolCategoryActivationState(sessionId, toolCategory);
     const surfaceToolCountBefore = buildTools(sessionId).length;
     activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
     const surface = buildTools(sessionId);
     const verification = verifyToolCategorySurface(toolCategory, surface, { unboundedTools: surface });
     if (!verification.ok) {
-      if (!wasActive) deactivateToolCategory(sessionId, toolCategory);
+      restoreToolCategoryActivationState(sessionId, activationStateBefore);
       console.warn('[tool-category-provisioning] automatic activation failed:', verification);
       continue;
     }
@@ -724,6 +725,7 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
       category: toolCategory,
       surfaceToolCountBefore,
       surfaceToolCountAfter: surface.length,
+      activationStateBefore,
     });
   }
   return provisionedCategories;

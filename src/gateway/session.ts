@@ -298,6 +298,17 @@ export interface ScopedToolCategoryActivation {
   activatedAt: number;
 }
 
+/**
+ * Transaction snapshot for a single tool-category activation.  Provisioning
+ * may temporarily add a turn-scoped activation, but a failed provider-surface
+ * rebuild must restore the category exactly as it was before that attempt.
+ */
+export interface ToolCategoryActivationSnapshot {
+  category: string;
+  persistent: boolean;
+  scoped: ScopedToolCategoryActivation[];
+}
+
 export interface CanvasProjectLink {
   rootPath?: string | null;
   github?: {
@@ -3788,6 +3799,58 @@ export function activateToolCategory(
     .filter((entry) => entry.category !== cleanCategory);
   scoped.push(nextEntry);
   session.scopedToolCategoryActivations = scoped.slice(-64);
+  saveSession(id);
+}
+
+export function captureToolCategoryActivationState(
+  id: string,
+  category: string,
+): ToolCategoryActivationSnapshot {
+  const session = getSession(id);
+  const cleanCategory = String(category || '').trim();
+  const changed = pruneScopedToolCategoryActivations(session);
+  if (changed) saveSession(id);
+  return {
+    category: cleanCategory,
+    persistent: Array.isArray(session.activatedToolCategories)
+      && session.activatedToolCategories.includes(cleanCategory),
+    scoped: (Array.isArray(session.scopedToolCategoryActivations)
+      ? session.scopedToolCategoryActivations
+      : [])
+      .filter((entry) => entry.category === cleanCategory)
+      .map((entry) => ({ ...entry })),
+  };
+}
+
+/**
+ * Restore only the snapshotted category.  Do not call deactivateToolCategory
+ * here: that helper intentionally removes every activation for a category,
+ * which would also erase a valid session activation that predated the failed
+ * provisioning attempt.
+ */
+export function restoreToolCategoryActivationState(
+  id: string,
+  snapshot: ToolCategoryActivationSnapshot,
+): void {
+  const session = getSession(id);
+  const cleanCategory = String(snapshot?.category || '').trim();
+  if (!cleanCategory) return;
+
+  const activeCategories = Array.isArray(session.activatedToolCategories)
+    ? session.activatedToolCategories
+    : [];
+  const nextCategories = activeCategories.filter((entry) => entry !== cleanCategory);
+  if (snapshot.persistent) nextCategories.push(cleanCategory);
+
+  const scoped = Array.isArray(session.scopedToolCategoryActivations)
+    ? session.scopedToolCategoryActivations
+    : [];
+  const nextScoped = scoped
+    .filter((entry) => entry.category !== cleanCategory)
+    .concat(snapshot.scoped.map((entry) => ({ ...entry })));
+
+  session.activatedToolCategories = nextCategories;
+  session.scopedToolCategoryActivations = nextScoped;
   saveSession(id);
 }
 

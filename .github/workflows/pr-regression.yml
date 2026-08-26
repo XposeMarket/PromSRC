@@ -50,7 +50,7 @@ jobs:
       - name: Verify natural-language tool activation
         run: npm run test:extension-activation && npm run test:tool-category-routing && npx tsx src/runtime/tool-category-prompt-signals.regression.ts
       - name: Verify provider-facing tool category provisioning
-        run: npm run test:tool-category-provisioning
+        run: npm run test:tool-category-provisioning && npm run test:tool-category-activation
       - name: Verify deterministic composite workflows
         run: npx tsx src/gateway/tools/composite-tools.regression.ts
       - name: Verify provider-neutral connector policy
