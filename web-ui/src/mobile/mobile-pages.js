@@ -6379,6 +6379,26 @@ function _updateMobilePendingApproval(id, patch = {}) {
   return null;
 }
 
+const MOBILE_APPROVAL_RECENT_RESOLUTION_MS = 15000;
+const mobileApprovalActionsInFlight = new Map();
+const mobileApprovalResolvedAt = new Map();
+
+function _mobileApprovalWasRecentlyResolved(id) {
+  const approvalId = String(id || '').trim();
+  if (!approvalId) return false;
+  const resolvedAt = Number(mobileApprovalResolvedAt.get(approvalId) || 0);
+  if (!resolvedAt) return false;
+  if (Date.now() - resolvedAt <= MOBILE_APPROVAL_RECENT_RESOLUTION_MS) return true;
+  mobileApprovalResolvedAt.delete(approvalId);
+  return false;
+}
+
+function _wireMobileApprovalActionButton(button) {
+  if (!button || button.dataset?.pmApprovalWired === '1') return;
+  button.dataset.pmApprovalWired = '1';
+  button.addEventListener('click', () => _resolveMobileApprovalButton(button));
+}
+
 function _renderMobileApprovalSheet() {
   const activeSessionId = _mobileApprovalSurfaceSessionId();
   const pending = _getPendingApprovalsForSession(activeSessionId)
@@ -6426,9 +6446,7 @@ function _renderMobileApprovalSheet() {
       if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
     });
   } catch {}
-  host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-    btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
-  });
+  host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
   _wireMobileProcessRunActions(host);
 }
 
@@ -6469,46 +6487,69 @@ async function _resolveMobileApprovalButton(button) {
   const id = String(button?.getAttribute?.('data-pm-approval-id') || '').trim();
   const action = String(button?.getAttribute?.('data-pm-approval-action') || '').trim();
   if (!id || !action) return;
+  if (mobileApprovalActionsInFlight.has(id)) {
+    console.debug('[mobile approvals] duplicate action ignored', { id, action, reason: 'in_flight' });
+    return;
+  }
+  if (_mobileApprovalWasRecentlyResolved(id)) {
+    console.debug('[mobile approvals] stale action ignored', { id, action, reason: 'recently_resolved' });
+    return;
+  }
   const approved = action === 'approve' || action === 'approve_session' || action === 'approve_always';
   const grantScope = action === 'approve_session' ? 'session' : action === 'approve_always' ? 'always' : '';
   const scope = button.closest('.pm-chat-approval, .pm-global-approval-sheet');
   scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = true; });
-  try {
-    const result = approved ? await approveMobileApproval(id, grantScope) : await denyMobileApproval(id);
-    const updated = _updateMobilePendingApproval(id, { status: approved ? 'approved' : 'rejected' });
-    pmToast(approved ? (grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved') : 'Rejected', approved ? 'success' : 'info');
-    const sid = _mobileApprovalVisibleSessionId(updated || result?.approval || { id }) || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId;
-    _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid || __pmChat.activeSessionId);
-    if (String(sid || '') === String(__pmChat.activeSessionId || '')) {
-      const threadEl = document.getElementById('pm-chat-thread');
-      const bodyEl = document.getElementById('pm-chat-body');
-      if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || 'chat');
-    }
-    _renderMobileApprovalSheet();
-    if (approved) {
-      setTimeout(() => {
-        const host = document.querySelector(`[data-process-approval-host="${_pmCssEscape(id)}"]`);
-        if (host) _pmLoadApprovalProcessRun(id, host).then(() => _wireMobileProcessRunActions(host)).catch(() => {});
-      }, 100);
-      const resumePrompt = String(result?.resumePrompt || '').trim();
-      if (resumePrompt) {
-        const resumeSid = String(result?.approval?.sessionId || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId || '').trim();
-        if (resumeSid) __pmChat.activeSessionId = resumeSid;
-        if (typeof window.__pmMobileSendMessage === 'function') {
-          setTimeout(() => window.__pmMobileSendMessage(resumePrompt, { fromApprovalResume: true }), 100);
-        } else {
-          const queue = _getMobileQueuedPrompts(resumeSid);
-          queue.push(_makeMobileQueuedPrompt(resumePrompt));
-          if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
-          _renderMobileQueuedPromptsPanel(resumeSid);
-          pmToast('Approval queued a resume message', 'info');
+  const request = (async () => {
+    try {
+      const result = approved ? await approveMobileApproval(id, grantScope) : await denyMobileApproval(id);
+      mobileApprovalResolvedAt.set(id, Date.now());
+      const updated = _updateMobilePendingApproval(id, { status: approved ? 'approved' : 'rejected' });
+      pmToast(approved ? (grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved') : 'Rejected', approved ? 'success' : 'info');
+      const sid = _mobileApprovalVisibleSessionId(updated || result?.approval || { id }) || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId;
+      _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid || __pmChat.activeSessionId);
+      if (String(sid || '') === String(__pmChat.activeSessionId || '')) {
+        const threadEl = document.getElementById('pm-chat-thread');
+        const bodyEl = document.getElementById('pm-chat-body');
+        if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || 'chat');
+      }
+      _renderMobileApprovalSheet();
+      if (approved) {
+        setTimeout(() => {
+          const host = document.querySelector(`[data-process-approval-host="${_pmCssEscape(id)}"]`);
+          if (host) _pmLoadApprovalProcessRun(id, host).then(() => _wireMobileProcessRunActions(host)).catch(() => {});
+        }, 100);
+        const resumePrompt = String(result?.resumePrompt || '').trim();
+        if (resumePrompt) {
+          const resumeSid = String(result?.approval?.sessionId || updated?.sessionId || updated?.sourceSessionId || __pmChat.activeSessionId || '').trim();
+          if (resumeSid) __pmChat.activeSessionId = resumeSid;
+          if (typeof window.__pmMobileSendMessage === 'function') {
+            setTimeout(() => window.__pmMobileSendMessage(resumePrompt, { fromApprovalResume: true }), 100);
+          } else {
+            const queue = _getMobileQueuedPrompts(resumeSid);
+            queue.push(_makeMobileQueuedPrompt(resumePrompt));
+            if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
+            _renderMobileQueuedPromptsPanel(resumeSid);
+            pmToast('Approval queued a resume message', 'info');
+          }
         }
       }
+    } catch (err) {
+      const message = String(err?.message || err || '').trim();
+      const alreadyHandled = /approval(?:\s+is)?\s+already\s+(?:approved|rejected|resolved)|approval\s+could\s+not\s+be\s+resolved/i.test(message);
+      if (alreadyHandled) {
+        mobileApprovalResolvedAt.set(id, Date.now());
+        await _reconcileMobilePendingApprovals({ retry: false }).catch(() => {});
+        return;
+      }
+      scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = false; });
+      pmToast(`Approval failed: ${message}`, 'error');
     }
-
-  } catch (err) {
-    scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = false; });
-    pmToast(`Approval failed: ${err.message || err}`, 'error');
+  })();
+  mobileApprovalActionsInFlight.set(id, request);
+  try {
+    await request;
+  } finally {
+    if (mobileApprovalActionsInFlight.get(id) === request) mobileApprovalActionsInFlight.delete(id);
   }
 }
 
@@ -8314,6 +8355,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileVoiceWorkgroup": { enumerable: true, get: () => _renderMobileVoiceWorkgroup },
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },
   "_resolveMobileApprovalButton": { enumerable: true, get: () => _resolveMobileApprovalButton },
+  "_wireMobileApprovalActionButton": { enumerable: true, get: () => _wireMobileApprovalActionButton },
   "_restoreMobileApprovalDetailsState": { enumerable: true, get: () => _restoreMobileApprovalDetailsState },
   "_restoreMobileQuestionDraftState": { enumerable: true, get: () => _restoreMobileQuestionDraftState },
   "_safeJsonPreview": { enumerable: true, get: () => _safeJsonPreview },
@@ -18184,6 +18226,7 @@ export {
   _renderMobileMarkdown,
   _renderMobileProcess,
   _resolveMobileApprovalButton,
+  _wireMobileApprovalActionButton,
   _restoreTemporaryMobileSubagentVoiceProfile,
   _setTemporaryMobileSubagentVoiceProfile,
   _uploadMobileChatAttachments,

@@ -27,7 +27,7 @@ import {
   _renderMobileAgentChatBubble,
   _renderMobileGoalPill,
   _renderMobileMarkdown,
-  _resolveMobileApprovalButton,
+  _wireMobileApprovalActionButton,
   _uploadMobileChatAttachments,
   _voiceDebug,
   _wireMobileProcessRunActions,
@@ -1159,9 +1159,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       live: m === liveMsg,
       keepLiveTraceVisible: m === liveMsg,
     }));
-    listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-      btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
-    });
+    listEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(listEl);
     scrollToLatest();
   }
