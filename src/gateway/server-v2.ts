@@ -65,7 +65,7 @@ import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartb
 import { MainChatTimerRunner } from './timers/timer-runner';
 import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
 import { ActiveThreadSupervisionController } from './threads/thread-supervision-controller';
-import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
+import { BrainRunner, createBrainHandleChatAdapter, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
   stopAgentSchedules,
@@ -630,8 +630,7 @@ setHeartbeatRunnerInstance(heartbeatRunner);
 startupMark('heartbeat runner constructed');
 
 const brainRunner = new BrainRunner({
-  handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
-    handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
+  handleChat: createBrainHandleChatAdapter(handleChat),
   broadcast: broadcastWS,
   workspacePath: getConfig().getWorkspacePath(),
   skillsManager,

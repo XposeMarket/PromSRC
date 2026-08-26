@@ -19,7 +19,37 @@ async function main(): Promise<void> {
     const leaseApi = await import('../gateway-progress-lease');
     const configApi = await import('../../config/config');
     const brainStateApi = await import('./brain-state');
-    const { BrainRunner, checkpointBrainRuntime } = await import('./brain-runner');
+    const { BrainRunner, checkpointBrainRuntime, createBrainHandleChatAdapter } = await import('./brain-runner');
+
+    const forwardedChatArgs: any[][] = [];
+    const bridge = createBrainHandleChatAdapter(async (...args: any[]) => {
+      forwardedChatArgs.push(args);
+      return { type: 'chat', text: 'ok', toolResults: [] };
+    });
+    const bridgeSendSSE = () => undefined;
+    const bridgeCallerOnToken = () => undefined;
+    const bridgeRuntimeOptions = { brainThoughtRuntime: true, runtimeId: 'runtime-bridge-regression' };
+    const bridgeReasoning = { enabled: true, level: 'low' };
+    await bridge(
+      'bridge test',
+      'brain_thought_bridge_regression',
+      bridgeSendSSE,
+      undefined,
+      { aborted: false },
+      'bridge context',
+      'model',
+      'cron',
+      ['brain_thought_submit'],
+      undefined,
+      bridgeReasoning,
+      bridgeCallerOnToken,
+      bridgeRuntimeOptions,
+    );
+    assert.equal(forwardedChatArgs.length, 1);
+    assert.deepEqual(forwardedChatArgs[0][10], bridgeReasoning, 'Brain reasoning settings must reach the chat router');
+    assert.equal(forwardedChatArgs[0][11], undefined, 'providerOverride must remain an empty reserved slot');
+    assert.equal(forwardedChatArgs[0][12], bridgeCallerOnToken, 'callerOnToken must reach the chat router');
+    assert.deepEqual(forwardedChatArgs[0][13], bridgeRuntimeOptions, 'Brain runtime flags must reach the chat router');
 
     const runtimeId = runtimeApi.registerLiveRuntime({
       kind: 'brain_thought',
