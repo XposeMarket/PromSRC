@@ -155,6 +155,20 @@ try {
   fs.rmSync(invalidationWorkspace, { recursive: true, force: true });
 }
 
+const duplicateWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-memory-atoms-dedupe-'));
+try {
+  fs.writeFileSync(
+    path.join(duplicateWorkspace, 'MEMORY.md'),
+    '# Memory\n\n## First section\n- Keep the gateway worker warm.\n\n## Second section\n- Keep the gateway-worker warm!\n',
+    'utf8',
+  );
+  const duplicateAtoms = parseMemoryAtoms(fs.readFileSync(path.join(duplicateWorkspace, 'MEMORY.md'), 'utf8'));
+  assert.equal(duplicateAtoms.length, 1, 'normalized duplicate memory bullets should produce one atom');
+  assert.equal(duplicateAtoms[0]?.sourceSection, 'First section', 'dedupe should preserve the first authoritative source range');
+} finally {
+  fs.rmSync(duplicateWorkspace, { recursive: true, force: true });
+}
+
 console.log(JSON.stringify({
   memoryPath,
   rawChars: raw.length,

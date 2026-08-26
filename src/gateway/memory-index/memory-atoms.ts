@@ -244,7 +244,13 @@ export function parseMemoryAtoms(raw: string): MemoryAtom[] {
     if (startIndex >= 0 && line.text.trim()) lastMeaningfulIndex = index;
   }
   flush();
-  return atoms;
+  const seenContent = new Set<string>();
+  return atoms.filter((atom) => {
+    const normalizedContent = normalizeText(atom.rawText);
+    if (!normalizedContent || seenContent.has(normalizedContent)) return false;
+    seenContent.add(normalizedContent);
+    return true;
+  });
 }
 
 function buildTermDocumentFrequency(atoms: MemoryAtom[]): Map<string, number> {

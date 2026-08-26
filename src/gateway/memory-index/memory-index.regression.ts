@@ -208,6 +208,23 @@ async function main(): Promise<void> {
     } else {
       console.warn(`sqlite memory backend unavailable; skipped SQLite sync assertion: ${sqliteStatus.error}`);
     }
+
+    const rootOnlyWorkspace = path.join(tmpRoot, 'workspace-root-only');
+    fs.mkdirSync(rootOnlyWorkspace, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootOnlyWorkspace, 'MEMORY.md'),
+      '# MEMORY\n\n## Root-only memory\n- A workspace root MEMORY file remains searchable without an audit directory.\n',
+      'utf-8',
+    );
+    const rootOnlyRefresh = refreshMemoryIndexFromAudit(rootOnlyWorkspace, {
+      force: true,
+      minIntervalMs: 0,
+      maxChangedFiles: 100,
+      syncSqlite: true,
+    });
+    assert.ok(rootOnlyRefresh.indexedFiles >= 1, 'root MEMORY.md should be indexed even when audit/ is absent');
+    const rootOnlySearch = searchMemoryIndex(rootOnlyWorkspace, { query: 'root MEMORY searchable audit directory', limit: 5 });
+    assert.ok(rootOnlySearch.hits.length > 0, 'root-only MEMORY.md should be returned by memory search');
   } finally {
     await shutdownMemoryIndexRefreshWorker();
     closeSqliteMemoryConnections();
