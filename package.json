@@ -38,6 +38,7 @@
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:tool-category-activation": "tsx src/gateway/tool-category-activation.regression.ts",
+    "test:tool-category-switch-model": "tsx src/gateway/tool-category-switch-model.regression.ts",
     "test:extension-activation": "tsx src/extensions/activation-planner.regression.ts",
     "test:tool-category-phase4": "tsx src/runtime/tool-category-phase4.validation.ts",
     "test:instruction-segment-resolver": "tsx src/runtime/instruction-segment-registry.regression.ts",
