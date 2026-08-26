@@ -37,13 +37,10 @@ function hasAnswerValue(payload) {
 }
 
 function normalizePayload(question, payload) {
-  if (!payload || typeof payload !== 'object') return buildQuestionAnswerPayload(question);
-  if (!Array.isArray(payload.answers)) return buildQuestionAnswerPayload(question, payload);
-  return {
-    ...payload,
-    answers: payload.answers.map((answer) => ({ ...(answer || {}) })),
-    generalOther: clean(payload.generalOther || payload.general_other),
-  };
+  // Every transport submission must use the model's canonical answer shape.
+  // In particular, a partially populated view payload still needs entries for
+  // every question and single-select answers must be truncated to one value.
+  return buildQuestionAnswerPayload(question, payload);
 }
 
 export function createQuestionController(options = {}) {
@@ -163,6 +160,25 @@ export function createQuestionController(options = {}) {
     const incoming = { ...normalized, sessionId: sid };
     const next = mergeQuestionRecords(current, incoming, inputOptions);
     const changed = !questionRecordsEqual(current, next);
+
+    // Duplicate gateway events are a no-op all the way through the runtime:
+    // ChatRuntime.upsertQuestion() touches the state slice and activity clock,
+    // so do not call it when the normalized record is unchanged.
+    if (!changed && current) {
+      if (inputOptions.projectLegacy !== false && inputOptions.forceProject === true) {
+        try {
+          projectToLegacy({
+            sessionId: sid,
+            question: current,
+            previous: current,
+            options: inputOptions,
+          });
+        } catch (error) {
+          try { onError(error, { phase: 'compatibility_projection', question: current }); } catch {}
+        }
+      }
+      return { accepted: true, changed: false, record: current, previous: current, sessionId: sid };
+    }
     const stored = runtime.upsertQuestion(next);
 
     // Runtime state is written first. This callback is an explicit one-way
@@ -199,11 +215,20 @@ export function createQuestionController(options = {}) {
       || event.question?.source_session_id,
     );
     const runtimeMatches = findRuntimeQuestions(id);
-    const legacyMatches = explicitSessionId ? [] : findLegacyQuestions(id);
-    const targets = explicitSessionId
-      ? [explicitSessionId]
-      : [...runtimeMatches, ...legacyMatches].map((entry) => entry.sessionId);
-    const sessions = [...new Set(targets.filter(Boolean))];
+    let sessions;
+    if (explicitSessionId) {
+      // An explicit event/session identity always wins, including when the
+      // record has not been hydrated in that runtime yet.
+      sessions = [explicitSessionId];
+    } else if (runtimeMatches.length) {
+      // Existing renderer records are authoritative. Do not use compatibility
+      // history to fan an event out to unrelated sessions.
+      sessions = runtimeMatches.map((entry) => entry.sessionId);
+    } else {
+      const legacyMatches = findLegacyQuestions(id);
+      sessions = legacyMatches.length === 1 ? [legacyMatches[0].sessionId] : [];
+    }
+    sessions = [...new Set(sessions.filter(Boolean))];
     if (!sessions.length) {
       const fallbackSessionId = resolveSessionId(event, '');
       const nextStatus = clean(status || event.status || 'pending').toLowerCase();
@@ -283,25 +308,10 @@ export function createQuestionController(options = {}) {
       projectLegacy: inputOptions.projectSubmitting !== false,
     });
     const submittingQuestion = submitStarted.record || question;
+    let result;
     try {
       if (typeof transport.submit !== 'function') throw new Error('Question submit transport is not configured.');
-      const result = await transport.submit(targetId, payload);
-      const answeredQuestion = {
-        ...submittingQuestion,
-        ...(result?.question || {}),
-        id: targetId,
-        sessionId: sid,
-        answers: payload.answers,
-        generalOther: payload.generalOther,
-      };
-      const resolved = transition({
-        questionId: targetId,
-        sessionId: sid,
-        question: answeredQuestion,
-      }, 'answered', { ...inputOptions, allowStatusRegression: true, projectLegacy: true });
-      try { await onSubmitSuccess({ result, question: resolved[0]?.record || answeredQuestion, payload, sessionId: sid }); } catch {}
-      if (typeof transport.resume === 'function') await transport.resume(result, sid);
-      return { ok: true, result, question: resolved[0]?.record || answeredQuestion, payload, sessionId: sid };
+      result = await transport.submit(targetId, payload);
     } catch (error) {
       upsert({ ...submittingQuestion, sessionId: sid, status: 'pending' }, {
         ...inputOptions,
@@ -312,6 +322,33 @@ export function createQuestionController(options = {}) {
       try { onError(error, { phase: 'submit', question: submittingQuestion, sessionId: sid }); } catch {}
       return { ok: false, reason: 'submit_failed', error, question: submittingQuestion, payload, sessionId: sid };
     }
+
+    // The backend has accepted the answer. Persist the terminal renderer
+    // state before attempting the optional resume request so a resume failure
+    // cannot make an answered card look pending again.
+    const answeredQuestion = {
+      ...submittingQuestion,
+      ...(result?.question || {}),
+      id: targetId,
+      sessionId: sid,
+      answers: payload.answers,
+      generalOther: payload.generalOther,
+    };
+    const resolved = transition({
+      questionId: targetId,
+      sessionId: sid,
+      question: answeredQuestion,
+    }, 'answered', { ...inputOptions, allowStatusRegression: true, projectLegacy: true });
+    const finalQuestion = resolved[0]?.record || answeredQuestion;
+    try { await onSubmitSuccess({ result, question: finalQuestion, payload, sessionId: sid }); } catch {}
+    if (typeof transport.resume === 'function') {
+      try {
+        await transport.resume(result, sid);
+      } catch (error) {
+        try { onError(error, { phase: 'resume', question: finalQuestion, sessionId: sid }); } catch {}
+      }
+    }
+    return { ok: true, result, question: finalQuestion, payload, sessionId: sid };
   }
 
   async function cancel(id, inputOptions = {}) {

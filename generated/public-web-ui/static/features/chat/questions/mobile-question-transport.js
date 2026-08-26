@@ -50,7 +50,9 @@ export function createMobileQuestionTransport(options = {}) {
     );
     if (targetSessionId) setActiveSessionId(targetSessionId);
     schedule(() => {
-      if (!sendResume(resumePrompt, { sessionId: targetSessionId })) {
+      // A successful callback may intentionally return undefined. Only an
+      // explicit false means the send was not accepted and should be queued.
+      if (sendResume(resumePrompt, { sessionId: targetSessionId }) === false) {
         queueResume(resumePrompt, targetSessionId);
       }
     }, 100);

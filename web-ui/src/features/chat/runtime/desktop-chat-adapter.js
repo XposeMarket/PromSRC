@@ -97,6 +97,8 @@ export function createDesktopChatRuntimeAdapter({
       runtime.replaceHistory(history, {
         source: String(options.source || 'desktop-compatibility-bridge'),
         pageInfo: options.pageInfo || session.historyPage || runtime.snapshot.paging,
+        initializeQuestionsFromHistory: options.initializeQuestionsFromHistory
+          ?? (runtime.snapshot.history.revision === 0),
       });
       runtime.setLifecycle({
         phase: windowRef._sessionThinking?.[session.id] || session.activeRun === true ? 'streaming' : 'idle',
