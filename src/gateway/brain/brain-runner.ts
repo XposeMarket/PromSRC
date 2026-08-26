@@ -398,6 +398,11 @@ const DREAM_CATCHUP_LOOKBACK_DAYS = 7;              // max backlog window to aut
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+type BrainChatRuntimeOptions = {
+  brainThoughtRuntime?: boolean;
+  runtimeId?: string;
+};
+
 type HandleChatFn = (
   message: string,
   sessionId: string,
@@ -411,13 +416,58 @@ type HandleChatFn = (
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
   reasoningOptions?: { enabled?: boolean; level?: string },
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { brainThoughtRuntime?: boolean },
+  runtimeOptions?: BrainChatRuntimeOptions,
 ) => Promise<{
   type: string;
   text: string;
   thinking?: string;
   toolResults?: Array<{ name: string; args: any; result: string; error: boolean }>;
 }>;
+
+type ChatRouterHandleChatFn = typeof import('../routes/chat.router').handleChat;
+
+/**
+ * Adapt the Brain-owned chat contract to the full chat-router signature.
+ *
+ * The router reserves one positional slot for providerOverride between
+ * reasoningOptions and callerOnToken. Keeping that slot explicit here prevents
+ * Brain's runtime flags from being silently shifted or dropped by a gateway
+ * wrapper.
+ */
+export function createBrainHandleChatAdapter(
+  routerHandleChat: ChatRouterHandleChatFn,
+): HandleChatFn {
+  return (
+    message,
+    sessionId,
+    sendSSE,
+    pinnedMessages,
+    abortSignal,
+    callerContext,
+    modelOverride,
+    executionMode,
+    toolFilter,
+    attachments,
+    reasoningOptions,
+    callerOnToken,
+    runtimeOptions,
+  ) => routerHandleChat(
+    message,
+    sessionId,
+    sendSSE,
+    pinnedMessages,
+    abortSignal,
+    callerContext,
+    modelOverride,
+    executionMode,
+    toolFilter,
+    attachments,
+    reasoningOptions as Parameters<ChatRouterHandleChatFn>[10],
+    undefined, // providerOverride is reserved for interactive turn routing.
+    callerOnToken,
+    runtimeOptions,
+  );
+}
 
 export interface BrainRunnerDeps {
   handleChat: HandleChatFn;
@@ -1261,7 +1311,7 @@ export class BrainRunner {
         undefined,
         thoughtReasoning ? { enabled: true, level: thoughtReasoning } : undefined,
         undefined,
-        { brainThoughtRuntime: true },
+        { brainThoughtRuntime: true, runtimeId },
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain thought run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
@@ -1598,6 +1648,8 @@ export class BrainRunner {
         ]),
         undefined,
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
+        undefined,
+        { runtimeId },
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
@@ -1959,6 +2011,8 @@ export class BrainRunner {
         ],
         undefined,
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
+        undefined,
+        { runtimeId },
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream cleanup run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`

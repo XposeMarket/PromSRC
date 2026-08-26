@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 // Guard the architectural boundary: Thought is supervisory cognition, not a normal Prometheus chat turn.
 const runner = fs.readFileSync('src/gateway/brain/brain-runner.ts', 'utf8');
+const server = fs.readFileSync('src/gateway/server-v2.ts', 'utf8');
 const toolBuilder = fs.readFileSync('src/gateway/tool-builder.ts', 'utf8');
 const chatHelpers = fs.readFileSync('src/gateway/chat/chat-helpers.ts', 'utf8');
 const chatFiles = [];
@@ -23,7 +24,8 @@ assert(livePrompt.includes('Browser observations in the Activity Package are evi
 assert(runner.includes("'brain_context_search'"));
 assert(runner.includes("'brain_activity_read'"));
 assert(runner.includes("'brain_thought_submit'"));
-assert(runner.includes('{ brainThoughtRuntime: true }'));
+assert(runner.includes('{ brainThoughtRuntime: true, runtimeId }'));
+assert(server.includes('createBrainHandleChatAdapter(handleChat)'));
 assert(runner.includes('submissionSucceeded && fileLooksFresh && capsuleArtifactValid && !runFailed'));
 assert(!livePrompt.includes('workspace_edit'));
 assert(chatRuntime.includes('You are Thought, an internal supervisory cognition process inside Prometheus.'));
