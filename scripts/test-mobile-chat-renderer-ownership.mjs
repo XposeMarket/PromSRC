@@ -65,6 +65,9 @@ const measurements = {
   gzipBytes: records.reduce((total, record) => total + record.gzipBytes, 0),
   moduleCount: records.length,
 };
-assert(measurements.gzipBytes < 250000, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// The mobile question stepper keeps prior answers in the chat-side draft map
+// and animates the composer-owned handoff; keep the performance guard tight
+// while allowing that intentional interaction state logic.
+assert(measurements.gzipBytes < 250500, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

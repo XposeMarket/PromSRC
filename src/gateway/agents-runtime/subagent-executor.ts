@@ -20660,11 +20660,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               agentId: inferAgentIdFromSession(sessionId, args),
               originType: origin.originType === 'proposal' ? 'unknown' : origin.originType,
               originLabel: origin.originLabel,
-              title: args?.title,
-              prompt: args?.prompt || args?.message || args?.question,
-              context: args?.context || args?.reason,
               questions: args?.questions,
-              allowGeneralOther: args?.allow_general_other ?? args?.allowGeneralOther,
               ttlMs: args?.ttl_ms || args?.ttlMs,
             });
           } catch (err: any) {
@@ -20687,7 +20683,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               agentId: inferAgentIdFromSession(sessionId, args),
               actionType: 'tool_executed' as any,
               toolName: name,
-              toolArgs: { question_id: question.id, title: question.title, prompt: question.prompt, questions: question.questions },
+              toolArgs: { question_id: question.id, questions: question.questions },
               policyTier: 'propose',
               approvalStatus: 'auto_allowed' as any,
               resultSummary: `Queued Prometheus question ${question.id}`,

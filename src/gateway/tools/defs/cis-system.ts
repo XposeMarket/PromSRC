@@ -721,15 +721,11 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'ask_prometheus_questions',
         description:
-          'Ask the user 1-5 structured questions as a durable interactive card. This call blocks and the current turn remains suspended until the user answers or cancels the card; do not send a follow-up message while it is pending. Use when a missing decision/preference materially affects the next step.',
+          'Ask the user 1-5 structured questions as a durable interactive card. The UI presents one question at a time with tappable options. This call blocks and the current turn remains suspended until the user answers or cancels the card; do not send a follow-up message while it is pending. Use when a missing decision/preference materially affects the next step.',
         parameters: {
           type: 'object',
-          required: ['title', 'prompt', 'questions'],
+          required: ['questions'],
           properties: {
-            title: { type: 'string', description: 'Short card title shown to the user, max ~180 chars.' },
-            prompt: { type: 'string', description: 'Warm concise explanation of why Prometheus needs this answer.' },
-            context: { type: 'string', description: 'Optional short context about the task or decision.' },
-            allow_general_other: { type: 'boolean', description: 'Whether to show an extra Anything else field for the whole card. Defaults true.' },
             questions: {
               type: 'array',
               minItems: 1,
@@ -744,7 +740,6 @@ export function getCisSystemTools(): any[] {
                   options: { type: 'array', items: { type: 'string' }, description: '2-8 concise options for select questions. Not needed for text questions.' },
                   allowOther: { type: 'boolean', description: 'Whether this question has an Other option/text. Defaults true.' },
                   required: { type: 'boolean', description: 'Whether an answer is needed before submit. Defaults true.' },
-                  helpText: { type: 'string', description: 'Optional tiny helper text.' },
                 },
               },
             },

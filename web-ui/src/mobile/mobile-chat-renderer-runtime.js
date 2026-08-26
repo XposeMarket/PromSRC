@@ -33,6 +33,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _mobileWorkflowTraceEntriesForMessage,
   _normalizeMobileMedia,
   _normalizeMobileMediaList,
+  _normalizeMobileQuestion,
   _normalizeMobileVoiceWorkgroup,
   _nowTime,
   _pmCssEscape,
@@ -48,7 +49,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileMediaGallery,
   _renderMobileMessageActions,
   _renderMobileProductCarousel,
-  _renderMobileQuestionCard,
   _renderMobileRichArtifacts,
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
@@ -128,6 +128,59 @@ export function createMobileChatRendererRuntime(context = {}) {
       if (part === 'interruption_response') return 'Response after steer';
     }
     return String(message?.workflowLabel || '').trim();
+  }
+
+  function _renderMobileQuestionCard(item) {
+    const q = _normalizeMobileQuestion(item);
+    if (!q.id || !q.questions.length) return '';
+    // Submission is optimistic: remove the card before the network round-trip
+    // so the stream never leaves an answered card behind while the agent resumes.
+    if (q.status === 'submitting') return '';
+    const pending = q.status === 'pending';
+    const questionCount = q.questions.length;
+    const requestedIndex = Number(q.currentIndex);
+    const currentIndex = Number.isFinite(requestedIndex)
+      ? Math.max(0, Math.min(questionCount - 1, Math.floor(requestedIndex)))
+      : 0;
+    const currentQuestion = q.questions[currentIndex];
+    const isLastQuestion = currentIndex === questionCount - 1;
+    // Escape the inline JS id arg for use inside a double-quoted onclick
+    // attribute. escapeHtml turns the quotes into entities that decode back to
+    // a valid JS string literal in the browser.
+    const idJson = escapeHtml(JSON.stringify(q.id));
+    const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
+    const visibleQuestions = pending ? [currentQuestion] : q.questions;
+    const blocks = visibleQuestions.map((qq) => {
+      const ans = answerMap.get(qq.id) || {};
+      if (!pending) {
+        const sel = Array.isArray(ans.selected) ? ans.selected : [];
+        const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
+        return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
+      }
+      const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" aria-pressed="false" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')"><span class="pm-q-check" aria-hidden="true"></span><span class="pm-q-opt-label">${escapeHtml(opt)}</span></button>`).join('');
+      const textArea = qq.mode === 'text'
+        ? `<textarea class="pm-q-input" data-pm-q-text="1" rows="3" placeholder="Type your answer" aria-label="${escapeHtml(qq.label)}"></textarea>`
+        : '';
+      const otherArea = qq.allowOther && qq.mode !== 'text'
+        ? `<div class="pm-q-other-row">
+            <button type="button" class="pm-q-other-toggle" aria-expanded="false" aria-pressed="false" onclick="_mobileQuestionToggleOther(this)"><span class="pm-q-check" aria-hidden="true"></span><span>Other…</span></button>
+            <textarea class="pm-q-input" data-pm-q-other="1" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escapeHtml(qq.label)}" hidden></textarea>
+          </div>`
+        : '';
+      return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
+        <div class="pm-q-label">${escapeHtml(qq.label)}</div>
+        ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
+        ${textArea}
+        ${otherArea}
+      </div>`;
+    }).join('');
+    return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}" data-pm-q-index="${currentIndex}" data-pm-q-total="${questionCount}">
+      ${pending && questionCount > 1 ? `<div class="pm-q-head"><span class="pm-q-progress" aria-label="Question ${currentIndex + 1} of ${questionCount}"><span class="pm-q-progress-current">${currentIndex + 1}</span><span class="pm-q-progress-total">/${questionCount}</span></span></div>` : ''}
+      ${blocks}
+      ${pending
+        ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">${isLastQuestion ? 'Submit answer' : 'Next question'}</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
+        : ''}
+    </div>`;
   }
   
   function _renderChatMessageHtml(m, index = -1, rowKey = '', rowSignature = '') {
@@ -3497,6 +3550,7 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
 
   const runtime = Object.freeze({
     _mobileWorkflowTransitionLabel,
+    _renderMobileQuestionCard,
     _renderChatMessageHtml,
     _renderMobileGoalCompletionReport,
     _addMobileMedia,
