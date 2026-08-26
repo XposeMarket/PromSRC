@@ -140,9 +140,19 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   entities: 'business',
 };
 
+const TOOL_CATEGORY_ALIAS_PATTERN = new RegExp(
+  `\\b(${Object.keys(TOOL_CATEGORY_ALIASES)
+    .sort((left, right) => right.length - left.length)
+    .map((alias) => alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'))
+    .join('|')})\\b`,
+  'i',
+);
+
 export function normalizeToolCategory(raw: unknown): ToolCategory | null {
   const normalized = normalizeManifestToolCategory(raw);
-  return normalized && getRuntimeToolCategoryIds().includes(normalized) ? normalized : null;
+  const alias = String(raw || '').trim().toLowerCase();
+  const canonical = normalized || TOOL_CATEGORY_ALIASES[alias] || null;
+  return canonical && getRuntimeToolCategoryIds().includes(canonical) ? canonical : null;
 }
 
 // Explicit name lists for non-prefix categories
@@ -1741,7 +1751,7 @@ export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
     if (!raw) return '';
     const direct = normalizeToolCategory(raw);
     if (direct && categories.includes(direct)) return direct;
-    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|media_generation|automations|automation_scheduling|automation_tasks|automation_recovery|automation_sessions|scheduling_pack|schedule_pack|task_pack|recovery_pack|session_pack|creative_quality|media_quality|runtime_admin|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_basic|creative_image|creative_video|creative_hyperframes|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|media_gen|integrations|connectors|mcp|composites|creative|image_mode|video_mode|hyperframes|creative_qa|runtime|diagnostics)\b/);
+    const match = raw.match(TOOL_CATEGORY_ALIAS_PATTERN);
     const matched = match ? normalizeToolCategory(match[1]) : null;
     return matched && categories.includes(matched) ? matched : '';
   };

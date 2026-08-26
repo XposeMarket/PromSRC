@@ -34,7 +34,11 @@ async function main(): Promise<void> {
     shutdownModelCallWorkerPool,
   } = await import('./model-call-worker-pool.js');
   try {
-    const first = dispatchModelCallWorker(request(1_000));
+    // Wait for the first slot to become busy before adding queued demand.
+    // Keep that first synthetic job alive long enough for the two newly
+    // spawned child processes to report ready on a cold Windows host; the
+    // assertion is about lazy expansion, not a race against child startup.
+    const first = dispatchModelCallWorker(request(3_000));
     await waitFor(() => getModelCallWorkerPoolStatus().active === 1);
     const firstLive = getModelCallWorkerPoolStatus().slots.filter((slot) => slot.pid).length;
     assert.equal(firstLive, 1, 'a single request should start only one configured model slot');

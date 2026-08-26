@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildTools } from './tool-builder';
+import { buildTools, normalizeToolArgsForTool } from './tool-builder';
 import {
   TOOL_CATEGORY_REPRESENTATIVE_TOOLS,
   verifyToolCategorySurface,
@@ -72,6 +72,17 @@ async function main(): Promise<void> {
     });
     assert.equal(successful.ok, true, 'same-turn provider rebuild must expose the activated representative');
     assert.equal(sessionApi.getActivatedToolCategories(sessionId).has(category), true);
+
+    const aliasSessionId = 'tool_category_alias_normalization_regression';
+    sessionApi.activateToolCategory(aliasSessionId, 'browser', { scope: 'session' });
+    const aliasActivated = sessionApi.getActivatedToolCategories(aliasSessionId);
+    assert.equal(aliasActivated.has('browser_automation'), true, 'legacy activation aliases must be stored canonically');
+    assert.equal(aliasActivated.has('browser'), false, 'legacy activation aliases must not leak into session state');
+    assert.deepEqual(
+      normalizeToolArgsForTool('request_tool_category', 'category: model_management'),
+      { category: 'model_management' },
+      'shorthand category arguments must recognize every manifest alias',
+    );
 
     // Automatic keyword activation has a second verification after the
     // provider cap/filter is applied. A failed final verification must restore

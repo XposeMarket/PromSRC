@@ -31,6 +31,8 @@ import {
   resolveStage3PilotPolicyDecision,
 } from '../runtime/instruction-segment-registry';
 import {
+  getEnabledStage4MenuSegments,
+  getStage4InstructionMode,
   resolveStage4MenuSegmentDecision,
   type Stage4InstructionIntents,
   type Stage4MenuSegmentId,
@@ -1523,8 +1525,13 @@ ${BG_AGENT_RUNTIME_HINT}`;
   let menu = legacyMenu;
   for (const [id, startHeading, nextHeading] of sectionBounds) {
     if (resolveStage4MenuSegmentDecision(id, stage4Intents).included) continue;
-    const start = menu.indexOf(`\n\n${startHeading}`);
-    const end = menu.indexOf(`\n\n${nextHeading}`, Math.max(0, start + 2));
+    // The legacy menu headings are indented, so searching for an exact
+    // unindented marker leaves disabled sections in the prompt. Locate the
+    // surrounding blank-line boundaries from the heading text instead.
+    const startHeadingIndex = menu.indexOf(startHeading);
+    const start = startHeadingIndex >= 0 ? menu.lastIndexOf('\n\n', startHeadingIndex) : -1;
+    const nextHeadingIndex = start >= 0 ? menu.indexOf(nextHeading, start + 2) : -1;
+    const end = nextHeadingIndex >= 0 ? menu.lastIndexOf('\n\n', nextHeadingIndex) : -1;
     if (start >= 0 && end > start) menu = menu.slice(0, start) + menu.slice(end);
   }
   const activeCategoryList = Array.from(activatedCategories)
@@ -1603,6 +1610,8 @@ export function buildToolsContext(activatedCategories: Set<string>, options?: { 
     search: searchFingerprint,
     publicDistribution: isPublicDistributionBuild(),
     instructionResolverMode: getInstructionResolverMode(),
+    stage4InstructionMode: getStage4InstructionMode(),
+    stage4MenuSegments: Array.from(getEnabledStage4MenuSegments()).sort(),
   });
   return memoizePromptProfileBlock(
     `tools:${categories.join(',')}`,
