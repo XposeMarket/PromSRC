@@ -8,6 +8,7 @@ import {
   normalizeQuestionRecord,
 } from '../web-ui/src/features/chat/questions/question-model.js';
 import { createQuestionController } from '../web-ui/src/features/chat/questions/question-controller.js';
+import { createMobileQuestionTransport } from '../web-ui/src/features/chat/questions/mobile-question-transport.js';
 import { ChatRuntime } from '../web-ui/src/features/chat/runtime/chat-runtime.js';
 
 const sourceQuestion = {
@@ -76,8 +77,9 @@ assert.equal(mergeQuestionRecords(answered, { ...question, status: 'pending' }, 
 const runtimes = new Map([
   ['session-one', new ChatRuntime({ gatewayId: 'question-test', sessionId: 'session-one' })],
   ['session-two', new ChatRuntime({ gatewayId: 'question-test', sessionId: 'session-two' })],
+  ['session-three', new ChatRuntime({ gatewayId: 'question-test', sessionId: 'session-three' })],
 ]);
-const legacy = { 'session-one': [], 'session-two': [] };
+const legacy = { 'session-one': [], 'session-two': [], 'session-three': [] };
 let projectionCount = 0;
 let fetchCount = 0;
 let submitCount = 0;
@@ -85,6 +87,15 @@ let resumeCount = 0;
 let cancelCount = 0;
 let submitSuccessCount = 0;
 let cancelSuccessCount = 0;
+const errorPhases = [];
+
+const sessionOneRuntime = runtimes.get('session-one');
+const originalSessionOneUpsertQuestion = sessionOneRuntime.upsertQuestion.bind(sessionOneRuntime);
+let sessionOneQuestionWriteCount = 0;
+sessionOneRuntime.upsertQuestion = (...args) => {
+  sessionOneQuestionWriteCount += 1;
+  return originalSessionOneUpsertQuestion(...args);
+};
 const transport = {
   fetchQuestion: async () => {
     fetchCount += 1;
@@ -92,11 +103,21 @@ const transport = {
   },
   submit: async (id, body) => {
     submitCount += 1;
-    assert.equal(id, 'question-one');
-    assert.equal(body.answers[0].selected[0], 'web');
+    assert.ok(['question-one', 'question-resume-failure'].includes(id));
+    assert.equal(body.answers.length, 1, 'partial view answers must be expanded to the question model');
+    assert.deepEqual(body.answers[0], {
+      id: 'single',
+      label: 'Which channel?',
+      mode: 'single_select',
+      selected: ['web'],
+      text: '',
+      other: '',
+    }, 'submit payloads must be canonical and single-select answers truncated');
     return {
       question: { id, sessionId: 'session-one', status: 'answered' },
-      resumePrompt: 'Continue the interrupted turn.',
+      resumePrompt: id === 'question-resume-failure'
+        ? 'Resume failure'
+        : 'Continue the interrupted turn.',
     };
   },
   cancel: async (id) => {
@@ -106,8 +127,9 @@ const transport = {
   },
   resume: async (result, sessionId) => {
     resumeCount += 1;
-    assert.equal(result.resumePrompt, 'Continue the interrupted turn.');
     assert.equal(sessionId, 'session-one');
+    if (result.resumePrompt === 'Resume failure') throw new Error('resume transport unavailable');
+    assert.equal(result.resumePrompt, 'Continue the interrupted turn.');
   },
 };
 
@@ -140,6 +162,7 @@ const controller = createQuestionController({
   getComposerTarget: () => '',
   onSubmitSuccess: () => { submitSuccessCount += 1; },
   onCancelSuccess: () => { cancelSuccessCount += 1; },
+  onError: (_error, details) => { errorPhases.push(details?.phase || 'unknown'); },
 });
 
 const pendingOne = controller.upsert({
@@ -151,8 +174,15 @@ const pendingOne = controller.upsert({
 });
 assert.equal(pendingOne.accepted, true);
 assert.equal(pendingOne.changed, true);
-assert.equal(controller.upsert(pendingOne.record).changed, false, 'duplicate create events must be idempotent');
-assert.equal(runtimes.get('session-one').snapshot.questions.length, 1);
+const beforeDuplicateSnapshot = sessionOneRuntime.snapshot;
+const beforeDuplicateActivityAt = beforeDuplicateSnapshot.lifecycle.lastActivityAt;
+const beforeDuplicateWrites = sessionOneQuestionWriteCount;
+const duplicateOne = controller.upsert(pendingOne.record);
+assert.equal(duplicateOne.changed, false, 'duplicate create events must be idempotent');
+assert.equal(sessionOneQuestionWriteCount, beforeDuplicateWrites, 'duplicate events must not call runtime.upsertQuestion');
+assert.strictEqual(sessionOneRuntime.snapshot, beforeDuplicateSnapshot, 'duplicate events must not replace runtime state');
+assert.equal(sessionOneRuntime.snapshot.lifecycle.lastActivityAt, beforeDuplicateActivityAt, 'duplicate events must not touch runtime activity');
+assert.equal(sessionOneRuntime.snapshot.questions.length, 1);
 assert.equal(projectionCount, 1, 'unchanged duplicate events must not repeat compatibility projection');
 
 const answeredOne = controller.transition({
@@ -175,6 +205,104 @@ assert.equal(pendingTwo.record.sessionId, 'session-two');
 controller.transition({ questionId: 'question-two', sessionId: 'session-two' }, 'answered');
 assert.equal(runtimes.get('session-one').getQuestion('question-two'), null, 'session targeting must not update another session');
 assert.equal(runtimes.get('session-two').getQuestion('question-two').status, 'answered');
+assert.equal(runtimes.get('session-three').getQuestion('question-two'), null, 'explicit session targeting must not create a third-session record');
+
+// Without a sid, existing runtime records are the only fan-out targets.
+for (const sessionId of ['session-one', 'session-two']) {
+  controller.upsert({
+    ...question,
+    id: 'question-runtime-matches',
+    sessionId,
+    questions: [{ id: 'single', label: 'Which channel?', mode: 'single_select', options: ['web', 'desktop'] }],
+    status: 'pending',
+  });
+}
+const runtimeMatchesTransition = controller.transition({
+  questionId: 'question-runtime-matches',
+  question: { ...question, id: 'question-runtime-matches', sessionId: '', sourceSessionId: '' },
+}, 'answered');
+assert.equal(runtimeMatchesTransition.length, 2, 'all existing runtime matches may receive an unscoped event');
+assert.equal(runtimes.get('session-one').getQuestion('question-runtime-matches').status, 'answered');
+assert.equal(runtimes.get('session-two').getQuestion('question-runtime-matches').status, 'answered');
+assert.equal(runtimes.get('session-three').getQuestion('question-runtime-matches'), null, 'unrelated sessions must not be created');
+
+// If no runtime has the record, exactly one legacy-history match may hydrate
+// it; multiple legacy matches are ambiguous and must not receive a terminal
+// event or manufacture a record in the active session.
+legacy['session-two'].push({
+  role: 'assistant',
+  questionRequest: {
+    ...question,
+    id: 'question-legacy-match',
+    sessionId: 'session-two',
+    questions: [{ id: 'single', label: 'Which channel?', mode: 'single_select', options: ['web', 'desktop'] }],
+    status: 'pending',
+  },
+});
+const legacyMatchTransition = controller.transition({
+  questionId: 'question-legacy-match',
+  question: { ...question, id: 'question-legacy-match', sessionId: '', sourceSessionId: '' },
+}, 'answered');
+assert.equal(legacyMatchTransition.length, 1);
+assert.equal(legacyMatchTransition[0].sessionId, 'session-two');
+assert.equal(runtimes.get('session-two').getQuestion('question-legacy-match').status, 'answered');
+assert.equal(runtimes.get('session-one').getQuestion('question-legacy-match'), null);
+assert.equal(runtimes.get('session-three').getQuestion('question-legacy-match'), null);
+
+for (const sessionId of ['session-one', 'session-two']) {
+  legacy[sessionId].push({
+    role: 'assistant',
+    questionRequest: {
+      ...question,
+      id: 'question-ambiguous-legacy',
+      sessionId,
+      status: 'pending',
+    },
+  });
+}
+const ambiguousTerminal = controller.transition({ questionId: 'question-ambiguous-legacy' }, 'answered');
+assert.equal(ambiguousTerminal.length, 0, 'ambiguous legacy terminal events must not use the active fallback');
+assert.equal(runtimes.get('session-one').getQuestion('question-ambiguous-legacy'), null);
+assert.equal(runtimes.get('session-two').getQuestion('question-ambiguous-legacy'), null);
+assert.equal(runtimes.get('session-three').getQuestion('question-ambiguous-legacy'), null);
+const activeFallback = controller.transition({ questionId: 'question-active-fallback' }, 'pending');
+assert.equal(activeFallback.length, 1);
+assert.equal(activeFallback[0].sessionId, 'session-one');
+assert.equal(runtimes.get('session-one').getQuestion('question-active-fallback').status, 'pending');
+assert.equal(runtimes.get('session-two').getQuestion('question-active-fallback'), null);
+assert.equal(runtimes.get('session-three').getQuestion('question-active-fallback'), null);
+
+// Legacy history may bootstrap ChatRuntime.questions only when the adapter
+// marks the first hydration explicitly. Subsequent compatibility refreshes
+// cannot seed a new record or overwrite the renderer-owned one.
+const historyBootstrapRuntime = new ChatRuntime({ gatewayId: 'question-test', sessionId: 'history-bootstrap' });
+historyBootstrapRuntime.replaceHistory([{
+  messageId: 'history-question-row',
+  role: 'assistant',
+  questionRequest: {
+    ...question,
+    id: 'history-question',
+    sessionId: 'history-bootstrap',
+    status: 'pending',
+  },
+}], { source: 'initial-hydration', initializeQuestionsFromHistory: true });
+assert.equal(historyBootstrapRuntime.getQuestion('history-question').status, 'pending');
+historyBootstrapRuntime.replaceHistory([{
+  messageId: 'history-question-row',
+  role: 'assistant',
+  questionRequest: {
+    ...question,
+    id: 'history-question',
+    sessionId: 'history-bootstrap',
+    status: 'answered',
+  },
+}, {
+  messageId: 'history-question-new-row',
+  role: 'assistant',
+  questionRequest: { ...question, id: 'history-question-new', status: 'pending' },
+}], { source: 'compatibility-refresh', initializeQuestionsFromHistory: true });
+assert.equal(historyBootstrapRuntime.getQuestion('history-question').status, 'pending', 'later history must not overwrite runtime questions');
+assert.equal(historyBootstrapRuntime.getQuestion('history-question-new'), null, 'later history must not seed runtime questions');
 
 const pendingThree = controller.upsert({
   ...question,
@@ -224,10 +352,51 @@ assert.equal(resumeCount, 1, 'the transport owns resume coordination');
 assert.equal(submitSuccessCount, 1);
 assert.equal(runtimes.get('session-one').getQuestion('question-one').status, 'answered');
 
+const resumeFailureQuestion = {
+  ...question,
+  id: 'question-resume-failure',
+  sessionId: 'session-one',
+  questions: [{ id: 'single', label: 'Which channel?', mode: 'single_select', options: ['web', 'desktop'] }],
+  status: 'pending',
+};
+runtimes.get('session-one').upsertQuestion(resumeFailureQuestion);
+const resumeFailure = await controller.submit('question-resume-failure');
+assert.equal(resumeFailure.ok, true, 'a successful backend submit remains successful when resume fails');
+assert.equal(resumeFailure.reason, undefined);
+assert.equal(runtimes.get('session-one').getQuestion('question-resume-failure').status, 'answered');
+assert.equal(errorPhases.includes('resume'), true, 'resume failures must be reported with phase resume');
+assert.equal(errorPhases.includes('submit'), false, 'resume failures must not be reported as submit failures');
+
 const cancelled = await controller.cancel('question-three', { sessionId: 'session-two' });
 assert.equal(cancelled.ok, true);
 assert.equal(cancelCount, 1);
 assert.equal(cancelSuccessCount, 1);
 assert.equal(runtimes.get('session-two').getQuestion('question-three').status, 'cancelled');
+
+let mobileResumeSendCount = 0;
+let mobileResumeQueueCount = 0;
+const mobileTransport = createMobileQuestionTransport({
+  request: async () => ({}),
+  getActiveSessionId: () => 'session-one',
+  sendResume: () => {
+    mobileResumeSendCount += 1;
+    // The real successful mobile send path has historically returned void.
+  },
+  queueResume: () => { mobileResumeQueueCount += 1; },
+  schedule: (callback) => callback(),
+});
+assert.equal(await mobileTransport.resume({ resumePrompt: 'Continue on mobile.' }, 'session-one'), true);
+assert.equal(mobileResumeSendCount, 1);
+assert.equal(mobileResumeQueueCount, 0, 'a successful undefined send callback must not also queue resume');
+
+let explicitFailureQueueCount = 0;
+const explicitFailureTransport = createMobileQuestionTransport({
+  request: async () => ({}),
+  sendResume: () => false,
+  queueResume: () => { explicitFailureQueueCount += 1; },
+  schedule: (callback) => callback(),
+});
+assert.equal(await explicitFailureTransport.resume({ resumePrompt: 'Retry on mobile.' }, 'session-one'), true);
+assert.equal(explicitFailureQueueCount, 1, 'only an explicit false send result should queue resume');
 
 console.log('Chat question model/controller contract passed.');

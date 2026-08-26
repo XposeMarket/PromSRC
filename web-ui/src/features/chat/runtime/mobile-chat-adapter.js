@@ -193,6 +193,8 @@ export function createMobileChatRuntimeAdapter({
       runtime.replaceHistory(mobileRuntimeHistory(thread), {
         source: String(options.source || 'mobile-compatibility-bridge'),
         pageInfo: options.pageInfo || runtime.snapshot.paging,
+        initializeQuestionsFromHistory: options.initializeQuestionsFromHistory
+          ?? (runtime.snapshot.history.revision === 0),
       });
       runtime.setLifecycle({
         phase: activeRun.busy || activeRun.running ? 'streaming' : 'idle',

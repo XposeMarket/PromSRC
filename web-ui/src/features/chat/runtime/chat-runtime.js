@@ -145,6 +145,7 @@ export class ChatRuntime {
     this._attachmentBridge = this._createArrayBridge(this._attachments, 'attachments');
     this._approvals = new Map();
     this._questions = new Map();
+    this._questionHistoryBootstrapDone = false;
     this._background = new Map();
     this._owners = new Map();
     this._subscriptions = new Set();
@@ -268,7 +269,16 @@ export class ChatRuntime {
     this._indexByKey = nextIndexByKey;
     this._order = Object.freeze(nextOrder);
     this._sourceHistory = Object.freeze(nextSources);
-    const seededQuestions = this._seedQuestionRecordsFromHistory(input);
+    // Legacy history is allowed to seed the renderer-owned question slice
+    // only during an explicit initial hydration. Later transcript refreshes
+    // are a one-way compatibility projection and must never create or replace
+    // ChatRuntime.questions.
+    const initializeQuestionsFromHistory = options.initializeQuestionsFromHistory === true;
+    let seededQuestions = false;
+    if (initializeQuestionsFromHistory && !this._questionHistoryBootstrapDone) {
+      this._questionHistoryBootstrapDone = true;
+      seededQuestions = this._seedQuestionRecordsFromHistory(input);
+    }
     const nextHistory = Object.freeze({
       revision: this._state.history.revision + 1,
       order: this._order,
