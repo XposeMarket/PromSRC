@@ -2179,17 +2179,70 @@ export async function browserDoctor(sessionId: string): Promise<string> {
         if (!sample) {
           warn('Native browser resources', 'no renderer sample is available yet');
         } else {
-          const privateMb = sample.memory?.privateBytes == null
+          const formatPercent = (value: unknown) => value == null || !Number.isFinite(Number(value))
             ? 'unknown'
-            : `${(Number(sample.memory.privateBytes) / (1024 * 1024)).toFixed(1)} MB private`;
-          const cpu = sample.cpuPercent == null ? 'unknown CPU' : `${Number(sample.cpuPercent).toFixed(1)}% CPU`;
+            : `${Number(value).toFixed(1)}%`;
+          const formatMemoryMb = (value: unknown) => value == null || !Number.isFinite(Number(value))
+            ? 'unknown'
+            : `${(Number(value) / (1024 * 1024)).toFixed(1)} MB`;
+          const formatProcessGroup = (group: any, fallback: any = {}) => {
+            const cpu = group?.cpuPercent ?? fallback.cpuPercent;
+            const privateBytes = group?.memory?.privateBytes ?? fallback.memory?.privateBytes;
+            const processCount = group?.processCount;
+            return `${formatPercent(cpu)} CPU, ${formatMemoryMb(privateBytes)} private${processCount == null ? '' : `, ${processCount} process${processCount === 1 ? '' : 'es'}`}`;
+          };
+          const breakdown = sample.processBreakdown || {};
+          const rendererFallback = { cpuPercent: sample.cpuPercent, memory: sample.memory };
+          const activeRenderer = breakdown.activeRenderer?.processCount
+            ? breakdown.activeRenderer
+            : rendererFallback;
+          const total = breakdown.total || {};
+          const gpu = breakdown.gpu || {};
+          const utility = breakdown.utility || {};
+          const main = breakdown.main || {};
           const heap = sample.page?.jsHeapRatio == null
             ? 'JS heap unavailable'
             : `${(Number(sample.page.jsHeapRatio) * 100).toFixed(1)}% JS heap`;
-          const detail = `${cpu}, ${privateMb}, ${heap}, ${sample.visible ? 'visible' : 'background'}; background throttling=${sample.backgroundThrottling ? 'on' : 'off'}`;
+          const pageState = sample.page?.hidden === true
+            ? 'page hidden'
+            : `page ${sample.page?.visibilityState || 'visibility unknown'}`;
+          const canvasCount = sample.page?.canvasCount == null ? 'unknown' : String(sample.page.canvasCount);
+          const gpuFeatureStatus = sample.gpu?.gpuFeatureStatus && typeof sample.gpu.gpuFeatureStatus === 'object'
+            ? Object.entries(sample.gpu.gpuFeatureStatus)
+              .slice(0, 8)
+              .map(([key, value]) => `${key}=${String(value)}`)
+              .join(', ')
+              .slice(0, 360) || 'unavailable'
+            : 'unavailable';
+          const acceleration = sample.gpu?.hardwareAccelerationEnabled == null
+            ? 'unknown'
+            : (sample.gpu.hardwareAccelerationEnabled ? 'on' : 'off');
+          const detail = [
+            `active renderer ${formatProcessGroup(activeRenderer, rendererFallback)}`,
+            `Electron total ${formatPercent(total.cpuPercent)} CPU, ${formatMemoryMb(total.memory?.privateBytes)} private`,
+            `main ${formatProcessGroup(main)}`,
+            `GPU ${formatProcessGroup(gpu)}`,
+            `utility ${formatProcessGroup(utility)}`,
+            `${heap}, ${canvasCount} canvas${canvasCount === '1' ? '' : 'es'}`,
+            `${sample.visible ? 'surface visible' : 'surface background'}, ${pageState}, attached=${sample.attached === true ? 'yes' : 'no'}`,
+            `background throttling=${sample.backgroundThrottling ? 'on' : 'off'}`,
+            `GPU acceleration=${acceleration}, features=${gpuFeatureStatus}`,
+          ].join('; ');
+          const pressureReasons = new Set<string>([
+            ...(sample.pressure?.reasons || []),
+            ...(breakdown.pressure?.reasons || []),
+          ]);
+          if (total.cpuPercent != null && Number(total.cpuPercent) >= 60) pressureReasons.add('electron-total-cpu');
           if (sample.backgroundThrottling !== true) fail('Native browser resources', `${detail}; hidden-page throttling is disabled`);
-          else if (sample.pressure?.level === 'elevated') warn('Native browser resources', `${detail}; pressure=${(sample.pressure.reasons || []).join(',') || 'elevated'}`);
+          else if (sample.pressure?.level === 'elevated' || pressureReasons.size) warn('Native browser resources', `${detail}; pressure=${[...pressureReasons].join(',') || 'elevated'}`);
           else ok('Native browser resources', detail);
+          if (sample.gpu?.hardwareAccelerationEnabled === false) {
+            warn('GPU acceleration', `disabled; Three.js/WebGL may be using software rendering; features=${gpuFeatureStatus}`);
+          } else if (sample.gpu?.hardwareAccelerationEnabled === true) {
+            ok('GPU acceleration', `enabled; features=${gpuFeatureStatus}`);
+          } else {
+            warn('GPU acceleration', `status unavailable; features=${gpuFeatureStatus}`);
+          }
         }
       } catch (err: any) {
         warn('Native browser resources', `sample unavailable: ${String(err?.message || err)}`);

@@ -20,6 +20,135 @@ function nonNegativeNumber(value, fallback = null) {
   return number == null ? fallback : Math.max(0, number);
 }
 
+// Electron's app.getAppMetrics() memory fields are kilobytes. Keep that
+// conversion at the Electron API boundary so every consumer below works in
+// bytes, including the fallback supplied by webContents.getProcessMemoryInfo().
+function kilobytesToBytes(value) {
+  if (value == null || value === '') return null;
+  const kilobytes = finiteNumber(value);
+  return kilobytes == null ? null : Math.max(0, kilobytes * 1024);
+}
+
+function normalizeElectronProcessMetric(processMetric) {
+  if (!processMetric || typeof processMetric !== 'object') return null;
+  const memory = processMetric.memory && typeof processMetric.memory === 'object'
+    ? processMetric.memory
+    : {};
+  return {
+    ...processMetric,
+    type: String(processMetric.type || '').slice(0, 48),
+    cpu: processMetric.cpu && typeof processMetric.cpu === 'object'
+      ? {
+        ...processMetric.cpu,
+        percentCPUUsage: nonNegativeNumber(processMetric.cpu.percentCPUUsage),
+      }
+      : processMetric.cpu,
+    memory: {
+      ...memory,
+      privateBytes: kilobytesToBytes(memory.privateBytes),
+      workingSetSize: kilobytesToBytes(memory.workingSetSize),
+      peakWorkingSetSize: kilobytesToBytes(memory.peakWorkingSetSize),
+    },
+  };
+}
+
+function normalizeElectronProcessMetrics(processMetrics) {
+  return (Array.isArray(processMetrics) ? processMetrics : [])
+    .map(normalizeElectronProcessMetric)
+    .filter(Boolean);
+}
+
+function getNativeBrowserOSProcessId(webContents) {
+  const processId = Number(webContents?.getOSProcessId?.() || 0);
+  return Number.isInteger(processId) && processId > 0 ? processId : null;
+}
+
+function findNativeBrowserProcessMetric(processMetrics, osProcessId) {
+  const processId = Number(osProcessId);
+  if (!Number.isInteger(processId) || processId <= 0) return null;
+  return (Array.isArray(processMetrics) ? processMetrics : [])
+    .find((candidate) => Number(candidate?.pid) === processId) || null;
+}
+
+function processType(processMetric) {
+  return String(processMetric?.type || '').trim().toLowerCase();
+}
+
+function isMainProcess(processMetric) {
+  const type = processType(processMetric);
+  return type === 'browser' || type === 'main';
+}
+
+function isRendererProcess(processMetric) {
+  const type = processType(processMetric);
+  return type === 'tab' || type === 'renderer' || type.includes('renderer');
+}
+
+function isGPUProcess(processMetric) {
+  const type = processType(processMetric);
+  return type === 'gpu' || type.includes('gpu');
+}
+
+function isUtilityProcess(processMetric) {
+  const type = processType(processMetric);
+  return type === 'utility' || type.includes('utility');
+}
+
+function sumKnownMetricValues(processMetrics, selector) {
+  const values = (Array.isArray(processMetrics) ? processMetrics : [])
+    .map(selector)
+    .filter((value) => value != null && Number.isFinite(Number(value)))
+    .map((value) => Math.max(0, Number(value)));
+  return values.length ? values.reduce((total, value) => total + value, 0) : null;
+}
+
+function summarizeNativeBrowserProcessGroup(processMetrics) {
+  const metrics = Array.isArray(processMetrics) ? processMetrics : [];
+  return {
+    processCount: metrics.length,
+    pids: metrics
+      .map((metric) => Number(metric?.pid))
+      .filter((pid) => Number.isInteger(pid) && pid > 0),
+    cpuPercent: sumKnownMetricValues(metrics, (metric) => metric?.cpu?.percentCPUUsage),
+    memory: {
+      privateBytes: sumKnownMetricValues(metrics, (metric) => metric?.memory?.privateBytes),
+      workingSetBytes: sumKnownMetricValues(metrics, (metric) => metric?.memory?.workingSetSize),
+      peakWorkingSetBytes: sumKnownMetricValues(metrics, (metric) => metric?.memory?.peakWorkingSetSize),
+    },
+  };
+}
+
+function buildNativeBrowserProcessBreakdown(processMetrics, activeRendererProcessId = null) {
+  const metrics = Array.isArray(processMetrics) ? processMetrics : [];
+  const main = metrics.filter(isMainProcess);
+  const renderer = metrics.filter(isRendererProcess);
+  const gpu = metrics.filter(isGPUProcess);
+  const utility = metrics.filter(isUtilityProcess);
+  const categorized = new Set([...main, ...renderer, ...gpu, ...utility]);
+  const other = metrics.filter((metric) => !categorized.has(metric));
+  const activeProcessId = Number(activeRendererProcessId);
+  const activeRenderer = Number.isInteger(activeProcessId) && activeProcessId > 0
+    ? metrics.filter((metric) => Number(metric?.pid) === activeProcessId)
+    : [];
+  const total = summarizeNativeBrowserProcessGroup(metrics);
+  const totalPressure = classifyNativeBrowserResourcePressure({
+    cpuPercent: total.cpuPercent,
+    privateBytes: total.memory.privateBytes,
+    page: {},
+  });
+
+  return {
+    total,
+    pressure: totalPressure,
+    main: summarizeNativeBrowserProcessGroup(main),
+    renderer: summarizeNativeBrowserProcessGroup(renderer),
+    activeRenderer: summarizeNativeBrowserProcessGroup(activeRenderer),
+    gpu: summarizeNativeBrowserProcessGroup(gpu),
+    utility: summarizeNativeBrowserProcessGroup(utility),
+    other: summarizeNativeBrowserProcessGroup(other),
+  };
+}
+
 function normalizePageMetrics(page = {}) {
   const usedJSHeapBytes = nonNegativeNumber(page.usedJSHeapBytes);
   const totalJSHeapBytes = nonNegativeNumber(page.totalJSHeapBytes);
@@ -67,12 +196,16 @@ function buildNativeBrowserResourceRecord({
   tabId = '',
   presented = false,
   visible = false,
+  attached = false,
   backgroundThrottling = true,
   processId = null,
   processMetric = null,
   processMemory = null,
+  processBreakdown = null,
+  gpu = null,
   page = null,
 } = {}) {
+  // processMetric and processMemory are already byte-normalized at this API.
   const metric = processMetric || {};
   const memory = metric.memory || {};
   const privateBytes = nonNegativeNumber(memory.privateBytes, nonNegativeNumber(processMemory?.privateBytes));
@@ -88,6 +221,7 @@ function buildNativeBrowserResourceRecord({
     tabId: String(tabId || '').slice(0, 160),
     presented: presented === true,
     visible: visible === true,
+    attached: attached === true,
     backgroundThrottling: backgroundThrottling !== false,
     processId: Number.isInteger(Number(processId)) && Number(processId) > 0 ? Number(processId) : null,
     cpuPercent,
@@ -96,6 +230,8 @@ function buildNativeBrowserResourceRecord({
       workingSetBytes,
       peakWorkingSetBytes,
     },
+    processBreakdown,
+    gpu,
     page: normalizedPage,
     pressure,
   };
@@ -103,7 +239,12 @@ function buildNativeBrowserResourceRecord({
 
 module.exports = {
   NATIVE_BROWSER_RESOURCE_THRESHOLDS,
+  buildNativeBrowserProcessBreakdown,
   buildNativeBrowserResourceRecord,
   classifyNativeBrowserResourcePressure,
+  findNativeBrowserProcessMetric,
+  getNativeBrowserOSProcessId,
+  normalizeElectronProcessMetric,
+  normalizeElectronProcessMetrics,
   normalizePageMetrics,
 };

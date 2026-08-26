@@ -53,7 +53,11 @@ const {
   killGatewayProcessTree: killManagedGatewayProcessTree,
 } = require('./gateway-process');
 const {
+  buildNativeBrowserProcessBreakdown,
   buildNativeBrowserResourceRecord,
+  findNativeBrowserProcessMetric,
+  getNativeBrowserOSProcessId,
+  normalizeElectronProcessMetrics,
 } = require('./native-browser-resource-policy');
 const {
   appendGatewaySupervisorEvidence,
@@ -2448,19 +2452,41 @@ async function readNativeBrowserPageResourceMetrics(wc) {
 
 function readNativeBrowserProcessMetrics() {
   try {
-    return typeof app.getAppMetrics === 'function' ? app.getAppMetrics() : [];
+    return typeof app.getAppMetrics === 'function'
+      ? normalizeElectronProcessMetrics(app.getAppMetrics())
+      : [];
   } catch {
     return [];
   }
 }
 
-async function collectNativeBrowserResourceMetrics(view, processMetrics = readNativeBrowserProcessMetrics()) {
+function readNativeBrowserGpuDiagnostics() {
+  let hardwareAccelerationEnabled = null;
+  let gpuFeatureStatus = null;
+  try {
+    if (typeof app.isHardwareAccelerationEnabled === 'function') {
+      hardwareAccelerationEnabled = app.isHardwareAccelerationEnabled() === true;
+    }
+  } catch {}
+  try {
+    if (typeof app.getGPUFeatureStatus === 'function') {
+      const status = app.getGPUFeatureStatus();
+      if (status && typeof status === 'object') gpuFeatureStatus = { ...status };
+    }
+  } catch {}
+  return { hardwareAccelerationEnabled, gpuFeatureStatus };
+}
+
+async function collectNativeBrowserResourceMetrics(
+  view,
+  processMetrics = readNativeBrowserProcessMetrics(),
+  gpu = readNativeBrowserGpuDiagnostics(),
+) {
   if (!view || view.webContents?.isDestroyed?.()) return null;
   const wc = view.webContents;
   const meta = nativeViewMeta(view);
-  const processId = Number(wc.getProcessId?.() || 0) || null;
-  const processMetric = (Array.isArray(processMetrics) ? processMetrics : [])
-    .find((candidate) => Number(candidate?.pid) === processId) || null;
+  const processId = getNativeBrowserOSProcessId(wc);
+  const processMetric = findNativeBrowserProcessMetric(processMetrics, processId);
   let processMemory = null;
   if ((!processMetric?.memory || processMetric.memory.privateBytes == null)
     && typeof wc.getProcessMemoryInfo === 'function') {
@@ -2478,39 +2504,50 @@ async function collectNativeBrowserResourceMetrics(view, processMetrics = readNa
     } catch {}
   }
   const page = await readNativeBrowserPageResourceMetrics(wc);
+  const processBreakdown = buildNativeBrowserProcessBreakdown(processMetrics, processId);
   const record = buildNativeBrowserResourceRecord({
     sampledAt: Date.now(),
     sessionId: meta.sessionId,
     tabId: meta.tabId,
     presented: meta.presented,
     visible: meta.visible,
+    attached: meta.attached,
     backgroundThrottling: meta.backgroundThrottling,
     processId,
     processMetric,
     processMemory,
+    processBreakdown,
+    gpu,
     page,
   });
   meta.lastResourceMetrics = record;
   const now = Date.now();
-  if (record.pressure.level !== 'normal'
-    && (meta.lastResourcePressure !== record.pressure.level
+  const processPressure = record.processBreakdown?.pressure || { level: 'normal', reasons: [] };
+  const pressureKey = `${record.pressure.level}:${processPressure.level}`;
+  if ((record.pressure.level !== 'normal' || processPressure.level !== 'normal')
+    && (meta.lastResourcePressure !== pressureKey
       || now - Number(meta.lastResourceLogAt || 0) >= NATIVE_BROWSER_RESOURCE_LOG_INTERVAL_MS)) {
     writeGatewayLog(`[main][native-browser-resource] ${JSON.stringify({
       sessionId: record.sessionId,
       tabId: record.tabId,
       presented: record.presented,
       visible: record.visible,
+      attached: record.attached,
       backgroundThrottling: record.backgroundThrottling,
       processId: record.processId,
       cpuPercent: record.cpuPercent,
       privateBytes: record.memory.privateBytes,
+      electronCpuPercent: record.processBreakdown?.total?.cpuPercent,
+      gpuCpuPercent: record.processBreakdown?.gpu?.cpuPercent,
+      hardwareAccelerationEnabled: record.gpu?.hardwareAccelerationEnabled,
+      processPressure,
       jsHeapRatio: record.page.jsHeapRatio,
       canvasCount: record.page.canvasCount,
       pressure: record.pressure,
     })}\n`);
     meta.lastResourceLogAt = now;
   }
-  meta.lastResourcePressure = record.pressure.level;
+  meta.lastResourcePressure = pressureKey;
   return record;
 }
 
@@ -2519,8 +2556,9 @@ async function sampleNativeBrowserResources() {
   nativeBrowserResourceSampleInFlight = true;
   try {
     const processMetrics = readNativeBrowserProcessMetrics();
+    const gpu = readNativeBrowserGpuDiagnostics();
     const views = Array.from(nativeBrowserViews.values()).slice(0, NATIVE_BROWSER_RESOURCE_MAX_VIEWS_PER_SAMPLE);
-    await Promise.allSettled(views.map((view) => collectNativeBrowserResourceMetrics(view, processMetrics)));
+    await Promise.allSettled(views.map((view) => collectNativeBrowserResourceMetrics(view, processMetrics, gpu)));
   } finally {
     nativeBrowserResourceSampleInFlight = false;
   }
@@ -2571,7 +2609,11 @@ async function getNativeBrowserResourceMetrics({ sessionId = '', tabId = '' } = 
       timestamp: Date.now(),
     };
   }
-  const metrics = await collectNativeBrowserResourceMetrics(view);
+  const metrics = await collectNativeBrowserResourceMetrics(
+    view,
+    readNativeBrowserProcessMetrics(),
+    readNativeBrowserGpuDiagnostics(),
+  );
   return { sessionId: sid, tabId: resolvedTabId, available: true, metrics, timestamp: Date.now() };
 }
 
