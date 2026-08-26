@@ -1,8 +1,6 @@
 ---
-name: QZXV Skill Write Probe
+name: qzxv-skill-write-probe
 description: Temporary diagnostic skill that verifies basic catalog creation independently of trigger routing.
-version: 1.0.0
-implicitInvocation: false
 ---
 
 # QZXV Skill Write Probe

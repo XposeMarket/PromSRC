@@ -6,7 +6,10 @@ const root = path.resolve(import.meta.dirname, '..', 'generated', 'bundled-skill
 const ids = new Set(fs.readdirSync(root, { withFileTypes: true })
   .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
   .map((entry) => entry.name));
-assert.equal(ids.size, 137, 'unexpected public skill count');
+// The canonical catalog currently publishes 150 skills after the explicit
+// private/local exclusions below. Keep this as a snapshot so an accidental
+// public-surface change still requires an intentional test update.
+assert.equal(ids.size, 150, 'unexpected public skill count');
 
 for (const id of [
   'self-repair-protocol', 'chatgpt-desktop-restart', 'prometheus-ash-archive-style',

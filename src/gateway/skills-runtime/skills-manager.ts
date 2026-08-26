@@ -379,7 +379,11 @@ function explicitSkillMentionScore(skill: Skill, rawText: string): number {
   }
 
   const idWords = idText.split(' ').filter(Boolean);
-  const genericShortId = idWords.length === 1 && idText.length < 6;
+  // A bare one-word slug is not proof that the user explicitly selected a
+  // skill: common slugs such as "verification" occur naturally in unrelated
+  // requests. Require $slug/skill:slug or a multi-word name for explicit
+  // selection, while ordinary routing can still use the skill's triggers.
+  const genericShortId = idWords.length === 1;
   if (!genericShortId && idText.length >= 4 && exactPhraseInText(idText, normalizedText)) {
     return 185 + Math.min(24, idWords.length * 5);
   }
@@ -425,15 +429,18 @@ export function rankSkillMatches(
       ...promptSignalMatch.matchedAllOf.map((group) => `allOf: ${group.join(' + ')}`),
       ...promptSignalMatch.matchedAnyOf.map((term) => `anyOf: ${term}`),
     ].slice(0, 8);
-    // A structured policy is authoritative for that skill: once configured,
-    // weak metadata/content overlap must not bypass minScore or noneOf.
-    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention) continue;
     const matchedTriggers = skill.triggers
       .map((trigger) => ({ trigger, score: triggerRouteScore(trigger, text, queryWords) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
     const bestTriggerScore = matchedTriggers[0]?.score || 0;
-    const hasExactTrigger = (!!matchedTriggers[0] && exactPhraseInText(matchedTriggers[0].trigger, text)) || promptSignalMatch.matched;
+    const hasExactLegacyTrigger = skill.triggers.some((trigger) => exactPhraseInText(trigger, text));
+    // A structured policy is authoritative against weak metadata/content
+    // overlap, but an exact legacy trigger remains a valid explicit routing
+    // contract for skills that have not migrated every phrase to promptSignals.
+    if (promptSignalMatch.configured && promptSignalMatch.excluded && !explicitMention) continue;
+    if (promptSignalMatch.configured && !promptSignalMatch.matched && !explicitMention && !hasExactLegacyTrigger) continue;
+    const hasExactTrigger = hasExactLegacyTrigger || promptSignalMatch.matched;
 
     const skillText = [
       skill.id,
@@ -450,6 +457,10 @@ export function rankSkillMatches(
     );
 
     let score = explicitMention ? explicitMentionScore : Math.max(bestTriggerScore, promptSignalRouteScore);
+    // An exact user phrase is a stronger routing contract than a broad
+    // coordinator's weak anyOf/allOf match (for example, "check process
+    // status" should select the shell playbook over generic investigation).
+    if (hasExactLegacyTrigger && !explicitMention) score += 60;
     const metadataWords = new Set(composerSkillWords(`${skill.id} ${skill.name} ${skill.categories.join(' ')}`));
     const metadataOverlap = Array.from(queryWords).filter((word) => metadataWords.has(word)).length;
     score += Math.min(24, metadataOverlap * 8);
@@ -879,30 +890,64 @@ export class SkillsManager {
     }
 
     const skillDir = path.join(this.skillsDir, id);
+    const existing = this.get(id);
+    const beforeHash = existing ? hashSkillDirectory(existing.rootDir) : '';
+    const snapshotDir = existing ? this.snapshotSkill(existing, existing.rootDir, 'skill-overwrite') : undefined;
     fs.mkdirSync(skillDir, { recursive: true });
 
     const lines = [
       '---',
-      `name: ${data.name}`,
-      `description: ${data.description}`,
-      'version: 1.0.0',
+      `name: ${JSON.stringify(String(data.name || ''))}`,
+      `description: ${JSON.stringify(String(data.description || ''))}`,
+      '---',
     ];
-    if (triggerValidation.triggers.length) {
-      lines.push(`triggers: ${triggerValidation.triggers.join(', ')}`);
-    }
-    if (promptSignalValidation.signals) {
-      lines.push(`promptSignals: ${JSON.stringify(promptSignalValidation.signals)}`);
-    }
-    if (data.implicitInvocation === false) lines.push('implicitInvocation: false');
-    lines.push('---');
     const content = lines.join('\n') + '\n\n' + data.instructions;
     assertSkillScanAllowed(scanSkillText(content, 'SKILL.md'), `Skill "${id}"`);
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf-8');
+
+    // Keep the entrypoint's frontmatter deliberately minimal. Routing and
+    // invocation metadata belongs in the native manifest, where it can be
+    // validated without turning a simple SKILL.md into an ad-hoc schema.
+    const manifest = {
+      schemaVersion: 'prometheus-skill-bundle-v1',
+      id,
+      name: data.name,
+      description: data.description || '',
+      version: '1.0.0',
+      entrypoint: 'SKILL.md',
+      triggers: triggerValidation.triggers,
+      promptSignals: promptSignalValidation.signals,
+      categories: [],
+      requiredTools: [],
+      permissions: {
+        workspaceRead: true,
+        workspaceWrite: true,
+        shell: false,
+        externalSideEffects: false,
+      },
+      implicitInvocation: data.implicitInvocation !== false,
+      resources: [],
+    };
+    assertSkillScanAllowed(scanSkillText(JSON.stringify(manifest, null, 2), 'skill.json'), `Skill "${id}"`);
+    fs.writeFileSync(path.join(skillDir, 'skill.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+    this.writeProvenance(skillDir, id, {
+      sourceType: 'prometheus-created',
+      source: 'skill_create',
+      createdAt: new Date().toISOString(),
+      prometheusCreatedVersion: 1,
+    });
 
     this.scanSkills();
 
     const skill = this.skills.get(id);
     if (!skill) throw new Error('Skill creation failed');
+    this.recordSkillChange(skill.id, {
+      beforeHash,
+      afterHash: hashSkillDirectory(skill.rootDir),
+      changedPaths: ['SKILL.md', 'skill.json'],
+      snapshotDir,
+      metadata: { changeType: existing ? 'skill_overwrite' : 'skill_created', appliedBy: 'skill_create' },
+    });
     console.log(`[Skills] Created: ${id}`);
     return skill;
   }

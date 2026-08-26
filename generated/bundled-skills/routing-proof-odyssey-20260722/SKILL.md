@@ -1,8 +1,6 @@
 ---
-name: Routing Proof Odyssey
+name: routing-proof-odyssey-20260722
 description: Temporary diagnostic skill used to verify a new skill can be created and retrieved by one exact unique phrase while remaining irrelevant to unrelated requests.
-version: 1.0.0
-triggers: moon-biscuit routing proof 2026
 ---
 
 # Routing Proof Odyssey

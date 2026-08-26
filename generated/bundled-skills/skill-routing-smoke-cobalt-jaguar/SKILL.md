@@ -1,8 +1,6 @@
 ---
-name: Skill Routing Smoke: Cobalt Jaguar
+name: skill-routing-smoke-cobalt-jaguar
 description: Diagnostic-only routing smoke test for one unique phrase. It performs no user workflow and exists solely to verify new skill trigger registration.
-version: 1.0.0
-triggers: cobalt jaguar routing smoke phrase
 ---
 
 # Diagnostic Skill Routing Smoke Test

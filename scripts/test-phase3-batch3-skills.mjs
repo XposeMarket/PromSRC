@@ -7,9 +7,9 @@ const read = (id) => fs.readFileSync(path.join(root, id, 'SKILL.md'), 'utf8');
 
 const creator = read('skill-creator');
 assert.match(creator, /skill_candidate_submit/);
-assert.match(creator, /Brain Curator is the sole automatic writer/);
-assert.match(creator, /Assistant summaries, praise, completion claims, tool count/i);
-assert.match(creator, /Do not[\s\S]*after every successful workflow/i);
+assert.match(creator, /skill_curator/);
+assert.match(creator, /Do not infer approval from assistant summaries, successful tool calls/i);
+assert.match(creator, /Do not infer approval from assistant summaries[\s\S]*successful tool calls/i);
 
 const repair = read('self-repair-protocol');
 assert.match(repair, /automation_dashboard/);
