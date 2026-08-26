@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { detectKeywordToolCategories } from './tool-category-keyword-router';
 import { detectLegacyToolCategories, buildToolsContext, TOOL_BLOCKS, CATEGORY_POLICIES } from '../gateway/prompt-context';
 import { buildTools } from '../gateway/tool-builder';
+import { verifyToolCategorySurface, TOOL_CATEGORY_REPRESENTATIVE_TOOLS } from '../gateway/tool-category-provisioning';
 import { estimateTextTokens, estimateToolSchemaTokens } from '../providers/model-usage';
 import { getCisSystemTools } from '../gateway/tools/defs/cis-system';
 
@@ -167,6 +168,39 @@ const prompts = Object.fromEntries(Object.entries(schemaCases).map(([name, categ
 const requestTool = getCisSystemTools().find((tool) => tool?.function?.name === 'request_tool_category');
 const requestDescription = String(requestTool?.function?.description || '');
 
+const provisioningDeps = { getMCPManager: () => ({ getAllTools: () => [] }), skipDynamicExtensionTools: true };
+const provisioningMatrix = [
+  'browser_automation',
+  'desktop_automation',
+  'workspace_write',
+  'agents_and_teams',
+  'media_assets',
+  'media_generation',
+] as const;
+const provisioningChecks = provisioningMatrix.map((category) => {
+  const coreSurface = buildTools(provisioningDeps, new Set());
+  const coreVerification = verifyToolCategorySurface(category, coreSurface, { unboundedTools: coreSurface });
+  assert.equal(coreVerification.ok, false, `${category}: core-only surface must not claim provisioning`);
+
+  const surface = buildTools(provisioningDeps, new Set([category]));
+  const verification = verifyToolCategorySurface(category, surface, { unboundedTools: surface });
+  assert.equal(verification.ok, true, `${category}: activated provider surface missing representatives: ${JSON.stringify(verification)}`);
+
+  const representatives = TOOL_CATEGORY_REPRESENTATIVE_TOOLS[category];
+  assert.ok(representatives?.[0], `${category}: representative tool mapping is required`);
+  const representative = representatives[0];
+  const simulatedMissing = surface.filter((tool: any) => tool?.function?.name !== representative);
+  const failedVerification = verifyToolCategorySurface(category, simulatedMissing, { unboundedTools: surface });
+  assert.equal(failedVerification.ok, false, `${category}: missing provider tool must fail closed`);
+  return {
+    category,
+    coreToolCount: coreSurface.length,
+    providerToolCount: surface.length,
+    representativeTools: verification.representativeTools,
+    failedReason: failedVerification.reason,
+  };
+});
+
 const report = {
   cases: CASES.length,
   positiveCases,
@@ -200,6 +234,7 @@ const report = {
     policyChars: String(CATEGORY_POLICIES[id] || '').length,
     estimatedTokens: estimateTextTokens(CATEGORY_POLICIES[id] || ''),
   }])),
+  provisioning: provisioningChecks,
   notes: {
     schemaTokensAreEstimated: true,
     costIsProportionalToInputTokens: true,
