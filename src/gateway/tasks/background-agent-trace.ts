@@ -17,15 +17,24 @@ function backgroundTraceText(value: unknown, max = 4_000): string {
   }
 }
 
+const REASONING_SUMMARY_EVENTS = new Set([
+  'reasoning_summary_delta',
+  'reasoning_summary',
+  'reasoning_delta',
+]);
+
 export function backgroundProcessEntryFromSseEvent(event: string, data: any): Record<string, any> | null {
   const eventType = String(event || '').trim();
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
   const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
-  const userVisibleReasoning = eventType === 'reasoning_summary_delta'
-    || eventType === 'reasoning_summary'
-    || eventType === 'reasoning_delta'
-    || source === 'reasoning_summary'
-    || visibility === 'user';
+  const isReasoningSummaryEvent = REASONING_SUMMARY_EVENTS.has(eventType);
+  const isReasoningSummarySource = source === 'reasoning_summary';
+  const isReasoningTrace = isReasoningSummaryEvent || isReasoningSummarySource;
+  const explicitlyPrivateReasoning = visibility === 'private' || visibility === 'internal';
+  // Event names/source metadata describe a channel, but an explicit private
+  // marker is authoritative. Drop it before constructing any durable trace.
+  if (explicitlyPrivateReasoning && (eventType === 'thinking_delta' || isReasoningTrace)) return null;
+  const userVisibleReasoning = isReasoningTrace || visibility === 'user';
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
     || (eventType === 'thinking_delta' && !userVisibleReasoning)) return null;
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
@@ -37,10 +46,7 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
   };
-  if (userVisibleReasoning && (eventType === 'thinking_delta'
-    || eventType === 'reasoning_summary_delta'
-    || eventType === 'reasoning_summary'
-    || eventType === 'reasoning_delta')) {
+  if (userVisibleReasoning && (eventType === 'thinking_delta' || isReasoningSummaryEvent)) {
     const text = backgroundTraceText(data?.text || data?.thinking || data?.summary || data?.message);
     return text ? {
       type: 'think',
