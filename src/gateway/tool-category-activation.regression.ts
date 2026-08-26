@@ -73,6 +73,45 @@ async function main(): Promise<void> {
     assert.equal(successful.ok, true, 'same-turn provider rebuild must expose the activated representative');
     assert.equal(sessionApi.getActivatedToolCategories(sessionId).has(category), true);
 
+    // Automatic keyword activation has a second verification after the
+    // provider cap/filter is applied. A failed final verification must restore
+    // the exact pre-activation state and rebuild without advertising the
+    // category. This mirrors the initial Chat route provisioning boundary.
+    const automaticSessionId = 'tool_category_automatic_activation_regression';
+    const automaticStateBefore = sessionApi.captureToolCategoryActivationState(automaticSessionId, category);
+    sessionApi.activateToolCategory(automaticSessionId, category, { scope: 'turn' });
+    const automaticSurface = buildTools(toolBuilderDeps, sessionApi.getActivatedToolCategories(automaticSessionId));
+    const automaticProviderMissingRepresentative = automaticSurface.filter(
+      (tool: any) => tool?.function?.name !== representative,
+    );
+    const automaticVerification = verifyToolCategorySurface(category, automaticProviderMissingRepresentative, {
+      unboundedTools: automaticSurface,
+      requestFilterActive: true,
+    });
+    assert.equal(automaticVerification.ok, false, 'the final capped provider surface must fail automatic provisioning');
+    let automaticProvisioningRolledBack = false;
+    if (!automaticVerification.ok) {
+      sessionApi.restoreToolCategoryActivationState(automaticSessionId, automaticStateBefore);
+      automaticProvisioningRolledBack = true;
+    }
+    assert.equal(automaticProvisioningRolledBack, true);
+    assert.equal(
+      sessionApi.getActivatedToolCategories(automaticSessionId).has(category),
+      false,
+      'failed automatic provisioning must not leave the category active',
+    );
+    const rebuiltAfterAutomaticRollback = buildTools(
+      toolBuilderDeps,
+      sessionApi.getActivatedToolCategories(automaticSessionId),
+    );
+    assert.equal(
+      verifyToolCategorySurface(category, rebuiltAfterAutomaticRollback, {
+        unboundedTools: rebuiltAfterAutomaticRollback,
+      }).ok,
+      false,
+      'the rebuild after automatic rollback must no longer advertise the failed category',
+    );
+
     console.log('tool category activation regression passed');
   } finally {
     try {

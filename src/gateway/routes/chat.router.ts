@@ -3752,6 +3752,7 @@ async function handleChat(
   sendSSE('ui_preflight', { message: 'Loading tool schemas...' });
   let initialToolSurface = buildProviderToolSurface(initialGenerationOverride);
   tools = initialToolSurface.provider;
+  let automaticProvisioningRolledBack = false;
   for (const activation of automaticallyActivatedCategories) {
     const verification = verifyToolCategorySurface(activation.category, initialToolSurface.provider, {
       unboundedTools: initialToolSurface.unbounded,
@@ -3763,8 +3764,20 @@ async function handleChat(
       activation.surfaceToolCountBefore,
       initialToolSurface.provider.length,
     );
+    if (!verification.ok) {
+      // The capped/filtered provider surface is the authority for whether an
+      // automatic activation is usable. Restore the exact pre-activation
+      // state when it cannot expose the requested representative tools; a
+      // failed final verification must not leave the category advertised in
+      // session state for later turns.
+      restoreToolCategoryActivationState(sessionId, activation.activationStateBefore);
+      automaticProvisioningRolledBack = true;
+    }
   }
-  if (automaticallyActivatedCategories.some((activation) => !getActivatedToolCategories(sessionId).has(activation.category))) {
+  if (
+    automaticProvisioningRolledBack
+    || automaticallyActivatedCategories.some((activation) => !getActivatedToolCategories(sessionId).has(activation.category))
+  ) {
     initialToolSurface = buildProviderToolSurface(initialGenerationOverride);
     tools = initialToolSurface.provider;
   }
