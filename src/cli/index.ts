@@ -653,9 +653,22 @@ async function runSupervisedGateway(): Promise<void> {
   let stopping = false;
   let restartCount = 0;
   let child: ChildProcess | null = null;
+  let activeGatewayProcessStartedAt: number | null = null;
   let launchInFlight = false;
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
+  // The parent-provided value is only a seed for this supervisor. Each child
+  // launch receives a fresh generation so a stale status file from an earlier
+  // child cannot be mistaken for the currently supervised gateway. Heartbeat
+  // freshness is evaluated separately as liveness.
+  const configuredGatewayGeneration = Number(process.env.PROMETHEUS_GATEWAY_PROCESS_STARTED_AT);
+  let lastGatewayProcessStartedAt = Number.isFinite(configuredGatewayGeneration) && configuredGatewayGeneration > 0
+    ? Math.floor(configuredGatewayGeneration)
+    : 0;
+  const allocateGatewayProcessStartedAt = (): number => {
+    lastGatewayProcessStartedAt = Math.max(Date.now(), lastGatewayProcessStartedAt + 1);
+    return lastGatewayProcessStartedAt;
+  };
   const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
     || path.join(getGatewayStateRoot(), '.prometheus');
 
@@ -728,12 +741,14 @@ async function runSupervisedGateway(): Promise<void> {
     // ownership probe remains on crash-recovery and manual relaunch paths.
     if (!explicitQuickRestart) await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
     if (stopping) return;
+    const launchedGatewayProcessStartedAt = allocateGatewayProcessStartedAt();
     const launched = spawn(process.execPath, gatewayChildArgs(), {
       cwd: process.cwd(),
       env: {
         ...process.env,
         PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1',
         PROMETHEUS_SUPERVISOR_STATE_DIR: supervisorStateDir,
+        PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(launchedGatewayProcessStartedAt),
         ...(explicitQuickRestart ? { PROMETHEUS_HOT_RESTART: '1' } : {}),
       },
       stdio: 'inherit',
@@ -742,10 +757,14 @@ async function runSupervisedGateway(): Promise<void> {
       windowsHide: true,
     });
     child = launched;
+    activeGatewayProcessStartedAt = launchedGatewayProcessStartedAt;
     launched.once('exit', (code, signal) => {
       void (async () => {
       if (stopping) return;
-      if (child === launched) child = null;
+      if (child === launched) {
+        child = null;
+        activeGatewayProcessStartedAt = null;
+      }
       console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}).`);
       const now = Date.now();
       const probe = await probeGatewayHealth(1200);
@@ -763,6 +782,7 @@ async function runSupervisedGateway(): Promise<void> {
         restartEnabled: gatewaySupervisorRestartEnabled(),
         heartbeatFreshMs: 20_000,
         legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+        expectedProcessStartedAt: launchedGatewayProcessStartedAt,
         runtimeStatus,
         progressLease,
       });
@@ -869,6 +889,7 @@ async function runSupervisedGateway(): Promise<void> {
       restartEnabled: gatewaySupervisorRestartEnabled(),
       heartbeatFreshMs: 20_000,
       legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+      expectedProcessStartedAt: activeGatewayProcessStartedAt ?? undefined,
       runtimeStatus,
       progressLease,
     });
