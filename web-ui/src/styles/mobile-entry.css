@@ -1,2 +1,3 @@
 @layer tokens, shell, route, components, state, compatibility;
 @import './mobile.css' layer(route);
+@import '../features/chat/questions/questions.mobile.css' layer(route);

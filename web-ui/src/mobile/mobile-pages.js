@@ -592,6 +592,24 @@ const _markMobileSessionRunning = mobileChatRuntimeAdapter.setRunning;
 let mobileNormalizeQuestionRecord = null;
 let mobileQuestionController = null;
 let mobileQuestionControllerPromise = null;
+let mobileQuestionViewApi = null;
+let mobileQuestionHostApi = null;
+const mobileQuestionRendererApi = Object.freeze({
+  render: (question) => mobileQuestionViewApi?.render?.(question) || '',
+  placement: (question) => {
+    if (mobileQuestionHostApi?.questionPlacement) return mobileQuestionHostApi.questionPlacement(question);
+    const status = String(question?.status || 'pending').trim().toLowerCase();
+    return status === 'pending' || status === 'submitting' ? 'composer' : 'history';
+  },
+  capture: (root) => mobileQuestionHostApi?.captureMobileQuestionDraftState?.(root, {
+    document,
+    onCapture: (qid, state) => _mobileQuestionDrafts.set(qid, state),
+  }) || {},
+  restore: (root, map) => mobileQuestionHostApi?.restoreMobileQuestionDraftState?.(root, map, {
+    document,
+    drafts: Object.fromEntries(_mobileQuestionDrafts),
+  }),
+});
 
 function _ensureMobileQuestionController() {
   if (mobileQuestionController) return Promise.resolve(mobileQuestionController);
@@ -599,8 +617,12 @@ function _ensureMobileQuestionController() {
     mobileQuestionControllerPromise = Promise.all([
       import('../features/chat/questions/question-controller.js'),
       import('../features/chat/questions/mobile-question-transport.js'),
-    ]).then(([questionApi, transportApi]) => {
+      import('../features/chat/questions/mobile-question-view.js'),
+      import('../features/chat/questions/question-composer-host.js'),
+    ]).then(([questionApi, transportApi, viewApi, hostApi]) => {
       mobileNormalizeQuestionRecord = questionApi.normalizeQuestionRecord;
+      mobileQuestionViewApi = viewApi;
+      mobileQuestionHostApi = hostApi;
       const mobileQuestionTransport = transportApi.createMobileQuestionTransport({
         request: (...args) => window.api(...args),
         getActiveSessionId: () => __pmChat.activeSessionId,
@@ -7400,6 +7422,7 @@ if (typeof window !== 'undefined') {
 const _mobileQuestionDrafts = new Map();
 
 function _normalizeMobileQuestion(input, extra = {}) {
+  if (mobileQuestionViewApi?.normalize) return mobileQuestionViewApi.normalize(input, extra);
   const source = input && typeof input === 'object' ? input : {};
   const status = extra.status || source.status;
   if (typeof mobileNormalizeQuestionRecord !== 'function') return status ? { ...source, status } : source;
@@ -7407,63 +7430,13 @@ function _normalizeMobileQuestion(input, extra = {}) {
 }
 
 function _renderMobileQuestionCard(item) {
-  const q = _normalizeMobileQuestion(item);
-  if (!q.id || !q.questions.length) return '';
-  // Submission is optimistic: remove the card before the network round-trip so
-  // the stream never leaves an answered card behind while the agent resumes.
-  if (q.status === 'submitting') return '';
-  const pending = q.status === 'pending';
-  // Escape the inline JS id arg for use inside a double-quoted onclick attribute.
-  // Raw JSON.stringify yields a value wrapped in double quotes which terminates
-  // the onclick="" attribute early, breaking Submit/Cancel entirely. escapeHtml
-  // turns the quotes into &quot; so the browser decodes a valid JS string literal
-  // (mirrors the desktop encodeInlineJsString pattern in ChatPage.js).
-  const idJson = escapeHtml(JSON.stringify(q.id));
-  const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
-  const blocks = q.questions.map((qq) => {
-    const ans = answerMap.get(qq.id) || {};
-    if (!pending) {
-      const sel = Array.isArray(ans.selected) ? ans.selected : [];
-      const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
-      return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
-    }
-    const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
-    const otherArea = qq.allowOther && qq.mode !== 'text'
-      ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>`
-      : '';
-    return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
-      <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
-      ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
-      ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
-      ${otherArea}
-    </div>`;
-  }).join('');
-  return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
-    <div class="pm-q-head"><span class="pm-q-kicker">${pending ? (q.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</span><span class="pm-q-status pm-q-status-${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></div>
-    <div class="pm-q-title">${escapeHtml(q.title)}</div>
-    ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
-    ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
-    ${blocks}
-    ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
-    ${pending
-      ? `<div class="pm-q-actions"><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
-      : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
-  </div>`;
+  return mobileQuestionViewApi?.render
+    ? mobileQuestionViewApi.render(item)
+    : '';
 }
 
 function _mobileQuestionToggleOption(btn, mode) {
-  if (!btn) return;
-  if (mode === 'single_select') {
-    // Reclicking the already-selected option deselects it (so the user can
-    // clear a single-select answer); otherwise select this one and clear siblings.
-    const wasSelected = btn.classList.contains('selected');
-    const wrap = btn.parentElement;
-    if (wrap) wrap.querySelectorAll('.pm-q-opt.selected').forEach((el) => el.classList.remove('selected'));
-    if (!wasSelected) btn.classList.add('selected');
-  } else {
-    btn.classList.toggle('selected');
-  }
-  _mobileQuestionRememberDraft(btn);
+  return mobileQuestionViewApi?.toggleOption?.(btn, mode, { rememberDraft: _mobileQuestionRememberDraft });
 }
 
 function _normalizeMobileVoiceWorkgroup(value) {
@@ -7555,13 +7528,7 @@ function _renderMobileVoiceWorkgroup(message) {
   </section>`;
 }
 function _mobileQuestionToggleOther(btn) {
-  const card = btn?.closest?.('[data-pm-q-card]');
-  const block = btn?.closest?.('[data-pm-q]');
-  const itemId = String(block?.getAttribute('data-pm-q') || '').trim();
-  if (!card || !itemId) return;
-  card.setAttribute('data-pm-q-compose-target', `${itemId}::other`);
-  document.getElementById('pm-composer-input')?.focus?.();
-  _mobileQuestionRememberDraft(btn);
+  return mobileQuestionViewApi?.toggleOther?.(btn, { document, rememberDraft: _mobileQuestionRememberDraft });
 }
 
 function _mobileQuestionRememberDraft(el) {
@@ -7630,137 +7597,26 @@ function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = 
   return changed;
 }
 
-// Preserve in-progress answers in pending question cards across the full
-// innerHTML rebuild that _renderThread does every streaming tick. Without this,
-// a re-render a few seconds after the user taps an option / types wipes their
-// selections + typed text + focus, so they can only type one letter at a time
-// and Submit ends up sending empty answers. Mirrors the desktop card behavior.
 function _captureMobileQuestionDraftState(root) {
-  const out = {};
-  if (!root) return out;
-  try {
-    root.querySelectorAll('[data-pm-q-card]').forEach((card) => {
-      if (!card.classList || !card.classList.contains('pm-question-card')) return;
-      const qid = card.getAttribute('data-pm-q-card');
-      if (!qid) return;
-      const state = { selected: {}, texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-pm-q-compose-target') || '', focus: null };
-      card.querySelectorAll('[data-pm-q]').forEach((block) => {
-        const bid = block.getAttribute('data-pm-q') || '';
-        state.selected[bid] = Array.from(block.querySelectorAll('.pm-q-opt.selected'))
-          .map((el) => el.getAttribute('data-pm-q-opt') || '').filter(Boolean);
-        const textEl = block.querySelector('[data-pm-q-text]');
-        if (textEl) state.texts[bid] = textEl.value || '';
-        const otherEl = block.querySelector('[data-pm-q-other]');
-        if (otherEl) state.others[bid] = { value: otherEl.value || '', hidden: otherEl.hasAttribute('hidden') };
-      });
-      const gen = card.querySelector('[data-pm-q-general]');
-      if (gen) state.general = gen.value || '';
-      try {
-        const active = document.activeElement;
-        if (active && card.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
-          let kind = '', key = '';
-          if (active.hasAttribute('data-pm-q-general')) { kind = 'general'; }
-          else {
-            const block = active.closest('[data-pm-q]');
-            key = block ? (block.getAttribute('data-pm-q') || '') : '';
-            if (active.hasAttribute('data-pm-q-text')) kind = 'text';
-            else if (active.hasAttribute('data-pm-q-other')) kind = 'other';
-          }
-          if (kind) {
-            state.focus = {
-              kind,
-              key,
-              selStart: typeof active.selectionStart === 'number' ? active.selectionStart : null,
-              selEnd: typeof active.selectionEnd === 'number' ? active.selectionEnd : null,
-            };
-          }
-        }
-      } catch {}
-      out[qid] = state;
-      _mobileQuestionDrafts.set(qid, state);
-    });
-  } catch {}
-  return out;
+  if (!mobileQuestionHostApi?.captureMobileQuestionDraftState) return {};
+  return mobileQuestionHostApi.captureMobileQuestionDraftState(root, {
+    document,
+    onCapture: (qid, state) => _mobileQuestionDrafts.set(qid, state),
+  });
 }
 function _restoreMobileQuestionDraftState(root, map) {
-  if (!root) return;
-  try {
-    const combined = { ...Object.fromEntries(_mobileQuestionDrafts), ...(map || {}) };
-    Object.keys(combined).forEach((qid) => {
-      const card = root.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
-      if (!card || !card.classList || !card.classList.contains('pm-question-card')) return;
-      const state = combined[qid];
-      if (state.composeTarget) card.setAttribute('data-pm-q-compose-target', state.composeTarget);
-      Object.entries(state.selected || {}).forEach(([bid, vals]) => {
-        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
-        if (!block || !Array.isArray(vals) || !vals.length) return;
-        const want = new Set(vals);
-        block.querySelectorAll('.pm-q-opt').forEach((el) => {
-          if (want.has(el.getAttribute('data-pm-q-opt') || '')) el.classList.add('selected');
-        });
-      });
-      Object.entries(state.texts || {}).forEach(([bid, val]) => {
-        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
-        const el = block?.querySelector('[data-pm-q-text]');
-        if (el) el.value = val;
-      });
-      Object.entries(state.others || {}).forEach(([bid, info]) => {
-        const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
-        const el = block?.querySelector('[data-pm-q-other]');
-        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
-      });
-      const gen = card.querySelector('[data-pm-q-general]');
-      if (gen) gen.value = state.general || '';
-      try {
-        if (state.focus && state.focus.kind) {
-          let el = null;
-          if (state.focus.kind === 'general') {
-            el = gen;
-          } else {
-            const block = card.querySelector(`[data-pm-q="${_pmCssEscape(state.focus.key)}"]`);
-            el = state.focus.kind === 'text'
-              ? block?.querySelector('[data-pm-q-text]')
-              : block?.querySelector('[data-pm-q-other]');
-          }
-          if (el && !el.hasAttribute('hidden') && document.activeElement !== el) {
-            el.focus({ preventScroll: true });
-            const len = el.value ? el.value.length : 0;
-            const s = state.focus.selStart == null ? len : Math.min(state.focus.selStart, len);
-            const e = state.focus.selEnd == null ? len : Math.min(state.focus.selEnd, len);
-            if (typeof el.setSelectionRange === 'function') el.setSelectionRange(s, e);
-          }
-        }
-      } catch {}
-    });
-  } catch {}
+  if (!mobileQuestionHostApi?.restoreMobileQuestionDraftState) return;
+  return mobileQuestionHostApi.restoreMobileQuestionDraftState(root, map, {
+    document,
+    drafts: Object.fromEntries(_mobileQuestionDrafts),
+  });
 }
 
 function _mobileQuestionPayloadFromDraft(q, state) {
-  if (!state) return null;
-  return {
-    answers: q.questions.map((qq) => ({
-      id: qq.id,
-      label: qq.label,
-      mode: qq.mode,
-      selected: qq.mode === 'text' ? [] : (Array.isArray(state.selected?.[qq.id]) ? state.selected[qq.id] : []),
-      text: String(state.texts?.[qq.id] || '').trim(),
-      other: String(state.others?.[qq.id]?.value || '').trim(),
-    })),
-    generalOther: String(state.general || '').trim(),
-  };
+  return mobileQuestionHostApi?.mobileQuestionPayloadFromDraft?.(q, state) || null;
 }
 function _collectMobileQuestionAnswers(q) {
-  const card = document.querySelector(`[data-pm-q-card="${(window.CSS && CSS.escape) ? CSS.escape(q.id) : q.id}"]`);
-  if (!card) return { answers: [], generalOther: '' };
-  const answers = q.questions.map((qq) => {
-    const block = card.querySelector(`[data-pm-q="${(window.CSS && CSS.escape) ? CSS.escape(qq.id) : qq.id}"]`);
-    const selected = block ? Array.from(block.querySelectorAll('.pm-q-opt.selected')).map((el) => el.getAttribute('data-pm-q-opt') || '').filter(Boolean) : [];
-    const text = block ? String(block.querySelector('[data-pm-q-text]')?.value || '').trim() : '';
-    const other = block ? String(block.querySelector('[data-pm-q-other]')?.value || '').trim() : '';
-    return { id: qq.id, label: qq.label, mode: qq.mode, selected: qq.mode === 'single_select' ? selected.slice(0, 1) : selected, text, other };
-  });
-  const generalOther = String(card.querySelector('[data-pm-q-general]')?.value || '').trim();
-  return { answers, generalOther };
+  return mobileQuestionViewApi?.collectAnswers?.(q, { document }) || { answers: [], generalOther: '' };
 }
 
 function _focusMobileQuestionComposer() {
@@ -7783,13 +7639,14 @@ async function _submitMobileQuestionFromComposer(text, sessionId = __pmChat.acti
 // Most-recent pending question for a session. The rendered question lives in
 // the composer popover so it stays directly above the input while the stream
 // re-renders.
-function _getPendingQuestionForSession(sessionId) {
+function _getPendingQuestionForSession(sessionId, { includeSubmitting = false } = {}) {
   const sid = String(sessionId || '').trim();
   const runtime = mobileChatRuntimeAdapter.runtimeFor(sid);
   const runtimeQuestions = [...(runtime?.snapshot?.questions || [])];
+  const actionableStatuses = includeSubmitting ? ['pending', 'submitting'] : ['pending'];
   const runtimeQuestion = runtimeQuestions
     .reverse()
-    .find((question) => String(question?.status || 'pending').toLowerCase() === 'pending');
+    .find((question) => actionableStatuses.includes(String(question?.status || 'pending').toLowerCase()));
   if (runtimeQuestion) return runtimeQuestion;
   // Before the first runtime hydration, a cached legacy thread may be the only
   // source available to the composer. Once the runtime has any question record
@@ -7798,7 +7655,7 @@ function _getPendingQuestionForSession(sessionId) {
   const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
   for (let i = thread.length - 1; i >= 0; i--) {
     const q = thread[i]?.questionRequest;
-    if (q && String(q.status || 'pending').toLowerCase() === 'pending') return q;
+    if (q && actionableStatuses.includes(String(q.status || 'pending').toLowerCase())) return q;
   }
   return null;
 }
@@ -7806,22 +7663,20 @@ function _getPendingQuestionForSession(sessionId) {
 function _syncMobileQuestionComposerPopover(sessionId = __pmChat.activeSessionId, draftMap = {}) {
   const host = document.getElementById('pm-mobile-question-popover');
   if (!host) return;
-  const question = _getPendingQuestionForSession(sessionId);
+  const question = _getPendingQuestionForSession(sessionId, { includeSubmitting: true });
   const composer = document.getElementById('pm-composer');
-  if (!question) {
-    host.hidden = true;
-    host.innerHTML = '';
-    host.removeAttribute('data-question-id');
-    composer?.classList.remove('has-pending-question');
-    try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
-    return;
-  }
-  host.innerHTML = _renderMobileQuestionCard(question);
-  host.hidden = false;
-  host.setAttribute('data-question-id', String(question.id || ''));
-  composer?.classList.add('has-pending-question');
-  _restoreMobileQuestionDraftState(host, draftMap);
-  try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
+  if (!mobileQuestionHostApi?.syncQuestionComposerHost) return;
+  mobileQuestionHostApi.syncQuestionComposerHost({
+    host,
+    question,
+    render: _renderMobileQuestionCard,
+    mode: 'mobile',
+    composer,
+    questionChanged: () => {
+      _restoreMobileQuestionDraftState(host, draftMap);
+      try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
+    },
+  });
 }
 
 function _mobileQuestionIsResolved(id) {
@@ -8037,7 +7892,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "__pmVoice": { enumerable: true, get: () => __pmVoice },
   "_activeMobileThread": { enumerable: true, get: () => _activeMobileThread },
   "_captureMobileApprovalDetailsState": { enumerable: true, get: () => _captureMobileApprovalDetailsState },
-  "_captureMobileQuestionDraftState": { enumerable: true, get: () => _captureMobileQuestionDraftState },
   "_captureMobileWorkerDeckViewState": { enumerable: true, get: () => _captureMobileWorkerDeckViewState },
   "_collectMessageMedia": { enumerable: true, get: () => _collectMessageMedia },
   "_formatMobileGoalElapsed": { enumerable: true, get: () => _formatMobileGoalElapsed },
@@ -8077,7 +7931,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileMediaGallery": { enumerable: true, get: () => _renderMobileMediaGallery },
   "_renderMobileMessageActions": { enumerable: true, get: () => _renderMobileMessageActions },
   "_renderMobileProductCarousel": { enumerable: true, get: () => _renderMobileProductCarousel },
-  "_renderMobileQuestionCard": { enumerable: true, get: () => _renderMobileQuestionCard },
+  "_mobileQuestionRenderer": { enumerable: true, get: () => mobileQuestionRendererApi },
   "_renderMobileRichArtifacts": { enumerable: true, get: () => _renderMobileRichArtifacts },
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
@@ -8086,7 +7940,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },
   "_resolveMobileApprovalButton": { enumerable: true, get: () => _resolveMobileApprovalButton },
   "_restoreMobileApprovalDetailsState": { enumerable: true, get: () => _restoreMobileApprovalDetailsState },
-  "_restoreMobileQuestionDraftState": { enumerable: true, get: () => _restoreMobileQuestionDraftState },
   "_safeJsonPreview": { enumerable: true, get: () => _safeJsonPreview },
   "_scheduleMobileThreadCacheSave": { enumerable: true, get: () => _scheduleMobileThreadCacheSave },
   "_syncMobileQuestionComposerPopover": { enumerable: true, get: () => _syncMobileQuestionComposerPopover },

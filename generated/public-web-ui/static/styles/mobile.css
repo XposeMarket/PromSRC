@@ -6662,59 +6662,6 @@ html.pm-session-context-open * {
 .pm-map-sub { font-size: 12px; opacity: 0.62; margin-top: 1px; }
 .pm-map-link { font-size: 11px; font-weight: 600; color: #5a91ff; text-decoration: none; display: inline-block; margin-top: 4px; }
 
-/* Mobile Prometheus question card */
-.pm-question-card { margin: 10px 0 4px; border: 0; border-left: 0; border-radius: 13px; padding: 12px 14px; background: rgba(255,255,255,0.05); display: flex; flex-direction: column; gap: 9px; box-shadow: none; }
-/* Keep the active question attached to the composer instead of the streaming
-   history. The explicit descendant selector wins over the generic composer
-   child stacking rule below, so the popover remains in the front layer. */
-.pm-composer .pm-mobile-question-popover {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: auto;
-  min-width: 0;
-  max-width: 100%;
-  z-index: 20;
-  max-height: min(62dvh, 560px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  box-sizing: border-box;
-  padding: 0;
-  background: var(--pm-surface-strong);
-  border: 1px solid var(--pm-border);
-  border-radius: 16px;
-  box-shadow: var(--pm-shadow-md);
-}
-.pm-mobile-question-popover[hidden] { display: none; }
-.pm-mobile-question-popover .pm-question-card { margin: 0; }
-/* Pending question docked inside the live streaming bubble (below the tool stream). */
-.pm-streaming-question-dock { margin-top: 8px; }
-.pm-streaming-question-dock .pm-question-card { margin: 0; }
-.pm-question-answered, .pm-question-cancelled, .pm-question-expired { border-left-color: #64748b; opacity: 0.85; }
-.pm-q-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pm-q-kicker { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.6; }
-.pm-q-status { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: rgba(56,189,248,0.18); color: #7dd3fc; }
-.pm-q-status-answered { background: rgba(74,222,128,0.16); color: #4ade80; }
-.pm-q-status-cancelled, .pm-q-status-expired { background: rgba(148,163,184,0.18); color: #94a3b8; }
-.pm-q-title { font-size: 14px; font-weight: 700; }
-.pm-q-prompt { font-size: 13px; line-height: 1.4; opacity: 0.92; }
-.pm-q-context { font-size: 12px; line-height: 1.4; opacity: 0.6; }
-.pm-q-block { display: flex; flex-direction: column; gap: 6px; }
-.pm-q-label { font-size: 13px; font-weight: 650; }
-.pm-q-optional { font-weight: 500; opacity: 0.6; }
-.pm-q-help { font-size: 11px; opacity: 0.6; }
-.pm-q-answered { font-size: 12px; opacity: 0.8; }
-.pm-q-opts { display: flex; flex-direction: column; flex-wrap: nowrap; gap: 6px; }
-.pm-q-opt { width: 100%; box-sizing: border-box; text-align: left; font-size: 12px; padding: 8px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.04); color: inherit; }
-.pm-q-opt.selected { border-color: #38bdf8; background: rgba(56,189,248,0.18); color: #e0f2fe; font-weight: 650; }
-.pm-q-other-toggle { align-self: flex-start; font-size: 12px; padding: 7px 11px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.16); background: transparent; color: inherit; }
-.pm-q-input { width: 100%; font-size: 13px; padding: 8px 10px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.16); background: rgba(0,0,0,0.25); color: inherit; resize: vertical; box-sizing: border-box; }
-.pm-q-actions { display: flex; gap: 8px; margin-top: 2px; }
-.pm-q-submit { flex: 1; font-size: 13px; font-weight: 700; padding: 10px; border-radius: 9px; border: none; background: #2563eb; color: #fff; }
-.pm-q-cancel { font-size: 13px; font-weight: 650; padding: 10px 16px; border-radius: 9px; border: 1px solid rgba(255,255,255,0.18); background: transparent; color: inherit; }
-.pm-q-resolved { font-size: 12px; opacity: 0.6; }
-
 /* Mobile prediction market card */
 .pm-prediction-market { margin: 10px 0 4px; }
 .pm-pmkt-heading { font-size: 11px; font-weight: 800; opacity: 0.6; text-transform: uppercase; margin-bottom: 8px; }

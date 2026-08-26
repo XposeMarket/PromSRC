@@ -15,6 +15,14 @@ const STYLE_DEFINITIONS = Object.freeze({
   ]),
   chat: Object.freeze([
     Object.freeze({
+      id: 'pm-mobile-question-style',
+      file: '../features/chat/questions/questions.mobile.css',
+      publicPath: '/static/features/chat/questions/questions.mobile.css',
+      layer: 'route',
+      version: 'pm-v1-2026-08-26-question-owner',
+      attribute: 'data-prom-mobile-question-style',
+    }),
+    Object.freeze({
       id: 'pm-mobile-composer-stack-style',
       file: 'mobile-composer-stack.css',
       layer: 'components',
@@ -63,13 +71,15 @@ function ensureStyle(owner, definition) {
     document.head.appendChild(link);
   }
   const query = definition.query ? `?v=${definition.version}&${definition.query}` : `?v=${definition.version}`;
-  const relativeUrl = new URL(`../styles/${definition.file}${query}`, import.meta.url);
+  const sourcePath = definition.file.startsWith('.') ? definition.file : `../styles/${definition.file}`;
+  const relativeUrl = new URL(`${sourcePath}${query}`, import.meta.url);
   // Source modules resolve next to web-ui/src/styles during development. The
   // production bundler moves this module into /build/chunks, while the
   // intentionally route-owned CSS remains an independently cacheable static
   // asset under /static/styles.
   if (relativeUrl.pathname.includes('/build/')) {
     relativeUrl.pathname = `/static/styles/${definition.file}`;
+    if (definition.publicPath) relativeUrl.pathname = definition.publicPath;
   }
   link.href = relativeUrl.href;
   link.dataset.promMobileStyleOwner = owner;

@@ -1,5 +1,6 @@
 @import './base.css';
 @import './components.css';
+@import '../features/chat/questions/questions.desktop.css';
 @import './onboarding.css';
 @import './pages.css';
 @import './projects.css';

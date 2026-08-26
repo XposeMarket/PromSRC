@@ -8,7 +8,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   __pmVoice,
   _activeMobileThread,
   _captureMobileApprovalDetailsState,
-  _captureMobileQuestionDraftState,
   _captureMobileWorkerDeckViewState,
   _collectMessageMedia,
   _formatMobileGoalElapsed,
@@ -48,7 +47,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileMediaGallery,
   _renderMobileMessageActions,
   _renderMobileProductCarousel,
-  _renderMobileQuestionCard,
+  _mobileQuestionRenderer,
   _renderMobileRichArtifacts,
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
@@ -57,7 +56,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileWorkTimer,
   _resolveMobileApprovalButton,
   _restoreMobileApprovalDetailsState,
-  _restoreMobileQuestionDraftState,
   _safeJsonPreview,
   _scheduleMobileThreadCacheSave,
   _syncMobileQuestionComposerPopover,
@@ -116,6 +114,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _setMobileLiveProgressNarration,
   _normalizeMobileFileChanges,
   } = context || {};
+  const questionApi = _mobileQuestionRenderer || {};
 
   let mobileFirstTranscriptPaintMarked = false;
 
@@ -174,14 +173,11 @@ export function createMobileChatRendererRuntime(context = {}) {
       inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
     }
     if (m.questionRequest) {
-      // Pending questions are owned by the composer popover. Keep the history
-      // stream free of a second copy; preserve any real assistant text/approval
-      // that accompanied the question.
-      const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
-      if (qPending) {
+      const qPlacement = questionApi.placement?.(m.questionRequest) || 'history';
+      if (qPlacement === 'composer') {
         if (!String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
       } else {
-        inner += _renderMobileQuestionCard(m.questionRequest);
+        inner += questionApi.render?.(m.questionRequest) || '';
       }
     }
     const hasLiveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length > 0;
@@ -1038,7 +1034,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const openTerminals = {};
     const stableImageNodes = new Map();
     const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
-    const questionDrafts = _captureMobileQuestionDraftState(document);
+    const questionDrafts = questionApi.capture?.(document) || {};
     try {
       threadEl.querySelectorAll('img[src]').forEach((node) => {
         const src = String(node.getAttribute('src') || '').trim();
@@ -1148,7 +1144,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         else if (openTraceGroups[key]) d.setAttribute('open', '');
       });
       _restoreMobileApprovalDetailsState(threadEl, approvalDetails);
-      _restoreMobileQuestionDraftState(document, questionDrafts);
+      questionApi.restore?.(document, questionDrafts);
       Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
         const nextHost = threadEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
         if (!nextHost || !snapshot?.host) return;
@@ -1481,7 +1477,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       let stablePendingImageBatch = null;
       let stableThinkingDots = null;
       const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
-      const questionDrafts = _captureMobileQuestionDraftState(currentEl);
+      const questionDrafts = questionApi.capture?.(currentEl) || {};
       try {
         currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
           const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
@@ -1593,7 +1589,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           else if (openTraceGroups[key]) d.setAttribute('open', '');
         });
         _restoreMobileApprovalDetailsState(currentEl, approvalDetails);
-        _restoreMobileQuestionDraftState(currentEl, questionDrafts);
+        questionApi.restore?.(currentEl, questionDrafts);
         Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
           const nextHost = currentEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
           if (!nextHost || !snapshot?.host) return;

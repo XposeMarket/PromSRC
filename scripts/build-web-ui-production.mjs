@@ -227,7 +227,7 @@ async function extractInlineScripts(html, documentName, moduleOutputs) {
 function replaceLocalStyles(html, cssPath) {
   let inserted = false;
   const output = html.replace(
-    /\s*<link\s+rel=["']stylesheet["']\s+href=["']\/?src\/styles\/[^"']+["'][^>]*>\s*/gi,
+    /\s*<link\s+rel=["']stylesheet["']\s+href=["']\/?src\/(?:styles|features)\/[^"']+\.css(?:\?[^"']*)?["'][^>]*>\s*/gi,
     () => {
       if (inserted) return '\n';
       inserted = true;
