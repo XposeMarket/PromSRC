@@ -7349,50 +7349,7 @@ function _normalizeMobileQuestion(input, extra = {}) {
   };
 }
 
-function _renderMobileQuestionCard(item) {
-  const q = _normalizeMobileQuestion(item);
-  if (!q.id || !q.questions.length) return '';
-  // Submission is optimistic: remove the card before the network round-trip so
-  // the stream never leaves an answered card behind while the agent resumes.
-  if (q.status === 'submitting') return '';
-  const pending = q.status === 'pending';
-  // Escape the inline JS id arg for use inside a double-quoted onclick attribute.
-  // Raw JSON.stringify yields a value wrapped in double quotes which terminates
-  // the onclick="" attribute early, breaking Submit/Cancel entirely. escapeHtml
-  // turns the quotes into &quot; so the browser decodes a valid JS string literal
-  // (mirrors the desktop encodeInlineJsString pattern in ChatPage.js).
-  const idJson = escapeHtml(JSON.stringify(q.id));
-  const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
-  const blocks = q.questions.map((qq) => {
-    const ans = answerMap.get(qq.id) || {};
-    if (!pending) {
-      const sel = Array.isArray(ans.selected) ? ans.selected : [];
-      const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
-      return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
-    }
-    const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
-    const otherArea = qq.allowOther && qq.mode !== 'text'
-      ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>`
-      : '';
-    return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
-      <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
-      ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
-      ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
-      ${otherArea}
-    </div>`;
-  }).join('');
-  return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
-    <div class="pm-q-head"><span class="pm-q-kicker">${pending ? (q.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</span><span class="pm-q-status pm-q-status-${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></div>
-    <div class="pm-q-title">${escapeHtml(q.title)}</div>
-    ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
-    ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
-    ${blocks}
-    ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
-    ${pending
-      ? `<div class="pm-q-actions"><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
-      : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
-  </div>`;
-}
+function _renderMobileQuestionCard(...args) { return _mobileChatRendererInvoke('_renderMobileQuestionCard', args); }
 
 function _mobileQuestionToggleOption(btn, mode) {
   if (!btn) return;
@@ -7503,8 +7460,16 @@ function _mobileQuestionToggleOther(btn) {
   const itemId = String(block?.getAttribute('data-pm-q') || '').trim();
   if (!card || !itemId) return;
   card.setAttribute('data-pm-q-compose-target', `${itemId}::other`);
-  document.getElementById('pm-composer-input')?.focus?.();
-  _mobileQuestionRememberDraft(btn);
+  const otherInput = block.querySelector('[data-pm-q-other]');
+  const isOpen = !!otherInput && !otherInput.hidden;
+  if (otherInput) {
+    otherInput.hidden = isOpen;
+    btn.setAttribute('aria-expanded', String(!isOpen));
+    if (!isOpen) {
+      try { otherInput.focus({ preventScroll: true }); } catch { try { otherInput.focus(); } catch {} }
+    }
+  }
+  _mobileQuestionRememberDraft(otherInput || btn);
 }
 
 function _mobileQuestionRememberDraft(el) {
@@ -7593,7 +7558,12 @@ function _restoreMobileQuestionDraftState(root, map) {
       Object.entries(state.others || {}).forEach(([bid, info]) => {
         const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
         const el = block?.querySelector('[data-pm-q-other]');
-        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
+        if (el) {
+          el.value = info.value || '';
+          if (!info.hidden) el.removeAttribute('hidden');
+          else el.setAttribute('hidden', '');
+          block?.querySelector('.pm-q-other-toggle')?.setAttribute('aria-expanded', String(!info.hidden));
+        }
       });
       const gen = card.querySelector('[data-pm-q-general]');
       if (gen) gen.value = state.general || '';
@@ -7687,6 +7657,12 @@ function _getMissingMobileQuestionAnswers(q, payload) {
 }
 
 function _focusMobileQuestionComposer() {
+  const card = document.querySelector('[data-pm-q-card]');
+  const answer = card?.querySelector('textarea:not([hidden]), input:not([hidden]), .pm-q-opt, .pm-q-other-toggle');
+  if (answer) {
+    try { answer.focus({ preventScroll: true }); } catch { try { answer.focus(); } catch {} }
+    return;
+  }
   const input = document.getElementById('pm-composer-input');
   if (!input) return;
   try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
@@ -7721,6 +7697,7 @@ function _syncMobileQuestionComposerPopover(sessionId = __pmChat.activeSessionId
   if (!host) return;
   const question = _getPendingQuestionForSession(sessionId);
   const composer = document.getElementById('pm-composer');
+  const liveDraftMap = host.hidden ? {} : _captureMobileQuestionDraftState(host);
   if (!question) {
     host.hidden = true;
     host.innerHTML = '';
@@ -7729,11 +7706,12 @@ function _syncMobileQuestionComposerPopover(sessionId = __pmChat.activeSessionId
     try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
     return;
   }
+  document.getElementById('pm-composer-input')?.blur?.();
   host.innerHTML = _renderMobileQuestionCard(question);
   host.hidden = false;
   host.setAttribute('data-question-id', String(question.id || ''));
   composer?.classList.add('has-pending-question');
-  _restoreMobileQuestionDraftState(host, draftMap);
+  _restoreMobileQuestionDraftState(host, { ...liveDraftMap, ...(draftMap || {}) });
   try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
 }
 
@@ -7806,7 +7784,7 @@ async function _submitMobileQuestion(id, options = {}) {
       key: 'mobile-question-answer-required',
       severity: 'warning',
       title: 'Answer required',
-      summary: `Use the composer to answer: ${labels}`,
+      summary: `Answer before submitting: ${labels}`,
     });
     return false;
   }
@@ -8092,6 +8070,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_mobileTraceHasToolGroup": { enumerable: true, get: () => _mobileTraceHasToolGroup },
   "_mobileVoiceWorkgroupStatus": { enumerable: true, get: () => _mobileVoiceWorkgroupStatus },
   "_mobileWorkflowTraceEntriesForMessage": { enumerable: true, get: () => _mobileWorkflowTraceEntriesForMessage },
+  "_normalizeMobileQuestion": { enumerable: true, get: () => _normalizeMobileQuestion },
   "_normalizeMobileMedia": { enumerable: true, get: () => _normalizeMobileMedia },
   "_normalizeMobileMediaList": { enumerable: true, get: () => _normalizeMobileMediaList },
   "_normalizeMobileVoiceWorkgroup": { enumerable: true, get: () => _normalizeMobileVoiceWorkgroup },
@@ -8109,7 +8088,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileMediaGallery": { enumerable: true, get: () => _renderMobileMediaGallery },
   "_renderMobileMessageActions": { enumerable: true, get: () => _renderMobileMessageActions },
   "_renderMobileProductCarousel": { enumerable: true, get: () => _renderMobileProductCarousel },
-  "_renderMobileQuestionCard": { enumerable: true, get: () => _renderMobileQuestionCard },
   "_renderMobileRichArtifacts": { enumerable: true, get: () => _renderMobileRichArtifacts },
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
@@ -9776,6 +9754,7 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
   const threadEl = page.querySelector('#pm-chat-thread');
   const scrollLatestBtn = page.querySelector('#pm-scroll-latest');
   const form     = page.querySelector('#pm-composer');
+  const questionHost = page.querySelector('#pm-mobile-question-popover');
   const connectionStatus = page.querySelector('#pm-chat-connection-status');
   const toolProgressDock = page.querySelector('#pm-tool-progress-dock');
   const mainPlanDock = page.querySelector('#pm-main-plan-dock');
@@ -10570,9 +10549,12 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     const hasText = !!String(input?.value || '').trim();
     const hasAttachments = getPendingAttachments().length > 0;
     const focused = document.activeElement === input;
+    const questionPending = !!_getPendingQuestionForSession(requestedSession);
     form.classList.toggle('is-focused', focused);
     form.classList.toggle('has-text', hasText);
     form.classList.toggle('has-attachments', hasAttachments);
+    form.classList.toggle('has-pending-question', questionPending);
+    if (questionPending) form.classList.remove('is-focused', 'has-text', 'has-attachments');
     requestAnimationFrame(() => updateChatComposerSpace());
   }
 
@@ -16376,6 +16358,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
   });
   input?.addEventListener('blur', () => setTimeout(() => _pmHideSlashPopover(page), 120));
+  questionHost?.addEventListener('input', (event) => {
+    const field = event.target?.closest?.('[data-pm-q-text], [data-pm-q-other], [data-pm-q-general]');
+    if (!field) return;
+    _mobileQuestionRememberDraft(field);
+    updateChatComposerSpace();
+  });
+  questionHost?.addEventListener('change', (event) => {
+    const field = event.target?.closest?.('[data-pm-q-text], [data-pm-q-other], [data-pm-q-general]');
+    if (field) _mobileQuestionRememberDraft(field);
+  });
   commandChip?.addEventListener('click', () => _pmClearActiveSlashCommand(page, input));
   window.addEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
   // Warm the explicit `$` picker while the chat surface mounts. The picker

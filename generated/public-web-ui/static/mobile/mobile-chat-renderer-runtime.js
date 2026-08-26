@@ -33,6 +33,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _mobileWorkflowTraceEntriesForMessage,
   _normalizeMobileMedia,
   _normalizeMobileMediaList,
+  _normalizeMobileQuestion,
   _normalizeMobileVoiceWorkgroup,
   _nowTime,
   _pmCssEscape,
@@ -48,7 +49,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileMediaGallery,
   _renderMobileMessageActions,
   _renderMobileProductCarousel,
-  _renderMobileQuestionCard,
   _renderMobileRichArtifacts,
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
@@ -128,6 +128,63 @@ export function createMobileChatRendererRuntime(context = {}) {
       if (part === 'interruption_response') return 'Response after steer';
     }
     return String(message?.workflowLabel || '').trim();
+  }
+
+  function _renderMobileQuestionCard(item) {
+    const q = _normalizeMobileQuestion(item);
+    if (!q.id || !q.questions.length) return '';
+    // Submission is optimistic: remove the card before the network round-trip
+    // so the stream never leaves an answered card behind while the agent resumes.
+    if (q.status === 'submitting') return '';
+    const pending = q.status === 'pending';
+    // Escape the inline JS id arg for use inside a double-quoted onclick
+    // attribute. escapeHtml turns the quotes into entities that decode back to
+    // a valid JS string literal in the browser.
+    const idJson = escapeHtml(JSON.stringify(q.id));
+    const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
+    const blocks = q.questions.map((qq) => {
+      const ans = answerMap.get(qq.id) || {};
+      if (!pending) {
+        const sel = Array.isArray(ans.selected) ? ans.selected : [];
+        const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
+        return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
+      }
+      const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
+      const textArea = qq.mode === 'text'
+        ? `<textarea class="pm-q-input" data-pm-q-text="1" rows="3" placeholder="Type your answer" aria-label="${escapeHtml(qq.label)}"></textarea>`
+        : '';
+      const otherArea = qq.allowOther && qq.mode !== 'text'
+        ? `<div class="pm-q-other-row">
+            <button type="button" class="pm-q-other-toggle" aria-expanded="false" onclick="_mobileQuestionToggleOther(this)">Other…</button>
+            <textarea class="pm-q-input" data-pm-q-other="1" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escapeHtml(qq.label)}" hidden></textarea>
+          </div>`
+        : '';
+      return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
+        <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
+        ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
+        ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
+        ${textArea}
+        ${otherArea}
+      </div>`;
+    }).join('');
+    const generalOther = q.allowGeneralOther
+      ? `<div class="pm-q-block pm-q-general-block">
+          <div class="pm-q-label">Anything else <span class="pm-q-optional">(optional)</span></div>
+          <textarea class="pm-q-input" data-pm-q-general="1" rows="2" placeholder="Add context for Prometheus" aria-label="Anything else"></textarea>
+        </div>`
+      : '';
+    return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
+      <div class="pm-q-head"><span class="pm-q-kicker">${pending ? (q.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</span><span class="pm-q-status pm-q-status-${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></div>
+      <div class="pm-q-title">${escapeHtml(q.title)}</div>
+      ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
+      ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
+      ${blocks}
+      ${pending ? generalOther : ''}
+      ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
+      ${pending
+        ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">Submit answer</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
+        : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
+    </div>`;
   }
   
   function _renderChatMessageHtml(m, index = -1, rowKey = '', rowSignature = '') {
@@ -3497,6 +3554,7 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
 
   const runtime = Object.freeze({
     _mobileWorkflowTransitionLabel,
+    _renderMobileQuestionCard,
     _renderChatMessageHtml,
     _renderMobileGoalCompletionReport,
     _addMobileMedia,
