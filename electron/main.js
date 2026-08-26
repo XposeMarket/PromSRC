@@ -42,6 +42,7 @@ const {
   parseWindowsListeningPids,
 } = require('./security');
 const { getNativeBrowserViewImplementations } = require('./native-browser-view');
+const { createNativeBrowserNavigationController } = require('./native-browser-navigation');
 const {
   getChromeProfileCatalog,
   getImportedChromeProfile,
@@ -828,6 +829,7 @@ async function checkForPrometheusUpdates(source = 'manual', lockHeld = false) {
 // background automation (DOM snapshot / run-js).
 const NATIVE_BROWSER_DEFAULT_PROFILE = 'main';
 const nativeBrowserViews = new Map();      // `${profileKey}::${tabId}` -> WebContentsView/BrowserView
+const nativeBrowserNavigation = createNativeBrowserNavigationController();
 const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
 const nativeBrowserSessionTabs = new Map(); // `${sessionId}::${profileKey}` -> { partition, tabIds, activeTabId }
 const nativeBrowserProfileSessions = new Map(); // imported profile id -> Electron Session
@@ -2271,6 +2273,11 @@ function nativeTabKey(partition, tabId) {
   return `${partition}::${String(tabId || '').trim()}`;
 }
 
+// Electron rejects the Promise returned by loadURL when a newer navigation
+// supersedes it. The controller keeps the latest navigation authoritative and
+// suppresses only that expected abort.
+const loadNativeBrowserUrl = nativeBrowserNavigation.load;
+
 function createNativeBrowserTabId() {
   nativeBrowserTabSequence += 1;
   return `native-tab-${Date.now().toString(36)}-${nativeBrowserTabSequence.toString(36)}`;
@@ -2722,7 +2729,7 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
       Promise.resolve().then(async () => {
         const created = ensureNativeBrowserView(sessionId, '', '', { forceNew: true });
         presentNativeView(partition, created.tabId, sessionId);
-        if (targetUrl !== 'about:blank') await created.view.webContents.loadURL(targetUrl);
+        if (targetUrl !== 'about:blank') await loadNativeBrowserUrl(created.view, partition, created.tabId, targetUrl);
       }).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
     } catch (err) {
       meta.lastError = err?.message || String(err);
@@ -2740,7 +2747,14 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
   wc.on('did-navigate', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
   wc.on('did-navigate-in-page', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
   wc.on('page-title-updated', (_event, title) => { meta.title = title || wc.getTitle() || ''; onUpdate(); });
-  wc.on('did-fail-load', (_event, _code, description, validatedURL) => { meta.lastError = description || 'Native browser load failed.'; meta.url = validatedURL || wc.getURL() || meta.url; onUpdate(); });
+  wc.on('did-fail-load', (_event, errorCode, description, validatedURL) => {
+    // Electron uses ERR_ABORTED (-3) when a newer navigation supersedes the
+    // current one. The newer navigation owns the state, so do not leave a
+    // stale error on the browser canvas while it is settling.
+    meta.lastError = Number(errorCode) === -3 ? '' : (description || 'Native browser load failed.');
+    meta.url = validatedURL || wc.getURL() || meta.url;
+    onUpdate();
+  });
 }
 
 // Ensures a view exists for the resolved profile partition and tab, and maps
@@ -2890,7 +2904,7 @@ async function openNativeBrowserSurface({ sessionId = '', url = '', profile = ''
   const meta = nativeViewMeta(view);
   meta.lastError = '';
   const targetUrl = normalizeBrowserUrlForLoad(url || meta.url || 'about:blank');
-  if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  if (targetUrl && targetUrl !== 'about:blank') await loadNativeBrowserUrl(view, partition, resolvedTabId, targetUrl);
   meta.url = wc.getURL() || targetUrl;
   meta.title = wc.getTitle() || '';
   return emitNativeSessionState(sessionId, view, partition);
@@ -2911,7 +2925,7 @@ async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = 
   const hasRealPage = currentUrl && currentUrl !== 'about:blank';
   if (!hasRealPage) {
     const targetUrl = normalizeBrowserUrlForLoad(url || meta.url || 'about:blank');
-    if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+    if (targetUrl && targetUrl !== 'about:blank') await loadNativeBrowserUrl(view, partition, resolvedTabId, targetUrl);
   }
   meta.url = wc.getURL() || meta.url || 'about:blank';
   meta.title = wc.getTitle() || meta.title || '';
@@ -2921,6 +2935,11 @@ async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = 
 async function navigateNativeBrowserSurface({ action = '', url = '', sessionId = '', tabId = '' } = {}) {
   const { view, wc, partition, tabId: resolvedTabId } = requireNativeViewForSession(sessionId, '', tabId);
   presentNativeView(partition, resolvedTabId, sessionId);
+  // presentNativeView attaches the selected view, but the global state flag
+  // is also consumed by setBounds/surface sync. Keep those representations in
+  // lockstep for manual address-bar navigation after the canvas was hidden.
+  nativeBrowserState.attached = true;
+  nativeBrowserState.sessionId = String(sessionId || nativeBrowserState.sessionId || '').trim();
   const normalized = String(action || '').trim().toLowerCase();
   nativeViewMeta(view).lastError = '';
   if (normalized === 'back') {
@@ -2930,7 +2949,7 @@ async function navigateNativeBrowserSurface({ action = '', url = '', sessionId =
   } else if (normalized === 'reload') {
     wc.reload();
   } else if (normalized === 'open') {
-    await wc.loadURL(normalizeBrowserUrlForLoad(url));
+    await loadNativeBrowserUrl(view, partition, resolvedTabId, normalizeBrowserUrlForLoad(url));
   } else {
     throw new Error(`Unsupported native browser navigation action "${normalized || 'unknown'}".`);
   }
@@ -2979,7 +2998,7 @@ async function newNativeBrowserTab({ sessionId = '', url = '', profile = '' } = 
   const meta = nativeViewMeta(view);
   meta.lastError = '';
   const targetUrl = normalizeBrowserUrlForLoad(url || 'about:blank');
-  if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  if (targetUrl && targetUrl !== 'about:blank') await loadNativeBrowserUrl(view, partition, tabId, targetUrl);
   refreshNativeViewMeta(view);
   return emitNativeSessionState(sid, view, partition);
 }
