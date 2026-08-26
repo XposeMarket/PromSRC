@@ -14,11 +14,14 @@ const owners = read('web-ui/src/mobile/mobile-style-owners.js');
 const generatedOwners = read('generated/public-web-ui/static/mobile/mobile-style-owners.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const generatedRenderer = read('generated/public-web-ui/static/mobile/mobile-chat-renderer-runtime.js');
 
 assert.equal(generatedCss, css, 'generated composer-stack CSS must mirror source exactly');
 assert.equal(generatedData, data, 'generated mobile-data loader must mirror source exactly');
 assert.equal(generatedDataBase, dataBase, 'generated mobile-data base must mirror source exactly');
 assert.equal(generatedOwners, owners, 'generated mobile style-owner registry must mirror source exactly');
+assert.equal(generatedRenderer, renderer, 'generated mobile chat renderer must mirror source exactly');
 assert.doesNotMatch(dataBase, /stylesheet|mobile-composer-stack|mobile-liquid-glass/, 'data base must stay free of route stylesheet installation');
 assert.match(owners, /chat:\s*Object\.freeze\(\[[\s\S]*?mobile-composer-stack\.css/, 'chat must own the composer-stack stylesheet');
 assert.match(owners, /ensureMobileChatStyles\(\)/, 'chat route must expose an explicit stylesheet owner entry point');
@@ -113,12 +116,12 @@ assert.match(
   'generated chat geometry must keep the fixed background dock contract',
 );
 assert.match(
-  pages,
+  renderer,
   /function _reconcileMobileBackgroundSpawnDockMarkup\(host, markup\)[\s\S]*?reconcileKeyedTimelineRows\(host, markup/,
   'background dock updates must reconcile keyed lanes instead of replacing the expanded card shell',
 );
 assert.match(
-  pages,
+  renderer,
   /data-pm-row-key="background:\$\{escapeHtml\(lane\.id\)\}"/,
   'background lanes must have stable keys across live tool events',
 );
