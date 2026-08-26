@@ -20,7 +20,7 @@ const cardSource = sourcePages.slice(cardStart, cardEnd);
 assert.match(cardSource, /pm-chat-approval-icon/, 'approval cards need the tool-approval shield/status icon');
 assert.match(cardSource, /Allow this tool to run\?/, 'pending approvals need the tool-approval heading');
 assert.match(cardSource, /pm-chat-approval-tool/, 'approval cards need the monospace tool name');
-assert.match(cardSource, /pm-chat-approval-status/, 'approval cards need a status badge');
+assert.doesNotMatch(cardSource, /pm-chat-approval-status/, 'approval cards should not render the status pill');
 assert.match(cardSource, /pm-chat-approval-details/, 'approval details need a collapsible disclosure');
 assert.match(cardSource, /View details/, 'approval details need the tool-approval disclosure label');
 assert.match(cardSource, /Allow once/, 'approval cards need a one-shot allow action');
@@ -33,6 +33,7 @@ assert.match(sourceCss, /\.pm-chat-approval-btn\.reject[\s\S]*?color: var\(--pm-
 assert.match(sourceVoicePage, /pm-va-details/, 'voice approvals need the same tool-approval disclosure');
 assert.match(sourceVoicePage, /Allow this tool to run\?/, 'voice approvals need the tool-approval heading');
 assert.match(sourceVoicePage, /id="pm-va-tool"/, 'voice approvals need the monospace tool name slot');
+assert.doesNotMatch(sourceVoicePage, /id="pm-va-risk"/, 'voice approvals should not render the status pill');
 assert.match(sourceVoicePage, /id="pm-va-approve">Allow once/, 'voice approvals need a one-shot allow action');
 assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
 assert.equal(generatedVoicePage, sourceVoicePage, 'generated mobile-voice-page.js must mirror source');

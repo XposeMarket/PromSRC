@@ -85,7 +85,6 @@ export async function renderVoicePage(baseContext, page, ctx) {
               <strong class="pm-va-title">Allow this tool to run?</strong>
               <code class="pm-va-tool" id="pm-va-tool"></code>
             </div>
-            <span class="pm-va-risk" id="pm-va-risk">Approval required</span>
           </div>
           <div class="pm-va-action" id="pm-va-action"></div>
           <details class="pm-va-details" open>
@@ -1898,9 +1897,11 @@ void main() {
       detailEl.hidden = !human.detail;
     }
     const riskEl = approvalCard.querySelector('#pm-va-risk');
-    riskEl.textContent = String(approval.status || 'pending').toLowerCase() === 'pending' ? 'Approval required' : riskLabel;
-    riskEl.title = `Risk ${riskLabel}`;
-    riskEl.style.color = riskColor;
+    if (riskEl) {
+      riskEl.textContent = String(approval.status || 'pending').toLowerCase() === 'pending' ? 'Approval required' : riskLabel;
+      riskEl.title = `Risk ${riskLabel}`;
+      riskEl.style.color = riskColor;
+    }
     const argsEl = approvalCard.querySelector('#pm-va-args');
     const techEl = approvalCard.querySelector('#pm-va-technical');
     if (argsEl) argsEl.textContent = technicalText;

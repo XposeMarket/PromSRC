@@ -6241,7 +6241,6 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
         <strong class="pm-chat-approval-title">${escapeHtml(title)}</strong>
         <code class="pm-chat-approval-tool">${escapeHtml(toolName)}</code>
       </div>
-      <b class="pm-chat-approval-status pm-chat-approval-status-${escapeHtml(status)}">${escapeHtml(statusLabel)}</b>
     </div>
     ${human.summary ? `<p>${escapeHtml(human.summary)}</p>` : ''}
     ${parametersHtml ? `<details class="pm-approval-technical pm-chat-approval-details" open>
