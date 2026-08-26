@@ -3,6 +3,7 @@ import {
   normalizeManifestToolCategory,
   type ToolCategoryId,
 } from '../runtime/tool-category-manifest';
+import type { WorkspaceToolMode } from '../runtime/workspace-tool-mode';
 
 /**
  * Representative provider-facing tools used to prove that a category really
@@ -73,6 +74,23 @@ export interface ToolCategorySurfaceVerification {
   reason: string;
 }
 
+function representativeToolsForCategory(
+  rawCategory: unknown,
+  workspaceMode?: WorkspaceToolMode,
+): string[] {
+  const category = normalizeCategory(rawCategory);
+  // terminal-first intentionally hides the native file wrappers. The command
+  // runner remains the callable workspace surface in that mode, so requiring
+  // workspace_read/workspace_edit here would reject a valid activation before
+  // the model can use workspace_run to start or inspect a process.
+  if (category === 'workspace_write' && workspaceMode === 'terminal-first') {
+    return ['workspace_run'];
+  }
+  return category
+    ? [...(TOOL_CATEGORY_REPRESENTATIVE_TOOLS[category] || [])]
+    : [];
+}
+
 function toolName(tool: any): string {
   return String(tool?.function?.name || tool?.name || '').trim();
 }
@@ -98,14 +116,13 @@ export function verifyToolCategorySurface(
   options: {
     unboundedTools?: any[];
     requestFilterActive?: boolean;
+    workspaceMode?: WorkspaceToolMode;
   } = {},
 ): ToolCategorySurfaceVerification {
   const category = normalizeCategory(rawCategory) || String(rawCategory || '').trim();
   const providerNames = uniqueNames(providerTools);
   const unboundedNames = uniqueNames(options.unboundedTools || providerTools);
-  const configuredRepresentatives = normalizeCategory(rawCategory)
-    ? [...(TOOL_CATEGORY_REPRESENTATIVE_TOOLS[normalizeCategory(rawCategory) as ToolCategoryId] || [])]
-    : [];
+  const configuredRepresentatives = representativeToolsForCategory(rawCategory, options.workspaceMode);
   const representativeTools = configuredRepresentatives.length > 0
     ? configuredRepresentatives
     : unboundedNames.filter((name) => isToolAvailableForManifestCategory(name, category as ToolCategoryId)).slice(0, 2);

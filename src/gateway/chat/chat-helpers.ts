@@ -94,6 +94,7 @@ import { normalizeManifestToolCategory } from '../../runtime/tool-category-manif
 import { verifyToolCategorySurface } from '../tool-category-provisioning';
 import { planMessageExtensionActivation } from '../../extensions/activation-planner.js';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
+import { getWorkspaceToolMode } from '../../runtime/workspace-tool-mode';
 import type { TurnTimingRecorder } from './turn-timing';
 import {
   browserOpen,
@@ -715,7 +716,10 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
     const surfaceToolCountBefore = buildTools(sessionId).length;
     activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
     const surface = buildTools(sessionId);
-    const verification = verifyToolCategorySurface(toolCategory, surface, { unboundedTools: surface });
+    const verification = verifyToolCategorySurface(toolCategory, surface, {
+      unboundedTools: surface,
+      workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
+    });
     if (!verification.ok) {
       restoreToolCategoryActivationState(sessionId, activationStateBefore);
       console.warn('[tool-category-provisioning] automatic activation failed:', verification);

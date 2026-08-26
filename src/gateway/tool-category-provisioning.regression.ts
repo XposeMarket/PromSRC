@@ -76,8 +76,29 @@ const reports = categories.map((category) => {
   };
 });
 
+// terminal-first is a supported workspace mode, not a failed provisioning
+// state. It intentionally hides the native file wrappers while retaining the
+// command runner used to start and inspect bounded processes.
+const terminalFirstWorkspaceSurface = buildTools(deps, new Set(['workspace_write']))
+  .filter((tool: any) => !['workspace_read', 'workspace_edit'].includes(tool?.function?.name));
+const terminalFirstWorkspace = verifyToolCategorySurface('workspace_write', terminalFirstWorkspaceSurface, {
+  unboundedTools: terminalFirstWorkspaceSurface,
+  workspaceMode: 'terminal-first',
+});
+assert.equal(terminalFirstWorkspace.ok, true, 'terminal-first workspace mode should provision workspace_run');
+assert.deepEqual(terminalFirstWorkspace.representativeTools, ['workspace_run']);
+assert.equal(
+  verifyToolCategorySurface('workspace_write', terminalFirstWorkspaceSurface, { unboundedTools: terminalFirstWorkspaceSurface }).ok,
+  false,
+  'native workspace mode must still require the full read/edit/run surface',
+);
+
 console.log(JSON.stringify({
   categories: reports,
   sameTurnSurfaceRefresh: true,
   activationCardAfterProvisioningOnly: true,
+  terminalFirstWorkspaceMode: {
+    representativeTools: terminalFirstWorkspace.representativeTools,
+    provisioned: terminalFirstWorkspace.ok,
+  },
 }, null, 2));
