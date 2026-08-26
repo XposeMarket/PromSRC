@@ -976,8 +976,6 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     memoryMark('refresh throttled');
     return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, ...stats };
   }
-  if (!fs.existsSync(auditRoot)) return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, totalRecords: 0, totalChunks: 0, updatedAt: nowIso };
-
   const sourceFiles = new Map<string, string>();
   for (const d of ROOT_DIRS) {
     for (const abs of listFilesRecursive(path.join(auditRoot, d))) {

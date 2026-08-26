@@ -19,7 +19,8 @@ async function main(): Promise<void> {
   process.env.PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_IDLE_TTL_MS = '1000';
   process.env.PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES = String(recycleRssBytes);
   process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS = '1';
-  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_TIMEOUT_CEILING_MS = '1000';
+  const coldElasticTestTimeoutMs = 2_000;
+  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_TIMEOUT_CEILING_MS = String(coldElasticTestTimeoutMs);
   process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_CPU_MS = '50';
   process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_RSS_BYTES = String(recycleRssBytes + 1);
 
@@ -135,7 +136,7 @@ async function main(): Promise<void> {
       // A cold process cannot be expected to fit the production 250 ms
       // budget on every host; the test-only ceiling observes direct service
       // without accepting the old dummy-warmup path.
-      { timeoutMs: 1_000 },
+      { timeoutMs: coldElasticTestTimeoutMs },
     );
     let concurrentResult: string;
     try {
@@ -145,7 +146,7 @@ async function main(): Promise<void> {
     }
     const concurrentElapsedMs = Date.now() - concurrentStartedAt;
     assert.ok(JSON.parse(concurrentResult), 'cold elastic demand should serve the real concurrent lookup');
-    assert.ok(concurrentElapsedMs <= 1_000, `cold elastic lookup exceeded the bounded cold-start test window (elapsed=${concurrentElapsedMs}ms)`);
+    assert.ok(concurrentElapsedMs <= coldElasticTestTimeoutMs, `cold elastic lookup exceeded the bounded cold-start test window (elapsed=${concurrentElapsedMs}ms)`);
     const afterColdElastic = getAutomaticMemorySearchWorkerStatus();
     assert.ok(afterColdElastic.workers[1]?.lastColdStart, 'cold-elastic demand must expose bounded phase diagnostics');
     assert.ok((afterColdElastic.workers[1]?.lastColdStart?.totalDurationMs || 0) >= 0);

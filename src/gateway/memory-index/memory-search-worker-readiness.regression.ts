@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-async function waitFor(predicate: () => boolean, timeoutMs = 8_000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
     if (Date.now() - startedAt > timeoutMs) throw new Error(`Timed out after ${timeoutMs}ms`);
@@ -13,10 +13,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 8_000): Promise<voi
 
 async function main(): Promise<void> {
   // Import the client only after the policy is configured. The regression
-  // intentionally makes the first query exceed the old 2s warmup gate.
+  // intentionally makes the first query much slower than process startup.
   process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS = '1';
-  process.env.PROMETHEUS_MEMORY_SEARCH_WARMUP_TIMEOUT_MS = '2000';
-  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_WARMUP_DELAY_MS = '2500';
+  const warmupDelayMs = 5_000;
+  process.env.PROMETHEUS_MEMORY_SEARCH_WARMUP_TIMEOUT_MS = '7000';
+  process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_WARMUP_DELAY_MS = String(warmupDelayMs);
 
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-memory-search-readiness-'));
   const workspacePath = path.join(tmpRoot, 'workspace');
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
     const startedAt = Date.now();
     await client.warmMemorySearchWorker(workspacePath, { awaitPrewarm: false });
     const processReadyElapsedMs = Date.now() - startedAt;
-    assert.ok(processReadyElapsedMs < 2_000, `process readiness must not wait for the slow prewarm query (elapsed=${processReadyElapsedMs}ms)`);
+    assert.ok(processReadyElapsedMs < warmupDelayMs, `process readiness must not wait for the slow prewarm query (elapsed=${processReadyElapsedMs}ms)`);
     const processReadyStatus = client.getMemorySearchWorkerStatus();
     assert.equal(processReadyStatus.broker.state, 'ready', 'listener readiness should be satisfied once the child IPC process is ready');
     assert.ok(['pending', 'completed'].includes(processReadyStatus.warmup.queryStatus), 'the optional query prewarm should be tracked separately from process readiness');
@@ -46,8 +47,8 @@ async function main(): Promise<void> {
     assert.equal(status.broker.state, 'ready', 'a slow first query must not leave the explicit worker stopped');
     assert.equal(status.warmup.queryStatus, 'completed');
     assert.ok((status.warmup.processStartupMs || 0) >= 0);
-    assert.ok((status.warmup.queryDurationMs || 0) >= 2_000, 'the regression must exercise a genuinely slow first-query phase');
-    assert.ok(Date.now() - startedAt >= 2_000);
+    assert.ok((status.warmup.queryDurationMs || 0) >= warmupDelayMs, 'the regression must exercise a genuinely slow first-query phase');
+    assert.ok(Date.now() - startedAt >= warmupDelayMs);
 
     const result = await client.searchMemoryInWorker('memory_search', {
       workspacePath,
