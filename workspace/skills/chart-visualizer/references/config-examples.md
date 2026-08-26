@@ -6,7 +6,7 @@ This reference preserves detailed guidance from the former `chart-visualizer` en
 
 - [Chart type decision](#chart-type-decision)
 - [Chart.js config examples](#format-chartjs-config-object)
-- [Color palette](#color-palette)
+- [Color palette](#color-palette-legacy-examples-only)
 - [Labels and titles](#labels--titles)
 - [Rules and anti-patterns](#rules--anti-patterns)
 - [Proactive triggering](#proactive-triggering)

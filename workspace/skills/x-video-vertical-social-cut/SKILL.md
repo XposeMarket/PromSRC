@@ -1,8 +1,6 @@
 ---
-name: Video to Vertical Social Cut
+name: x-video-vertical-social-cut
 description: Download or ingest videos from X/Twitter, YouTube, other yt-dlp-supported pages, direct media URLs, or local files and rapidly turn them into polished no-header vertical social clips using direct FFmpeg, centered preserved landscape footage, dark source blur, word-timed captions, bounded hook selection, and actual-export QA.
-version: 2.0.0
-triggers: download this video and make a clip, turn this youtube video into a captioned vertical clip, make a vertical captioned clip from this x video, turn this twitter video into a tiktok style video, make a no-header vertical clip from this video, create a 9:16 social cut with captions, clip this online video with captions
 ---
 
 # Video to Vertical Social Cut
@@ -59,7 +57,7 @@ Use a short folder such as `tmp/media-cut/<platform-or-id>/`.
 - Local file: verify the given file directly; do not copy unless short-path processing requires it.
 - Cache reuse: inspect only known identity-specific locations and verify path, bytes, duration, and codecs.
 
-If `download_media` reports a merge/postprocessing failure, inspect the exact output directory before retrying. If it contains a valid video-only stream and valid audio-only stream with matching duration, use them as separate FFmpeg inputs. See `references/youtube-fast-path-2026-07-23.md`.
+If `download_media` reports a merge/postprocessing failure, inspect the exact output directory before retrying. If it contains a valid video-only stream and valid audio-only stream with matching duration, use them as separate FFmpeg inputs. See `references/youtube-fast-path-proof.md`.
 
 ### 2. Probe once
 

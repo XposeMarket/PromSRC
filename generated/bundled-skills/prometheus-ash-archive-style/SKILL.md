@@ -1,5 +1,5 @@
 ---
-name: "Prometheus One Brand System"
+name: prometheus-ash-archive-style
 description: "Apply the current Prometheus One visual identity: a sleek, premium black-and-gold local AI command-center system across product UI, mobile, website, releases, and creative work."
 ---
 

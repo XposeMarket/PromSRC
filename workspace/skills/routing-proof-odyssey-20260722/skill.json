@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "routing-proof-odyssey-20260722",
+  "name": "Routing Proof Odyssey",
+  "description": "Temporary diagnostic skill used to verify a new skill can be created and retrieved by one exact unique phrase while remaining irrelevant to unrelated requests.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": ["moon-biscuit routing proof 2026"],
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "implicitInvocation": false,
+  "resources": []
+}

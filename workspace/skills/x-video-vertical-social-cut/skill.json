@@ -63,12 +63,12 @@
       "type": "reference"
     },
     {
-      "path": "references/cyrilxbt-24-minute-fast-path-2026-07-23.md",
+      "path": "references/cyrilxbt-fast-path-benchmark.md",
       "type": "reference",
       "description": "Measured 24-minute fresh-source critical path, stable FFmpeg path, bounded opening transcription, one-script render/QA, and direct-frame geometry verification."
     },
     {
-      "path": "references/youtube-fast-path-2026-07-23.md",
+      "path": "references/youtube-fast-path-proof.md",
       "type": "doc",
       "description": "Measured YouTube ingest, separate-stream merge-failure recovery, direct FFmpeg render, and actual-export QA proof."
     }

@@ -54,6 +54,10 @@ function fixture(id, extra = {}) {
 
 const structured = fixture('structured-debugger', { promptSignals: signals });
 const legacy = fixture('legacy-debugger', { triggers: ['debug workflow'] });
+const hybrid = fixture('hybrid-debugger', {
+  triggers: ['fix this skill'],
+  promptSignals: { phrases: ['api not responding'], allOf: [], anyOf: [], noneOf: [], minScore: 4 },
+});
 
 const phrase = rankSkillMatches([structured], 'The API not responding', { includeExplicitOnly: true, limit: 3 })[0];
 assert.equal(phrase?.id, 'structured-debugger');
@@ -84,6 +88,22 @@ assert(evaluated.matchedAllOf.length === 1);
 
 const legacyMatch = rankSkillMatches([legacy], 'debug workflow', { includeExplicitOnly: true, limit: 3 })[0];
 assert.equal(legacyMatch?.id, 'legacy-debugger', 'flat triggers must remain compatible');
+const hybridLegacyMatch = rankSkillMatches([hybrid], 'fix this skill', { includeExplicitOnly: true, limit: 3 })[0];
+assert.equal(hybridLegacyMatch?.id, 'hybrid-debugger', 'an exact legacy trigger must survive alongside structured signals');
+const genericVerification = fixture('verification', {
+  name: 'Full-Story Verification',
+  promptSignals: { phrases: ['verify the whole flow'], allOf: [], anyOf: ['verification'], noneOf: [], minScore: 6 },
+});
+assert.equal(
+  rankSkillMatches([genericVerification], 'webhook signature verification', { includeExplicitOnly: true, limit: 3 }).length,
+  0,
+  'a bare one-word skill slug must not count as explicit selection in an unrelated request',
+);
+assert.equal(
+  rankSkillMatches([genericVerification], 'skill:verification', { includeExplicitOnly: true, limit: 3 })[0]?.id,
+  'verification',
+  'skill:slug must remain an explicit selection path',
+);
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-prompt-signals-'));
 try {
