@@ -18,8 +18,6 @@ try {
   const queue = getPrometheusQuestionQueue();
   const createQuestion = (sessionId) => queue.create(createPrometheusQuestionPayload({
     sessionId,
-    title: 'Choose a path',
-    prompt: 'A decision is required before work continues.',
     questions: [{ id: 'path', label: 'Which path?', mode: 'single_select', options: ['A', 'B'] }],
   }));
 

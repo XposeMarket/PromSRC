@@ -137,53 +137,49 @@ export function createMobileChatRendererRuntime(context = {}) {
     // so the stream never leaves an answered card behind while the agent resumes.
     if (q.status === 'submitting') return '';
     const pending = q.status === 'pending';
+    const questionCount = q.questions.length;
+    const requestedIndex = Number(q.currentIndex);
+    const currentIndex = Number.isFinite(requestedIndex)
+      ? Math.max(0, Math.min(questionCount - 1, Math.floor(requestedIndex)))
+      : 0;
+    const currentQuestion = q.questions[currentIndex];
+    const isLastQuestion = currentIndex === questionCount - 1;
     // Escape the inline JS id arg for use inside a double-quoted onclick
     // attribute. escapeHtml turns the quotes into entities that decode back to
     // a valid JS string literal in the browser.
     const idJson = escapeHtml(JSON.stringify(q.id));
     const answerMap = new Map((q.answers || []).map((a) => [String(a?.id || ''), a || {}]));
-    const blocks = q.questions.map((qq) => {
+    const visibleQuestions = pending ? [currentQuestion] : q.questions;
+    const blocks = visibleQuestions.map((qq) => {
       const ans = answerMap.get(qq.id) || {};
       if (!pending) {
         const sel = Array.isArray(ans.selected) ? ans.selected : [];
         const txt = [sel.join(', '), String(ans.text || ''), ans.other ? `Other: ${ans.other}` : ''].filter(Boolean).join(' · ') || 'No answer';
         return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
       }
-      const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
+      const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" aria-pressed="false" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')"><span class="pm-q-check" aria-hidden="true"></span><span class="pm-q-opt-label">${escapeHtml(opt)}</span></button>`).join('');
       const textArea = qq.mode === 'text'
         ? `<textarea class="pm-q-input" data-pm-q-text="1" rows="3" placeholder="Type your answer" aria-label="${escapeHtml(qq.label)}"></textarea>`
         : '';
       const otherArea = qq.allowOther && qq.mode !== 'text'
         ? `<div class="pm-q-other-row">
-            <button type="button" class="pm-q-other-toggle" aria-expanded="false" onclick="_mobileQuestionToggleOther(this)">Other…</button>
+            <button type="button" class="pm-q-other-toggle" aria-expanded="false" aria-pressed="false" onclick="_mobileQuestionToggleOther(this)"><span class="pm-q-check" aria-hidden="true"></span><span>Other…</span></button>
             <textarea class="pm-q-input" data-pm-q-other="1" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escapeHtml(qq.label)}" hidden></textarea>
           </div>`
         : '';
       return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
-        <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
-        ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
+        <div class="pm-q-label">${escapeHtml(qq.label)}</div>
         ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
         ${textArea}
         ${otherArea}
       </div>`;
     }).join('');
-    const generalOther = q.allowGeneralOther
-      ? `<div class="pm-q-block pm-q-general-block">
-          <div class="pm-q-label">Anything else <span class="pm-q-optional">(optional)</span></div>
-          <textarea class="pm-q-input" data-pm-q-general="1" rows="2" placeholder="Add context for Prometheus" aria-label="Anything else"></textarea>
-        </div>`
-      : '';
-    return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
-      <div class="pm-q-head"><span class="pm-q-kicker">${pending ? (q.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</span><span class="pm-q-status pm-q-status-${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></div>
-      <div class="pm-q-title">${escapeHtml(q.title)}</div>
-      ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
-      ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
+    return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}" data-pm-q-index="${currentIndex}" data-pm-q-total="${questionCount}">
+      ${pending && questionCount > 1 ? `<div class="pm-q-head"><span class="pm-q-progress" aria-label="Question ${currentIndex + 1} of ${questionCount}"><span class="pm-q-progress-current">${currentIndex + 1}</span><span class="pm-q-progress-total">/${questionCount}</span></span></div>` : ''}
       ${blocks}
-      ${pending ? generalOther : ''}
-      ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
       ${pending
-        ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">Submit answer</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
-        : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
+        ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">${isLastQuestion ? 'Submit answer' : 'Next question'}</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
+        : ''}
     </div>`;
   }
   

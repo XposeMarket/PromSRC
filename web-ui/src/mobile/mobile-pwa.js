@@ -1,4 +1,4 @@
-const PM_PWA_VERSION = 'pm-v308-2026-08-24-chat-voice-trace';
+const PM_PWA_VERSION = 'pm-v309-2026-08-26-question-stepper';
 const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
 window.addEventListener('beforeinstallprompt', (event) => {

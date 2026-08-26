@@ -13,7 +13,6 @@ export interface PrometheusQuestionItem {
   options?: string[];
   allowOther?: boolean;
   required?: boolean;
-  helpText?: string;
 }
 
 export interface PrometheusQuestionAnswer {
@@ -111,7 +110,6 @@ function normalizeQuestionItem(raw: any, index: number): PrometheusQuestionItem 
     options,
     allowOther: raw.allowOther !== false && raw.allow_other !== false,
     required: raw.required !== false,
-    helpText: String(raw.helpText || raw.help_text || '').trim().slice(0, 280) || undefined,
   };
 }
 
@@ -121,11 +119,7 @@ export function createPrometheusQuestionPayload(input: {
   agentId?: string;
   originType?: PrometheusQuestionRecord['originType'];
   originLabel?: string;
-  title?: string;
-  prompt?: string;
-  context?: string;
   questions?: any[];
-  allowGeneralOther?: boolean;
   ttlMs?: number;
 }): Omit<PrometheusQuestionRecord, 'id' | 'createdAt' | 'status'> {
   const sessionId = String(input.sessionId || '').trim();
@@ -142,11 +136,14 @@ export function createPrometheusQuestionPayload(input: {
     agentId: String(input.agentId || '').trim() || undefined,
     originType: input.originType || 'main_chat',
     originLabel: String(input.originLabel || '').trim() || undefined,
-    title: String(input.title || 'Prometheus question').trim().slice(0, 180) || 'Prometheus question',
-    prompt: String(input.prompt || 'Prometheus needs a little more direction.').trim().slice(0, 1200) || 'Prometheus needs a little more direction.',
-    context: String(input.context || '').trim().slice(0, 1200) || undefined,
+    // Card presentation copy is intentionally not part of the question
+    // contract. Keep the legacy record fields populated for durable-record
+    // compatibility; clients receive only the active question/options data.
+    title: 'Prometheus question',
+    prompt: '',
+    context: undefined,
     questions,
-    allowGeneralOther: input.allowGeneralOther !== false,
+    allowGeneralOther: false,
     expiresAt: Date.now() + ttlMs,
   };
 }
@@ -160,11 +157,7 @@ export function serializePrometheusQuestionForClient(record: PrometheusQuestionR
     agentId: record.agentId,
     originType: record.originType,
     originLabel: record.originLabel,
-    title: record.title,
-    prompt: record.prompt,
-    context: record.context,
     questions: record.questions,
-    allowGeneralOther: record.allowGeneralOther,
     createdAt: record.createdAt,
     status: record.status,
     answers: record.answers,

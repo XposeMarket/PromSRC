@@ -44628,9 +44628,6 @@ function normalizePrometheusQuestionRecord(record = {}, fallback = {}) {
   return {
     id,
     sessionId,
-    title: String(record.title || fallback.title || 'Prometheus question').trim(),
-    prompt: String(record.prompt || fallback.prompt || fallback.summary || '').trim(),
-    context: String(record.context || fallback.context || '').trim(),
     questions: questions.slice(0, 5).map((q, index) => ({
       id: String(q?.id || `q${index + 1}`).trim() || `q${index + 1}`,
       label: String(q?.label || q?.question || '').trim(),
@@ -44638,9 +44635,8 @@ function normalizePrometheusQuestionRecord(record = {}, fallback = {}) {
       options: Array.isArray(q?.options) ? q.options.map((opt) => String(opt || '').trim()).filter(Boolean).slice(0, 8) : [],
       allowOther: q?.allowOther !== false && q?.allow_other !== false,
       required: q?.required !== false,
-      helpText: String(q?.helpText || q?.help_text || '').trim(),
     })).filter((q) => q.label),
-    allowGeneralOther: record.allowGeneralOther !== false && fallback.allowGeneralOther !== false,
+    allowGeneralOther: false,
     status: String(record.status || fallback.status || 'pending').trim().toLowerCase() || 'pending',
     answers: Array.isArray(record.answers) ? record.answers : [],
     generalOther: String(record.generalOther || fallback.generalOther || '').trim(),
@@ -44681,38 +44677,26 @@ function renderInlinePrometheusQuestion(item) {
       const deselect = type === 'radio' ? ` onmousedown="toggleQuestionRadio(${encodeInlineJsString(inputId)})"` : '';
       return `<label for="${escHtml(inputId)}" class="pq-option">
         <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}"${deselect} />
-        <span>${escHtml(option)}</span>
+        <span class="pq-option-check" aria-hidden="true"></span>
+        <span class="pq-option-label">${escHtml(option)}</span>
       </label>`;
     }).join('');
     const otherInput = q.allowOther && q.mode !== 'text'
-      ? `<div class="pq-other-row"><button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})">Other</button></div>`
+      ? `<div class="pq-other-row"><button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})"><span class="pq-option-check" aria-hidden="true"></span><span>Other…</span></button></div>`
       : '';
     return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${index ? 10 : 0}px">
-      <div class="pq-q-label">${escHtml(q.label)}${q.required ? '' : ' <span class="pq-optional">(optional)</span>'}</div>
-      ${q.helpText ? `<div class="chat-approval-subdetail">${escHtml(q.helpText)}</div>` : ''}
+      <div class="pq-q-label">${escHtml(q.label)}</div>
       ${options ? `<div class="pq-options">${options}</div>` : ''}
       ${otherInput}
     </div>`;
   }).join('');
   return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}">
-    <div class="chat-approval-head">
-      <div>
-        <div class="chat-approval-kicker">${pending ? (question.questions.length > 1 ? 'Prometheus has a few questions' : 'Prometheus has a question') : 'Question result'}</div>
-        <div class="chat-approval-title">${escHtml(question.title || 'Prometheus question')}</div>
-      </div>
-      <div class="chat-approval-badges">
-        <span class="chat-approval-status chat-approval-status-${escHtml(statusLabel)}">${escHtml(statusLabel)}</span>
-      </div>
-    </div>
-    ${question.prompt ? `<div class="chat-approval-detail">${escHtml(question.prompt)}</div>` : ''}
-    ${question.context ? `<div class="chat-approval-subdetail">${escHtml(question.context)}</div>` : ''}
     ${questionBlocks}
-    ${!pending && question.generalOther ? `<div class="chat-approval-scope"><span>Anything else</span>${escHtml(question.generalOther).replace(/\n/g, '<br>')}</div>` : ''}
     ${pending
       ? `<div class="chat-approval-actions">
           <button class="chat-approval-btn chat-approval-deny" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
         </div>`
-      : `<div class="chat-approval-resolved">This question was ${escHtml(statusLabel)}.</div>`}
+      : ''}
   </div>`;
 }
 

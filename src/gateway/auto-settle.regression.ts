@@ -126,7 +126,7 @@ async function main(): Promise<void> {
 
     const questionSession = 'regression_settle_question';
     addOldSession(questionSession);
-    const question = questionApi.createPrometheusQuestionPayload({ sessionId: questionSession, prompt: 'answer', questions: [{ id: 'q', question: 'Continue?' }] });
+    const question = questionApi.createPrometheusQuestionPayload({ sessionId: questionSession, questions: [{ id: 'q', question: 'Continue?' }] });
     questionApi.getPrometheusQuestionQueue().create(question);
     const questionBlockers = settlementApi.getSessionSettlementBlockers(questionSession, { automatic: true, cutoffAt: now, expectedLastActiveAt: oldAt });
     assert.equal(questionBlockers.some((blocker) => blocker.code === 'pending_question'), true);
