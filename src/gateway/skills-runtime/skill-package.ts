@@ -725,7 +725,7 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
         : undefined;
   const invocationPolicy = String(manifestRaw?.invocationPolicy || manifestRaw?.invocation_policy || '').trim().toLowerCase();
   const broadOrManualSkill = categories.some((category) => ['style', 'role', 'persona', 'manual', 'guidelines'].includes(category))
-    || /(?:^|-)(?:style|guidelines|operator|manager|strategist|persona|mode)(?:-|$)/i.test(`${id} ${name}`);
+    || /(?:^|[-\s])(?:style|guidelines|operator|manager|strategist|persona|mode)(?=$|[-\s])/i.test(`${id} ${name}`);
   const implicitInvocation = explicitImplicitInvocation !== undefined
     ? explicitImplicitInvocation
     : invocationPolicy === 'explicit'

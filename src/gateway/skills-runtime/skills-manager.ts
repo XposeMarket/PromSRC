@@ -908,7 +908,7 @@ export class SkillsManager {
     // Keep the entrypoint's frontmatter deliberately minimal. Routing and
     // invocation metadata belongs in the native manifest, where it can be
     // validated without turning a simple SKILL.md into an ad-hoc schema.
-    const manifest = {
+    const manifest: Record<string, unknown> = {
       schemaVersion: 'prometheus-skill-bundle-v1',
       id,
       name: data.name,
@@ -919,15 +919,15 @@ export class SkillsManager {
       promptSignals: promptSignalValidation.signals,
       categories: [],
       requiredTools: [],
-      permissions: {
-        workspaceRead: true,
-        workspaceWrite: true,
-        shell: false,
-        externalSideEffects: false,
-      },
-      implicitInvocation: data.implicitInvocation !== false,
       resources: [],
     };
+    // Omission is intentional: the loader applies its existing broad/manual/
+    // style/persona heuristic when implicitInvocation is not specified.
+    if (typeof data.implicitInvocation === 'boolean') {
+      manifest.implicitInvocation = data.implicitInvocation;
+    }
+    // createSkill() has no permission input. Do not broaden the old contract
+    // by claiming workspace-write access for a newly created skill.
     assertSkillScanAllowed(scanSkillText(JSON.stringify(manifest, null, 2), 'skill.json'), `Skill "${id}"`);
     fs.writeFileSync(path.join(skillDir, 'skill.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
     this.writeProvenance(skillDir, id, {
