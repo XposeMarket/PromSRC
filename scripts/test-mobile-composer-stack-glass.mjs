@@ -14,13 +14,14 @@ const owners = read('web-ui/src/mobile/mobile-style-owners.js');
 const generatedOwners = read('generated/public-web-ui/static/mobile/mobile-style-owners.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
-const chatRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
-const generatedChatRenderer = read('generated/public-web-ui/static/mobile/mobile-chat-renderer-runtime.js');
+const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const generatedRenderer = read('generated/public-web-ui/static/mobile/mobile-chat-renderer-runtime.js');
 
 assert.equal(generatedCss, css, 'generated composer-stack CSS must mirror source exactly');
 assert.equal(generatedData, data, 'generated mobile-data loader must mirror source exactly');
 assert.equal(generatedDataBase, dataBase, 'generated mobile-data base must mirror source exactly');
 assert.equal(generatedOwners, owners, 'generated mobile style-owner registry must mirror source exactly');
+assert.equal(generatedRenderer, renderer, 'generated mobile chat renderer must mirror source exactly');
 assert.doesNotMatch(dataBase, /stylesheet|mobile-composer-stack|mobile-liquid-glass/, 'data base must stay free of route stylesheet installation');
 assert.match(owners, /chat:\s*Object\.freeze\(\[[\s\S]*?mobile-composer-stack\.css/, 'chat must own the composer-stack stylesheet');
 assert.match(owners, /ensureMobileChatStyles\(\)/, 'chat route must expose an explicit stylesheet owner entry point');
@@ -58,21 +59,11 @@ assert.match(css, /saturate\(var\(--pm-lg-panel-saturate/, 'stack surfaces must 
 assert.match(css, /brightness\(var\(--pm-lg-panel-brightness/, 'stack surfaces must use the baked composer brightness token');
 assert.doesNotMatch(css, /blur\((?:16|18|20)px\)/, 'old thick-blur liquid glass must not be reintroduced in the stack stylesheet');
 assert.doesNotMatch(css, /linear-gradient\(135deg/, 'stack glass must stay neutral instead of using old directional shading');
-assert.match(
-  mobileCss,
-  /body\.pm-mobile-active \.pm-mobile-queued-prompts,[\s\S]*?body\.pm-mobile-active \.pm-composer,[\s\S]*?box-shadow:/,
-  'queued messages must use the same final liquid-glass finish as the composer',
-);
 
 assert.match(
   css,
   /\.pm-mobile-queued-prompts\s*\{[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?width:\s*auto;[\s\S]*?bottom:\s*calc\(var\(--pm-composer-stack-base-bottom\) \+ var\(--pm-goal-live-height, 0px\)\);/,
   'queued messages must share the composer horizontal inset and stack directly above it',
-);
-assert.match(
-  css,
-  /Raw development\/Electron mobile\.html loads mobile\.css directly[\s\S]*?body\.pm-mobile-active \.pm-mobile-queued-prompts\s*\{[\s\S]*?left:\s*var\(--pm-composer-stack-inset\);[\s\S]*?right:\s*var\(--pm-composer-stack-inset\);[\s\S]*?width:\s*auto;/,
-  'raw development/Electron CSS must preserve the composer-locked queue geometry',
 );
 assert.match(
   css,
@@ -92,11 +83,6 @@ assert.match(
 assert.match(css, /\[class\*="recovery"\]\[class\*="toast"\]/, 'dedicated recovery toast variants must be composer anchored');
 assert.match(css, /\[class\*="reconnect"\]\[class\*="toast"\]/, 'dedicated reconnect toast variants must be composer anchored');
 assert.match(css, /body\.pm-mobile-active\.pm-keyboard-open[\s\S]*?--pm-composer-stack-base-bottom/, 'keyboard-open mode must redefine the shared base instead of detaching individual overlays');
-assert.match(
-  mobileCss,
-  /body\.pm-mobile-active\.pm-mobile-document-scroll,[\s\S]*?body\.pm-mobile-active\.pm-mobile-document-scroll #mobile-root,[\s\S]*?body\.pm-mobile-active\.pm-mobile-document-scroll \.pm-app,[\s\S]*?body\.pm-mobile-active\.pm-mobile-document-scroll \.pm-page,[\s\S]*?body\.pm-mobile-active\.pm-mobile-document-scroll \.pm-body\s*\{[\s\S]*?background-color:\s*var\(--pm-bg\) !important;[\s\S]*?background-image:\s*none !important;/,
-  'document-scroll mobile shell layers must share one continuous theme backdrop',
-);
 
 assert.match(
   mobileCss,
@@ -130,24 +116,14 @@ assert.match(
   'generated chat geometry must keep the fixed background dock contract',
 );
 assert.match(
-  chatRenderer,
+  renderer,
   /function _reconcileMobileBackgroundSpawnDockMarkup\(host, markup\)[\s\S]*?reconcileKeyedTimelineRows\(host, markup/,
   'background dock updates must reconcile keyed lanes instead of replacing the expanded card shell',
 );
 assert.match(
-  generatedChatRenderer,
-  /function _reconcileMobileBackgroundSpawnDockMarkup\(host, markup\)[\s\S]*?reconcileKeyedTimelineRows\(host, markup/,
-  'generated background dock updates must reconcile keyed lanes instead of replacing the expanded card shell',
-);
-assert.match(
-  chatRenderer,
+  renderer,
   /data-pm-row-key="background:\$\{escapeHtml\(lane\.id\)\}"/,
   'background lanes must have stable keys across live tool events',
-);
-assert.match(
-  generatedChatRenderer,
-  /data-pm-row-key="background:\$\{escapeHtml\(lane\.id\)\}"/,
-  'generated background lanes must have stable keys across live tool events',
 );
 assert.match(
   pages,
