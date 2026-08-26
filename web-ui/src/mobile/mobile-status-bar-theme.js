@@ -1,6 +1,6 @@
 const STYLE_ID = 'pm-mobile-status-bar-theme-style';
 const LAYER_ID = 'pm-mobile-status-edge-tint';
-const STYLE_VERSION = 'pm-v302-2026-08-22-status-edge-theme-sync';
+const STYLE_VERSION = 'pm-v303-2026-08-26-status-edge-flow-fix';
 
 let rootObserver = null;
 let bodyObserver = null;

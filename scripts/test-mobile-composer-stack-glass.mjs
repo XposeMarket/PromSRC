@@ -58,6 +58,11 @@ assert.match(css, /saturate\(var\(--pm-lg-panel-saturate/, 'stack surfaces must 
 assert.match(css, /brightness\(var\(--pm-lg-panel-brightness/, 'stack surfaces must use the baked composer brightness token');
 assert.doesNotMatch(css, /blur\((?:16|18|20)px\)/, 'old thick-blur liquid glass must not be reintroduced in the stack stylesheet');
 assert.doesNotMatch(css, /linear-gradient\(135deg/, 'stack glass must stay neutral instead of using old directional shading');
+assert.match(
+  mobileCss,
+  /body\.pm-mobile-active \.pm-mobile-queued-prompts,[\s\S]*?body\.pm-mobile-active \.pm-composer,[\s\S]*?box-shadow:/,
+  'queued messages must use the same final liquid-glass finish as the composer',
+);
 
 assert.match(
   css,

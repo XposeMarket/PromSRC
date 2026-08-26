@@ -16966,6 +16966,7 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-c
 .pm-header .pm-online,
 .pm-header-action-cluster,
 .pm-completion-toast,
+body.pm-mobile-active .pm-mobile-queued-prompts,
 body.pm-mobile-active .pm-composer,
 body.pm-mobile-active .pm-tabbar {
   background: rgba(255,255,255,.04);
@@ -16987,6 +16988,7 @@ body.pm-mobile-active .pm-tabbar {
 :root[data-theme="dark"] .pm-header .pm-online,
 :root[data-theme="dark"] .pm-header-action-cluster,
 :root[data-theme="dark"] .pm-completion-toast,
+:root[data-theme="dark"] body.pm-mobile-active .pm-mobile-queued-prompts,
 :root[data-theme="dark"] body.pm-mobile-active .pm-composer,
 :root[data-theme="dark"] body.pm-mobile-active .pm-tabbar {
   background: rgba(255,255,255,.055);
@@ -17005,6 +17007,7 @@ body.pm-mobile-active .pm-tabbar {
   .pm-header .pm-online,
   .pm-header-action-cluster,
   .pm-completion-toast,
+  body.pm-mobile-active .pm-mobile-queued-prompts,
   body.pm-mobile-active .pm-composer,
   body.pm-mobile-active .pm-tabbar {
     border-color: transparent !important;
@@ -17013,6 +17016,7 @@ body.pm-mobile-active .pm-tabbar {
   .pm-header .pm-online::after,
   .pm-header-action-cluster::after,
   .pm-completion-toast::after,
+  body.pm-mobile-active .pm-mobile-queued-prompts::after,
   body.pm-mobile-active .pm-composer > .pm-glass-border,
   body.pm-mobile-active .pm-tabbar > .pm-glass-border {
     content: '';
@@ -17863,7 +17867,6 @@ body.pm-mobile-active :where(
   .pm-mobile-goal-pill,
   .pm-mobile-goal-details,
   .pm-chat-connection-status,
-  .pm-mobile-queued-prompts,
   .pm-tool-progress-pill,
   .pm-background-spawn-pill,
   .pm-background-spawn-close,

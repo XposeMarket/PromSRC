@@ -152,6 +152,11 @@ assert.doesNotMatch(statusCssSource, /blur\(/,
   'status-edge bridge must not add its own blur');
 assert.match(statusCssSource, /backdrop-filter:\s*none !important;/,
   'status-edge bridge must explicitly remain blur-free');
+assert.match(
+  statusCssSource,
+  /}\s*\/\* mobile\.css gives every direct app child[\s\S]*?body\.pm-mobile-active \.pm-app > \.pm-mobile-status-edge-tint\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?z-index:\s*5;/,
+  'status-edge tint must escape the app child normal-flow rule',
+);
 
 // Scope guard: this layer is material-only. Do not let a future cleanup sneak
 // geometry, motion, popover, or layout changes into the historical restore.
