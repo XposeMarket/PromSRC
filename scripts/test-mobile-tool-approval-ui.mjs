@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const sourcePages = read('web-ui/src/mobile/mobile-pages.js');
+const sourceVoicePage = read('web-ui/src/mobile/mobile-voice-page.js');
 const sourceCss = read('web-ui/src/styles/mobile.css');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedVoicePage = read('generated/public-web-ui/static/mobile/mobile-voice-page.js');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
 
 const cardStart = sourcePages.indexOf('function _renderMobileApprovalCard(');
@@ -28,7 +30,13 @@ assert.doesNotMatch(cardSource, /pm-q-|pm-mobile-question-popover/, 'approval ca
 assert.match(sourceCss, /\.pm-chat-approval-parameters/, 'approval details need parameter-row styling');
 assert.match(sourceCss, /\.pm-chat-approval-btn\.approve[\s\S]*?background: var\(--pm-text\)/, 'allow once must be the primary tool-approval action');
 assert.match(sourceCss, /\.pm-chat-approval-btn\.reject[\s\S]*?color: var\(--pm-muted\)/, 'deny must be the restrained tool-approval action');
+assert.match(sourceVoicePage, /pm-va-details/, 'voice approvals need the same tool-approval disclosure');
+assert.match(sourceVoicePage, /Allow this tool to run\?/, 'voice approvals need the tool-approval heading');
+assert.match(sourceVoicePage, /id="pm-va-tool"/, 'voice approvals need the monospace tool name slot');
+assert.match(sourceVoicePage, /id="pm-va-approve">Allow once/, 'voice approvals need a one-shot allow action');
 assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedVoicePage, sourceVoicePage, 'generated mobile-voice-page.js must mirror source');
 assert.match(generatedCss, /\.pm-chat-approval-parameters/, 'generated mobile CSS must include tool-approval styles');
+assert.match(generatedCss, /\.pm-va-details/, 'generated mobile CSS must include voice tool-approval styles');
 
 console.log('Mobile tool approval UI contract passed.');
