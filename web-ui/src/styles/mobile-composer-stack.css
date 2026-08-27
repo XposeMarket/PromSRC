@@ -546,15 +546,15 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 }
 .pm-trace-tool-icon.is-live {
   box-sizing: border-box;
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
   border: 0;
   border-radius: 50%;
   background-color: var(--pm-blue, #4aa8ff);
   -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
   mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
-  font-size: 0;
+  font-size: 12px;
   rotate: 0deg;
   animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }

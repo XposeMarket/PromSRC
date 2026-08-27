@@ -1,5 +1,6 @@
 import {
   coalesceToolActivityEntries,
+  renderToolActivityIcon,
   renderToolActivityEntry,
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
@@ -742,8 +743,9 @@ export function createMobileChatRendererRuntime(context = {}) {
       const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
-          <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : '›'}</span>
+          <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
           <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
+          <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
         </summary>
         <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>

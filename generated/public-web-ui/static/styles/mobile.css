@@ -5136,7 +5136,7 @@ html.pm-session-context-open * {
 .pm-trace-timeline {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   width: 100%;
   margin-top: 2px;
 }
@@ -5182,6 +5182,22 @@ html.pm-session-context-open * {
   opacity: .72;
 }
 .pm-trace-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
+  color: var(--pm-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+.pm-trace-tool-icon svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+.pm-trace-tool-chevron {
   flex: 0 0 auto;
   color: var(--pm-muted);
   font-size: 15px;
@@ -5189,11 +5205,12 @@ html.pm-session-context-open * {
   transform: rotate(0deg);
   transition: transform .18s ease;
 }
-.pm-trace-tool-group[open] .pm-trace-tool-icon {
+.pm-trace-tool-group[open] .pm-trace-tool-chevron {
   transform: rotate(90deg);
 }
 .pm-trace-tool-summary strong {
   display: inline-block;
+  flex: 1 1 auto;
   min-width: 0;
   color: var(--pm-muted);
   font-size: 12px;
@@ -5231,9 +5248,27 @@ html.pm-session-context-open * {
 .pm-trace-tool-body .tool-activity-entry-summary {
   display: flex;
   align-items: center;
+  gap: 7px;
   min-height: 20px;
+  font-size: 13px;
+  line-height: 1.55;
   padding: 0;
 }
+.pm-trace-tool-body .tool-activity-tool-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
+  color: var(--pm-muted);
+  vertical-align: middle;
+}
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="terminal"] { color: var(--pm-blue, #4aa8ff); }
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="pointer"],
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="keyboard"] { color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 72%, var(--pm-text)); }
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="edit"] { color: var(--pm-yellow, #f5c451); }
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="image"],
+.pm-trace-tool-body .tool-activity-tool-icon[data-tool-icon="video"] { color: color-mix(in srgb, var(--pm-purple, #a78bfa) 72%, var(--pm-text)); }
+.pm-trace-tool-body .tool-activity-tool-icon svg { display: block; width: 1em; height: 1em; }
 .pm-trace-tool-body .tool-activity-entry-summary .tool-activity-label {
   flex: 1 1 auto;
   grid-column: auto;

@@ -28,6 +28,8 @@ assert.doesNotMatch(renderer, /: 'Thought';/, 'generic Thought labels must stay 
 assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary journal/, 'live progress must own the active summary label');
 assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
 assert.match(renderer, /pm-trace-tool-icon\$\{isLiveCurrent \? ' is-live' : ''\}/, 'active tool rows must expose a live status indicator');
+assert.match(renderer, /renderToolActivityIcon\(\{ family: 'tool', key: 'tool\.summary' \}/, 'collapsed tool summaries must use the shared wrench icon');
+assert.match(renderer, /pm-trace-tool-chevron/, 'tool summaries must retain a visible expansion affordance beside the wrench');
 assert.match(pages, /reasoningKind:[\s\S]{0,220}'full_thought'/, 'curated paragraph thoughts must be tagged separately from summaries');
 assert.match(pages, /source: 'agent_thought',[\s\S]{0,100}reasoningKind: 'full_thought'/, 'assistant prose moved into the live trace must remain a visible full thought');
 assert.match(pages, /message\._pmTraceThoughtProbe = \{[\s\S]{0,220}extra: probe\.extra/, 'thought probe buffering must preserve presentation metadata');
@@ -40,6 +42,8 @@ assert.match(renderer, /inlineActivityVisible/, 'the foreground progress dock mu
 assert.match(renderer, /host\.hidden = !state\?\.message \|\| inlineActivityVisible/, 'the duplicate foreground progress pill must hide once inline activity exists');
 assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expose their busy state');
 assert.match(activity, /tool-activity-status-icon/, 'tool results must expose a compact status indicator');
+assert.match(activity, /export function renderToolActivityIcon/, 'tool rows must expose the shared icon renderer');
+assert.match(activity, /data-tool-icon/, 'tool icons must identify their mapped category');
 assert.match(activity, /state === 'succeeded' \? ''/, 'successful tool rows must not render a repeated checkmark');
 assert.match(chatCss, /\.pm-trace-thought-group/, 'thought disclosure styling must be present in the chat component owner');
 assert.match(chatCss, /\.pm-trace-thought-body[\s\S]*?width:\s*100%[\s\S]*?margin-left:\s*0/, 'thought body must remain full width without a nested rail');
@@ -56,7 +60,7 @@ assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \
 assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
 assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces must use the mobile font token');
 assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');
-assert.match(mobileCss, /\.pm-trace-timeline\s*\{[\s\S]*?gap:\s*6px[\s\S]*?margin-top:\s*2px/, 'trace groups must use the compact transition rhythm');
+assert.match(mobileCss, /\.pm-trace-timeline\s*\{[\s\S]*?gap:\s*2px[\s\S]*?margin-top:\s*2px/, 'trace groups must use the compact transition rhythm');
 assert.match(mobileCss, /\.pm-thinking-dots\s*\{[\s\S]*?margin-top:\s*2px[\s\S]*?padding-top:\s*0/, 'thinking dots must align with the trace rhythm');
 assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*var\(--pm-chat-trace-size\)/, 'visible thought prose must use the shared chat metrics');
 

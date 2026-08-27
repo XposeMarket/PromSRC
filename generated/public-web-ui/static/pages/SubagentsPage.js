@@ -20,6 +20,7 @@ import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
   installToolActivityExpansionPersistence,
+  renderToolActivityIcon,
   renderToolActivityEntry,
   toolActivitySummary,
 } from '../tool-activity.js';
@@ -1348,8 +1349,9 @@ function renderSubagentGroupedTrace(entries, { streaming = false } = {}) {
     const itemLabel = callCount ? 'call' : 'item';
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''}>
       <summary class="live-turn-tool-summary">
-        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+        <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
         <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+        <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderSubagentTraceList(group.entries)}</div>
