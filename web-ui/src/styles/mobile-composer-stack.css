@@ -401,6 +401,64 @@ body.pm-mobile-active.pm-keyboard-open .pm-mobile-goal-strip {
 body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
 }
+
+/* Turn-summary diffs are a compact receipt, not the full workspace viewer. */
+body.pm-mobile-active .pm-file-changes-card--turn-summary {
+  margin-top: 8px;
+  border-radius: 14px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head {
+  min-height: 34px;
+  padding: 7px 10px;
+  gap: 7px;
+  font-size: 11px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head span,
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-counts {
+  gap: 5px;
+  font-size: 10px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-row {
+  min-height: 30px;
+  padding: 5px 10px;
+  gap: 7px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-main {
+  gap: 5px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-status {
+  min-width: 43px;
+  padding: 2px 5px;
+  font-size: 7px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-path {
+  font-size: 10px;
+  line-height: 1.2;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-more summary {
+  min-height: 30px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+
+/* Keep the expanded editor's real controls above the glass decoration and
+   make its hit rectangle explicit after a visual-viewport recovery. */
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) {
+  isolation: isolate;
+}
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+  position: relative;
+  z-index: 4;
+  pointer-events: auto;
+}
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-input,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row button {
+  touch-action: manipulation;
+}
 body.pm-mobile-active.pm-keyboard-open .pm-tool-progress-dock {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px));
 }
@@ -516,9 +574,11 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
+  align-self: center;
+  margin: 0;
   color: color-mix(in srgb, var(--pm-muted) 78%, transparent);
   font-size: 0;
+  line-height: 1;
   transform: rotate(0deg);
   transition: transform .2s cubic-bezier(.16,1,.3,1);
 }
@@ -536,8 +596,8 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 }
 .pm-trace-thought-body {
   box-sizing: border-box;
-  width: calc(100% - 12px);
-  margin-left: 12px;
+  width: 100%;
+  margin-left: 0;
   padding: 5px 0 2px 9px;
   overflow: hidden;
   border-left: 3px solid color-mix(in srgb, var(--pm-muted) 28%, transparent);
@@ -661,7 +721,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-compaction[data-status="compacted"] strong::before,
 .pm-trace-compaction[data-status="done"] strong::before {
   border-color: rgba(34,197,94,.7);
-  background: linear-gradient(135deg, rgba(34,197,94,.95), rgba(22,163,74,.72));
+  background: linear-gradient(to bottom, rgba(34,197,94,.95), rgba(22,163,74,.72));
 }
 .pm-trace-compaction[data-status="failed"] strong::before {
   border-color: rgba(248,113,113,.7);

@@ -247,7 +247,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
       .map((entry) => String(entry?.text || entry?.content || '').trim())
       .filter(Boolean);
-    return coalesceToolActivityEntries(entries).filter((entry) => {
+    return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
       if (_isMobileImageGenerationStreamEntry(entry)) return false;
       if (_isMobilePreparedTraceEntry(entry)) return false;
       if (_isMobileVisionInjectionStatusText(entry?.text)) return false;
@@ -287,7 +287,8 @@ export function createMobileChatRendererRuntime(context = {}) {
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const entry = source[index];
       const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-      if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
+      if (!['agent_progress', 'reasoning_summary'].includes(String(extra.source || '').toLowerCase())
+        && String(entry?.type || '').toLowerCase() !== 'reasoning_summary') continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -308,6 +309,21 @@ export function createMobileChatRendererRuntime(context = {}) {
   function _isMobileTraceThoughtEntry(entry) {
     const type = String(entry?.type || 'info').toLowerCase();
     return type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type);
+  }
+
+  function _mobileTraceThoughtKind(entry) {
+    if (!_isMobileTraceThoughtEntry(entry)) return '';
+    if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+    if (explicit === 'summary' || explicit === 'full_thought') return explicit;
+    const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+    return String(entry?.type || '').toLowerCase() === 'reasoning_summary'
+      || source === 'reasoning_summary'
+      || source === 'agent_progress'
+      || extra.visibility === 'summary'
+      ? 'summary'
+      : 'full_thought';
   }
 
   function _mobileTraceGroupStableKey(group, index = 0) {
@@ -365,9 +381,11 @@ export function createMobileChatRendererRuntime(context = {}) {
       }
       if (_isMobileTraceThoughtEntry(entry)) {
         activeToolGroup = null;
+        const thoughtKind = _mobileTraceThoughtKind(entry);
+        const groupKind = thoughtKind === 'summary' ? 'thought-summary' : 'thought';
         const previous = groups[groups.length - 1];
-        if (previous?.kind === 'thought') previous.entries.push(entry);
-        else groups.push({ kind: 'thought', entries: [entry] });
+        if (previous?.kind === groupKind) previous.entries.push(entry);
+        else groups.push({ kind: groupKind, entries: [entry] });
         return;
       }
       if (!activeToolGroup) {
@@ -661,21 +679,23 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!groups.length) return '';
     if (!streaming
       && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
-      && !kindFilter?.has('thought')) return '';
+      && !kindFilter?.has('thought')
+      && !kindFilter?.has('thought-summary')) return '';
     const latestToolGroupIndex = groups.reduce((latest, group, index) => (
       group.kind === 'tools' ? index : latest
     ), -1);
     return `<div class="pm-trace-timeline">${groups.map((group, index) => {
-      if (group.kind === 'thought') {
+      if (group.kind === 'thought' || group.kind === 'thought-summary') {
+        const isSummaryThought = group.kind === 'thought-summary';
         const isLiveThought = streaming && index === groups.length - 1;
-        const progressSummary = isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
+        const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
         const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
         const duration = durationMs > 0 ? _formatMobileWorkDuration(durationMs) : '';
-        const summary = isLiveThought
-          ? (progressSummary || 'Thinking…')
-          : `Thought${duration ? ` for ${duration}` : ''}`;
+        const summary = isSummaryThought
+          ? (isLiveThought ? (progressSummary || 'Thinking…') : `Thought${duration ? ` for ${duration}` : ''}`)
+          : 'Thought';
         const summaryKey = _mobileTraceSummaryKey(summary);
-        const openAttr = (isLiveThought || openThoughts) ? ' open' : '';
+        const openAttr = (!isSummaryThought || isLiveThought || openThoughts) ? ' open' : '';
         return `<details class="pm-trace-thought-group"${openAttr}${isLiveThought ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
           <summary class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
             ${isLiveThought ? '<span class="pm-trace-thought-indicator is-live" aria-hidden="true"></span>' : ''}
@@ -834,7 +854,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const liveCompletionThoughts = m._pmLiveActivityCompleted === true
       ? _renderMobileGroupedTrace(completedTraceEntries, {
           streaming: false,
-          visibleKinds: ['thought'],
+          visibleKinds: ['thought', 'thought-summary'],
           openThoughts: true,
         })
       : '';
@@ -2860,14 +2880,16 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     // Background-agent details are a live work surface: keep their tool
     // timeline visible while an answer starts streaming instead of replacing
     // the timeline with the first response token.
-    const keepLiveTraceVisible = options.keepLiveTraceVisible === true || message?._backgroundAgentLive === true;
-    const liveTraceHtml = streaming && (keepLiveTraceVisible || !answerStarted || isVoiceTraceTurn) && Array.isArray(traceMessage.liveTraceEntries)
+    const liveTraceHtml = streaming && Array.isArray(traceMessage.liveTraceEntries)
       ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
     const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
     if (hasLiveTrace) {
-      inner += liveTraceHtml;
+      // Keep activity mounted through final-answer streaming. The work timer
+      // owns the disclosure target, so active traces can be collapsed without
+      // disappearing or being rebuilt as a second tool stream.
+      inner += `<div class="pm-trace-drawer open" data-trace-live="1">${liveTraceHtml}</div>`;
     } else if (_mobileTraceHasToolGroup(completedTraceEntries)) {
       inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
     } else {

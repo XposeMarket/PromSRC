@@ -63,6 +63,13 @@ function privateReasoning(data: Record<string, any>): boolean {
 }
 
 function reasoningExtra(data: Record<string, any>, eventType: string): Record<string, any> {
+  const explicitKind = String(data.reasoningKind || data.presentationKind || '').trim().toLowerCase();
+  const reasoningKind = explicitKind === 'private'
+    ? 'private'
+    : (eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta'
+      || String(data.source || '').toLowerCase() === 'reasoning_summary'
+      ? 'summary'
+      : 'full_thought');
   return {
     ...data,
     source: eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta'
@@ -70,6 +77,7 @@ function reasoningExtra(data: Record<string, any>, eventType: string): Record<st
       : String(data.source || 'agent_progress'),
     visibility: 'user',
     event: eventType,
+    reasoningKind,
   };
 }
 

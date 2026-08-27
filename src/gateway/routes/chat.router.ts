@@ -1412,7 +1412,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       type: 'think',
       actor: 'Prom',
       content,
-      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user' },
+      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user', reasoningKind: 'summary' },
     };
   }
   if (eventType === 'progress_state') {
@@ -1491,7 +1491,12 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       type: 'think',
       actor: 'Prom',
       content: truncateRuntimeProcessText(data?.thinking || data?.text || data?.message),
-      extra: { source: String(data?.source || 'runtime_checkpoint'), event: eventType, visibility },
+      extra: {
+        source: String(data?.source || 'runtime_checkpoint'),
+        event: eventType,
+        visibility,
+        reasoningKind: 'full_thought',
+      },
     };
   }
   if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
@@ -1502,7 +1507,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       type: 'think',
       actor: 'Prom',
       content,
-      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user' },
+      extra: { source: 'reasoning_summary', event: eventType, visibility: 'user', reasoningKind: 'summary' },
     };
   }
   if (eventType === 'error' || eventType === 'warn') {
@@ -21689,6 +21694,7 @@ router.post('/api/chat', async (req, res) => {
       message: 'The active Chat turn was aborted before normal completion.',
       reason: String(reason || 'operator_abort').slice(0, 160),
       runtimeId: chatStream.runtimeId,
+      clientRequestId: clientRequestId || undefined,
     };
     const frame = appendMainChatStreamEvent(resolvedSessionId, chatStream.streamId, 'error', payload);
     try {

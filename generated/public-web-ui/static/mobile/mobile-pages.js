@@ -2910,9 +2910,10 @@ function _renderMobileWorkTimer(msg, opts = {}) {
       ? Number(msg.workDurationMs)
       : ((Number.isFinite(endedAt) && endedAt > 0 ? endedAt : Number(msg?.timestamp || Date.now())) - startedAt));
   const label = `${active ? 'Working for' : 'Worked for'} ${escapeHtml(_formatMobileWorkDuration(duration))}`;
-  const hasTrace = !active && _mobileTraceHasToolGroup(_mobileWorkflowTraceEntriesForMessage(msg));
+  const traceEntries = _mobileWorkflowTraceEntriesForMessage(msg);
+  const hasTrace = traceEntries.length > 0;
   if (hasTrace) {
-    const expanded = opts.expanded ? ' expanded' : '';
+    const expanded = (opts.expanded || active) ? ' expanded' : '';
     return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace">
       ${label}
       <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3138,6 +3139,45 @@ function _recordMobileChatError(message, error) {
   return message.errorPresentation;
 }
 
+function _isMobileRuntimeAbortEvent(evt) {
+  const code = String(evt?.code || evt?.error?.code || '').trim().toUpperCase();
+  const reason = String(evt?.reason || '').trim().toLowerCase();
+  return code === 'MAIN_CHAT_RUNTIME_ABORTED'
+    || (String(evt?.type || '').toLowerCase() === 'error' && /^(operator_abort|user_abort|abort|aborted|stop)/.test(reason));
+}
+
+function _findMobileExpectedAbortTurn(thread, evt = null) {
+  if (!Array.isArray(thread)) return null;
+  const runtimeId = String(evt?.runtimeId || evt?.data?.runtimeId || '').trim();
+  const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
+  const clientRequestId = String(evt?.clientRequestId || evt?.data?.clientRequestId || '').trim();
+  const hasIdentity = !!(runtimeId || streamId || clientRequestId);
+  return [...thread].reverse().find((turn) => {
+    if (turn?.role !== 'ai' || turn?._pmAbortRequested !== true) return false;
+    if (clientRequestId && String(turn._clientRequestId || '').trim() === clientRequestId) return true;
+    if (runtimeId && String(turn.runtimeId || '').trim() === runtimeId) return true;
+    if (streamId && String(turn.streamId || turn._streamId || '').trim() === streamId) return true;
+    // An identified late frame must never settle a newer queued turn. The
+    // identity-less fallback is only for older gateways that cannot echo any
+    // request/runtime/stream identifier.
+    return !hasIdentity;
+  }) || null;
+}
+
+function _acknowledgeMobileExpectedAbortTurn(turn) {
+  if (!turn) return false;
+  turn._pmAbortRequested = false;
+  turn._pmAbortAcknowledged = true;
+  turn.streaming = false;
+  turn._pmLiveActivityCompleted = true;
+  if (!String(turn.body?.text || turn.content || '').trim()) {
+    turn.body = { ...(turn.body || {}), text: '[Generation stopped by user. Runtime abort sent and process log preserved.]' };
+    turn.content = turn.body.text;
+  }
+  delete turn.errorPresentation;
+  return true;
+}
+
 function _clearRecoveredMobileChatError(message) {
   if (!message) return false;
   let changed = false;
@@ -3328,16 +3368,20 @@ function _handleMobileCleanThought(message, evt) {
     source: String(evt?.source || '').trim() || 'agent_thought',
     visibility,
     event: String(evt?.type || '').trim() || 'agent_thought',
+    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || '').trim().toLowerCase()
+      || (String(evt?.source || '').trim().toLowerCase() === 'reasoning_summary' ? 'summary' : 'full_thought'),
     ...(streamId ? { streamId } : {}),
     ...(eventKey ? { eventKey } : {}),
     ...(Number.isFinite(seq) && seq >= 0 ? { seq: Math.floor(seq) } : {}),
   };
-  // Agent-thought packets are the curated reasoning/progress channel used by
-  // the main chat. Keep the latest narration slot for the compact live view,
-  // and also journal the concrete thought in the expandable process stream so
-  // background-agent details do not collapse down to summary-only output.
+  // Summary packets own the replaceable one-line progress slot. A curated
+  // paragraph thought is a separate journal entry and must never replace that
+  // slot; otherwise the renderer cannot keep the two presentation surfaces
+  // distinct after a tool call or reconnect.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
-  const updated = _setMobileLiveProgressNarration(message, text, { replace: true, visibility });
+  const updated = thoughtExtra.reasoningKind === 'summary'
+    ? _setMobileLiveProgressNarration(message, text, { replace: true, visibility })
+    : false;
   const alreadyJournaled = eventKey && Array.isArray(message.liveTraceEntries)
     && message.liveTraceEntries.some((entry) => (
       String(entry?.eventKey || entry?.extra?.eventKey || '').trim() === eventKey
@@ -3490,7 +3534,13 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
       ...normalized,
       type: 'think',
       text,
-      extra: { ...normalizedExtra, source: 'reasoning_summary', visibility: 'user', event: event || 'reasoning_summary' },
+      extra: {
+        ...normalizedExtra,
+        source: 'reasoning_summary',
+        visibility: 'user',
+        reasoningKind: 'summary',
+        event: event || 'reasoning_summary',
+      },
     };
   }
   if ((event === 'token_narration_boundary' || normalizedType === 'preamble') && text) {
@@ -3498,7 +3548,26 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
       ...normalized,
       type: 'preamble',
       text,
-      extra: { ...normalizedExtra, source: 'agent_progress', visibility: 'user', event: event || 'token_narration_boundary' },
+      extra: {
+        ...normalizedExtra,
+        source: 'agent_progress',
+        visibility: 'user',
+        reasoningKind: 'summary',
+        event: event || 'token_narration_boundary',
+      },
+    };
+  }
+  if ((normalizedType === 'think' || normalizedType === 'reasoning_summary') && text) {
+    const source = String(normalizedExtra.source || entry.source || '').trim().toLowerCase();
+    const kind = String(normalizedExtra.reasoningKind || '').trim().toLowerCase()
+      || (source === 'reasoning_summary' || source === 'agent_progress' || normalizedType === 'reasoning_summary'
+        ? 'summary'
+        : 'full_thought');
+    return {
+      ...normalized,
+      type: 'think',
+      text,
+      extra: { ...normalizedExtra, reasoningKind: kind },
     };
   }
   const inference = _mobileRecoveredTraceInference(normalized);
@@ -4130,6 +4199,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
       type,
       text,
       time: String(trace?.time || _nowTime()),
+      ...(trace?.extra && typeof trace.extra === 'object' ? { extra: { ...trace.extra } } : {}),
     });
   }
 }
@@ -4157,6 +4227,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
       type,
       text,
       time: String(trace?.time || _nowTime()),
+      ...(trace?.extra && typeof trace.extra === 'object' ? { extra: { ...trace.extra } } : {}),
     });
   }
   return liveEntries.length ? [...liveEntries, ...out] : out;
@@ -4169,7 +4240,6 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
   // The durable process log is a recovery fallback, not a second narration
   // channel. When the stream already supplied thought text, replaying the
   // same planning updates from processEntries produces duplicate prose rows.
-  const hasExplicitLiveThought = liveSources.some((entry) => _isMobileUserVisibleReasoningTraceEntry(entry));
   const structuredActions = new Set(liveSources.map((entry) => String(
     entry?.activity?.action
       || entry?.extra?.action
@@ -4220,7 +4290,6 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
       text = _dedupeMobileTraceProseText(text);
     }
     if (_isMobileTraceThoughtType(type) && !_isMobileUserVisibleReasoningTraceEntry({ ...entry, type, extra })) return;
-    if (fromProcess && _isMobileTraceThoughtType(type) && hasExplicitLiveThought) return;
     const preview = entry.preview && typeof entry.preview === 'object' ? entry.preview : null;
     const previewData = String(preview?.dataUrl || entry.dataUrl || '').trim();
     if (!text && !previewData) return;
@@ -4269,7 +4338,6 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const type = String(entry?.type || '').toLowerCase();
     return type === 'preamble' || type === 'think' || type === 'assistant';
   };
-  const hasExplicitLiveThought = message.liveTraceEntries.some((entry) => _isMobileUserVisibleReasoningTraceEntry(entry));
   // A cold recovery may have only process entries. Reconstruct every curated
   // visible thought in order; retaining only the latest one makes a recovered
   // turn look like a single flat tool stream and loses the reasoning between
@@ -4287,7 +4355,6 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const key = traceDedupeKey(entry);
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
-      if (hasExplicitLiveThought) continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
       if (existingThoughts.some((seen) => _mobileTraceThoughtTextsSimilar(seen, text))) continue;
       existingThoughts.push(text);
@@ -4549,10 +4616,13 @@ function _isMobileUserVisibleReasoningTraceEntry(entry) {
   if (type === 'preamble' || type === 'assistant') return true;
   if (type !== 'think' && !_isMobileTraceReasoningSummaryType(type)) return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const reasoningKind = String(extra.reasoningKind || '').trim().toLowerCase();
+  if (reasoningKind === 'private') return false;
+  if (reasoningKind === 'summary' || reasoningKind === 'full_thought') return true;
   const source = String(extra.source || entry?.source || '').toLowerCase();
   return type === 'reasoning_summary'
-    ? source === 'reasoning_summary' || extra.visibility === 'user' || extra.visibility === 'summary'
-    : source === 'reasoning_summary' || extra.visibility === 'user';
+    ? source === 'reasoning_summary' || source === 'agent_progress' || extra.visibility === 'user' || extra.visibility === 'summary'
+    : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || extra.visibility === 'user';
 }
 
 function _mobileTraceThoughtCoveredByEarlier(message, text, excludeEntry = null, candidateEntry = null) {
@@ -5549,24 +5619,54 @@ function _isMobileExplicitMediaToolName(name) {
 }
 
 function _mobileHasPendingImageGeneration(message) {
-  if (message?.streaming !== true) return false;
-  const entries = [
+  if (message?.streaming !== true
+    || message?.finalResponseStarted === true
+    || message?._pmFinalReceived === true
+    || message?._pmLiveActivityCompleted === true
+    || message?._done === true) return false;
+  const rawEntries = [
     ...(Array.isArray(message.processEntries) ? message.processEntries : []),
     ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
   ];
-  const hasActiveGenerateImageTool = entries.some((entry) => {
+  const entries = [];
+  const seen = new Set();
+  rawEntries.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
     const type = String(entry?.type || '').toLowerCase();
-    if (type === 'result' || type === 'error') return false;
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const eventKey = String(extra.eventKey || entry.eventKey || '').trim();
+    const callId = String(extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || entry.callId || '').trim();
     const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
-    return _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+    const key = `${type}|${eventKey || callId || text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
   });
-  const hasTerminalGenerateImageResult = entries.some((entry) => {
+  let activeImageCalls = 0;
+  let observedImageActivity = false;
+  entries.forEach((entry) => {
     const type = String(entry?.type || '').toLowerCase();
-    if (type !== 'result' && type !== 'error') return false;
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    if (presentationMode === 'background') return;
     const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
-    return _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+    const isImageActivity = _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+    if (!isImageActivity) return;
+    observedImageActivity = true;
+    if (type === 'result' || type === 'error' || type === 'tool_result') {
+      activeImageCalls = Math.max(0, activeImageCalls - 1);
+      return;
+    }
+    if (type === 'tool' || type === 'call') {
+      activeImageCalls += 1;
+      return;
+    }
+    // Some older runtimes only emitted a progress/info row for image jobs.
+    // Treat the first such row as an open job, while repeated progress rows do
+    // not inflate the count.
+    if (activeImageCalls === 0) activeImageCalls = 1;
   });
-  return hasActiveGenerateImageTool && !hasTerminalGenerateImageResult;
+  return observedImageActivity && activeImageCalls > 0;
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
@@ -6500,7 +6600,7 @@ function _renderMobileFileChangesGroup(data, options = {}) {
   const label = String(options.label || '').trim();
   const checkpointAction = _renderMobileWorkspaceCheckpointAction(options.checkpoint || data.checkpoint);
   return `
-    <div class="pm-file-changes-card">
+    <div class="pm-file-changes-card pm-file-changes-card--turn-summary">
       <div class="pm-file-changes-head">
         <strong>${label ? `${escapeHtml(label)} - ` : ''}${data.summary.fileCount} ${fileWord} changed</strong>
         <span class="pm-file-changes-actions">${checkpointAction}<span class="pm-file-changes-total"><em class="ins">+${data.summary.insertions}</em><em class="del">-${data.summary.deletions}</em></span></span>
@@ -12953,6 +13053,9 @@ void main() {
     sideState.sideThreadRendered = true;
     _wireMobileProcessRunActions(sideThreadEl);
     _wireMobileChatEnhancements(sideThreadEl);
+    // Background details use a separate reconciled thread, so install the
+    // delegated work-timer disclosure listener here as well as on main chat.
+    _installMobileTimestampReveal(sideThreadEl, () => {});
     if (shouldFollowTail) requestAnimationFrame(() => {
       if (sideThreadEl) sideThreadEl.scrollTop = sideThreadEl.scrollHeight;
     });
@@ -13623,8 +13726,32 @@ void main() {
   const _onComposerFocusOutKb = (event) => {
     if (_isKeyboardComposerTarget(event.target)) _onComposerBlurKb();
   };
+  const _resetKeyboardControllerForLifecycle = () => {
+    _pmKbFocusActive = false;
+    _pmKbFocusGraceUntil = 0;
+    _pmKbPinUntil = 0;
+    _pmKbViewportMode = '';
+    if (_pmKbFocusGraceTimer) {
+      window.clearTimeout(_pmKbFocusGraceTimer);
+      _pmKbFocusGraceTimer = 0;
+    }
+    _pmKbApp?.classList.remove('pm-keyboard-open');
+    _pmKbApp?.style.removeProperty('--pm-keyboard-offset');
+    _pmKbClearComposerShift();
+    _pmKbClearComposerViewportStyles();
+    _pmKbTabbar?.style.removeProperty('display');
+  };
+  const _onPageHideKb = () => _resetKeyboardControllerForLifecycle();
+  const _onPageShowKb = () => { _resetKeyboardControllerForLifecycle(); _scheduleKeyboardOffset(); };
+  const _onVisibilityChangeKb = () => {
+    if (document.visibilityState === 'hidden') _resetKeyboardControllerForLifecycle();
+    else _onPageShowKb();
+  };
   page.addEventListener('focusin', _onComposerFocusInKb);
   page.addEventListener('focusout', _onComposerFocusOutKb);
+  window.addEventListener('pagehide', _onPageHideKb);
+  window.addEventListener('pageshow', _onPageShowKb);
+  document.addEventListener('visibilitychange', _onVisibilityChangeKb);
   function _teardownKeyboardController() {
     if (_pmKbRaf) { cancelAnimationFrame(_pmKbRaf); _pmKbRaf = 0; }
     if (_pmKbPinRaf) { cancelAnimationFrame(_pmKbPinRaf); _pmKbPinRaf = 0; }
@@ -13634,6 +13761,9 @@ void main() {
       _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
     }
     window.removeEventListener('resize', _onWindowKeyboardResize);
+    window.removeEventListener('pagehide', _onPageHideKb);
+    window.removeEventListener('pageshow', _onPageShowKb);
+    document.removeEventListener('visibilitychange', _onVisibilityChangeKb);
     page.removeEventListener('focusin', _onComposerFocusInKb);
     page.removeEventListener('focusout', _onComposerFocusOutKb);
     _pmKbFocusActive = false;
@@ -14275,6 +14405,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
     if (!noteChatStreamSeq(evt)) return 'duplicate';
+    if (evt.type === 'error' && _isMobileRuntimeAbortEvent(evt) && aiTurn._pmAbortRequested === true) {
+      _acknowledgeMobileExpectedAbortTurn(aiTurn);
+      return 'aborted';
+    }
     const eventClientRequestId = String(evt.clientRequestId || '').trim();
     if (eventClientRequestId && (aiTurn._pmAdmissionPending === true || !String(aiTurn._clientRequestId || '').trim())) {
       aiTurn._clientRequestId = eventClientRequestId;
@@ -14667,6 +14801,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       const activeThread = _activeMobileThread();
       const aiTurn = _findLatestAssistantTurn(activeThread);
       if (aiTurn?.streaming) {
+        aiTurn._pmAbortRequested = true;
         _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.');
         const streamed = String(aiTurn.body?.text || aiTurn.content || '').trim();
         aiTurn.body = aiTurn.body || { sender: 'Prometheus', text: '' };
@@ -15522,6 +15657,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (stopSent) return;
       stopSent = true;
       stoppedByUser = true;
+      aiTurn._pmAbortRequested = true;
       const run = __pmChat.activeRuns?.[actualSessionId] || {};
       const runtimeId = String(run.runtimeId || aiTurn.runtimeId || _readMobileActiveRun(actualSessionId)?.runtimeId || '').trim();
       _appendMobileProcess(aiTurn, 'warn', 'Stop requested. Aborting the live runtime now.', runtimeId ? { runtimeId } : undefined);
@@ -15627,6 +15763,19 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(true);
       return 'streaming';
     }
+    if (eventType === 'error' && _isMobileRuntimeAbortEvent({ ...data, ...msg, type: eventType })) {
+      const expectedAbortTurn = _findMobileExpectedAbortTurn(activeThread, { ...data, ...msg });
+      if (expectedAbortTurn) {
+        _acknowledgeMobileExpectedAbortTurn(expectedAbortTurn);
+        _clearMobileToolProgress(requestedSession);
+        _renderMobileToolProgressDock(toolProgressDock, requestedSession);
+        _clearMobileActiveRun(requestedSession);
+        _markMobileSessionRunning(requestedSession, false);
+        setBusy(false, requestedSession);
+        renderThreadNow();
+        return 'aborted';
+      }
+    }
     _markMobileSessionRunning(requestedSession, true);
     let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
     const foundRequestOwnedTurn = !!aiTurn;
@@ -15705,7 +15854,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       at: msg.at || data?.at,
     };
     const applied = applyMobileChatStreamEvent(aiTurn, evt);
-    if (applied === 'done' || applied === 'error') {
+    if (applied === 'aborted') {
+      _clearMobileActiveRun(requestedSession);
+      _markMobileSessionRunning(requestedSession, false);
+      setBusy(false, requestedSession);
+      renderThreadNow();
+    } else if (applied === 'done' || applied === 'error') {
       finalizeMobileLiveAiTurn(aiTurn);
       _clearMobileActiveRun(requestedSession);
       _markMobileSessionRunning(requestedSession, false);
