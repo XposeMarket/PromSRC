@@ -562,7 +562,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   box-sizing: border-box;
   width: 100%;
   margin-left: 0;
-  padding: 5px 0 2px;
+  padding: 2px 0 0;
   overflow: hidden;
 }
 .pm-trace-thought-body .pm-live-trace {
@@ -573,11 +573,13 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-thought-body .pm-live-md,
 .pm-trace-thought-body .pm-live-prose p,
 .pm-trace-thought-body .pm-live-md p {
+  margin: 0;
   padding: 2px 0;
-  color: color-mix(in srgb, var(--pm-text) 56%, var(--pm-muted));
+  color: var(--pm-text);
   font-family: var(--pm-chat-font);
-  font-size: var(--pm-chat-trace-size);
-  line-height: var(--pm-chat-trace-line);
+  font-size: var(--pm-chat-reading-size);
+  font-weight: 420;
+  line-height: var(--pm-chat-reading-line);
 }
 @keyframes pm-trace-loading-icon-rotate {
   to { rotate: 360deg; }

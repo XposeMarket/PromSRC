@@ -62,6 +62,8 @@ assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces mus
 assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');
 assert.match(mobileCss, /\.pm-trace-timeline\s*\{[\s\S]*?gap:\s*2px[\s\S]*?margin-top:\s*2px/, 'trace groups must use the compact transition rhythm');
 assert.match(mobileCss, /\.pm-thinking-dots\s*\{[\s\S]*?margin-top:\s*2px[\s\S]*?padding-top:\s*0/, 'thinking dots must align with the trace rhythm');
-assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*var\(--pm-chat-trace-size\)/, 'visible thought prose must use the shared chat metrics');
+assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)/, 'visible thought prose must use the shared chat metrics');
+assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?margin:\s*0[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)[\s\S]*?font-weight:\s*420/, 'visible thought prose must match final-response typography');
+assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*13px[\s\S]*?font-weight:\s*650/, 'tool summaries must use the stronger chat typography');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');
