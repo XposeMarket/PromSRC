@@ -716,15 +716,11 @@ export function createMobileChatRendererRuntime(context = {}) {
         const isLiveThought = streaming && index === groups.length - 1;
         const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
         const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
-        const duration = durationMs > 0 ? _formatMobileWorkDuration(durationMs) : '';
-        const summary = isSummaryThought
-          ? (isLiveThought ? (progressSummary || 'Thinking…') : `Thought${duration ? ` for ${duration}` : ''}`)
-          : 'Thought';
-        const summaryKey = _mobileTraceSummaryKey(summary);
+        const summaryMarkup = progressSummary
+          ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${escapeHtml(progressSummary)}</strong></div>`
+          : '';
         return `<div class="pm-trace-thought-group" data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
-          <div class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
-            <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-          </div>
+          ${summaryMarkup}
           <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div>
         </div>`;
       }

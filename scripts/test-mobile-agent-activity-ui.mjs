@@ -22,6 +22,9 @@ assert.match(renderer, /const liveCompletionThoughts = m\._pmLiveActivityComplet
 assert.match(renderer, /visibleKinds: \['thought', 'thought-summary'\][\s\S]*?openThoughts: true/, 'live-completion thoughts must be visible and closable');
 assert.match(renderer, /group\.kind === 'thought' \|\| group\.kind === 'thought-summary'/, 'thought summaries and paragraph thoughts must render as distinct groups');
 assert.match(renderer, /const isSummaryThought = group\.kind === 'thought-summary'/, 'summary thought disclosure state must be explicit');
+assert.match(renderer, /const summaryMarkup = progressSummary\s*\?/, 'only live progress text may retain a thought summary row');
+assert.doesNotMatch(renderer, /`Thought\$\{duration/, 'generic Thought duration labels must stay removed');
+assert.doesNotMatch(renderer, /: 'Thought';/, 'generic Thought labels must stay removed');
 assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary journal/, 'live progress must own the active summary label');
 assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
 assert.match(renderer, /pm-trace-tool-icon\$\{isLiveCurrent \? ' is-live' : ''\}/, 'active tool rows must expose a live status indicator');
