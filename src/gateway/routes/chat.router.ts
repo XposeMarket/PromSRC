@@ -3756,6 +3756,7 @@ async function handleChat(
     const verification = verifyToolCategorySurface(activation.category, initialToolSurface.provider, {
       unboundedTools: initialToolSurface.unbounded,
       requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+      requestFilter: effectiveToolFilter,
       workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
     });
     recordToolCategoryProvisioning(
@@ -4512,6 +4513,7 @@ async function handleChat(
         const verification = verifyToolCategorySurface(requestedToolCategory, providerSurface.provider, {
           unboundedTools: providerSurface.unbounded,
           requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+          requestFilter: effectiveToolFilter,
           workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
         });
         recordToolCategoryProvisioning(
