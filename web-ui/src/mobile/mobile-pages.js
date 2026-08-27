@@ -12859,7 +12859,11 @@ void main() {
       : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
     const finalText = String(record?.error || record?.result || '').trim();
-    const displayText = running ? sourceText : (finalText || sourceText);
+    // A persisted running lane often has no assistant message yet. Keep the
+    // cold-open detail useful until its stream/session replay supplies one.
+    const displayText = running
+      ? (sourceText || String(record?.task || '').trim() || 'Working…')
+      : (finalText || sourceText);
     const traceMessage = {
       ...source,
       content: displayText,
