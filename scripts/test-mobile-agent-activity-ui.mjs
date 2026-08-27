@@ -13,7 +13,8 @@ const mobileCss = read('web-ui/src/styles/mobile.css');
 
 assert.match(renderer, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
 assert.doesNotMatch(pages, /function _mobileTracePresentationEntries\(/, 'chat activity presentation must stay out of the static page chunk');
-assert.match(renderer, /details class="pm-trace-thought-group"/, 'thoughts must render as closable disclosures');
+assert.match(renderer, /<div class="pm-trace-thought-group"/, 'thoughts must render as always-visible activity blocks');
+assert.doesNotMatch(renderer, /details class="pm-trace-thought-group"/, 'thoughts must not render as collapsible disclosures');
 assert.doesNotMatch(pages, /function _renderMobileGroupedTrace\(/, 'grouped trace rendering must stay in the lazy renderer');
 assert.match(pages, /_pmLiveActivityCompleted = true/, 'the renderer must know when a live turn crossed its final frame');
 assert.match(renderer, /visibleKinds = null, openThoughts = false/, 'trace rendering must support thought and tool filtering');
@@ -31,8 +32,7 @@ assert.match(pages, /_pmAbortRequested = true/, 'expected user aborts must be ma
 assert.match(pages, /_isMobileRuntimeAbortEvent/, 'late runtime abort frames must use the existing stopped turn');
 assert.match(pages, /_installMobileTimestampReveal\(sideThreadEl/, 'background detail threads must wire work-timer disclosure');
 assert.match(renderer, /liveCompletionTools \|\| _renderMobileGroupedTrace/, 'the tool stream must remain in its collapsible drawer');
-assert.match(renderer, /embeddedToolsByThought/, 'thoughts and their following tool phases must share one parent disclosure');
-assert.match(renderer, /embeddedToolGroups\.has\(group\)/, 'embedded tool phases must not render as duplicate sibling disclosures');
+assert.match(renderer, /details class="pm-trace-tool-group"/, 'tool phases must remain the collapsible activity surface');
 assert.match(renderer, /inlineActivityVisible/, 'the foreground progress dock must defer to the inline activity stream');
 assert.match(renderer, /host\.hidden = !state\?\.message \|\| inlineActivityVisible/, 'the duplicate foreground progress pill must hide once inline activity exists');
 assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expose their busy state');
@@ -44,7 +44,7 @@ assert.doesNotMatch(chatCss, /\.pm-trace-thought-body[\s\S]{0,260}border-left:\s
 assert.doesNotMatch(mobileCss, /\.pm-trace-tool-group\s*\{[\s\S]{0,180}border-left:/, 'tool groups must not render a left rail');
 assert.doesNotMatch(mobileCss, /\.pm-trace-tool-body \.tool-activity-entry\s*\{[\s\S]{0,220}border-left:/, 'tool entries must not render a left rail');
 assert.doesNotMatch(mobileCss, /\.pm-live-segment\s*\{[\s\S]{0,180}border-left:/, 'live trace entries must not render a left rail');
-assert.match(chatCss, /\.pm-trace-thought-chevron::before/, 'thought chevron must use a centered shape instead of a font glyph');
+assert.doesNotMatch(chatCss, /pm-trace-thought-chevron/, 'thoughts must not render a collapse chevron');
 assert.match(chatCss, /\.pm-trace-compaction\s*\{/, 'chat-owned compaction styling must stay with the activity component owner');
 assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
 assert.match(chatCss, /phosphor-circle-notch\.svg/, 'live activity spinners must use the packaged icon asset');
