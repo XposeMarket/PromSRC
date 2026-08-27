@@ -575,8 +575,9 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-thought-body .pm-live-md p {
   padding: 2px 0;
   color: color-mix(in srgb, var(--pm-text) 56%, var(--pm-muted));
-  font-size: 13px;
-  line-height: 1.45;
+  font-family: var(--pm-chat-font);
+  font-size: var(--pm-chat-trace-size);
+  line-height: var(--pm-chat-trace-line);
 }
 @keyframes pm-trace-loading-icon-rotate {
   to { rotate: 360deg; }

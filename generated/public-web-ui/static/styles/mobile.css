@@ -3735,8 +3735,11 @@ html.pm-session-context-open * {
 /* ---------- chat ---------- */
 .pm-chat-thread {
   --pm-time-reveal-x: 0px;
+  --pm-chat-font: var(--pm-font);
   --pm-chat-reading-size: 16.5px;
   --pm-chat-reading-line: 1.43;
+  --pm-chat-trace-size: 15px;
+  --pm-chat-trace-line: 1.4;
   display: flex;
   flex-direction: column;
   gap: 17px;
@@ -3911,8 +3914,9 @@ html.pm-session-context-open * {
   border-radius: 18px;
   padding: 12px 14px;
   box-shadow: var(--pm-shadow-sm);
-  font-size: 15px;
-  line-height: 1.45;
+  font-family: var(--pm-chat-font);
+  font-size: var(--pm-chat-reading-size);
+  line-height: var(--pm-chat-reading-line);
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -3972,7 +3976,7 @@ html.pm-session-context-open * {
 .pm-msg.from-ai .pm-live-md,
 .pm-msg.from-ai .pm-live-prose {
   color: var(--pm-text);
-  font-family: var(--pm-font);
+  font-family: var(--pm-chat-font);
   font-size: var(--pm-chat-reading-size);
   font-weight: 420;
   line-height: var(--pm-chat-reading-line);
@@ -3984,9 +3988,10 @@ html.pm-session-context-open * {
 .pm-msg.from-ai .pm-live-prose,
 .pm-msg.from-ai .pm-live-md {
   color: color-mix(in srgb, var(--pm-text) 82%, var(--pm-muted));
-  font-size: clamp(14px, calc(0.92 * var(--pm-chat-reading-size)), 16px);
+  font-family: var(--pm-chat-font);
+  font-size: var(--pm-chat-trace-size);
   font-weight: 380;
-  line-height: 1.38;
+  line-height: var(--pm-chat-trace-line);
 }
 .pm-msg.from-ai .pm-live-trace .pm-live-text,
 .pm-msg.from-ai .pm-live-trace .pm-live-segment,
@@ -3995,7 +4000,7 @@ html.pm-session-context-open * {
   color: inherit;
   font-size: 1em;
   font-weight: 380;
-  line-height: 1.38;
+  line-height: var(--pm-chat-trace-line);
 }
 .pm-msg.from-ai .pm-final-answer {
   transform-origin: left bottom;
@@ -5122,18 +5127,18 @@ html.pm-session-context-open * {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 .pm-trace-timeline {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 .pm-trace-thought {
   width: 100%;
@@ -5363,7 +5368,8 @@ html.pm-session-context-open * {
   align-items: center;
   gap: 6px;
   min-height: 20px;
-  padding-top: 3px;
+  margin-top: 2px;
+  padding-top: 0;
 }
 .pm-thinking-dots span {
   width: 7px;

@@ -51,5 +51,10 @@ assert.match(chatCss, /phosphor-circle-notch\.svg/, 'live activity spinners must
 assert.match(chatCss, /@keyframes pm-trace-loading-icon-rotate[\s\S]*?rotate: 360deg/, 'live activity spinners must animate as a centered rotation');
 assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong/, 'active tool summaries must use the live shimmer treatment');
 assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
+assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces must use the mobile font token');
+assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');
+assert.match(mobileCss, /\.pm-trace-timeline\s*\{[\s\S]*?gap:\s*6px[\s\S]*?margin-top:\s*2px/, 'trace groups must use the compact transition rhythm');
+assert.match(mobileCss, /\.pm-thinking-dots\s*\{[\s\S]*?margin-top:\s*2px[\s\S]*?padding-top:\s*0/, 'thinking dots must align with the trace rhythm');
+assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*var\(--pm-chat-trace-size\)/, 'visible thought prose must use the shared chat metrics');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');
