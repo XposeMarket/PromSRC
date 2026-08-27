@@ -7713,10 +7713,25 @@ RULES:
       }
     } catch (err: any) {
       console.error('[v2] Chat error:', err.message);
+      const preservedToolResults = allToolResults.length > 0 ? allToolResults : undefined;
+      const preservedThinking = allThinking || undefined;
+      const preservedReasoningSummary = normalizeReasoningSummary(allReasoningSummary);
       if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
-        return { type: 'chat', text: 'No final response was generated. Please retry.' };
+        return {
+          type: 'chat',
+          text: 'No final response was generated. Please retry.',
+          thinking: preservedThinking,
+          reasoningSummary: preservedReasoningSummary,
+          toolResults: preservedToolResults,
+        };
       }
-      return { type: 'chat', text: `Error: ${err.message}` };
+      return {
+        type: 'chat',
+        text: `Error: ${err.message}`,
+        thinking: preservedThinking,
+        reasoningSummary: preservedReasoningSummary,
+        toolResults: preservedToolResults,
+      };
     }
 
     let toolCalls = response.tool_calls;
@@ -9672,6 +9687,22 @@ RULES:
 	        tool_call_id: toolCallId || undefined,
 	        content: toolMessageContent,
 	      });
+
+      // Thought submission is a structured terminal action. Once it has been
+      // accepted, asking the provider for a prose response creates an
+      // unnecessary extra round and can turn a valid Thought into a false
+      // failure when the provider returns an empty completion.
+      if (isBrainThoughtRuntime && toolName === 'brain_thought_submit' && !toolResult.error) {
+        sendSSE('info', { message: 'Thought submission accepted; stopping the model loop.' });
+        return {
+          type: 'execute',
+          text: '',
+          thinking: allThinking || undefined,
+          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+          toolResults: allToolResults,
+        };
+      }
+
       if (isSupervisionLoop && toolName === 'prometheus_thread_ops' && !toolResult.error) {
         const controlPayload = parseSupervisionControlPayload(toolResult);
         const controlAction = String(toolArgs?.action || '').trim().toLowerCase();

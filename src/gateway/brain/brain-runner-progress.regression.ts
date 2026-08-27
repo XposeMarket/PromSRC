@@ -21,6 +21,13 @@ async function main(): Promise<void> {
     const brainStateApi = await import('./brain-state');
     const { BrainRunner, checkpointBrainRuntime, createBrainHandleChatAdapter } = await import('./brain-runner');
 
+    const brainRunnerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'gateway', 'brain', 'brain-runner.ts'), 'utf8');
+    assert.match(
+      brainRunnerSource,
+      /const runFailed = \/\^error:\/i\.test\(String\(resultText \|\| ''\)\.trim\(\)\) && !submissionSucceeded;/,
+      'a successful structured submission must not be invalidated by a later provider error text',
+    );
+
     const forwardedChatArgs: any[][] = [];
     const bridge = createBrainHandleChatAdapter(async (...args: any[]) => {
       forwardedChatArgs.push(args);

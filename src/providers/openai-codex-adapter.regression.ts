@@ -75,6 +75,26 @@ async function main(): Promise<void> {
   assert.match(fallbackBlock, /No final response was generated\. Please retry\./, 'missing finals must be reported explicitly');
   assert.doesNotMatch(fallbackBlock, /allToolResults|\.result\b|`Done\./, 'missing finals must never synthesize prose from tool results');
 
+  const providerCatchStart = chatSource.indexOf("if (err?.code === 'CODEX_INCOMPLETE_STREAM'");
+  const providerCatchEnd = chatSource.indexOf('let toolCalls', providerCatchStart);
+  assert.ok(providerCatchStart >= 0 && providerCatchEnd > providerCatchStart, 'provider error handling block must exist');
+  const providerCatchBlock = chatSource.slice(providerCatchStart, providerCatchEnd);
+  assert.match(
+    providerCatchBlock,
+    /toolResults: preservedToolResults/,
+    'provider failures must preserve tool results for Brain outcome verification and recovery',
+  );
+
+  const thoughtTerminalStart = chatSource.indexOf(
+    "if (isBrainThoughtRuntime && toolName === 'brain_thought_submit' && !toolResult.error)",
+  );
+  const thoughtTerminalEnd = chatSource.indexOf("if (isSupervisionLoop && toolName === 'prometheus_thread_ops'", thoughtTerminalStart);
+  assert.ok(thoughtTerminalStart >= 0 && thoughtTerminalEnd > thoughtTerminalStart, 'Brain Thought terminal submission guard must exist');
+  const thoughtTerminalBlock = chatSource.slice(thoughtTerminalStart, thoughtTerminalEnd);
+  assert.match(thoughtTerminalBlock, /type: 'execute'/, 'accepted Thought submissions must return an execution result');
+  assert.match(thoughtTerminalBlock, /text: ''/, 'accepted Thought submissions must not request a prose final');
+  assert.match(thoughtTerminalBlock, /toolResults: allToolResults/, 'accepted Thought submissions must return the completed tool history');
+
   console.log('openai-codex empty-final regressions passed');
 }
 
