@@ -5156,8 +5156,6 @@ html.pm-session-context-open * {
 .pm-trace-tool-group {
   width: 100%;
   min-width: 0;
-  border-left: 3px solid color-mix(in srgb, var(--pm-orange) 50%, transparent);
-  padding-left: 9px;
 }
 .pm-trace-tool-group summary {
   list-style: none;
@@ -5219,11 +5217,10 @@ html.pm-session-context-open * {
   width: 100%;
   min-width: 0;
   border: 0;
-  border-left: 3px solid rgba(148,163,184,.45);
   border-radius: 0;
   background: transparent;
   overflow: visible;
-  padding: 1px 0 1px 9px;
+  padding: 1px 0;
   box-sizing: border-box;
 }
 .pm-trace-tool-body .tool-activity-entry-summary {
@@ -5265,10 +5262,6 @@ html.pm-session-context-open * {
   line-height: 1.2;
   text-transform: uppercase;
 }
-.pm-trace-tool-body .tool-activity-entry[data-status="preparing"],
-.pm-trace-tool-body .tool-activity-entry[data-status="running"] { border-left-color: color-mix(in srgb, var(--pm-orange) 62%, transparent); }
-.pm-trace-tool-body .tool-activity-entry[data-status="succeeded"] { border-left-color: rgba(47,125,68,.52); }
-.pm-trace-tool-body .tool-activity-entry[data-status="failed"] { border-left-color: rgba(229,74,58,.62); }
 .pm-trace-tool-body .tool-activity-label {
   grid-column: 1;
   grid-row: 2;
@@ -5312,9 +5305,8 @@ html.pm-session-context-open * {
 .pm-trace-tool-body .tool-activity-detail-row pre {
   max-height: 190px;
   margin: 0;
-  padding: 3px 0 3px 8px;
+  padding: 3px 0;
   overflow: auto;
-  border-left: 1px solid rgba(148, 163, 184, .18);
   border-radius: 0;
   background: transparent;
   color: var(--pm-muted);
@@ -5388,8 +5380,7 @@ html.pm-session-context-open * {
   40% { transform: scale(1); opacity: 1; }
 }
 .pm-live-segment {
-  border-left: 3px solid rgba(148,163,184,.45);
-  padding: 1px 0 1px 9px;
+  padding: 1px 0;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
@@ -5451,21 +5442,6 @@ html.pm-session-context-open * {
   height: 100%;
   object-fit: contain;
   transform: translateZ(0);
-}
-.pm-live-segment.think {
-  border-color: rgba(99,102,241,.5);
-}
-.pm-live-segment.tool {
-  border-color: color-mix(in srgb, var(--pm-orange) 58%, transparent);
-}
-.pm-live-segment.vision {
-  border-color: rgba(56,189,248,.6);
-}
-.pm-live-segment.result {
-  border-color: rgba(47,125,68,.52);
-}
-.pm-live-segment.error {
-  border-color: rgba(229,74,58,.62);
 }
 .pm-trace-tool-group-shell {
   width: 100%;
@@ -9957,13 +9933,6 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 :root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-msg-status-divider {
   background: linear-gradient(90deg, rgba(214, 183, 94, .42), rgba(214, 183, 94, .06));
-}
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-trace-tool-group {
-  border-left-color: rgba(214, 183, 94, .54);
-}
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-trace-tool-body .tool-activity-entry:is([data-status="preparing"], [data-status="running"]),
-:root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-live-segment.tool {
-  border-left-color: rgba(214, 183, 94, .68);
 }
 :root[data-skin="dark"] body.pm-mobile-active .pm-chat-body .pm-trace-compaction[data-status="compacting"] strong::before {
   border-color: rgba(240, 217, 139, .82);

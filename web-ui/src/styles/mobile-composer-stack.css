@@ -624,9 +624,8 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   box-sizing: border-box;
   width: 100%;
   margin-left: 0;
-  padding: 5px 0 2px 9px;
+  padding: 5px 0 2px;
   overflow: hidden;
-  border-left: 3px solid color-mix(in srgb, var(--pm-muted) 28%, transparent);
 }
 .pm-trace-thought-body .pm-live-trace {
   margin-top: 0;

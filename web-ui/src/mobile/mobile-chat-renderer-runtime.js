@@ -710,34 +710,20 @@ export function createMobileChatRendererRuntime(context = {}) {
         group.kind === 'tools' ? index : latest
       ), -1);
     }
-    return `<div class="pm-trace-timeline">${groups.map((group, index) => {
-      if (group.kind === 'thought' || group.kind === 'thought-summary') {
-        const isSummaryThought = group.kind === 'thought-summary';
-        const isLiveThought = streaming && index === groups.length - 1;
-        const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
-        const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
-        const duration = durationMs > 0 ? _formatMobileWorkDuration(durationMs) : '';
-        const summary = isSummaryThought
-          ? (isLiveThought ? (progressSummary || 'Thinking…') : `Thought${duration ? ` for ${duration}` : ''}`)
-          : 'Thought';
-        const summaryKey = _mobileTraceSummaryKey(summary);
-        const openAttr = (!isSummaryThought || isLiveThought || openThoughts) ? ' open' : '';
-        return `<details class="pm-trace-thought-group"${openAttr}${isLiveThought ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
-          <summary class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
-            ${isLiveThought ? '<span class="pm-trace-thought-indicator is-live" aria-hidden="true"></span>' : ''}
-            <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-            <span class="pm-trace-thought-chevron" aria-hidden="true"></span>
-          </summary>
-          <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div>
-        </details>`;
+    // A thought and the tool phase it introduces are one activity phase. Keep
+    // the tool disclosure inside that thought disclosure instead of rendering
+    // two sibling controls that look like duplicate activity.
+    const embeddedToolsByThought = new Map();
+    const embeddedToolGroups = new Set();
+    groups.forEach((group, index) => {
+      const next = groups[index + 1];
+      if ((group.kind === 'thought' || group.kind === 'thought-summary') && next?.kind === 'tools') {
+        embeddedToolsByThought.set(group, next);
+        embeddedToolGroups.add(next);
       }
-      if (group.kind === 'compaction') {
-        return group.entries.map(_renderMobileCompactionBreak).join('');
-      }
-      if (group.kind === 'vision') {
-        return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
-      }
-      const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
+    });
+    const renderToolGroup = (group, groupIndex) => {
+      const isLiveCurrent = streaming && groupIndex === latestToolGroupIndex && groupIndex === groups.length - 1;
       const progressSummary = isLiveCurrent ? activeProgressSummary : '';
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
@@ -755,6 +741,40 @@ export function createMobileChatRendererRuntime(context = {}) {
         </summary>
         <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
       </details>`;
+    };
+    return `<div class="pm-trace-timeline">${groups.map((group, index) => {
+      if (embeddedToolGroups.has(group)) return '';
+      if (group.kind === 'thought' || group.kind === 'thought-summary') {
+        const isSummaryThought = group.kind === 'thought-summary';
+        const embeddedToolGroup = embeddedToolsByThought.get(group);
+        const isLiveThought = streaming && (
+          index === groups.length - 1
+          || (embeddedToolGroup && index + 1 === latestToolGroupIndex && index + 1 === groups.length - 1)
+        );
+        const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
+        const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
+        const duration = durationMs > 0 ? _formatMobileWorkDuration(durationMs) : '';
+        const summary = isSummaryThought
+          ? (isLiveThought ? (progressSummary || 'Thinking…') : `Thought${duration ? ` for ${duration}` : ''}`)
+          : 'Thought';
+        const summaryKey = _mobileTraceSummaryKey(summary);
+        const openAttr = (!isSummaryThought || isLiveThought || openThoughts) ? ' open' : '';
+        return `<details class="pm-trace-thought-group"${openAttr}${isLiveThought ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
+          <summary class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
+            ${isLiveThought ? '<span class="pm-trace-thought-indicator is-live" aria-hidden="true"></span>' : ''}
+            <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
+            <span class="pm-trace-thought-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}${embeddedToolGroup ? renderToolGroup(embeddedToolGroup, index + 1) : ''}</div></div>
+        </details>`;
+      }
+      if (group.kind === 'compaction') {
+        return group.entries.map(_renderMobileCompactionBreak).join('');
+      }
+      if (group.kind === 'vision') {
+        return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
+      }
+      return renderToolGroup(group, index);
     }).join('')}</div>`;
   }
 
