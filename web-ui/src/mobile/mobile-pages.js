@@ -98,6 +98,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-chat-adapter.js';
+import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { createMobileTimelineView } from '../features/chat/timeline/mobile-timeline-view.js';
 import { captureKeyedScrollState, reconcileKeyedTimelineRows } from '../features/chat/timeline/keyed-dom.js';
 import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
@@ -571,6 +572,8 @@ if (!__pmChat.toolProgressBySession || typeof __pmChat.toolProgressBySession !==
 if (!__pmChat.resolvedQuestionIds || typeof __pmChat.resolvedQuestionIds !== 'object') __pmChat.resolvedQuestionIds = {};
 if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== 'object') __pmChat.mobileRecoveryOwners = {};
 if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
+
+const mobileStreamReceiptLedger = createMobileStreamReceiptLedger();
 
 const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
   defaultSessionId: MOBILE_CHAT_SESSION_ID,
@@ -2633,6 +2636,25 @@ function _rememberMobileCompletedAssistantTurn(sessionId, message) {
   };
 }
 
+function _findMobileRecentlyCompletedTurn(thread, evt = null, sessionId = '') {
+  if (!Array.isArray(thread)) return null;
+  const clientRequestId = String(evt?.clientRequestId || evt?.data?.clientRequestId || '').trim();
+  const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
+  if (!clientRequestId && !streamId) return null;
+  const sid = String(sessionId || evt?.sessionId || '').trim();
+  const pinned = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
+  if (pinned && Date.now() - Number(pinned.at || 0) <= 120_000) {
+    const pinnedTurn = pinned.turn;
+    if (clientRequestId && String(pinnedTurn?._clientRequestId || '').trim() === clientRequestId) return pinnedTurn;
+    if (streamId && String(pinnedTurn?._streamId || pinnedTurn?._pmLastStreamId || '').trim() === streamId) return pinnedTurn;
+  }
+  return [...thread].reverse().find((turn) => {
+    if (turn?.role !== 'ai' || turn.streaming === true) return false;
+    if (clientRequestId && String(turn._clientRequestId || '').trim() === clientRequestId) return true;
+    return !!streamId && String(turn._streamId || turn._pmLastStreamId || '').trim() === streamId;
+  }) || null;
+}
+
 function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
   const sid = String(sessionId || '').trim();
   const pin = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
@@ -3241,6 +3263,7 @@ function _findMobileExpectedAbortTurn(thread, evt = null) {
 
 function _acknowledgeMobileExpectedAbortTurn(turn) {
   if (!turn) return false;
+  if (turn._pmAbortAcknowledged === true && turn._pmAbortRequested !== true) return true;
   turn._pmAbortRequested = false;
   turn._pmAbortAcknowledged = true;
   turn.streaming = false;
@@ -14281,6 +14304,7 @@ void main() {
 
   function noteChatStreamSeq(evt) {
     if (!evt) return true;
+    if (mobileStreamReceiptLedger.has(requestedSession, evt)) return false;
     const seq = Math.max(0, Math.floor(Number(evt?.seq || 0)) || 0);
     const streamId = evt?.streamId ? String(evt.streamId) : '';
     const cid = typeof evt.clientRequestId === 'string' ? evt.clientRequestId.trim() : '';
@@ -14304,13 +14328,16 @@ void main() {
       __pmChat.activeRuns[requestedSession] = { ...run, busy: run.busy !== false, runtimeId };
       _rememberMobileActiveRun(requestedSession, { runtimeId });
     }
-    if (!seq) return true;
+    if (!seq) {
+      return mobileStreamReceiptLedger.accept(requestedSession, evt);
+    }
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     const run = __pmChat.activeRuns[requestedSession] || {};
     const previousStreamId = String(run.streamId || '').trim();
     const streamChanged = !!streamId && !!previousStreamId && streamId !== previousStreamId;
     const prevSeq = Math.max(0, Math.floor(Number(run.lastSeq || 0)) || 0);
     if (!streamChanged && seq <= prevSeq) return false;
+    if (!mobileStreamReceiptLedger.accept(requestedSession, evt)) return false;
     __pmChat.activeRuns[requestedSession] = {
       ...run,
       busy: true,
@@ -14447,9 +14474,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
     if (!noteChatStreamSeq(evt)) return 'duplicate';
-    if (evt.type === 'error' && _isMobileRuntimeAbortEvent(evt) && aiTurn._pmAbortRequested === true) {
-      _acknowledgeMobileExpectedAbortTurn(aiTurn);
-      return 'aborted';
+    if (evt.type === 'error' && _isMobileRuntimeAbortEvent(evt)) {
+      if (aiTurn._pmAbortRequested === true || aiTurn._pmAbortAcknowledged === true) {
+        _acknowledgeMobileExpectedAbortTurn(aiTurn);
+        return 'aborted';
+      }
+      if (aiTurn._pmFinalReceived === true) return 'duplicate';
     }
     const eventClientRequestId = String(evt.clientRequestId || '').trim();
     if (eventClientRequestId && (aiTurn._pmAdmissionPending === true || !String(aiTurn._clientRequestId || '').trim())) {
@@ -14865,6 +14895,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           ? `[Stopped by user]\n\n${streamed}`
           : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
         aiTurn.content = aiTurn.body.text;
+        _acknowledgeMobileExpectedAbortTurn(aiTurn);
         finalizeMobileLiveAiTurn(aiTurn);
       }
       _clearMobileActiveRun(sid);
@@ -15529,6 +15560,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         targetAiTurn.body.text = streamed
           ? `[Stopped by user]\n\n${streamed}`
           : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
+        targetAiTurn._pmAbortRequested = false;
+        targetAiTurn._pmAbortAcknowledged = true;
       }
       targetAiTurn.streaming = false;
       targetAiTurn.workEndedAt = Number(targetAiTurn.workEndedAt || Date.now()) || Date.now();
@@ -15768,6 +15801,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const isInternalWatchRun = String(data?.source || data?.run?.source || '').trim().toLowerCase() === 'internal_watch';
     const incomingClientRequestId = String(data?.clientRequestId || '').trim();
     const eventType = String(msg.event || data?.event || data?.type || '');
+    const evt = {
+      ...data,
+      type: eventType,
+      seq: msg.seq || data?.seq,
+      streamId: msg.streamId || data?.streamId,
+      at: msg.at || data?.at,
+    };
     if (eventType === 'user_message') {
       const ownClientRequestId = String(__pmChat.sentClientRequestIds?.[requestedSession] || '').trim();
       if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return 'own-user';
@@ -15828,9 +15868,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(true);
       return 'streaming';
     }
+    if (mobileStreamReceiptLedger.has(requestedSession, evt)) return 'duplicate';
     if (eventType === 'error' && _isMobileRuntimeAbortEvent({ ...data, ...msg, type: eventType })) {
       const expectedAbortTurn = _findMobileExpectedAbortTurn(activeThread, { ...data, ...msg });
       if (expectedAbortTurn) {
+        if (!noteChatStreamSeq(evt)) return 'duplicate';
         _acknowledgeMobileExpectedAbortTurn(expectedAbortTurn);
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
@@ -15841,6 +15883,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'aborted';
       }
     }
+    if (_findMobileRecentlyCompletedTurn(activeThread, evt, requestedSession)) return 'duplicate';
     _markMobileSessionRunning(requestedSession, true);
     let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
     const foundRequestOwnedTurn = !!aiTurn;
@@ -15912,13 +15955,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (activeRunKind === 'main_chat_goal') aiTurn.messageKind = 'goal_turn';
     }
     if (isInternalWatchRun) aiTurn.messageKind = 'internal_watch_review';
-    const evt = {
-      ...data,
-      type: eventType,
-      seq: msg.seq || data?.seq,
-      streamId: msg.streamId || data?.streamId,
-      at: msg.at || data?.at,
-    };
     const applied = applyMobileChatStreamEvent(aiTurn, evt);
     if (applied === 'aborted') {
       _clearMobileActiveRun(requestedSession);
