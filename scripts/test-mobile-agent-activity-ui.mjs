@@ -20,6 +20,9 @@ assert.match(renderer, /const liveCompletionThoughts = m\._pmLiveActivityComplet
 assert.match(renderer, /visibleKinds: \['thought', 'thought-summary'\][\s\S]*?openThoughts: true/, 'live-completion thoughts must be visible and closable');
 assert.match(renderer, /group\.kind === 'thought' \|\| group\.kind === 'thought-summary'/, 'thought summaries and paragraph thoughts must render as distinct groups');
 assert.match(renderer, /const isSummaryThought = group\.kind === 'thought-summary'/, 'summary thought disclosure state must be explicit');
+assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary journal/, 'live progress must own the active summary label');
+assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
+assert.match(renderer, /pm-trace-tool-icon\$\{isLiveCurrent \? ' is-live' : ''\}/, 'active tool rows must expose a live status indicator');
 assert.match(pages, /reasoningKind:[\s\S]{0,220}'full_thought'/, 'curated paragraph thoughts must be tagged separately from summaries');
 assert.match(pages, /_pmAbortRequested = true/, 'expected user aborts must be marked before transport teardown');
 assert.match(pages, /_isMobileRuntimeAbortEvent/, 'late runtime abort frames must use the existing stopped turn');
@@ -35,5 +38,7 @@ assert.match(chatCss, /\.pm-trace-thought-body[\s\S]*?width:\s*100%[\s\S]*?margi
 assert.match(chatCss, /\.pm-trace-thought-chevron::before/, 'thought chevron must use a centered shape instead of a font glyph');
 assert.match(chatCss, /\.pm-trace-compaction\s*\{/, 'chat-owned compaction styling must stay with the activity component owner');
 assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong/, 'active tool summaries must use the live shimmer treatment');
+assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');

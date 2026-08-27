@@ -284,10 +284,22 @@ export function createMobileChatRendererRuntime(context = {}) {
 
   function _mobileTraceProgressSummary(entries) {
     const source = Array.isArray(entries) ? entries : [];
+    // `agent_progress` is the single mutable live slot. Prefer it over the
+    // durable reasoning-summary journal so an active tool cannot resurrect an
+    // older summary as a second label after a reconnect.
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const entry = source[index];
       const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-      if (!['agent_progress', 'reasoning_summary'].includes(String(extra.source || '').toLowerCase())
+      if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
+      const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (text) return text.slice(0, 220);
+    }
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const entry = source[index];
+      const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+      if (String(extra.source || '').toLowerCase() !== 'reasoning_summary'
         && String(entry?.type || '').toLowerCase() !== 'reasoning_summary') continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
         .replace(/\s+/g, ' ')
@@ -675,15 +687,29 @@ export function createMobileChatRendererRuntime(context = {}) {
     const kindFilter = Array.isArray(visibleKinds) || visibleKinds instanceof Set
       ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
       : null;
-    const groups = _mobileTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
+    let groups = _mobileTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
     if (!groups.length) return '';
     if (!streaming
       && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
       && !kindFilter?.has('thought')
       && !kindFilter?.has('thought-summary')) return '';
-    const latestToolGroupIndex = groups.reduce((latest, group, index) => (
+    let latestToolGroupIndex = groups.reduce((latest, group, index) => (
       group.kind === 'tools' ? index : latest
     ), -1);
+    const activeProgressSummary = streaming ? _mobileTraceProgressSummary(entries) : '';
+    // The mutable progress slot belongs to the current live tool phase. Once
+    // a tool group is the last group, hide its matching Thought copy so the
+    // text has one visual owner and cannot appear to overwrite an earlier
+    // thought position during rapid stream paints or recovery.
+    if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
+      groups = groups.filter((group) => !(
+        group.kind === 'thought-summary'
+        && _mobileTraceThoughtTextsSimilar(_mobileTraceProgressSummary(group.entries), activeProgressSummary)
+      ));
+      latestToolGroupIndex = groups.reduce((latest, group, index) => (
+        group.kind === 'tools' ? index : latest
+      ), -1);
+    }
     return `<div class="pm-trace-timeline">${groups.map((group, index) => {
       if (group.kind === 'thought' || group.kind === 'thought-summary') {
         const isSummaryThought = group.kind === 'thought-summary';
@@ -711,8 +737,8 @@ export function createMobileChatRendererRuntime(context = {}) {
       if (group.kind === 'vision') {
         return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
       }
-      const isLiveCurrent = streaming && index === latestToolGroupIndex;
-      const progressSummary = isLiveCurrent ? _mobileTraceProgressSummary(entries) : '';
+      const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
+      const progressSummary = isLiveCurrent ? activeProgressSummary : '';
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
       const visibleEntries = _mobileVisibleTraceEntries(group.entries);
@@ -723,7 +749,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
-          <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
+          <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : '›'}</span>
           <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
         </summary>

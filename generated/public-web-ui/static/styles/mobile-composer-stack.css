@@ -567,6 +567,26 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   color: transparent;
   animation: pm-trace-thought-shimmer 2.2s linear infinite;
 }
+.pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
+  color: color-mix(in srgb, var(--pm-text) 68%, var(--pm-muted));
+  background: linear-gradient(105deg, currentColor 28%, color-mix(in srgb, var(--pm-text) 88%, white) 50%, currentColor 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: pm-trace-thought-shimmer 2.2s linear infinite;
+}
+.pm-trace-tool-icon.is-live {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid color-mix(in srgb, var(--pm-blue, #4aa8ff) 82%, transparent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  font-size: 0;
+  transform: none !important;
+  animation: pm-trace-thought-spin .9s linear infinite;
+}
 .pm-trace-thought-chevron {
   display: inline-flex;
   width: 14px;
@@ -660,9 +680,30 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   border-color: color-mix(in srgb, var(--pm-red) 72%, transparent);
   color: var(--pm-red);
 }
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"] {
+  position: relative;
+  font-size: 0;
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::before,
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  content: '';
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
 @media (prefers-reduced-motion: reduce) {
   .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
-  .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
+  .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"],
+  .pm-trace-tool-icon.is-live,
+  .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
     animation: none;
   }
 }
