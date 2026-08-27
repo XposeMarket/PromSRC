@@ -2639,12 +2639,56 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     const existing = Array.isArray(target[key]) ? target[key] : [];
     const incoming = Array.isArray(source[key]) ? source[key] : [];
     if (!incoming.length) return;
-    const seen = new Set(existing.map((item) => JSON.stringify(item)));
     target[key] = existing.slice();
+    const keyFor = (item) => {
+      if (!item || typeof item !== 'object') return '';
+      const extra = item.extra && typeof item.extra === 'object' ? item.extra : {};
+      const eventKey = String(
+        item.eventKey
+          || extra.eventKey
+          || ((extra.streamId || item.streamId) && (extra.seq ?? item.seq) !== undefined
+            ? `${extra.streamId || item.streamId}:${extra.seq ?? item.seq}`
+            : ''),
+      ).trim();
+      if (eventKey) return `event:${eventKey}`;
+      const callId = String(
+        item.callId
+          || item.toolCallId
+          || extra.callId
+          || extra.call_id
+          || extra.toolCallId
+          || extra.tool_call_id
+          || item.activity?.callId
+          || item.activity?.activityId
+          || '',
+      ).trim();
+      const type = String(item.type || item.kind || '').toLowerCase();
+      const action = String(item.action || item.toolName || extra.action || extra.toolName || item.activity?.action || '').trim().toLowerCase();
+      const text = String(item.text || item.content || item.message || '').replace(/\s+/g, ' ').trim();
+      const preview = String(item.preview?.dataUrl || item.dataUrl || '').slice(0, 120);
+      if (!callId && !action && !text && !preview) return '';
+      return `${type}|${callId}|${action}|${text}|${preview}`;
+    };
+    const positions = new Map();
+    target[key].forEach((item, index) => {
+      const itemKey = keyFor(item);
+      if (itemKey && !positions.has(itemKey)) positions.set(itemKey, index);
+    });
     incoming.forEach((item) => {
-      const id = JSON.stringify(item);
-      if (!seen.has(id)) {
-        seen.add(id);
+      const itemKey = keyFor(item);
+      const existingIndex = itemKey ? positions.get(itemKey) : undefined;
+      if (existingIndex !== undefined) {
+        const prior = target[key][existingIndex];
+        const priorText = String(prior?.text || prior?.content || '').trim();
+        const incomingText = String(item?.text || item?.content || '').trim();
+        target[key][existingIndex] = {
+          ...prior,
+          ...item,
+          ...(priorText.length > incomingText.length ? { text: prior.text } : {}),
+          ...(prior?.extra || item?.extra ? { extra: { ...(prior?.extra || {}), ...(item?.extra || {}) } } : {}),
+        };
+      } else {
+        if (itemKey) positions.set(itemKey, target[key].length);
         target[key].push(item);
       }
     });
@@ -4398,7 +4442,11 @@ function _moveMobileAnswerTextIntoTrace(message, type = 'think') {
     // reasoning/commentary. Tool activity may arrive after it, but that must
     // not turn it into a hidden raw-thought row.
     _appendMobileLiveTrace(message, type, text, {
-      extra: { visibility: 'user', source: 'reasoning_summary' },
+      extra: {
+        visibility: 'user',
+        source: 'agent_thought',
+        reasoningKind: 'full_thought',
+      },
     });
   }
   if (message.body) message.body.text = '';
@@ -4680,7 +4728,12 @@ function _flushMobileTraceThoughtProbe(message, { force = false } = {}) {
   const comparable = _mobileTraceComparableText(text);
   const ready = force || comparable.length >= 48 || /[.!?]\s*$/.test(text) || /\n\s*\n/.test(text);
   if (!ready) {
-    message._pmTraceThoughtProbe = { type, text, time: probe.time || _nowTime() };
+    message._pmTraceThoughtProbe = {
+      type,
+      text,
+      time: probe.time || _nowTime(),
+      extra: probe.extra && typeof probe.extra === 'object' ? { ...probe.extra } : null,
+    };
     return false;
   }
   _pushMobileTraceThoughtEntry(message, type, text, probe.time || _nowTime(), probe.extra);

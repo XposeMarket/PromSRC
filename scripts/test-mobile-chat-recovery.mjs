@@ -151,6 +151,9 @@ assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ord
 assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must retain explicit user-visible reasoning summaries');
 assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
+assert.match(pages, /const keyFor = \(item\) => \{/, 'recovery must define a stable activity merge key');
+assert.match(pages, /return `event:\$\{eventKey\}`/, 'recovery activity merge must prefer stream event identity');
+assert.match(pages, /return `\$\{type\}\|\$\{callId\}\|\$\{action\}\|\$\{text\}\|\$\{preview\}`/, 'recovery activity merge must fall back to normalized content');
 assert.match(toolActivityRuntime, /entry\?\.extra\?\.action \|\| entry\?\.extra\?\.toolName/, 'cold recovery rows must load the existing tool activity renderer');
 assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy tool event-shaped rows must be normalized before rich coalescing');
 assert.match(pages, /rawType = String\(entry\.type \|\| entry\.kind \|\| ''\)\.toLowerCase\(\)/, 'mobile recovery must inspect legacy event-shaped trace types');

@@ -542,10 +542,13 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   opacity: .72;
 }
 .pm-trace-thought-indicator.is-live {
-  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 82%, transparent);
-  border-top-color: transparent;
+  border: 0;
+  background-color: var(--pm-blue, #4aa8ff);
+  -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
   opacity: 1;
-  animation: pm-trace-thought-spin .9s linear infinite;
+  rotate: 0deg;
+  animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }
 .pm-trace-thought-summary strong {
   display: inline-block;
@@ -577,15 +580,18 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   animation: pm-trace-thought-shimmer 2.2s linear infinite;
 }
 .pm-trace-tool-icon.is-live {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 13px;
-  border: 2px solid color-mix(in srgb, var(--pm-blue, #4aa8ff) 82%, transparent);
-  border-top-color: transparent;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 0;
   border-radius: 50%;
+  background-color: var(--pm-blue, #4aa8ff);
+  -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
   font-size: 0;
-  transform: none !important;
-  animation: pm-trace-thought-spin .9s linear infinite;
+  rotate: 0deg;
+  animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }
 .pm-trace-thought-chevron {
   display: inline-flex;
@@ -635,8 +641,8 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   font-size: 13px;
   line-height: 1.45;
 }
-@keyframes pm-trace-thought-spin {
-  to { transform: rotate(360deg); }
+@keyframes pm-trace-loading-icon-rotate {
+  to { rotate: 360deg; }
 }
 @keyframes pm-trace-thought-shimmer {
   from { background-position: 220% 0; }
@@ -667,10 +673,15 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 }
 .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
 .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
-  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 72%, transparent);
-  border-top-color: transparent;
-  color: var(--pm-blue, #4aa8ff);
-  animation: pm-trace-thought-spin .9s linear infinite;
+  box-sizing: border-box;
+  border: 0;
+  background-color: var(--pm-blue, #4aa8ff);
+  -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  color: transparent;
+  font-size: 0;
+  rotate: 0deg;
+  animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }
 .pm-trace-tool-body .tool-activity-status-icon[data-status="succeeded"] {
   border-color: color-mix(in srgb, var(--pm-green) 70%, transparent);
