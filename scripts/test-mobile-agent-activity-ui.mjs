@@ -21,7 +21,10 @@ assert.match(renderer, /inlineActivityVisible/, 'the foreground progress dock mu
 assert.match(renderer, /host\.hidden = !state\?\.message \|\| inlineActivityVisible/, 'the duplicate foreground progress pill must hide once inline activity exists');
 assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expose their busy state');
 assert.match(activity, /tool-activity-status-icon/, 'tool results must expose a compact status indicator');
+assert.match(activity, /state === 'succeeded' \? ''/, 'successful tool rows must not render a repeated checkmark');
 assert.match(css, /\.pm-trace-thought-group/, 'thought disclosure styling must be present');
+assert.match(css, /\.pm-trace-thought-body[\s\S]*?margin-left:\s*12px[\s\S]*?border-left:\s*3px/, 'thought body rail must align with nested tool-result rails');
+assert.match(css, /\.pm-trace-thought-chevron::before/, 'thought chevron must use a centered shape instead of a font glyph');
 assert.match(css, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');

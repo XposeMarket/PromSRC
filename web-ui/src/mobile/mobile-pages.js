@@ -5082,9 +5082,9 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
       const openAttr = (isLiveThought || openThoughts) ? ' open' : '';
       return `<details class="pm-trace-thought-group"${openAttr}${isLiveThought ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
         <summary class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
-          <span class="pm-trace-thought-indicator${isLiveThought ? ' is-live' : ''}" aria-hidden="true"></span>
+          ${isLiveThought ? '<span class="pm-trace-thought-indicator is-live" aria-hidden="true"></span>' : ''}
           <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-          <span class="pm-trace-thought-chevron" aria-hidden="true">⌄</span>
+          <span class="pm-trace-thought-chevron" aria-hidden="true"></span>
         </summary>
         <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div>
       </details>`;
