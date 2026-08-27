@@ -8042,6 +8042,7 @@ function _mobileBackgroundSpawnDockOpen(...args) { return _mobileChatRendererInv
 function _setMobileBackgroundSpawnDockOpen(...args) { return _mobileChatRendererInvoke('_setMobileBackgroundSpawnDockOpen', args); }
 function _mobileBackgroundSpawnClearedIds(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnClearedIds', args); }
 function _mobileBackgroundSpawnId(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnId', args); }
+function _hydrateMobileBackgroundSpawnLane(...args) { return _mobileChatRendererInvoke('hydrateBackgroundLane', args); }
 function _mobileBackgroundSpawnPromptFromMessage(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnPromptFromMessage', args); }
 function _mobileParseBackgroundStatus(...args) { return _mobileChatRendererInvoke('_mobileParseBackgroundStatus', args); }
 function _collectMobileBackgroundSpawnRecoveries(...args) { return _mobileChatRendererInvoke('_collectMobileBackgroundSpawnRecoveries', args); }
@@ -8140,6 +8141,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "escapeHtml": { enumerable: true, get: () => escapeHtml },
   "loadBgTaskDetail": { enumerable: true, get: () => loadBgTaskDetail },
   "mobileChatRuntimeAdapter": { enumerable: true, get: () => mobileChatRuntimeAdapter },
+  "loadMobileChatSession": { enumerable: true, get: () => loadMobileChatSession },
   "mobileGatewayFetch": { enumerable: true, get: () => mobileGatewayFetch },
   "markMobileLifecycle": { enumerable: true, get: () => markMobileLifecycle },
   "mobileStreamRenderScheduler": { enumerable: true, get: () => mobileStreamRenderScheduler },
@@ -12749,63 +12751,12 @@ void main() {
   function _mobileBackgroundAgentDetailRecord(id) {
     const cleanId = String(id || '').trim();
     if (!cleanId) return null;
-    const lane = _mobileBackgroundSpawnLanes()[cleanId];
-    const stored = findBackgroundAgentWork(cleanId, requestedSession)
-      || findBackgroundAgentWork(cleanId, __pmChat.activeSessionId);
-    if (!lane) {
-      if (!stored) return null;
-      const storedRecord = {
-        ...stored,
-        id: cleanId,
-        sessionId: stored.sessionId || requestedSession,
-        backgroundSessionId: stored.backgroundSessionId || '',
-        task: stored.task || stored.prompt || '',
-        status: stored.status || 'running',
-        events: _mobileBackgroundStoredProcessEntries(stored),
-        liveTraceEntries: Array.isArray(stored.liveTraceEntries)
-          ? stored.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
-          : [],
-      };
-      return {
-        ...storedRecord,
-        message: _mobileBackgroundAgentDetailMessage(storedRecord),
-      };
-    }
-    const identity = resolveBackgroundAgentIdentity(lane.id, {
-      existingName: lane.agentName,
-      existingColor: lane.agentColor,
-    });
-    const processEntries = Array.isArray(lane.message?.processEntries) && lane.message.processEntries.length
-      ? lane.message.processEntries
-      : _mobileBackgroundStoredProcessEntries(stored);
-    const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
-      ? lane.message.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
-      : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
-    return {
-      id: lane.id,
-      sessionId: lane.sessionId || requestedSession,
-      backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
-      agentName: identity.name,
-      agentColor: identity.color,
-      task: lane.task || lane.prompt || stored?.task || '',
-      status: lane.status || stored?.status || 'running',
-      startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
-      completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
-      updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
-      // `result` belongs solely to the completed background run. Live token
-      // text remains on `message`, and tool results stay in processEntries.
-      result: String(lane.result || stored?.result || '').trim(),
-      error: String(lane.error || stored?.error || '').trim(),
-      fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
-      events: processEntries,
-      liveTraceEntries,
-      steerMessages: Array.isArray(lane.steerMessages) && lane.steerMessages.length
-        ? lane.steerMessages
-        : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
-      streamId: lane.streamId || stored?.streamId || '',
-      lastSeq: Number(lane.lastSeq || stored?.lastSeq || 0) || 0,
-      message: lane.message || null,
-    };
+    return _mobileChatRendererInvoke('backgroundDetailRecord', [
+      cleanId,
+      requestedSession,
+      _normalizeMobileRecoveredTraceEntry,
+      _mobileBackgroundAgentDetailMessage,
+    ]);
   }
 
   function _mobileBackgroundAgentDetailEvents(record) {
@@ -12994,20 +12945,7 @@ void main() {
     if (!lane) {
       const stored = _mobileBackgroundAgentDetailRecord(cleanId);
       if (!stored) return;
-      lane = _upsertMobileBackgroundSpawnLane({
-        ...stored,
-        bgId: cleanId,
-        backgroundId: cleanId,
-        state: stored.status || 'running',
-        prompt: stored.task || '',
-        taskPrompt: stored.task || '',
-        sessionId: stored.sessionId || requestedSession,
-        spawnerSessionId: stored.sessionId || requestedSession,
-        bgSessionId: stored.backgroundSessionId || '',
-        streamId: stored.streamId || '',
-        seq: stored.lastSeq || 0,
-        message: stored.message,
-      }, requestedSession);
+      lane = _hydrateMobileBackgroundSpawnLane(stored, cleanId, requestedSession);
       if (!lane) return;
     }
     backgroundDetailPollInFlight = true;
