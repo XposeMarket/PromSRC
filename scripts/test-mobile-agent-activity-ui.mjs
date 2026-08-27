@@ -8,7 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const activity = read('web-ui/src/tool-activity.js');
-const css = read('web-ui/src/styles/mobile.css');
+const chatCss = read('web-ui/src/styles/mobile-composer-stack.css');
 
 assert.match(pages, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
 assert.match(pages, /details class="pm-trace-thought-group"/, 'thoughts must render as closable disclosures');
@@ -22,9 +22,10 @@ assert.match(renderer, /host\.hidden = !state\?\.message \|\| inlineActivityVisi
 assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expose their busy state');
 assert.match(activity, /tool-activity-status-icon/, 'tool results must expose a compact status indicator');
 assert.match(activity, /state === 'succeeded' \? ''/, 'successful tool rows must not render a repeated checkmark');
-assert.match(css, /\.pm-trace-thought-group/, 'thought disclosure styling must be present');
-assert.match(css, /\.pm-trace-thought-body[\s\S]*?margin-left:\s*12px[\s\S]*?border-left:\s*3px/, 'thought body rail must align with nested tool-result rails');
-assert.match(css, /\.pm-trace-thought-chevron::before/, 'thought chevron must use a centered shape instead of a font glyph');
-assert.match(css, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
+assert.match(chatCss, /\.pm-trace-thought-group/, 'thought disclosure styling must be present in the chat component owner');
+assert.match(chatCss, /\.pm-trace-thought-body[\s\S]*?margin-left:\s*12px[\s\S]*?border-left:\s*3px/, 'thought body rail must align with nested tool-result rails');
+assert.match(chatCss, /\.pm-trace-thought-chevron::before/, 'thought chevron must use a centered shape instead of a font glyph');
+assert.match(chatCss, /\.pm-trace-compaction\s*\{/, 'chat-owned compaction styling must stay with the activity component owner');
+assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');
