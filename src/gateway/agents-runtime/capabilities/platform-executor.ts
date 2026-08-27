@@ -266,22 +266,18 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         const { getConnectionRuntime } = await import('../../../connections/runtime.js');
         const runtime = getConnectionRuntime();
         const action = String(args.action || 'list').trim().toLowerCase();
+        const { liveOverlayForConnection, summarizeConnectionOps } = await import('../../../connections/connection-ops-summary.js');
         const summarizeConnection = (connection: any) => {
           const mcpServerId = String(connection.configuration?.mcpServerId || connection.serviceId || '').trim();
           const mcpStatus = mcpServerId ? getMCPManager().getStatus().find((item: any) => item.id === mcpServerId) : undefined;
-          const runtimeInvalid = mcpStatus && (mcpStatus.status === 'error' || /401|unauthori[sz]ed|revoked|invalid token/i.test(String(mcpStatus.error || '')));
-          return {
-            id: connection.id,
-            serviceId: connection.serviceId,
-            serviceName: connection.serviceName,
-            connected: !runtimeInvalid && connection.enabled && connection.authenticated && connection.registered,
-            authState: runtimeInvalid ? 'reauth_required' : connection.authState,
-            health: runtimeInvalid ? 'unavailable' : connection.health,
-            verified: runtimeInvalid ? false : connection.verified,
-            toolCount: Array.isArray(connection.availableTools) ? connection.availableTools.length : (Array.isArray(connection.registeredTools) ? connection.registeredTools.length : 0),
-            autoExposedToolCount: Array.isArray(connection.exposedTools) ? connection.exposedTools.length : 0,
-            ...(runtimeInvalid ? { error: String(mcpStatus?.error || 'MCP runtime unavailable').slice(0, 240), action: 'reauthenticate' } : {}),
-          };
+          let live;
+          try {
+            ensurePrometheusExtensionRuntimeLoaded();
+            live = liveOverlayForConnection(connection, getExtensionRuntimeRegistry());
+          } catch {
+            live = undefined;
+          }
+          return summarizeConnectionOps(connection, { mcpStatus, live });
         };
         if (action === 'list' || action === 'list_connections') {
           const connections = runtime.orchestrator.listConnections();
