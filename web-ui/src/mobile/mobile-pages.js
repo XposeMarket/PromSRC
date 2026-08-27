@@ -955,9 +955,85 @@ function _compactMobileThreadCacheMedia(items) {
   }).filter((item) => item && (item.path || item.url || item.name || item.productUrl));
 }
 
+function _compactMobileThreadCacheValue(value, limit = 1800) {
+  if (value == null || value === '') return undefined;
+  if (typeof value === 'string') return value.slice(0, limit);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  try {
+    const clone = JSON.parse(JSON.stringify(value));
+    return JSON.stringify(clone).length <= limit ? clone : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function _compactMobileThreadCacheExtra(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const compact = {};
+  const keys = [
+    'event', 'source', 'visibility', 'action', 'toolName', 'toolCallId', 'tool_call_id',
+    'callId', 'eventKey', 'streamId', 'seq', 'stepNum', 'status', 'ok', 'durationMs',
+    'message', 'progress', 'error', 'args', 'result', 'output',
+  ];
+  for (const key of keys) {
+    const next = _compactMobileThreadCacheValue(value[key], key === 'result' || key === 'output' ? 2800 : 1200);
+    if (next !== undefined) compact[key] = next;
+  }
+  return Object.keys(compact).length ? compact : undefined;
+}
+
+function _compactMobileThreadCacheActivity(activity) {
+  if (!activity || typeof activity !== 'object') return undefined;
+  const compact = {};
+  const keys = [
+    'kind', 'callId', 'action', 'key', 'family', 'countNoun', 'target', 'status', 'ok',
+    'progress', 'result', 'durationMs', 'startedAt', 'updatedAt', 'technicalName',
+    'activityId', 'resultAttached', 'eventKey', 'streamId', 'seq', 'stepNum',
+  ];
+  for (const key of keys) {
+    const next = _compactMobileThreadCacheValue(activity[key], key === 'result' ? 4200 : 1200);
+    if (next !== undefined) compact[key] = next;
+  }
+  const args = _compactMobileThreadCacheValue(activity.args, 2200);
+  if (args !== undefined) compact.args = args;
+  if (activity.terminal && typeof activity.terminal === 'object') {
+    const terminal = _compactMobileThreadCacheValue({
+      runId: activity.terminal.runId,
+      state: activity.terminal.state,
+      output: String(activity.terminal.output || '').slice(-12000),
+      sequence: activity.terminal.sequence,
+      exitCode: activity.terminal.exitCode,
+      durationMs: activity.terminal.durationMs,
+    }, 15000);
+    if (terminal) compact.terminal = terminal;
+  }
+  return Object.keys(compact).length ? compact : undefined;
+}
+
+function _compactMobileThreadCacheTrace(entries, limit = 180) {
+  return (Array.isArray(entries) ? entries : []).slice(-limit).map((entry) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const text = String(entry.text || entry.content || entry.message || '').slice(0, 4200);
+    const extra = _compactMobileThreadCacheExtra(entry.extra);
+    const activity = _compactMobileThreadCacheActivity(entry.activity);
+    const compact = {
+      id: String(entry.id || '').trim() || undefined,
+      type: String(entry.type || entry.kind || 'event').trim() || 'event',
+      text,
+      ts: Number(entry.ts || entry.timestamp || 0) || undefined,
+      time: String(entry.time || '').trim() || undefined,
+      endTs: Number(entry.endTs || 0) || undefined,
+      ...(extra ? { extra } : {}),
+      ...(activity ? { activity } : {}),
+    };
+    return compact;
+  }).filter((entry) => entry && (entry.text || entry.activity || entry.extra));
+}
+
 function _compactMobileThreadCacheProcess(entries, limit = 10) {
   return (Array.isArray(entries) ? entries : []).slice(-limit).map((entry) => ({
     id: String(entry?.id || '').trim() || undefined,
+    _key: String(entry?._key || '').trim() || undefined,
     type: String(entry?.type || entry?.kind || 'event').trim() || 'event',
     text: String(entry?.text || entry?.content || entry?.message || '').slice(0, 900),
     content: String(entry?.content || entry?.text || entry?.message || '').slice(0, 900),
@@ -965,6 +1041,7 @@ function _compactMobileThreadCacheProcess(entries, limit = 10) {
     timestamp: Number(entry?.timestamp || entry?.t || entry?.ts || 0) || undefined,
     time: String(entry?.time || '').trim() || undefined,
     status: String(entry?.status || '').trim() || undefined,
+    extra: _compactMobileThreadCacheExtra(entry?.extra),
   })).filter((entry) => entry.text || entry.content || entry.toolName);
 }
 
@@ -1006,6 +1083,7 @@ function _compactMobileThreadCacheMessage(m) {
     },
     attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
     processEntries: _compactMobileThreadCacheProcess(m?.processEntries, m?.streaming ? 16 : 8),
+    liveTraceEntries: _compactMobileThreadCacheTrace(m?.liveTraceEntries, m?.streaming ? 300 : 180),
     workStartedAt: Number(m?.workStartedAt || 0) || undefined,
     workEndedAt: Number(m?.workEndedAt || 0) || undefined,
     workDurationMs: Number.isFinite(Number(m?.workDurationMs)) ? Number(m.workDurationMs) : undefined,
@@ -1042,6 +1120,7 @@ function _compactMobileThreadCacheMessage(m) {
     } : undefined,
   };
   if (!compact.processEntries.length) delete compact.processEntries;
+  if (!compact.liveTraceEntries.length) delete compact.liveTraceEntries;
   for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
     if (!compact[key]?.length) delete compact[key];
   }
@@ -3035,6 +3114,8 @@ function _appendMobileProcess(message, type, text, extra = null) {
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const entry = _makeProcessEntry(type, text, extra);
   if (!entry) return;
+  const entryKey = _mobileProcessEntryKey(entry);
+  if (entryKey && message.processEntries.some((existing) => _mobileProcessEntryKey(existing) === entryKey)) return;
   const prev = message.processEntries[message.processEntries.length - 1];
   if (prev && prev.type === entry.type && prev.text === entry.text) return;
   message.processEntries.push(entry);
@@ -3239,15 +3320,34 @@ function _handleMobileCleanThought(message, evt) {
   if (visibility === 'private') return false;
   const text = String(evt?.thinking || evt?.text || '').trim();
   if (!text) return false;
+  const streamId = String(evt?.streamId || '').trim();
+  const seq = Number(evt?.seq);
+  const eventKey = String(evt?.eventKey || '').trim()
+    || (streamId && Number.isFinite(seq) && seq >= 0 ? `${streamId}:${Math.floor(seq)}` : '');
+  const thoughtExtra = {
+    source: String(evt?.source || '').trim() || 'agent_thought',
+    visibility,
+    event: String(evt?.type || '').trim() || 'agent_thought',
+    ...(streamId ? { streamId } : {}),
+    ...(eventKey ? { eventKey } : {}),
+    ...(Number.isFinite(seq) && seq >= 0 ? { seq: Math.floor(seq) } : {}),
+  };
   // Agent-thought packets are the curated reasoning/progress channel used by
   // the main chat. Keep the latest narration slot for the compact live view,
   // and also journal the concrete thought in the expandable process stream so
   // background-agent details do not collapse down to summary-only output.
   message._thinking = message._thinking ? `${message._thinking}\n\n${text}` : text;
   const updated = _setMobileLiveProgressNarration(message, text, { replace: true, visibility });
+  const alreadyJournaled = eventKey && Array.isArray(message.liveTraceEntries)
+    && message.liveTraceEntries.some((entry) => (
+      String(entry?.eventKey || entry?.extra?.eventKey || '').trim() === eventKey
+    ));
+  if (!alreadyJournaled) {
+    _appendMobileLiveTrace(message, 'think', text, { extra: thoughtExtra });
+  }
   _pushMobileStreamProcessEntry(message, 'think', text, {
     ...evt,
-    source: String(evt?.source || '').trim() || 'agent_progress',
+    source: thoughtExtra.source,
     visibility,
   }, false);
   return updated || true;
@@ -3265,6 +3365,15 @@ function _handleMobileThinkingCallback(message, text, meta = null) {
 
 function _mobileProcessEntryKey(entry) {
   if (!entry || typeof entry !== 'object') return '';
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const streamId = String(extra.streamId || entry.streamId || '').trim();
+  const seq = Number(extra.seq ?? entry.seq);
+  const eventKey = String(extra.eventKey || entry.eventKey || '').trim()
+    || (streamId && Number.isFinite(seq) && seq >= 0 ? `${streamId}:${Math.floor(seq)}` : '');
+  if (eventKey) return `${String(entry.type || '').toLowerCase()}|event:${eventKey}`;
+  const event = String(extra.event || entry.event || '').trim().toLowerCase();
+  const callId = String(extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || '').trim();
+  if (event && callId) return `${String(entry.type || '').toLowerCase()}|${event}|call:${callId}`;
   return [
     String(entry.type || '').toLowerCase(),
     String(entry.text || entry.content || '').replace(/\s+/g, ' ').trim().slice(0, 500),
@@ -4161,12 +4270,10 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     return type === 'preamble' || type === 'think' || type === 'assistant';
   };
   const hasExplicitLiveThought = message.liveTraceEntries.some((entry) => _isMobileUserVisibleReasoningTraceEntry(entry));
-  // A cold recovery may have only process entries. Preserve one current
-  // narrative update for that case, rather than recreating every historical
-  // planning fragment as a separate live timeline block.
-  const latestDerivedThoughtIndex = derived.reduce((latest, entry, index) => (
-    isThoughtTraceEntry(entry) ? index : latest
-  ), -1);
+  // A cold recovery may have only process entries. Reconstruct every curated
+  // visible thought in order; retaining only the latest one makes a recovered
+  // turn look like a single flat tool stream and loses the reasoning between
+  // tool calls. Explicit live thoughts remain authoritative when present.
   const existing = new Set(message.liveTraceEntries.map((entry) =>
     traceDedupeKey(entry)
   ));
@@ -4180,7 +4287,7 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const key = traceDedupeKey(entry);
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
-      if (hasExplicitLiveThought || index !== latestDerivedThoughtIndex) continue;
+      if (hasExplicitLiveThought) continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
       if (existingThoughts.some((seen) => _mobileTraceThoughtTextsSimilar(seen, text))) continue;
       existingThoughts.push(text);
@@ -4728,10 +4835,16 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   if (!a || !b || String(a.role || '') !== String(b.role || '')) return false;
   const aGoalTurn = String(a.goalTurnId || '').trim();
   const bGoalTurn = String(b.goalTurnId || '').trim();
-  if (aGoalTurn || bGoalTurn) return !!aGoalTurn && aGoalTurn === bGoalTurn;
+  if (aGoalTurn && bGoalTurn) return aGoalTurn === bGoalTurn;
+  const aRequest = String(a._clientRequestId || '').trim();
+  const bRequest = String(b._clientRequestId || '').trim();
   const aMessageId = String(a.messageId || '').trim();
   const bMessageId = String(b.messageId || '').trim();
-  if (aMessageId || bMessageId) return !!aMessageId && aMessageId === bMessageId;
+  const requestIdentityMatches = !!aRequest && !!bRequest && aRequest === bRequest;
+  // The cached optimistic row often has no messageId while the hydrated row
+  // does. Do not reject a matching request identity just because the server
+  // assigned a new id during reconnect.
+  if (aMessageId && bMessageId && aMessageId !== bMessageId && !requestIdentityMatches) return false;
   const aWorkflowPart = String(a.workflowPart || '').trim();
   const bWorkflowPart = String(b.workflowPart || '').trim();
   const aWorkflowGroup = String(a.workflowGroupId || '').trim();
@@ -4745,8 +4858,6 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   if (aKind || bKind) {
     if (!aKind || aKind !== bKind) return false;
   }
-  const aRequest = String(a._clientRequestId || '').trim();
-  const bRequest = String(b._clientRequestId || '').trim();
   if (aRequest || bRequest) return !!aRequest && aRequest === bRequest;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
@@ -14058,7 +14169,7 @@ void main() {
 
   function processEntriesFromReplayFrames(frames) {
     const entries = [];
-    const replayState = { liveTraceEntries: entries };
+    const replayState = { liveTraceEntries: entries, streaming: true };
     for (const frame of Array.isArray(frames) ? frames : []) {
       const evt = replayFrameToEvent(frame);
       if (!evt?.type) continue;

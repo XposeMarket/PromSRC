@@ -60,7 +60,9 @@ jobs:
           npm run sync:web-ui
           git diff --exit-code
       - name: Verify tool activity edit line stats
-        run: node scripts/test-tool-activity-edit-stats.mjs
+        run: |
+          node scripts/test-tool-activity-edit-stats.mjs
+          npm run test:tool-activity-stream
       - name: Verify Creative video timeline interactions
         run: node scripts/test-creative-video-timeline-interactions.mjs
       - name: Verify desktop multi-chat and composer contracts

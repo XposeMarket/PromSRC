@@ -2134,6 +2134,14 @@ export function createMobileChatRendererRuntime(context = {}) {
       const stableImageNodes = new Map();
       const stableTraceSummaryLabels = {};
       const stableLiveTraceTimeline = currentBubble.querySelector('.pm-trace-timeline');
+      const nextLiveTraceTimeline = nextBubble.querySelector('.pm-trace-timeline');
+      const preserveLiveTraceTimeline = Boolean(
+        stableLiveTraceTimeline
+        && !nextLiveTraceTimeline
+        && currentStreaming
+        && Array.isArray(message.liveTraceEntries)
+        && message.liveTraceEntries.length,
+      );
       let stablePendingImageBatch = null;
       let stableThinkingDots = null;
       const approvalDetails = _captureMobileApprovalDetailsState(currentEl);
@@ -2194,9 +2202,18 @@ export function createMobileChatRendererRuntime(context = {}) {
       } catch {}
       setInnerHTMLPreservingVisuals(currentBubble, nextBubble.innerHTML);
       try {
-        const nextLiveTraceTimeline = currentBubble.querySelector('.pm-trace-timeline');
-        if (stableLiveTraceTimeline && nextLiveTraceTimeline && _patchMobileLiveTraceTimeline(stableLiveTraceTimeline, nextLiveTraceTimeline)) {
-          nextLiveTraceTimeline.replaceWith(stableLiveTraceTimeline);
+        let renderedLiveTraceTimeline = currentBubble.querySelector('.pm-trace-timeline');
+        // A transient recovery/render pass can briefly produce a bubble with
+        // no trace markup even though the source turn still has live entries.
+        // Keep the current timeline attached until the authoritative source
+        // either renders it again or is explicitly reset to an empty trace.
+        if (preserveLiveTraceTimeline && !renderedLiveTraceTimeline) {
+          currentBubble.appendChild(stableLiveTraceTimeline);
+          renderedLiveTraceTimeline = stableLiveTraceTimeline;
+        }
+        if (stableLiveTraceTimeline && renderedLiveTraceTimeline && renderedLiveTraceTimeline !== stableLiveTraceTimeline
+          && _patchMobileLiveTraceTimeline(stableLiveTraceTimeline, renderedLiveTraceTimeline)) {
+          renderedLiveTraceTimeline.replaceWith(stableLiveTraceTimeline);
         }
         currentBubble.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
           const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();

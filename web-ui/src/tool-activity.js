@@ -357,6 +357,30 @@ function callIdFromPayload(payload = {}, { allowGenericId = true } = {}) {
   );
 }
 
+function streamIdFromPayload(payload = {}) {
+  return compact(payload.streamId || payload.stream_id || payload.activity?.streamId || '', 180);
+}
+
+function sequenceFromPayload(payload = {}) {
+  const raw = payload.seq ?? payload.sequence ?? payload.activity?.seq;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+function stepNumberFromPayload(payload = {}) {
+  const raw = payload.stepNum ?? payload.step_num ?? payload.step ?? payload.activity?.stepNum;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.floor(value) : null;
+}
+
+function eventKeyFromPayload(payload = {}) {
+  const explicit = compact(payload.eventKey || payload.event_id || payload.eventId || payload.activity?.eventKey || '', 220);
+  if (explicit) return explicit;
+  const streamId = streamIdFromPayload(payload);
+  const seq = sequenceFromPayload(payload);
+  return streamId && seq != null ? `${streamId}:${seq}` : '';
+}
+
 function actionArgs(payload = {}) {
   return parseArgs(payload.args || payload.params || payload.input || payload.arguments || payload.activity?.args);
 }
@@ -485,6 +509,12 @@ function makeActivity(payload, phase, previous = null) {
   const args = actionArgs(payload);
   const action = actionFromPayload(payload) || previous?.action || '';
   const callId = callIdFromPayload(payload) || previous?.callId || '';
+  const eventKey = eventKeyFromPayload(payload) || previous?.eventKey || '';
+  const streamId = streamIdFromPayload(payload) || previous?.streamId || '';
+  const sequence = sequenceFromPayload(payload);
+  const seq = sequence != null ? sequence : (previous?.seq ?? null);
+  const stepNumber = stepNumberFromPayload(payload);
+  const stepNum = stepNumber != null ? stepNumber : (previous?.stepNum ?? null);
   const now = Date.now();
   const durationMs = Number(payload.durationMs ?? payload.elapsedMs ?? payload.elapsed_ms ?? previous?.durationMs);
   const errorValue = payload.error;
@@ -525,17 +555,26 @@ function makeActivity(payload, phase, previous = null) {
     updatedAt: now,
     technicalName: action,
     activityId: previous?.activityId || payload.activityId || '',
+    ...(eventKey ? { eventKey } : {}),
+    ...(streamId ? { streamId } : {}),
+    ...(seq != null ? { seq } : {}),
+    ...(stepNum != null ? { stepNum } : {}),
     ...(terminal ? { terminal } : {}),
   };
 }
 
 function matchingOperation(entries, payload, phase) {
   const callId = callIdFromPayload(payload);
+  const eventKey = eventKeyFromPayload(payload);
+  const stepNum = stepNumberFromPayload(payload);
   const action = actionFromPayload(payload);
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const activity = entries[index]?.activity;
-    if (!activity || activity.kind !== 'operation' || activity.resultAttached) continue;
+    if (!activity || activity.kind !== 'operation') continue;
     if (callId && activity.callId && callId === activity.callId) return entries[index];
+    if (eventKey && activity.eventKey && eventKey === activity.eventKey) return entries[index];
+    if (stepNum != null && activity.stepNum != null && stepNum === activity.stepNum) return entries[index];
+    if (activity.resultAttached) continue;
     if (action && activity.action === action && ['preparing', 'running'].includes(activity.status)) return entries[index];
     if (phase === 'call' && activity.status === 'preparing' && action && describeTool(action).key === activity.key) return entries[index];
   }
@@ -595,7 +634,9 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
   const resultActivity = makeActivity(payload, 'result', operationEntry.activity);
   resultActivity.kind = 'result';
   const existingResult = entries.find((entry) => entry?.activity?.kind === 'result'
-    && resultActivity.callId && entry.activity.callId === resultActivity.callId);
+    && ((resultActivity.eventKey && entry.activity.eventKey === resultActivity.eventKey)
+      || (resultActivity.callId && entry.activity.callId === resultActivity.callId)
+      || (resultActivity.stepNum != null && entry.activity.stepNum === resultActivity.stepNum)));
   if (existingResult) {
     existingResult.activity = resultActivity;
     existingResult.type = resultActivity.ok ? 'result' : 'error';
