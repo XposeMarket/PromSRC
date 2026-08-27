@@ -19,7 +19,7 @@ function eventIdentity(event = {}) {
   if (eventId) return `event:${eventId}`;
   const streamId = clean(source.streamId || source.stream_id || nested.streamId || nested.stream_id);
   const seq = Number(source.seq ?? nested.seq);
-  if (streamId && Number.isFinite(seq) && seq > 0) return `stream:${streamId}:${Math.floor(seq)}`;
+  if (streamId && Number.isFinite(seq) && seq >= 0) return `stream:${streamId}:${Math.floor(seq)}`;
   return '';
 }
 
