@@ -60,6 +60,7 @@ assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-
 assert.match(chatCss, /phosphor-circle-notch\.svg/, 'live activity spinners must use the packaged icon asset');
 assert.match(chatCss, /@keyframes pm-trace-loading-icon-rotate[\s\S]*?rotate: 360deg/, 'live activity spinners must animate as a centered rotation');
 assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong/, 'active tool summaries must use the live shimmer treatment');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong[\s\S]*?-webkit-text-fill-color:\s*transparent[\s\S]*?background:\s*linear-gradient\(/, 'active tool summaries must clip an explicit shimmer gradient instead of resolving currentColor to transparent');
 assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
 assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces must use the mobile font token');
 assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');

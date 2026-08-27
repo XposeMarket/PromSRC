@@ -536,12 +536,17 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   white-space: nowrap;
 }
 .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
-  color: color-mix(in srgb, var(--pm-text) 68%, var(--pm-muted));
-  background: linear-gradient(105deg, currentColor 28%, color-mix(in srgb, var(--pm-text) 88%, white) 50%, currentColor 72%);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 28%,
+    color-mix(in srgb, var(--pm-text) 88%, white) 50%,
+    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 72%
+  );
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
   animation: pm-trace-thought-shimmer 2.2s linear infinite;
 }
 .pm-trace-tool-icon.is-live {
