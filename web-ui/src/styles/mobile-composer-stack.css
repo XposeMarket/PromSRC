@@ -437,6 +437,259 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 }
 }
 
+@layer components {
+/* Agent activity belongs to the chat-owned component surface. Keeping these
+   disclosures here prevents the shared mobile route stylesheet from carrying
+   chat-only trace geometry and animation rules. */
+.pm-msg.from-ai .pm-bubble > .pm-trace-thoughts-visible {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+.pm-bubble .pm-trace-thought-group,
+.pm-bubble .pm-trace-thought-body {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.pm-trace-thought-group {
+  color: color-mix(in srgb, var(--pm-text) 58%, var(--pm-muted));
+}
+.pm-trace-thought-group summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0;
+  color: var(--pm-muted);
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-trace-thought-group summary::-webkit-details-marker {
+  display: none;
+}
+.pm-trace-thought-group summary:active {
+  opacity: .72;
+}
+.pm-trace-thought-indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border: 1px solid color-mix(in srgb, var(--pm-muted) 65%, transparent);
+  border-radius: 50%;
+  opacity: .72;
+}
+.pm-trace-thought-indicator.is-live {
+  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 82%, transparent);
+  border-top-color: transparent;
+  opacity: 1;
+  animation: pm-trace-thought-spin .9s linear infinite;
+}
+.pm-trace-thought-summary strong {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--pm-text) 58%, var(--pm-muted));
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-trace-thought-group[data-pm-trace-live-current="1"] .pm-trace-thought-summary strong {
+  color: color-mix(in srgb, var(--pm-text) 68%, var(--pm-muted));
+  background: linear-gradient(105deg, currentColor 28%, color-mix(in srgb, var(--pm-text) 88%, white) 50%, currentColor 72%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: pm-trace-thought-shimmer 2.2s linear infinite;
+}
+.pm-trace-thought-chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  color: color-mix(in srgb, var(--pm-muted) 78%, transparent);
+  font-size: 0;
+  transform: rotate(0deg);
+  transition: transform .2s cubic-bezier(.16,1,.3,1);
+}
+.pm-trace-thought-chevron::before {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+}
+.pm-trace-thought-group[open] .pm-trace-thought-chevron {
+  transform: rotate(180deg);
+}
+.pm-trace-thought-body {
+  box-sizing: border-box;
+  width: calc(100% - 12px);
+  margin-left: 12px;
+  padding: 5px 0 2px 9px;
+  overflow: hidden;
+  border-left: 3px solid color-mix(in srgb, var(--pm-muted) 28%, transparent);
+}
+.pm-trace-thought-body .pm-live-trace {
+  margin-top: 0;
+  gap: 2px;
+}
+.pm-trace-thought-body .pm-live-prose,
+.pm-trace-thought-body .pm-live-md,
+.pm-trace-thought-body .pm-live-prose p,
+.pm-trace-thought-body .pm-live-md p {
+  padding: 2px 0;
+  color: color-mix(in srgb, var(--pm-text) 56%, var(--pm-muted));
+  font-size: 13px;
+  line-height: 1.45;
+}
+@keyframes pm-trace-thought-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pm-trace-thought-shimmer {
+  from { background-position: 220% 0; }
+  to { background-position: -40% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-trace-thought-indicator.is-live,
+  .pm-trace-thought-group[data-pm-trace-live-current="1"] .pm-trace-thought-summary strong {
+    animation: none;
+  }
+}
+.pm-trace-tool-body .tool-activity-entry-summary {
+  gap: 7px;
+}
+.pm-trace-tool-body .tool-activity-status-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--pm-muted) 45%, transparent);
+  border-radius: 50%;
+  color: var(--pm-muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
+.pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
+  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 72%, transparent);
+  border-top-color: transparent;
+  color: var(--pm-blue, #4aa8ff);
+  animation: pm-trace-thought-spin .9s linear infinite;
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="succeeded"] {
+  border-color: color-mix(in srgb, var(--pm-green) 70%, transparent);
+  color: var(--pm-green);
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--pm-red) 72%, transparent);
+  color: var(--pm-red);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
+  .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
+    animation: none;
+  }
+}
+.pm-trace-compaction {
+  width: 100%;
+  min-width: 0;
+  margin: 4px 0 2px;
+}
+.pm-trace-compaction summary {
+  display: grid;
+  grid-template-columns: minmax(24px, 1fr) auto minmax(24px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--pm-muted);
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-trace-compaction summary::-webkit-details-marker {
+  display: none;
+}
+.pm-trace-compaction summary:active {
+  opacity: .72;
+}
+.pm-trace-compaction-line {
+  display: block;
+  height: 1px;
+  min-width: 0;
+  background: linear-gradient(90deg, transparent, rgba(148,163,184,.32), transparent);
+}
+.pm-trace-compaction strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--pm-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.pm-trace-compaction strong::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1px solid rgba(148,163,184,.65);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+}
+.pm-trace-compaction[data-status="compacting"] strong::before {
+  border-color: color-mix(in srgb, var(--pm-orange) 75%, transparent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: pmSpin .9s linear infinite;
+}
+.pm-trace-compaction[data-status="compacted"] strong::before,
+.pm-trace-compaction[data-status="done"] strong::before {
+  border-color: rgba(34,197,94,.7);
+  background: linear-gradient(135deg, rgba(34,197,94,.95), rgba(22,163,74,.72));
+}
+.pm-trace-compaction[data-status="failed"] strong::before {
+  border-color: rgba(248,113,113,.7);
+  background: rgba(248,113,113,.18);
+}
+.pm-trace-compaction-body {
+  margin: 6px 0 2px;
+  padding: 10px 11px;
+  border: 1px solid rgba(148,163,184,.18);
+  border-radius: 8px;
+  background: rgba(15,23,42,.28);
+  color: var(--pm-text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+.pm-trace-compaction-body.muted {
+  color: var(--pm-muted);
+}
+.pm-trace-compaction-body .pm-live-md {
+  font-size: 12px;
+  line-height: 1.5;
+}
+@keyframes pmSpin {
+  to { transform: rotate(360deg); }
+}
+}
+
 /* Raw development/Electron mobile.html loads mobile.css directly, outside the
    route layer used by the generated web bundle. Keep this attachment bridge
    unlayered too so the legacy queue geometry cannot outrank the shared stack

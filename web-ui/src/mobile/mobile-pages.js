@@ -92,12 +92,9 @@ import {
   appendCommandTerminalChunkToDom,
   applyCommandProcessEvent,
   applyToolActivityEvent,
-  coalesceToolActivityEntries,
   installToolActivityExpansionPersistence,
   loadToolActivityFeature,
-  renderToolActivityEntry,
   setToolActivityDisclosureState,
-  toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createMobileChatRuntimeAdapter } from '../features/chat/runtime/mobile-chat-adapter.js';
@@ -2810,6 +2807,14 @@ function _mobileAssistantWorkStartedAt(msg) {
   return Number.isFinite(ts) && ts > 0 ? ts : 0;
 }
 
+function _mobileTraceHasToolGroup(entries) {
+  return (Array.isArray(entries) ? entries : []).some((entry) => {
+    if (entry?.activity) return true;
+    const type = String(entry?.type || '').toLowerCase();
+    return ['tool', 'result', 'error', 'compaction', 'vision'].includes(type);
+  });
+}
+
 function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   if (msg?.suppressWorkTimer === true) return '';
@@ -3020,6 +3025,7 @@ function _makeProcessEntry(type, text, extra = null) {
     type: String(type || 'info'),
     text: content,
     extra,
+    ts: Date.now(),
     time: _nowTime(),
   };
 }
@@ -3126,7 +3132,7 @@ function _maybeFlushMobileThinkingBeforeEvent(message, evt) {
 
 function _isMobileProgressNarration(value) {
   const text = _normalizeMobileTraceProseText(value).replace(/\s+/g, ' ').trim();
-  return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
+  return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Executing|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring|Queuing|Dispatching)\b/i.test(text);
 }
 
 function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
@@ -3643,6 +3649,17 @@ function _renderMobileProcess(entries, options = {}) {
   `;
 }
 
+function _closeMobileTraceThoughts(message) {
+  const entries = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  if (!entries.length) return;
+  const endedAt = Date.now();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!_isMobileTraceThoughtType(entry?.type)) break;
+    if (!Number.isFinite(Number(entry.endTs)) || Number(entry.endTs) <= 0) entry.endTs = endedAt;
+  }
+}
+
 function _appendMobileLiveTrace(message, type, text, { append = false, extra = null } = {}) {
   if (!message) return;
   const content = String(text || '');
@@ -3653,7 +3670,10 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
   const isUserVisibleThought = isThoughtLike && _isMobileUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
-  if (!isThoughtLike) _flushMobileTraceThoughtProbe(message, { force: true });
+  if (!isThoughtLike) {
+    _closeMobileTraceThoughts(message);
+    _flushMobileTraceThoughtProbe(message, { force: true });
+  }
   if (isThoughtLike && _mobileTraceShouldProbeThought(message, normalizedType, append, extra)) {
     const probe = message._pmTraceThoughtProbe;
     const nextProbeText = _appendMobileStreamingText(
@@ -3708,6 +3728,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
         id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: normalizedType,
         text: trimmed,
+        ts: Date.now(),
         time: _nowTime(),
         ...(extra && typeof extra === 'object' ? { extra } : {}),
       });
@@ -3718,6 +3739,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
 function _applyMobileToolActivity(message, phase, payload = {}) {
   if (!message) return null;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  _closeMobileTraceThoughts(message);
   return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
 }
 
@@ -4463,6 +4485,7 @@ function _pushMobileTraceThoughtEntry(message, type, text, time = '', extra = nu
     id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: String(type || 'preamble').toLowerCase(),
     text: trimmed,
+    ts: Date.now(),
     time: String(time || _nowTime()),
     ...(extra && typeof extra === 'object' ? { extra } : {}),
   };
@@ -4521,211 +4544,6 @@ function _dedupeMobileTraceProseText(value) {
   return normalized;
 }
 
-function _renderMobileLiveTraceEntry(entry) {
-  if (entry?.activity) return renderToolActivityEntry(entry, escapeHtml);
-  const type = String(entry.type || 'info').toLowerCase();
-  const text = String(entry.text || '').trim();
-  const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.time || entry.ts || '')}`).trim();
-  const attr = entryId ? ` data-pm-live-entry-id="${escapeHtml(entryId)}"` : '';
-  const previewHtml = _renderMobileLiveTracePreview(entry);
-  if (type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type)) {
-    return `<div class="pm-live-prose ${escapeHtml(type)}"${attr}><div class="pm-live-md">${_renderMobileMarkdown(_dedupeMobileTraceProseText(text))}</div>${previewHtml}</div>`;
-  }
-  const label = type === 'vision' ? 'Vision' : type === 'result' ? 'Tool result' : type === 'error' ? 'Tool error' : 'Tool';
-  const body = text ? `<div class="pm-live-text">${escapeHtml(text)}</div>` : '';
-  return `<div class="pm-live-segment ${escapeHtml(type)}"${attr}><span>${escapeHtml(label)}</span>${body}${previewHtml}</div>`;
-}
-
-function _isMobileTraceCompactionEntry(entry) {
-  return String(entry?.type || '').toLowerCase() === 'compaction';
-}
-
-function _renderMobileCompactionBreak(entry) {
-  const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
-  const entryId = String(entry?.id || `compaction_${entry?.time || entry?.ts || ''}_${status}`).trim();
-  const label = String(entry?.text || '').trim()
-    || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
-  const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
-  const body = summary
-    ? `<div class="pm-trace-compaction-body"><div class="pm-live-md">${_renderMobileMarkdown(summary)}</div></div>`
-    : (status === 'compacting' ? '<div class="pm-trace-compaction-body muted">Compaction summary will appear when complete.</div>' : '');
-  return `<details class="pm-trace-compaction" data-status="${escapeHtml(status || 'done')}" data-pm-trace-entry-id="${escapeHtml(entryId)}">
-    <summary>
-      <span class="pm-trace-compaction-line" aria-hidden="true"></span>
-      <strong>${escapeHtml(label)}</strong>
-      <span class="pm-trace-compaction-line" aria-hidden="true"></span>
-    </summary>
-    ${body}
-  </details>`;
-}
-
-function _isMobilePreparedTraceEntry(entry) {
-  const type = String(entry?.type || '').toLowerCase();
-  const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
-  return type === 'tool' && /^Prepared\b/i.test(text);
-}
-
-function _mobileVisibleTraceEntries(entries) {
-  const thoughtTexts = [];
-  const sourceEntries = Array.isArray(entries) ? entries : [];
-  const replaceableProgressTexts = sourceEntries
-    .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
-    .map((entry) => String(entry?.text || entry?.content || '').trim())
-    .filter(Boolean);
-  return coalesceToolActivityEntries(entries).filter((entry) => {
-    if (_isMobileImageGenerationStreamEntry(entry)) return false;
-    if (_isMobilePreparedTraceEntry(entry)) return false;
-    if (_isMobileVisionInjectionStatusText(entry?.text)) return false;
-    if (_isMobileBareThinkingTraceText(entry?.text)) return false;
-    const hasContent = String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
-    if (!hasContent) return false;
-    const type = String(entry?.type || '').toLowerCase();
-    if (_isMobileTraceThoughtType(type)) {
-      // Older/replayed frames could leave the same explicit summary in a
-      // visible think row after the progress slot was created. The summary
-      // slot is authoritative; suppress that stale duplicate so the tool
-      // stream does not grow a second reasoning card.
-      if (replaceableProgressTexts.length
-        && type === 'think'
-        && String(entry?.extra?.source || '').toLowerCase() === 'reasoning_summary'
-        && replaceableProgressTexts.some((progressText) => _mobileTraceThoughtTextsSimilar(entry?.text || '', progressText))) return false;
-      if (!_isMobileUserVisibleReasoningTraceEntry(entry)) return false;
-      const text = _dedupeMobileTraceProseText(entry?.text || '');
-      if (text) {
-        if (_isMobileTraceThoughtFragmentText(text)) return false;
-        const comparable = _mobileTraceComparableText(text);
-        const words = comparable.split(/\s+/).filter(Boolean).length;
-        if (thoughtTexts.some((seen) => {
-          const seenComparable = _mobileTraceComparableText(seen);
-          return _mobileTraceThoughtTextsSimilar(seen, text)
-            || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
-        })) return false;
-        thoughtTexts.push(text);
-      }
-    }
-    return true;
-  });
-}
-
-function _mobileTraceProgressSummary(entries) {
-  const source = Array.isArray(entries) ? entries : [];
-  for (let index = source.length - 1; index >= 0; index -= 1) {
-    const entry = source[index];
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!text) continue;
-    // The progress slot is the source of truth for the collapsed label. Keep
-    // its actual text instead of falling back to a generic "Reasoning" label.
-    return text.slice(0, 220);
-  }
-  return '';
-}
-
-function _renderMobileLiveTrace(entries) {
-  const list = _mobileVisibleTraceEntries(entries);
-  if (!list.length) return '';
-  return `<div class="pm-live-trace">${list.map(_renderMobileLiveTraceEntry).join('')}</div>`;
-}
-
-function _isMobileTraceThoughtEntry(entry) {
-  const type = String(entry?.type || 'info').toLowerCase();
-  return type === 'preamble' || type === 'think' || type === 'assistant' || _isMobileTraceReasoningSummaryType(type);
-}
-
-function _mobileTraceGroupStableKey(group, index = 0) {
-  const kind = String(group?.kind || 'group');
-  const first = Array.isArray(group?.entries) ? group.entries[0] : null;
-  const entryKey = String(
-    first?.activity?.callId
-    || first?.activity?.activityId
-    || first?.id
-    || `${kind}_${index}`
-  ).trim();
-  return `trace_group_${kind}_${entryKey}`;
-}
-
-function _markMobileLiveStreamMotion(rootEl, sessionKey) {
-  if (!rootEl) return;
-  const key = String(sessionKey || (typeof __pmChat !== 'undefined' && __pmChat?.activeSessionId) || 'chat');
-  const seenBySession = window.__pmMobileLiveStreamEntryIdsBySession || (window.__pmMobileLiveStreamEntryIdsBySession = {});
-  const seen = seenBySession[key] || (seenBySession[key] = new Set());
-  const segmentSeenBySession = window.__pmMobileLiveTraceSegmentIdsBySession || (window.__pmMobileLiveTraceSegmentIdsBySession = {});
-  const segmentSeen = segmentSeenBySession[key] || (segmentSeenBySession[key] = new Set());
-  try {
-    rootEl.querySelectorAll('[data-pm-live-entry-id]').forEach((node) => {
-      const id = String(node.getAttribute('data-pm-live-entry-id') || '').trim();
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-      node.classList.add('pm-live-stream-enter');
-    });
-    rootEl.querySelectorAll('.pm-trace-thought[data-pm-trace-group], details.pm-trace-tool-group[data-pm-trace-group]').forEach((node) => {
-      const id = String(node.getAttribute('data-pm-trace-group') || '').trim();
-      if (!id || segmentSeen.has(id)) return;
-      segmentSeen.add(id);
-      node.classList.add('pm-live-stream-enter');
-    });
-  } catch {}
-}
-
-function _mobileTraceGroups(entries) {
-  const list = _mobileVisibleTraceEntries(entries);
-  const groups = [];
-  let activeToolGroup = null;
-  list.forEach((entry) => {
-    if (_isMobileTraceCompactionEntry(entry)) {
-      activeToolGroup = null;
-      groups.push({ kind: 'compaction', entries: [entry] });
-      return;
-    }
-    if (String(entry?.type || '').toLowerCase() === 'vision' && _renderMobileLiveTracePreview(entry)) {
-      // Screenshots intentionally break the collapsible tool sequence so they
-      // stay visible as first-class timeline cards.
-      if (groups[groups.length - 1]?.kind === 'vision') groups[groups.length - 1].entries.push(entry);
-      else groups.push({ kind: 'vision', entries: [entry] });
-      activeToolGroup = null;
-      return;
-    }
-    if (_isMobileTraceThoughtEntry(entry)) {
-      activeToolGroup = null;
-      groups.push({ kind: 'thought', entries: [entry] });
-      return;
-    }
-    if (!activeToolGroup) {
-      activeToolGroup = { kind: 'tools', entries: [] };
-      groups.push(activeToolGroup);
-    }
-    activeToolGroup.entries.push(entry);
-  });
-  return groups.map((group, index) => ({ ...group, id: _mobileTraceGroupStableKey(group, index) }));
-}
-
-function _mobileTraceHasToolGroup(entries) {
-  return _mobileTraceGroups(entries).some((group) =>
-    (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0
-  );
-}
-
-function _mobileTraceToolLabel(text) {
-  return String(text || '')
-    .replace(/\s+/g, ' ')
-    .replace(/^Preparing\s+/i, '')
-    .replace(/^Prepared\s+/i, '')
-    .replace(/\s*(?:->|→).*/, '')
-    .replace(/:\s+(?!\{).*/, '')
-    .replace(/\s+(?:complete|failed)$/i, '')
-    .replace(/:\s*\{.*$/, '')
-    .trim();
-}
-
-function _mobileTraceCountPhrase(count) {
-  if (count === 1) return 'once';
-  if (count === 2) return 'twice';
-  return `${count} times`;
-}
-
 function _mobileTraceJsonPayload(text) {
   const raw = String(text || '');
   const start = raw.search(/[\[{]/);
@@ -4737,292 +4555,6 @@ function _mobileTraceJsonPayload(text) {
   try { return JSON.parse(raw.slice(start, end + 1)); } catch { return null; }
 }
 
-function _mobileTracePayloadValues(payload, keys, limit = 4) {
-  const wanted = new Set((keys || []).map((key) => String(key || '').toLowerCase()));
-  const out = [];
-  const visit = (value, depth = 0) => {
-    if (out.length >= limit || value == null || depth > 5) return;
-    if (Array.isArray(value)) {
-      value.forEach((item) => visit(item, depth + 1));
-      return;
-    }
-    if (typeof value !== 'object') return;
-    Object.entries(value).forEach(([key, item]) => {
-      if (out.length >= limit) return;
-      if (wanted.has(String(key || '').toLowerCase()) && item != null && typeof item !== 'object') {
-        const text = String(item || '').trim();
-        if (text) out.push(text);
-      } else {
-        visit(item, depth + 1);
-      }
-    });
-  };
-  visit(payload);
-  return [...new Set(out)];
-}
-
-function _mobileTraceFirstPayloadValue(payload, keys) {
-  return _mobileTracePayloadValues(payload, keys, 1)[0] || '';
-}
-
-function _mobileTraceArrowDetail(text) {
-  const raw = String(text || '').replace(/\s+/g, ' ').trim();
-  const match = raw.match(/(?:->|=>|→)\s*([^.;\n]+)/);
-  return match ? match[1].replace(/\s+bundle\s+Description.*$/i, '').trim() : '';
-}
-
-function _mobileTraceTitleCaseSlug(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (!/[-_]/.test(raw)) return raw;
-  return raw.split(/[-_]+/).filter(Boolean).map((part) => {
-    const lower = part.toLowerCase();
-    if (['ai', 'ui', 'api', 'url', 'json', 'html', 'css', 'js', 'ts', 'tsx', 'jsx', 'x'].includes(lower)) return lower.toUpperCase();
-    return lower.charAt(0).toUpperCase() + lower.slice(1);
-  }).join(' ');
-}
-
-function _mobileTraceCompactDetail(value, { path = false, url = false, slug = false } = {}) {
-  let raw = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!raw) return '';
-  if (url || /^https?:\/\//i.test(raw)) {
-    try {
-      const parsed = new URL(raw);
-      raw = `${parsed.host}${parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : ''}`;
-    } catch {}
-  } else if (path || /[\\/]/.test(raw)) {
-    raw = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
-  } else if (slug) {
-    raw = _mobileTraceTitleCaseSlug(raw);
-  }
-  return raw.length > 48 ? `${raw.slice(0, 45)}...` : raw;
-}
-
-function _mobileTraceDescriptorFor(rawText, entryType = 'tool') {
-  const raw = String(rawText || '').replace(/\s+/g, ' ').trim();
-  const type = String(entryType || '').toLowerCase();
-  const label = _mobileTraceToolLabel(raw);
-  const lower = `${label} ${raw}`.toLowerCase();
-  const payload = _mobileTraceJsonPayload(raw);
-  const arrow = _mobileTraceArrowDetail(raw);
-  const fileValues = _mobileTracePayloadValues(payload, ['file', 'filename', 'path', 'source', 'target', 'to_path', 'from_path'], 3)
-    .map((value) => _mobileTraceCompactDetail(value, { path: true }))
-    .filter(Boolean);
-  const urlValue = _mobileTraceFirstPayloadValue(payload, ['url', 'href', 'currentUrl', 'pageUrl', 'targetUrl']);
-  const windowValue = _mobileTraceFirstPayloadValue(payload, ['window', 'windowTitle', 'title', 'name', 'app']);
-  const commandValue = _mobileTraceFirstPayloadValue(payload, ['command', 'cmd', 'script']);
-  const skillValue = _mobileTraceFirstPayloadValue(payload, ['id', 'skill', 'skillId', 'name']);
-  const make = (key, past, gerund, noun, plural, detail = '', opts = {}) => ({
-    key,
-    past,
-    gerund,
-    noun,
-    plural: plural || `${noun}s`,
-    detail: String(detail || '').trim(),
-    detailPrefix: opts.detailPrefix || '',
-    countStyle: opts.countStyle || 'noun',
-    status: type === 'error' || /\bfailed\b/i.test(raw) ? 'failed' : '',
-  });
-  if (type === 'vision' || /\b(vision|screenshot|screen shot|image preview)\b/.test(lower)) {
-    return make('vision', 'Viewed', 'Viewing', 'screenshot', 'screenshots', windowValue || arrow, { detailPrefix: '' });
-  }
-  if (/\b(skill read|read skill)\b/.test(lower)) {
-    return make('skillRead', 'Read', 'Reading', 'skill', 'skills', _mobileTraceCompactDetail(skillValue || arrow, { slug: true }), { detailPrefix: 'skill' });
-  }
-  if (/\b(skill list|list skills|skill search|skill match)\b/.test(lower)) {
-    const query = _mobileTraceFirstPayloadValue(payload, ['query', 'q', 'search']);
-    return make('skillList', 'Searched', 'Searching', 'skill list', 'skill searches', _mobileTraceCompactDetail(query || arrow), { detailPrefix: 'for' });
-  }
-  if (/\b(desktop focus|focus window|desktop window)\b/.test(lower)) {
-    return make('desktopFocus', 'Focused', 'Focusing', 'window', 'windows', _mobileTraceCompactDetail(windowValue || arrow, { slug: true }));
-  }
-  if (/\b(desktop screen|desktop screenshot|screen capture)\b/.test(lower)) {
-    return make('desktopScreen', 'Captured', 'Capturing', 'desktop screen', 'desktop screens', _mobileTraceCompactDetail(windowValue, { slug: true }));
-  }
-  if (/\b(browser scroll|scrolled?|scroll_collect|scroll collect)\b/.test(lower)) {
-    const direction = _mobileTraceFirstPayloadValue(payload, ['direction', 'dir']);
-    return make('browserScroll', 'Scrolled', 'Scrolling', 'scroll', 'scrolls', _mobileTraceCompactDetail(direction || arrow), { countStyle: 'times' });
-  }
-  if (/\b(browser click|clicked?|tap|tapped)\b/.test(lower)) {
-    const target = _mobileTraceFirstPayloadValue(payload, ['text', 'label', 'selector', 'target', 'ariaLabel']);
-    return make('browserClick', 'Clicked', 'Clicking', 'click', 'clicks', _mobileTraceCompactDetail(target || arrow), { countStyle: 'times' });
-  }
-  if (/\b(browser open|browser navigate|navigate|opened page|open page|go to|goto|visited)\b/.test(lower)) {
-    return make('browserOpen', 'Opened', 'Opening', 'page', 'pages', _mobileTraceCompactDetail(urlValue || arrow, { url: true }));
-  }
-  if (/\b(browser extract|get page text|page text|read page|browser read)\b/.test(lower)) {
-    return make('browserRead', 'Read', 'Reading', 'page', 'pages', _mobileTraceCompactDetail(urlValue || arrow, { url: true }));
-  }
-  if (/\b(workspace edit|dev source edit|apply patch|edited?|update file|delete file)\b/.test(lower)) {
-    return make('fileEdit', 'Edited', 'Editing', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
-  }
-  if (/\b(write note|workspace write|create file|write file|save file)\b/.test(lower)) {
-    return make('fileWrite', 'Wrote', 'Writing', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
-  }
-  if (/\b(workspace read|dev source read|read files batch|read file|file read|fetch file|get-content|cat|sed|open file|view file)\b/.test(lower)) {
-    return make('fileRead', 'Read', 'Reading', 'file', 'files', fileValues[0] || _mobileTraceCompactDetail(arrow, { path: true }), { detailPrefix: 'file' });
-  }
-  if (/\b(grep|rg|ripgrep|search source|search file|search files|file search|find in files)\b/.test(lower)) {
-    const query = _mobileTraceFirstPayloadValue(payload, ['pattern', 'query', 'q', 'search']);
-    return make('fileSearch', 'Searched', 'Searching', 'files', 'file searches', _mobileTraceCompactDetail(query || fileValues[0] || arrow), { detailPrefix: 'for' });
-  }
-  if (/\b(web search|search query|searched web|web\.run|internet search|search web)\b/.test(lower)) {
-    const query = _mobileTraceFirstPayloadValue(payload, ['q', 'query', 'search']);
-    return make('webSearch', 'Searched', 'Searching', 'web', 'web searches', _mobileTraceCompactDetail(query || arrow), { detailPrefix: 'for' });
-  }
-  if (/\b(shell|powershell|command|terminal|run command|workspace run|cmd\.exe)\b/.test(lower)) {
-    const command = _mobileTraceCompactDetail(commandValue || arrow || label);
-    return make('command', 'Ran', 'Running', 'command', 'commands', command, { detailPrefix: 'command' });
-  }
-  if (/\b(approval|approve|permission)\b/.test(lower)) {
-    return make('approval', 'Requested', 'Requesting', 'approval', 'approvals', _mobileTraceCompactDetail(arrow));
-  }
-  return make(`tool:${label || raw || 'tool'}`, 'Used', 'Using', 'tool', 'tools', _mobileTraceCompactDetail(arrow || label || raw));
-}
-
-function _mobileTraceJoinSummaryParts(parts) {
-  if (!parts.length) return '';
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
-}
-
-function _mobileTraceMergeDetail(target, source) {
-  if (!target || !source) return;
-  if (!target.detail && source.detail) target.detail = source.detail;
-  if (!target.status && source.status) target.status = source.status;
-}
-
-function _mobileTraceLogicalTools(entries) {
-  const list = _mobileVisibleTraceEntries(entries);
-  const calls = [];
-  let pending = null;
-  let current = null;
-  list.forEach((entry) => {
-    const type = String(entry?.type || '').toLowerCase();
-    if (!['tool', 'result', 'error', 'vision'].includes(type)) return;
-    const raw = String(entry?.text || '').replace(/\s+/g, ' ').trim();
-    if (!raw && type !== 'vision') return;
-    if (/^Processing\.{0,3}$/i.test(raw) || /^Prepared\b/i.test(raw)) return;
-    const descriptor = _mobileTraceDescriptorFor(raw, type);
-    if (type === 'tool' && /^Preparing\b/i.test(raw)) {
-      pending = (!pending || pending.key !== descriptor.key) ? { ...descriptor, pending: true } : pending;
-      return;
-    }
-    if (type === 'tool' || type === 'vision') {
-      if (pending && pending.key !== descriptor.key) calls.push(pending);
-      pending = null;
-      current = { ...descriptor };
-      calls.push(current);
-      return;
-    }
-    const target = current || pending;
-    if (target && (!descriptor.key || target.key === descriptor.key || /\bcomplete\b|->|=>|→|\bok\b|\bapplied\b/i.test(raw))) {
-      _mobileTraceMergeDetail(target, descriptor);
-      if (type === 'error' || /\bfailed\b/i.test(raw)) target.status = 'failed';
-      return;
-    }
-    if (type === 'error' || !/\bcomplete\b/i.test(raw)) {
-      current = { ...descriptor };
-      calls.push(current);
-    }
-  });
-  if (pending && !calls.includes(pending)) calls.push(pending);
-  return calls;
-}
-
-function _mobileTraceLogicalGroupText(calls) {
-  const list = Array.isArray(calls) ? calls : [];
-  if (!list.length) return '';
-  const first = list[0];
-  const count = list.length;
-  const details = [...new Set(list.map((call) => call.detail).filter(Boolean))].slice(0, 2);
-  const failed = list.filter((call) => call.status === 'failed').length;
-  if (failed && failed === count) {
-    if (count === 1) return `${first.noun.charAt(0).toUpperCase()}${first.noun.slice(1)} failed${details[0] ? `: ${details[0]}` : ''}`;
-    return `${count} ${first.plural} failed`;
-  }
-  if (count === 1) {
-    const detail = details[0] ? `${first.detailPrefix && first.detailPrefix !== 'for' ? ` ${first.detailPrefix}:` : ''} ${details[0]}` : ` ${first.noun}`;
-    if (first.detailPrefix === 'for' && details[0]) return `${first.past} for ${details[0]}`;
-    return `${first.past}${detail}`;
-  }
-  if (first.countStyle === 'times') return `${first.past} ${_mobileTraceCountPhrase(count)}`;
-  const tail = details.length ? `: ${details.join(', ')}` : '';
-  return `${first.past} ${count} ${first.plural}${tail}`;
-}
-
-function _mobileTraceToolSummary(entries) {
-  const structured = toolActivitySummary(entries);
-  if (structured) return structured;
-  const calls = _mobileTraceLogicalTools(entries);
-  const groups = new Map();
-  calls.forEach((call) => {
-    const key = `${call.key}|${call.status === 'failed' ? 'failed' : 'ok'}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(call);
-  });
-  const parts = [...groups.values()].map(_mobileTraceLogicalGroupText).filter(Boolean);
-  if (parts.length) return _mobileTraceJoinSummaryParts(parts.slice(0, 3));
-  const count = _mobileVisibleTraceEntries(entries).length;
-  return `Used ${count} tool${count === 1 ? '' : 's'}`;
-}
-
-function _mobileTraceCurrentToolLabel(entries) {
-  const structured = toolActivitySummary(entries, { live: true });
-  if (structured) return structured;
-  const calls = _mobileTraceLogicalTools(entries);
-  const call = calls[calls.length - 1];
-  if (call) {
-    if (call.status === 'failed') return `${call.noun.charAt(0).toUpperCase()}${call.noun.slice(1)} failed${call.detail ? `: ${call.detail}` : ''}`;
-    if (call.detailPrefix === 'for' && call.detail) return `${call.gerund} for ${call.detail}`;
-    if (call.detail) return `${call.gerund}${call.detailPrefix ? ` ${call.detailPrefix}:` : ''} ${call.detail}`;
-    return `${call.gerund} ${call.noun}`;
-  }
-  return _mobileTraceToolSummary(entries);
-}
-
-function _mobileTraceSummaryKey(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent = false } = {}) {
-  const groups = _mobileTraceGroups(entries);
-  if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
-  const latestToolGroupIndex = groups.reduce((latest, group, index) => (
-    group.kind === 'tools' ? index : latest
-  ), -1);
-  return `<div class="pm-trace-timeline">${groups.map((group, index) => {
-    if (group.kind === 'thought') {
-      return `<div class="pm-trace-thought" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
-    }
-    if (group.kind === 'compaction') {
-      return group.entries.map(_renderMobileCompactionBreak).join('');
-    }
-    if (group.kind === 'vision') {
-      return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
-    }
-    const isLiveCurrent = streaming && index === latestToolGroupIndex;
-    const progressSummary = isLiveCurrent ? _mobileTraceProgressSummary(entries) : '';
-    const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
-    const summaryKey = _mobileTraceSummaryKey(summary);
-    const visibleEntries = _mobileVisibleTraceEntries(group.entries);
-    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const nonReasoningEntries = visibleEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
-    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
-    const itemLabel = callCount ? 'call' : 'item';
-    const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
-    return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
-      <summary class="pm-trace-tool-summary">
-        <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
-        <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
-      </summary>
-      <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
-    </details>`;
-  }).join('')}</div>`;
-}
 
 function _renderMobileGeneratedFiles(files) {
   const media = _normalizeMobileMediaList(files);
@@ -8319,7 +7851,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_isMobileGenerateVideoToolName": { enumerable: true, get: () => _isMobileGenerateVideoToolName },
   "_isMobileVoiceAgentWorkerHandoff": { enumerable: true, get: () => _isMobileVoiceAgentWorkerHandoff },
   "_isMobileVoiceTraceTurn": { enumerable: true, get: () => _isMobileVoiceTraceTurn },
-  "_markMobileLiveStreamMotion": { enumerable: true, get: () => _markMobileLiveStreamMotion },
   "_mergeMobileMediaIntoMessage": { enumerable: true, get: () => _mergeMobileMediaIntoMessage },
   "_mergeMobileProductCarouselIntoMessage": { enumerable: true, get: () => _mergeMobileProductCarouselIntoMessage },
   "_mobileAssistantWorkStartedAt": { enumerable: true, get: () => _mobileAssistantWorkStartedAt },
@@ -8327,7 +7858,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_mobileHasPendingImageGeneration": { enumerable: true, get: () => _mobileHasPendingImageGeneration },
   "_mobileTimelineEntries": { enumerable: true, get: () => _mobileTimelineEntries },
   "_mobileToolEventName": { enumerable: true, get: () => _mobileToolEventName },
-  "_mobileTraceHasToolGroup": { enumerable: true, get: () => _mobileTraceHasToolGroup },
   "_mobileVoiceWorkgroupStatus": { enumerable: true, get: () => _mobileVoiceWorkgroupStatus },
   "_mobileWorkflowTraceEntriesForMessage": { enumerable: true, get: () => _mobileWorkflowTraceEntriesForMessage },
   "_normalizeMobileQuestion": { enumerable: true, get: () => _normalizeMobileQuestion },
@@ -8343,7 +7873,18 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileChatErrorPresentation": { enumerable: true, get: () => _renderMobileChatErrorPresentation },
   "_renderMobileFileChanges": { enumerable: true, get: () => _renderMobileFileChanges },
   "_renderMobileGeneratedImageLoadingCard": { enumerable: true, get: () => _renderMobileGeneratedImageLoadingCard },
-  "_renderMobileGroupedTrace": { enumerable: true, get: () => _renderMobileGroupedTrace },
+  "_dedupeMobileTraceProseText": { enumerable: true, get: () => _dedupeMobileTraceProseText },
+  "_isMobileBareThinkingTraceText": { enumerable: true, get: () => _isMobileBareThinkingTraceText },
+  "_isMobileImageGenerationStreamEntry": { enumerable: true, get: () => _isMobileImageGenerationStreamEntry },
+  "_isMobileTraceReasoningSummaryType": { enumerable: true, get: () => _isMobileTraceReasoningSummaryType },
+  "_isMobileTraceThoughtFragmentText": { enumerable: true, get: () => _isMobileTraceThoughtFragmentText },
+  "_isMobileTraceThoughtType": { enumerable: true, get: () => _isMobileTraceThoughtType },
+  "_isMobileUserVisibleReasoningTraceEntry": { enumerable: true, get: () => _isMobileUserVisibleReasoningTraceEntry },
+  "_isMobileVisionInjectionStatusText": { enumerable: true, get: () => _isMobileVisionInjectionStatusText },
+  "_mobileTraceComparableText": { enumerable: true, get: () => _mobileTraceComparableText },
+  "_mobileTraceJsonPayload": { enumerable: true, get: () => _mobileTraceJsonPayload },
+  "_mobileTraceThoughtTextsSimilar": { enumerable: true, get: () => _mobileTraceThoughtTextsSimilar },
+  "_renderMobileLiveTracePreview": { enumerable: true, get: () => _renderMobileLiveTracePreview },
   "_renderMobileMarkdown": { enumerable: true, get: () => _renderMobileMarkdown },
   "_renderMobileMediaGallery": { enumerable: true, get: () => _renderMobileMediaGallery },
   "_renderMobileMessageActions": { enumerable: true, get: () => _renderMobileMessageActions },
@@ -14607,6 +14148,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn.liveTraceEntries = [];
     aiTurn.finalResponseStarted = false;
     delete aiTurn._pmFinalReceived;
+    delete aiTurn._pmLiveActivityCompleted;
     aiTurn.toolActivityStarted = false;
     aiTurn.agentExecutionMode = '';
     if (options.clientRequestId) aiTurn._clientRequestId = options.clientRequestId;
@@ -14825,6 +14367,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         invalidateMobileDrawerSessions('mobile');
         return 'streaming';
       case 'final':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -14852,6 +14396,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         renderThreadSoon();
         return 'final';
       case 'done':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -14874,6 +14420,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         mobileChatRuntimeAdapter.completeStream(requestedSession, evt.reply || aiTurn.body?.text || aiTurn.content, aiTurn);
         return 'done';
       case 'error':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _finishMobileVisualStreamText(aiTurn);
@@ -14900,6 +14448,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   function finalizeMobileLiveAiTurn(aiTurn) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn) return;
+    _closeMobileTraceThoughts(aiTurn);
+    aiTurn._pmLiveActivityCompleted = true;
     _flushMobilePendingThinkingBurst(aiTurn);
     _finishMobileVisualStreamText(aiTurn);
     aiTurn.streaming = false;
