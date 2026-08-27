@@ -1175,8 +1175,12 @@ function _compactMobileThreadCacheMessage(m) {
   };
   if (!compact.processEntries.length) delete compact.processEntries;
   if (!compact.liveTraceEntries.length) delete compact.liveTraceEntries;
-  for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts', 'fileChanges']) {
+  for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
     if (!compact[key]?.length) delete compact[key];
+  }
+  if (!compact.fileChanges || typeof compact.fileChanges !== 'object'
+    || !Array.isArray(compact.fileChanges.files) || !compact.fileChanges.files.length) {
+    delete compact.fileChanges;
   }
   if (!compact.richArtifacts?.length) delete compact.richArtifacts;
   return compact;
