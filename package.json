@@ -108,6 +108,7 @@
     "test:mobile-agent-activity": "node scripts/test-mobile-agent-activity-ui.mjs",
     "test:tool-activity-stream": "node scripts/test-tool-activity-stream.mjs",
     "test:desktop-chat-recovery": "node scripts/test-desktop-chat-recovery.mjs",
+    "test:chat-artifact-lifecycle": "node scripts/test-chat-artifact-lifecycle.mjs",
     "test:mobile-chat-recovery-trace": "tsx src/gateway/durable-chat-trace.regression.ts",
     "test:mobile-regression-audit": "node scripts/test-mobile-css-ownership.mjs && node scripts/test-mobile-voice-runtime-ownership.mjs && node scripts/test-mobile-question-composer-contract.mjs && node scripts/test-mobile-chat-renderer-ownership.mjs && node scripts/test-mobile-chat-runtime-authority.mjs && node scripts/test-mobile-chat-renderer-authority.mjs && node scripts/test-mobile-lifecycle-telemetry.mjs && node scripts/test-mobile-chat-runtime-request-identity.mjs && npx tsx src/gateway/history-reconciliation.regression.ts && node scripts/test-mobile-settings-return.mjs && node scripts/test-chat-progress-visibility.mjs && node scripts/test-chat-duration-contract.mjs && node scripts/test-realtime-voice-error-presentation.mjs && npx tsx src/gateway/realtime/codex-realtime-errors.regression.ts && node scripts/test-mobile-chat-bubble-layout.mjs && node scripts/test-mobile-voice-first-turn-transition.mjs && node scripts/test-mobile-generated-chat-parity.mjs",
     "test:mobile-route-chunks": "node scripts/test-mobile-route-chunks.mjs",
