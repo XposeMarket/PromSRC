@@ -1352,7 +1352,12 @@ export class BrainRunner {
       if (toolLog) persistToolLog(sessionId, toolLog);
     }
 
-    const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const submissionSucceeded = toolResults.some((tool) => String(tool?.name || '') === 'brain_thought_submit' && tool?.error !== true);
+    // A structured submission is the Thought completion contract. If a later
+    // provider/final-response path reports an error, do not discard an
+    // otherwise valid submission; artifact verification below remains the
+    // authoritative success check.
+    const runFailed = /^error:/i.test(String(resultText || '').trim()) && !submissionSucceeded;
     const artifactFresh = (): boolean => {
       try {
         if (!fs.existsSync(absOutFile)) return false;
@@ -1365,7 +1370,6 @@ export class BrainRunner {
     const fileLooksFresh = artifactFresh();
     const capsuleArtifact = inspectBrainThoughtCapsuleArtifact(absCapsuleFile, runStartedAt);
     const capsuleArtifactValid = capsuleArtifact.status === 'valid';
-    const submissionSucceeded = toolResults.some((tool) => String(tool?.name || '') === 'brain_thought_submit' && tool?.error !== true);
     const verifiedSuccess = submissionSucceeded && fileLooksFresh && capsuleArtifactValid && !runFailed;
     const outcome: BrainRunOutcome = resolveBrainRunOutcome({ verifiedSuccess, wasAborted });
     const success = outcome === 'success';
