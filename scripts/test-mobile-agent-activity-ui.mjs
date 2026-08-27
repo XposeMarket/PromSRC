@@ -69,5 +69,6 @@ assert.match(mobileCss, /\.pm-thinking-dots\s*\{[\s\S]*?margin-top:\s*2px[\s\S]*
 assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)/, 'visible thought prose must use the shared chat metrics');
 assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?margin:\s*0[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)[\s\S]*?font-weight:\s*420/, 'visible thought prose must match final-response typography');
 assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*13px[\s\S]*?font-weight:\s*650/, 'tool summaries must use the stronger chat typography');
+assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?color:\s*var\(--pm-muted\)/, 'inactive tool summaries must use the same muted gray token as their tool icon');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');

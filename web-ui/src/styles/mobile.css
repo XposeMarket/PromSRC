@@ -5212,7 +5212,7 @@ html.pm-session-context-open * {
   display: inline-block;
   flex: 1 1 auto;
   min-width: 0;
-  color: color-mix(in srgb, var(--pm-text) 76%, var(--pm-muted));
+  color: var(--pm-muted);
   font-family: var(--pm-chat-font);
   font-size: 13px;
   line-height: 1.25;
