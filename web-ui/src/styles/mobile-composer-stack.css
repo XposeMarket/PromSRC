@@ -436,3 +436,20 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   }
 }
 }
+
+/* Raw development/Electron mobile.html loads mobile.css directly, outside the
+   route layer used by the generated web bundle. Keep this attachment bridge
+   unlayered too so the legacy queue geometry cannot outrank the shared stack
+   rule above in that environment. */
+body.pm-mobile-active .pm-mobile-queued-prompts {
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  width: auto;
+  max-width: none;
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+  border-radius: 18px;
+}
+
+body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
+  bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
+}

@@ -56,3 +56,12 @@ body:not(.pm-mobile-active) .pm-mobile-status-edge-tint {
   display: none !important;
 }
 }
+
+/* mobile.css gives every direct app child a normal-flow position. This tint
+   is deliberately an app child for the native status-area bridge, so keep its
+   fixed positioning outside the shell layer; otherwise it becomes a trailing
+   flex item and paints a split surface above the bottom chrome. */
+body.pm-mobile-active .pm-app > .pm-mobile-status-edge-tint {
+  position: fixed;
+  z-index: 5;
+}

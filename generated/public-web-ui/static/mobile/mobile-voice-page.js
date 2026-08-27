@@ -80,55 +80,61 @@ export async function renderVoicePage(baseContext, page, ctx) {
 
         <div id="pm-voice-approval" class="pm-voice-approval" hidden aria-live="polite" aria-label="Approval required">
           <div class="pm-va-header">
-            <span class="pm-va-icon">!</span>
-            <span class="pm-va-title">Approval Required</span>
-            <span class="pm-va-risk" id="pm-va-risk"></span>
+            <span class="pm-va-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+            <div class="pm-va-heading">
+              <strong class="pm-va-title">Allow this tool to run?</strong>
+              <code class="pm-va-tool" id="pm-va-tool"></code>
+            </div>
           </div>
-          <div class="pm-va-tool" id="pm-va-tool"></div>
           <div class="pm-va-action" id="pm-va-action"></div>
-          <div class="pm-va-detail" id="pm-va-detail" hidden></div>
-          <div class="pm-va-section" id="pm-va-path-host" hidden>
-            <div class="pm-va-section-label">Requested path</div>
-            <div class="pm-va-path-val" id="pm-va-path-val"></div>
-          </div>
-          <div class="pm-va-section" id="pm-va-boundary-host" hidden>
-            <div class="pm-va-section-label">External paths</div>
-            <pre class="pm-va-boundary-val" id="pm-va-boundary-val"></pre>
-          </div>
-          <div class="pm-va-section" id="pm-va-files-host" hidden>
-            <div class="pm-va-section-label">Files</div>
-            <div class="pm-va-files-val" id="pm-va-files-val"></div>
-          </div>
-          <div class="pm-va-section" id="pm-va-reasoning-host" hidden>
-            <div class="pm-va-section-label">Reasoning</div>
-            <div class="pm-va-reasoning-val" id="pm-va-reasoning-val"></div>
-          </div>
-          <details class="pm-va-section pm-va-collapsible" id="pm-va-evidence-host" hidden>
-            <summary>Evidence</summary>
-            <pre class="pm-va-evidence-val" id="pm-va-evidence-val"></pre>
+          <details class="pm-va-details" open>
+            <summary>View details <span aria-hidden="true">⌃</span></summary>
+            <div class="pm-va-detail-body">
+              <div class="pm-va-detail" id="pm-va-detail" hidden></div>
+              <div class="pm-va-section" id="pm-va-path-host" hidden>
+                <div class="pm-va-section-label">Requested path</div>
+                <div class="pm-va-path-val" id="pm-va-path-val"></div>
+              </div>
+              <div class="pm-va-section" id="pm-va-boundary-host" hidden>
+                <div class="pm-va-section-label">External paths</div>
+                <pre class="pm-va-boundary-val" id="pm-va-boundary-val"></pre>
+              </div>
+              <div class="pm-va-section" id="pm-va-files-host" hidden>
+                <div class="pm-va-section-label">Files</div>
+                <div class="pm-va-files-val" id="pm-va-files-val"></div>
+              </div>
+              <div class="pm-va-section" id="pm-va-reasoning-host" hidden>
+                <div class="pm-va-section-label">Reasoning</div>
+                <div class="pm-va-reasoning-val" id="pm-va-reasoning-val"></div>
+              </div>
+              <details class="pm-va-section pm-va-collapsible" id="pm-va-evidence-host" hidden>
+                <summary>Evidence</summary>
+                <pre class="pm-va-evidence-val" id="pm-va-evidence-val"></pre>
+              </details>
+              <details class="pm-va-section pm-va-collapsible" id="pm-va-plan-host" hidden>
+                <summary>Plan</summary>
+                <pre class="pm-va-plan-val" id="pm-va-plan-val"></pre>
+              </details>
+              <details class="pm-va-section pm-va-collapsible" id="pm-va-workflow-host" hidden>
+                <summary>Expected workflow</summary>
+                <pre class="pm-va-workflow-val" id="pm-va-workflow-val"></pre>
+              </details>
+              <div class="pm-va-section" id="pm-va-final-host" hidden>
+                <div class="pm-va-section-label" id="pm-va-final-kind"></div>
+                <div class="pm-va-final-target" id="pm-va-final-target"></div>
+              </div>
+              <details class="pm-va-technical" id="pm-va-technical" hidden>
+                <summary>Technical details</summary>
+                <pre class="pm-va-args" id="pm-va-args"></pre>
+              </details>
+            </div>
           </details>
-          <details class="pm-va-section pm-va-collapsible" id="pm-va-plan-host" hidden>
-            <summary>Plan</summary>
-            <pre class="pm-va-plan-val" id="pm-va-plan-val"></pre>
-          </details>
-          <details class="pm-va-section pm-va-collapsible" id="pm-va-workflow-host" hidden>
-            <summary>Expected workflow</summary>
-            <pre class="pm-va-workflow-val" id="pm-va-workflow-val"></pre>
-          </details>
-          <div class="pm-va-section" id="pm-va-final-host" hidden>
-            <div class="pm-va-section-label" id="pm-va-final-kind"></div>
-            <div class="pm-va-final-target" id="pm-va-final-target"></div>
-          </div>
           <div class="pm-va-terminal-host" id="pm-va-terminal-host" hidden></div>
-          <details class="pm-va-technical" id="pm-va-technical" hidden>
-            <summary>Technical details</summary>
-            <pre class="pm-va-args" id="pm-va-args"></pre>
-          </details>
           <div class="pm-va-btns">
-            <button type="button" class="pm-va-btn reject" id="pm-va-reject">Reject</button>
-            <button type="button" class="pm-va-btn approve" id="pm-va-approve">Approve</button>
-            <button type="button" class="pm-va-btn session" id="pm-va-session" hidden>This session</button>
+            <button type="button" class="pm-va-btn approve" id="pm-va-approve">Allow once</button>
             <button type="button" class="pm-va-btn always" id="pm-va-always" hidden>Always allow</button>
+            <button type="button" class="pm-va-btn session" id="pm-va-session" hidden>Allow this session</button>
+            <button type="button" class="pm-va-btn reject" id="pm-va-reject">Deny</button>
           </div>
         </div>
         ${inlineMode ? `
@@ -1880,8 +1886,10 @@ void main() {
     const riskColor = risk >= 7 ? 'var(--pm-orange)' : risk >= 4 ? '#d6a247' : '#2fae66';
     const human = context._pmHumanApproval(approval);
     const technicalText = context._pmApprovalTechnicalText(approval);
+    const isDevApply = String(approval.approvalKind || '').trim() === 'dev_apply_live'
+      || String(approval.toolName || '').trim() === 'prom_apply_dev_changes';
 
-    approvalCard.querySelector('#pm-va-tool').textContent = human.title;
+    approvalCard.querySelector('#pm-va-tool').textContent = String(approval.toolName || human.title || 'tool').trim();
     approvalCard.querySelector('#pm-va-action').textContent = human.summary;
     const detailEl = approvalCard.querySelector('#pm-va-detail');
     if (detailEl) {
@@ -1889,8 +1897,11 @@ void main() {
       detailEl.hidden = !human.detail;
     }
     const riskEl = approvalCard.querySelector('#pm-va-risk');
-    riskEl.textContent = riskLabel;
-    riskEl.style.color = riskColor;
+    if (riskEl) {
+      riskEl.textContent = String(approval.status || 'pending').toLowerCase() === 'pending' ? 'Approval required' : riskLabel;
+      riskEl.title = `Risk ${riskLabel}`;
+      riskEl.style.color = riskColor;
+    }
     const argsEl = approvalCard.querySelector('#pm-va-args');
     const techEl = approvalCard.querySelector('#pm-va-technical');
     if (argsEl) argsEl.textContent = technicalText;
@@ -1903,6 +1914,10 @@ void main() {
     }
     approvalCard.querySelector('#pm-va-session')?.toggleAttribute('hidden', !context._pmApprovalCanSave(approval));
     approvalCard.querySelector('#pm-va-always')?.toggleAttribute('hidden', !context._pmApprovalCanSave(approval));
+    const approveButton = approvalCard.querySelector('#pm-va-approve');
+    const rejectButton = approvalCard.querySelector('#pm-va-reject');
+    if (approveButton) approveButton.textContent = isDevApply ? 'Apply live' : 'Allow once';
+    if (rejectButton) rejectButton.textContent = isDevApply ? 'Keep verified' : 'Deny';
 
     // ── path_access ────────────────────────────────────────────────────────
     const pathHost = approvalCard.querySelector('#pm-va-path-host');

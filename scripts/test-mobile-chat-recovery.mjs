@@ -81,6 +81,31 @@ assert.match(
   /resetChatDictationComposerState = \(\) => \{[\s\S]{0,560}chatSpeechEnabled = false;[\s\S]{0,560}micBtn\?\.classList\.remove\('listening'\)/,
   'sending a main-chat message must end transcription mode and clear its active mic state',
 );
+assert.match(
+  pages,
+  /const mobileApprovalActionsInFlight = new Map\(\)/,
+  'mobile approval actions must be coalesced by approval id during recovery races',
+);
+assert.match(
+  pages,
+  /if \(mobileApprovalActionsInFlight\.has\(id\)\)[\s\S]{0,180}reason: 'in_flight'/,
+  'a second approval click must be ignored while the first resolution is pending',
+);
+assert.match(
+  pages,
+  /function _wireMobileApprovalActionButton\(button\)[\s\S]{0,180}pmApprovalWired/,
+  'approval buttons must be wired at most once across keyed rerenders',
+);
+assert.match(
+  pages,
+  /alreadyHandled[\s\S]{0,360}_reconcileMobilePendingApprovals\(\{ retry: false \}\)/,
+  'a late already-resolved response must reconcile instead of showing a false approval failure',
+);
+assert.match(
+  renderer,
+  /querySelectorAll\('\[data-pm-approval-action\]\[data-pm-approval-id\]'\)\.forEach\(_wireMobileApprovalActionButton\)/,
+  'the keyed mobile renderer must use the guarded approval button wiring helper',
+);
 assert.doesNotMatch(
   pages,
   /resetChatDictationComposerState = \(\) => \{[\s\S]{0,720}scheduleChatDictationCycle\(/,

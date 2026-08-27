@@ -55,7 +55,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileUserEditComposer,
   _renderMobileVoiceWorkgroup,
   _renderMobileWorkTimer,
-  _resolveMobileApprovalButton,
+  _wireMobileApprovalActionButton,
   _restoreMobileApprovalDetailsState,
   _restoreMobileQuestionDraftState,
   _safeJsonPreview,
@@ -1211,9 +1211,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         if (toggle) toggle.textContent = snapshot.toggleText || 'Close terminal';
       });
     } catch {}
-    threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-      btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
-    });
+    threadEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(threadEl);
     _wireMobileChatEnhancements(threadEl);
     _scheduleMobileThreadCacheSave(sid);
@@ -1658,9 +1656,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       } catch {}
     }
     const patchedEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`) || nextEl;
-    patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-      btn.addEventListener('click', () => _resolveMobileApprovalButton(btn));
-    });
+    patchedEl.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach(_wireMobileApprovalActionButton);
     _wireMobileProcessRunActions(patchedEl);
     _wireMobileChatEnhancements(patchedEl);
     try {
@@ -3208,7 +3204,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     };
   });
   host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
-    btn.onclick = () => _resolveMobileApprovalButton(btn);
+    _wireMobileApprovalActionButton(btn);
   });
   _wireMobileProcessRunActions(host);
   host.querySelectorAll('.pm-background-spawn-lane[data-bg-id]').forEach((node) => {
