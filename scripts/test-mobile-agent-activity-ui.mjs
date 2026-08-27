@@ -10,10 +10,12 @@ const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const activity = read('web-ui/src/tool-activity.js');
 const chatCss = read('web-ui/src/styles/mobile-composer-stack.css');
 
-assert.match(pages, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
-assert.match(pages, /details class="pm-trace-thought-group"/, 'thoughts must render as closable disclosures');
+assert.match(renderer, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
+assert.doesNotMatch(pages, /function _mobileTracePresentationEntries\(/, 'chat activity presentation must stay out of the static page chunk');
+assert.match(renderer, /details class="pm-trace-thought-group"/, 'thoughts must render as closable disclosures');
+assert.doesNotMatch(pages, /function _renderMobileGroupedTrace\(/, 'grouped trace rendering must stay in the lazy renderer');
 assert.match(pages, /_pmLiveActivityCompleted = true/, 'the renderer must know when a live turn crossed its final frame');
-assert.match(pages, /visibleKinds = null, openThoughts = false/, 'trace rendering must support separate thought and tool surfaces');
+assert.match(renderer, /visibleKinds = null, openThoughts = false/, 'trace rendering must support separate thought and tool surfaces');
 assert.match(renderer, /const liveCompletionThoughts = m\._pmLiveActivityCompleted === true/, 'completed live turns must keep thoughts outside the hidden tool drawer');
 assert.match(renderer, /visibleKinds: \['thought'\][\s\S]*?openThoughts: true/, 'live-completion thoughts must be visible and closable');
 assert.match(renderer, /liveCompletionTools \|\| _renderMobileGroupedTrace/, 'the tool stream must remain in its collapsible drawer');
