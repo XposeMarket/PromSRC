@@ -12752,7 +12752,25 @@ void main() {
     const lane = _mobileBackgroundSpawnLanes()[cleanId];
     const stored = findBackgroundAgentWork(cleanId, requestedSession)
       || findBackgroundAgentWork(cleanId, __pmChat.activeSessionId);
-    if (!lane) return stored;
+    if (!lane) {
+      if (!stored) return null;
+      const storedRecord = {
+        ...stored,
+        id: cleanId,
+        sessionId: stored.sessionId || requestedSession,
+        backgroundSessionId: stored.backgroundSessionId || '',
+        task: stored.task || stored.prompt || '',
+        status: stored.status || 'running',
+        events: _mobileBackgroundStoredProcessEntries(stored),
+        liveTraceEntries: Array.isArray(stored.liveTraceEntries)
+          ? stored.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
+          : [],
+      };
+      return {
+        ...storedRecord,
+        message: _mobileBackgroundAgentDetailMessage(storedRecord),
+      };
+    }
     const identity = resolveBackgroundAgentIdentity(lane.id, {
       existingName: lane.agentName,
       existingColor: lane.agentColor,
@@ -12968,12 +12986,30 @@ void main() {
   async function refreshMobileBackgroundAgentDetail(id) {
     const cleanId = String(id || '').trim();
     if (!cleanId || backgroundDetailPollInFlight) return;
-    const lane = _mobileBackgroundSpawnLanes()[cleanId];
-    if (!lane) return;
+    let lane = _mobileBackgroundSpawnLanes()[cleanId];
+    if (!lane) {
+      const stored = _mobileBackgroundAgentDetailRecord(cleanId);
+      if (!stored) return;
+      lane = _upsertMobileBackgroundSpawnLane({
+        ...stored,
+        bgId: cleanId,
+        backgroundId: cleanId,
+        state: stored.status || 'running',
+        prompt: stored.task || '',
+        taskPrompt: stored.task || '',
+        sessionId: stored.sessionId || requestedSession,
+        spawnerSessionId: stored.sessionId || requestedSession,
+        bgSessionId: stored.backgroundSessionId || '',
+        streamId: stored.streamId || '',
+        seq: stored.lastSeq || 0,
+        message: stored.message,
+      }, requestedSession);
+      if (!lane) return;
+    }
     backgroundDetailPollInFlight = true;
     try {
       const currentLane = _mobileBackgroundSpawnLanes()[cleanId];
-      const [statusResponse, replay, session] = await Promise.all([
+      let [statusResponse, replay, session] = await Promise.all([
         loadMobileBackgroundStatus(cleanId).catch(() => null),
         loadMobileBackgroundStreamReplay(cleanId, currentLane?.lastSeq || 0).catch(() => null),
         currentLane?.bgSessionId
@@ -12984,6 +13020,14 @@ void main() {
       if (status) _applyMobileBackgroundSpawnStatus(status, requestedSession);
       const refreshedLane = _mobileBackgroundSpawnLanes()[cleanId];
       if (refreshedLane && replay) _applyMobileBackgroundStreamReplay(refreshedLane, replay);
+      if (!session && refreshedLane?.bgSessionId) {
+        session = await loadMobileChatSession(refreshedLane.bgSessionId, {
+          force: true,
+          historyLimit: 24,
+          processLimit: 500,
+          fullProcess: true,
+        }).catch(() => null);
+      }
       if (refreshedLane && session) _mergeMobileBackgroundAgentSessionSnapshot(refreshedLane, session);
       const refreshedRecord = _mobileBackgroundAgentDetailRecord(cleanId);
       if (refreshedRecord) {
