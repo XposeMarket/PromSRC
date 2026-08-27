@@ -37,6 +37,9 @@ assert.match(pages, /_pmAbortRequested = true/, 'expected user aborts must be ma
 assert.match(pages, /_isMobileRuntimeAbortEvent/, 'late runtime abort frames must use the existing stopped turn');
 assert.match(pages, /_installMobileTimestampReveal\(sideThreadEl/, 'background detail threads must wire work-timer disclosure');
 assert.match(renderer, /liveCompletionTools \|\| _renderMobileGroupedTrace/, 'the tool stream must remain in its collapsible drawer');
+assert.match(renderer, /const enteredCompletedTraceLayout = !currentHasCompletedTraceLayout && nextHasCompletedTraceLayout/, 'completion must detect the live-to-collapsed trace layout boundary');
+assert.match(renderer, /if \(finalizedThisPatch \|\| enteredCompletedTraceLayout\)/, 'completion must close tool groups at the final-frame layout boundary');
+assert.match(renderer, /if \(!enteredCompletedTraceLayout[\s\S]{0,220}_patchMobileLiveTraceTimeline/, 'completion must not merge the old live timeline into the new thought timeline');
 assert.match(renderer, /details class="pm-trace-tool-group"/, 'tool phases must remain the collapsible activity surface');
 assert.match(renderer, /inlineActivityVisible/, 'the foreground progress dock must defer to the inline activity stream');
 assert.match(renderer, /host\.hidden = !state\?\.message \|\| inlineActivityVisible/, 'the duplicate foreground progress pill must hide once inline activity exists');

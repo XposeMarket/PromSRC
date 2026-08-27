@@ -2176,6 +2176,18 @@ export function createMobileChatRendererRuntime(context = {}) {
       const stableTraceSummaryLabels = {};
       const stableLiveTraceTimeline = currentBubble.querySelector('.pm-trace-timeline');
       const nextLiveTraceTimeline = nextBubble.querySelector('.pm-trace-timeline');
+      const currentHasCompletedTraceLayout = Boolean(
+        currentBubble.querySelector('.pm-trace-drawer[data-trace-completed="1"]'),
+      );
+      const nextHasCompletedTraceLayout = Boolean(
+        nextBubble.querySelector('.pm-trace-drawer[data-trace-completed="1"]'),
+      );
+      // The final frame splits the live all-in-one timeline into visible
+      // thoughts and a collapsed tool drawer. Do not reconcile the old
+      // timeline against the first timeline in that new layout: that would
+      // move the live tool groups into the thought surface and make the
+      // completion paint look like an out-of-order rewrite.
+      const enteredCompletedTraceLayout = !currentHasCompletedTraceLayout && nextHasCompletedTraceLayout;
       const preserveLiveTraceTimeline = Boolean(
         stableLiveTraceTimeline
         && !nextLiveTraceTimeline
@@ -2221,7 +2233,7 @@ export function createMobileChatRendererRuntime(context = {}) {
         currentEl.querySelectorAll('details.pm-trace-tool-group, details.pm-trace-thought-group, details.pm-trace-compaction').forEach((d, detailIndex) => {
           const traceId = d.getAttribute('data-pm-trace-group') || d.getAttribute('data-pm-trace-entry-id') || detailIndex;
           const key = `${d.classList.contains('pm-trace-compaction') ? 'compaction' : 'group'}:${traceId}`;
-          if (finalizedThisPatch) {
+          if (finalizedThisPatch || enteredCompletedTraceLayout) {
             closedTraceGroups.add(key);
             return;
           }
@@ -2252,7 +2264,8 @@ export function createMobileChatRendererRuntime(context = {}) {
           currentBubble.appendChild(stableLiveTraceTimeline);
           renderedLiveTraceTimeline = stableLiveTraceTimeline;
         }
-        if (stableLiveTraceTimeline && renderedLiveTraceTimeline && renderedLiveTraceTimeline !== stableLiveTraceTimeline
+        if (!enteredCompletedTraceLayout
+          && stableLiveTraceTimeline && renderedLiveTraceTimeline && renderedLiveTraceTimeline !== stableLiveTraceTimeline
           && _patchMobileLiveTraceTimeline(stableLiveTraceTimeline, renderedLiveTraceTimeline)) {
           renderedLiveTraceTimeline.replaceWith(stableLiveTraceTimeline);
         }
@@ -2266,7 +2279,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           const stable = src ? stableImageNodes.get(src)?.shift() : null;
           if (stable && stable !== node && stable.isConnected === false) node.replaceWith(stable);
         });
-        currentBubble.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key], .pm-trace-thought-summary strong[data-pm-trace-summary-key]').forEach((node) => {
+        if (!enteredCompletedTraceLayout) currentBubble.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key], .pm-trace-thought-summary strong[data-pm-trace-summary-key]').forEach((node) => {
           const groupKey = node.closest('[data-pm-trace-group]')?.getAttribute('data-pm-trace-group') || '';
           const key = String(node.getAttribute('data-pm-trace-summary-key') || '').trim();
           const stable = groupKey ? stableTraceSummaryLabels[groupKey] : null;
