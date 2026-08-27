@@ -4,6 +4,7 @@ import {
   renderToolActivityEntry,
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
+import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 
 // Chat rich-message, attachment, and transcript renderer runtime.
 export function createMobileChatRendererRuntime(context = {}) {
@@ -2843,6 +2844,40 @@ function _mobileAgentTurnPresentation(message) {
   };
 }
 
+function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
+  if (!Array.isArray(thread)) return null;
+  const clientRequestId = String(evt?.clientRequestId || evt?.data?.clientRequestId || '').trim();
+  const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
+  if (!clientRequestId && !streamId) return null;
+  const sid = String(sessionId || evt?.sessionId || '').trim();
+  const pinned = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
+  if (pinned && Date.now() - Number(pinned.at || 0) <= 120_000) {
+    const pinnedTurn = pinned.turn;
+    if (clientRequestId && String(pinnedTurn?._clientRequestId || '').trim() === clientRequestId) return pinnedTurn;
+    if (streamId && String(pinnedTurn?._streamId || pinnedTurn?._pmLastStreamId || '').trim() === streamId) return pinnedTurn;
+  }
+  return [...thread].reverse().find((turn) => {
+    if (turn?.role !== 'ai' || turn.streaming === true) return false;
+    if (clientRequestId && String(turn._clientRequestId || '').trim() === clientRequestId) return true;
+    return !!streamId && String(turn._streamId || turn._pmLastStreamId || '').trim() === streamId;
+  }) || null;
+}
+
+function _ackMobileAbort(turn) {
+  if (!turn) return false;
+  if (turn._pmAbortAcknowledged === true && turn._pmAbortRequested !== true) return true;
+  turn._pmAbortRequested = false;
+  turn._pmAbortAcknowledged = true;
+  turn.streaming = false;
+  turn._pmLiveActivityCompleted = true;
+  if (!String(turn.body?.text || turn.content || '').trim()) {
+    turn.body = { ...(turn.body || {}), text: '[Generation stopped by user. Runtime abort sent and process log preserved.]' };
+    turn.content = turn.body.text;
+  }
+  delete turn.errorPresentation;
+  return true;
+}
+
 function _voiceMessageMeta(message) {
   const source = [
     message?.source,
@@ -4231,6 +4266,9 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
 }
 
   const runtime = Object.freeze({
+    createMobileStreamReceiptLedger,
+    _findMobileCompletedTurn,
+    _ackMobileAbort,
     _mobileWorkflowTransitionLabel,
     _renderMobileQuestionCard,
     _renderChatMessageHtml,
