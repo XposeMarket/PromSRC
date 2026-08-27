@@ -19,6 +19,7 @@ import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
+import { getWorkspaceToolMode } from '../../runtime/workspace-tool-mode';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
@@ -3755,6 +3756,8 @@ async function handleChat(
     const verification = verifyToolCategorySurface(activation.category, initialToolSurface.provider, {
       unboundedTools: initialToolSurface.unbounded,
       requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+      requestFilter: effectiveToolFilter,
+      workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
     });
     recordToolCategoryProvisioning(
       verification,
@@ -4510,6 +4513,8 @@ async function handleChat(
         const verification = verifyToolCategorySurface(requestedToolCategory, providerSurface.provider, {
           unboundedTools: providerSurface.unbounded,
           requestFilterActive: Boolean(effectiveToolFilter && effectiveToolFilter.length > 0),
+          requestFilter: effectiveToolFilter,
+          workspaceMode: getWorkspaceToolMode(getConfig().getConfig()),
         });
         recordToolCategoryProvisioning(
           verification,

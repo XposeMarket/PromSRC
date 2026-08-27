@@ -3,6 +3,7 @@ import {
   normalizeManifestToolCategory,
   type ToolCategoryId,
 } from '../runtime/tool-category-manifest';
+import type { WorkspaceToolMode } from '../runtime/workspace-tool-mode';
 
 /**
  * Representative provider-facing tools used to prove that a category really
@@ -73,6 +74,48 @@ export interface ToolCategorySurfaceVerification {
   reason: string;
 }
 
+function representativeToolsForCategory(
+  rawCategory: unknown,
+  workspaceMode?: WorkspaceToolMode,
+  unboundedNames: string[] = [],
+  requestFilter: readonly string[] = [],
+): string[] {
+  const category = normalizeCategory(rawCategory);
+  const configuredRepresentatives = category === 'workspace_write' && workspaceMode === 'terminal-first'
+    ? ['workspace_run']
+    : category
+      ? [...(TOOL_CATEGORY_REPRESENTATIVE_TOOLS[category] || [])]
+      : [];
+  // terminal-first intentionally hides the native file wrappers. The command
+  // runner remains the callable workspace surface in that mode, so requiring
+  // workspace_read/workspace_edit here would reject a valid activation before
+  // the model can use workspace_run to start or inspect a process.
+  if (!category || requestFilter.length === 0) return configuredRepresentatives;
+
+  const filterMatches = (name: string): boolean => requestFilter.some((pattern) => (
+    pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern
+  ));
+  const filteredConfigured = configuredRepresentatives.filter(filterMatches);
+  const exactFilteredCategoryTools = requestFilter.filter((name) => (
+    !name.includes('*') && isToolAvailableForManifestCategory(name, category)
+  ));
+  const explicitRepresentatives = Array.from(new Set([
+    ...filteredConfigured,
+    ...exactFilteredCategoryTools,
+  ]));
+  if (explicitRepresentatives.length > 0) return explicitRepresentatives;
+
+  // Prefix filters can intentionally select a category subset without naming
+  // one of its stable representatives. Use the filtered pre-cap surface to
+  // prove that at least one callable category tool survived that profile.
+  const visibleFilteredCategoryTools = unboundedNames.filter((name) => (
+    filterMatches(name) && isToolAvailableForManifestCategory(name, category)
+  ));
+  return visibleFilteredCategoryTools.length > 0
+    ? visibleFilteredCategoryTools.slice(0, 2)
+    : configuredRepresentatives;
+}
+
 function toolName(tool: any): string {
   return String(tool?.function?.name || tool?.name || '').trim();
 }
@@ -98,14 +141,22 @@ export function verifyToolCategorySurface(
   options: {
     unboundedTools?: any[];
     requestFilterActive?: boolean;
+    requestFilter?: readonly string[];
+    workspaceMode?: WorkspaceToolMode;
   } = {},
 ): ToolCategorySurfaceVerification {
   const category = normalizeCategory(rawCategory) || String(rawCategory || '').trim();
   const providerNames = uniqueNames(providerTools);
   const unboundedNames = uniqueNames(options.unboundedTools || providerTools);
-  const configuredRepresentatives = normalizeCategory(rawCategory)
-    ? [...(TOOL_CATEGORY_REPRESENTATIVE_TOOLS[normalizeCategory(rawCategory) as ToolCategoryId] || [])]
-    : [];
+  const requestFilter = Array.from(new Set((options.requestFilter || [])
+    .map((pattern) => String(pattern || '').trim())
+    .filter(Boolean)));
+  const configuredRepresentatives = representativeToolsForCategory(
+    rawCategory,
+    options.workspaceMode,
+    unboundedNames,
+    requestFilter,
+  );
   const representativeTools = configuredRepresentatives.length > 0
     ? configuredRepresentatives
     : unboundedNames.filter((name) => isToolAvailableForManifestCategory(name, category as ToolCategoryId)).slice(0, 2);
@@ -113,7 +164,7 @@ export function verifyToolCategorySurface(
   const actualCategoryTools = providerNames.filter((name) => isToolAvailableForManifestCategory(name, category as ToolCategoryId));
   const unboundedCategoryTools = unboundedNames.filter((name) => isToolAvailableForManifestCategory(name, category as ToolCategoryId));
   const providerCapped = unboundedNames.length > providerNames.length;
-  const filteredByRequest = options.requestFilterActive === true;
+  const filteredByRequest = options.requestFilterActive === true || requestFilter.length > 0;
   const ok = representativeTools.length > 0 && missingTools.length === 0;
 
   let reason = 'provisioned';
@@ -121,7 +172,10 @@ export function verifyToolCategorySurface(
     reason = 'no_expected_tools_available';
   } else if (missingTools.length > 0) {
     const removedAfterBuild = missingTools.every((name) => unboundedNames.includes(name));
-    if (removedAfterBuild && filteredByRequest) reason = 'request_filter_removed_expected_tools';
+    const excludedByRequestFilter = requestFilter.length > 0 && missingTools.every((name) => !requestFilter.some((pattern) => (
+      pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern
+    )));
+    if ((removedAfterBuild && filteredByRequest) || excludedByRequestFilter) reason = 'request_filter_removed_expected_tools';
     else if (removedAfterBuild && providerCapped) reason = 'provider_cap_removed_expected_tools';
     else reason = 'builder_surface_missing_expected_tools';
   }
