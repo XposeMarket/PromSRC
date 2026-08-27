@@ -4982,7 +4982,7 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 .live-turn-timeline {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
   margin: 4px 0 8px;
   width: 100%;
   max-width: 100%;
@@ -5114,6 +5114,7 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 }
 .live-turn-tool-summary strong {
   display: inline-block;
+  flex: 1 1 auto;
   color: var(--text);
   font-size: 12px;
   font-weight: 800;
@@ -5126,15 +5127,31 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
   opacity: .82;
 }
 .live-turn-tool-icon {
-  width: 13px;
-  flex: 0 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
   color: var(--muted);
+  font-size: 12px;
   line-height: 1;
   text-align: center;
+}
+.live-turn-tool-icon svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
+.live-turn-tool-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
   transform: rotate(0deg);
   transition: transform .18s ease;
 }
-.live-turn-tool-group[open] > .live-turn-tool-summary .live-turn-tool-icon {
+.live-turn-tool-group[open] > .live-turn-tool-summary .live-turn-tool-chevron {
   transform: rotate(90deg);
 }
 .live-turn-tool-body {
@@ -5160,8 +5177,25 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
   align-items: center;
   gap: 7px;
   min-height: 22px;
+  font-size: 13px;
+  line-height: 1.65;
   padding: 0;
 }
+.tool-activity-tool-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
+  color: var(--muted);
+  vertical-align: middle;
+}
+.tool-activity-tool-icon[data-tool-icon="terminal"] { color: #4aa8ff; }
+.tool-activity-tool-icon[data-tool-icon="pointer"],
+.tool-activity-tool-icon[data-tool-icon="keyboard"] { color: color-mix(in srgb, #4aa8ff 72%, var(--text)); }
+.tool-activity-tool-icon[data-tool-icon="edit"] { color: #f5c451; }
+.tool-activity-tool-icon[data-tool-icon="image"],
+.tool-activity-tool-icon[data-tool-icon="video"] { color: color-mix(in srgb, #a78bfa 72%, var(--text)); }
+.tool-activity-tool-icon svg { display: block; width: 1em; height: 1em; }
 .tool-activity-status-icon {
   display: inline-flex;
   width: 15px;

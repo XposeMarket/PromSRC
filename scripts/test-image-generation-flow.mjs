@@ -71,9 +71,13 @@ assert.doesNotMatch(preview, /base64,/i, 'preview payload helper must not embed 
 
 // Desktop/mobile presentation contracts.
 assert.match(desktop, /hasBackgroundImageGeneration[\s\S]*return false/, 'desktop foreground loader must be suppressed for background working assets');
+assert.match(desktop, /activeImageCalls[\s\S]*observedImageActivity/, 'desktop image loading must track open image calls instead of a stale text match');
+assert.match(desktop, /!answerStarted && isGenerateImagePendingFromEntries/, 'desktop image loading must stop once the final response begins');
 assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop must render constrained cache-backed previews');
 assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop must replace matching partial previews by stable identity');
 assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile must render constrained cache-backed previews');
+assert.match(mobile, /message\?\.finalResponseStarted === true[\s\S]*message\?\._pmFinalReceived === true/, 'mobile image loading must stop at the final-response boundary');
+assert.match(mobile, /activeImageCalls[\s\S]*observedImageActivity/, 'mobile image loading must reconcile duplicate process/live entries');
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile must replace matching partial previews by stable identity');
 assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not duplicate background working assets into the final gallery');
 assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image events must mark background working assets inline-only');

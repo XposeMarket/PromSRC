@@ -233,4 +233,34 @@ const {
   }
 }
 
+{
+  // A reconnect can replay the retained stream from sequence zero. The same
+  // call/result frames must reconcile into the existing rows instead of
+  // appending a second copy of the tool activity.
+  const entries = [];
+  const call = {
+    streamId: 'replay_stream_1',
+    seq: 14,
+    stepNum: 3,
+    action: 'workspace_read',
+    args: { action: 'read', path: 'src/app.js' },
+  };
+  const result = {
+    streamId: 'replay_stream_1',
+    seq: 15,
+    stepNum: 3,
+    action: 'workspace_read',
+    args: { action: 'read', path: 'src/app.js' },
+    result: 'const app = true;',
+    error: false,
+  };
+  applyToolActivityEvent(entries, 'call', call);
+  applyToolActivityEvent(entries, 'result', result);
+  applyToolActivityEvent(entries, 'call', call);
+  applyToolActivityEvent(entries, 'result', result);
+  assert.equal(entries.length, 2, 'replayed sequenced call/result frames remain one operation/result pair');
+  assert.equal(entries.filter((entry) => entry.activity?.kind === 'operation').length, 1);
+  assert.equal(entries.filter((entry) => entry.activity?.kind === 'result').length, 1);
+}
+
 console.log('[tool-activity-stream] two-row lifecycle, compact tool/result rows, and terminal output passed');

@@ -342,6 +342,76 @@ function normalizeAction(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+const TOOL_ACTIVITY_ICON_PATHS = Object.freeze({
+  wrench: '<path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8l-5.4 5.4a2.1 2.1 0 0 0 3 3l5.4-5.4a4.5 4.5 0 0 0 5.8-5.8l-3.2 3.2-2.6-.6-.6-2.6z"/>',
+  terminal: '<path d="m4 5 6 7-6 7"/><path d="M13 19h7"/>',
+  file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/>',
+  list: '<path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
+  edit: '<path d="m4 16-.8 4.8L8 20 19 9l-4-4-11 11z"/><path d="m13.5 5.5 5 5"/>',
+  browser: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 8h18M7 6h.01M10 6h.01"/>',
+  pointer: '<path d="m5 3 3.5 17 4-6 6.5-2.5z"/>',
+  keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M6 14h8M16 14h2"/>',
+  scroll: '<path d="M8 4h8M8 20h8"/><path d="M12 4v16M9 7l3-3 3 3M9 17l3 3 3-3"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3z"/>',
+  link: '<path d="M10 13.8 14 10"/><path d="M7.5 16.5H6a4 4 0 0 1 0-8h3"/><path d="M16.5 7.5H18a4 4 0 0 1 0 8h-3"/>',
+  sparkles: '<path d="m12 3 1.2 4.8L18 9l-4.8 1.2L12 15l-1.2-4.8L6 9l4.8-1.2zM19 15l.6 2.4L22 18l-2.4.6L19 21l-.6-2.4L16 18l2.4-.6z"/>',
+  checklist: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m7 9 1.5 1.5L11 8M13 9h4M7 15l1.5 1.5L11 14M13 15h4"/>',
+  bookmark: '<path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-3-6 3z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 3 3 2-2 6 6"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3z"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5"/>',
+});
+
+function toolActivityIconKind(activity = {}) {
+  const family = normalizeAction(activity.family);
+  const key = normalizeAction(activity.key || activity.action);
+  const action = normalizeAction(activity.action);
+  const value = `${family} ${key} ${action}`;
+  if (family === 'command' || /\b(command|terminal|shell)\b/.test(value)) return 'terminal';
+  if (family === 'file') {
+    if (/search|grep|find/.test(value)) return 'search';
+    if (/edit|write|patch|create|delete/.test(value)) return 'edit';
+    if (/list|tree/.test(value)) return 'list';
+    return 'file';
+  }
+  if (family === 'browser') {
+    if (/click|tap/.test(value)) return 'pointer';
+    if (/type|fill|keyboard/.test(value)) return 'keyboard';
+    if (/scroll/.test(value)) return 'scroll';
+    if (/read|extract/.test(value)) return 'file';
+    return 'browser';
+  }
+  if (family === 'desktop') {
+    if (/click|tap/.test(value)) return 'pointer';
+    if (/type|keyboard/.test(value)) return 'keyboard';
+    if (/scroll/.test(value)) return 'scroll';
+    if (/screenshot|screen|capture/.test(value)) return 'image';
+    return 'monitor';
+  }
+  if (family === 'web') return /fetch|link|url/.test(value) ? 'link' : 'globe';
+  if (family === 'skill') return 'sparkles';
+  if (family === 'plan') return 'checklist';
+  if (family === 'memory') return 'bookmark';
+  if (family === 'presentation') return 'browser';
+  if (family === 'media') return /video/.test(value) ? 'video' : 'image';
+  if (family === 'system') return 'layers';
+  if (/image|photo|screenshot/.test(value)) return 'image';
+  if (/video|movie/.test(value)) return 'video';
+  if (/browser|navigate|page/.test(value)) return 'browser';
+  if (/web|fetch|url|link/.test(value)) return 'globe';
+  if (/file|read|write|edit/.test(value)) return 'file';
+  return 'wrench';
+}
+
+export function renderToolActivityIcon(activity = {}, escapeHtml) {
+  const esc = typeof escapeHtml === 'function' ? escapeHtml : (value) => String(value ?? '');
+  const kind = toolActivityIconKind(activity);
+  const path = TOOL_ACTIVITY_ICON_PATHS[kind] || TOOL_ACTIVITY_ICON_PATHS.wrench;
+  return `<svg class="tool-activity-tool-icon" data-tool-icon="${esc(kind)}" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+}
+
 function actionFromPayload(payload = {}) {
   return normalizeAction(payload.action || payload.toolName || payload.name || payload.activity?.action);
 }
@@ -355,6 +425,30 @@ function callIdFromPayload(payload = {}, { allowGenericId = true } = {}) {
       || (allowGenericId ? payload.id : ''),
     180,
   );
+}
+
+function streamIdFromPayload(payload = {}) {
+  return compact(payload.streamId || payload.stream_id || payload.activity?.streamId || '', 180);
+}
+
+function sequenceFromPayload(payload = {}) {
+  const raw = payload.seq ?? payload.sequence ?? payload.activity?.seq;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+function stepNumberFromPayload(payload = {}) {
+  const raw = payload.stepNum ?? payload.step_num ?? payload.step ?? payload.activity?.stepNum;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.floor(value) : null;
+}
+
+function eventKeyFromPayload(payload = {}) {
+  const explicit = compact(payload.eventKey || payload.event_id || payload.eventId || payload.activity?.eventKey || '', 220);
+  if (explicit) return explicit;
+  const streamId = streamIdFromPayload(payload);
+  const seq = sequenceFromPayload(payload);
+  return streamId && seq != null ? `${streamId}:${seq}` : '';
 }
 
 function actionArgs(payload = {}) {
@@ -485,6 +579,12 @@ function makeActivity(payload, phase, previous = null) {
   const args = actionArgs(payload);
   const action = actionFromPayload(payload) || previous?.action || '';
   const callId = callIdFromPayload(payload) || previous?.callId || '';
+  const eventKey = eventKeyFromPayload(payload) || previous?.eventKey || '';
+  const streamId = streamIdFromPayload(payload) || previous?.streamId || '';
+  const sequence = sequenceFromPayload(payload);
+  const seq = sequence != null ? sequence : (previous?.seq ?? null);
+  const stepNumber = stepNumberFromPayload(payload);
+  const stepNum = stepNumber != null ? stepNumber : (previous?.stepNum ?? null);
   const now = Date.now();
   const durationMs = Number(payload.durationMs ?? payload.elapsedMs ?? payload.elapsed_ms ?? previous?.durationMs);
   const errorValue = payload.error;
@@ -525,17 +625,26 @@ function makeActivity(payload, phase, previous = null) {
     updatedAt: now,
     technicalName: action,
     activityId: previous?.activityId || payload.activityId || '',
+    ...(eventKey ? { eventKey } : {}),
+    ...(streamId ? { streamId } : {}),
+    ...(seq != null ? { seq } : {}),
+    ...(stepNum != null ? { stepNum } : {}),
     ...(terminal ? { terminal } : {}),
   };
 }
 
 function matchingOperation(entries, payload, phase) {
   const callId = callIdFromPayload(payload);
+  const eventKey = eventKeyFromPayload(payload);
+  const stepNum = stepNumberFromPayload(payload);
   const action = actionFromPayload(payload);
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const activity = entries[index]?.activity;
-    if (!activity || activity.kind !== 'operation' || activity.resultAttached) continue;
+    if (!activity || activity.kind !== 'operation') continue;
     if (callId && activity.callId && callId === activity.callId) return entries[index];
+    if (eventKey && activity.eventKey && eventKey === activity.eventKey) return entries[index];
+    if (stepNum != null && activity.stepNum != null && stepNum === activity.stepNum) return entries[index];
+    if (activity.resultAttached) continue;
     if (action && activity.action === action && ['preparing', 'running'].includes(activity.status)) return entries[index];
     if (phase === 'call' && activity.status === 'preparing' && action && describeTool(action).key === activity.key) return entries[index];
   }
@@ -595,7 +704,9 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
   const resultActivity = makeActivity(payload, 'result', operationEntry.activity);
   resultActivity.kind = 'result';
   const existingResult = entries.find((entry) => entry?.activity?.kind === 'result'
-    && resultActivity.callId && entry.activity.callId === resultActivity.callId);
+    && ((resultActivity.eventKey && entry.activity.eventKey === resultActivity.eventKey)
+      || (resultActivity.callId && entry.activity.callId === resultActivity.callId)
+      || (resultActivity.stepNum != null && entry.activity.stepNum === resultActivity.stepNum)));
   if (existingResult) {
     existingResult.activity = resultActivity;
     existingResult.type = resultActivity.ok ? 'result' : 'error';
@@ -792,6 +903,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     ? escapeHtml
     : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = String(entry.text || activityText(activity));
+  const toolIconHtml = renderToolActivityIcon(activity, esc);
   const editStats = toolActivityEditStats(activity);
   const durationMatch = editStats ? label.match(/(\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s))$/i) : null;
   const labelBase = durationMatch ? label.slice(0, -durationMatch[1].length) : label;
@@ -821,7 +933,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   </details>` : '';
   return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}">
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
-    <div class="tool-activity-entry-summary">${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span></div>
+    <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span></div>
   </div>
   ${terminalHtml}
   </div>`;

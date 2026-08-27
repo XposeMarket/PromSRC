@@ -401,6 +401,64 @@ body.pm-mobile-active.pm-keyboard-open .pm-mobile-goal-strip {
 body.pm-mobile-active.pm-keyboard-open .pm-mobile-queued-prompts {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px));
 }
+
+/* Turn-summary diffs are a compact receipt, not the full workspace viewer. */
+body.pm-mobile-active .pm-file-changes-card--turn-summary {
+  margin-top: 8px;
+  border-radius: 14px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head {
+  min-height: 34px;
+  padding: 7px 10px;
+  gap: 7px;
+  font-size: 11px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-changes-head span,
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-counts {
+  gap: 5px;
+  font-size: 10px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-row {
+  min-height: 30px;
+  padding: 5px 10px;
+  gap: 7px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-main {
+  gap: 5px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-status {
+  min-width: 43px;
+  padding: 2px 5px;
+  font-size: 7px;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-path {
+  font-size: 10px;
+  line-height: 1.2;
+}
+body.pm-mobile-active .pm-file-changes-card--turn-summary .pm-file-change-more summary {
+  min-height: 30px;
+  padding: 7px 10px;
+  font-size: 10px;
+}
+
+/* Keep the expanded editor's real controls above the glass decoration and
+   make its hit rectangle explicit after a visual-viewport recovery. */
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) {
+  isolation: isolate;
+}
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+  position: relative;
+  z-index: 4;
+  pointer-events: auto;
+}
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-input,
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row button {
+  touch-action: manipulation;
+}
 body.pm-mobile-active.pm-keyboard-open .pm-tool-progress-dock {
   bottom: calc(var(--pm-composer-stack-base-bottom) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px));
 }
@@ -457,7 +515,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-thought-group {
   color: color-mix(in srgb, var(--pm-text) 58%, var(--pm-muted));
 }
-.pm-trace-thought-group summary {
+.pm-trace-thought-summary {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -465,29 +523,6 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   min-height: 24px;
   padding: 0;
   color: var(--pm-muted);
-  cursor: pointer;
-  list-style: none;
-  -webkit-tap-highlight-color: transparent;
-}
-.pm-trace-thought-group summary::-webkit-details-marker {
-  display: none;
-}
-.pm-trace-thought-group summary:active {
-  opacity: .72;
-}
-.pm-trace-thought-indicator {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border: 1px solid color-mix(in srgb, var(--pm-muted) 65%, transparent);
-  border-radius: 50%;
-  opacity: .72;
-}
-.pm-trace-thought-indicator.is-live {
-  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 82%, transparent);
-  border-top-color: transparent;
-  opacity: 1;
-  animation: pm-trace-thought-spin .9s linear infinite;
 }
 .pm-trace-thought-summary strong {
   display: inline-block;
@@ -500,47 +535,40 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pm-trace-thought-group[data-pm-trace-live-current="1"] .pm-trace-thought-summary strong {
-  color: color-mix(in srgb, var(--pm-text) 68%, var(--pm-muted));
-  background: linear-gradient(105deg, currentColor 28%, color-mix(in srgb, var(--pm-text) 88%, white) 50%, currentColor 72%);
+.pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(
+    105deg,
+    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 28%,
+    color-mix(in srgb, var(--pm-text) 88%, white) 50%,
+    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 72%
+  );
   background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
   animation: pm-trace-thought-shimmer 2.2s linear infinite;
 }
-.pm-trace-thought-chevron {
-  display: inline-flex;
-  width: 14px;
-  height: 16px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-  color: color-mix(in srgb, var(--pm-muted) 78%, transparent);
-  font-size: 0;
-  transform: rotate(0deg);
-  transition: transform .2s cubic-bezier(.16,1,.3,1);
-}
-.pm-trace-thought-chevron::before {
-  content: '';
-  display: block;
-  width: 6px;
-  height: 6px;
-  border-right: 1.5px solid currentColor;
-  border-bottom: 1.5px solid currentColor;
-  transform: translateY(-1px) rotate(45deg);
-}
-.pm-trace-thought-group[open] .pm-trace-thought-chevron {
-  transform: rotate(180deg);
+.pm-trace-tool-icon.is-live {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 0;
+  border-radius: 50%;
+  background-color: var(--pm-blue, #4aa8ff);
+  -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  font-size: 12px;
+  rotate: 0deg;
+  animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }
 .pm-trace-thought-body {
   box-sizing: border-box;
-  width: calc(100% - 12px);
-  margin-left: 12px;
-  padding: 5px 0 2px 9px;
+  width: 100%;
+  margin-left: 0;
+  padding: 2px 0 0;
   overflow: hidden;
-  border-left: 3px solid color-mix(in srgb, var(--pm-muted) 28%, transparent);
 }
 .pm-trace-thought-body .pm-live-trace {
   margin-top: 0;
@@ -550,23 +578,23 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-thought-body .pm-live-md,
 .pm-trace-thought-body .pm-live-prose p,
 .pm-trace-thought-body .pm-live-md p {
+  margin: 0;
   padding: 2px 0;
-  color: color-mix(in srgb, var(--pm-text) 56%, var(--pm-muted));
-  font-size: 13px;
-  line-height: 1.45;
+  color: var(--pm-text);
+  font-family: var(--pm-chat-font);
+  font-size: var(--pm-chat-reading-size);
+  font-weight: 420;
+  line-height: var(--pm-chat-reading-line);
 }
-@keyframes pm-trace-thought-spin {
-  to { transform: rotate(360deg); }
+@keyframes pm-trace-loading-icon-rotate {
+  to { rotate: 360deg; }
 }
 @keyframes pm-trace-thought-shimmer {
   from { background-position: 220% 0; }
   to { background-position: -40% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pm-trace-thought-indicator.is-live,
-  .pm-trace-thought-group[data-pm-trace-live-current="1"] .pm-trace-thought-summary strong {
-    animation: none;
-  }
+  .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong { animation: none; }
 }
 .pm-trace-tool-body .tool-activity-entry-summary {
   gap: 7px;
@@ -587,10 +615,15 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 }
 .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
 .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
-  border-color: color-mix(in srgb, var(--pm-blue, #4aa8ff) 72%, transparent);
-  border-top-color: transparent;
-  color: var(--pm-blue, #4aa8ff);
-  animation: pm-trace-thought-spin .9s linear infinite;
+  box-sizing: border-box;
+  border: 0;
+  background-color: var(--pm-blue, #4aa8ff);
+  -webkit-mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  mask: url("../assets/icons/phosphor-circle-notch.svg") center / contain no-repeat;
+  color: transparent;
+  font-size: 0;
+  rotate: 0deg;
+  animation: pm-trace-loading-icon-rotate .9s linear infinite;
 }
 .pm-trace-tool-body .tool-activity-status-icon[data-status="succeeded"] {
   border-color: color-mix(in srgb, var(--pm-green) 70%, transparent);
@@ -600,9 +633,30 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   border-color: color-mix(in srgb, var(--pm-red) 72%, transparent);
   color: var(--pm-red);
 }
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"] {
+  position: relative;
+  font-size: 0;
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::before,
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  content: '';
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.pm-trace-tool-body .tool-activity-status-icon[data-status="failed"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
 @media (prefers-reduced-motion: reduce) {
   .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
-  .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"] {
+  .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"],
+  .pm-trace-tool-icon.is-live,
+  .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
     animation: none;
   }
 }
@@ -661,7 +715,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 .pm-trace-compaction[data-status="compacted"] strong::before,
 .pm-trace-compaction[data-status="done"] strong::before {
   border-color: rgba(34,197,94,.7);
-  background: linear-gradient(135deg, rgba(34,197,94,.95), rgba(22,163,74,.72));
+  background: linear-gradient(to bottom, rgba(34,197,94,.95), rgba(22,163,74,.72));
 }
 .pm-trace-compaction[data-status="failed"] strong::before {
   border-color: rgba(248,113,113,.7);

@@ -31,7 +31,7 @@ assert.match(mobile, /syncBackgroundDockOnScroll/);
 assert.match(mobile, /_isMobileReasoningSummaryTraceEntry/);
 assert.match(mobile, /session\.liveTraceEntries/);
 assert.match(mobile, /session\.history/);
-assert.match(mobile, /msg\.eventName/);
+assert.match(read('web-ui/src/mobile/mobile-chat-renderer-runtime.js'), /msg\.eventName/);
 assert.doesNotMatch(mobile, /openMobileSideChat\(msg\)/);
 assert.match(read('web-ui/src/mobile/mobile-shell.js'), /_isDrawerBackgroundAgentSession/);
 assert.match(read('web-ui/src/mobile/mobile-shell.js'), /!_isDrawerHiddenRuntimeSession\(session\)/);

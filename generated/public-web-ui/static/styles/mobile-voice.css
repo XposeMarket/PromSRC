@@ -40,6 +40,18 @@
     align-items: start;
     padding: calc(max(env(safe-area-inset-top), 12px) + 58px) 14px calc(env(safe-area-inset-bottom) + var(--pm-tabbar-h) + 18px);
   }
+  /* The real orb lives in .pm-voice-orb-dock, not in the flex placeholder
+     used to reserve the stage. Center that dock in the usable voice stage so
+     the orb is not bottom-anchored behind the tab bar. */
+  .pm-voice-body--page .pm-voice-snap-primary .pm-voice-stage {
+    position: relative;
+    min-height: calc(100dvh - max(env(safe-area-inset-top), 12px) - var(--pm-tabbar-h) - env(safe-area-inset-bottom) - 76px);
+  }
+  .pm-voice-body--page .pm-voice-orb-dock {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
   .pm-voice-body--page .pm-voice-snap-secondary {
     position: relative;
     overflow-y: auto;

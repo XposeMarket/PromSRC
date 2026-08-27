@@ -11,6 +11,7 @@ import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
   installToolActivityExpansionPersistence,
+  renderToolActivityIcon,
   renderToolActivityEntry,
   setToolActivityDisclosureState,
   toolActivitySummary,
@@ -12594,8 +12595,9 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     const itemLabel = callCount ? 'call' : 'item';
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
-        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+        <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
         <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+        <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
@@ -12804,16 +12806,51 @@ function attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, entries,
 }
 
 function isGenerateImagePendingFromEntries(...entryGroups) {
-  const entries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
-  const hasBackgroundImageGeneration = entries.some((entry) => {
+  const rawEntries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
+  const hasBackgroundImageGeneration = rawEntries.some((entry) => {
     const args = entry?.activity?.args || entry?.extra?.args || entry?.args || {};
     return String(entry?.activity?.action || entry?.extra?.action || entry?.action || '').toLowerCase() === 'generate_image'
-      && String(args?.presentation_mode || '').toLowerCase() === 'background';
+      && String(args?.presentation_mode || args?.presentationMode || '').toLowerCase() === 'background';
   });
   if (hasBackgroundImageGeneration) return false;
-  const text = entries.map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase()).join('\n');
-  return /\b(generate_image|generating image|image generation|i am generating the image)\b/.test(text)
-    && !/\b(generate_image complete|generated image|generated images|failed|error)\b/.test(text);
+  const entries = [];
+  const seen = new Set();
+  rawEntries.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const type = String(entry?.type || '').toLowerCase();
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const eventKey = String(extra.eventKey || entry.eventKey || '').trim();
+    const callId = String(extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || entry.callId || '').trim();
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    const key = `${type}|${eventKey || callId || text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
+  });
+  let activeImageCalls = 0;
+  let observedImageActivity = false;
+  entries.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    if (presentationMode === 'background') return;
+    const action = String(entry?.activity?.action || extra.action || entry?.action || '').trim().toLowerCase();
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isImageActivity = action === 'generate_image'
+      || /\b(generate_image|generating image|image generation|i am generating the image)\b/.test(text);
+    if (!isImageActivity) return;
+    observedImageActivity = true;
+    if (type === 'result' || type === 'error' || type === 'tool_result') {
+      activeImageCalls = Math.max(0, activeImageCalls - 1);
+      return;
+    }
+    if (type === 'tool' || type === 'call') {
+      activeImageCalls += 1;
+      return;
+    }
+    if (activeImageCalls === 0) activeImageCalls = 1;
+  });
+  return observedImageActivity && activeImageCalls > 0;
 }
 
 function renderGeneratedImageLoadingCard() {
@@ -13516,7 +13553,9 @@ function renderSessionThinkingBodyHtml(sessionId) {
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
   const currentTurnEntries = mergeLiveTraceProcessEntries(st.liveTraceEntries, rawCurrentTurnEntries);
-  const pendingImageHtml = isGenerateImagePendingFromEntries(st.liveTraceEntries, currentTurnEntries) ? renderGeneratedImageLoadingCard() : '';
+  const pendingImageHtml = !answerStarted && isGenerateImagePendingFromEntries(st.liveTraceEntries, currentTurnEntries)
+    ? renderGeneratedImageLoadingCard()
+    : '';
   const activeModelBadgeHtml = st.activeModelBadge
     ? `<div class="msg-role"><span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span></div>`
     : '';

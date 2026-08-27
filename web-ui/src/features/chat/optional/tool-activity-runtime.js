@@ -204,7 +204,14 @@ export function renderToolActivityEntry(entry, escapeHtml = (value) => String(va
   void loadToolActivityFeature().catch(() => {});
   const activity = entry?.activity || {};
   const label = String(activity.label || activity.action || entry?.text || 'Tool activity').trim();
-  return `<div class="tool-activity-entry tool-activity-entry--loading" data-tool-activity-loading="true"><span>${escapeHtml(label)}</span></div>`;
+  const wrench = '<svg class="tool-activity-tool-icon" data-tool-icon="wrench" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8l-5.4 5.4a2.1 2.1 0 0 0 3 3l5.4-5.4a4.5 4.5 0 0 0 5.8-5.8l-3.2 3.2-2.6-.6-.6-2.6z"/></svg>';
+  return `<div class="tool-activity-entry tool-activity-entry--loading" data-tool-activity-loading="true"><div class="tool-activity-entry-summary">${wrench}<span class="tool-activity-label">${escapeHtml(label)}</span></div></div>`;
+}
+
+export function renderToolActivityIcon(activity = {}, escapeHtml = (value) => String(value ?? '')) {
+  if (feature) return feature.renderToolActivityIcon(activity, escapeHtml);
+  void loadToolActivityFeature().catch(() => {});
+  return '<svg class="tool-activity-tool-icon" data-tool-icon="wrench" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8l-5.4 5.4a2.1 2.1 0 0 0 3 3l5.4-5.4a4.5 4.5 0 0 0 5.8-5.8l-3.2 3.2-2.6-.6-.6-2.6z"/></svg>';
 }
 
 export function appendCommandTerminalChunkToDom(runId, chunk, sequence = 0) {
