@@ -5158,8 +5158,47 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 .tool-activity-entry-summary {
   display: flex;
   align-items: center;
+  gap: 7px;
   min-height: 22px;
   padding: 0;
+}
+.tool-activity-status-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+.tool-activity-status-icon[data-status="running"],
+.tool-activity-status-icon[data-status="preparing"] {
+  border-color: color-mix(in srgb, #4aa8ff 72%, transparent);
+  border-top-color: transparent;
+  color: #4aa8ff;
+  animation: pm-tool-activity-spin .9s linear infinite;
+}
+.tool-activity-status-icon[data-status="succeeded"] {
+  border-color: color-mix(in srgb, #22c55e 70%, transparent);
+  color: #22c55e;
+}
+.tool-activity-status-icon[data-status="failed"] {
+  border-color: color-mix(in srgb, var(--red) 72%, transparent);
+  color: var(--red);
+}
+@keyframes pm-tool-activity-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-activity-status-icon[data-status="running"],
+  .tool-activity-status-icon[data-status="preparing"] {
+    animation: none;
+  }
 }
 .tool-activity-entry-summary .tool-activity-label {
   flex: 1 1 auto;

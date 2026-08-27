@@ -3020,6 +3020,7 @@ function _makeProcessEntry(type, text, extra = null) {
     type: String(type || 'info'),
     text: content,
     extra,
+    ts: Date.now(),
     time: _nowTime(),
   };
 }
@@ -3126,7 +3127,7 @@ function _maybeFlushMobileThinkingBeforeEvent(message, evt) {
 
 function _isMobileProgressNarration(value) {
   const text = _normalizeMobileTraceProseText(value).replace(/\s+/g, ' ').trim();
-  return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
+  return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Executing|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring|Queuing|Dispatching)\b/i.test(text);
 }
 
 function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
@@ -3643,6 +3644,17 @@ function _renderMobileProcess(entries, options = {}) {
   `;
 }
 
+function _closeMobileTraceThoughts(message) {
+  const entries = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  if (!entries.length) return;
+  const endedAt = Date.now();
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!_isMobileTraceThoughtType(entry?.type)) break;
+    if (!Number.isFinite(Number(entry.endTs)) || Number(entry.endTs) <= 0) entry.endTs = endedAt;
+  }
+}
+
 function _appendMobileLiveTrace(message, type, text, { append = false, extra = null } = {}) {
   if (!message) return;
   const content = String(text || '');
@@ -3653,7 +3665,10 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
   const isUserVisibleThought = isThoughtLike && _isMobileUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
-  if (!isThoughtLike) _flushMobileTraceThoughtProbe(message, { force: true });
+  if (!isThoughtLike) {
+    _closeMobileTraceThoughts(message);
+    _flushMobileTraceThoughtProbe(message, { force: true });
+  }
   if (isThoughtLike && _mobileTraceShouldProbeThought(message, normalizedType, append, extra)) {
     const probe = message._pmTraceThoughtProbe;
     const nextProbeText = _appendMobileStreamingText(
@@ -3708,6 +3723,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
         id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: normalizedType,
         text: trimmed,
+        ts: Date.now(),
         time: _nowTime(),
         ...(extra && typeof extra === 'object' ? { extra } : {}),
       });
@@ -3718,6 +3734,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
 function _applyMobileToolActivity(message, phase, payload = {}) {
   if (!message) return null;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  _closeMobileTraceThoughts(message);
   return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
 }
 
@@ -4463,6 +4480,7 @@ function _pushMobileTraceThoughtEntry(message, type, text, time = '', extra = nu
     id: `mtrace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: String(type || 'preamble').toLowerCase(),
     text: trimmed,
+    ts: Date.now(),
     time: String(time || _nowTime()),
     ...(extra && typeof extra === 'object' ? { extra } : {}),
   };
@@ -4559,6 +4577,57 @@ function _renderMobileCompactionBreak(entry) {
   </details>`;
 }
 
+function _mobileTracePresentationEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    if (!entry || entry.activity) return entry;
+    const type = String(entry.type || '').toLowerCase();
+    const text = String(entry.text || entry.content || entry.message || '').trim();
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
+    // Older mobile turns stored agent narration as generic process/info rows.
+    // Reclassify only action-less progress prose so it can use the same muted,
+    // collapsible thought treatment as live reasoning.
+    if (['info', 'progress'].includes(type) && !action && _isMobileProgressNarration(text)) {
+      return {
+        ...entry,
+        type: 'think',
+        extra: {
+          ...extra,
+          source: extra.source || 'agent_progress',
+          visibility: extra.visibility || 'user',
+        },
+      };
+    }
+    return entry;
+  });
+}
+
+function _mobileTraceEntryTime(entry, key) {
+  const value = entry?.[key] ?? entry?.extra?.[key];
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function _mobileTraceGroupDurationMs(entries, { live = false } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  let startedAt = 0;
+  let endedAt = 0;
+  let explicitDuration = 0;
+  for (const entry of list) {
+    const start = _mobileTraceEntryTime(entry, 'ts') || _mobileTraceEntryTime(entry, 'startedAt');
+    const end = _mobileTraceEntryTime(entry, 'endTs') || _mobileTraceEntryTime(entry, 'endedAt');
+    const duration = Number(entry?.durationMs ?? entry?.extra?.durationMs);
+    if (start > 0) startedAt = startedAt > 0 ? Math.min(startedAt, start) : start;
+    if (end > 0) endedAt = Math.max(endedAt, end);
+    if (Number.isFinite(duration) && duration > explicitDuration) explicitDuration = duration;
+  }
+  if (startedAt > 0) {
+    const effectiveEnd = endedAt > startedAt ? endedAt : (live ? Date.now() : startedAt);
+    if (effectiveEnd >= startedAt) return Math.max(0, effectiveEnd - startedAt);
+  }
+  return explicitDuration;
+}
+
 function _isMobilePreparedTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
@@ -4567,7 +4636,7 @@ function _isMobilePreparedTraceEntry(entry) {
 
 function _mobileVisibleTraceEntries(entries) {
   const thoughtTexts = [];
-  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const sourceEntries = _mobileTracePresentationEntries(entries);
   const replaceableProgressTexts = sourceEntries
     .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
     .map((entry) => String(entry?.text || entry?.content || '').trim())
@@ -4661,7 +4730,7 @@ function _markMobileLiveStreamMotion(rootEl, sessionKey) {
       seen.add(id);
       node.classList.add('pm-live-stream-enter');
     });
-    rootEl.querySelectorAll('.pm-trace-thought[data-pm-trace-group], details.pm-trace-tool-group[data-pm-trace-group]').forEach((node) => {
+    rootEl.querySelectorAll('details.pm-trace-thought-group[data-pm-trace-group], details.pm-trace-tool-group[data-pm-trace-group]').forEach((node) => {
       const id = String(node.getAttribute('data-pm-trace-group') || '').trim();
       if (!id || segmentSeen.has(id)) return;
       segmentSeen.add(id);
@@ -4690,7 +4759,9 @@ function _mobileTraceGroups(entries) {
     }
     if (_isMobileTraceThoughtEntry(entry)) {
       activeToolGroup = null;
-      groups.push({ kind: 'thought', entries: [entry] });
+      const previous = groups[groups.length - 1];
+      if (previous?.kind === 'thought') previous.entries.push(entry);
+      else groups.push({ kind: 'thought', entries: [entry] });
       return;
     }
     if (!activeToolGroup) {
@@ -4986,16 +5057,37 @@ function _mobileTraceSummaryKey(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent = false } = {}) {
-  const groups = _mobileTraceGroups(entries);
+function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
+  const kindFilter = Array.isArray(visibleKinds) || visibleKinds instanceof Set
+    ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
+    : null;
+  const groups = _mobileTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
   if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
+  if (!streaming
+    && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
+    && !kindFilter?.has('thought')) return '';
   const latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
   return `<div class="pm-trace-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
-      return `<div class="pm-trace-thought" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div>`;
+      const isLiveThought = streaming && index === groups.length - 1;
+      const progressSummary = isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
+      const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
+      const duration = durationMs > 0 ? _formatMobileWorkDuration(durationMs) : '';
+      const summary = isLiveThought
+        ? (progressSummary || 'Thinking…')
+        : `Thought${duration ? ` for ${duration}` : ''}`;
+      const summaryKey = _mobileTraceSummaryKey(summary);
+      const openAttr = (isLiveThought || openThoughts) ? ' open' : '';
+      return `<details class="pm-trace-thought-group"${openAttr}${isLiveThought ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
+        <summary class="pm-trace-thought-summary" aria-live="${isLiveThought ? 'polite' : 'off'}">
+          <span class="pm-trace-thought-indicator${isLiveThought ? ' is-live' : ''}" aria-hidden="true"></span>
+          <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
+          <span class="pm-trace-thought-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <div class="pm-trace-thought-body"><div class="pm-live-trace">${group.entries.map(_renderMobileLiveTraceEntry).join('')}</div></div>
+      </details>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(_renderMobileCompactionBreak).join('');
@@ -14607,6 +14699,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn.liveTraceEntries = [];
     aiTurn.finalResponseStarted = false;
     delete aiTurn._pmFinalReceived;
+    delete aiTurn._pmLiveActivityCompleted;
     aiTurn.toolActivityStarted = false;
     aiTurn.agentExecutionMode = '';
     if (options.clientRequestId) aiTurn._clientRequestId = options.clientRequestId;
@@ -14825,6 +14918,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         invalidateMobileDrawerSessions('mobile');
         return 'streaming';
       case 'final':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -14852,6 +14947,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         renderThreadSoon();
         return 'final';
       case 'done':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
@@ -14874,6 +14971,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         mobileChatRuntimeAdapter.completeStream(requestedSession, evt.reply || aiTurn.body?.text || aiTurn.content, aiTurn);
         return 'done';
       case 'error':
+        _closeMobileTraceThoughts(aiTurn);
+        aiTurn._pmLiveActivityCompleted = true;
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _finishMobileVisualStreamText(aiTurn);
@@ -14900,6 +14999,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   function finalizeMobileLiveAiTurn(aiTurn) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn) return;
+    _closeMobileTraceThoughts(aiTurn);
+    aiTurn._pmLiveActivityCompleted = true;
     _flushMobilePendingThinkingBurst(aiTurn);
     _finishMobileVisualStreamText(aiTurn);
     aiTurn.streaming = false;

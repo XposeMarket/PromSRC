@@ -799,7 +799,11 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     ? ` <span class="tool-activity-edit-delta" data-added-lines="${editStats.added}" data-removed-lines="${editStats.removed}"><span class="tool-activity-edit-added" style="color:var(--ok,#4ade80)">+${editStats.added}</span> <span class="tool-activity-edit-removed" style="color:var(--err,#f87171)">−${editStats.removed}</span></span>`
     : '';
   const labelHtml = `${esc(labelBase)}${editStatsHtml}${durationMatch ? esc(durationMatch[1]) : ''}`;
-  const state = activity.kind === 'result' ? (activity.ok === false ? 'failed' : 'succeeded') : activity.status || 'running';
+  const state = activity.kind === 'result'
+    ? (activity.ok === false ? 'failed' : 'succeeded')
+    : (activity.resultAttached ? (activity.ok === false ? 'failed' : 'succeeded') : activity.status || 'running');
+  const statusLabel = state === 'failed' ? 'Failed' : state === 'succeeded' ? 'Completed' : state === 'preparing' ? 'Preparing' : 'Running';
+  const statusIcon = state === 'failed' ? '×' : state === 'succeeded' ? '✓' : '·';
   const activityKey = activity.callId || activity.activityId || entry?.id || `${activity.action || 'tool'}_${activity.kind || 'operation'}`;
   const terminal = activity.family === 'command' ? activity.terminal : null;
   const terminalActive = terminal && !terminal.completed && !['exited'].includes(String(terminal.state || '').toLowerCase());
@@ -812,9 +816,9 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     <summary><span>${terminalActive ? 'Live terminal' : 'Terminal output'}</span><em>${terminalActive ? 'streaming' : 'completed'}</em><i aria-hidden="true">›</i></summary>
     <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(terminal.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
   </details>` : '';
-  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}">
+  return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}">
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
-    <div class="tool-activity-entry-summary"><span class="tool-activity-label">${labelHtml}</span></div>
+    <div class="tool-activity-entry-summary"><span class="tool-activity-status-icon" data-status="${esc(state)}" role="img" aria-label="${esc(statusLabel)}">${statusIcon}</span><span class="tool-activity-label">${labelHtml}</span></div>
   </div>
   ${terminalHtml}
   </div>`;
