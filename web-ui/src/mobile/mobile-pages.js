@@ -955,6 +955,10 @@ function _compactMobileThreadCacheMedia(items) {
   }).filter((item) => item && (item.path || item.url || item.name || item.productUrl));
 }
 
+function _compactMobileThreadCacheFileChanges(value) {
+  return _mobileChatRendererInvoke('compactFileChanges', [value]);
+}
+
 function _compactMobileThreadCacheValue(value, limit = 1800) {
   if (value == null || value === '') return undefined;
   if (typeof value === 'string') return value.slice(0, limit);
@@ -1099,6 +1103,7 @@ function _compactMobileThreadCacheMessage(m) {
     generatedVideos: _compactMobileThreadCacheMedia(m?.generatedVideos),
     files: _compactMobileThreadCacheMedia(m?.files),
     artifacts: _compactMobileThreadCacheMedia(m?.artifacts),
+    fileChanges: _compactMobileThreadCacheFileChanges(m?.fileChanges),
     // Keep every supported rich card in the offline/reconnect snapshot. Voice
     // show_ui cards use concrete types such as weather, chart, and sources;
     // filtering to only legacy `visual` cards made them vanish after recovery.
@@ -1123,6 +1128,10 @@ function _compactMobileThreadCacheMessage(m) {
   if (!compact.liveTraceEntries.length) delete compact.liveTraceEntries;
   for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
     if (!compact[key]?.length) delete compact[key];
+  }
+  if (!compact.fileChanges || typeof compact.fileChanges !== 'object'
+    || !Array.isArray(compact.fileChanges.files) || !compact.fileChanges.files.length) {
+    delete compact.fileChanges;
   }
   if (!compact.richArtifacts?.length) delete compact.richArtifacts;
   return compact;
