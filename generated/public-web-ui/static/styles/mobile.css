@@ -11793,6 +11793,14 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-items: center;
   pointer-events: none;
 }
+/* Keep the standalone orb centered in the usable primary stage. This more
+   specific unlayered rule must win over the historical bottom-anchored dock
+   rule above and over the later route layer. */
+.pm-voice-body--page .pm-voice-snap-primary .pm-voice-orb-dock {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
 .pm-voice-body--page .pm-voice-orb-dock .pm-voice-orb-mic,
 .pm-voice-body--page .pm-voice-orb-dock .pm-voice-snap-arrow-down {
   pointer-events: auto;

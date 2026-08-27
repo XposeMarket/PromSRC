@@ -12809,7 +12809,8 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
   const rawEntries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
   const hasBackgroundImageGeneration = rawEntries.some((entry) => {
     const args = entry?.activity?.args || entry?.extra?.args || entry?.args || {};
-    return String(entry?.activity?.action || entry?.extra?.action || entry?.action || '').toLowerCase() === 'generate_image'
+    const action = String(entry?.activity?.action || entry?.activity?.toolName || entry?.extra?.action || entry?.extra?.toolName || entry?.action || entry?.toolName || '').toLowerCase();
+    return ['generate_image', 'image_gen', 'imagegen'].includes(action)
       && String(args?.presentation_mode || args?.presentationMode || '').toLowerCase() === 'background';
   });
   if (hasBackgroundImageGeneration) return false;
@@ -12827,30 +12828,47 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
     seen.add(key);
     entries.push(entry);
   });
-  let activeImageCalls = 0;
+  const activeImageCalls = new Set();
   let observedImageActivity = false;
-  entries.forEach((entry) => {
+  entries.forEach((entry, index) => {
     const type = String(entry?.type || '').toLowerCase();
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const presentationMode = String(extra.presentation_mode || extra.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
     if (presentationMode === 'background') return;
-    const action = String(entry?.activity?.action || extra.action || entry?.action || '').trim().toLowerCase();
+    const action = String(entry?.activity?.action || entry?.activity?.toolName || extra.action || extra.toolName || entry?.action || entry?.toolName || '').trim().toLowerCase();
     const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const isImageActivity = action === 'generate_image'
-      || /\b(generate_image|generating image|image generation|i am generating the image)\b/.test(text);
+    const isImageActivity = ['generate_image', 'image_gen', 'imagegen'].includes(action)
+      || /\b(generate_image|image_gen|imagegen|generating image|image generation|i am generating the image)\b/.test(text);
     if (!isImageActivity) return;
     observedImageActivity = true;
-    if (type === 'result' || type === 'error' || type === 'tool_result') {
-      activeImageCalls = Math.max(0, activeImageCalls - 1);
+    const key = String(
+      entry?.activity?.callId
+      || entry?.activity?.call_id
+      || extra.callId
+      || extra.call_id
+      || extra.toolCallId
+      || extra.tool_call_id
+      || entry?.callId
+      || entry?.call_id
+      || entry?.eventKey
+      || extra.eventKey
+      || `${action || 'image'}:anonymous`,
+    ).trim();
+    const terminalText = /\b(?:generate image|generating image|generated image|image generation)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(text)
+      || /\b(?:failed|error)\b[\s\S]*\b(?:generate image|image generation)\b/i.test(text);
+    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
+      if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
+      else activeImageCalls.clear();
       return;
     }
     if (type === 'tool' || type === 'call') {
-      activeImageCalls += 1;
+      activeImageCalls.add(key);
       return;
     }
-    if (activeImageCalls === 0) activeImageCalls = 1;
+    if (activeImageCalls.size === 0) activeImageCalls.add(key);
   });
-  return observedImageActivity && activeImageCalls > 0;
+  return observedImageActivity && activeImageCalls.size > 0;
 }
 
 function renderGeneratedImageLoadingCard() {

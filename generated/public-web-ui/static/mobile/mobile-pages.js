@@ -5642,9 +5642,46 @@ function _isMobileGenerateImageToolName(name) {
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
   return value === 'generate_image'
+    || value === 'image_gen'
+    || value === 'imagegen'
     || value === 'image_generation'
     || value === 'voice_generate_image'
     || value === 'creative_generate_image_shot';
+}
+
+function _mobileImageGenerationEntryAction(entry) {
+  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return _mobileToolEventName(
+    activity.action
+    || activity.toolName
+    || extra.action
+    || extra.toolName
+    || entry?.action
+    || entry?.toolName
+    || entry?.name
+    || entry,
+  );
+}
+
+function _mobileImageGenerationEntryKey(entry, action, index) {
+  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return String(
+    activity.callId
+    || activity.call_id
+    || activity.activityId
+    || extra.callId
+    || extra.call_id
+    || extra.toolCallId
+    || extra.tool_call_id
+    || entry?.callId
+    || entry?.call_id
+    || entry?.toolCallId
+    || entry?.eventKey
+    || extra.eventKey
+    || `${action || 'image'}:anonymous`,
+  ).trim();
 }
 
 function _isMobileGenerateVideoToolName(name) {
@@ -5695,31 +5732,39 @@ function _mobileHasPendingImageGeneration(message) {
     seen.add(key);
     entries.push(entry);
   });
-  let activeImageCalls = 0;
+  const activeImageCalls = new Set();
   let observedImageActivity = false;
-  entries.forEach((entry) => {
+  entries.forEach((entry, index) => {
     const type = String(entry?.type || '').toLowerCase();
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const presentationMode = String(extra.presentation_mode || extra.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
     if (presentationMode === 'background') return;
     const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
-    const isImageActivity = _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
+    const action = _mobileImageGenerationEntryAction(entry);
+    const lowerText = text.toLowerCase();
+    const isImageActivity = _isMobileGenerateImageToolName(action)
+      || /\b(generate_image|image_gen|imagegen|generate image|generating image|generated image|image generation)\b/.test(lowerText);
     if (!isImageActivity) return;
     observedImageActivity = true;
-    if (type === 'result' || type === 'error' || type === 'tool_result') {
-      activeImageCalls = Math.max(0, activeImageCalls - 1);
+    const key = _mobileImageGenerationEntryKey(entry, action, index);
+    const terminalText = /\b(?:generate image|generating image|generated image|image generation)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(text)
+      || /\b(?:failed|error)\b[\s\S]*\b(?:generate image|image generation)\b/i.test(text);
+    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
+      if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
+      else activeImageCalls.clear();
       return;
     }
     if (type === 'tool' || type === 'call') {
-      activeImageCalls += 1;
+      activeImageCalls.add(key);
       return;
     }
     // Some older runtimes only emitted a progress/info row for image jobs.
     // Treat the first such row as an open job, while repeated progress rows do
     // not inflate the count.
-    if (activeImageCalls === 0) activeImageCalls = 1;
+    if (activeImageCalls.size === 0) activeImageCalls.add(key);
   });
-  return observedImageActivity && activeImageCalls > 0;
+  return observedImageActivity && activeImageCalls.size > 0;
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
