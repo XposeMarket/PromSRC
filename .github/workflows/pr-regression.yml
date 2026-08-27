@@ -103,6 +103,8 @@ jobs:
         run: node scripts/test-mobile-stale-gateway-route-recovery.mjs
       - name: Verify mobile chat recovery
         run: node scripts/test-mobile-chat-recovery.mjs
+      - name: Verify mobile stream receipt idempotency
+        run: node scripts/test-mobile-stream-receipts.mjs
       - name: Verify foreground Chat owner restart reconciliation
         run: npm run test:restart-retrigger
       - name: Verify gateway supervisor identity and liveness recovery policy

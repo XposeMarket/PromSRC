@@ -105,6 +105,7 @@
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
     "test:gateway-relay": "node scripts/test-electron-gateway-relay.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",
+    "test:mobile-stream-receipts": "node scripts/test-mobile-stream-receipts.mjs",
     "test:mobile-agent-activity": "node scripts/test-mobile-agent-activity-ui.mjs",
     "test:tool-activity-stream": "node scripts/test-tool-activity-stream.mjs",
     "test:desktop-chat-recovery": "node scripts/test-desktop-chat-recovery.mjs",
