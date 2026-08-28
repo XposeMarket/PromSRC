@@ -959,6 +959,15 @@ function _compactMobileThreadCacheFileChanges(value) {
   return _mobileChatRendererInvoke('compactFileChanges', [value]);
 }
 
+function _hasMobileFileChanges(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value.files) && value.files.length > 0) return true;
+  return Array.isArray(value.groups) && value.groups.some((group) => {
+    const payload = group?.fileChanges && typeof group.fileChanges === 'object' ? group.fileChanges : group;
+    return Array.isArray(payload?.files) && payload.files.length > 0;
+  });
+}
+
 function _compactMobileThreadCacheValue(value, limit = 1800) {
   if (value == null || value === '') return undefined;
   if (typeof value === 'string') return value.slice(0, limit);
@@ -1129,8 +1138,7 @@ function _compactMobileThreadCacheMessage(m) {
   for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
     if (!compact[key]?.length) delete compact[key];
   }
-  if (!compact.fileChanges || typeof compact.fileChanges !== 'object'
-    || !Array.isArray(compact.fileChanges.files) || !compact.fileChanges.files.length) {
+  if (!_hasMobileFileChanges(compact.fileChanges)) {
     delete compact.fileChanges;
   }
   if (!compact.richArtifacts?.length) delete compact.richArtifacts;
