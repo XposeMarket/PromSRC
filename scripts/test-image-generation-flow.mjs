@@ -19,6 +19,7 @@ const capabilityRegistry = read('src/gateway/agents-runtime/capabilities/registr
 const preview = read('src/gateway/generated-image-preview.ts');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
+const mobileRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const defs = read('src/gateway/tools/defs/file-web-memory.ts');
 const skill = read('workspace/skills/imagegen/SKILL.md');
 
@@ -76,8 +77,8 @@ assert.match(desktop, /!answerStarted && isGenerateImagePendingFromEntries/, 'de
 assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop must render constrained cache-backed previews');
 assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop must replace matching partial previews by stable identity');
 assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile must render constrained cache-backed previews');
-assert.match(mobile, /message\?\.finalResponseStarted === true[\s\S]*message\?\._pmFinalReceived === true/, 'mobile image loading must stop at the final-response boundary');
-assert.match(mobile, /activeImageCalls[\s\S]*observedImageActivity/, 'mobile image loading must reconcile duplicate process/live entries');
+assert.match(mobileRenderer, /message\?\.finalResponseStarted === true[\s\S]*message\?\._pmFinalReceived === true/, 'mobile image loading must stop at the final-response boundary');
+assert.match(mobileRenderer, /activeImageCalls[\s\S]*observedImageActivity/, 'mobile image loading must reconcile duplicate process/live entries');
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile must replace matching partial previews by stable identity');
 assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not duplicate background working assets into the final gallery');
 assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image events must mark background working assets inline-only');

@@ -118,6 +118,7 @@
     "test:funnel-routing": "tsx src/gateway/routes/funnel-routing.regression.ts",
     "test:gateway-instance-mode": "tsx src/cli/gateway-instance-mode.regression.ts",
     "test:mobile-voice-media": "node scripts/test-mobile-voice-media-contract.mjs",
+    "test:mobile-voice-image-lifecycle": "node scripts/test-mobile-voice-image-lifecycle.mjs",
     "test:design-preview": "node scripts/test-design-preview-contract.mjs",
     "test:chat-error-presentation": "node scripts/test-chat-error-presentation.mjs",
     "test:shared-chat-runtime": "node scripts/test-shared-chat-runtime.mjs && tsx src/gateway/chat/history-cursor.regression.ts",

@@ -5651,6 +5651,8 @@ function _isMobileGenerateImageToolName(name) {
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
   return value === 'generate_image'
+    || value === 'image_gen'
+    || value === 'imagegen'
     || value === 'image_generation'
     || value === 'voice_generate_image'
     || value === 'creative_generate_image_shot';
@@ -5678,57 +5680,6 @@ function _isMobileExplicitMediaToolName(name) {
     || value === 'canvas_present'
     || value.startsWith('creative_')
     || value.startsWith('hyperframes_');
-}
-
-function _mobileHasPendingImageGeneration(message) {
-  if (message?.streaming !== true
-    || message?.finalResponseStarted === true
-    || message?._pmFinalReceived === true
-    || message?._pmLiveActivityCompleted === true
-    || message?._done === true) return false;
-  const rawEntries = [
-    ...(Array.isArray(message.processEntries) ? message.processEntries : []),
-    ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
-  ];
-  const entries = [];
-  const seen = new Set();
-  rawEntries.forEach((entry) => {
-    if (!entry || typeof entry !== 'object') return;
-    const type = String(entry?.type || '').toLowerCase();
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const eventKey = String(extra.eventKey || entry.eventKey || '').trim();
-    const callId = String(extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || entry.callId || '').trim();
-    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
-    const key = `${type}|${eventKey || callId || text}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    entries.push(entry);
-  });
-  let activeImageCalls = 0;
-  let observedImageActivity = false;
-  entries.forEach((entry) => {
-    const type = String(entry?.type || '').toLowerCase();
-    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    const presentationMode = String(extra.presentation_mode || extra.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
-    if (presentationMode === 'background') return;
-    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
-    const isImageActivity = _isMobileGenerateImageToolName(_mobileToolEventName(entry?.extra || entry) || text);
-    if (!isImageActivity) return;
-    observedImageActivity = true;
-    if (type === 'result' || type === 'error' || type === 'tool_result') {
-      activeImageCalls = Math.max(0, activeImageCalls - 1);
-      return;
-    }
-    if (type === 'tool' || type === 'call') {
-      activeImageCalls += 1;
-      return;
-    }
-    // Some older runtimes only emitted a progress/info row for image jobs.
-    // Treat the first such row as an open job, while repeated progress rows do
-    // not inflate the count.
-    if (activeImageCalls === 0) activeImageCalls = 1;
-  });
-  return observedImageActivity && activeImageCalls > 0;
 }
 
 function _isMobileImageGenerationStreamEntry(entry) {
@@ -8128,7 +8079,6 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_mergeMobileProductCarouselIntoMessage": { enumerable: true, get: () => _mergeMobileProductCarouselIntoMessage },
   "_mobileAssistantWorkStartedAt": { enumerable: true, get: () => _mobileAssistantWorkStartedAt },
   "_mobileFileExt": { enumerable: true, get: () => _mobileFileExt },
-  "_mobileHasPendingImageGeneration": { enumerable: true, get: () => _mobileHasPendingImageGeneration },
   "_mobileTimelineEntries": { enumerable: true, get: () => _mobileTimelineEntries },
   "_mobileToolEventName": { enumerable: true, get: () => _mobileToolEventName },
   "_mobileVoiceWorkgroupStatus": { enumerable: true, get: () => _mobileVoiceWorkgroupStatus },
