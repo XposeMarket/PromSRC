@@ -1,5 +1,5 @@
 export function chatProgressVisibility(event = {}) {
-  const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
+  const extra = event?.extra ?? {};
   const visibility = String(event?.visibility || extra.visibility || '').trim().toLowerCase();
   if (visibility === 'private' || visibility === 'internal') return 'private';
 
@@ -12,8 +12,11 @@ export function chatProgressVisibility(event = {}) {
   // `thinking` is the legacy provider/full-thought channel and is private
   // unless the gateway explicitly marks a curated packet user-visible.
   if (type === 'thinking') return visibility === 'user' ? 'user' : 'private';
-  if (type === 'agent_thought') return 'user';
-  return visibility === 'user' ? 'user' : 'summary';
+  // Unknown channels fail closed unless the gateway explicitly labels the
+  // packet as curated user-visible or summary progress.
+  if (type === 'agent_thought' || visibility === 'user') return 'user';
+  if (visibility === 'summary' || visibility === 'visible') return 'summary';
+  return 'private';
 }
 
 export function isUserSafeAgentProgress(event = {}) {
