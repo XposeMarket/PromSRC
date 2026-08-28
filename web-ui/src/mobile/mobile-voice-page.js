@@ -607,6 +607,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
       }
       mobileThinkingOrb = controller;
       context.__pmVoice.thinkingOrbController = controller;
+      if (!voiceOrbReactionRaf) voiceOrbReactionRaf = requestAnimationFrame(_drawStandaloneOrbReaction);
     })
     .catch((error) => console.warn('[mobile voice] thinking orb failed to mount:', error));
   context.__pmVoice.thinkingOrbController = null;
@@ -1294,7 +1295,7 @@ void main() {
     voiceWaveRaf = requestAnimationFrame(_drawVoiceWave);
     context.window.addEventListener('resize', _resizeVoiceWaveCanvas);
   }
-  if (mobileThinkingOrb) {
+  if (mobileThinkingOrb && !voiceOrbReactionRaf) {
     voiceOrbReactionRaf = requestAnimationFrame(_drawStandaloneOrbReaction);
   }
 

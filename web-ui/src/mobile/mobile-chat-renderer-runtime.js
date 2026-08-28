@@ -58,6 +58,129 @@ function _compactMobileThreadCacheFileChanges(value) {
   };
 }
 
+function _imageGenerationToolName(value) {
+  const raw = typeof value === 'string'
+    ? value
+    : String(
+      value?.action
+      || value?.name
+      || value?.toolName
+      || value?.tool_name
+      || value?.tool
+      || value?.label
+      || '',
+    );
+  return raw.trim().replace(/[^a-z0-9_]+/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').toLowerCase();
+}
+
+function _isImageGenerationToolName(value) {
+  return [
+    'generate_image',
+    'image_gen',
+    'imagegen',
+    'image_generation',
+    'voice_generate_image',
+    'creative_generate_image_shot',
+  ].includes(_imageGenerationToolName(value));
+}
+
+function _imageGenerationEntryAction(entry) {
+  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return _imageGenerationToolName(
+    activity.action
+    || activity.toolName
+    || extra.action
+    || extra.toolName
+    || entry?.action
+    || entry?.toolName
+    || entry?.name
+    || entry,
+  );
+}
+
+function _imageGenerationEntryKey(entry, action) {
+  const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return String(
+    activity.callId
+    || activity.call_id
+    || activity.activityId
+    || extra.callId
+    || extra.call_id
+    || extra.toolCallId
+    || extra.tool_call_id
+    || entry?.callId
+    || entry?.call_id
+    || entry?.toolCallId
+    || entry?.eventKey
+    || extra.eventKey
+    || `${action || 'image'}:anonymous`,
+  ).trim();
+}
+
+function _isImageGenerationTerminalText(text) {
+  const value = String(text || '');
+  return /\b(?:generate[_ ]image|generating[_ ]image|generated[_ ]image|image[_ ](?:gen|generation)|imagegen)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(value)
+    || /\b(?:failed|error)\b[\s\S]*\b(?:generate[_ ]image|image[_ ](?:gen|generation)|imagegen)\b/i.test(value);
+}
+
+function _hasPendingImageGeneration(message) {
+  if (message?.streaming !== true
+    || message?.finalResponseStarted === true
+    || message?._pmFinalReceived === true
+    || message?._pmLiveActivityCompleted === true
+    || message?._done === true) return false;
+  const rawEntries = [
+    ...(Array.isArray(message.processEntries) ? message.processEntries : []),
+    ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
+  ];
+  const entries = [];
+  const seen = new Set();
+  rawEntries.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const type = String(entry?.type || '').toLowerCase();
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+    const eventKey = String(extra.eventKey || entry.eventKey || '').trim();
+    const callId = String(activity.callId || activity.call_id || activity.activityId || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || entry.callId || entry.call_id || entry.toolCallId || '').trim();
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    const key = `${type}|${eventKey || callId || text}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
+  });
+  const activeImageCalls = new Set();
+  let observedImageActivity = false;
+  entries.forEach((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
+    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
+    if (presentationMode === 'background') return;
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
+    const action = _imageGenerationEntryAction(entry);
+    const lowerText = text.toLowerCase();
+    const isImageActivity = _isImageGenerationToolName(action)
+      || /\b(generate_image|image_gen|imagegen|generate image|generating image|generated image|image generation)\b/.test(lowerText);
+    if (!isImageActivity) return;
+    observedImageActivity = true;
+    const key = _imageGenerationEntryKey(entry, action);
+    const terminalText = _isImageGenerationTerminalText(text);
+    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
+      if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
+      else activeImageCalls.clear();
+      return;
+    }
+    if (type === 'tool' || type === 'call') {
+      activeImageCalls.add(key);
+      return;
+    }
+    if (activeImageCalls.size === 0) activeImageCalls.add(key);
+  });
+  return observedImageActivity && activeImageCalls.size > 0;
+}
+
 // Chat rich-message, attachment, and transcript renderer runtime.
 export function createMobileChatRendererRuntime(context = {}) {
   const {
@@ -84,7 +207,6 @@ export function createMobileChatRendererRuntime(context = {}) {
   _mergeMobileProductCarouselIntoMessage,
   _mobileAssistantWorkStartedAt,
   _mobileFileExt,
-  _mobileHasPendingImageGeneration,
   _mobileTimelineEntries,
   _mobileToolEventName,
   _dedupeMobileTraceProseText,
@@ -938,7 +1060,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           visibleKinds: ['tools', 'compaction', 'vision'],
         })
       : '';
-    const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
+    const hasPendingImageGeneration = _hasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
     if (hasLiveTrace) {
       inner += liveTraceHtml;
     } else if (traceFrozenForSteer && hasCompletedTrace) {
@@ -2982,7 +3104,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     } else {
       inner += progress;
     }
-    const hasPendingImageGeneration = _mobileHasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
+    const hasPendingImageGeneration = _hasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
       ? `<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>`
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');

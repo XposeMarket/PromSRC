@@ -113,6 +113,8 @@ jobs:
         run: npm run test:mobile-regression-audit
       - name: Verify mobile voice/media contract
         run: node scripts/test-mobile-voice-media-contract.mjs
+      - name: Verify mobile voice and image lifecycle
+        run: npm run test:mobile-voice-image-lifecycle
       - name: Verify mobile voice motion and realtime resilience
         run: |
           node scripts/test-mobile-voice-motion-orb.mjs
