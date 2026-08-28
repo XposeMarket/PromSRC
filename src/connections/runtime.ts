@@ -23,8 +23,6 @@ import { migrateLegacyConnections } from './legacy-migration';
 export {
   isManagedConnectorToolAvailable,
   isManagedMcpToolAvailable,
-  isManagedConnectorToolExposed,
-  isManagedMcpToolExposed,
 } from './tool-surface';
 
 let singleton: { orchestrator: ConnectionOrchestrator; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
@@ -103,7 +101,7 @@ export function getConnectionRuntime() {
       if (key) headers.Authorization = `Bearer ${key}`;
       try {
         const response = await fetch(`${baseUrl}/models`, { headers, signal: AbortSignal.timeout(12_000) });
-        if (!response.ok) return { ok: false, error: `Model discovery returned HTTP ${response.status}.` };
+        if (!response.ok) return { ok: false, error: `Model discovery returned HTTP ${response.status}.`;
         const body: any = await response.json();
         const models = Array.isArray(body?.data) ? body.data.map((item: any) => String(item?.id || '')).filter(Boolean) : [];
         return { ok: true, models, streaming: true, toolCalling: true, details: { status: response.status } };
