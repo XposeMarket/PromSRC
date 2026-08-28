@@ -23,8 +23,6 @@ import { migrateLegacyConnections } from './legacy-migration';
 export {
   isManagedConnectorToolAvailable,
   isManagedMcpToolAvailable,
-  isManagedConnectorToolExposed,
-  isManagedMcpToolExposed,
 } from './tool-surface';
 
 let singleton: { orchestrator: ConnectionOrchestrator; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;

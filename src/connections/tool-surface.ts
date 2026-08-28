@@ -214,13 +214,3 @@ export function isManagedConnectorToolAvailable(connectorId: string, toolName: s
 export function isManagedMcpToolAvailable(serverId: string, toolName: string): boolean {
   return getConnectionToolExposure(serverId, toolName).available;
 }
-
-/**
- * Compatibility aliases retained for older callers. These names historically
- * meant “include in the model tool surface”; they intentionally check
- * availableTools, not only the automatic/read-only exposedTools subset.
- */
-/** @deprecated Use isManagedConnectorToolAvailable. */
-export const isManagedConnectorToolExposed = isManagedConnectorToolAvailable;
-/** @deprecated Use isManagedMcpToolAvailable. */
-export const isManagedMcpToolExposed = isManagedMcpToolAvailable;
