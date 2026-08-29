@@ -1215,7 +1215,11 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
     if (String(msg.agentId || '') !== String(agent.id)) return;
     try {
       upsertServerMessages(await loadSubagentChat(agent.id, 80));
-      liveMsg = null;
+      // The completed/history broadcast is sent before the stream's terminal
+      // frame. Keep the SSE-owned live bubble until that stream has settled;
+      // otherwise a WS notification can erase the bubble while tokens are
+      // still arriving and leave the callbacks writing into a detached object.
+      if (!localSseActive) liveMsg = null;
       renderList();
     } catch {}
   };
@@ -1365,15 +1369,18 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
       ...(isVoiceTurn ? { voiceTarget: _mobileVoiceTargetPayload() } : {}),
     }, {
       onEvent: (evt) => {
+        if (!liveMsg) return;
         _applyMobileAgentStreamEvent(liveMsg, evt, agent.name || agent.id || 'Subagent');
         renderList();
       },
       onError: (err) => {
         if (err?.name === 'AbortError') return;
-        liveMsg.content = liveMsg.content || `Error: ${err?.message || 'stream failed'}`;
-        liveMsg._progress = '';
-        liveMsg.streaming = false;
-        liveMsg.workEndedAt = Date.now();
+        const target = liveMsg;
+        if (!target) return;
+        target.content = target.content || `Error: ${err?.message || 'stream failed'}`;
+        target._progress = '';
+        target.streaming = false;
+        target.workEndedAt = Date.now();
         localSseActive = false;
         currentStream = null;
         attachStream?.(null);
