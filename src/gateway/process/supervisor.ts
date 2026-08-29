@@ -8,6 +8,7 @@ import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
 import { classifyCommandTermination } from './command-outcome';
 import { createTerminalWorkspaceTracker, type TerminalWorkspaceChangeResult, type TerminalWorkspaceTracker } from '../coding/terminal-change-tracker';
+import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
 import type {
   ManagedProcessRun,
   ProcessLogResult,
@@ -19,6 +20,11 @@ import type {
 } from './types';
 
 const MAX_PREVIEW_CHARS = 4000;
+const configuredCaptureChars = Number(process.env.PROMETHEUS_PROCESS_CAPTURE_MAX_CHARS);
+const MAX_CAPTURE_CHARS = Number.isFinite(configuredCaptureChars)
+  ? Math.max(64 * 1024, Math.min(16 * 1024 * 1024, Math.floor(configuredCaptureChars)))
+  : 2 * 1024 * 1024;
+const OUTPUT_RECORD_PERSIST_INTERVAL_MS = 250;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -27,6 +33,12 @@ function nowIso(): string {
 function trimPreview(text: string): string {
   if (text.length <= MAX_PREVIEW_CHARS) return text;
   return text.slice(-MAX_PREVIEW_CHARS);
+}
+
+function appendCaptured(current: string, text: string): { value: string; truncated: boolean } {
+  const combined = `${current}${text}`;
+  if (combined.length <= MAX_CAPTURE_CHARS) return { value: combined, truncated: false };
+  return { value: combined.slice(-MAX_CAPTURE_CHARS), truncated: true };
 }
 
 function normalizeShell(input?: ProcessShell): ProcessShell {
@@ -100,6 +112,7 @@ function buildSummary(exitCode: number | null, stderr: string, stdout: string): 
 export class ProcessSupervisor {
   private readonly store: ProcessRunStore;
   private readonly active = new Map<string, ManagedProcessRun>();
+  private readonly lastOutputRecordPersistAt = new Map<string, number>();
   private lastPersistenceWarningAt = 0;
 
   constructor(store: ProcessRunStore) {
@@ -116,9 +129,9 @@ export class ProcessSupervisor {
 
   private appendOutput(runId: string, kind: 'stdout' | 'stderr', text: string): void {
     try {
-      if (kind === 'stdout') this.store.appendStdout(runId, text);
-      else this.store.appendStderr(runId, text);
-      this.store.appendCombined(runId, text);
+      const streamPath = kind === 'stdout' ? this.store.stdoutPath(runId) : this.store.stderrPath(runId);
+      enqueueAsyncAppend(streamPath, text);
+      enqueueAsyncAppend(this.store.combinedPath(runId), text);
     } catch (error) {
       this.warnPersistenceFailure(`persisting ${kind} for ${runId}`, error);
     }
@@ -214,6 +227,8 @@ export class ProcessSupervisor {
 
     let stdout = '';
     let stderr = '';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let settled = false;
     let forcedReason: ProcessTerminationReason | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -242,8 +257,15 @@ export class ProcessSupervisor {
     const onChunk = (kind: 'stdout' | 'stderr', chunk: Buffer | string) => {
       const text = String(chunk);
       if (captureOutput) {
-        if (kind === 'stdout') stdout += text;
-        else stderr += text;
+        if (kind === 'stdout') {
+          const captured = appendCaptured(stdout, text);
+          stdout = captured.value;
+          stdoutTruncated ||= captured.truncated;
+        } else {
+          const captured = appendCaptured(stderr, text);
+          stderr = captured.value;
+          stderrTruncated ||= captured.truncated;
+        }
       }
       if (kind === 'stdout') {
         record.stdoutBytes += Buffer.byteLength(text);
@@ -260,7 +282,9 @@ export class ProcessSupervisor {
     child.stdout.on('data', (chunk) => onChunk('stdout', chunk));
     child.stderr.on('data', (chunk) => onChunk('stderr', chunk));
     child.on('error', (err) => {
-      stderr += String(err?.message || err);
+      const captured = appendCaptured(stderr, String(err?.message || err));
+      stderr = captured.value;
+      stderrTruncated ||= captured.truncated;
       forcedReason = 'spawn_error';
     });
 
@@ -313,6 +337,8 @@ export class ProcessSupervisor {
           exitSignal: signal,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+          ...(stderrTruncated ? { stderrTruncated: true } : {}),
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
@@ -329,6 +355,8 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+          ...(stderrTruncated ? { stderrTruncated: true } : {}),
           completionSummary: outcome.ok ? buildSummary(code, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(code, stderr, stdout) || outcome.label),
           ...(workspaceResult?.workspaceChanges.length ? {
@@ -352,6 +380,7 @@ export class ProcessSupervisor {
           });
         }
         this.active.delete(runId);
+        this.lastOutputRecordPersistAt.delete(runId);
         resolve(exit);
       });
     });
@@ -394,6 +423,7 @@ export class ProcessSupervisor {
     const cwd = record.cwd;
     let stdout = '';
     let stderr = '';
+    let stdoutTruncated = false;
     let settled = false;
     let forcedReason: ProcessTerminationReason | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -429,7 +459,11 @@ export class ProcessSupervisor {
 
     const onChunk = (chunk: string) => {
       const text = String(chunk);
-      if (captureOutput) stdout += text;
+      if (captureOutput) {
+        const captured = appendCaptured(stdout, text);
+        stdout = captured.value;
+        stdoutTruncated ||= captured.truncated;
+      }
       record.stdoutBytes += Buffer.byteLength(text);
       this.appendOutput(runId, 'stdout', text);
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
@@ -486,6 +520,7 @@ export class ProcessSupervisor {
           exitSignal: signal || null,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
@@ -502,6 +537,7 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
+          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
           completionSummary: outcome.ok ? buildSummary(exitCode, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(exitCode, stderr, stdout) || outcome.label),
           ...(workspaceResult?.workspaceChanges.length ? {
@@ -525,6 +561,7 @@ export class ProcessSupervisor {
           });
         }
         this.active.delete(runId);
+        this.lastOutputRecordPersistAt.delete(runId);
         resolve(exit);
       });
     });
@@ -589,6 +626,8 @@ export class ProcessSupervisor {
         exitSignal: record.exitSignal ?? null,
         stdout: logs.stdout.trim(),
         stderr: logs.stderr.trim(),
+        stdoutTruncated: record.stdoutTruncated || logs.truncated,
+        stderrTruncated: record.stderrTruncated || logs.truncated,
         timedOut: record.timedOut === true,
         noOutputTimedOut: record.noOutputTimedOut === true,
         workspacePath: record.workspacePath,
@@ -602,10 +641,16 @@ export class ProcessSupervisor {
   }
 
   private persistAndBroadcast(record: ProcessRunRecord, eventType: string, extra: Record<string, unknown> = {}): void {
-    try {
-      this.store.writeRecord(record);
-    } catch (error) {
-      this.warnPersistenceFailure(`persisting record ${record.runId}`, error);
+    const now = Date.now();
+    const lastPersistedAt = this.lastOutputRecordPersistAt.get(record.runId) || 0;
+    const shouldPersist = eventType !== 'process_run_output' || now - lastPersistedAt >= OUTPUT_RECORD_PERSIST_INTERVAL_MS;
+    if (shouldPersist) {
+      try {
+        this.store.writeRecord(record);
+        if (eventType === 'process_run_output') this.lastOutputRecordPersistAt.set(record.runId, now);
+      } catch (error) {
+        this.warnPersistenceFailure(`persisting record ${record.runId}`, error);
+      }
     }
     try {
       broadcastWS({ type: eventType, run: record, ...extra, timestamp: Date.now() });

@@ -44,6 +44,8 @@ export interface ProcessRunRecord {
   completionSummary?: string;
   stdoutBytes: number;
   stderrBytes: number;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
   outputPreview: string;
   outputSeq?: number;
   workspacePath?: string;
@@ -60,6 +62,8 @@ export interface ProcessRunExit {
   exitSignal: NodeJS.Signals | number | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
   timedOut: boolean;
   noOutputTimedOut: boolean;
   workspacePath?: string;

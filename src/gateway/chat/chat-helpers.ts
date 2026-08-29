@@ -14,6 +14,7 @@ import fs from 'fs';
 import { getAgentById, getConfig } from '../../config/config';
 import { resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { getProcessSupervisor } from '../process/supervisor';
+import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, captureToolCategoryActivationState, getActivatedToolCategories, restoreToolCategoryActivationState, type ToolCategoryActivationSnapshot } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
@@ -358,7 +359,8 @@ async function runCommandCaptured(
     toolCallId: options.toolCallId,
     timeoutMs,
     workspacePath: options.workspacePath || getConfig().getWorkspacePath(),
-    trackWorkspaceChanges: options.trackWorkspaceChanges !== false,
+    trackWorkspaceChanges: options.trackWorkspaceChanges === true
+      || (options.trackWorkspaceChanges !== false && shouldTrackTerminalWorkspaceChanges(command)),
   });
   const exit = await run.wait();
   return {

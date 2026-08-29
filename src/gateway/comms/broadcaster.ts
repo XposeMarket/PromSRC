@@ -41,6 +41,8 @@ let _lastHeartbeatDriftEventMs = 0;
 let _lastRestartableHeartbeatDriftAt = 0;
 let _lastRestartableHeartbeatDriftMs = 0;
 let _eventLoopStallRestartScheduled = false;
+let _memoryPressureRestartScheduled = false;
+let _memoryPressureConsecutiveSamples = 0;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
 const _nodeRuntime = getNodeRuntimeSnapshot();
 const _eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
@@ -62,6 +64,20 @@ const MEMORY_PRESSURE_RSS_BYTES = parseNonNegativeIntEnv(
   'PROMETHEUS_GATEWAY_MEMORY_PRESSURE_RSS_BYTES',
   Math.floor(2.5 * 1024 * 1024 * 1024),
 );
+const MEMORY_RESTART_RSS_BYTES = parseNonNegativeIntEnv(
+  'PROMETHEUS_GATEWAY_MEMORY_RESTART_RSS_BYTES',
+  4 * 1024 * 1024 * 1024,
+);
+const MEMORY_RESTART_CONSECUTIVE_SAMPLES = Math.max(1, parseNonNegativeIntEnv(
+  'PROMETHEUS_GATEWAY_MEMORY_RESTART_CONSECUTIVE_SAMPLES',
+  3,
+));
+const MEMORY_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv(
+  'PROMETHEUS_GATEWAY_MEMORY_RESTART_MIN_UPTIME_MS',
+  120_000,
+);
+const memoryAutorestartEnv = String(process.env.PROMETHEUS_GATEWAY_MEMORY_AUTORESTART || '').trim().toLowerCase();
+const MEMORY_AUTORESTART_ENABLED = !['0', 'false', 'off', 'no'].includes(memoryAutorestartEnv);
 
 interface EventLoopMetrics {
   maxMs: number;
@@ -154,7 +170,7 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
   if (EVENT_LOOP_STALL_RESTART_MS <= 0) return;
   if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
   if (process.uptime() * 1000 < EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS) return;
-  if (_eventLoopStallRestartScheduled) return;
+  if (_eventLoopStallRestartScheduled || _memoryPressureRestartScheduled) return;
   _eventLoopStallRestartScheduled = true;
 
   try {
@@ -196,6 +212,69 @@ function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: numb
     }
   }, 250);
   if (typeof (timer as any).unref === 'function') (timer as any).unref();
+}
+
+export function shouldScheduleGatewayMemoryRecovery(
+  rssBytes: number,
+  consecutiveSamples: number,
+  thresholdBytes = MEMORY_RESTART_RSS_BYTES,
+  requiredSamples = MEMORY_RESTART_CONSECUTIVE_SAMPLES,
+): boolean {
+  return thresholdBytes > 0
+    && rssBytes >= thresholdBytes
+    && consecutiveSamples >= Math.max(1, requiredSamples);
+}
+
+function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: number): void {
+  if (MEMORY_RESTART_RSS_BYTES <= 0 || memory.rss < MEMORY_RESTART_RSS_BYTES) {
+    _memoryPressureConsecutiveSamples = 0;
+    return;
+  }
+  _memoryPressureConsecutiveSamples += 1;
+  if (!MEMORY_AUTORESTART_ENABLED) return;
+  if (process.uptime() * 1000 < MEMORY_RESTART_MIN_UPTIME_MS) return;
+  if (!shouldScheduleGatewayMemoryRecovery(memory.rss, _memoryPressureConsecutiveSamples)) return;
+  if (_memoryPressureRestartScheduled || _eventLoopStallRestartScheduled) return;
+  _memoryPressureRestartScheduled = true;
+
+  const rssGb = Math.round((memory.rss / (1024 * 1024 * 1024)) * 100) / 100;
+  try {
+    enqueueAsyncAppend(
+      path.join(getConfig().getConfigDir(), 'gateway-recovery-events.ndjson'),
+      JSON.stringify({
+        timestamp: new Date(now).toISOString(),
+        event: 'memory_pressure_recovery_scheduled',
+        action: 'graceful_restart',
+        pid: process.pid,
+        nodeRuntime: _nodeRuntime,
+        memory,
+        thresholdBytes: MEMORY_RESTART_RSS_BYTES,
+        consecutiveSamples: _memoryPressureConsecutiveSamples,
+        runtimeWorkers: getRuntimeWorkerDiagnostics(),
+        modelBusy: _modelBusyCount > 0,
+        lastMainSessionId: _lastMainSessionId,
+      }) + '\n',
+    );
+  } catch {}
+
+  console.error(`[GatewayRuntime] RSS remained at ${rssGb} GB. Scheduling checkpointed memory-pressure recovery...`);
+  const timer = setTimeout(async () => {
+    try {
+      const { gracefulRestart } = await import('../lifecycle.js');
+      await gracefulRestart({
+        reason: 'repair',
+        timestamp: now,
+        previousSessionId: _lastMainSessionId,
+        originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
+        title: 'Gateway memory-pressure recovery',
+        summary: `Gateway RSS remained above the safe ${Math.round(MEMORY_RESTART_RSS_BYTES / (1024 * 1024 * 1024) * 100) / 100} GB boundary, so Prometheus checkpointed active work and recycled the gateway before paging could stall it.`,
+      });
+    } catch (err: any) {
+      console.error('[GatewayRuntime] Memory-pressure recovery restart failed:', err?.message || err);
+      process.exit(1);
+    }
+  }, 250);
+  timer.unref?.();
 }
 
 function writeRuntimeStatus(reason = 'heartbeat'): void {
@@ -246,6 +325,11 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       eventLoopStallRestartThresholdMs: EVENT_LOOP_STALL_RESTART_MS,
       eventLoopStallAutoRestartEnabled: EVENT_LOOP_STALL_AUTORESTART_ENABLED,
       eventLoopStallRestartScheduled: _eventLoopStallRestartScheduled,
+      memoryRestartThresholdBytes: MEMORY_RESTART_RSS_BYTES,
+      memoryRestartConsecutiveSamplesRequired: MEMORY_RESTART_CONSECUTIVE_SAMPLES,
+      memoryPressureConsecutiveSamples: _memoryPressureConsecutiveSamples,
+      memoryAutoRestartEnabled: MEMORY_AUTORESTART_ENABLED,
+      memoryPressureRestartScheduled: _memoryPressureRestartScheduled,
       eventLoop,
       memoryPressure: {
         rssBytes: memory.rss,
@@ -261,6 +345,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       },
       runtimeWorkers: getRuntimeWorkerDiagnostics(),
     }));
+    maybeScheduleMemoryPressureRecovery(memory, now);
     maybeScheduleEventLoopStallRecovery(heartbeatDriftMs, now);
   } catch {}
 }
