@@ -73,11 +73,14 @@ function createNativeBrowserNavigationController({ loadURL, stop } = {}) {
       return { authoritative: true, ignored: false };
     }
 
-    const index = superseded.findIndex((candidate) => (
+    // Keep the bounded superseded record after a match. Electron may surface
+    // duplicate failure notifications for the same obsolete navigation, and
+    // stale presentation must stay idempotent rather than becoming authoritative
+    // merely because the first notification consumed the evidence.
+    const matched = superseded.find((candidate) => (
       candidate.target === failedTarget && candidate.generation < latest.generation
     ));
-    if (index < 0) return { authoritative: true, ignored: false };
-    const [matched] = superseded.splice(index, 1);
+    if (!matched) return { authoritative: true, ignored: false };
     return {
       authoritative: false,
       ignored: true,
