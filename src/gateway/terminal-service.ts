@@ -78,6 +78,11 @@ function isKnownReadOnlyPowerShellSequence(command: string): boolean {
   if (clauses.length < 2) return false;
   let sawInspection = false;
   for (const clause of clauses) {
+    // Each semicolon-delimited clause must itself be a single recognized
+    // observational expression. A safe-looking prefix followed by a pipeline
+    // or call operator can execute arbitrary code (for example,
+    // `Get-Content file | Invoke-Expression`) and must retain change tracking.
+    if (/(?:&&|\|\||[|&])/.test(stripQuoted(clause))) return false;
     if (/^\$[A-Za-z_][\w:.-]*\s*=\s*(?:'[^']*'|"[^"]*")\s*$/s.test(clause)) continue;
     if (/^\$[A-Za-z_][\w:.-]*\s*=\s*(?:get-(?:childitem|content|item|location)|select-string|test-path|resolve-path)\b/i.test(clause)) {
       sawInspection = true;
