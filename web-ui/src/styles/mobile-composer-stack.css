@@ -160,6 +160,59 @@ body.pm-mobile-active :is(.pm-main-plan-dock, .pm-background-spawn-dock) {
   );
 }
 
+/* The compact Goal and background-agent controls are one bottom chrome row
+   when both are present. Keep the wrapper inert in the normal layout so the
+   existing plan/background stack keeps its independent open states. */
+body.pm-mobile-active .pm-mobile-runtime-pills {
+  display: contents;
+}
+body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-runtime-pills {
+  position: fixed;
+  left: var(--pm-composer-stack-inset);
+  right: var(--pm-composer-stack-inset);
+  bottom: var(--pm-composer-stack-base-bottom);
+  z-index: 6;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--pm-composer-stack-gap, 8px);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-runtime-pills > :is(
+  .pm-main-plan-dock,
+  .pm-background-spawn-dock,
+  .pm-mobile-goal-strip
+) {
+  position: static;
+  inset: auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  transform: none;
+  transition: none;
+}
+body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-runtime-pills > .pm-mobile-goal-strip {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-runtime-pills > .pm-mobile-goal-strip .pm-mobile-goal-pill {
+  max-width: 100%;
+}
+body.pm-mobile-active .pm-page.pm-runtime-goal-agent-pills-paired #pm-mobile-runtime-pills > .pm-background-spawn-dock.is-collapsed {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+}
+
 body.pm-mobile-active .pm-background-spawn-dock:not(.is-collapsed) {
   left: var(--pm-composer-stack-inset);
   right: var(--pm-composer-stack-inset);

@@ -57,6 +57,9 @@ assert.match(chat, /Synthetic Goal prompts are runtime control input, not user-a
 assert.match(chat, /Gateway restarted — goal continuing\./, 'restart recovery must emit only a compact lifecycle notice');
 assert.match(chat, /goalRestartCheckpointId/, 'restart lifecycle notices must deduplicate by checkpoint identity');
 assert.match(chat, /PROGRESS_LIFECYCLE_TOOLS/, 'Goal lifecycle tools must not append synthetic work-plan steps');
+assert.match(chat, /PLAN_STEP_TERMINAL_TOOLS/, 'terminal-first workspace commands must be considered for plan evidence');
+assert.match(chat, /extractTerminalWorkspaceChangesFromToolResult\(r, workspacePath\)/, 'terminal workspace diffs must count as write evidence');
+assert.doesNotMatch(chat, /Plan step completion rejected:/, 'missing native file evidence must not hard-block plan advancement');
 assert.match(goals, /Superseded by Prometheus owner completion/, 'owner completion must close stale plan bookkeeping');
 const runnerStart = chat.indexOf('function startMainChatGoalRunner');
 const runnerEnd = chat.indexOf('export function resumeMainChatGoalsInterruptedForRestart', runnerStart);

@@ -593,7 +593,7 @@ const {
 } = createMobileTimelineView({
   runtimeFor: mobileChatRuntimeAdapter.runtimeFor,
   getRows: mobileChatRuntimeAdapter.getTranscriptRows,
-  isHiddenMessage: _isMobileHiddenVoiceDraftMessage,
+  isHiddenMessage: _isMobileHiddenTranscriptMessage,
 });
 
 function _mobileGoalTimestampMs(value) {
@@ -1941,6 +1941,20 @@ function _isMobileHiddenVoiceDraftMessage(msg, index = -1) {
     && !Array.isArray(msg?.attachmentPreviews);
 }
 
+function _isMobileGoalStartAcknowledgementText(value) {
+  return /^(?:Started|Resumed|Revised and resumed) main-chat goal\b/i.test(String(value || '').trim());
+}
+
+function _isMobileGoalStartAcknowledgement(msg) {
+  return String(msg?.messageKind || '').trim() === 'goal_command_ack'
+    && _isMobileGoalStartAcknowledgementText(_mobileMessageCopyText(msg));
+}
+
+function _isMobileHiddenTranscriptMessage(msg, index = -1) {
+  return _isMobileHiddenVoiceDraftMessage(msg, index)
+    || _isMobileGoalStartAcknowledgement(msg);
+}
+
 function _isMobileMessagePersistable(msg) {
   if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) return false;
   if (msg.role !== 'ai') return true;
@@ -2217,7 +2231,7 @@ function _makeMobileSideChatTitle(seed = '') {
 
 function _mobileSideReferenceSnapshot(parentThread = []) {
   const visible = (Array.isArray(parentThread) ? parentThread : [])
-    .filter((msg, index) => msg && !_isMobileHiddenVoiceDraftMessage(msg, index))
+    .filter((msg, index) => msg && !_isMobileHiddenTranscriptMessage(msg, index))
     .filter((msg) => msg.role === 'user' || msg.role === 'ai')
     .slice(-8);
   return visible.map((msg) => {
@@ -9594,8 +9608,11 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     </button>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
     <div class="pm-tool-progress-dock" id="pm-tool-progress-dock" hidden aria-live="polite"></div>
-    <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
-    <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
+    <div class="pm-mobile-runtime-pills" id="pm-mobile-runtime-pills">
+      <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
+      <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
+      <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
+    </div>
     <div id="pm-mobile-sources-popover" class="pm-mobile-sources-popover" hidden role="dialog" aria-modal="true" aria-label="Chat Sources">
       <button type="button" id="pm-mobile-sources-scrim" class="pm-mobile-sources-popover-scrim" aria-label="Close Sources"></button>
       <section class="pm-mobile-sources-panel">
@@ -9605,7 +9622,6 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
         <div id="pm-mobile-sources-list" class="pm-mobile-sources-list"><div class="pm-mobile-sources-empty">Sources stay online and load selectively when needed.</div></div>
       </section>
     </div>
-    <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
     ${requestedSession === MOBILE_CHAT_SESSION_ID ? `
       <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
         <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
@@ -10489,6 +10505,9 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
       const shouldRecoverGoalStream = /^(runner_started|launch_accepted|turn_preparing|turn_started|runtime_failure|startup_auto_resume|startup_crash_recovered|crash_recovered|recovery_finalized|recovery_resumed)$/.test(event)
         || (!event && status === 'active');
       if (shouldRecoverGoalStream) {
+        if (/^(runner_started|launch_accepted|turn_preparing|turn_started)$/.test(event)) {
+          onMainChatGoalSse({ sessionId: sid, event: 'runtime_registered' });
+        }
         scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
       } else if (
         event === 'runner_idle'
@@ -12578,18 +12597,21 @@ void main() {
       const planDockHeight = mainPlanDock && !mainPlanDock.hidden
         ? Math.ceil(mainPlanDock.getBoundingClientRect?.().height || 0)
         : 0;
+      const goalAgentPillsPaired = page?.classList?.contains('pm-runtime-goal-agent-pills-paired') === true;
       const runtimeDockHeight = Math.max(overlayDockHeight, planDockHeight);
-      const runtimeSurfaceHeight = Math.max(dockHeight, planDockHeight);
-      page?.style?.setProperty?.('--pm-background-dock-live-height', `${dockHeight}px`);
+      const runtimeSurfaceHeight = goalAgentPillsPaired ? 0 : Math.max(dockHeight, planDockHeight);
+      const stackedGoalHeight = goalAgentPillsPaired ? Math.max(dockHeight, planDockHeight, goalHeight) : goalHeight;
+      page?.style?.setProperty?.('--pm-goal-live-height', `${stackedGoalHeight}px`);
+      page?.style?.setProperty?.('--pm-background-dock-live-height', `${goalAgentPillsPaired ? 0 : dockHeight}px`);
       page?.style?.setProperty?.('--pm-main-plan-live-height', `${planDockHeight}px`);
-      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + toolProgressHeight + runtimeSurfaceHeight + connectionHeight}px`);
+      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + stackedGoalHeight + toolProgressHeight + runtimeSurfaceHeight + connectionHeight}px`);
       const hasExpandedSurface = goalStrip?.dataset?.expanded === 'true'
         || mainPlanDock?.classList?.contains('is-open')
         || backgroundSpawnDock?.classList?.contains('is-open');
       // Open cards get a larger reading gutter than their collapsed pills. The
       // extra 32px keeps the final chat/tool line visibly above the glass edge.
       const clearance = hasExpandedSurface || connectionHeight || queuedHeight ? 78 : (runtimeDockHeight ? 46 : 34);
-      const space = Math.max(170, height + queuedHeight + goalHeight + toolProgressHeight + runtimeDockHeight + connectionHeight + clearance);
+      const space = Math.max(170, height + queuedHeight + stackedGoalHeight + toolProgressHeight + runtimeSurfaceHeight + connectionHeight + clearance);
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -13065,7 +13087,7 @@ void main() {
       })}`);
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
-        .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
+        .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenTranscriptMessage(msg, index));
       setInnerHTMLPreservingVisuals(sideThreadEl, visible.length
         ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
         : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>');
@@ -14676,6 +14698,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         } else {
           _finishMobileVisualStreamText(aiTurn);
         }
+        if (_isMobileGoalStartAcknowledgementText(evt.reply || aiTurn.body?.text || aiTurn.content)) {
+          aiTurn.messageKind = 'goal_command_ack';
+        }
         aiTurn.workStartedAt = Number(evt.workStartedAt || aiTurn.workStartedAt || aiTurn.createdAt || Date.now()) || Date.now();
         aiTurn.workEndedAt = Number(evt.workEndedAt || aiTurn.workEndedAt || Date.now()) || Date.now();
         aiTurn.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
@@ -14741,16 +14766,27 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const committedFinalTurn = mobileChatRuntimeAdapter.replaceTranscriptRow(requestedSession, aiTurn, {
       source: 'mobile-recovery-final',
     });
-    const patchedFinal = _patchMobileThreadMessage(
-      threadEl,
-      committedFinalTurn?.source || aiTurn,
-      _activeMobileThread().indexOf(aiTurn),
-    );
-    if (patchedFinal) {
-      _syncMobileWorkTimer(threadEl, body, requestedSession);
-      _restoreMobileChatScroll(body, scrollSnapshot);
-    } else {
+    const committedSource = committedFinalTurn?.source || aiTurn;
+    // The mobile timeline deliberately omits command acknowledgements such as
+    // "Started main-chat goal mode.". A direct row patch bypasses that
+    // timeline filter and can put the acknowledgement back into the DOM until
+    // the next reconnect/history paint. Force the filtered paint at this
+    // boundary; the real main_chat_goal runtime turn is a separate row and
+    // remains visible as soon as its lifecycle events arrive.
+    if (_isMobileHiddenTranscriptMessage(committedSource)) {
       renderThreadNow();
+    } else {
+      const patchedFinal = _patchMobileThreadMessage(
+        threadEl,
+        committedSource,
+        _activeMobileThread().indexOf(aiTurn),
+      );
+      if (patchedFinal) {
+        _syncMobileWorkTimer(threadEl, body, requestedSession);
+        _restoreMobileChatScroll(body, scrollSnapshot);
+      } else {
+        renderThreadNow();
+      }
     }
     const finalThread = _activeMobileThread();
     _saveMobileThreadCache(requestedSession, finalThread);
@@ -15526,16 +15562,25 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       const committedFinalTurn = mobileChatRuntimeAdapter.replaceTranscriptRow(actualSessionId, targetAiTurn, {
         source: 'mobile-send-final',
       });
-      const patchedFinal = _patchMobileThreadMessage(
-        threadEl,
-        committedFinalTurn?.source || targetAiTurn,
-        activeThread.indexOf(targetAiTurn),
-      );
-      if (patchedFinal) {
-        _syncMobileWorkTimer(threadEl, body, actualSessionId);
-        _restoreMobileChatScroll(body, scrollSnapshot);
-      } else {
+      const committedSource = committedFinalTurn?.source || targetAiTurn;
+      // A goal command acknowledgement is filtered from the mobile timeline.
+      // Do not incrementally patch it back into the already-painted thread;
+      // use the filtered render so the acknowledgement disappears immediately
+      // just as it does after reconnect/history hydration.
+      if (_isMobileHiddenTranscriptMessage(committedSource)) {
         renderThreadNow();
+      } else {
+        const patchedFinal = _patchMobileThreadMessage(
+          threadEl,
+          committedSource,
+          activeThread.indexOf(targetAiTurn),
+        );
+        if (patchedFinal) {
+          _syncMobileWorkTimer(threadEl, body, actualSessionId);
+          _restoreMobileChatScroll(body, scrollSnapshot);
+        } else {
+          renderThreadNow();
+        }
       }
       const finalThread = Array.isArray(__pmChat.threads[actualSessionId]) ? __pmChat.threads[actualSessionId] : activeThread;
       _saveMobileThreadCache(actualSessionId, finalThread);
@@ -15864,6 +15909,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (activeRunKind) {
       aiTurn.activeRunKind = activeRunKind;
       aiTurn.agentRuntimeKind = activeRunKind;
+      if (activeRunKind === 'main_chat_goal') aiTurn.messageKind = 'goal_turn';
     }
     if (isInternalWatchRun) aiTurn.messageKind = 'internal_watch_review';
     const evt = {
@@ -15916,7 +15962,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (sid !== requestedSession) return;
     const event = String(msg.event || '').trim();
     if (!event) return;
-    applyMainChatStreamPayload({
+    const applied = applyMainChatStreamPayload({
       sessionId: sid,
       event,
       activeRunKind: 'main_chat_goal',
@@ -15925,6 +15971,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       at: msg.at,
       data: msg,
     });
+    // Goal lifecycle frames can arrive before the first tool event and some
+    // of them intentionally carry no transcript content. Paint the active
+    // goal turn immediately so the regular tool stream has a visible owner.
+    if (['runtime_registered', 'goal_turn_preparing', 'goal_turn_identity'].includes(event)
+      && applied !== 'duplicate') renderThreadNow();
   };
   const onMainChatStreamUpdate = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return;
