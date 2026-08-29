@@ -30,21 +30,25 @@ function createNativeBrowserNavigationController({ loadURL, stop } = {}) {
   async function load(url, ...args) {
     const target = normalizeTarget(url);
     const previous = inFlight;
-    if (previous && previous.settled !== true) {
-      previous.superseded = true;
-      rememberSuperseded(previous);
-      try { stop?.(); } catch {}
-    }
-
     const entry = {
       generation: generation + 1,
       target,
       superseded: false,
       settled: false,
     };
+
+    // Establish the replacement as authoritative BEFORE stopping the prior
+    // load. Electron may synchronously emit did-fail-load(-3) from stop(), and
+    // that event must already see the newer generation/target as the owner.
     generation = entry.generation;
     latest = { generation: entry.generation, target };
     inFlight = entry;
+
+    if (previous && previous.settled !== true) {
+      previous.superseded = true;
+      rememberSuperseded(previous);
+      try { stop?.(); } catch {}
+    }
 
     try {
       return await Promise.resolve().then(() => loadURL(url, ...args));
