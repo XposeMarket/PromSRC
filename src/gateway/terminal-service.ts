@@ -73,6 +73,27 @@ function stripQuoted(command: string): string {
   return String(command || '').replace(/"[^"]*"|'[^']*'/g, ' ');
 }
 
+function isKnownReadOnlyPowerShellSequence(command: string): boolean {
+  const clauses = String(command || '').split(';').map((clause) => clause.trim()).filter(Boolean);
+  if (clauses.length < 2) return false;
+  let sawInspection = false;
+  for (const clause of clauses) {
+    if (/^\$[A-Za-z_][\w:.-]*\s*=\s*(?:'[^']*'|"[^"]*")\s*$/s.test(clause)) continue;
+    if (/^\$[A-Za-z_][\w:.-]*\s*=\s*(?:get-(?:childitem|content|item|location)|select-string|test-path|resolve-path)\b/i.test(clause)) {
+      sawInspection = true;
+      continue;
+    }
+    if (/^\$[A-Za-z_][\w:.-]*\s*=\s*\[regex\]::Match\([^;]+\)\.Value\s*$/i.test(clause)) continue;
+    if (/^(?:write-output|select-object|where-object|sort-object|measure-object|format-(?:list|table|wide|custom))\b/i.test(clause)) continue;
+    if (CONFIDENT_READ_ONLY_PATTERNS.some((pattern) => pattern.test(clause))) {
+      sawInspection = true;
+      continue;
+    }
+    return false;
+  }
+  return sawInspection;
+}
+
 export function looksLongRunning(command: string): boolean {
   const unquoted = stripQuoted(command);
   return /(?:^|[\s;|&])(?:nohup|setsid|disown)\b/i.test(unquoted)
@@ -94,7 +115,15 @@ export function shouldTrackTerminalWorkspaceChanges(command: string): boolean {
   const source = String(command || '').trim();
   if (!source) return false;
   if (WORKSPACE_MUTATION_PATTERNS.some((pattern) => pattern.test(source))) return true;
-  return !CONFIDENT_READ_ONLY_PATTERNS.some((pattern) => pattern.test(source));
+  const confidentlyReadOnly = CONFIDENT_READ_ONLY_PATTERNS.some((pattern) => pattern.test(source));
+  if (!confidentlyReadOnly) return true;
+
+  // A read-only prefix does not make the rest of a compound shell command safe.
+  // Unless we can recognize the whole sequence as observational, retain change
+  // tracking so later clauses cannot mutate files without undo/plan evidence.
+  const unquoted = stripQuoted(source);
+  if (/(?:&&|\|\||[;|])/.test(unquoted) && !isKnownReadOnlyPowerShellSequence(source)) return true;
+  return false;
 }
 
 export function resolveTerminalCwd(cwd?: string): string {
