@@ -36,8 +36,6 @@ function runGitWorkspaceCase(): void {
     git(root, ['add', '.']);
     git(root, ['commit', '-qm', 'baseline']);
 
-    // This dirty file exists before the terminal run and is deliberately left
-    // untouched. It must not appear in the command's change set.
     write(root, 'preexisting.txt', 'before\noperator change\n');
     const tracker = createTerminalWorkspaceTracker({ workspacePath: root, cwd: root, command: 'test command' });
     assert.ok(tracker, 'Git tracker should initialize');
@@ -102,8 +100,6 @@ function runNonGitWorkspaceCase(): void {
 function runBoundedCommandHintCase(): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-tracker-bounded-'));
   try {
-    // Force the normal walk to hit its bounded-file cap before it reaches the
-    // target lexically. The command path must still be captured exactly.
     for (let index = 0; index < 5010; index += 1) {
       write(root, `aa-noise/${String(index).padStart(5, '0')}.txt`, 'noise\n');
     }
@@ -205,10 +201,6 @@ async function runProcessSupervisorCase(): Promise<void> {
       workspacePath: root,
       trackWorkspaceChanges: true,
     });
-    // The contract under test is "an edit that happened before cancellation is
-    // still captured." Waiting a fixed 120 ms made the test scheduler-dependent:
-    // on slower runners the shell could be killed before the child Node process
-    // ever performed its synchronous write, leaving no real edit to report.
     await waitForPath(path.join(root, 'cancelled.txt'));
     cancelled.cancel('manual_cancel');
     const cancelledExit = await cancelled.wait();
@@ -221,15 +213,17 @@ async function runProcessSupervisorCase(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  assert.equal(shouldTrackTerminalWorkspaceChanges("$f='games\\figure-8-drift\\index.html'; $raw=Get-Content $f -Raw; $script=[regex]::Match($raw,'x').Value; Write-Output $script"), false, 'read-only PowerShell inspection must not snapshot the workspace');
+  assert.equal(shouldTrackTerminalWorkspaceChanges("$f='games\\figure-8-drift\\index.html'; $raw=Get-Content $f -Raw; $script=[regex]::Match($raw,'x').Value; Write-Output $script"), false, 'known read-only PowerShell inspection must not snapshot the workspace');
   assert.equal(shouldTrackTerminalWorkspaceChanges("Set-Content -LiteralPath '.\\game.html' -Value 'changed'"), true, 'PowerShell writes must retain change tracking');
   assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short'), false, 'read-only Git commands must not snapshot the workspace');
+  assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short && printf changed | dd of=tracked.txt'), true, 'a read-only prefix must not suppress tracking for a later compound mutation');
+  assert.equal(shouldTrackTerminalWorkspaceChanges('Get-Content README.md; Invoke-Expression $nextCommand'), true, 'an unclassified PowerShell clause after a read-only prefix must stay tracked');
   assert.equal(shouldTrackTerminalWorkspaceChanges('npm run build'), true, 'unknown or potentially mutating commands stay tracked');
   runGitWorkspaceCase();
   runNonGitWorkspaceCase();
   runBoundedCommandHintCase();
   await runProcessSupervisorCase();
-  console.log('[terminal-change-tracker] Git, dirty-baseline, failed-edit, revert, rename, ignored, non-Git, bounded command hints, and process lifecycle cases passed');
+  console.log('[terminal-change-tracker] Git, read-only classification, dirty-baseline, failed-edit, revert, rename, ignored, non-Git, bounded command hints, and process lifecycle cases passed');
 }
 
 void main();
