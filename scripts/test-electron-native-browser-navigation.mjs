@@ -129,5 +129,13 @@ assert.match(
   /navigate:\s*async\s*\(payload = \{\}\) => \{[\s\S]*native-browser:attach[\s\S]*native-browser:navigate/,
   'manual browser navigation must reattach the hidden native canvas before navigating',
 );
+assert.doesNotMatch(
+  preloadSource,
+  /ipcRenderer\.invoke\('native-browser:attach',\s*payload\)/,
+  'reattach must not forward the navigation URL/action payload and cause a duplicate initial load',
+);
+assert.match(preloadSource, /sessionId:\s*payload\?\.sessionId/);
+assert.match(preloadSource, /tabId:\s*payload\?\.tabId/);
+assert.match(preloadSource, /profile:\s*payload\?\.profile/);
 
 console.log('Electron native browser navigation recovery checks passed.');
