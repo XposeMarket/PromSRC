@@ -49,8 +49,12 @@ async function main(): Promise<void> {
     getModelCallWorkerPoolStatus,
     shutdownModelCallWorkerPool,
     ModelCallWorkerError,
+    shouldTreatModelWorkerHeartbeatAsStale,
   } = await import('./model-call-worker-pool.js');
   try {
+  assert.equal(shouldTreatModelWorkerHeartbeatAsStale(40_000, 45_000, 30_000, 10_000), false, 'a locally delayed watchdog must not blame a healthy child worker');
+  assert.equal(shouldTreatModelWorkerHeartbeatAsStale(40_000, 10_000, 30_000, 10_000), true, 'a normally scheduled watchdog should enforce a genuinely stale heartbeat');
+  assert.equal(shouldTreatModelWorkerHeartbeatAsStale(20_000, 10_000, 30_000, 10_000), false, 'a fresh heartbeat remains healthy');
   const observed: string[] = [];
   const beforeStream = getModelCallWorkerPoolStatus();
   const roundtrip = await dispatchModelCallWorker(request(), {

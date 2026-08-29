@@ -47,6 +47,28 @@ const INTERACTIVE_PATTERNS = [
   /\bssh\b/i,
 ];
 
+const WORKSPACE_MUTATION_PATTERNS = [
+  /\b(?:set|add|clear)-content\b/i,
+  /\bout-file\b/i,
+  /\b(?:new|remove|copy|move|rename)-item(?:property)?\b/i,
+  /\bset-item(?:property)?\b/i,
+  /\b(?:writealltext|writeallbytes|appendalltext|appendalllines)\b/i,
+  /\b(?:writefile|appendfile|unlink|rmsync|mkdir|rename|copyfile)(?:sync)?\b/i,
+  /(?:^|[;&|]\s*)(?:rm|del|erase|move|mv|copy|cp|ren|mkdir|md|rmdir|touch|tee)\b/i,
+  /\bsed\s+-[^\r\n;|&]*i\b/i,
+  /(?:^|[^>])>{1,2}(?!=)/,
+  /\bgit\s+(?:add|apply|am|checkout|switch|commit|merge|rebase|reset|restore|clean|cherry-pick|revert|stash|tag|push|pull)\b/i,
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|uninstall|update|upgrade|run|exec|publish)\b/i,
+  /\b(?:npx|tsx|ts-node|node|python|python3|pip|pip3|cargo|go|dotnet|docker|kubectl)\b/i,
+];
+
+const CONFIDENT_READ_ONLY_PATTERNS = [
+  /^\s*(?:get-(?:childitem|content|item|location)|select-string|test-path|resolve-path)\b/i,
+  /^\s*\$[A-Za-z_][\w:.-]*\s*=.*\b(?:get-(?:childitem|content|item)|select-string|test-path|resolve-path)\b/is,
+  /^\s*git\s+(?:status|diff|log|show|rev-parse|ls-files|grep|branch\s+--show-current)\b/i,
+  /^\s*(?:rg|grep|findstr|ls|dir|cat|type)\b/i,
+];
+
 function stripQuoted(command: string): string {
   return String(command || '').replace(/"[^"]*"|'[^']*'/g, ' ');
 }
@@ -61,6 +83,18 @@ export function looksLongRunning(command: string): boolean {
 export function looksInteractive(command: string): boolean {
   const unquoted = stripQuoted(command);
   return INTERACTIVE_PATTERNS.some((pattern) => pattern.test(unquoted));
+}
+
+/**
+ * Terminal change tracking takes a synchronous before/after workspace
+ * fingerprint. Skip it only for commands that are confidently observational;
+ * unknown commands remain tracked so undo/change evidence stays conservative.
+ */
+export function shouldTrackTerminalWorkspaceChanges(command: string): boolean {
+  const source = String(command || '').trim();
+  if (!source) return false;
+  if (WORKSPACE_MUTATION_PATTERNS.some((pattern) => pattern.test(source))) return true;
+  return !CONFIDENT_READ_ONLY_PATTERNS.some((pattern) => pattern.test(source));
 }
 
 export function resolveTerminalCwd(cwd?: string): string {
@@ -100,7 +134,7 @@ export async function runTerminal(input: TerminalRunInput): Promise<TerminalRunR
     stdinMode: input.stdin === true || input.input != null || pty ? 'pipe' : 'ignore',
     input: input.input,
     workspacePath: input.workspacePath || resolveTerminalCwd(input.cwd),
-    trackWorkspaceChanges: true,
+    trackWorkspaceChanges: shouldTrackTerminalWorkspaceChanges(command),
   });
   if (mode === 'foreground') {
     const exit = await run.wait();

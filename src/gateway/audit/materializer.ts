@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import { fork, type ChildProcess } from 'child_process';
 
 type StartAuditMaterializerOpts = {
   workspacePath: string;
@@ -111,6 +111,9 @@ const MIN_INTERVAL_MS = 5 * 60_000;
 const INITIAL_DELAY_MS = 5 * 60_000;
 const COUNT_CAP = 5_000;
 const MAX_PREVIEW_ROWS = 80;
+const MATERIALIZER_CHILD_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_CHILD';
+const DEFAULT_CHILD_MAX_OLD_SPACE_MB = 768;
+const DEFAULT_CHILD_TIMEOUT_MS = 4 * 60_000;
 
 let _timer: NodeJS.Timeout | null = null;
 let _running = false;
@@ -620,30 +623,41 @@ export function materializeAuditSnapshot(configDir: string, workspacePath: strin
   writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
 }
 
-export function createAuditMaterializerWorker(opts: StartAuditMaterializerOpts, intervalMs: number): Worker {
+function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
+}
+
+function materializerChildExecArgv(): string[] {
+  const maxOldSpaceMb = boundedInt(
+    process.env.PROMETHEUS_AUDIT_MATERIALIZER_MAX_OLD_SPACE_MB,
+    DEFAULT_CHILD_MAX_OLD_SPACE_MB,
+    256,
+    2 * 1024,
+  );
+  return [
+    ...process.execArgv.filter((arg) => !/^--max[-_]old[-_]space[-_]size(?:=|$)/i.test(arg)),
+    `--max-old-space-size=${maxOldSpaceMb}`,
+  ];
+}
+
+export function createAuditMaterializerProcess(opts: StartAuditMaterializerOpts, intervalMs: number): ChildProcess {
   const data = {
     type: 'prometheus_audit_materializer',
     workspacePath: opts.workspacePath,
     configDir: opts.configDir,
     intervalMs,
   };
-  if (path.extname(__filename).toLowerCase() !== '.ts') {
-    return new Worker(__filename, {
-      execArgv: process.execArgv,
-      workerData: data,
-    });
-  }
-
-  // Worker threads do not reliably inherit tsx's source-mode loader on every
-  // supported Node version. Register tsx inside a tiny CommonJS bootstrap so a
-  // development gateway can execute this .ts entrypoint just like dist/*.js.
-  return new Worker(
-    `const { workerData } = require('node:worker_threads'); require('tsx/cjs/api').register(); require(workerData.entry);`,
-    {
-      eval: true,
-      workerData: { ...data, entry: __filename },
+  return fork(__filename, [], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      [MATERIALIZER_CHILD_ENV]: Buffer.from(JSON.stringify(data), 'utf8').toString('base64url'),
     },
-  );
+    execArgv: materializerChildExecArgv(),
+    serialization: 'json',
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
 }
 
 export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
@@ -662,22 +676,41 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
     };
     try {
       // The audit mirror can parse and redact tens of megabytes of append-only
-      // logs. Keep that synchronous filesystem/JSON work off the gateway event
-      // loop so WebSocket, SSE, HTTP, and Telegram traffic remain responsive.
-      const worker = createAuditMaterializerWorker(opts, intervalMs);
-      worker.unref();
-      worker.on('message', (message: any) => {
+      // logs and rebuild a very large manifest. A worker_thread still owns
+      // memory inside the gateway process; repeated one-shot isolates caused
+      // their released 16 MB V8 segments to remain committed to the gateway.
+      // A capped child process gives the OS a hard reclamation boundary.
+      const child = createAuditMaterializerProcess(opts, intervalMs);
+      const timeoutMs = boundedInt(
+        process.env.PROMETHEUS_AUDIT_MATERIALIZER_TIMEOUT_MS,
+        DEFAULT_CHILD_TIMEOUT_MS,
+        30_000,
+        Math.max(30_000, intervalMs - 5_000),
+      );
+      const timeout = setTimeout(() => {
+        console.warn(`[AuditMaterializer] Child exceeded ${timeoutMs}ms and was terminated.`);
+        try { child.kill(); } catch {}
+        finish();
+      }, timeoutMs);
+      timeout.unref?.();
+      const finishChild = () => {
+        clearTimeout(timeout);
+        finish();
+      };
+      child.unref();
+      child.channel?.unref?.();
+      child.on('message', (message: any) => {
         if (message?.ok === false) {
-          console.warn('[AuditMaterializer] Worker sync failed:', String(message?.error || 'unknown error'));
+          console.warn('[AuditMaterializer] Child sync failed:', String(message?.error || 'unknown error'));
         }
       });
-      worker.on('error', (err) => {
-        console.warn('[AuditMaterializer] Worker failed:', String(err?.message || err));
-        finish();
+      child.on('error', (err) => {
+        console.warn('[AuditMaterializer] Child failed:', String(err?.message || err));
+        finishChild();
       });
-      worker.on('exit', (code) => {
-        if (code !== 0) console.warn(`[AuditMaterializer] Worker exited with code ${code}`);
-        finish();
+      child.on('exit', (code) => {
+        if (code !== 0) console.warn(`[AuditMaterializer] Child exited with code ${code}`);
+        finishChild();
       });
     } catch (err: any) {
       console.warn('[AuditMaterializer] Could not start worker:', String(err?.message || err));
@@ -701,13 +734,34 @@ export function stopAuditMaterializer(): void {
   _intervalMs = null;
 }
 
-if (!isMainThread && workerData?.type === 'prometheus_audit_materializer') {
+function readMaterializerChildData(): any | null {
+  const encoded = String(process.env[MATERIALIZER_CHILD_ENV] || '').trim();
+  if (!encoded) return null;
   try {
-    _intervalMs = Number(workerData.intervalMs) || DEFAULT_INTERVAL_MS;
-    materializeAuditSnapshot(String(workerData.configDir || ''), String(workerData.workspacePath || ''));
-    parentPort?.postMessage({ ok: true });
+    return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+const materializerChildData = readMaterializerChildData();
+if (materializerChildData?.type === 'prometheus_audit_materializer') {
+  let exitCode = 0;
+  let message: Record<string, unknown> = { ok: true };
+  try {
+    _intervalMs = Number(materializerChildData.intervalMs) || DEFAULT_INTERVAL_MS;
+    materializeAuditSnapshot(String(materializerChildData.configDir || ''), String(materializerChildData.workspacePath || ''));
   } catch (err: any) {
-    parentPort?.postMessage({ ok: false, error: String(err?.message || err) });
-    process.exitCode = 1;
+    exitCode = 1;
+    message = { ok: false, error: String(err?.message || err) };
+  }
+  const exit = () => {
+    try { process.disconnect?.(); } catch {}
+    process.exit(exitCode);
+  };
+  if (typeof process.send === 'function' && process.connected) {
+    try { process.send(message, exit); } catch { exit(); }
+  } else {
+    exit();
   }
 }

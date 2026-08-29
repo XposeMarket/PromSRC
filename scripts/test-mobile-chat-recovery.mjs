@@ -540,7 +540,8 @@ assert.match(ws, /_WS_STALE_AFTER_MS/, 'client must track an inbound-silence thr
 assert.match(ws, /type: 'ws:stale'/, 'client must report and replace an OPEN-but-silent WebSocket');
 assert.match(ws, /connectWS\(\{ force: true, timeoutMs: 6000, reconnectDelayMs: 0 \}\)/, 'stale sockets must reconnect immediately');
 assert.match(broadcaster, /gateway-event-loop-stalls\.ndjson/, 'gateway must retain event-loop stall diagnostics');
-assert.match(auditMaterializer, /new Worker\(__filename/, 'audit materialization must run outside the gateway event loop');
-assert.match(auditMaterializer, /prometheus_audit_materializer/, 'audit worker must have an explicit worker entrypoint');
+assert.match(auditMaterializer, /fork\(__filename/, 'audit materialization must run in a disposable child process outside the gateway');
+assert.match(auditMaterializer, /prometheus_audit_materializer/, 'audit child must have an explicit process entrypoint');
+assert.match(auditMaterializer, /--max-old-space-size=/, 'audit child must have an explicit heap cap');
 
 console.log('[mobile-chat-recovery] recovery/replay/reload contract passed');
