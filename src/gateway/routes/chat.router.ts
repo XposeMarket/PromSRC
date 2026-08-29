@@ -3967,6 +3967,17 @@ async function handleChat(
     'apply_patch', 'apply_patchset', 'apply_workspace_patchset',
     'workspace_edit', 'prom_apply_dev_changes',
   ]);
+  // In terminal-first workspace mode the native file wrappers are not on the
+  // provider surface. Captured terminal/workspace_run calls still return the
+  // same before/after workspace diff metadata, but their tool name is a shell
+  // tool (usually run_command) rather than a file mutation tool. Keep these
+  // names separate from the native set so a read-only shell command cannot be
+  // mistaken for a write; the evidence check below requires actual reported
+  // workspaceChanges for this group.
+  const PLAN_STEP_TERMINAL_TOOLS = new Set([
+    'workspace_run', 'run_command', 'terminal', 'shell_command', 'terminal_run',
+    'start_process', 'process_wait',
+  ]);
   const PROGRESS_LIFECYCLE_TOOLS = new Set([
     'declare_plan', 'complete_plan_step', 'step_complete', 'complete_goal', 'block_goal',
   ]);
@@ -3987,7 +3998,13 @@ async function handleChat(
     );
     return allToolResults
       .slice(lastBoundary + 1)
-      .some((r) => r && !r.error && PLAN_STEP_WRITE_EVIDENCE_TOOLS.has(String(r.name || '').trim()));
+      .some((r) => {
+        if (!r || r.error) return false;
+        const name = String(r.name || '').trim();
+        if (PLAN_STEP_WRITE_EVIDENCE_TOOLS.has(name)) return true;
+        if (!PLAN_STEP_TERMINAL_TOOLS.has(name)) return false;
+        return extractTerminalWorkspaceChangesFromToolResult(r, workspacePath).length > 0;
+      });
   };
 
   // Keep legacy round-stats for the checklist-guard and continuation-nudge logic
@@ -7894,7 +7911,7 @@ RULES:
             '',
             'Your previous reply did not call any tools. Do not describe what you will do.',
             'Your next assistant message must contain tool calls only.',
-            'Use the available workspace file tools directly: list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, file_stats.',
+            'Use the available workspace tools directly: native file tools when exposed, or workspace_run/run_command/terminal in terminal-first mode; use list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, and file_stats when available.',
             '',
             nextStep
               ? `Execute the next required action for: ${nextStep.text}.`
@@ -8236,7 +8253,7 @@ RULES:
             '',
             'Your previous reply attempted to finalize or narrated intent without tool calls.',
             'Do not answer in prose. Your next assistant message must contain tool calls only.',
-            'Use the workspace file tools directly: list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, file_stats.',
+            'Use the available workspace tools directly: native file tools when exposed, or workspace_run/run_command/terminal in terminal-first mode; use list_directory, read_files_batch, read_file, apply_patchset, mkdir, create_file, replace_lines, find_replace, and file_stats when available.',
             'After the step is actually complete, call complete_plan_step with concrete evidence.',
           ].join('\n'),
         });
@@ -9222,22 +9239,15 @@ RULES:
           const currentStep = progressState.items[stepCursor];
           const currentStepText = String(currentStep?.text || '').trim();
           if (planStepNeedsWriteEvidence(currentStepText, note) && !hasRecentWriteEvidenceForCurrentStep()) {
-            const failText = [
-              'Plan step completion rejected: this step appears to require creating or editing a file, but no successful write/create/patch/edit tool ran since the step started.',
-              currentStepText ? `Current step: ${currentStepText}` : '',
-              'Do not narrate that you are writing. Call the actual workspace file tool now: workspace_edit action:create/write/patchset, create_file, write_file, replace_lines, find_replace, insert_after, or apply_patchset. Then verify with path_exists/file_stats/read_file before completing the step.',
-            ].filter(Boolean).join('\n');
-            allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
-            sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: failText,
-            });
-            markProgressStepResult(false, toolName);
-            resetProgressRoundStats();
-            continue;
+            // Plan bookkeeping must remain usable across workspace modes. A
+            // terminal-first turn may have made a real edit without exposing a
+            // native file tool, and browser/verification-only phases may not
+            // produce a file diff at all. Keep the missing-write signal as
+            // diagnostics, but never turn it into a failed plan update.
+            const evidenceNote = currentStepText
+              ? `Plan step ${stepCursor + 1} has no native write evidence yet; accepting the explicit completion for "${currentStepText}".`
+              : 'Plan step has no native write evidence yet; accepting the explicit completion.';
+            sendSSE('info', { message: evidenceNote });
           }
         }
         let completionSummary = note

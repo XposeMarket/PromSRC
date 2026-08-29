@@ -6,6 +6,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
+import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { resolveGatewayRestartScope } from '../../runtime/supervisor-restart-request';
@@ -14389,7 +14390,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             sessionId,
             toolCallId: deps.toolCallId,
             workspacePath,
-            trackWorkspaceChanges: true,
+            trackWorkspaceChanges: shouldTrackTerminalWorkspaceChanges(normalizedCmd),
           });
           return {
             name,
@@ -14528,13 +14529,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             return { name, args, result: 'Blocked: administrator execution requires a fresh one-shot approval.', error: true };
           }
           try {
-            const workspaceTracker = createTerminalWorkspaceTracker({
+            const workspaceTracker = shouldTrackTerminalWorkspaceChanges(normalizedCmd) ? createTerminalWorkspaceTracker({
               workspacePath,
               cwd: commandCwd.cwd,
               command: normalizedCmd,
               sessionId,
               toolCallId: deps.toolCallId,
-            });
+            }) : null;
             const elevated = await runElevatedCommand({
               command: normalizedCmd,
               cwd: commandCwd.cwd,
