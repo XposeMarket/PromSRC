@@ -68,6 +68,9 @@ const measurements = {
 // The mobile question stepper keeps prior answers in the chat-side draft map
 // and animates the composer-owned handoff; keep the performance guard tight
 // while allowing that intentional interaction state logic.
-assert(measurements.gzipBytes < 250500, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// Goal launches now prime the normal live-turn surface at lifecycle admission
+// so the first tool frame has an owner; keep the budget tight while allowing
+// that intentional goal-stream handoff.
+assert(measurements.gzipBytes < 250750, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

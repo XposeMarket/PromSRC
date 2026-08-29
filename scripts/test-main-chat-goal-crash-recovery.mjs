@@ -16,6 +16,7 @@ process.env.PROMETHEUS_DATA_DIR = dataDir;
 process.env.PROMETHEUS_WORKSPACE_DIR = workspaceDir;
 
 const crashSessionId = `goal_crash_contract_${Date.now()}`;
+const pausedCrashSessionId = `${crashSessionId}_watchdog_paused`;
 const plannedSessionId = `${crashSessionId}_planned`;
 const crashDevEditId = `dev_edit_crash_${Date.now()}`;
 const plannedDevEditId = `${crashDevEditId}_planned`;
@@ -28,6 +29,7 @@ const runtimes = require('./dist/gateway/live-runtime-registry.js');
 
 const sessionId = process.env.CRASH_SESSION_ID;
 const devEditId = process.env.CRASH_DEV_EDIT_ID;
+const pausedSessionId = process.env.PAUSED_CRASH_SESSION_ID;
 const now = Date.now();
 const started = goals.handleMainChatGoalCommand(sessionId, '/goal finish and verify the interrupted source edit');
 approvals.upsertDevSourceEditContinuation({
@@ -65,6 +67,23 @@ runtimes.updateLiveRuntimeCheckpoint(runtimeId, {
   message: 'First source file changed; verification has not run.',
 });
 sessions.flushSession(sessionId);
+const pausedStarted = goals.handleMainChatGoalCommand(pausedSessionId, '/goal preserve a watchdog-paused turn across a forced restart');
+const pausedRuntimeId = runtimes.registerLiveRuntime({
+  kind: 'main_chat_goal',
+  label: 'Main chat goal',
+  sessionId: pausedSessionId,
+  source: 'goal',
+  recoveryPolicy: 'resume',
+  recoveryData: { goalId: pausedStarted.goal.id },
+});
+runtimes.updateLiveRuntimeCheckpoint(pausedRuntimeId, {
+  event: 'tool_result',
+  toolName: 'workspace_run',
+  goalId: pausedStarted.goal.id,
+  message: 'Read-only inspection was in flight when the owner watchdog paused the goal.',
+});
+goals.handleMainChatGoalCommand(pausedSessionId, '/goal pause no_measurable_progress');
+sessions.flushSession(pausedSessionId);
 runtimes.markActiveRuntimesInterrupted('gateway_crash');
 `;
 
@@ -74,6 +93,7 @@ const child = spawnSync(process.execPath, ['-e', childSetup], {
     ...process.env,
     CRASH_SESSION_ID: crashSessionId,
     CRASH_DEV_EDIT_ID: crashDevEditId,
+    PAUSED_CRASH_SESSION_ID: pausedCrashSessionId,
   },
   encoding: 'utf8',
   timeout: 20_000,
@@ -95,11 +115,12 @@ const boot = require('../dist/gateway/boot.js');
 try {
   const recovered = recovery.recoverInterruptedRuntimes();
   assert.deepEqual(
-    recovered.crashRecoveredGoalSessionIds,
-    [crashSessionId],
-    'an unplanned interrupted goal must return its exact session ID for startup resume',
+    [...recovered.crashRecoveredGoalSessionIds].sort(),
+    [crashSessionId, pausedCrashSessionId].sort(),
+    'unplanned interrupted goals, including a watchdog-paused owner, must return their exact session IDs for startup resume',
   );
   assert.ok(recovered.interruptedChats.includes(crashSessionId));
+  assert.ok(recovered.interruptedChats.includes(pausedCrashSessionId));
 
   const crashGoal = sessions.getMainChatGoal(crashSessionId);
   assert.equal(crashGoal?.status, 'restarting');
@@ -108,6 +129,11 @@ try {
   assert.equal(crashGoal?.restartCheckpoint?.devEditId, crashDevEditId);
   assert.match(crashGoal?.nextStepDirective || '', /reread/i);
   assert.match(crashGoal?.nextStepDirective || '', /before the current changes were verified or applied/i);
+
+  const pausedCrashGoal = sessions.getMainChatGoal(pausedCrashSessionId);
+  assert.equal(pausedCrashGoal?.status, 'restarting');
+  assert.equal(pausedCrashGoal?.restartCheckpoint?.phase, 'crash_recovered');
+  assert.match(pausedCrashGoal?.lastReason || '', /unexpected gateway restart/i);
 
   const crashContinuation = approvals.getDevSourceEditContinuation(crashDevEditId);
   assert.equal(
@@ -123,9 +149,9 @@ try {
   assert.doesNotMatch(crashStatus.content, /changes are live|restart completed successfully/i);
 
   assert.deepEqual(
-    recovery.consumeCrashRecoveredMainChatGoalSessionIds(),
-    [crashSessionId],
-    'the startup handoff must expose the recovered goal exactly once',
+    recovery.consumeCrashRecoveredMainChatGoalSessionIds().sort(),
+    [crashSessionId, pausedCrashSessionId].sort(),
+    'the startup handoff must expose each recovered goal exactly once',
   );
   assert.deepEqual(
     recovery.consumeCrashRecoveredMainChatGoalSessionIds(),
@@ -225,7 +251,7 @@ try {
   console.log('main-chat goal crash recovery: ok');
 } finally {
   lifecycle.clearRestartContext();
-  for (const sessionId of [crashSessionId, plannedSessionId, `${plannedSessionId}_no_context`]) {
+  for (const sessionId of [crashSessionId, pausedCrashSessionId, plannedSessionId, `${plannedSessionId}_no_context`]) {
     sessions.deleteSession(sessionId);
   }
   fs.rmSync(testRoot, { recursive: true, force: true });
