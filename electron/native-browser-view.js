@@ -24,15 +24,33 @@ function prepareNativeBrowserWebContents(webContents) {
 
   webContents.loadURL = (url, ...args) => controller.load(url, ...args);
 
+  const trackFailureListener = (listener, wrapped) => {
+    const registrations = wrappedFailureListeners.get(listener) || [];
+    registrations.push(wrapped);
+    wrappedFailureListeners.set(listener, registrations);
+  };
+
+  const forgetFailureListener = (listener, wrapped) => {
+    const registrations = wrappedFailureListeners.get(listener);
+    if (!registrations?.length) return;
+    const index = registrations.lastIndexOf(wrapped);
+    if (index >= 0) registrations.splice(index, 1);
+    if (registrations.length) wrappedFailureListeners.set(listener, registrations);
+    else wrappedFailureListeners.delete(listener);
+  };
+
   const wrapFailureListener = (listener, once = false) => {
     if (typeof listener !== 'function') return listener;
     const wrapped = (event, errorCode, description, validatedURL, ...rest) => {
-      if (once) rawRemoveListener?.('did-fail-load', wrapped);
+      if (once) {
+        rawRemoveListener?.('did-fail-load', wrapped);
+        forgetFailureListener(listener, wrapped);
+      }
       const decision = controller.classifyFailure({ errorCode, validatedURL });
       if (!decision.authoritative) return undefined;
       return listener(event, errorCode, description, validatedURL, ...rest);
     };
-    wrappedFailureListeners.set(listener, wrapped);
+    trackFailureListener(listener, wrapped);
     return wrapped;
   };
 
@@ -52,10 +70,10 @@ function prepareNativeBrowserWebContents(webContents) {
   if (rawOnce) webContents.once = (eventName, listener) => registerListener(eventName, listener, true);
   if (rawRemoveListener) {
     webContents.removeListener = (eventName, listener) => {
-      const target = eventName === 'did-fail-load'
-        ? (wrappedFailureListeners.get(listener) || listener)
-        : listener;
-      wrappedFailureListeners.delete(listener);
+      if (eventName !== 'did-fail-load') return rawRemoveListener(eventName, listener);
+      const registrations = wrappedFailureListeners.get(listener);
+      const target = registrations?.length ? registrations[registrations.length - 1] : listener;
+      if (registrations?.length) forgetFailureListener(listener, target);
       return rawRemoveListener(eventName, target);
     };
   }

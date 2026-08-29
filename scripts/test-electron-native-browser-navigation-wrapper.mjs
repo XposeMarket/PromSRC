@@ -34,4 +34,15 @@ wc.removeListener('did-fail-load', added);
 wc.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'https://invalid.test/');
 assert.equal(addListenerCalls, 1, 'removeListener must also remove addListener registrations');
 
+let duplicateCalls = 0;
+const duplicate = () => { duplicateCalls += 1; };
+wc.on('did-fail-load', duplicate);
+wc.on('did-fail-load', duplicate);
+wc.removeListener('did-fail-load', duplicate);
+wc.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'https://invalid.test/');
+assert.equal(duplicateCalls, 1, 'one removeListener call must remove exactly one duplicate registration');
+wc.removeListener('did-fail-load', duplicate);
+wc.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'https://invalid.test/');
+assert.equal(duplicateCalls, 1, 'repeated removeListener calls must remove every duplicate wrapped registration');
+
 console.log('Electron native browser navigation listener wrapper passed.');
