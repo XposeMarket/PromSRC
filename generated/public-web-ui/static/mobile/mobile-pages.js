@@ -572,6 +572,8 @@ if (!__pmChat.resolvedQuestionIds || typeof __pmChat.resolvedQuestionIds !== 'ob
 if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== 'object') __pmChat.mobileRecoveryOwners = {};
 if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
 
+let receipts = null;
+
 const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
   defaultSessionId: MOBILE_CHAT_SESSION_ID,
   getState: () => __pmChat,
@@ -2633,6 +2635,10 @@ function _rememberMobileCompletedAssistantTurn(sessionId, message) {
   };
 }
 
+function _findMobileCompletedTurn(...args) {
+  return _mobileChatRendererInvoke('_findMobileCompletedTurn', args) || null;
+}
+
 function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
   const sid = String(sessionId || '').trim();
   const pin = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
@@ -3239,18 +3245,8 @@ function _findMobileExpectedAbortTurn(thread, evt = null) {
   }) || null;
 }
 
-function _acknowledgeMobileExpectedAbortTurn(turn) {
-  if (!turn) return false;
-  turn._pmAbortRequested = false;
-  turn._pmAbortAcknowledged = true;
-  turn.streaming = false;
-  turn._pmLiveActivityCompleted = true;
-  if (!String(turn.body?.text || turn.content || '').trim()) {
-    turn.body = { ...(turn.body || {}), text: '[Generation stopped by user. Runtime abort sent and process log preserved.]' };
-    turn.content = turn.body.text;
-  }
-  delete turn.errorPresentation;
-  return true;
+function _ackMobileAbort(...args) {
+  return _mobileChatRendererInvoke('_ackMobileAbort', args) || false;
 }
 
 function _clearRecoveredMobileChatError(message) {
@@ -9389,6 +9385,7 @@ function _saveMobileLastChatContext(context = {}) {
 
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
   await loadMobileChatRendererRuntime();
+  receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
   ensureMobileChatStyles();
   _installMobileApprovalBridge();
   // Chat recovery needs the same tool/result renderer as live streaming. Kick
@@ -14290,13 +14287,16 @@ void main() {
       __pmChat.activeRuns[requestedSession] = { ...run, busy: run.busy !== false, runtimeId };
       _rememberMobileActiveRun(requestedSession, { runtimeId });
     }
-    if (!seq) return true;
+    if (!seq) {
+      return receipts.accept(requestedSession, evt);
+    }
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
     const run = __pmChat.activeRuns[requestedSession] || {};
     const previousStreamId = String(run.streamId || '').trim();
     const streamChanged = !!streamId && !!previousStreamId && streamId !== previousStreamId;
     const prevSeq = Math.max(0, Math.floor(Number(run.lastSeq || 0)) || 0);
     if (!streamChanged && seq <= prevSeq) return false;
+    if (!receipts.accept(requestedSession, evt)) return false;
     __pmChat.activeRuns[requestedSession] = {
       ...run,
       busy: true,
@@ -14433,9 +14433,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
     if (!noteChatStreamSeq(evt)) return 'duplicate';
-    if (evt.type === 'error' && _isMobileRuntimeAbortEvent(evt) && aiTurn._pmAbortRequested === true) {
-      _acknowledgeMobileExpectedAbortTurn(aiTurn);
-      return 'aborted';
+    if (evt.type === 'error' && _isMobileRuntimeAbortEvent(evt)) {
+      if (aiTurn._pmAbortRequested === true || aiTurn._pmAbortAcknowledged === true) {
+        _ackMobileAbort(aiTurn);
+        return 'aborted';
+      }
+      if (aiTurn._pmFinalReceived === true) return 'duplicate';
     }
     const eventClientRequestId = String(evt.clientRequestId || '').trim();
     if (eventClientRequestId && (aiTurn._pmAdmissionPending === true || !String(aiTurn._clientRequestId || '').trim())) {
@@ -14851,6 +14854,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           ? `[Stopped by user]\n\n${streamed}`
           : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
         aiTurn.content = aiTurn.body.text;
+        _ackMobileAbort(aiTurn);
         finalizeMobileLiveAiTurn(aiTurn);
       }
       _clearMobileActiveRun(sid);
@@ -15515,6 +15519,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         targetAiTurn.body.text = streamed
           ? `[Stopped by user]\n\n${streamed}`
           : '[Generation stopped by user. Runtime abort sent and process log preserved.]';
+        targetAiTurn._pmAbortRequested = false;
+        targetAiTurn._pmAbortAcknowledged = true;
       }
       targetAiTurn.streaming = false;
       targetAiTurn.workEndedAt = Number(targetAiTurn.workEndedAt || Date.now()) || Date.now();
@@ -15754,6 +15760,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const isInternalWatchRun = String(data?.source || data?.run?.source || '').trim().toLowerCase() === 'internal_watch';
     const incomingClientRequestId = String(data?.clientRequestId || '').trim();
     const eventType = String(msg.event || data?.event || data?.type || '');
+    const evt = {
+      ...data,
+      type: eventType,
+      seq: msg.seq || data?.seq,
+      streamId: msg.streamId || data?.streamId,
+      at: msg.at || data?.at,
+    };
     if (eventType === 'user_message') {
       const ownClientRequestId = String(__pmChat.sentClientRequestIds?.[requestedSession] || '').trim();
       if (incomingClientRequestId && incomingClientRequestId === ownClientRequestId) return 'own-user';
@@ -15814,10 +15827,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       setBusy(true);
       return 'streaming';
     }
+    if (receipts.has(requestedSession, evt)) return 'duplicate';
     if (eventType === 'error' && _isMobileRuntimeAbortEvent({ ...data, ...msg, type: eventType })) {
       const expectedAbortTurn = _findMobileExpectedAbortTurn(activeThread, { ...data, ...msg });
       if (expectedAbortTurn) {
-        _acknowledgeMobileExpectedAbortTurn(expectedAbortTurn);
+        if (!noteChatStreamSeq(evt)) return 'duplicate';
+        _ackMobileAbort(expectedAbortTurn);
         _clearMobileToolProgress(requestedSession);
         _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _clearMobileActiveRun(requestedSession);
@@ -15827,6 +15842,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'aborted';
       }
     }
+    if (_findMobileCompletedTurn(activeThread, evt, requestedSession)) return 'duplicate';
     _markMobileSessionRunning(requestedSession, true);
     let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, incomingClientRequestId);
     const foundRequestOwnedTurn = !!aiTurn;
@@ -15898,13 +15914,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (activeRunKind === 'main_chat_goal') aiTurn.messageKind = 'goal_turn';
     }
     if (isInternalWatchRun) aiTurn.messageKind = 'internal_watch_review';
-    const evt = {
-      ...data,
-      type: eventType,
-      seq: msg.seq || data?.seq,
-      streamId: msg.streamId || data?.streamId,
-      at: msg.at || data?.at,
-    };
     const applied = applyMobileChatStreamEvent(aiTurn, evt);
     if (applied === 'aborted') {
       _clearMobileActiveRun(requestedSession);

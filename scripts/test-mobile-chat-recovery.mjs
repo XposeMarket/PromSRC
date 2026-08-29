@@ -338,6 +338,10 @@ assert.match(
 );
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');
+assert.match(pages, /createMobileStreamReceiptLedger/, 'mobile stream delivery must have a bounded receipt ledger');
+assert.match(pages, /receipts\.has\(requestedSession, evt\)/, 'duplicate durable frames must be rejected before allocating a new assistant turn');
+assert.match(pages, /_findMobileCompletedTurn\(activeThread, evt, requestedSession\)/, 'late frames must reconcile against the recently completed turn identity');
+assert.match(pages, /_pmAbortAcknowledged/, 'expected aborts must have an idempotent terminal marker');
 assert.match(pages, /aiTurn\._pmFinalReceived = true/, 'a displayed final response must become a monotonic recovery boundary');
 assert.match(
   pages,
