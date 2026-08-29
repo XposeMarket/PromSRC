@@ -15,7 +15,7 @@ import {
 } from '../teams/managed-teams';
 import { createTask, listTaskSummaries, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
 import { findRecoveryTaskForTeamChatTarget, handleTaskRecoveryMessage } from '../tasks/task-router';
-import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory } from '../../scheduler';
+import { recordAgentRun, getAgentRunHistory } from '../../scheduler';
 import {
   triggerManagerReview,
   handleManagerConversation,
@@ -517,7 +517,6 @@ function _pauseManagedTeamInternal(teamId: string, reason?: string): { success: 
 
   if (changed) {
     cm.updateConfig({ agents: explicitAgents } as any);
-    reloadAgentSchedules();
   }
 
   team.manager = {
@@ -613,7 +612,6 @@ function _resumeManagedTeamInternal(teamId: string): { success: boolean; team?: 
 
   if (changed) {
     cm.updateConfig({ agents: explicitAgents } as any);
-    reloadAgentSchedules();
   }
 
   team.manager = {

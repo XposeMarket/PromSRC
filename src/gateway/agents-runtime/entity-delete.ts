@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
-import { reloadAgentSchedules } from '../../scheduler';
 import { normalizeAgentsForSave, sanitizeAgentId } from '../agents/agent-normalize';
 import {
   deleteManagedTeam,
@@ -153,7 +152,6 @@ export function deleteAgentCompletely(input: {
   // Remove the live timer and persisted heartbeat override as part of deleting
   // the agent, rather than leaving a stale Settings > Heartbeat card behind.
   getHeartbeatRunnerInstance()?.unregisterAgent(agentId);
-  reloadAgentSchedules();
 
   return { success: true, agentId, removedPaths, deletedScheduledJobs, affectedTeams };
 }
@@ -212,7 +210,6 @@ export function deleteTeamCompletely(input: {
   const removedWorkspacePaths = removeTeamWorkspace(teamId);
   const ok = deleteManagedTeam(teamId);
   if (ok) input.broadcastTeamEvent?.({ type: 'team_deleted', teamId, teamName: team.name });
-  reloadAgentSchedules();
 
   return {
     success: ok,

@@ -4,7 +4,7 @@ import { Router } from 'express';
 import { getConfig, getAgents, getAgentById, ensureAgentWorkspace, resolveAgentWorkspace } from '../../config/config';
 import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegramConfig, normalizeDiscordConfig, normalizeWhatsAppConfig } from '../comms/broadcaster';
 import { listManagedTeams, getManagedTeam } from '../teams/managed-teams';
-import { reloadAgentSchedules, recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
+import { recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { inferAgentModelDefaultType, resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
@@ -1725,7 +1725,6 @@ router.post('/api/agent-profile-packs/install', (req, res) => {
     const finalAgents = _normalizeAgentsForSave(next);
     cm.updateConfig({ agents: finalAgents } as any);
     _skillsManager?.scanSkills?.();
-    reloadAgentSchedules();
     broadcastWS({ type: 'agents_updated', source: 'agent_profile_pack_import', agentId: result.agent.id });
     res.json({ success: true, agent: finalAgents.find((a: any) => a.id === result.agent.id) || result.agent, preview: result.preview, installRecordPath: result.installRecordPath });
   } catch (err: any) {
@@ -1752,7 +1751,6 @@ router.delete('/api/agent-profile-packs/:agentId', (req, res) => {
     const finalAgents = _normalizeAgentsForSave(explicitAgents.filter((a: any) => _sanitizeAgentId(a.id) !== targetId));
     cm.updateConfig({ agents: finalAgents } as any);
     if (canRemoveWorkspace && fs.existsSync(resolvedWorkspace)) fs.rmSync(resolvedWorkspace, { recursive: true, force: true });
-    reloadAgentSchedules();
     broadcastWS({ type: 'agents_updated', source: 'agent_profile_pack_uninstall', agentId: targetId });
     res.json({ success: true, agentId: targetId, removedWorkspace: canRemoveWorkspace ? resolvedWorkspace : null });
   } catch (err: any) {
@@ -1778,7 +1776,6 @@ router.post('/api/agents', (req, res) => {
   cm.updateConfig({ agents: finalAgents } as any);
   const saved = finalAgents.find(a => a.id === normalized.id);
   if (saved) ensureAgentWorkspace(saved as any);
-  reloadAgentSchedules();
   // Check if a team should be suggested after adding this agent
   const suggestion = checkForTeamSuggestion(normalized.id);
   if (suggestion) {
@@ -1806,7 +1803,6 @@ router.put('/api/agents/:id', (req, res) => {
   const finalAgents = _normalizeAgentsForSave(next);
   cm.updateConfig({ agents: finalAgents } as any);
   ensureAgentWorkspace(merged as any);
-  reloadAgentSchedules();
   res.json({ success: true, agent: merged });
 });
 

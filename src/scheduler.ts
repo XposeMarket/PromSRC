@@ -2,9 +2,8 @@
  * scheduler.ts — Agent run history store.
  *
  * The agent cron scheduler has been removed. Subagent scheduling now runs
- * through CronScheduler jobs with subagent_id.
- * This file retains only the run history helpers used by scheduled jobs
- * and team dispatch to record completed agent runs.
+ * through CronScheduler jobs with subagent_id. This file retains only the run
+ * history helpers used by scheduled jobs and team dispatch.
  */
 
 import fs from 'fs';
@@ -94,15 +93,3 @@ export function getAgentLastRun(agentId: string): AgentRunHistoryEntry | null {
   }
   return null;
 }
-
-// ── Stubs kept for backward-compat imports that haven't been cleaned up yet ──
-/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
-export function initializeAgentSchedules(): void {}
-/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
-export function reloadAgentSchedules(): void {}
-/** @deprecated Subagent cron scheduling moved to CronScheduler jobs with subagent_id */
-export function stopAgentSchedules(): void {}
-/** @deprecated Broadcast injection no longer needed */
-export function setSchedulerBroadcast(_fn: (data: object) => void): void {}
-/** @deprecated Run fn injection no longer needed */
-export function setSchedulerRunAgentFn(_fn: any): void {}

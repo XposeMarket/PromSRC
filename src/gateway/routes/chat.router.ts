@@ -199,17 +199,6 @@ import {
 import { desktopBackgroundReleaseSession } from '../desktop-background';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { CronScheduler } from '../scheduling/cron-scheduler';
-import { HeartbeatRunner } from '../scheduling/heartbeat-runner';
-import {
-  initializeAgentSchedules,
-  reloadAgentSchedules,
-  stopAgentSchedules,
-  getAgentRunHistory,
-  getAgentLastRun,
-  recordAgentRun,
-  setSchedulerBroadcast,
-  setSchedulerRunAgentFn,
-} from '../../scheduler';
 import { automationDashboardTool } from '../scheduling/schedule-admin-tools';
 import { cancelThreadSupervision, listThreadSupervisions } from '../threads/thread-supervision';
 import { TelegramChannel } from '../comms/telegram-channel';

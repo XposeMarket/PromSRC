@@ -5156,7 +5156,6 @@ export class TelegramChannel {
     const upsertAgent = async (agentId: string, patch: Record<string, any>): Promise<{ ok: boolean; error?: string }> => {
       try {
         const { getConfig, getAgentById, ensureAgentWorkspace } = require('../config/config.js');
-        const { reloadAgentSchedules } = require('../scheduler.js');
         const cm = getConfig();
         const raw = cm.getConfig() as any;
         const agents = Array.isArray(raw.agents) ? [...raw.agents] : [];
@@ -5171,7 +5170,6 @@ export class TelegramChannel {
         cm.updateConfig({ agents } as any);
         const saved = (require('../config/config.js').getAgentById(agentId));
         if (saved) ensureAgentWorkspace(saved);
-        reloadAgentSchedules();
         return { ok: true };
       } catch (err: any) {
         return { ok: false, error: String(err?.message || err) };
@@ -6133,7 +6131,6 @@ export class TelegramChannel {
             return;
           }
           const { getConfig, getAgentById } = require('../config/config.js');
-          const { reloadAgentSchedules } = require('../scheduler.js');
           const cm = getConfig();
           const raw = cm.getConfig() as any;
           const agents = Array.isArray(raw.agents) ? [...raw.agents] : [];
@@ -6149,7 +6146,6 @@ export class TelegramChannel {
             agents.push({ ...existing, model, id: pending.agentId });
           }
           cm.updateConfig({ agents } as any);
-          reloadAgentSchedules();
           await this.sendMessage(chatId, `✅ Model updated to <code>${model}</code> for <b>${pending.agentName || pending.agentId}</b>.`);
         } catch (err: any) {
           await this.sendMessage(chatId, `❌ Model update failed: ${err.message}`);
