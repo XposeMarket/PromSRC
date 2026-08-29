@@ -8052,6 +8052,7 @@ function _mobileBackgroundSpawnDockOpen(...args) { return _mobileChatRendererInv
 function _setMobileBackgroundSpawnDockOpen(...args) { return _mobileChatRendererInvoke('_setMobileBackgroundSpawnDockOpen', args); }
 function _mobileBackgroundSpawnClearedIds(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnClearedIds', args); }
 function _mobileBackgroundSpawnId(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnId', args); }
+function _hydrateMobileBackgroundSpawnLane(...args) { return _mobileChatRendererInvoke('hydrateBackgroundLane', args); }
 function _mobileBackgroundSpawnPromptFromMessage(...args) { return _mobileChatRendererInvoke('_mobileBackgroundSpawnPromptFromMessage', args); }
 function _mobileParseBackgroundStatus(...args) { return _mobileChatRendererInvoke('_mobileParseBackgroundStatus', args); }
 function _collectMobileBackgroundSpawnRecoveries(...args) { return _mobileChatRendererInvoke('_collectMobileBackgroundSpawnRecoveries', args); }
@@ -8150,6 +8151,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "escapeHtml": { enumerable: true, get: () => escapeHtml },
   "loadBgTaskDetail": { enumerable: true, get: () => loadBgTaskDetail },
   "mobileChatRuntimeAdapter": { enumerable: true, get: () => mobileChatRuntimeAdapter },
+  "loadMobileChatSession": { enumerable: true, get: () => loadMobileChatSession },
   "mobileGatewayFetch": { enumerable: true, get: () => mobileGatewayFetch },
   "markMobileLifecycle": { enumerable: true, get: () => markMobileLifecycle },
   "mobileStreamRenderScheduler": { enumerable: true, get: () => mobileStreamRenderScheduler },
@@ -12768,45 +12770,12 @@ void main() {
   function _mobileBackgroundAgentDetailRecord(id) {
     const cleanId = String(id || '').trim();
     if (!cleanId) return null;
-    const lane = _mobileBackgroundSpawnLanes()[cleanId];
-    const stored = findBackgroundAgentWork(cleanId, requestedSession)
-      || findBackgroundAgentWork(cleanId, __pmChat.activeSessionId);
-    if (!lane) return stored;
-    const identity = resolveBackgroundAgentIdentity(lane.id, {
-      existingName: lane.agentName,
-      existingColor: lane.agentColor,
-    });
-    const processEntries = Array.isArray(lane.message?.processEntries) && lane.message.processEntries.length
-      ? lane.message.processEntries
-      : _mobileBackgroundStoredProcessEntries(stored);
-    const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
-      ? lane.message.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
-      : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
-    return {
-      id: lane.id,
-      sessionId: lane.sessionId || requestedSession,
-      backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
-      agentName: identity.name,
-      agentColor: identity.color,
-      task: lane.task || lane.prompt || stored?.task || '',
-      status: lane.status || stored?.status || 'running',
-      startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
-      completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
-      updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
-      // `result` belongs solely to the completed background run. Live token
-      // text remains on `message`, and tool results stay in processEntries.
-      result: String(lane.result || stored?.result || '').trim(),
-      error: String(lane.error || stored?.error || '').trim(),
-      fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
-      events: processEntries,
-      liveTraceEntries,
-      steerMessages: Array.isArray(lane.steerMessages) && lane.steerMessages.length
-        ? lane.steerMessages
-        : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
-      streamId: lane.streamId || stored?.streamId || '',
-      lastSeq: Number(lane.lastSeq || stored?.lastSeq || 0) || 0,
-      message: lane.message || null,
-    };
+    return _mobileChatRendererInvoke('backgroundDetailRecord', [
+      cleanId,
+      requestedSession,
+      _normalizeMobileRecoveredTraceEntry,
+      _mobileBackgroundAgentDetailMessage,
+    ]);
   }
 
   function _mobileBackgroundAgentDetailEvents(record) {
@@ -12860,7 +12829,11 @@ void main() {
       : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
     const finalText = String(record?.error || record?.result || '').trim();
-    const displayText = running ? sourceText : (finalText || sourceText);
+    // A persisted running lane often has no assistant message yet. Keep the
+    // cold-open detail useful until its stream/session replay supplies one.
+    const displayText = running
+      ? (sourceText || String(record?.task || '').trim() || 'Working…')
+      : (finalText || sourceText);
     const traceMessage = {
       ...source,
       content: displayText,
@@ -12987,12 +12960,17 @@ void main() {
   async function refreshMobileBackgroundAgentDetail(id) {
     const cleanId = String(id || '').trim();
     if (!cleanId || backgroundDetailPollInFlight) return;
-    const lane = _mobileBackgroundSpawnLanes()[cleanId];
-    if (!lane) return;
+    let lane = _mobileBackgroundSpawnLanes()[cleanId];
+    if (!lane) {
+      const stored = _mobileBackgroundAgentDetailRecord(cleanId);
+      if (!stored) return;
+      lane = _hydrateMobileBackgroundSpawnLane(stored, cleanId, requestedSession);
+      if (!lane) return;
+    }
     backgroundDetailPollInFlight = true;
     try {
       const currentLane = _mobileBackgroundSpawnLanes()[cleanId];
-      const [statusResponse, replay, session] = await Promise.all([
+      let [statusResponse, replay, session] = await Promise.all([
         loadMobileBackgroundStatus(cleanId).catch(() => null),
         loadMobileBackgroundStreamReplay(cleanId, currentLane?.lastSeq || 0).catch(() => null),
         currentLane?.bgSessionId
@@ -13003,6 +12981,14 @@ void main() {
       if (status) _applyMobileBackgroundSpawnStatus(status, requestedSession);
       const refreshedLane = _mobileBackgroundSpawnLanes()[cleanId];
       if (refreshedLane && replay) _applyMobileBackgroundStreamReplay(refreshedLane, replay);
+      if (!session && refreshedLane?.bgSessionId) {
+        session = await loadMobileChatSession(refreshedLane.bgSessionId, {
+          force: true,
+          historyLimit: 24,
+          processLimit: 500,
+          fullProcess: true,
+        }).catch(() => null);
+      }
       if (refreshedLane && session) _mergeMobileBackgroundAgentSessionSnapshot(refreshedLane, session);
       const refreshedRecord = _mobileBackgroundAgentDetailRecord(cleanId);
       if (refreshedRecord) {

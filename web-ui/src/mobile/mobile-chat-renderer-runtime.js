@@ -3664,6 +3664,83 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   return lane;
 }
 
+function _mobileBackgroundStoredDetailRecord(stored, id, sessionId, normalizeTrace) {
+  const record = {
+    ...stored,
+    id,
+    sessionId: stored.sessionId || sessionId,
+    backgroundSessionId: stored.backgroundSessionId || '',
+    task: stored.task || stored.prompt || '',
+    status: stored.status || 'running',
+    events: _mobileBackgroundStoredProcessEntries(stored),
+    liveTraceEntries: Array.isArray(stored.liveTraceEntries)
+      ? stored.liveTraceEntries.map(normalizeTrace).filter(Boolean)
+      : [],
+  };
+  return record;
+}
+
+function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace, buildMessage) {
+  const lane = _mobileBackgroundSpawnLanes()[id];
+  const stored = findBackgroundAgentWork(id, requestedSession)
+    || findBackgroundAgentWork(id, __pmChat.activeSessionId);
+  if (!lane) {
+    if (!stored) return null;
+    const storedRecord = _mobileBackgroundStoredDetailRecord(stored, id, requestedSession, normalizeTrace);
+    return { ...storedRecord, message: buildMessage(storedRecord) };
+  }
+  const identity = resolveBackgroundAgentIdentity(lane.id, {
+    existingName: lane.agentName,
+    existingColor: lane.agentColor,
+  });
+  const processEntries = Array.isArray(lane.message?.processEntries) && lane.message.processEntries.length
+    ? lane.message.processEntries
+    : _mobileBackgroundStoredProcessEntries(stored);
+  const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
+    ? lane.message.liveTraceEntries.map(normalizeTrace).filter(Boolean)
+    : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
+  return {
+    id: lane.id,
+    sessionId: lane.sessionId || requestedSession,
+    backgroundSessionId: lane.bgSessionId || stored?.backgroundSessionId || '',
+    agentName: identity.name,
+    agentColor: identity.color,
+    task: lane.task || lane.prompt || stored?.task || '',
+    status: lane.status || stored?.status || 'running',
+    startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
+    completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
+    updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
+    result: String(lane.result || stored?.result || '').trim(),
+    error: String(lane.error || stored?.error || '').trim(),
+    fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
+    events: processEntries,
+    liveTraceEntries,
+    steerMessages: Array.isArray(lane.steerMessages) && lane.steerMessages.length
+      ? lane.steerMessages
+      : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
+    streamId: lane.streamId || stored?.streamId || '',
+    lastSeq: Number(lane.lastSeq || stored?.lastSeq || 0) || 0,
+    message: lane.message || null,
+  };
+}
+
+function _hydrateMobileBackgroundSpawnLane(record, id, sessionId) {
+  return _upsertMobileBackgroundSpawnLane({
+    ...record,
+    bgId: id,
+    backgroundId: id,
+    state: record.status || 'running',
+    prompt: record.task || '',
+    taskPrompt: record.task || '',
+    sessionId: record.sessionId || sessionId,
+    spawnerSessionId: record.sessionId || sessionId,
+    bgSessionId: record.backgroundSessionId || '',
+    streamId: record.streamId || '',
+    seq: record.lastSeq || 0,
+    message: record.message,
+  }, sessionId);
+}
+
 function _mobileBackgroundSpawnWorkRecord(lane) {
   if (!lane) return null;
   const identity = resolveBackgroundAgentIdentity(lane.id, {
@@ -4542,6 +4619,8 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
     _mobileBackgroundSpawnClearedIds,
     _mobileBackgroundSpawnId,
     compactFileChanges: _compactMobileThreadCacheFileChanges,
+    backgroundDetailRecord: _mobileBackgroundAgentDetailRecord,
+    hydrateBackgroundLane: _hydrateMobileBackgroundSpawnLane,
     _mobileBackgroundSpawnPromptFromMessage,
     _mobileParseBackgroundStatus,
     _collectMobileBackgroundSpawnRecoveries,
