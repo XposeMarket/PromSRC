@@ -10,6 +10,9 @@ function prepareNativeBrowserWebContents(webContents) {
   const rawStop = typeof webContents.stop === 'function' ? webContents.stop.bind(webContents) : null;
   const rawOn = typeof webContents.on === 'function' ? webContents.on.bind(webContents) : null;
   const rawOnce = typeof webContents.once === 'function' ? webContents.once.bind(webContents) : null;
+  const rawAddListener = typeof webContents.addListener === 'function'
+    ? webContents.addListener.bind(webContents)
+    : rawOn;
   const rawRemoveListener = typeof webContents.removeListener === 'function'
     ? webContents.removeListener.bind(webContents)
     : null;
@@ -21,9 +24,10 @@ function prepareNativeBrowserWebContents(webContents) {
 
   webContents.loadURL = (url, ...args) => controller.load(url, ...args);
 
-  const wrapFailureListener = (listener) => {
+  const wrapFailureListener = (listener, once = false) => {
     if (typeof listener !== 'function') return listener;
     const wrapped = (event, errorCode, description, validatedURL, ...rest) => {
+      if (once) rawRemoveListener?.('did-fail-load', wrapped);
       const decision = controller.classifyFailure({ errorCode, validatedURL });
       if (!decision.authoritative) return undefined;
       return listener(event, errorCode, description, validatedURL, ...rest);
@@ -32,18 +36,20 @@ function prepareNativeBrowserWebContents(webContents) {
     return wrapped;
   };
 
-  if (rawOn) {
-    webContents.on = (eventName, listener) => rawOn(
-      eventName,
-      eventName === 'did-fail-load' ? wrapFailureListener(listener) : listener,
-    );
-  }
-  if (rawOnce) {
-    webContents.once = (eventName, listener) => rawOnce(
-      eventName,
-      eventName === 'did-fail-load' ? wrapFailureListener(listener) : listener,
-    );
-  }
+  const registerListener = (eventName, listener, once = false) => {
+    if (eventName !== 'did-fail-load') {
+      return once && rawOnce ? rawOnce(eventName, listener) : rawOn?.(eventName, listener);
+    }
+    const wrapped = wrapFailureListener(listener, once);
+    // Register the explicit once wrapper with rawOn rather than rawOnce. The
+    // original EventEmitter.once() delegates through this.on(), which would
+    // otherwise pass through our override again and double-wrap the listener.
+    return rawOn?.(eventName, wrapped);
+  };
+
+  if (rawOn) webContents.on = (eventName, listener) => registerListener(eventName, listener, false);
+  if (rawAddListener) webContents.addListener = (eventName, listener) => registerListener(eventName, listener, false);
+  if (rawOnce) webContents.once = (eventName, listener) => registerListener(eventName, listener, true);
   if (rawRemoveListener) {
     webContents.removeListener = (eventName, listener) => {
       const target = eventName === 'did-fail-load'
