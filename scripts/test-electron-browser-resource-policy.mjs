@@ -122,4 +122,8 @@ assert.match(mainSource, /isHardwareAccelerationEnabled/);
 assert.match(mainSource, /getGPUFeatureStatus/);
 assert.match(mainSource, /buildNativeBrowserProcessBreakdown/);
 
+await import('./test-electron-native-browser-navigation.mjs');
+await import('./test-electron-native-browser-view-contract.mjs');
+await import('./test-electron-native-browser-navigation-wrapper.mjs');
+
 console.log('Electron native browser resource policy checks passed.');

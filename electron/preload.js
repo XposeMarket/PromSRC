@@ -112,7 +112,19 @@ contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
   attach: (options = {}) => ipcRenderer.invoke('native-browser:attach', options),
   detach: () => ipcRenderer.invoke('native-browser:detach'),
   setBounds: (bounds = {}) => ipcRenderer.invoke('native-browser:set-bounds', bounds),
-  navigate: (payload = {}) => ipcRenderer.invoke('native-browser:navigate', payload),
+  navigate: async (payload = {}) => {
+    // A hidden canvas deliberately marks the native surface detached. Manual
+    // address/history navigation is an explicit request to use that surface
+    // again, so restore attachment before dispatching the navigation action.
+    // Do not forward the navigation URL into attach: a blank detached view
+    // would otherwise load it once during attach and again during navigate.
+    await ipcRenderer.invoke('native-browser:attach', {
+      sessionId: payload?.sessionId,
+      tabId: payload?.tabId,
+      profile: payload?.profile,
+    });
+    return ipcRenderer.invoke('native-browser:navigate', payload);
+  },
   listTabs: (options = {}) => ipcRenderer.invoke('native-browser:list-tabs', options),
   selectTab: (options = {}) => ipcRenderer.invoke('native-browser:select-tab', options),
   newTab: (options = {}) => ipcRenderer.invoke('native-browser:new-tab', options),
