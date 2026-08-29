@@ -47,6 +47,10 @@ assert.equal(controller.classifyFailure({
 }).authoritative, false, 'late A abort should be ignored once B owns the view');
 assert.equal(controller.classifyFailure({
   errorCode: -3,
+  validatedURL: 'https://example.test/first',
+}).authoritative, false, 'duplicate stale A aborts must remain idempotently ignored');
+assert.equal(controller.classifyFailure({
+  errorCode: -3,
   validatedURL: 'https://example.test/second',
 }).authoritative, true, 'the current request abort must remain authoritative');
 
@@ -104,6 +108,8 @@ const wrappedB = wc.loadURL('https://example.test/b');
 await Promise.all([wrappedA, wrappedB]);
 assert.equal(wc.stops, 1);
 assert.equal(surfacedFailures, 0, 'known superseded did-fail-load must not reach main state handling');
+wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://example.test/a');
+assert.equal(surfacedFailures, 0, 'duplicate stale did-fail-load must remain suppressed');
 wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://example.test/b');
 assert.equal(surfacedFailures, 1, 'unsuperseded abort must still reach main state handling');
 
