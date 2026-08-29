@@ -76,6 +76,12 @@ function prepareNativeBrowserWebContents(webContents) {
       if (registrations?.length) forgetFailureListener(listener, target);
       return rawRemoveListener(eventName, target);
     };
+    // EventEmitter.prototype.off is an alias to the original prototype method,
+    // so overriding removeListener on this instance does not make off() route
+    // through the wrapped-listener lookup automatically.
+    if (typeof webContents.off === 'function') {
+      webContents.off = (eventName, listener) => webContents.removeListener(eventName, listener);
+    }
   }
 
   Object.defineProperty(webContents, '__prometheusNavigationPrepared', {
