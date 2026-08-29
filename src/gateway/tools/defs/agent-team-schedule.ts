@@ -1625,7 +1625,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'declare_plan',
-        description: 'Declare a step-by-step plan before executing complex multi-phase work. Call this FIRST only when the task has meaningful phases (2–6) such as branching decisions, cross-system coordination, or extended execution. Do NOT use for quick linear actions even if they require multiple tools (e.g., screenshot capture/send, simple open-click-type flows, single lookup+reply). browser_* and desktop_* tools do NOT auto-advance the plan — many tool calls can belong to one phase. Call complete_plan_step when a phase is finished. File/shell/memory tools still advance the plan per successful action.',
+        description: 'Declare a step-by-step plan before executing complex multi-phase work. Call this FIRST only when the task has meaningful phases (2–6) such as branching decisions, cross-system coordination, or extended execution. Do NOT use for quick linear actions even if they require multiple tools (e.g., screenshot capture/send, simple open-click-type flows, single lookup+reply). browser_* and desktop_* tools do NOT auto-advance the plan — many tool calls can belong to one phase. Call complete_plan_step when a phase is finished. Native file tools, terminal/workspace_run commands, browser actions, and verification results are all valid evidence for a phase; plan bookkeeping must remain usable even when one tool surface is unavailable.',
         parameters: {
           type: 'object',
           required: ['steps'],
@@ -1648,11 +1648,11 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'complete_plan_step',
         description:
-          'Mark the current declare_plan phase finished and move to the next plan line. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. For create/write/build/edit phases, only call this after an actual successful write/create/patch/edit tool and verification evidence. Not needed for browser/desktop-only work until the phase is actually complete.',
+          'Mark the current declare_plan phase finished and move to the next plan line. Use after you finish a phase (e.g. desktop focus + screenshots done) before starting the next. Include concrete evidence in note when available: native file-tool results, terminal/workspace_run workspaceChanges, browser/desktop results, or verification output are all valid. Do not wait for a native file tool when the active workspace mode exposes only terminal/workspace_run; plan bookkeeping is non-blocking and should still advance when the phase is complete.',
         parameters: {
           type: 'object',
           properties: {
-            note: { type: 'string', description: 'Concrete one-line evidence, including file/tool result when relevant (e.g. "Created games/foo/index.html with create_file and verified with file_stats").' },
+            note: { type: 'string', description: 'Concrete one-line evidence, including the file, terminal/workspace_run command, browser action, or verification result when relevant (e.g. "Updated games/foo/index.html with workspace_run and verified the page loads").' },
           },
         },
       },

@@ -3240,9 +3240,15 @@ function _syncMobileRuntimePillPair(host) {
   const bgDock = page.querySelector('#pm-background-spawn-dock');
   const goalDock = page.querySelector('.pm-mobile-goal-strip:not(.pm-mobile-goal-strip-inline)');
   const hasGoalPill = !!goalDock && !goalDock.hidden;
+  const goalAgentPillsPaired = hasGoalPill
+    && goalDock.dataset.expanded !== 'true'
+    && !!bgDock
+    && !bgDock.hidden
+    && bgDock.classList.contains('is-collapsed');
   const paired = !hasGoalPill && !!planDock && !planDock.hidden && !planDock.classList.contains('is-open')
     && !!bgDock && !bgDock.hidden && bgDock.classList.contains('is-collapsed');
   page.classList.toggle('pm-runtime-pills-paired', paired);
+  page.classList.toggle('pm-runtime-goal-agent-pills-paired', goalAgentPillsPaired);
   page.classList.toggle('pm-goal-pill-active', hasGoalPill);
   page.classList.remove('pm-goal-plan-pills-paired');
 }

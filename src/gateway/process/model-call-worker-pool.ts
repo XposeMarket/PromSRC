@@ -199,6 +199,21 @@ const recycleRssBytes = envInt(
   2_147_483_647,
 );
 const maxOldSpaceMb = envInt('PROMETHEUS_MODEL_WORKER_MAX_OLD_SPACE_MB', 1024, 128, 8 * 1024);
+const heartbeatWatchdogIntervalMs = Math.max(1_000, Math.floor(heartbeatTimeoutMs / 3));
+
+export function shouldTreatModelWorkerHeartbeatAsStale(
+  heartbeatAgeMs: number,
+  watchdogElapsedMs: number,
+  timeoutMs = heartbeatTimeoutMs,
+  expectedWatchdogIntervalMs = heartbeatWatchdogIntervalMs,
+): boolean {
+  if (heartbeatAgeMs <= timeoutMs) return false;
+  // A delayed parent timer means child IPC heartbeats were also unable to be
+  // delivered to this event loop. Give the poll phase one cycle to drain them
+  // instead of killing a healthy provider worker because the gateway stalled.
+  if (watchdogElapsedMs > expectedWatchdogIntervalMs * 2) return false;
+  return true;
+}
 
 const queue: Task[] = [];
 const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
@@ -912,12 +927,20 @@ export async function shutdownModelCallWorkerPool(): Promise<void> {
   }));
 }
 
+let lastHeartbeatWatchdogAt = Date.now();
 const heartbeatWatchdog = setInterval(() => {
   if (shuttingDown) return;
   const now = Date.now();
+  const watchdogElapsedMs = Math.max(0, now - lastHeartbeatWatchdogAt);
+  lastHeartbeatWatchdogAt = now;
   for (const slot of slots) {
     if (!slot.child || slot.state !== 'busy' || !slot.lastHeartbeatAt) continue;
-    if (now - slot.lastHeartbeatAt <= heartbeatTimeoutMs) continue;
+    if (!shouldTreatModelWorkerHeartbeatAsStale(
+      now - slot.lastHeartbeatAt,
+      watchdogElapsedMs,
+      heartbeatTimeoutMs,
+      heartbeatWatchdogIntervalMs,
+    )) continue;
     const task = slot.task;
     const error = new ModelCallWorkerError(
       `Model worker heartbeat was stale for more than ${heartbeatTimeoutMs}ms.`,
@@ -933,5 +956,5 @@ const heartbeatWatchdog = setInterval(() => {
     }
     try { slot.child.kill(); } catch {}
   }
-}, Math.max(1_000, Math.floor(heartbeatTimeoutMs / 3)));
+}, heartbeatWatchdogIntervalMs);
 heartbeatWatchdog.unref?.();

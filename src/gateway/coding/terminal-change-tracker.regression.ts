@@ -7,6 +7,7 @@ import { createTerminalWorkspaceTracker, type TerminalWorkspaceChangeResult } fr
 import { collectTurnFileChangesFromProcessEntries } from '../file-change-summary';
 import { ProcessSupervisor } from '../process/supervisor';
 import { ProcessRunStore } from '../process/store';
+import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 
 function git(cwd: string, args: string[]): string {
   return String(execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }) || '');
@@ -220,6 +221,10 @@ async function runProcessSupervisorCase(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  assert.equal(shouldTrackTerminalWorkspaceChanges("$f='games\\figure-8-drift\\index.html'; $raw=Get-Content $f -Raw; $script=[regex]::Match($raw,'x').Value; Write-Output $script"), false, 'read-only PowerShell inspection must not snapshot the workspace');
+  assert.equal(shouldTrackTerminalWorkspaceChanges("Set-Content -LiteralPath '.\\game.html' -Value 'changed'"), true, 'PowerShell writes must retain change tracking');
+  assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short'), false, 'read-only Git commands must not snapshot the workspace');
+  assert.equal(shouldTrackTerminalWorkspaceChanges('npm run build'), true, 'unknown or potentially mutating commands stay tracked');
   runGitWorkspaceCase();
   runNonGitWorkspaceCase();
   runBoundedCommandHintCase();
