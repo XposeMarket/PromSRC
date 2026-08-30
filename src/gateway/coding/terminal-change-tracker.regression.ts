@@ -214,6 +214,7 @@ async function runProcessSupervisorCase(): Promise<void> {
 
 async function main(): Promise<void> {
   assert.equal(shouldTrackTerminalWorkspaceChanges("$f='games\\figure-8-drift\\index.html'; $raw=Get-Content $f -Raw; $script=[regex]::Match($raw,'x').Value; Write-Output $script"), false, 'known read-only PowerShell inspection must not snapshot the workspace');
+  assert.equal(shouldTrackTerminalWorkspaceChanges("$f='games;archive\\index.html'; $raw=Get-Content $f -Raw; Write-Output $raw"), false, 'quoted semicolons must not turn a known read-only PowerShell sequence into a workspace snapshot');
   assert.equal(shouldTrackTerminalWorkspaceChanges("Set-Content -LiteralPath '.\\game.html' -Value 'changed'"), true, 'PowerShell writes must retain change tracking');
   assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short'), false, 'read-only Git commands must not snapshot the workspace');
   assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short && printf changed | dd of=tracked.txt'), true, 'a read-only prefix must not suppress tracking for a later compound mutation');
