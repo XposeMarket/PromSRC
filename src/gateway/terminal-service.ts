@@ -73,8 +73,44 @@ function stripQuoted(command: string): string {
   return String(command || '').replace(/"[^"]*"|'[^']*'/g, ' ');
 }
 
+function splitPowerShellClauses(command: string): string[] {
+  const source = String(command || '');
+  const clauses: string[] = [];
+  let quote: "'" | '"' | null = null;
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === '`' && index + 1 < source.length) {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        if (quote === "'" && source[index + 1] === "'") {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === ';') {
+      const clause = source.slice(start, index).trim();
+      if (clause) clauses.push(clause);
+      start = index + 1;
+    }
+  }
+  const tail = source.slice(start).trim();
+  if (tail) clauses.push(tail);
+  return clauses;
+}
+
 function isKnownReadOnlyPowerShellSequence(command: string): boolean {
-  const clauses = String(command || '').split(';').map((clause) => clause.trim()).filter(Boolean);
+  const clauses = splitPowerShellClauses(command);
   if (clauses.length < 2) return false;
   let sawInspection = false;
   for (const clause of clauses) {
