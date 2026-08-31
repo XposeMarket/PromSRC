@@ -98,10 +98,14 @@ function splitPowerShellClauses(command: string): string[] {
       quote = char;
       continue;
     }
-    if (char === ';') {
+    if (char === ';' || char === '\r' || char === '\n') {
       const clause = source.slice(start, index).trim();
       if (clause) clauses.push(clause);
       start = index + 1;
+      if (char === '\r' && source[index + 1] === '\n') {
+        index += 1;
+        start = index + 1;
+      }
     }
   }
   const tail = source.slice(start).trim();
@@ -114,7 +118,7 @@ function isKnownReadOnlyPowerShellSequence(command: string): boolean {
   if (clauses.length < 2) return false;
   let sawInspection = false;
   for (const clause of clauses) {
-    // Each semicolon-delimited clause must itself be a single recognized
+    // Each statement-delimited clause must itself be a single recognized
     // observational expression. A safe-looking prefix followed by a pipeline
     // or call operator can execute arbitrary code (for example,
     // `Get-Content file | Invoke-Expression`) and must retain change tracking.
