@@ -72,7 +72,9 @@ const measurements = {
 // so the first tool frame has an owner; keep the budget tight while allowing
 // that intentional goal-stream handoff. The background-agent side-chat
 // disclosure, prompt replay, and recovery presentation add 559 gzip bytes over
-// current main, so the ceiling is ratcheted to the exact refreshed measurement.
-assert(measurements.gzipBytes <= 250913, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// current main, and the question lifecycle facade adds 173 more bytes for the
+// step-aware composer handoff. Keep the ceiling at the exact refreshed
+// measurement so unrelated initial-load growth still fails loudly.
+assert(measurements.gzipBytes <= 251086, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

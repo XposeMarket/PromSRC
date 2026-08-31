@@ -10,7 +10,7 @@ The target paths marked **planned** are created by the component-ownership progr
 |---|---|---|---|
 | Chat session lifecycle, history, stream, queue, approvals and questions | `runtime/` | Desktop/mobile runtime adapters plus legacy page mirrors | `ChatRuntime` and gateway truth |
 | Timeline row identity, windowing, reconciliation and scroll anchoring | `timeline/` | Existing desktop/mobile timeline modules | Timeline controller/view |
-| Question normalization, validation and lifecycle | `questions/question-model.js`, `questions/question-controller.js` **planned** | `ChatPage.js`, `mobile-pages.js` | `ChatRuntime.questions` through the question controller |
+| Question normalization, validation and lifecycle | `questions/question-model.js`, `questions/question-controller.js` | `ChatPage.js`, `mobile-pages.js` | `ChatRuntime.questions` through the question controller |
 | Question history cards and composer question host | `questions/desktop-question-view.js`, `questions/mobile-question-view.js`, `questions/question-composer-host.js` **planned** | Desktop/mobile page renderers and mobile renderer runtime | Stateless feature views |
 | Tool lifecycle, coalescing and normalized descriptors | `tools/tool-activity-model.js`, `tools/tool-descriptor-registry.js` **planned** | `tool-activity.js` and optional runtime facade | Tool activity model |
 | Working/tool stream grouping and disclosure | `tools/desktop-tool-stream-view.js`, `tools/mobile-tool-stream-view.js` **planned** | `ChatPage.js`, `mobile-pages.js`, mobile renderer runtime | Tool stream controller plus surface view |

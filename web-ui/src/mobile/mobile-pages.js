@@ -7826,7 +7826,35 @@ function _mobileQuestionIsResolved(id) {
 }
 async function _submitMobileQuestion(id, options = {}) {
   await _ensureMobileQuestionController();
-  const result = await mobileQuestionController.submit(id, options);
+  const qid = String(id || '').trim();
+  const card = document.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
+  const submitButton = card?.querySelector('[data-pm-q-submit]');
+  if (submitButton?.disabled) return false;
+  const local = mobileQuestionController.findQuestion(qid, options.sessionId);
+  if (local?.record) {
+    const q = _normalizeMobileQuestion(local.record);
+    const currentIndex = _mobileQuestionStepIndex(q);
+    submitButton?.setAttribute('aria-busy', 'true');
+    if (submitButton) submitButton.disabled = true;
+    const result = await mobileQuestionController.submit(qid, {
+      ...options,
+      readAnswers: () => _collectMobileQuestionAnswers(q),
+      readDraftAnswers: () => null,
+      stepIndex: currentIndex,
+      advanceStep: true,
+      onStepAdvance: ({ payload, nextIndex, sessionId }) => {
+        const state = _rememberMobileQuestionPayload(q, payload, nextIndex);
+        _syncMobileQuestionComposerPopover(sessionId || q.sessionId || __pmChat.activeSessionId, { [qid]: state });
+      },
+    });
+    if (!result.ok && submitButton) {
+      submitButton.disabled = false;
+      submitButton.removeAttribute('aria-busy');
+    }
+    return result.ok === true;
+  }
+
+  const result = await mobileQuestionController.submit(qid, options);
   return result.ok === true;
 }
 async function _cancelMobileQuestion(id) {

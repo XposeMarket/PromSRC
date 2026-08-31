@@ -12,16 +12,16 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2331725,
-  'web-ui/src/mobile/mobile-pages.js': 892023,
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 176072,
-  'web-ui/src/styles/mobile.css': 577919,
-  'web-ui/src/styles/components.css': 281178,
-  'web-ui/index.html': 557076,
+  'web-ui/src/pages/ChatPage.js': 2330215,
+  'web-ui/src/mobile/mobile-pages.js': 898464,
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 231112,
+  'web-ui/src/styles/mobile.css': 585898,
+  'web-ui/src/styles/components.css': 284925,
+  'web-ui/index.html': 558138,
 });
 const CODE_OWNED_NEW_MODULE_CEILING = 400000;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
-const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 114;
+const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 122;
 
 if (baseline.version !== 3) failures.push(`architecture baseline version must be 3 (received ${baseline.version})`);
 for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)) {

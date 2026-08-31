@@ -28,6 +28,8 @@ const sourceQuestion = {
 };
 
 const question = normalizeQuestionRecord(sourceQuestion);
+assert.equal(normalizeQuestionRecord({ ...sourceQuestion, currentIndex: '2' }).currentIndex, 2, 'question normalization must preserve the active mobile step');
+assert.equal(normalizeQuestionRecord({ ...sourceQuestion, currentIndex: 'not-a-number' }).currentIndex, 0, 'invalid question steps must fall back to the first step');
 assert.equal(normalizeQuestionMode('multiple'), 'multi_select');
 assert.equal(normalizeQuestionMode('free_text'), 'text');
 assert.equal(question.id, 'question-model-1');
@@ -164,6 +166,60 @@ const controller = createQuestionController({
   onCancelSuccess: () => { cancelSuccessCount += 1; },
   onError: (_error, details) => { errorPhases.push(details?.phase || 'unknown'); },
 });
+
+const stepRuntime = new ChatRuntime({ gatewayId: 'question-test', sessionId: 'session-stepper' });
+let stepSubmitCount = 0;
+let stepAdvance;
+const stepController = createQuestionController({
+  runtimeFor: (sessionId) => sessionId === 'session-stepper' ? stepRuntime : null,
+  getSessionIds: () => ['session-stepper'],
+  getActiveSessionId: () => 'session-stepper',
+  transport: {
+    submit: async () => {
+      stepSubmitCount += 1;
+      return { question: { id: 'question-stepper', sessionId: 'session-stepper', status: 'answered' } };
+    },
+  },
+});
+const stepQuestion = {
+  id: 'question-stepper',
+  sessionId: 'session-stepper',
+  status: 'pending',
+  questions: [
+    { id: 'first', label: 'First step', mode: 'single_select', options: ['yes'] },
+    { id: 'second', label: 'Second step', mode: 'single_select', options: ['yes'] },
+  ],
+};
+stepController.upsert(stepQuestion);
+const firstStep = await stepController.submit('question-stepper', {
+  stepIndex: 0,
+  advanceStep: true,
+  readAnswers: () => ({ answers: [
+    { id: 'first', selected: [] },
+    { id: 'second', selected: [] },
+  ] }),
+  composerText: 'custom first-step answer',
+  getComposerTarget: () => 'first::other',
+  onStepAdvance: (details) => { stepAdvance = details; },
+});
+assert.equal(firstStep.ok, true, 'the first question step must advance locally');
+assert.equal(firstStep.advanced, true, 'the first question step must report a local advance');
+assert.equal(stepSubmitCount, 0, 'intermediate question steps must not call the backend');
+assert.equal(stepAdvance.nextIndex, 1, 'the question controller must advance to the next step');
+assert.equal(stepAdvance.payload.answers[0].other, 'custom first-step answer', 'per-submit composer targets must reach the question model');
+assert.equal(stepRuntime.getQuestion('question-stepper').status, 'pending');
+const finalStep = await stepController.submit('question-stepper', {
+  stepIndex: 1,
+  advanceStep: true,
+  readAnswers: () => ({ answers: [
+    { id: 'first', selected: ['yes'] },
+    { id: 'second', selected: ['yes'] },
+  ] }),
+});
+assert.equal(finalStep.ok, true, 'the final question step must submit normally');
+assert.equal(finalStep.advanced, undefined);
+assert.equal(stepSubmitCount, 1, 'the final question step must call the backend once');
+assert.equal(stepRuntime.getQuestion('question-stepper').status, 'answered');
 
 const pendingOne = controller.upsert({
   ...question,

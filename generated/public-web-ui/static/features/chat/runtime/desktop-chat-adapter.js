@@ -97,6 +97,8 @@ export function createDesktopChatRuntimeAdapter({
       runtime.replaceHistory(history, {
         source: String(options.source || 'desktop-compatibility-bridge'),
         pageInfo: options.pageInfo || session.historyPage || runtime.snapshot.paging,
+        initializeQuestionsFromHistory: options.initializeQuestionsFromHistory
+          ?? (runtime.snapshot.history.revision === 0),
       });
       runtime.setLifecycle({
         phase: windowRef._sessionThinking?.[session.id] || session.activeRun === true ? 'streaming' : 'idle',
@@ -106,7 +108,6 @@ export function createDesktopChatRuntimeAdapter({
       });
       for (const message of history) {
         if (message?.approvalRequest?.id) runtime.upsertApproval(message.approvalRequest);
-        if (message?.questionRequest?.id) runtime.upsertQuestion(message.questionRequest);
       }
       for (const approval of Array.isArray(streamState.pendingApprovals) ? streamState.pendingApprovals : []) {
         try { runtime.upsertApproval(approval); } catch {}

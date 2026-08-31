@@ -587,6 +587,82 @@ const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
 });
 const _makeMobileQueuedPrompt=mobileChatRuntimeAdapter.createQueuedPrompt;
 const _markMobileSessionRunning = mobileChatRuntimeAdapter.setRunning;
+
+let mobileNormalizeQuestionRecord = null;
+let mobileQuestionController = null;
+let mobileQuestionControllerPromise = null;
+
+function _ensureMobileQuestionController() {
+  if (mobileQuestionController) return Promise.resolve(mobileQuestionController);
+  if (!mobileQuestionControllerPromise) {
+    mobileQuestionControllerPromise = Promise.all([
+      import('../features/chat/questions/question-controller.js'),
+      import('../features/chat/questions/mobile-question-transport.js'),
+    ]).then(([questionApi, transportApi]) => {
+      mobileNormalizeQuestionRecord = questionApi.normalizeQuestionRecord;
+      const mobileQuestionTransport = transportApi.createMobileQuestionTransport({
+        request: (...args) => window.api(...args),
+        getActiveSessionId: () => __pmChat.activeSessionId,
+        setActiveSessionId: (sessionId) => { __pmChat.activeSessionId = String(sessionId || '').trim() || MOBILE_CHAT_SESSION_ID; },
+        sendResume: (message, options = {}) => {
+          if (typeof window.__pmMobileSendMessage !== 'function') return false;
+          window.__pmMobileSendMessage(message, { fromQuestionResume: true, sessionId: options.sessionId });
+          return true;
+        },
+        queueResume: (message, sessionId) => {
+          const queue = _getMobileQueuedPrompts(sessionId);
+          queue.push(_makeMobileQueuedPrompt(message));
+          if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
+          _renderMobileQueuedPromptsPanel(sessionId);
+          pmToast('Answer queued a resume message', 'info');
+          return true;
+        },
+      });
+      mobileQuestionController = questionApi.createQuestionController({
+        runtimeFor: mobileChatRuntimeAdapter.runtimeFor,
+        getActiveSessionId: () => __pmChat.activeSessionId,
+        getSessionIds: () => Object.keys(__pmChat.threads || {}),
+        getLegacyQuestion: (id, preferredSessionId = '') => {
+          const sessions = preferredSessionId
+            ? [preferredSessionId]
+            : Object.keys(__pmChat.threads || {});
+          for (const sid of sessions) {
+            const thread = __pmChat.threads?.[sid];
+            const message = (Array.isArray(thread) ? thread : [])
+              .find((item) => String(item?.questionRequest?.id || '') === String(id || ''));
+            if (message?.questionRequest) return { sessionId: sid, record: message.questionRequest };
+          }
+          return null;
+        },
+        getLegacyQuestionSessionIds: () => Object.keys(__pmChat.threads || {}),
+        transport: mobileQuestionTransport,
+        projectToLegacy: (details) => _projectMobileQuestionToLegacy(details),
+        readAnswers: (question) => _collectMobileQuestionAnswers(question),
+        readDraftAnswers: (question) => _mobileQuestionPayloadFromDraft(question, _mobileQuestionDrafts.get(question.id)),
+        getComposerTarget: (question) => {
+          const card = document.querySelector(`[data-pm-q-card="${_pmCssEscape(question.id)}"]`);
+          return String(card?.getAttribute('data-pm-q-compose-target') || '').trim();
+        },
+        focusComposer: _focusMobileQuestionComposer,
+        onValidationMissing: (missing) => {
+          const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
+          pmToast?.({
+            key: 'mobile-question-answer-required',
+            severity: 'warning',
+            title: 'Answer required',
+            summary: `Use the composer to answer: ${labels}`,
+          });
+        },
+        onError: (error, details = {}) => {
+          const title = details.phase === 'cancel' ? 'Question cancel failed' : 'Question submit failed';
+          pmToast?.(`${title}: ${error?.message || error}`, 'error');
+        },
+      });
+      return mobileQuestionController;
+    });
+  }
+  return mobileQuestionControllerPromise;
+}
 const {
   controller: mobileTimelineController,
   scheduler: mobileStreamRenderScheduler,
@@ -7232,27 +7308,10 @@ if (typeof window !== 'undefined') {
 const _mobileQuestionDrafts = new Map();
 
 function _normalizeMobileQuestion(input, extra = {}) {
-  const src = input && typeof input === 'object' ? input : {};
-  const id = String(src.id || extra.questionId || extra.id || '').trim();
-  const rawCurrentIndex = src.currentIndex ?? extra.currentIndex;
-  const questions = (Array.isArray(src.questions) ? src.questions : []).map((q, i) => ({
-    id: String(q?.id || `q${i + 1}`),
-    label: String(q?.label || q?.question || ''),
-    mode: q?.mode === 'multi_select' ? 'multi_select' : q?.mode === 'text' ? 'text' : 'single_select',
-    options: Array.isArray(q?.options) ? q.options.map((o) => String(o)) : [],
-    allowOther: q?.allowOther !== false,
-    required: q?.required !== false,
-  })).filter((q) => q.label);
-  return {
-    id,
-    sessionId: String(src.sessionId || src.sourceSessionId || extra.sessionId || '').trim(),
-    currentIndex: Number.isFinite(Number(rawCurrentIndex)) ? Number(rawCurrentIndex) : 0,
-    questions,
-    allowGeneralOther: false,
-    status: String(extra.status || src.status || 'pending'),
-    answers: Array.isArray(src.answers) ? src.answers : [],
-    generalOther: String(src.generalOther || extra.generalOther || '').trim(),
-  };
+  const source = input && typeof input === 'object' ? input : {};
+  const status = extra.status || source.status;
+  if (typeof mobileNormalizeQuestionRecord !== 'function') return status ? { ...source, status } : source;
+  return mobileNormalizeQuestionRecord(status ? { ...source, status } : source, extra);
 }
 
 function _renderMobileQuestionCard(...args) { return _mobileChatRendererInvoke('_renderMobileQuestionCard', args); }
@@ -7405,6 +7464,63 @@ function _mobileQuestionRememberDraft(el) {
   if (!qid) return;
   const captured = _captureMobileQuestionDraftState(card.parentElement || card);
   if (captured[qid]) _mobileQuestionDrafts.set(qid, captured[qid]);
+}
+
+// ChatRuntime.questions is authoritative for question lifecycle state. This is
+// the only question-specific write path back into the legacy mobile thread;
+// history hydration can seed a runtime record once, but it cannot compete with
+// controller transitions after that seed.
+function _projectMobileQuestionToLegacy({ sessionId, question, options = {} } = {}) {
+  const sid = String(sessionId || question?.sessionId || question?.sourceSessionId || '').trim();
+  const qid = String(question?.id || question?.questionId || '').trim();
+  if (!sid || !qid) return false;
+  if (!__pmChat.threads || typeof __pmChat.threads !== 'object') __pmChat.threads = {};
+  const status = String(question?.status || 'pending').trim().toLowerCase() || 'pending';
+  const terminal = ['answered', 'cancelled', 'expired', 'resolved'].includes(status);
+  if (terminal) {
+    __pmChat.resolvedQuestionIds[qid] = true;
+    let changed = false;
+    Object.entries(__pmChat.threads).forEach(([threadSid, thread]) => {
+      if (!Array.isArray(thread)) return;
+      let threadChanged = false;
+      thread.forEach((message) => {
+        if (String(message?.questionRequest?.id || '') !== qid) return;
+        delete message.questionRequest;
+        changed = true;
+        threadChanged = true;
+      });
+      if (threadChanged && String(__pmChat.activeSessionId || '').trim() === String(threadSid)) {
+        _renderMobileChatSessionNow(threadSid);
+      }
+    });
+    return changed;
+  }
+  if (_mobileQuestionIsResolved(qid)) {
+    if (options.allowStatusRegression !== true) return false;
+    delete __pmChat.resolvedQuestionIds[qid];
+  }
+  if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
+  const thread = __pmChat.threads[sid];
+  const matches = thread.filter((message) => String(message?.questionRequest?.id || '') === qid);
+  let changed = false;
+  if (matches.length) {
+    matches.forEach((message) => {
+      message.questionRequest = { ...(message.questionRequest || {}), ...question };
+      changed = true;
+    });
+  } else if (options.create !== false) {
+    thread.push({
+      role: 'ai',
+      timestamp: Date.now(),
+      time: _nowTime(),
+      body: { sender: 'Prometheus', text: '' },
+      content: '',
+      questionRequest: question,
+    });
+    changed = true;
+  }
+  if (changed && String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+  return changed;
 }
 
 // Preserve in-progress answers in pending question cards across the full
@@ -7604,43 +7720,6 @@ function _collectMobileQuestionAnswers(q) {
   return { answers, generalOther };
 }
 
-function _applyMobileQuestionComposerAnswer(q, payload, composerText = '') {
-  const text = String(composerText || '').trim();
-  if (!text || !q || !payload) return payload;
-  const card = document.querySelector(`[data-pm-q-card="${_pmCssEscape(q.id)}"]`);
-  const rawTarget = String(card?.getAttribute('data-pm-q-compose-target') || '').trim();
-  const [targetId, targetKind] = rawTarget.split('::');
-  const targetQuestion = q.questions.find((item) => String(item.id) === String(targetId || ''))
-    || q.questions.find((item) => item.mode === 'text')
-    || q.questions.find((item) => item.allowOther)
-    || null;
-  const targetAnswer = targetQuestion
-    ? payload.answers.find((answer) => String(answer.id) === String(targetQuestion.id))
-    : null;
-  if (targetAnswer) {
-    if (targetKind === 'other' || (!targetKind && targetQuestion.mode !== 'text')) targetAnswer.other = text;
-    else targetAnswer.text = text;
-  } else if (q.allowGeneralOther) {
-    payload.generalOther = text;
-  } else if (payload.answers[0]) {
-    payload.answers[0].text = text;
-  }
-  return payload;
-}
-
-function _getMissingMobileQuestionAnswers(q, payload) {
-  const answers = Array.isArray(payload?.answers) ? payload.answers : [];
-  return (q?.questions || []).filter((item) => {
-    if (item?.required === false) return false;
-    const answer = answers.find((candidate) => String(candidate?.id || '') === String(item?.id || ''));
-    return !answer || (
-      !(Array.isArray(answer.selected) && answer.selected.length)
-      && !String(answer.text || '').trim()
-      && !String(answer.other || '').trim()
-    );
-  });
-}
-
 function _focusMobileQuestionComposer() {
   const card = document.querySelector('[data-pm-q-card]');
   const answer = card?.querySelector('textarea:not([hidden]), input:not([hidden]), .pm-q-opt, .pm-q-other-toggle');
@@ -7669,6 +7748,16 @@ async function _submitMobileQuestionFromComposer(text, sessionId = __pmChat.acti
 // re-renders.
 function _getPendingQuestionForSession(sessionId) {
   const sid = String(sessionId || '').trim();
+  const runtime = mobileChatRuntimeAdapter.runtimeFor(sid);
+  const runtimeQuestions = [...(runtime?.snapshot?.questions || [])];
+  const runtimeQuestion = runtimeQuestions
+    .reverse()
+    .find((question) => String(question?.status || 'pending').toLowerCase() === 'pending');
+  if (runtimeQuestion) return runtimeQuestion;
+  // Before the first runtime hydration, a cached legacy thread may be the only
+  // source available to the composer. Once the runtime has any question record
+  // or a hydrated history, a legacy copy must never become a competing reader.
+  if (runtimeQuestions.length || Number(runtime?.snapshot?.history?.revision || 0) > 0) return null;
   const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
   for (let i = thread.length - 1; i >= 0; i--) {
     const q = thread[i]?.questionRequest;
@@ -7732,173 +7821,54 @@ function _syncMobileQuestionComposerPopover(sessionId = __pmChat.activeSessionId
   }, 110);
 }
 
-function _findMobileQuestionRecord(qid) {
-  const id = String(qid || '').trim();
-  if (!id) return null;
-  const sessions = __pmChat.threads || {};
-  for (const sid of Object.keys(sessions)) {
-    const thread = sessions[sid];
-    if (!Array.isArray(thread)) continue;
-    const msg = thread.find((m) => String(m?.questionRequest?.id || '') === id);
-    if (msg?.questionRequest) return msg.questionRequest;
-  }
-  return null;
-}
 function _mobileQuestionIsResolved(id) {
   return __pmChat.resolvedQuestionIds?.[String(id || '').trim()] === true;
 }
-function _setMobileQuestionSubmitting(id) {
-  const qid = String(id || '').trim();
-  if (!qid) return;
-  Object.entries(__pmChat.threads || {}).forEach(([sid, thread]) => {
-    if (!Array.isArray(thread)) return;
-    let changed = false;
-    thread.forEach((message) => {
-      if (String(message?.questionRequest?.id || '') !== qid) return;
-      message.questionRequest = { ...message.questionRequest, status: 'submitting' };
-      mobileChatRuntimeAdapter.upsertQuestion(sid, message.questionRequest);
-      changed = true;
-    });
-    if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
-  });
-}
-function _removeMobileQuestionFromThread(id) {
-  const qid = String(id || '').trim();
-  if (!qid) return;
-  __pmChat.resolvedQuestionIds[qid] = true;
-  Object.entries(__pmChat.threads || {}).forEach(([sid, thread]) => {
-    if (!Array.isArray(thread)) return;
-    let changed = false;
-    thread.forEach((message) => {
-      if (String(message?.questionRequest?.id || '') !== qid) return;
-      mobileChatRuntimeAdapter.resolveQuestion(sid, qid, 'resolved', message.questionRequest);
-      delete message.questionRequest;
-      changed = true;
-    });
-    if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
-  });
-}
 async function _submitMobileQuestion(id, options = {}) {
+  await _ensureMobileQuestionController();
   const qid = String(id || '').trim();
   const card = document.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
   const submitButton = card?.querySelector('[data-pm-q-submit]');
   if (submitButton?.disabled) return false;
-  submitButton?.setAttribute('aria-busy', 'true');
-  if (submitButton) submitButton.disabled = true;
-  // Prefer the locally-rendered question record (already in the thread) so a
-  // slow/failed /api/questions fetch can't strand Submit with an empty question
-  // shape and silently send no answers. Network is only a fallback.
-  let record = _findMobileQuestionRecord(qid);
-  if (!record) {
-    try { const data = await window.api('/api/questions?status=all'); record = (data.questions || []).find((it) => String(it.id || '') === qid) || null; } catch {}
-  }
-  const q = _normalizeMobileQuestion(record || { id: qid, questions: [] });
-  const currentIndex = _mobileQuestionStepIndex(q);
-  let payload = _collectMobileQuestionAnswers(q);
-  _applyMobileQuestionComposerAnswer(q, payload, options.composerText);
-  const isLastQuestion = currentIndex >= q.questions.length - 1;
-  const missing = _getMissingMobileQuestionAnswers(
-    { ...q, questions: isLastQuestion ? q.questions : [q.questions[currentIndex]] },
-    payload,
-  );
-  if (missing.length) {
-    if (submitButton) {
+  const local = mobileQuestionController.findQuestion(qid, options.sessionId);
+  if (local?.record) {
+    const q = _normalizeMobileQuestion(local.record);
+    const currentIndex = _mobileQuestionStepIndex(q);
+    submitButton?.setAttribute('aria-busy', 'true');
+    if (submitButton) submitButton.disabled = true;
+    const result = await mobileQuestionController.submit(qid, {
+      ...options,
+      readAnswers: () => _collectMobileQuestionAnswers(q),
+      readDraftAnswers: () => null,
+      stepIndex: currentIndex,
+      advanceStep: true,
+      onStepAdvance: ({ payload, nextIndex, sessionId }) => {
+        const state = _rememberMobileQuestionPayload(q, payload, nextIndex);
+        _syncMobileQuestionComposerPopover(sessionId || q.sessionId || __pmChat.activeSessionId, { [qid]: state });
+      },
+    });
+    if (!result.ok && submitButton) {
       submitButton.disabled = false;
       submitButton.removeAttribute('aria-busy');
     }
-    _focusMobileQuestionComposer();
-    const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
-    pmToast?.({
-      key: 'mobile-question-answer-required',
-      severity: 'warning',
-      title: 'Answer required',
-      summary: `Answer before submitting: ${labels}`,
-    });
-    return false;
+    return result.ok === true;
   }
-  if (!isLastQuestion) {
-    const nextIndex = currentIndex + 1;
-    const state = _rememberMobileQuestionPayload(q, payload, nextIndex);
-    const sessionId = String(q.sessionId || __pmChat.activeSessionId || '').trim();
-    _syncMobileQuestionComposerPopover(sessionId, { [qid]: state });
-    return true;
-  }
-  _setMobileQuestionSubmitting(qid);
-  try {
-    const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
-    const answeredQuestion = { ...(result?.question || q), answers: payload.answers, generalOther: payload.generalOther };
-    _mobileQuestionDrafts.delete(qid);
-    _updateMobileQuestionStatus({ questionId: qid, sessionId: answeredQuestion.sessionId, question: answeredQuestion }, 'answered');
-    _mobileQuestionDrafts.delete(qid);
-    // When there was no live waiter (the normal async case on mobile, since the
-    // original turn already ended), the backend returns a resumePrompt so the
-    // agent can be continued with the answers. Mirror the approval-resume flow:
-    // re-fire the chat in the right session so the agent actually responds.
-    const resumePrompt = String(result?.resumePrompt || '').trim();
-    if (resumePrompt) {
-      const resumeSid = String(result?.question?.sessionId || result?.question?.sourceSessionId || __pmChat.activeSessionId || '').trim();
-      if (resumeSid) __pmChat.activeSessionId = resumeSid;
-      if (typeof window.__pmMobileSendMessage === 'function') {
-        setTimeout(() => window.__pmMobileSendMessage(resumePrompt, { fromQuestionResume: true }), 100);
-      } else {
-        const queue = _getMobileQueuedPrompts(resumeSid);
-        queue.push(_makeMobileQueuedPrompt(resumePrompt));
-        if (queue.length > PM_MOBILE_MAX_QUEUED_PROMPTS) queue.splice(0, queue.length - PM_MOBILE_MAX_QUEUED_PROMPTS);
-        _renderMobileQueuedPromptsPanel(resumeSid);
-        pmToast('Answer queued a resume message', 'info');
-      }
-    }
-    return true;
-  } catch (err) {
-    // Restore the same card if the answer could not be submitted.
-    _updateMobileQuestionStatus({ questionId: qid, question: q }, 'pending');
-    pmToast?.(`Question submit failed: ${err?.message || err}`, 'error');
-    return false;
-  }
+
+  const result = await mobileQuestionController.submit(qid, options);
+  return result.ok === true;
 }
 async function _cancelMobileQuestion(id) {
-  const qid = String(id || '').trim();
-  try {
-    const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/cancel`, { method: 'POST', body: '{}' });
-    _updateMobileQuestionStatus({ questionId: qid, sessionId: result?.question?.sessionId, question: result?.question }, 'cancelled');
-  } catch (err) { pmToast?.(`Question cancel failed: ${err?.message || err}`, 'error'); }
+  await _ensureMobileQuestionController();
+  const result = await mobileQuestionController.cancel(id);
+  return result.ok === true;
 }
 function _upsertMobileQuestion(q) {
-  const sid = String(q.sessionId || '').trim();
-  if (!sid || !q.id) return;
-  if (_mobileQuestionIsResolved(q.id)) return;
-  if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
-  const thread = __pmChat.threads[sid];
-  const existing = thread.filter((m) => String(m?.questionRequest?.id || '') === q.id);
-  if (existing.length) {
-    existing.forEach((message) => { message.questionRequest = { ...(message.questionRequest || {}), ...q }; });
-  } else {
-    thread.push({ role: 'ai', timestamp: Date.now(), time: _nowTime(), body: { sender: 'Prometheus', text: '' }, content: '', questionRequest: q });
-  }
-  mobileChatRuntimeAdapter.upsertQuestion(sid, q);
-  if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+  if (!mobileQuestionController) return false;
+  return mobileQuestionController.upsert(q).accepted;
 }
 function _updateMobileQuestionStatus(event, status) {
-  const id = String(event.questionId || event.id || event.question?.id || '').trim();
-  if (!id) return;
-  if (status && status !== 'pending' && status !== 'submitting') {
-    _mobileQuestionDrafts.delete(id);
-    _removeMobileQuestionFromThread(id);
-    return;
-  }
-  const sessions = __pmChat.threads || {};
-  for (const sid of Object.keys(sessions)) {
-    const thread = sessions[sid];
-    if (!Array.isArray(thread)) continue;
-    const matches = thread.filter((m) => String(m?.questionRequest?.id || '') === id);
-    if (!matches.length) continue;
-    matches.forEach((msg) => {
-      msg.questionRequest = _normalizeMobileQuestion(event.question || msg.questionRequest, { id, status });
-      msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
-    });
-    try { mobileChatRuntimeAdapter.reconcileQuestion(sid, id, status, matches[0]?.questionRequest || { id, status }); } catch {}
-    if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
-  }
+  if (!mobileQuestionController) return false;
+  return mobileQuestionController.transition(event, status).some((result) => result.accepted);
 }
 if (typeof window !== 'undefined' && !window.__pmMobileQuestionBridgeInstalled) {
   window.__pmMobileQuestionBridgeInstalled = true;
@@ -7907,13 +7877,23 @@ if (typeof window !== 'undefined' && !window.__pmMobileQuestionBridgeInstalled) 
   window._mobileQuestionRememberDraft = _mobileQuestionRememberDraft;
   window._submitMobileQuestion = _submitMobileQuestion;
   window._cancelMobileQuestion = _cancelMobileQuestion;
-  wsEventBus.on('question_created', (msg = {}) => {
+  wsEventBus.on('question_created', async (msg = {}) => {
+    await _ensureMobileQuestionController();
     const q = _normalizeMobileQuestion(msg.question || {}, { ...msg, status: 'pending' });
     if (q.id && q.sessionId) _upsertMobileQuestion(q);
   });
-  wsEventBus.on('question_answered', (msg = {}) => _updateMobileQuestionStatus(msg, 'answered'));
-  wsEventBus.on('question_cancelled', (msg = {}) => _updateMobileQuestionStatus(msg, 'cancelled'));
-  wsEventBus.on('question_expired', (msg = {}) => _updateMobileQuestionStatus(msg, 'expired'));
+  wsEventBus.on('question_answered', async (msg = {}) => {
+    await _ensureMobileQuestionController();
+    _updateMobileQuestionStatus(msg, 'answered');
+  });
+  wsEventBus.on('question_cancelled', async (msg = {}) => {
+    await _ensureMobileQuestionController();
+    _updateMobileQuestionStatus(msg, 'cancelled');
+  });
+  wsEventBus.on('question_expired', async (msg = {}) => {
+    await _ensureMobileQuestionController();
+    _updateMobileQuestionStatus(msg, 'expired');
+  });
 }
 
 
@@ -9387,6 +9367,7 @@ function _saveMobileLastChatContext(context = {}) {
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
   await loadMobileChatRendererRuntime();
   receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
+  await _ensureMobileQuestionController();
   ensureMobileChatStyles();
   _installMobileApprovalBridge();
   // Chat recovery needs the same tool/result renderer as live streaming. Kick
