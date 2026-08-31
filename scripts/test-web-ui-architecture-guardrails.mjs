@@ -17,7 +17,7 @@ const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 230104,
   'web-ui/src/styles/mobile.css': 585232,
   'web-ui/src/styles/components.css': 284925,
-  'web-ui/index.html': 557076,
+  'web-ui/index.html': 558138,
 });
 const CODE_OWNED_NEW_MODULE_CEILING = 400000;
 

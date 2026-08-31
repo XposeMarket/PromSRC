@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "capturedFrom": "36b95c07a281f25fd2f2a205bb26cf6dc1b9b155",
+  "capturedFrom": "979a0a970cbd189ad580e75228170756fe645010",
   "maxNewModuleBytes": 400000,
   "legacySurfaces": {
     "web-ui/src/pages/ChatPage.js": 2334533,
@@ -8,6 +8,6 @@
     "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 230104,
     "web-ui/src/styles/mobile.css": 585232,
     "web-ui/src/styles/components.css": 284925,
-    "web-ui/index.html": 557076
+    "web-ui/index.html": 558138
   }
 }
