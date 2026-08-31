@@ -32,8 +32,9 @@ assert.match(pressureModel, /history\.reduce\(\(total, message\) => total \+ est
 assert.match(pressureModel, /const activeHistory = history\.slice\(start\)/, 'compacted fallback must count every message after the summary checkpoint');
 assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persistedEstimate >= 0\)/, 'persisted session pressure should remain authoritative when available');
 assert.match(chatRouter, /const history = getActiveHistoryForApiCall\(id\)/, 'the context-window endpoint must use the full active transcript');
-assert.match(chatRouter, /function aggregateSessionToolUsage\(sessionId: string\)/, 'thread tool usage must aggregate all persisted observations');
-assert.match(chatRouter, /const toolUsage = aggregateSessionToolUsage\(id\)/, 'context-window response must include cumulative tool usage');
+assert.match(chatRouter, /const observationSnapshot = readToolObservationSnapshot\(id, 100_000\)/, 'context-window must read one cached observation snapshot');
+assert.match(chatRouter, /estimateStoredThreadFootprint\(id, session, profile, observationSnapshot\.observations\)/, 'stored footprint must reuse the observation snapshot');
+assert.match(chatRouter, /const toolUsage = observationSnapshot\.usage/, 'context-window response must include cached cumulative tool usage');
 assert.match(chatRouter, /Model usage · thread total/, 'provider usage must be exposed as a thread total');
 assert.match(chatRouter, /Tool I\/O · thread total/, 'tool input/output must be exposed as a thread total');
 assert.doesNotMatch(chatRouter, /getLastTurnUsageTelemetry|last_turn_usage/, 'the context-window response must not be driven by last-turn telemetry');

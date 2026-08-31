@@ -54,7 +54,7 @@
     "test:storage-boundaries": "npm run build:backend && node scripts/test-storage-boundaries.mjs",
     "test:tool-security-boundaries": "npm run build:backend && node scripts/test-tool-security-boundaries.mjs",
     "test:subagent-context": "npm run build:backend && node scripts/test-subagent-context-isolation.mjs",
-    "test:context-window": "tsx src/gateway/context/context-window-usage.regression.ts && node scripts/test-context-window-ui.mjs",
+    "test:context-window": "tsx src/gateway/context/context-window-usage.regression.ts && tsx src/gateway/tool-observations.regression.ts && node scripts/test-context-window-ui.mjs",
     "test:turn-context": "tsx src/gateway/context/turn-context-packet.regression.ts",
     "test:agent-identity-memory": "npm run build:backend && node scripts/test-agent-identity-memory.mjs",
     "test:codex-spark-usage": "npm run build:backend && node scripts/test-codex-spark-usage.mjs",

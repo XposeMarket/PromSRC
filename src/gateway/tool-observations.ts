@@ -40,6 +40,31 @@ export interface ToolObservation {
   createdAt: number;
 }
 
+export interface ToolObservationUsageByTool {
+  tool: string;
+  calls: number;
+  argsTokens: number;
+  resultTokens: number;
+  totalTokens: number;
+  resultBytes: number;
+}
+
+export interface ToolObservationUsage {
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  argsTokens: number;
+  resultTokens: number;
+  totalTokens: number;
+  resultBytes: number;
+  tools: ToolObservationUsageByTool[];
+}
+
+export interface ToolObservationSnapshot {
+  observations: ToolObservation[];
+  usage: ToolObservationUsage;
+}
+
 export interface ObservationContextOptions {
   lookbackTurns?: number;
   maxChars?: number;
@@ -64,6 +89,142 @@ function observationJsonlPath(sessionId: string): string {
 
 function rawRoot(sessionId: string): string {
   return path.join(observationRoot(), 'raw', safeSessionFileName(sessionId));
+}
+
+const TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT = 100_000;
+
+interface CachedToolObservationSnapshot {
+  fileSize: number;
+  mtimeMs: number;
+  recentObservations: ToolObservation[];
+  totals: Omit<ToolObservationUsage, 'tools'>;
+  byTool: Map<string, ToolObservationUsageByTool>;
+}
+
+const toolObservationSnapshotCache = new Map<string, CachedToolObservationSnapshot>();
+
+function createEmptyToolObservationSnapshot(): CachedToolObservationSnapshot {
+  return {
+    fileSize: 0,
+    mtimeMs: 0,
+    recentObservations: [],
+    totals: {
+      calls: 0,
+      successfulCalls: 0,
+      failedCalls: 0,
+      argsTokens: 0,
+      resultTokens: 0,
+      totalTokens: 0,
+      resultBytes: 0,
+    },
+    byTool: new Map(),
+  };
+}
+
+function nonNegativeObservationNumber(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function addObservationToSnapshotCache(cache: CachedToolObservationSnapshot, observation: ToolObservation): void {
+  const estimate = observation?.tokenEstimate;
+  const argsTokens = nonNegativeObservationNumber(estimate?.argsTokens);
+  const resultTokens = nonNegativeObservationNumber(estimate?.resultTokens);
+  const recordedTotalTokens = nonNegativeObservationNumber(estimate?.totalTokens);
+  const totalTokens = recordedTotalTokens || argsTokens + resultTokens;
+  const resultBytes = nonNegativeObservationNumber(estimate?.resultBytes);
+  cache.totals.calls += 1;
+  cache.totals.successfulCalls += observation.status === 'ok' ? 1 : 0;
+  cache.totals.failedCalls += observation.status === 'error' ? 1 : 0;
+  cache.totals.argsTokens += argsTokens;
+  cache.totals.resultTokens += resultTokens;
+  cache.totals.totalTokens += totalTokens;
+  cache.totals.resultBytes += resultBytes;
+
+  const name = String(observation.toolName || 'unknown_tool');
+  const row = cache.byTool.get(name) || {
+    tool: name,
+    calls: 0,
+    argsTokens: 0,
+    resultTokens: 0,
+    totalTokens: 0,
+    resultBytes: 0,
+  };
+  row.calls += 1;
+  row.argsTokens += argsTokens;
+  row.resultTokens += resultTokens;
+  row.totalTokens += totalTokens;
+  row.resultBytes += resultBytes;
+  cache.byTool.set(name, row);
+
+  cache.recentObservations.push(observation);
+  if (cache.recentObservations.length > TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT) {
+    cache.recentObservations.splice(0, cache.recentObservations.length - TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT);
+  }
+}
+
+function usageFromSnapshotCache(cache: CachedToolObservationSnapshot): ToolObservationUsage {
+  return {
+    ...cache.totals,
+    tools: [...cache.byTool.values()]
+      .sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls)
+      .slice(0, 20)
+      .map((row) => ({ ...row })),
+  };
+}
+
+function snapshotFromCache(cache: CachedToolObservationSnapshot, maxObservations: number): ToolObservationSnapshot {
+  return {
+    observations: cache.recentObservations.slice(-maxObservations),
+    usage: usageFromSnapshotCache(cache),
+  };
+}
+
+function rebuildToolObservationSnapshot(filePath: string, maxObservations: number): ToolObservationSnapshot {
+  const cache = createEmptyToolObservationSnapshot();
+  try {
+    const stat = fs.statSync(filePath);
+    cache.fileSize = stat.size;
+    cache.mtimeMs = stat.mtimeMs;
+    const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      try {
+        addObservationToSnapshotCache(cache, JSON.parse(line) as ToolObservation);
+      } catch {}
+    }
+    toolObservationSnapshotCache.set(filePath, cache);
+  } catch {
+    toolObservationSnapshotCache.delete(filePath);
+  }
+  return snapshotFromCache(cache, maxObservations);
+}
+
+/**
+ * Returns the recent observation window plus lifetime totals for a session.
+ * The JSONL file is indexed once per file version. Normal persistence updates
+ * the cached index incrementally, while external file changes are detected by
+ * size/mtime and rebuilt on the next read.
+ */
+export function readToolObservationSnapshot(sessionId: string, maxObservations = 100_000): ToolObservationSnapshot {
+  const filePath = observationJsonlPath(sessionId);
+  const requestedLimit = Math.floor(Number(maxObservations));
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT, requestedLimit)
+    : TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT;
+  let stat: fs.Stats | null = null;
+  try { stat = fs.statSync(filePath); } catch {}
+  if (!stat || !stat.isFile()) {
+    const cached = toolObservationSnapshotCache.get(filePath);
+    if (cached && cached.fileSize === 0 && cached.mtimeMs === 0) return snapshotFromCache(cached, limit);
+    const empty = createEmptyToolObservationSnapshot();
+    toolObservationSnapshotCache.set(filePath, empty);
+    return snapshotFromCache(empty, limit);
+  }
+  const cached = toolObservationSnapshotCache.get(filePath);
+  if (cached && cached.fileSize === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    return snapshotFromCache(cached, limit);
+  }
+  return rebuildToolObservationSnapshot(filePath, limit);
 }
 
 function scrubValue(value: unknown, depth = 0): unknown {
@@ -311,11 +472,29 @@ export function createToolObservationsFromResults(sessionId: string, turnId: str
 export function persistToolObservations(sessionId: string, observations: ToolObservation[]): void {
   if (!observations.length) return;
   const filePath = observationJsonlPath(sessionId);
+  let before: { size: number; mtimeMs: number } = { size: 0, mtimeMs: 0 };
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isFile()) before = { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch {}
   // Commit the recovery-safe audit hint before canonical persistence so a hard
   // crash between these writes still leaves continuity evidence.
   for (const observation of observations) appendContinuityToolObservation(observation);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, observations.map((obs) => JSON.stringify(obs)).join('\n') + '\n', 'utf-8');
+  try {
+    const stat = fs.statSync(filePath);
+    const cached = toolObservationSnapshotCache.get(filePath);
+    if (cached && cached.fileSize === before.size && cached.mtimeMs === before.mtimeMs) {
+      for (const observation of observations) addObservationToSnapshotCache(cached, observation);
+      cached.fileSize = stat.size;
+      cached.mtimeMs = stat.mtimeMs;
+    } else {
+      toolObservationSnapshotCache.delete(filePath);
+    }
+  } catch {
+    toolObservationSnapshotCache.delete(filePath);
+  }
 }
 
 export function persistToolResultsAsObservations(sessionId: string, turnId: string, toolResults: Array<any> = []): ToolObservation[] {
@@ -325,17 +504,7 @@ export function persistToolResultsAsObservations(sessionId: string, turnId: stri
 }
 
 export function readToolObservations(sessionId: string, maxObservations = 80): ToolObservation[] {
-  const filePath = observationJsonlPath(sessionId);
-  if (!fs.existsSync(filePath)) return [];
-  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
-  const slice = lines.slice(-Math.max(1, maxObservations));
-  const out: ToolObservation[] = [];
-  for (const line of slice) {
-    try {
-      out.push(JSON.parse(line) as ToolObservation);
-    } catch {}
-  }
-  return out;
+  return readToolObservationSnapshot(sessionId, maxObservations).observations;
 }
 
 export function buildToolBenchmarkAggregate(sessionId: string, maxObservations = 5000): Record<string, any> {

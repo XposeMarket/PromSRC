@@ -78,7 +78,7 @@ import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMess
 import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../chat/turn-route-snapshot';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import { deriveContextWindowUsage } from '../context/context-window-usage';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, type ToolObservation } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
@@ -17215,7 +17215,7 @@ function estimateToolObservationRawTokens(sessionId: string, profile: { tokenize
   return { tokens, bytes, files };
 }
 
-function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }) {
+function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }, observations = readToolObservationSnapshot(sessionId, 100_000).observations) {
   const history = Array.isArray(session?.history) ? session.history : [];
   let visibleChatTokens = 0;
   let processEntryTokens = 0;
@@ -17238,7 +17238,6 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
     attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
   }
   const sessionJsonTokens = estimateJsonTokensForModel(session, profile);
-  const observations = readToolObservations(sessionId, 100000);
   const toolObservationStoredTokens = estimateJsonTokensForModel(observations, profile);
   const raw = estimateToolObservationRawTokens(sessionId, profile);
   return {
@@ -17844,50 +17843,6 @@ function buildProviderUsageGroup(id: string, label: string, usage: any, percentL
     { id: `${id}_cache_write`, label: 'Cache write', tokens: cacheWriteTokens, active: cacheWriteTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
   ].filter((row) => row.active);
   return { id, label, tokens: totalTokens, active: true, includedInContext: false, outOfBand: true, percentLabel, children };
-}
-
-function aggregateSessionToolUsage(sessionId: string) {
-  const observations = readToolObservations(sessionId, 100_000);
-  const totals = {
-    calls: observations.length,
-    successfulCalls: 0,
-    failedCalls: 0,
-    argsTokens: 0,
-    resultTokens: 0,
-    totalTokens: 0,
-    resultBytes: 0,
-  };
-  const byTool = new Map<string, any>();
-  for (const observation of observations) {
-    const estimate = observation?.tokenEstimate;
-    const argsTokens = Math.max(0, Number(estimate?.argsTokens || 0));
-    const resultTokens = Math.max(0, Number(estimate?.resultTokens || 0));
-    const totalTokens = Math.max(0, Number(estimate?.totalTokens || argsTokens + resultTokens));
-    const resultBytes = Math.max(0, Number(estimate?.resultBytes || 0));
-    totals.successfulCalls += observation.status === 'ok' ? 1 : 0;
-    totals.failedCalls += observation.status === 'error' ? 1 : 0;
-    totals.argsTokens += argsTokens;
-    totals.resultTokens += resultTokens;
-    totals.totalTokens += totalTokens;
-    totals.resultBytes += resultBytes;
-
-    const name = String(observation.toolName || 'unknown_tool');
-    const row = byTool.get(name) || { tool: name, calls: 0, argsTokens: 0, resultTokens: 0, totalTokens: 0, resultBytes: 0 };
-    row.calls += 1;
-    row.argsTokens += argsTokens;
-    row.resultTokens += resultTokens;
-    row.totalTokens += totalTokens;
-    row.resultBytes += resultBytes;
-    byTool.set(name, row);
-  }
-  return {
-    ...totals,
-    // Keep the API bounded while totals above remain exact across every
-    // persisted observation in the thread.
-    tools: [...byTool.values()]
-      .sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls)
-      .slice(0, 20),
-  };
 }
 
 function buildToolUsageGroup(toolUsage: any): ContextWindowRow | null {
@@ -22758,9 +22713,10 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
-    const storedThread = estimateStoredThreadFootprint(id, session, profile);
+    const observationSnapshot = readToolObservationSnapshot(id, 100_000);
+    const storedThread = estimateStoredThreadFootprint(id, session, profile, observationSnapshot.observations);
     const modelUsage = aggregateSessionModelUsage(id);
-    const toolUsage = aggregateSessionToolUsage(id);
+    const toolUsage = observationSnapshot.usage;
     const currentState = buildContextWindowCurrentState({
       sessionId: id,
       profile,
