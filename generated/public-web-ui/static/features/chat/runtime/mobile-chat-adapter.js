@@ -193,6 +193,8 @@ export function createMobileChatRuntimeAdapter({
       runtime.replaceHistory(mobileRuntimeHistory(thread), {
         source: String(options.source || 'mobile-compatibility-bridge'),
         pageInfo: options.pageInfo || runtime.snapshot.paging,
+        initializeQuestionsFromHistory: options.initializeQuestionsFromHistory
+          ?? (runtime.snapshot.history.revision === 0),
       });
       runtime.setLifecycle({
         phase: activeRun.busy || activeRun.running ? 'streaming' : 'idle',
@@ -202,7 +204,6 @@ export function createMobileChatRuntimeAdapter({
       });
       for (const message of thread) {
         if (message?.approvalRequest?.id) runtime.upsertApproval(message.approvalRequest);
-        if (message?.questionRequest?.id) runtime.upsertQuestion(message.questionRequest);
       }
       const pending = Object.values(state.pendingApprovals || {})
         .flatMap((records) => (Array.isArray(records) ? records : [records]));

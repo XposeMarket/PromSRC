@@ -16,6 +16,8 @@
     "build:web-production": "node scripts/build-web-ui-production.mjs",
     "build:web": "npm run check:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js",
+    "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
+    "test:chat-question-controller": "node scripts/test-chat-question-controller.mjs",
     "sync:web-ui": "npm run build:thinking-orb && node scripts/prepare-public-build.js --web-only && npm run check:web-ui",
     "sync:hyperframes": "node scripts/sync-hyperframes-catalog.js",
     "test:codex-oauth-realtime": "npm run build:backend && node scripts/test-codex-oauth-realtime-bridge.mjs",

@@ -6,6 +6,8 @@ This document is the default engineering contract for `web-ui/`. It is intention
 
 A recognizable UI concept with its own markup, behavior or lifecycle should have an explicit module owner.
 
+The current and planned chat owners are indexed in `web-ui/src/features/chat/OWNERSHIP.md`. Keep that lookup map synchronized as compatibility owners move.
+
 Examples:
 
 - approval request → `ApprovalCard`
@@ -174,6 +176,8 @@ The largest legacy surfaces have exact byte baselines in `scripts/web-ui-archite
 - They must not grow above the recorded baseline.
 - When a refactor shrinks one, lower its recorded baseline in the same PR.
 - New individual JS/CSS modules must stay below the configured module-size ceiling unless a deliberate exception is added with review.
+- Chat feature modules have a tighter feature-specific ceiling so extraction cannot produce another feature mega-module.
+- The mobile renderer context dependency count is also ratcheted downward; moving code across a file boundary must reduce coupling rather than grow the service-locator context.
 
 This ratchet is a migration tool, not a claim that byte count alone measures architecture quality.
 

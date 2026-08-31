@@ -145,6 +145,7 @@ export class ChatRuntime {
     this._attachmentBridge = this._createArrayBridge(this._attachments, 'attachments');
     this._approvals = new Map();
     this._questions = new Map();
+    this._questionHistoryBootstrapDone = false;
     this._background = new Map();
     this._owners = new Map();
     this._subscriptions = new Set();
@@ -268,6 +269,16 @@ export class ChatRuntime {
     this._indexByKey = nextIndexByKey;
     this._order = Object.freeze(nextOrder);
     this._sourceHistory = Object.freeze(nextSources);
+    // Legacy history is allowed to seed the renderer-owned question slice
+    // only during an explicit initial hydration. Later transcript refreshes
+    // are a one-way compatibility projection and must never create or replace
+    // ChatRuntime.questions.
+    const initializeQuestionsFromHistory = options.initializeQuestionsFromHistory === true;
+    let seededQuestions = false;
+    if (initializeQuestionsFromHistory && !this._questionHistoryBootstrapDone) {
+      this._questionHistoryBootstrapDone = true;
+      seededQuestions = this._seedQuestionRecordsFromHistory(input);
+    }
     const nextHistory = Object.freeze({
       revision: this._state.history.revision + 1,
       order: this._order,
@@ -275,7 +286,11 @@ export class ChatRuntime {
       source: cleanId(options.source, 'hydrate'),
     });
     const nextPaging = pageInfo(options.pageInfo || this._state.paging, nextOrder.length);
-    this._replaceState({ history: nextHistory, paging: nextPaging });
+    this._replaceState({
+      history: nextHistory,
+      paging: nextPaging,
+      ...(seededQuestions ? { questions: Object.freeze([...this._questions.values()]) } : {}),
+    });
     this._touchActivity();
     return this.getSourceHistory();
   }
@@ -506,6 +521,10 @@ export class ChatRuntime {
     return this._attachmentBridge;
   }
 
+  getQuestion(id) {
+    return this._questions.get(cleanId(id)) || null;
+  }
+
   upsertApproval(record) {
     return this._upsertRecord(this._approvals, record, 'approvals');
   }
@@ -573,6 +592,35 @@ export class ChatRuntime {
         source: streaming ? 'stream-delta' : 'stream-final',
       }),
     });
+  }
+
+  _seedQuestionRecordsFromHistory(messages) {
+    let changed = false;
+    for (const message of Array.isArray(messages) ? messages : []) {
+      const source = message?.questionRequest;
+      const id = cleanId(source?.id || source?.questionId);
+      if (!id || this._questions.has(id)) continue;
+      const record = {
+        ...source,
+        id,
+        sessionId: cleanId(source?.sessionId || source?.sourceSessionId, this.sessionId),
+        ...(Array.isArray(source?.questions)
+          ? { questions: source.questions.map((question) => ({
+              ...question,
+              ...(Array.isArray(question?.options) ? { options: question.options.slice() } : {}),
+            })) }
+          : {}),
+        ...(Array.isArray(source?.answers)
+          ? { answers: source.answers.map((answer) => ({
+              ...answer,
+              ...(Array.isArray(answer?.selected) ? { selected: answer.selected.slice() } : {}),
+            })) }
+          : {}),
+      };
+      this._questions.set(id, Object.freeze(record));
+      changed = true;
+    }
+    return changed;
   }
 
   _upsertRecord(map, record, slice) {

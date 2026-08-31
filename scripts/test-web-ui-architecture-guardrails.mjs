@@ -12,14 +12,16 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2334533,
-  'web-ui/src/mobile/mobile-pages.js': 899829,
+  'web-ui/src/pages/ChatPage.js': 2330215,
+  'web-ui/src/mobile/mobile-pages.js': 898464,
   'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 231112,
   'web-ui/src/styles/mobile.css': 585898,
   'web-ui/src/styles/components.css': 284925,
   'web-ui/index.html': 558138,
 });
 const CODE_OWNED_NEW_MODULE_CEILING = 400000;
+const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
+const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 122;
 
 if (baseline.version !== 3) failures.push(`architecture baseline version must be 3 (received ${baseline.version})`);
 for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)) {
@@ -32,6 +34,12 @@ for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)
 }
 if (Number(baseline.maxNewModuleBytes) > CODE_OWNED_NEW_MODULE_CEILING) {
   failures.push(`new module JSON ceiling ${baseline.maxNewModuleBytes} exceeds code-owned ceiling ${CODE_OWNED_NEW_MODULE_CEILING}`);
+}
+if (Number(baseline.maxChatFeatureModuleBytes) > CODE_OWNED_CHAT_FEATURE_MODULE_CEILING) {
+  failures.push(`chat feature module JSON ceiling ${baseline.maxChatFeatureModuleBytes} exceeds code-owned ceiling ${CODE_OWNED_CHAT_FEATURE_MODULE_CEILING}`);
+}
+if (Number(baseline.maxMobileRendererContextDependencies) > CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING) {
+  failures.push(`mobile renderer context JSON ceiling ${baseline.maxMobileRendererContextDependencies} exceeds code-owned ceiling ${CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING}`);
 }
 
 function bytes(relativePath) {
@@ -59,6 +67,10 @@ const legacy = new Set(Object.keys(baseline.legacySurfaces || {}));
 const maxNewModuleBytes = Math.min(
   Number(baseline.maxNewModuleBytes || CODE_OWNED_NEW_MODULE_CEILING),
   CODE_OWNED_NEW_MODULE_CEILING,
+);
+const maxChatFeatureModuleBytes = Math.min(
+  Number(baseline.maxChatFeatureModuleBytes || CODE_OWNED_CHAT_FEATURE_MODULE_CEILING),
+  CODE_OWNED_CHAT_FEATURE_MODULE_CEILING,
 );
 
 function importSpecifiers(source) {
@@ -95,21 +107,42 @@ function walk(directory) {
     }
     if (!/\.(?:js|mjs|css)$/i.test(entry.name)) continue;
     const relativePath = path.relative(root, absolute).split(path.sep).join('/');
-    validateChatFeatureDependencies(absolute, relativePath);
     if (legacy.has(relativePath)) continue;
     const actual = bytes(relativePath);
     if (actual > maxNewModuleBytes) {
       failures.push(`${relativePath}: ${actual} bytes exceeds module ceiling ${maxNewModuleBytes}`);
     }
+    if (relativePath.startsWith('web-ui/src/features/chat/') && actual > maxChatFeatureModuleBytes) {
+      failures.push(`${relativePath}: ${actual} bytes exceeds chat feature module ceiling ${maxChatFeatureModuleBytes}`);
+    }
+    validateChatFeatureDependencies(absolute, relativePath);
   }
 }
 
 walk(path.join(root, 'web-ui', 'src'));
 
+const mobileRendererPath = path.join(root, 'web-ui', 'src', 'mobile', 'mobile-chat-renderer-runtime.js');
+const mobileRendererSource = fs.readFileSync(mobileRendererPath, 'utf8');
+const contextMatch = mobileRendererSource.match(/const\s*\{([\s\S]*?)\}\s*=\s*context\s*\|\|\s*\{\}/);
+if (!contextMatch) {
+  failures.push('web-ui/src/mobile/mobile-chat-renderer-runtime.js: runtime context boundary was not found');
+} else {
+  const dependencyCount = contextMatch[1].split(',').map((value) => value.trim()).filter(Boolean).length;
+  const configured = Math.min(
+    Number(baseline.maxMobileRendererContextDependencies || CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING),
+    CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING,
+  );
+  if (dependencyCount > configured) {
+    failures.push(`web-ui/src/mobile/mobile-chat-renderer-runtime.js: context grew to ${dependencyCount} dependencies (ratchet ${configured})`);
+  }
+}
+
 for (const required of [
   'workspace/self/WEB_UI_ARCHITECTURE.md',
   'workspace/self/WEB_UI_ARCHITECTURE_PERFORMANCE_REVIEW_2026-08-19.md',
+  'workspace/self/WEB_UI_COMPONENT_OWNERSHIP_REFACTOR_PLAN_2026-08-26.md',
   'workspace/self/WEB_UI_PERFORMANCE_PROGRAM_2026-08-22.md',
+  'web-ui/src/features/chat/OWNERSHIP.md',
 ]) {
   if (!fs.existsSync(path.join(root, required))) failures.push(`${required}: missing architecture documentation`);
 }
@@ -124,3 +157,5 @@ for (const [relativePath, maxBytes] of Object.entries(baseline.legacySurfaces ||
   console.log(`- ${relativePath}: ${bytes(relativePath)} / ${maxBytes} bytes`);
 }
 console.log(`- new JS/CSS module ceiling: ${maxNewModuleBytes} bytes`);
+console.log(`- chat feature JS/CSS module ceiling: ${maxChatFeatureModuleBytes} bytes`);
+console.log(`- mobile renderer context ceiling: ${baseline.maxMobileRendererContextDependencies} dependencies`);
