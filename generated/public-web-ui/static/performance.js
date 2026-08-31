@@ -29,13 +29,13 @@ function activateDesktopPageFeatures(mode) {
     startDesktopFeature('Context Window', () => import('./context-window-live-tracking.js'));
   }
   if (page === 'subagents' || page === 'teams') {
+    // Keep these calls as a retry path if a desktop entry chunk failed on the
+    // first attempt. Successful loads are keyed and therefore not duplicated.
     startDesktopFeature('Prom Bot', () => import('./prom-bot.js')
       .then(() => import('./prom-bot-roster.js'))
       .then(() => import('./prom-bot-collab.js'))
       .then(() => import('./prom-bot-collab-hardening.js'))
       .then(() => import('./team-prom-bot-flow.js')));
-  }
-  if (page === 'subagents' || page === 'teams') {
     startDesktopFeature('Canonical Composer', () => import('./features/chat/canonical-desktop-composer.js'));
     startDesktopFeature('Bot Create', () => import('./bot-create.js')
       .then(() => import('./bot-create-settings-bridge.js')));
@@ -60,6 +60,17 @@ function installTurnDiffIntent() {
 }
 
 if (!shouldBootMobile) {
+  // Prom Bot and Bot Create own controls in the global desktop sidebar. They
+  // must be ready on the initial Chat route rather than waiting for a
+  // Subagents or Teams page activation. The heavier Chat workspace remains
+  // page-gated above.
+  startDesktopFeature('Prom Bot', () => import('./prom-bot.js')
+    .then(() => import('./prom-bot-roster.js'))
+    .then(() => import('./prom-bot-collab.js'))
+    .then(() => import('./prom-bot-collab-hardening.js'))
+    .then(() => import('./team-prom-bot-flow.js')));
+  startDesktopFeature('Bot Create', () => import('./bot-create.js')
+    .then(() => import('./bot-create-settings-bridge.js')));
   window.addEventListener('prometheus:page-activated', (event) => {
     activateDesktopPageFeatures(event?.detail?.mode);
   });

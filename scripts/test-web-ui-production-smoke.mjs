@@ -112,6 +112,9 @@ try {
   assert(requests.includes(manifest.entries.desktop.js), 'desktop entry was not requested');
   assert(requests.includes(manifest.entries.desktop.css), 'desktop stylesheet was not requested');
   assert(!requests.includes(manifest.entries.mobile.js), 'desktop boot requested the mobile entry');
+  for (const source of ['src/prom-bot.js', 'src/bot-create.js']) {
+    assert(requests.includes(manifest.moduleOutputs[source]), `desktop initial boot did not request ${source}`);
+  }
   assert.deepEqual(moduleErrors, [], 'production desktop module evaluation failed');
   assert.deepEqual(missing.filter((pathname) => pathname.startsWith('/build/')), [], 'production desktop requested a missing hashed asset');
   await context.close();

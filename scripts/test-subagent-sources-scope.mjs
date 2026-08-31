@@ -47,6 +47,7 @@ const mobile = [
   read('web-ui/src/mobile/mobile-pages.js'),
   read('web-ui/src/mobile/mobile-subagent-pages.js'),
 ].join('\n');
+const mobileRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const resourceStore = read('src/gateway/resources/resource-store.ts');
 
 assert.match(desktop, /showSourcesMinimizedPanel[\s\S]{0,500}!sourcePanelContextIsActive\(\)/);
@@ -59,7 +60,8 @@ assert.ok((subagents.match(/case 'resources_changed'/g) || []).length >= 2, 'liv
 assert.match(subagents, /function replaySubagentChatStream/);
 assert.match(subagents, /refreshSubagentSourcePanelFromEvent\(agentId, event\)/);
 assert.match(mobile, /requestToken: 0/);
-assert.match(mobile, /case 'resources_changed'/);
+assert.match(mobileRenderer, /case 'resources_changed'/);
+assert.match(mobileRenderer, /_refreshMobileSourcesForSession/);
 assert.match(mobile, /sourcePanelResourceBelongsToContext\(resource/);
 assert.match(mobile, /const sessionId = subagentChatSessionId\(agentId\)/);
 assert.match(mobile, /sessionId: options\.sessionId \|\| __pmChat\.activeSessionId/);
