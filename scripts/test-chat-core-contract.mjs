@@ -146,6 +146,21 @@ assert.deepEqual(
   background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
   [1, 2],
 );
+background.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 3,
+  events: [{ streamId: 'stream-test', seq: 3, type: 'tool', content: 'third' }],
+  updatedAt: 6,
+});
+background.flushBackgroundAgentWorkPersistence();
+assert.deepEqual(
+  background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
+  [1, 2, 3],
+  'partial monotonic persistence must retain the existing event buffer',
+);
 
 delete globalThis.localStorage;
 
