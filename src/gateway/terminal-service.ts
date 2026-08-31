@@ -73,12 +73,52 @@ function stripQuoted(command: string): string {
   return String(command || '').replace(/"[^"]*"|'[^']*'/g, ' ');
 }
 
+function splitPowerShellClauses(command: string): string[] {
+  const source = String(command || '');
+  const clauses: string[] = [];
+  let quote: "'" | '"' | null = null;
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === '`' && index + 1 < source.length) {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        if (quote === "'" && source[index + 1] === "'") {
+          index += 1;
+          continue;
+        }
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === ';' || char === '\r' || char === '\n') {
+      const clause = source.slice(start, index).trim();
+      if (clause) clauses.push(clause);
+      start = index + 1;
+      if (char === '\r' && source[index + 1] === '\n') {
+        index += 1;
+        start = index + 1;
+      }
+    }
+  }
+  const tail = source.slice(start).trim();
+  if (tail) clauses.push(tail);
+  return clauses;
+}
+
 function isKnownReadOnlyPowerShellSequence(command: string): boolean {
-  const clauses = String(command || '').split(';').map((clause) => clause.trim()).filter(Boolean);
+  const clauses = splitPowerShellClauses(command);
   if (clauses.length < 2) return false;
   let sawInspection = false;
   for (const clause of clauses) {
-    // Each semicolon-delimited clause must itself be a single recognized
+    // Each statement-delimited clause must itself be a single recognized
     // observational expression. A safe-looking prefix followed by a pipeline
     // or call operator can execute arbitrary code (for example,
     // `Get-Content file | Invoke-Expression`) and must retain change tracking.
