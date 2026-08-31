@@ -1,10 +1,27 @@
 // Browser mirror of src/providers/reasoning-capabilities.ts.
+const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
+const OPENAI_56 = ['none','low','medium','high','xhigh','max'];
+const CODEX_56_ULTRA = [...OPENAI_56, 'ultra'];
+
+export function hasReasoningCapabilityPolicy(provider) {
+  return MODEL_CAPABILITY_PROVIDERS.has(String(provider || '').trim().toLowerCase());
+}
+
 export function reasoningCapability(provider, model) {
   const id = String(provider || '').trim().toLowerCase();
   const raw = String(model || '').trim().toLowerCase();
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
-  if (id === 'openai' || id === 'openai_codex') {
-    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: id === 'openai_codex' ? ['none','low','medium','high','xhigh','max','ultra'] : ['none','low','medium','high','xhigh','max'], defaultEffort: 'medium' };
+  if (id === 'openai_codex') {
+    if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_56_ULTRA], defaultEffort: 'medium' };
+    if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
+    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
+    return { efforts: [] };
+  }
+  if (id === 'openai') {
+    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
     if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };

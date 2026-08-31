@@ -1663,10 +1663,11 @@ function syncProviderStateSummary(providerOverride) {
     perplexity: 'settings-perplexity-effort',
   };
   const model = String(document.getElementById(modelIds[provider])?.value || '').trim();
-  const effort = String(document.getElementById(effortIds[provider])?.value || '').trim();
+  const rawEffort = String(document.getElementById(effortIds[provider])?.value || '').trim();
   const speed = String(document.getElementById(
     provider === 'openai_codex' ? 'settings-codex-speed' : 'settings-' + provider + '-speed'
   )?.value || 'standard').trim();
+  const effort = rawEffort && validEffort(provider, model, rawEffort) ? rawEffort : '';
   const modelEl = document.getElementById('settings-provider-state-model');
   const reasoningEl = document.getElementById('settings-provider-state-reasoning');
   const speedEl = document.getElementById('settings-provider-state-speed');
@@ -1808,11 +1809,11 @@ async function loadModelSettings() {
       relabelModelSelect(document.getElementById('settings-codex-model'), 'openai_codex');
       if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
       { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
-      { const s = document.getElementById('settings-openai-speed'); if (s) s.value = pc.openai?.speed || 'standard'; }
+      { const s = document.getElementById('settings-openai-speed'); if (s) s.value = pc.openai?.speed || (pc.openai?.fast_mode ? 'fast' : 'standard'); }
       { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = 'auto'; }
       if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
       { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
-      { const s = document.getElementById('settings-codex-speed'); if (s) s.value = pc.openai_codex?.speed || 'standard'; }
+      { const s = document.getElementById('settings-codex-speed'); if (s) s.value = pc.openai_codex?.speed || (pc.openai_codex?.fast_mode ? 'fast' : 'standard'); }
       { const s = document.getElementById('settings-codex-tool-choice'); if (s) s.value = pc.openai_codex?.tool_choice || 'auto'; }
       if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
       { const s = document.getElementById('settings-anthropic-effort'); if (s) s.value = pc.anthropic?.reasoning_effort || ''; }
@@ -2260,35 +2261,39 @@ function buildProviderPayload(providerOverride) {
   providers.ollama    = { endpoint: document.getElementById('settings-ollama-endpoint')?.value  || 'http://localhost:11434', model: document.getElementById('settings-primary-model')?.value || 'qwen3:4b' };
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
   providers.lm_studio = { endpoint: document.getElementById('settings-lmstudio-endpoint')?.value || 'http://localhost:1234',  model: document.getElementById('settings-lmstudio-model')?.value   || '' };
+  const openaiModel = document.getElementById('settings-openai-model')?.value || 'gpt-4o';
   const openaiEffort = document.getElementById('settings-openai-effort')?.value || '';
   const openaiToolChoice = 'auto';
-  providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
-  if (openaiEffort) providers.openai.reasoning_effort = openaiEffort;
+  providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '', model: openaiModel };
+  if (openaiEffort && validEffort('openai', openaiModel, openaiEffort)) providers.openai.reasoning_effort = openaiEffort;
   providers.openai.speed = document.getElementById('settings-openai-speed')?.value === 'fast' ? 'fast' : 'standard';
   providers.openai.tool_choice = openaiToolChoice;
+  const codexModel = document.getElementById('settings-codex-model')?.value || 'gpt-5.4-codex';
   const codexEffort = document.getElementById('settings-codex-effort')?.value || '';
   const codexToolChoice = document.getElementById('settings-codex-tool-choice')?.value || 'auto';
-  providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4-codex' };
-  if (codexEffort) providers.openai_codex.reasoning_effort = codexEffort;
+  providers.openai_codex = { model: codexModel };
+  if (codexEffort && validEffort('openai_codex', codexModel, codexEffort)) providers.openai_codex.reasoning_effort = codexEffort;
   providers.openai_codex.speed = document.getElementById('settings-codex-speed')?.value === 'fast' ? 'fast' : 'standard';
   providers.openai_codex.tool_choice = codexToolChoice;
   const anthropicExtThinking = document.getElementById('settings-anthropic-extended-thinking')?.checked || false;
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
+  const anthropicModel = document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6';
   const anthropicEffortEl = document.getElementById('settings-anthropic-effort');
   const anthropicEffort = anthropicEffortEl?.disabled ? '' : (anthropicEffortEl?.value || '');
   providers.anthropic = {
-    model: document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6',
+    model: anthropicModel,
     extended_thinking: anthropicExtThinking,
     thinking_budget: anthropicBudget,
     speed: document.getElementById('settings-anthropic-speed')?.value === 'fast' ? 'fast' : 'standard',
   };
-  if (anthropicEffort) providers.anthropic.reasoning_effort = anthropicEffort;
+  if (anthropicEffort && validEffort('anthropic', anthropicModel, anthropicEffort)) providers.anthropic.reasoning_effort = anthropicEffort;
   const perplexityEffort = document.getElementById('settings-perplexity-effort')?.value || '';
+  const perplexityModel = document.getElementById('settings-perplexity-model')?.value || 'sonar-pro';
   providers.perplexity = {
     api_key: document.getElementById('settings-perplexity-key')?.value || '',
-    model: document.getElementById('settings-perplexity-model')?.value || 'sonar-pro',
+    model: perplexityModel,
   };
-  if (perplexityEffort) providers.perplexity.reasoning_effort = perplexityEffort;
+  if (perplexityEffort && validEffort('perplexity', perplexityModel, perplexityEffort)) providers.perplexity.reasoning_effort = perplexityEffort;
   providers.gemini = {
     api_key: document.getElementById('settings-gemini-key')?.value || '',
     model: document.getElementById('settings-gemini-model')?.value || 'gemini-2.5-pro',

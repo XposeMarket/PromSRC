@@ -439,9 +439,6 @@ function renderProviderFields(provider, cfg = {}) {
   const endpointId = endpointInputId(provider);
   const keyId = apiKeyInputId(provider);
   const effortId = effortInputId(provider);
-  const efforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : (v || 'none') }));
-  const codexEfforts = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : v === 'ultra' ? 'Ultra' : (v || 'none') }));
-  const anthropicEfforts = ['', 'low', 'medium', 'high', 'xhigh', 'max'].map(v => ({ value: v, label: v === 'xhigh' ? 'X high' : (v || 'provider default') }));
   if (provider === 'ollama') {
     return `
       ${field('Endpoint', input(endpointId, cfg.endpoint || 'http://localhost:11434'))}
@@ -460,7 +457,7 @@ function renderProviderFields(provider, cfg = {}) {
       ${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="sk-..."'))}
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
       ${efforts.length > 1 ? field('Reasoning Effort', select(effortId, efforts, cfg.reasoning_effort || '')) : ''}
-      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || 'standard')) : ''}
+      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || (cfg.fast_mode === true ? 'fast' : 'standard'))) : ''}
     `;
   }
   if (provider === 'openai_codex') {
@@ -468,7 +465,7 @@ function renderProviderFields(provider, cfg = {}) {
     return `
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
       ${field('Reasoning Effort', select(effortId, codexEfforts, cfg.reasoning_effort || ''))}
-      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || 'standard')) : ''}
+      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || (cfg.fast_mode === true ? 'fast' : 'standard'))) : ''}
       <div class="pm-settings-callout">Connect or disconnect the ChatGPT account from Credentials/Auth controls on desktop if OAuth needs renewal.</div>
     `;
   }

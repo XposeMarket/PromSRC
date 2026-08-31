@@ -20,7 +20,9 @@ import { mobileGatewayFetch } from './mobile-api.js';
 import {
   reasoningSelectorOptions,
   formatReasoningSelectorLabel,
+  hasReasoningCapabilityPolicy,
   supportsFastSpeed,
+  validEffort,
 } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { renderReasoningSelector } from '../components/reasoning-selector.js';
@@ -46,15 +48,6 @@ const BUILTIN_STATIC_MODELS = {
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
   xai: ['grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
 };
-
-// Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
-const REASONING_EFFORT_PROVIDERS = new Set(['openai', 'openai_codex', 'perplexity', 'xai']);
-const EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-const CODEX_EFFORT_OPTIONS = ['', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-const PERPLEXITY_EFFORT_OPTIONS = ['', 'low', 'medium', 'high'];
-const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
-const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
-const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Caches ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 let _llmCache = null;            // full llm config { provider, providers }
@@ -522,7 +515,11 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   const llm = await _loadLlm(force);
   if (eventModel.model || eventModel.provider) {
     const eventCfg = llm?.providers?.[eventModel.provider] || {};
-    const eventEffort = String(modelChangeDetail?.reasoningEffort || modelChangeDetail?.reasoning_effort || eventCfg.reasoning_effort || '').trim();
+    const eventEffort = _normalizedReasoningEffort(
+      eventModel.provider,
+      eventModel.model,
+      modelChangeDetail?.reasoningEffort || modelChangeDetail?.reasoning_effort || eventCfg.reasoning_effort,
+    );
     const label = _setBadgeLabel(formatModelWithReasoning(eventModel.model, eventModel.provider, eventEffort));
     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
     // keep the streamed active-model label instead of overwriting it from config.
@@ -536,7 +533,15 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   const { provider, model } = route?.effective?.providerId
     ? { provider: route.effective.providerId, model: route.effective.model }
     : _activeModel(llm);
-  const cfg = { ...(llm?.providers?.[provider] || {}), model, reasoning_effort: route?.effective?.reasoningEffort || (llm?.providers?.[provider] || {}).reasoning_effort };
+  const hasEffectiveRoute = Boolean(route?.effective?.providerId);
+  const rawReasoningEffort = hasEffectiveRoute
+    ? route.effective.reasoningEffort
+    : (llm?.providers?.[provider] || {}).reasoning_effort;
+  const cfg = {
+    ...(llm?.providers?.[provider] || {}),
+    model,
+    reasoning_effort: _normalizedReasoningEffort(provider, model, rawReasoningEffort),
+  };
   if (route?.effective?.providerId && _llmCache) {
     _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
   }
@@ -671,6 +676,13 @@ function _effortOptions(provider, cfg = {}) {
   return reasoningSelectorOptions(provider, cfg.model || '');
 }
 
+function _normalizedReasoningEffort(provider, model, value) {
+  const effort = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  if (!effort || effort === 'default' || effort === 'provider_default') return effort;
+  if (!hasReasoningCapabilityPolicy(provider)) return effort;
+  return validEffort(provider, model, effort) ? effort : '';
+}
+
 function _effortLabel(value, provider) {
   return formatReasoningSelectorLabel(value, provider);
 }
@@ -699,7 +711,7 @@ async function _openReasoningSheet() {
 
 function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
   const options = _effortOptions(provider, cfg);
-  const current = String(cfg.reasoning_effort || '').trim();
+  const current = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
   const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
   _setSheetTitle('');
@@ -866,8 +878,15 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   const existing = (_llmCache?.providers || {})[provider] || {};
   const merged = { ...existing, ...patch };
   if (merged.reasoning_effort === '') delete merged.reasoning_effort;
+  const active = _activeModel(_llmCache);
+  const model = String(merged.model || active.model || '').trim();
+  if (merged.reasoning_effort) {
+    const normalized = _normalizedReasoningEffort(provider, model, merged.reasoning_effort);
+    if (normalized) merged.reasoning_effort = normalized;
+    else delete merged.reasoning_effort;
+  }
   if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
-  _setBadgeLabel(formatModelWithReasoning(merged.model || _activeModel(_llmCache).model, provider, merged.reasoning_effort));
+  _setBadgeLabel(formatModelWithReasoning(model, provider, merged.reasoning_effort));
   clearTimeout(_reasoningSaveTimer);
   const commit = () => {
     _reasoningSaveChain = _reasoningSaveChain.then(async () => {
@@ -896,7 +915,7 @@ function _currentAdvancedState() {
   const { provider, model } = _activeModel(_llmCache);
   const cfg = (_llmCache?.providers || {})[provider] || {};
   const options = _effortOptions(provider, cfg);
-  const effort = String(cfg.reasoning_effort || '').trim();
+  const effort = _normalizedReasoningEffort(provider, cfg.model || model, cfg.reasoning_effort);
   const effortValue = options && options.includes(effort) ? effort : (options ? options[0] : '');
   return { provider, model: cfg.model || model, cfg, options, effortValue };
 }
@@ -1013,7 +1032,7 @@ function _renderEffortList(provider) {
     _renderAdvancedSheet();
     return;
   }
-  const current = String(cfg.reasoning_effort || '').trim();
+  const current = _normalizedReasoningEffort(provider, cfg.model, cfg.reasoning_effort);
   _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">&lsaquo;</button> Intelligence`);
   const rows = options.map((value) => {
     const isActive = value === current || (!value && !current);

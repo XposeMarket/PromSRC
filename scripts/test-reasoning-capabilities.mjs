@@ -5,12 +5,15 @@ const efforts = (provider, model) => getReasoningCapability(provider, model).eff
 
 for (const provider of ['openai', 'openai_codex']) {
   for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
-    assert.deepEqual(efforts(provider, model), provider === 'openai_codex'
+    const expected = provider === 'openai_codex' && ['gpt-5.6-sol', 'gpt-5.6-terra'].includes(model)
       ? ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-      : ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+      : ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+    assert.deepEqual(efforts(provider, model), expected);
     assert.equal(getReasoningCapability(provider, model).defaultEffort, 'medium');
   }
 }
+assert.equal(normalizeReasoningEffort('openai_codex', 'gpt-5.6-luna', 'ultra'), undefined);
+assert.equal(normalizeReasoningEffort('openai_codex', 'gpt-5.6-sol', 'ultra'), 'ultra');
 assert.deepEqual(efforts('openai', 'gpt-5.5'), ['none', 'low', 'medium', 'high', 'xhigh']);
 assert.equal(normalizeReasoningEffort('openai', 'gpt-5.5', 'minimal'), undefined);
 assert.deepEqual(efforts('openai', 'gpt-5'), ['minimal', 'low', 'medium', 'high']);
@@ -29,9 +32,11 @@ assert.deepEqual(efforts('xai', 'grok-4.20-multi-agent'), ['low', 'medium', 'hig
 assert.deepEqual(efforts('xai', 'grok-4.3'), ['none', 'low', 'medium', 'high']);
 assert.deepEqual(efforts('xai', 'grok-4.6'), ['none', 'low', 'medium', 'high']);
 assert.equal(supportsFastSpeed('openai', 'gpt-5.5'), true);
+assert.equal(supportsFastSpeed('openai_codex', 'gpt-5.6-luna'), true);
 assert.equal(supportsFastSpeed('openai', 'gpt-5.4-nano'), false);
 assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-8'), true);
 assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-6'), false);
 assert.equal(normalizeSpeed('openai', 'gpt-5.4-nano', 'fast'), 'standard');
+assert.equal(normalizeSpeed('openai_codex', 'gpt-5.6-luna', 'fast'), 'fast');
 
 console.log('reasoning capability policy: ok');

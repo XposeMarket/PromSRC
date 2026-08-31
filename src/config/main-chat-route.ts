@@ -5,6 +5,8 @@
  * default is deliberately kept as a durable mirror so templates and older
  * callers cannot make the UI describe a different route from the live chat.
  */
+import { hasReasoningCapabilityPolicy, normalizeReasoningEffort } from '../providers/reasoning-capabilities.js';
+
 export type MainChatRoute = {
   provider: string;
   model: string;
@@ -12,12 +14,22 @@ export type MainChatRoute = {
   accountId?: string;
 };
 
+function normalizeRouteReasoning(provider: string, model: string, value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  // Ollama and third-party providers may have their own internal thinking
+  // vocabulary. Hosted providers covered by the shared capability contract
+  // must never retain a value that their selected model cannot accept.
+  if (!hasReasoningCapabilityPolicy(provider)) return raw;
+  return normalizeReasoningEffort(provider, model, raw) || '';
+}
+
 export function readLiveMainChatRoute(config: any): MainChatRoute | null {
   const provider = String(config?.llm?.provider || '').trim();
   const providerConfig = provider ? config?.llm?.providers?.[provider] : null;
   const model = String(providerConfig?.model || config?.models?.primary || '').trim();
   if (!provider || !model) return null;
-  const reasoningEffort = String(providerConfig?.reasoning_effort || '').trim();
+  const reasoningEffort = normalizeRouteReasoning(provider, model, providerConfig?.reasoning_effort);
   return { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 
@@ -45,13 +57,12 @@ export function mainChatRoutePatch(config: any, route: MainChatRoute): Record<st
   const targetAccountId = String(route.accountId || nextProvider.defaultAccountId || '').trim();
   const retainCurrentAccountId = route.provider === String(currentLlm.provider || '').trim();
   const accountId = targetAccountId || (retainCurrentAccountId ? String(currentLlm.accountId || '').trim() : '');
-  const effectiveReasoning = route.reasoningEffort !== undefined
+  const requestedReasoning = route.reasoningEffort !== undefined
     ? route.reasoningEffort
-    : String(currentProvider.reasoning_effort || '').trim();
-  if (route.reasoningEffort !== undefined) {
-    if (route.reasoningEffort) nextProvider.reasoning_effort = route.reasoningEffort;
-    else delete nextProvider.reasoning_effort;
-  }
+    : currentProvider.reasoning_effort;
+  const effectiveReasoning = normalizeRouteReasoning(route.provider, route.model, requestedReasoning);
+  if (effectiveReasoning) nextProvider.reasoning_effort = effectiveReasoning;
+  else delete nextProvider.reasoning_effort;
   const defaults = { ...(config?.agent_model_defaults || {}), main_chat: formatMainChatRoute(route) };
   const reasoning = { ...(config?.agent_model_default_reasoning || {}) };
   if (effectiveReasoning) reasoning.main_chat = effectiveReasoning;
@@ -89,8 +100,7 @@ export function preserveLiveMainChatRoute(config: any, nextLlm: any): any {
   const providers = { ...(nextLlm?.providers || {}) };
   const selected = { ...(providers[live.provider] || {}) };
   selected.model = live.model;
-  const prior = config?.llm?.providers?.[live.provider] || {};
-  if (Object.prototype.hasOwnProperty.call(prior, 'reasoning_effort')) selected.reasoning_effort = prior.reasoning_effort;
+  if (live.reasoningEffort) selected.reasoning_effort = live.reasoningEffort;
   else delete selected.reasoning_effort;
   providers[live.provider] = selected;
   const accountId = String(selected.defaultAccountId || config?.llm?.accountId || '').trim();

@@ -389,7 +389,8 @@ export class OpenAICodexAdapter implements LLMProvider {
       // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
       const cfgRoot = getConfig().getConfig() as any;
       const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
-      if (normalizeSpeed('openai_codex', requestedModel, codexCfg.speed) === 'fast') body.service_tier = 'priority';
+      const configuredSpeed = codexCfg.speed || (codexCfg.fast_mode === true ? 'fast' : 'standard');
+      if (normalizeSpeed('openai_codex', requestedModel, configuredSpeed) === 'fast') body.service_tier = 'priority';
       const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
       if (options?.think !== false && (options?.think || configuredEffort)) {
         const rawEffort = options?.think

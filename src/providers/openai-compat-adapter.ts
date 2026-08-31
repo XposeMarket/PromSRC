@@ -313,9 +313,10 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      temperature: options?.temperature ?? 0.25,
 	      max_tokens: options?.max_tokens ?? 512,
 	      stream: !!options?.onToken,
-	    };
+    };
     const speedCfg = (getConfig().getConfig() as any)?.llm?.providers?.[this.id] || {};
-    if (normalizeSpeed(this.id, model, speedCfg.speed) === 'fast') body.service_tier = 'priority';
+    const configuredSpeed = speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
+    if (normalizeSpeed(this.id, model, configuredSpeed) === 'fast') body.service_tier = 'priority';
 	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.
     if (this.config.supportsReasoningEffort ?? EFFORT_PROVIDERS.has(this.id as string)) {
