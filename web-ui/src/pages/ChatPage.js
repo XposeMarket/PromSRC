@@ -1228,12 +1228,11 @@ function renderChatContextRows(rows, windowTokens) {
     const tag = expandable ? 'button' : 'div';
     const typeAttr = expandable ? ' type="button"' : '';
     const dataAttr = expandable ? ` data-ccw-row-id="${escHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
-    const titleAttr = row?.estimated ? ' title="Estimated drill-down; parent total is authoritative."' : '';
     const caret = expandable ? `<span class="chat-context-window-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>` : '';
     const estimate = row?.estimated ? '<span class="chat-context-window-estimate">est</span>' : '';
     const childHtml = expanded ? children.map((child) => renderRow(child, depth + 1)).join('') : '';
     return `
-      <${tag}${typeAttr}${dataAttr}${titleAttr} class="chat-context-window-row${active ? ' is-active' : ''}${muted}${expandable ? ' is-expandable' : ''}${depth > 0 ? ' is-child' : ''}" style="--ccw-depth:${Math.max(0, depth)};">
+      <${tag}${typeAttr}${dataAttr} class="chat-context-window-row${active ? ' is-active' : ''}${muted}${expandable ? ' is-expandable' : ''}${depth > 0 ? ' is-child' : ''}" style="--ccw-depth:${Math.max(0, depth)};">
         <span class="chat-context-window-label">${caret}<span class="chat-context-window-swatch"></span>${escHtml(row?.label || 'Context')}${estimate}</span>
         <span class="chat-context-window-value">${formatContextTokenCount(tokens)}</span>
         <span class="chat-context-window-percent">${escHtml(percentText)}</span>
@@ -1284,12 +1283,6 @@ function formatChatContextWindowUsage(usage) {
     : base;
 }
 
-function applyChatContextWindowLiveOverlay(data) {
-  // Live tool events schedule an authoritative server refresh; do not add
-  // speculative tokens to the bar or breakdown between snapshots.
-  return data;
-}
-
 function toggleChatContextWindowRow(event) {
   if (event) event.stopPropagation();
   const id = event?.currentTarget?.dataset?.ccwRowId;
@@ -1300,7 +1293,6 @@ function toggleChatContextWindowRow(event) {
 }
 
 function renderChatContextWindow(data = chatContextWindowState.data) {
-  data = applyChatContextWindowLiveOverlay(data);
   const btn = document.getElementById('chat-context-window-btn');
   const fill = document.getElementById('chat-context-window-fill');
   const total = document.getElementById('chat-context-window-total');

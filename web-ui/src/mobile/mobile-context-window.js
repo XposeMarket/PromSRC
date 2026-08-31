@@ -25,7 +25,6 @@ let _freshnessTimer = 0;
 let _getSessionId = null;
 let _getProvider = null;
 let _getAccountId = null;
-let _liveTurn = null;
 
 const MOBILE_CONTEXT_REFRESH_INTERVAL_MS = 5000;
 
@@ -53,12 +52,6 @@ function _fmtTokens(value) {
   if (n >= 1_000_000) { const m = n / 1_000_000; return `${m >= 10 ? m.toFixed(0) : m.toFixed(1)}m`; }
   if (n >= 1_000) { const k = n / 1_000; return `${k >= 100 ? k.toFixed(0) : k.toFixed(1)}k`; }
   return String(Math.round(n));
-}
-
-function _estimateTokensFromText(text) {
-  const raw = String(text || '');
-  if (!raw) return 0;
-  return Math.max(1, Math.ceil(raw.length / 4));
 }
 
 function _displayLimit(data, currentState = {}) {
@@ -98,72 +91,15 @@ function _scheduleFreshnessRefresh(delayMs = MOBILE_CONTEXT_REFRESH_INTERVAL_MS)
 }
 
 function _resetLiveTurn(sessionId) {
-  const sid = String(sessionId || '').trim();
-  _liveTurn = sid ? {
-    sessionId: sid,
-    active: true,
-    startedAt: Date.now(),
-    settledAt: 0,
-    toolResultTokens: 0,
-    toolResultBytes: 0,
-    toolDurationMsTotal: 0,
-    toolDurationMsMax: 0,
-    tools: new Map(),
-  } : null;
-  _scheduleRefresh(sid, 0);
+  _scheduleRefresh(String(sessionId || '').trim(), 0);
 }
 
 function _settleLiveTurn(sessionId) {
-  if (!_liveTurn || String(_liveTurn.sessionId || '') !== String(sessionId || '')) return;
-  const live = _liveTurn;
-  live.active = false;
-  live.settledAt = Date.now();
   _scheduleRefresh(sessionId, 450);
-  setTimeout(() => {
-    if (_liveTurn !== live) return;
-    if (Date.now() - Number(live.settledAt || 0) < 7000) return;
-    _liveTurn = null;
-    _scheduleRefresh(sessionId, 0);
-  }, 7500);
 }
 
-function _recordLiveToolResult(sessionId, evt = {}) {
-  const sid = String(sessionId || (typeof _getSessionId === 'function' ? _getSessionId() : '') || _lastSessionId || '').trim();
-  if (!sid) return;
-  if (!_liveTurn || String(_liveTurn.sessionId || '') !== sid) _resetLiveTurn(sid);
-  if (!_liveTurn) return;
-  const telemetry = evt?.extra?.telemetry || evt?.telemetry || {};
-  const resultText = String(evt?.result || evt?.output || evt?.error || '');
-  const resultTokens = Math.max(0, Number(telemetry.resultTokens || telemetry.result_tokens || 0))
-    || _estimateTokensFromText(resultText);
-  if (resultTokens <= 0) return;
-  const resultBytes = Math.max(0, Number(telemetry.resultBytes || telemetry.result_bytes || resultText.length || 0));
-  const durationMsRaw = Number(telemetry.durationMs || telemetry.duration_ms || evt?.durationMs || evt?.elapsedMs || evt?.elapsed_ms || 0);
-  const durationMs = Number.isFinite(durationMsRaw) ? Math.max(0, Math.round(durationMsRaw)) : 0;
-  const action = String(evt?.action || evt?.tool || evt?.name || 'tool').trim() || 'tool';
-  _liveTurn.active = true;
-  _liveTurn.toolResultTokens += resultTokens;
-  _liveTurn.toolResultBytes += resultBytes;
-  if (durationMs > 0) {
-    _liveTurn.toolDurationMsTotal = Math.max(0, Number(_liveTurn.toolDurationMsTotal || 0)) + durationMs;
-    _liveTurn.toolDurationMsMax = Math.max(Math.max(0, Number(_liveTurn.toolDurationMsMax || 0)), durationMs);
-  }
-  const tool = _liveTurn.tools.get(action) || { tool: action, calls: 0, resultTokens: 0, resultBytes: 0, durationMsTotal: 0, durationMsMax: 0 };
-  tool.calls += 1;
-  tool.resultTokens += resultTokens;
-  tool.resultBytes += resultBytes;
-  if (durationMs > 0) {
-    tool.durationMsTotal += durationMs;
-    tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
-  }
-  _liveTurn.tools.set(action, tool);
-  _scheduleRefresh(sid, 900);
-}
-
-function _applyLiveOverlay(data) {
-  // Live tool events schedule an authoritative server refresh; do not add
-  // speculative tokens to the bar or breakdown between snapshots.
-  return data;
+function _recordLiveToolResult(sessionId) {
+  _scheduleRefresh(String(sessionId || '').trim(), 900);
 }
 
 function _gaugeClass(pct) {
@@ -256,7 +192,6 @@ function _renderRows(rows, windowTokens, depth = 0) {
 }
 
 function _renderContext(data) {
-  data = _applyLiveOverlay(data);
   const ring = document.getElementById('pm-ctx-chip-ring');
   const chip = document.getElementById('pm-ctx-chip');
   const fill = document.getElementById('pm-ctx-fill');

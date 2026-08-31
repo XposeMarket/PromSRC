@@ -26,7 +26,6 @@ function activateDesktopPageFeatures(mode) {
   const page = String(mode || '').trim().toLowerCase();
   if (page === 'chat') {
     startDesktopFeature('Chat Intent', () => import('./features/chat/multi-chat-intent.js'));
-    startDesktopFeature('Context Window', () => import('./context-window-live-tracking.js'));
   }
   if (page === 'subagents' || page === 'teams') {
     // Keep these calls as a retry path if a desktop entry chunk failed on the

@@ -111,10 +111,14 @@ try {
   const desktopRequests = requestedPaths.slice();
   for (const expected of [
     '/src/features/chat/multi-chat-intent.js',
-    '/src/context-window-live-tracking.js',
   ]) {
     assert.equal(desktopRequests.includes(expected), true, `desktop Chat activation did not request ${expected}`);
   }
+  assert.equal(
+    desktopRequests.includes('/src/context-window-live-tracking.js'),
+    false,
+    'desktop Chat activation must not request the removed per-turn context overlay',
+  );
   for (const forbidden of [
     '/src/features/chat/multi-chat-workspace-v2.js',
     '/src/features/chat/canonical-desktop-composer.js',
