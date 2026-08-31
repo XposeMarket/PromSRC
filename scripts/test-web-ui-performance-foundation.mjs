@@ -94,6 +94,10 @@ try {
   assert.equal(event.name, 'fixture_ready');
   assert.equal(event.surface, 'mobile');
   assert.equal(Object.hasOwn(event, 'unsafe'), false, 'performance marks must keep their privacy allowlist');
+  const mobileRendererSample = await page.evaluate(() => window.__bootEvents.find((entry) => entry.name === 'renderer_sample'));
+  assert.ok(mobileRendererSample, 'renderer telemetry must emit an initial sample');
+  assert.equal(mobileRendererSample.surface, 'mobile');
+  assert.equal(typeof mobileRendererSample.domNodes, 'number');
 
   requestedPaths.length = 0;
   await page.goto(`${origin}/desktop-fixture`, { waitUntil: 'domcontentloaded' });

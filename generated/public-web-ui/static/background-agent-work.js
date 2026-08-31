@@ -7,6 +7,8 @@ export {
   backgroundAgentPreview,
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
+  appendBackgroundAgentEvent,
+  flushBackgroundAgentWorkPersistence,
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
   mergeBackgroundAgentTraceEntries,

@@ -99,7 +99,7 @@ if (!shouldBootMobile) {
 const MAX_EVENTS = 400;
 const events = [];
 const SAFE_STRING_KEYS = new Set(['traceId', 'clientRequestId', 'runtimeId', 'streamId', 'surface', 'telemetryId', 'toolCallId', 'toolFamily', 'toolName']);
-const SAFE_NUMBER_KEYS = new Set(['elapsedMs', 'durationMs', 'seq', 'count', 'size', 'bytes', 'eventCount', 'resultBytes', 'resultTokens', 'dispatchMs', 'executorMs', 'firstOutputMs', 'resultToModelMs', 'modelToVisibleMs', 'toolWallMs', 'transportMs']);
+const SAFE_NUMBER_KEYS = new Set(['elapsedMs', 'durationMs', 'seq', 'count', 'size', 'bytes', 'eventCount', 'resultBytes', 'resultTokens', 'dispatchMs', 'executorMs', 'firstOutputMs', 'resultToModelMs', 'modelToVisibleMs', 'toolWallMs', 'transportMs', 'jsHeapUsedBytes', 'jsHeapTotalBytes', 'jsHeapLimitBytes', 'domNodes', 'longTaskMaxMs']);
 
 function safeString(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 160);
@@ -146,3 +146,72 @@ export function getClientPerformanceEvents() {
 
 window.__PROM_PERF_MARK = markClientPerformance;
 window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
+
+const RENDERER_SAMPLE_INTERVAL_MS = 2000;
+let rendererPerformanceObserver = null;
+let rendererPerformanceSampleTimer = null;
+
+function rendererPerformanceDetails() {
+  const details = {
+    surface: shouldBootMobile ? 'mobile' : 'desktop',
+  };
+  try {
+    details.domNodes = document.getElementsByTagName('*').length;
+  } catch {}
+  const memory = performance.memory;
+  if (memory && typeof memory === 'object') {
+    details.jsHeapUsedBytes = memory.usedJSHeapSize;
+    details.jsHeapTotalBytes = memory.totalJSHeapSize;
+    details.jsHeapLimitBytes = memory.jsHeapSizeLimit;
+  }
+  return details;
+}
+
+function markRendererPerformanceSample() {
+  markClientPerformance('renderer_sample', rendererPerformanceDetails());
+}
+
+function stopRendererPerformanceTelemetry() {
+  if (rendererPerformanceObserver) {
+    try { rendererPerformanceObserver.disconnect(); } catch {}
+    rendererPerformanceObserver = null;
+  }
+  if (rendererPerformanceSampleTimer !== null) {
+    window.clearInterval(rendererPerformanceSampleTimer);
+    rendererPerformanceSampleTimer = null;
+  }
+}
+
+function installRendererPerformanceTelemetry() {
+  const PerformanceObserverCtor = window.PerformanceObserver;
+  if (typeof PerformanceObserverCtor === 'function') {
+    try {
+      rendererPerformanceObserver = new PerformanceObserverCtor((list) => {
+        const entries = list.getEntries();
+        if (!entries.length) return;
+        let totalDurationMs = 0;
+        let maxDurationMs = 0;
+        entries.forEach((entry) => {
+          const durationMs = Math.max(0, Number(entry.duration) || 0);
+          totalDurationMs += durationMs;
+          maxDurationMs = Math.max(maxDurationMs, durationMs);
+        });
+        markClientPerformance('renderer_long_task_batch', {
+          surface: shouldBootMobile ? 'mobile' : 'desktop',
+          count: entries.length,
+          durationMs: totalDurationMs,
+          longTaskMaxMs: maxDurationMs,
+        });
+      });
+      rendererPerformanceObserver.observe({ type: 'longtask', buffered: true });
+    } catch {
+      rendererPerformanceObserver = null;
+    }
+  }
+  markRendererPerformanceSample();
+  rendererPerformanceSampleTimer = window.setInterval(markRendererPerformanceSample, RENDERER_SAMPLE_INTERVAL_MS);
+  window.addEventListener('pagehide', stopRendererPerformanceTelemetry, { once: true });
+  window.__PROM_RENDERER_PERF_STOP = stopRendererPerformanceTelemetry;
+}
+
+installRendererPerformanceTelemetry();

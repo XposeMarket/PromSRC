@@ -49,11 +49,15 @@ import {
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
   persistBackgroundAgentWork,
-  mergeBackgroundAgentEvents,
+  appendBackgroundAgentEvent,
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+const backgroundAgentRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 120, ceilingMs: 360, hiddenMs: 500 });
+const processLogRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 80, ceilingMs: 240, hiddenMs: 400 });
+const PROCESS_LOG_PERSIST_DEBOUNCE_MS = 750;
+const processLogPersistTimers = new Map();
 
 let creativeSceneGraph = null;
 let CREATIVE_LIBRARY_PACKS = [];
@@ -8228,6 +8232,7 @@ function refreshVisibleChannelsList() {
 }
 
 function persistActiveChat() {
+  cancelProcessLogPersistence(window.activeChatSessionId);
   const idx = window.chatSessions.findIndex(s => s.id === window.activeChatSessionId);
   if (idx === -1) return;
   window.chatSessions[idx].history = window.chatHistory;
@@ -16245,7 +16250,53 @@ function renderProgressPanel() {
   });
 }
 
+function cancelProcessLogPersistence(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const timer = processLogPersistTimers.get(sid);
+  if (timer !== undefined) {
+    if (typeof clearTimeout === 'function') clearTimeout(timer);
+    processLogPersistTimers.delete(sid);
+  }
+}
+
+function scheduleProcessLogPersistence(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  cancelProcessLogPersistence(sid);
+  if (options.immediate === true || typeof setTimeout !== 'function') {
+    persistSession(sid);
+    return;
+  }
+  const timer = setTimeout(() => {
+    processLogPersistTimers.delete(sid);
+    persistSession(sid);
+  }, PROCESS_LOG_PERSIST_DEBOUNCE_MS);
+  timer?.unref?.();
+  processLogPersistTimers.set(sid, timer);
+}
+
+function flushProcessLogPersistence() {
+  for (const sid of [...processLogPersistTimers.keys()]) {
+    cancelProcessLogPersistence(sid);
+    persistSession(sid);
+  }
+}
+
+window.addEventListener('pagehide', flushProcessLogPersistence);
+
+function scheduleProcessLogRender(renderFn = renderProcessLog, options = {}) {
+  if (typeof renderFn !== 'function') return;
+  const task = () => {
+    try { renderFn(); } catch {}
+  };
+  if (options.immediate === true) processLogRenderScheduler.flush('process-log', task);
+  else processLogRenderScheduler.schedule('process-log', task);
+}
+
 function clearProcessLog() {
+  cancelProcessLogPersistence(window.activeChatSessionId);
+  processLogRenderScheduler.cancel('process-log');
   window.processLogEntries.length = 0;
   const el = document.getElementById('process-log');
   if (el) el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>';
@@ -16261,15 +16312,17 @@ function addProcessEntry(type, content, extra) {
   const contentText = String(content || '');
   if (!actor && contentText.startsWith('Task "') && (contentText.includes('check sidebar') || contentText.includes('nothing to report'))) return;
   window.processLogEntries.push({ ts, type, content, extra, actor });
-  renderProcessLog();
-  maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
-  persistActiveChat();
-  if (window.isThinking) {
-    const panel = document.getElementById('current-turn-process');
-    if (panel && panel.style.display !== 'none' && window.currentTurnStartIndex >= 0) {
-      panel.innerHTML = formatProcessLines(window.processLogEntries.slice(window.currentTurnStartIndex));
+  scheduleProcessLogRender(() => {
+    renderProcessLog();
+    maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
+    if (window.isThinking) {
+      const panel = document.getElementById('current-turn-process');
+      if (panel && panel.style.display !== 'none' && window.currentTurnStartIndex >= 0) {
+        panel.innerHTML = formatProcessLines(window.processLogEntries.slice(window.currentTurnStartIndex));
+      }
     }
-  }
+  });
+  scheduleProcessLogPersistence(window.activeChatSessionId);
 }
 
 function addSessionProcessEntry(sessionId, type, content, extra) {
@@ -16286,17 +16339,20 @@ function addSessionProcessEntry(sessionId, type, content, extra) {
   const isViewing = window.activeChatSessionId === sessionId;
   if (isViewing) {
     window.processLogEntries = sess.processLog;
-    renderProcessLog();
-    maybeAutoScrollRightColumn(!!window._sessionThinking?.[sessionId] || window.rightColumnAutoFollow);
-    if (window._sessionThinking?.[sessionId]) {
-      const panel = document.getElementById('current-turn-process');
-      const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
-      if (panel && panel.style.display !== 'none' && startIndex >= 0) {
-        panel.innerHTML = formatProcessLines(sess.processLog.slice(startIndex));
+    scheduleProcessLogRender(() => {
+      if (window.activeChatSessionId !== sessionId) return;
+      renderProcessLog();
+      maybeAutoScrollRightColumn(!!window._sessionThinking?.[sessionId] || window.rightColumnAutoFollow);
+      if (window._sessionThinking?.[sessionId]) {
+        const panel = document.getElementById('current-turn-process');
+        const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
+        if (panel && panel.style.display !== 'none' && startIndex >= 0) {
+          panel.innerHTML = formatProcessLines(sess.processLog.slice(startIndex));
+        }
       }
-    }
+    });
   }
-  persistSession(sessionId);
+  scheduleProcessLogPersistence(sessionId);
 }
 
 function renderProcessLog() {
@@ -17187,6 +17243,7 @@ function syncSessionSidebarSummary(session) {
 
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
+  cancelProcessLogPersistence(id);
   const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx === -1) return;
   const s = window.chatSessions[idx];
@@ -19046,6 +19103,8 @@ function toggleAgentPanel(agentId) {
 }
 
 // ---- Background Spawn Dock (one-shot background_spawn agents only) ----
+let backgroundSpawnDockRenderSignature = null;
+
 function ensureBackgroundSpawnDockMap() {
   if (!(window.backgroundSpawnDockMap instanceof Map)) window.backgroundSpawnDockMap = new Map();
   return window.backgroundSpawnDockMap;
@@ -19463,6 +19522,21 @@ function renderBackgroundSpawnPlan(lane) {
   `;
 }
 
+function renderBackgroundAgentUi() {
+  const detailId = String(window.backgroundAgentDetailId || '').trim();
+  if (detailId) renderBackgroundAgentDetail();
+  else renderBackgroundSpawnDock();
+  if (typeof renderSourcePanel === 'function' && sourcePanelEnvironmentIsVisible()) renderSourcePanel();
+}
+
+function scheduleBackgroundAgentUiUpdate(options = {}) {
+  const task = () => {
+    try { renderBackgroundAgentUi(); } catch {}
+  };
+  if (options.immediate === true) backgroundAgentRenderScheduler.flush('background-agent', task);
+  else backgroundAgentRenderScheduler.schedule('background-agent', task);
+}
+
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
@@ -19483,14 +19557,12 @@ function pushBackgroundSpawnEvent(msg = {}) {
   }
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
-    lane.events = mergeBackgroundAgentEvents(lane.events, [entry]);
+    lane.events = appendBackgroundAgentEvent(lane.events, entry);
     lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   }
   if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  scheduleBackgroundAgentUiUpdate();
 }
 
 function completeBackgroundSpawnLane(msg = {}) {
@@ -19519,9 +19591,8 @@ function completeBackgroundSpawnLane(msg = {}) {
       error: String(msg.error || existing.error || '').trim(),
       fileChanges: msg.fileChanges || existing.fileChanges || null,
       events: existing.events || [],
-    });
-    if (typeof renderSourcePanel === 'function') renderSourcePanel();
-    renderBackgroundAgentDetail();
+    }, { immediate: true });
+    scheduleBackgroundAgentUiUpdate({ immediate: true });
     return;
   }
   if (!backgroundSpawnEventSessionMatches(msg)) return;
@@ -19537,13 +19608,17 @@ function completeBackgroundSpawnLane(msg = {}) {
   const content = failed
     ? `${lane.agentName || 'Agent'} failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
     : `${lane.agentName || 'Agent'} complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
-  lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
+  lane.events = appendBackgroundAgentEvent(lane.events, {
+    ts,
+    type: failed ? 'error' : 'final',
+    actor: 'Background Agent',
+    content,
+    extra: msg,
+  });
   lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   lane.updatedAt = Date.now();
-  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), { immediate: true });
+  scheduleBackgroundAgentUiUpdate({ immediate: true });
 }
 
 function toggleBackgroundSpawnLane(id) {
@@ -19629,10 +19704,29 @@ function closeBackgroundAgentDetail() {
 function renderBackgroundSpawnDock() {
   const dock = document.getElementById('background-spawn-dock');
   if (!dock) return;
-  updateBackgroundSpawnDockOffset();
   const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
     .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
     .sort((a, b) => a.startedAt - b.startedAt);
+  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
+  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
+  const signature = [
+    String(window.activeChatSessionId || '').trim(),
+    dockOpen ? 'open' : 'collapsed',
+    lanes.map((lane) => [
+      lane.id,
+      lane.status,
+      lane.updatedAt,
+      lane.lastSeq,
+      lane.events?.length || 0,
+      lane.result,
+      lane.error,
+      lane.expanded === true ? 'expanded' : '',
+    ].join(':')).join('|'),
+  ].join('::');
+  if (signature === backgroundSpawnDockRenderSignature && dock.dataset.backgroundRenderSignature === signature) return;
+  backgroundSpawnDockRenderSignature = signature;
+  dock.dataset.backgroundRenderSignature = signature;
+  updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
   dock.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
@@ -19640,8 +19734,6 @@ function renderBackgroundSpawnDock() {
     updateBackgroundSpawnDockOffset();
     return;
   }
-  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
-  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
   dock.classList.toggle('is-open', dockOpen);
   dock.classList.toggle('is-collapsed', !dockOpen);
   if (!dockOpen) {

@@ -1,7 +1,10 @@
 const BACKGROUND_AGENT_WORK_KEY = 'prometheus_background_agent_work_v1';
+const BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS = 750;
 
 let backgroundAgentWorkCacheRaw = null;
 let backgroundAgentWorkCache = null;
+let backgroundAgentWorkPersistTimer = null;
+let backgroundAgentWorkPersistPending = false;
 
 export const BACKGROUND_AGENT_NAMES = [
   'Atlas', 'Athena', 'Apollo', 'Artemis', 'Ares', 'Hermes',
@@ -119,7 +122,8 @@ function normalizeBackgroundAgentSteer(message = {}) {
   };
 }
 
-export function normalizeBackgroundAgentWork(record = {}) {
+export function normalizeBackgroundAgentWork(record = {}, options = {}) {
+  const mergeEvents = options.mergeEvents !== false;
   const id = String(record.id || record.bgId || record.backgroundId || record.agentId || '').trim();
   const sessionId = String(record.sessionId || record.spawnerSessionId || record.parentSessionId || '').trim();
   if (!id || !sessionId) return null;
@@ -155,7 +159,7 @@ export function normalizeBackgroundAgentWork(record = {}) {
     fileChanges: record.fileChanges || null,
     streamId: String(record.streamId || stream.streamId || '').trim(),
     lastSeq: Math.max(0, Math.floor(Number(record.lastSeq || stream.lastSeq || 0)) || 0),
-    events: mergeBackgroundAgentEvents([], events),
+    events: mergeEvents ? mergeBackgroundAgentEvents([], events) : events.slice(-1200),
     liveTraceEntries,
     steerMessages: (Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : [])
       .map(normalizeBackgroundAgentSteer)
@@ -243,10 +247,57 @@ export function mergeBackgroundAgentEvents(existing = [], incoming = []) {
     .slice(-1200);
 }
 
+// The live gateway stream is ordered by sequence number. Keep that hot path
+// append-only and reserve the Map/sort merge for replayed or out-of-order data.
+export function appendBackgroundAgentEvent(existing = [], incoming = {}) {
+  const normalized = normalizeBackgroundAgentEvent(incoming);
+  if (!normalized) return Array.isArray(existing) ? existing.slice() : [];
+  const events = Array.isArray(existing) ? existing.slice() : [];
+  const previous = events[events.length - 1];
+  const streamId = String(normalized.streamId || '').trim();
+  const seq = Number(normalized.seq || 0);
+  const previousStreamId = String(previous?.streamId || '').trim();
+  const previousSeq = Number(previous?.seq || 0);
+  if (streamId && seq && (!previous || (previousStreamId === streamId && seq > previousSeq))) {
+    events.push(normalized);
+    return events.slice(-1200);
+  }
+  return mergeBackgroundAgentEvents(events, [normalized]);
+}
+
 function cacheBackgroundAgentWork(raw, records) {
   backgroundAgentWorkCacheRaw = raw;
   backgroundAgentWorkCache = records;
   return records;
+}
+
+function clearBackgroundAgentWorkPersistTimer() {
+  if (backgroundAgentWorkPersistTimer === null) return;
+  if (typeof clearTimeout === 'function') clearTimeout(backgroundAgentWorkPersistTimer);
+  backgroundAgentWorkPersistTimer = null;
+}
+
+function scheduleBackgroundAgentWorkPersistence() {
+  backgroundAgentWorkPersistPending = true;
+  clearBackgroundAgentWorkPersistTimer();
+  if (typeof setTimeout !== 'function') {
+    flushBackgroundAgentWorkPersistence();
+    return;
+  }
+  backgroundAgentWorkPersistTimer = setTimeout(() => {
+    backgroundAgentWorkPersistTimer = null;
+    flushBackgroundAgentWorkPersistence();
+  }, BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS);
+  // A test/runtime process should not be kept alive solely by a pending UI
+  // persistence write when the host exposes Node's timer handles.
+  backgroundAgentWorkPersistTimer?.unref?.();
+}
+
+export function flushBackgroundAgentWorkPersistence() {
+  clearBackgroundAgentWorkPersistTimer();
+  if (!backgroundAgentWorkPersistPending) return Array.isArray(backgroundAgentWorkCache) ? backgroundAgentWorkCache : [];
+  backgroundAgentWorkPersistPending = false;
+  return writeBackgroundAgentWork(Array.isArray(backgroundAgentWorkCache) ? backgroundAgentWorkCache : []);
 }
 
 export function readBackgroundAgentWork() {
@@ -264,6 +315,8 @@ export function readBackgroundAgentWork() {
 }
 
 export function writeBackgroundAgentWork(records = []) {
+  clearBackgroundAgentWorkPersistTimer();
+  backgroundAgentWorkPersistPending = false;
   try {
     const normalized = (Array.isArray(records) ? records : [])
       .map(normalizeBackgroundAgentWork)
@@ -278,24 +331,41 @@ export function writeBackgroundAgentWork(records = []) {
   }
 }
 
-export function persistBackgroundAgentWork(record = {}) {
-  const normalized = normalizeBackgroundAgentWork(record);
+export function persistBackgroundAgentWork(record = {}, options = {}) {
+  const normalized = normalizeBackgroundAgentWork(record, { mergeEvents: false });
   if (!normalized) return null;
   const records = readBackgroundAgentWork();
   const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
   if (index >= 0) {
+    const previous = records[index];
+    const previousLastSeq = Number(previous.lastSeq || 0);
+    const normalizedLastSeq = Number(normalized.lastSeq || 0);
+    const sameStream = Boolean(normalized.streamId)
+      && normalized.streamId === String(previous.streamId || '').trim();
     records[index] = {
-      ...records[index],
+      ...previous,
       ...normalized,
-      events: mergeBackgroundAgentEvents(records[index].events, normalized.events),
-      liveTraceEntries: mergeBackgroundAgentTraceEntries(records[index].liveTraceEntries, normalized.liveTraceEntries),
-      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : records[index].steerMessages,
-      backgroundSessionId: normalized.backgroundSessionId || records[index].backgroundSessionId,
-      streamId: normalized.streamId || records[index].streamId,
-      lastSeq: Math.max(Number(records[index].lastSeq || 0), Number(normalized.lastSeq || 0)),
+      // A monotonic stream update contains the complete bounded lane buffer;
+      // replacing it avoids re-sorting up to 1,200 entries on every event.
+      events: sameStream && normalizedLastSeq > previousLastSeq
+        ? normalized.events.slice(-1200)
+        : mergeBackgroundAgentEvents(previous.events, normalized.events),
+      liveTraceEntries: mergeBackgroundAgentTraceEntries(previous.liveTraceEntries, normalized.liveTraceEntries),
+      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages,
+      backgroundSessionId: normalized.backgroundSessionId || previous.backgroundSessionId,
+      streamId: normalized.streamId || previous.streamId,
+      lastSeq: Math.max(previousLastSeq, normalizedLastSeq),
     };
-  } else records.push(normalized);
-  writeBackgroundAgentWork(records);
+  } else {
+    records.push({
+      ...normalized,
+      events: mergeBackgroundAgentEvents([], normalized.events),
+    });
+  }
+  if (options.immediate === true) {
+    backgroundAgentWorkPersistPending = true;
+    flushBackgroundAgentWorkPersistence();
+  } else scheduleBackgroundAgentWorkPersistence();
   return normalized;
 }
 
@@ -351,4 +421,8 @@ export function backgroundAgentRecordToMessage(record = {}) {
       ? Math.max(0, Number(record.completedAt) - Number(record.startedAt))
       : undefined,
   };
+}
+
+if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('pagehide', flushBackgroundAgentWorkPersistence);
 }
