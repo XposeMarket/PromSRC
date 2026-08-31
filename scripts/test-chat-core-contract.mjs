@@ -54,12 +54,16 @@ assert.deepEqual(slash.mergeSlashCommandSkillIds('/visual make a chart', ['exist
 let backgroundRaw = JSON.stringify([
   { id: 'bg-cache-1', sessionId: 'session-cache', status: 'running', updatedAt: 1 },
 ]);
+let backgroundWriteCount = 0;
 globalThis.localStorage = {
   getItem(key) {
     return key === 'prometheus_background_agent_work_v1' ? backgroundRaw : null;
   },
   setItem(key, value) {
-    if (key === 'prometheus_background_agent_work_v1') backgroundRaw = String(value);
+    if (key === 'prometheus_background_agent_work_v1') {
+      backgroundWriteCount += 1;
+      backgroundRaw = String(value);
+    }
   },
 };
 
@@ -78,6 +82,25 @@ assert.equal(normalized.events.length, 1);
 assert.equal(background.backgroundAgentPreview('a '.repeat(100), 20).length <= 20, true);
 assert.equal(background.backgroundAgentAgeLabel(Date.now(), Date.now()), 'just now');
 assert.equal(background.resolveBackgroundAgentIdentity('bg-1').name.length > 0, true);
+const firstLiveEvent = background.appendBackgroundAgentEvent([], {
+  streamId: 'stream-test',
+  seq: 1,
+  type: 'tool',
+  content: 'first',
+});
+const secondLiveEvent = background.appendBackgroundAgentEvent(firstLiveEvent, {
+  streamId: 'stream-test',
+  seq: 2,
+  type: 'result',
+  content: 'second',
+});
+assert.deepEqual(secondLiveEvent.map((event) => event.seq), [1, 2]);
+assert.equal(background.appendBackgroundAgentEvent(secondLiveEvent, {
+  streamId: 'stream-test',
+  seq: 2,
+  type: 'result',
+  content: 'second',
+}).length, 2, 'duplicate stream events must remain deduplicated');
 
 const firstRead = background.readBackgroundAgentWork();
 const secondRead = background.readBackgroundAgentWork();
@@ -96,6 +119,33 @@ const written = background.writeBackgroundAgentWork([
 ]);
 assert.strictEqual(background.readBackgroundAgentWork(), written, 'writes should seed the same normalized cache used by reads');
 assert.equal(written[0].id, 'bg-cache-3');
+
+const writesBeforeDeferredPersist = backgroundWriteCount;
+background.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 1,
+  events: [firstLiveEvent[0]],
+  updatedAt: 4,
+});
+background.persistBackgroundAgentWork({
+  id: 'bg-live',
+  sessionId: 'session-live',
+  status: 'running',
+  streamId: 'stream-test',
+  lastSeq: 2,
+  events: secondLiveEvent,
+  updatedAt: 5,
+});
+assert.equal(backgroundWriteCount, writesBeforeDeferredPersist, 'live persistence should be deferred');
+background.flushBackgroundAgentWorkPersistence();
+assert.equal(backgroundWriteCount, writesBeforeDeferredPersist + 1, 'flush should coalesce deferred persistence into one write');
+assert.deepEqual(
+  background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
+  [1, 2],
+);
 
 delete globalThis.localStorage;
 
