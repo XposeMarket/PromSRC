@@ -80,6 +80,11 @@ try {
     '/src/features/chat/multi-chat-workspace-v2.js',
     '/src/features/chat/canonical-desktop-composer.js',
     '/src/context-window-live-tracking.js',
+    '/src/prom-bot.js',
+    '/src/prom-bot-roster.js',
+    '/src/prom-bot-collab.js',
+    '/src/prom-bot-collab-hardening.js',
+    '/src/team-prom-bot-flow.js',
     '/src/bot-create.js',
     '/src/bot-create-settings-bridge.js',
   ]) {
@@ -93,6 +98,12 @@ try {
   requestedPaths.length = 0;
   await page.goto(`${origin}/desktop-fixture`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__fixtureReady === true);
+  for (const expected of [
+    '/src/prom-bot.js',
+    '/src/bot-create.js',
+  ]) {
+    assert.equal(requestedPaths.includes(expected), true, `desktop initial boot did not request ${expected}`);
+  }
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('prometheus:page-activated', { detail: { mode: 'chat' } }));
   });
@@ -116,7 +127,11 @@ try {
     window.dispatchEvent(new CustomEvent('prometheus:page-activated', { detail: { mode: 'subagents' } }));
   });
   await page.waitForTimeout(100);
-  assert.equal(requestedPaths.includes('/src/bot-create.js'), true, 'desktop Subagents activation did not request the Bot creation owner');
+  assert.equal(
+    requestedPaths.includes('/src/features/chat/canonical-desktop-composer.js'),
+    true,
+    'desktop Subagents activation did not request the canonical composer owner',
+  );
   await context.close();
 } finally {
   await browser?.close().catch(() => {});

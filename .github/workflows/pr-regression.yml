@@ -81,6 +81,8 @@ jobs:
           node scripts/test-prom-bot-team-flow.mjs
           node scripts/test-bot-creation-contract.mjs
           node scripts/test-prom-bot-persistent-agent-hardening.mjs
+          node scripts/test-web-ui-performance-foundation.mjs
+          node scripts/test-web-ui-production-smoke.mjs
       - name: Verify Prometheus chat link routing
         run: npm run test:link-routing
       - name: Verify web UI restart reload dedupe
