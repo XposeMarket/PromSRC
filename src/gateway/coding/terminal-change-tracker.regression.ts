@@ -221,6 +221,7 @@ async function main(): Promise<void> {
   assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short && printf changed | dd of=tracked.txt'), true, 'a read-only prefix must not suppress tracking for a later compound mutation');
   assert.equal(shouldTrackTerminalWorkspaceChanges('Get-Content README.md; Invoke-Expression $nextCommand'), true, 'an unclassified PowerShell clause after a read-only prefix must stay tracked');
   assert.equal(shouldTrackTerminalWorkspaceChanges('$raw=Get-Content README.md | Invoke-Expression; Write-Output $raw'), true, 'a read-prefixed PowerShell pipeline must not bypass workspace tracking');
+  assert.equal(shouldTrackTerminalWorkspaceChanges('git status --short\nInvoke-Expression $nextCommand'), true, 'a read-only first line must not suppress tracking for a later newline-separated command');
   assert.equal(shouldTrackTerminalWorkspaceChanges('npm run build'), true, 'unknown or potentially mutating commands stay tracked');
   runGitWorkspaceCase();
   runNonGitWorkspaceCase();

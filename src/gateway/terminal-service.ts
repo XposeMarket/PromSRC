@@ -167,7 +167,7 @@ export function shouldTrackTerminalWorkspaceChanges(command: string): boolean {
   // Unless we can recognize the whole sequence as observational, retain change
   // tracking so later clauses cannot mutate files without undo/plan evidence.
   const unquoted = stripQuoted(source);
-  if (/(?:&&|\|\||[;|])/.test(unquoted) && !isKnownReadOnlyPowerShellSequence(source)) return true;
+  if (/(?:&&|\|\||[;|]|[\r\n])/.test(unquoted) && !isKnownReadOnlyPowerShellSequence(source)) return true;
   return false;
 }
 
