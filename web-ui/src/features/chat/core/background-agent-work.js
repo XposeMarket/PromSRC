@@ -342,14 +342,17 @@ export function persistBackgroundAgentWork(record = {}, options = {}) {
     const normalizedLastSeq = Number(normalized.lastSeq || 0);
     const sameStream = Boolean(normalized.streamId)
       && normalized.streamId === String(previous.streamId || '').trim();
+    const previousEvents = Array.isArray(previous.events) ? previous.events : [];
+    const hasCompleteEventBuffer = normalized.events.length >= previousEvents.length;
     records[index] = {
       ...previous,
       ...normalized,
-      // A monotonic stream update contains the complete bounded lane buffer;
-      // replacing it avoids re-sorting up to 1,200 entries on every event.
-      events: sameStream && normalizedLastSeq > previousLastSeq
+      // Internal live lanes provide the complete bounded buffer. Keep the
+      // merge fallback for callers that persist only the newest event so the
+      // optimization cannot discard already-recorded trace history.
+      events: sameStream && normalizedLastSeq > previousLastSeq && hasCompleteEventBuffer
         ? normalized.events.slice(-1200)
-        : mergeBackgroundAgentEvents(previous.events, normalized.events),
+        : mergeBackgroundAgentEvents(previousEvents, normalized.events),
       liveTraceEntries: mergeBackgroundAgentTraceEntries(previous.liveTraceEntries, normalized.liveTraceEntries),
       steerMessages: normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages,
       backgroundSessionId: normalized.backgroundSessionId || previous.backgroundSessionId,

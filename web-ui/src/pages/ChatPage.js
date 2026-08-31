@@ -18,6 +18,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
 } from '../features/chat/questions/question-model.js';
@@ -54,10 +55,16 @@ import {
 } from '../background-agent-work.js';
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
-const backgroundAgentRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 120, ceilingMs: 360, hiddenMs: 500 });
-const processLogRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 80, ceilingMs: 240, hiddenMs: 400 });
-const PROCESS_LOG_PERSIST_DEBOUNCE_MS = 750;
-const processLogPersistTimers = new Map();
+const chatPerformanceRuntime = createChatPerformanceRuntime({
+  persistSession,
+  persistActiveChat,
+  getChatSessionById,
+  getSessionStreamState,
+  renderProcessLog,
+  maybeAutoScrollRightColumn,
+  formatProcessLines,
+});
+const { addProcessEntry, addSessionProcessEntry, clearProcessLog } = chatPerformanceRuntime;
 
 let creativeSceneGraph = null;
 let CREATIVE_LIBRARY_PACKS = [];
@@ -8232,7 +8239,7 @@ function refreshVisibleChannelsList() {
 }
 
 function persistActiveChat() {
-  cancelProcessLogPersistence(window.activeChatSessionId);
+  chatPerformanceRuntime.cancelProcessLogPersistence(window.activeChatSessionId);
   const idx = window.chatSessions.findIndex(s => s.id === window.activeChatSessionId);
   if (idx === -1) return;
   window.chatSessions[idx].history = window.chatHistory;
@@ -16250,111 +16257,6 @@ function renderProgressPanel() {
   });
 }
 
-function cancelProcessLogPersistence(sessionId) {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return;
-  const timer = processLogPersistTimers.get(sid);
-  if (timer !== undefined) {
-    if (typeof clearTimeout === 'function') clearTimeout(timer);
-    processLogPersistTimers.delete(sid);
-  }
-}
-
-function scheduleProcessLogPersistence(sessionId, options = {}) {
-  const sid = String(sessionId || '').trim();
-  if (!sid) return;
-  cancelProcessLogPersistence(sid);
-  if (options.immediate === true || typeof setTimeout !== 'function') {
-    persistSession(sid);
-    return;
-  }
-  const timer = setTimeout(() => {
-    processLogPersistTimers.delete(sid);
-    persistSession(sid);
-  }, PROCESS_LOG_PERSIST_DEBOUNCE_MS);
-  timer?.unref?.();
-  processLogPersistTimers.set(sid, timer);
-}
-
-function flushProcessLogPersistence() {
-  for (const sid of [...processLogPersistTimers.keys()]) {
-    cancelProcessLogPersistence(sid);
-    persistSession(sid);
-  }
-}
-
-window.addEventListener('pagehide', flushProcessLogPersistence);
-
-function scheduleProcessLogRender(renderFn = renderProcessLog, options = {}) {
-  if (typeof renderFn !== 'function') return;
-  const task = () => {
-    try { renderFn(); } catch {}
-  };
-  if (options.immediate === true) processLogRenderScheduler.flush('process-log', task);
-  else processLogRenderScheduler.schedule('process-log', task);
-}
-
-function clearProcessLog() {
-  cancelProcessLogPersistence(window.activeChatSessionId);
-  processLogRenderScheduler.cancel('process-log');
-  window.processLogEntries.length = 0;
-  const el = document.getElementById('process-log');
-  if (el) el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>';
-  window.processLogAutoFollow = true;
-  window.rightColumnAutoFollow = true;
-  maybeAutoScrollRightColumn(true);
-  persistActiveChat();
-}
-
-function addProcessEntry(type, content, extra) {
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  const contentText = String(content || '');
-  if (!actor && contentText.startsWith('Task "') && (contentText.includes('check sidebar') || contentText.includes('nothing to report'))) return;
-  window.processLogEntries.push({ ts, type, content, extra, actor });
-  scheduleProcessLogRender(() => {
-    renderProcessLog();
-    maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
-    if (window.isThinking) {
-      const panel = document.getElementById('current-turn-process');
-      if (panel && panel.style.display !== 'none' && window.currentTurnStartIndex >= 0) {
-        panel.innerHTML = formatProcessLines(window.processLogEntries.slice(window.currentTurnStartIndex));
-      }
-    }
-  });
-  scheduleProcessLogPersistence(window.activeChatSessionId);
-}
-
-function addSessionProcessEntry(sessionId, type, content, extra) {
-  const sess = getChatSessionById(sessionId);
-  if (!sess) {
-    addProcessEntry(type, content, extra);
-    return;
-  }
-  if (!Array.isArray(sess.processLog)) sess.processLog = [];
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  sess.processLog.push({ ts, type, content, extra, actor });
-  const st = getSessionStreamState(sessionId);
-  const isViewing = window.activeChatSessionId === sessionId;
-  if (isViewing) {
-    window.processLogEntries = sess.processLog;
-    scheduleProcessLogRender(() => {
-      if (window.activeChatSessionId !== sessionId) return;
-      renderProcessLog();
-      maybeAutoScrollRightColumn(!!window._sessionThinking?.[sessionId] || window.rightColumnAutoFollow);
-      if (window._sessionThinking?.[sessionId]) {
-        const panel = document.getElementById('current-turn-process');
-        const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
-        if (panel && panel.style.display !== 'none' && startIndex >= 0) {
-          panel.innerHTML = formatProcessLines(sess.processLog.slice(startIndex));
-        }
-      }
-    });
-  }
-  scheduleProcessLogPersistence(sessionId);
-}
-
 function renderProcessLog() {
   const el = document.getElementById('process-log');
   if (!el) return;
@@ -17243,7 +17145,7 @@ function syncSessionSidebarSummary(session) {
 
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
-  cancelProcessLogPersistence(id);
+  chatPerformanceRuntime.cancelProcessLogPersistence(id);
   const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx === -1) return;
   const s = window.chatSessions[idx];
@@ -19530,11 +19432,7 @@ function renderBackgroundAgentUi() {
 }
 
 function scheduleBackgroundAgentUiUpdate(options = {}) {
-  const task = () => {
-    try { renderBackgroundAgentUi(); } catch {}
-  };
-  if (options.immediate === true) backgroundAgentRenderScheduler.flush('background-agent', task);
-  else backgroundAgentRenderScheduler.schedule('background-agent', task);
+  chatPerformanceRuntime.scheduleBackgroundAgentUiUpdate(renderBackgroundAgentUi, options);
 }
 
 function pushBackgroundSpawnEvent(msg = {}) {
