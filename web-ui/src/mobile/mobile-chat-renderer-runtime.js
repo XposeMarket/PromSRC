@@ -2216,6 +2216,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) return `index:${index}`;
     const traceKey = _mobileTraceNodeKey(node, index);
     if (node.classList?.contains('pm-trace-timeline')) return 'trace-timeline';
+    if (node.classList?.contains('pm-trace-drawer')) return 'trace-drawer';
     if (node.classList?.contains('pm-work-timer')) return 'work-timer';
     if (node.classList?.contains('pm-sender')) return 'sender';
     if (node.classList?.contains('pm-time')) return 'time';
@@ -2243,9 +2244,16 @@ export function createMobileChatRendererRuntime(context = {}) {
     Array.from(nextBubble.children).forEach((nextNode, index) => {
       const key = _mobileSideBubbleChildKey(nextNode, index);
       const currentNode = existing.get(key);
-      if (!currentNode || currentNode.tagName !== nextNode.tagName || currentNode.className !== nextNode.className) {
+      const sameTraceDrawerShell = currentNode?.classList?.contains('pm-trace-drawer')
+        && nextNode.classList?.contains('pm-trace-drawer');
+      if (!currentNode
+        || currentNode.tagName !== nextNode.tagName
+        || (currentNode.className !== nextNode.className && !sameTraceDrawerShell)) {
         ordered.push(nextNode.cloneNode(true));
         return;
+      }
+      if (sameTraceDrawerShell && currentNode.className !== nextNode.className) {
+        currentNode.className = nextNode.className;
       }
       if (nextNode.classList?.contains('pm-trace-timeline')) {
         _patchMobileLiveTraceTimeline(currentNode, nextNode);
@@ -2621,12 +2629,21 @@ export function createMobileChatRendererRuntime(context = {}) {
       const drawer = bubble.querySelector('.pm-trace-drawer');
       if (!drawer) return;
       const isExpanded = timerEl.classList.contains('expanded');
-      timerEl.classList.toggle('expanded', !isExpanded);
-      drawer.classList.toggle('open', !isExpanded);
+      const nextExpanded = !isExpanded;
+      timerEl.classList.toggle('expanded', nextExpanded);
+      timerEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+      drawer.classList.toggle('open', nextExpanded);
       if (isExpanded) {
         drawer.querySelectorAll('details.pm-trace-tool-group, details.pm-trace-thought-group').forEach((detail) => detail.removeAttribute('open'));
       }
       event.stopPropagation();
+    });
+    threadEl.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const timerEl = event.target?.closest?.('[data-expandable="trace"]');
+      if (!timerEl) return;
+      event.preventDefault();
+      timerEl.click();
     });
   
     const beginReveal = (clientX, clientY, id, inputType = '') => {
@@ -3111,13 +3128,16 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       liveTraceEntries: Array.isArray(message?.metadata?.liveTraceEntries) ? message.metadata.liveTraceEntries : [],
     },
   };
+  const traceExpanded = typeof message?.traceExpanded === 'boolean'
+    ? message.traceExpanded
+    : streaming;
   const turnPresentation = _mobileAgentTurnPresentation(message);
   let inner = '';
   if (fromUser) {
     inner = `${voiceMeta ? `<span class="pm-sender">${escapeHtml(voiceMeta)}</span>` : ''}<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>${attachmentHtml}`;
   } else {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
-    inner += _renderMobileWorkTimer(traceMessage);
+    inner += _renderMobileWorkTimer(traceMessage, { expanded: traceExpanded });
     inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     const answerStarted = !!String(text || '').trim();
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
@@ -3133,9 +3153,9 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       // Keep activity mounted through final-answer streaming. The work timer
       // owns the disclosure target, so active traces can be collapsed without
       // disappearing or being rebuilt as a second tool stream.
-      inner += `<div class="pm-trace-drawer open" data-trace-live="1">${liveTraceHtml}</div>`;
+      inner += `<div class="pm-trace-drawer${traceExpanded ? ' open' : ''}" data-trace-live="1">${liveTraceHtml}</div>`;
     } else if (_mobileTraceHasToolGroup(completedTraceEntries)) {
-      inner += `<div class="pm-trace-drawer" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+      inner += `<div class="pm-trace-drawer${traceExpanded ? ' open' : ''}" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
     } else {
       inner += progress;
     }

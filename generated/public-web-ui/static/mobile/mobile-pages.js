@@ -2994,8 +2994,9 @@ function _renderMobileWorkTimer(msg, opts = {}) {
   const traceEntries = _mobileWorkflowTraceEntriesForMessage(msg);
   const hasTrace = traceEntries.length > 0;
   if (hasTrace) {
-    const expanded = (opts.expanded || active) ? ' expanded' : '';
-    return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace">
+    const isExpanded = typeof opts.expanded === 'boolean' ? opts.expanded : active;
+    const expanded = isExpanded ? ' expanded' : '';
+    return `<div class="pm-work-timer pm-work-timer--expandable${expanded}" data-expandable="trace" role="button" tabindex="0" aria-expanded="${isExpanded ? 'true' : 'false'}">
       ${label}
       <svg class="pm-work-timer-chevron" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>`;
@@ -9858,6 +9859,7 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     link: null,
     thread: [],
     backgroundAgentId: '',
+    backgroundTraceExpanded: null,
     busy: false,
     abort: null,
     sideThreadRendered: false,
@@ -12536,16 +12538,25 @@ void main() {
     if (!backgroundSpawnDock) return;
     if (backgroundSpawnDock.hidden || !form) {
       backgroundSpawnDock.style.removeProperty('bottom');
+      backgroundSpawnDock.style.removeProperty('left');
+      backgroundSpawnDock.style.removeProperty('right');
       return;
     }
     const rect = composerRect || form.getBoundingClientRect?.();
     const visualViewport = window.visualViewport;
+    const viewportWidth = Number(
+      visualViewport?.width
+        || window.innerWidth
+        || document.documentElement?.clientWidth
+        || 0,
+    );
     const viewportHeight = Number(
       visualViewport?.height
         || window.innerHeight
         || document.documentElement?.clientHeight
         || 0,
     );
+    const viewportLeft = Number(visualViewport?.offsetLeft || 0) || 0;
     const viewportTop = Number(visualViewport?.offsetTop || 0) || 0;
     const composerTop = Number(rect?.top || 0) - viewportTop;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0 || !Number.isFinite(composerTop)) return;
@@ -12555,6 +12566,29 @@ void main() {
     // measured composer top instead of guessing from those offsets.
     const bottom = Math.max(0, Math.round(viewportHeight - composerTop + 8));
     backgroundSpawnDock.style.setProperty('bottom', `${bottom}px`);
+
+    // The resting composer uses a responsive chrome inset, while a focused
+    // composer expands to the 10px edge inset. Lock the expanded background
+    // dock to the measured composer box so both states stay exactly the same
+    // width. A collapsed count pill keeps its own centered, content-sized
+    // geometry and must not inherit these edge anchors.
+    const composerLeft = Number(rect?.left);
+    const composerRight = Number(rect?.right);
+    const canMeasureHorizontal = backgroundSpawnDock.classList.contains('is-collapsed') === false
+      && Number.isFinite(viewportWidth)
+      && viewportWidth > 0
+      && Number.isFinite(composerLeft)
+      && Number.isFinite(composerRight)
+      && composerRight > composerLeft;
+    if (canMeasureHorizontal) {
+      const left = Math.max(0, Math.round(composerLeft - viewportLeft));
+      const right = Math.max(0, Math.round(viewportWidth - (composerRight - viewportLeft)));
+      backgroundSpawnDock.style.setProperty('left', `${left}px`);
+      backgroundSpawnDock.style.setProperty('right', `${right}px`);
+    } else {
+      backgroundSpawnDock.style.removeProperty('left');
+      backgroundSpawnDock.style.removeProperty('right');
+    }
   }
 
   function updateChatComposerSpace() {
@@ -12790,27 +12824,33 @@ void main() {
       .filter((entry) => entry.text);
   }
 
+  function _mobileBackgroundAgentDetailPrompt(record) {
+    return String(record?.task || record?.prompt || '').trim();
+  }
+
   function _appendMobileBackgroundSnapshotTrace(message, entry) {
     if (!message || !entry || typeof entry !== 'object') return false;
-    const text = String(entry.text || entry.content || entry.message || entry.thinking || entry.summary || '').trim();
+    const normalizedEntry = _normalizeMobileRecoveredTraceEntry(entry) || entry;
+    const text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || normalizedEntry.thinking || normalizedEntry.summary || '').trim();
     if (!text) return false;
-    const type = String(entry.type || entry.kind || '').trim().toLowerCase();
-    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (_isMobileReasoningSummaryTraceEntry(entry)) {
+    const rawType = String(entry.type || entry.kind || '').trim().toLowerCase();
+    const type = String(normalizedEntry.type || normalizedEntry.kind || rawType).trim().toLowerCase();
+    const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : {};
+    if (_isMobileReasoningSummaryTraceEntry(entry) || _isMobileReasoningSummaryTraceEntry(normalizedEntry)) {
       _appendMobileReasoningSummary(message, text);
       return true;
     }
-    if (!['think', 'thinking', 'thought', 'agent_thought'].includes(type)) return false;
-    const visibility = String(extra.visibility || entry.visibility || '').trim().toLowerCase();
+    if (!['preamble', 'assistant', 'think', 'thinking', 'thought', 'agent_thought'].includes(type)) return false;
+    const visibility = String(extra.visibility || normalizedEntry.visibility || entry.visibility || '').trim().toLowerCase();
     if (visibility === 'private' || visibility === 'internal') return false;
-    const explicitUserThought = type === 'agent_thought'
+    const explicitUserThought = ['preamble', 'assistant', 'agent_thought'].includes(type) || rawType === 'agent_thought'
       ? true
       : _isMobileUserVisibleReasoningTraceEntry({
-        type: 'think',
+        type: type === 'thinking' || type === 'thought' ? 'think' : type,
         extra: { ...extra, visibility },
       });
     if (!explicitUserThought) return false;
-    _appendMobileLiveTrace(message, 'think', text, {
+    _appendMobileLiveTrace(message, type === 'preamble' || type === 'assistant' ? type : 'think', text, {
       extra: { ...extra, visibility: visibility || 'user' },
     });
     return true;
@@ -12820,6 +12860,7 @@ void main() {
     const status = String(record?.status || 'running').toLowerCase();
     const running = ['queued', 'running', 'in_progress'].includes(status);
     const agentName = String(record?.agentName || 'Background agent');
+    const promptText = _mobileBackgroundAgentDetailPrompt(record);
     const source = record?.message && typeof record.message === 'object' ? record.message : {};
     const processEntries = Array.isArray(source.processEntries) && source.processEntries.length
       ? source.processEntries
@@ -12828,12 +12869,18 @@ void main() {
       ? source.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
       : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
+    const normalizedPrompt = promptText.replace(/\s+/g, ' ').trim();
+    const normalizedSourceText = sourceText.replace(/\s+/g, ' ').trim();
+    // A cold lane can carry the original task in its cached message body. It
+    // belongs in the user row below, never in the agent's response bubble.
+    const sourceIsPrompt = !!normalizedPrompt
+      && !!normalizedSourceText
+      && normalizedSourceText === normalizedPrompt;
+    const responseText = sourceIsPrompt ? '' : sourceText;
     const finalText = String(record?.error || record?.result || '').trim();
-    // A persisted running lane often has no assistant message yet. Keep the
-    // cold-open detail useful until its stream/session replay supplies one.
     const displayText = running
-      ? (sourceText || String(record?.task || '').trim() || 'Working…')
-      : (finalText || sourceText);
+      ? responseText
+      : (finalText || responseText);
     const traceMessage = {
       ...source,
       content: displayText,
@@ -12854,6 +12901,9 @@ void main() {
       body: { ...(source?.body || {}), sender: agentName, text: displayText },
       processEntries,
       liveTraceEntries: traceMessage.liveTraceEntries,
+      traceExpanded: typeof sideState.backgroundTraceExpanded === 'boolean'
+        ? sideState.backgroundTraceExpanded
+        : running,
       streaming: running,
       _done: !running,
       _backgroundAgentLive: running,
@@ -13022,6 +13072,7 @@ void main() {
     const record = _mobileBackgroundAgentDetailRecord(cleanId);
     if (!cleanId || !record) return;
     sideState.backgroundAgentId = cleanId;
+    sideState.backgroundTraceExpanded = null;
     sideState.link = null;
     sideState.thread = [];
     sideState.sideThreadRendered = false;
@@ -13043,6 +13094,15 @@ void main() {
 
   function renderMobileSideSheet() {
     if (!sideThreadEl) return;
+    const openBackgroundId = String(sideState.backgroundAgentId || '').trim();
+    if (openBackgroundId && sideState.sideThreadRendered) {
+      const renderedBackgroundMessage = sideThreadEl.querySelector('.pm-agent-chat-msg[data-pm-background-agent-message]');
+      if (renderedBackgroundMessage
+        && String(renderedBackgroundMessage.getAttribute('data-pm-background-agent-message') || '').trim() === openBackgroundId) {
+        const renderedTimer = renderedBackgroundMessage.querySelector('[data-expandable="trace"]');
+        if (renderedTimer) sideState.backgroundTraceExpanded = renderedTimer.classList.contains('expanded');
+      }
+    }
     const shouldFollowTail = !sideState.sideThreadRendered || _mobileSideThreadNearBottom(sideThreadEl);
     const backgroundRecord = sideState.backgroundAgentId
       ? _mobileBackgroundAgentDetailRecord(sideState.backgroundAgentId)
@@ -13053,16 +13113,43 @@ void main() {
       const running = ['queued', 'running', 'in_progress'].includes(status);
       const agentName = String(backgroundRecord.agentName || 'Background agent');
       const message = _mobileBackgroundAgentDetailMessage(backgroundRecord);
+      const promptText = _mobileBackgroundAgentDetailPrompt(backgroundRecord);
+      const promptMessage = promptText
+        ? {
+            role: 'user',
+            content: promptText,
+            body: { text: promptText },
+            timestamp: Number(backgroundRecord.startedAt || Date.now()) || Date.now(),
+          }
+        : null;
       const steerHistory = (Array.isArray(backgroundRecord.steerMessages) ? backgroundRecord.steerMessages : [])
-        .map((steer) => ({
-          role: 'user',
-          content: String(steer?.content || '').trim(),
-          timestamp: Number(steer?.timestamp || Date.now()) || Date.now(),
-          channelLabel: 'steer',
-        }))
+        .map((steer, index) => {
+          const content = String(steer?.content || steer?.body?.text || '').trim();
+          return {
+            role: 'user',
+            content,
+            body: { ...(steer?.body || {}), text: content },
+            timestamp: Number(steer?.timestamp || Date.now()) || Date.now(),
+            channelLabel: 'steer',
+            _backgroundSteerRowKey: `background:${backgroundRecord.id}:steer:${String(steer?.id || index)}`,
+          };
+        })
         .filter((steer) => steer.content);
-      const historyHtml = steerHistory.map((steer, index) => _renderChatMessageHtml(steer, index)).join('');
-      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${historyHtml}${_renderMobileAgentChatBubble(message, {
+      const promptHtml = promptMessage
+        ? _renderChatMessageHtml(
+            promptMessage,
+            -1,
+            `background:${backgroundRecord.id}:prompt`,
+            `background-prompt:${backgroundRecord.id}`,
+          )
+        : '';
+      const historyHtml = steerHistory.map((steer, index) => _renderChatMessageHtml(
+        steer,
+        index,
+        steer._backgroundSteerRowKey,
+        `background-steer:${backgroundRecord.id}:${String(steer._backgroundSteerRowKey || index)}`,
+      )).join('');
+      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${promptHtml}${historyHtml}${_renderMobileAgentChatBubble(message, {
         sender: agentName,
         live: running,
         keepLiveTraceVisible: true,
@@ -13185,6 +13272,7 @@ void main() {
       ? { link: existing, thread: await loadMobileSideThread(existing) }
       : await createMobileSideChat(initialText);
     sideState.backgroundAgentId = '';
+    sideState.backgroundTraceExpanded = null;
     sideState.link = result.link;
     sideState.thread = Array.isArray(result.thread) ? result.thread : [];
     sideState.sideThreadRendered = false;
@@ -13208,6 +13296,7 @@ void main() {
   function closeMobileSideChatSheet() {
     stopMobileBackgroundAgentDetailRefresh();
     sideState.backgroundAgentId = '';
+    sideState.backgroundTraceExpanded = null;
     sideState.sideThreadRendered = false;
     sideSheet?.classList.remove('background-agent-detail-mode');
     sideSheet?.classList.remove('open');

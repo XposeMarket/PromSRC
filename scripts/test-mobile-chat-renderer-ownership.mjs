@@ -70,7 +70,9 @@ const measurements = {
 // while allowing that intentional interaction state logic.
 // Goal launches now prime the normal live-turn surface at lifecycle admission
 // so the first tool frame has an owner; keep the budget tight while allowing
-// that intentional goal-stream handoff.
-assert(measurements.gzipBytes < 250750, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// that intentional goal-stream handoff. The background-agent side-chat
+// disclosure, prompt replay, and recovery presentation add 559 gzip bytes over
+// current main, so the ceiling is ratcheted to the exact refreshed measurement.
+assert(measurements.gzipBytes <= 250913, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
