@@ -43,6 +43,32 @@ const modelOnly = mainChatRoutePatch({ ...legacy, ...switched }, {
 assert.equal(modelOnly.llm.providers.anthropic.reasoning_effort, 'max');
 assert.equal(modelOnly.agent_model_default_reasoning.main_chat, 'max');
 
+// Stale settings from an older UI must not reintroduce an unsupported Codex
+// effort when the active model is changed or the live route is reconciled.
+const codexWithUltra = {
+  ...legacy,
+  llm: {
+    ...legacy.llm,
+    providers: {
+      ...legacy.llm.providers,
+      openai_codex: { model: 'gpt-5.6-luna', reasoning_effort: 'ultra' },
+    },
+  },
+};
+const codexUltraPatch = mainChatRoutePatch(codexWithUltra, {
+  provider: 'openai_codex', model: 'gpt-5.6-luna',
+});
+assert.equal(codexUltraPatch.llm.providers.openai_codex.reasoning_effort, undefined);
+assert.equal(codexUltraPatch.agent_model_default_reasoning.main_chat, undefined);
+assert.deepEqual(readLiveMainChatRoute({ ...codexWithUltra, ...codexUltraPatch }), {
+  provider: 'openai_codex', model: 'gpt-5.6-luna',
+});
+
+const codexMaxPatch = mainChatRoutePatch(codexWithUltra, {
+  provider: 'openai_codex', model: 'gpt-5.6-luna', reasoningEffort: 'max',
+});
+assert.equal(codexMaxPatch.llm.providers.openai_codex.reasoning_effort, 'max');
+
 // A left-side connection save may update credentials, but may never activate
 // its selected provider or replace the main-chat model/reasoning.
 const connectionSave = preserveLiveMainChatRoute({ ...legacy, ...switched }, {

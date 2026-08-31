@@ -9,7 +9,7 @@ import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { getCredentialHandler } from '../../security/credential-handler';
-import { normalizeReasoningEffort, normalizeSpeed } from '../../providers/reasoning-capabilities';
+import { hasReasoningCapabilityPolicy, normalizeReasoningEffort, normalizeSpeed } from '../../providers/reasoning-capabilities';
 import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -2062,6 +2062,24 @@ function sanitizeLLMConfig(llm: any): any {
   const codexModel = copy?.providers?.openai_codex?.model;
   if (typeof codexModel === 'string' && codexModel.trim() === 'codex-davinci-002') {
     copy.providers.openai_codex.model = 'gpt-4o';
+  }
+  const providers = copy.providers && typeof copy.providers === 'object' ? copy.providers : {};
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    if (!providerConfig || typeof providerConfig !== 'object' || Array.isArray(providerConfig)) continue;
+    const model = String((providerConfig as any).model || '').trim();
+    if (hasReasoningCapabilityPolicy(providerId) && typeof (providerConfig as any).reasoning_effort === 'string') {
+      const effort = normalizeReasoningEffort(providerId, model, (providerConfig as any).reasoning_effort);
+      if (effort) (providerConfig as any).reasoning_effort = effort;
+      else delete (providerConfig as any).reasoning_effort;
+    }
+    const hasSpeedSetting = Object.prototype.hasOwnProperty.call(providerConfig, 'speed')
+      || Object.prototype.hasOwnProperty.call(providerConfig, 'fast_mode');
+    if (hasReasoningCapabilityPolicy(providerId) && hasSpeedSetting) {
+      const configuredSpeed = String((providerConfig as any).speed || '').trim()
+        || ((providerConfig as any).fast_mode === true ? 'fast' : 'standard');
+      (providerConfig as any).speed = normalizeSpeed(providerId, model, configuredSpeed);
+      delete (providerConfig as any).fast_mode;
+    }
   }
   return copy;
 }

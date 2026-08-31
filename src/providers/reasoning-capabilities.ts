@@ -6,8 +6,11 @@ export interface ReasoningCapability {
   thinkingMode?: 'adaptive' | 'manual';
 }
 
+const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
+
 const OPENAI_MODERN: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
 const OPENAI_56: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+const CODEX_56_ULTRA: ReasoningEffort[] = [...OPENAI_56, 'ultra'];
 const OPENAI_GPT5: ReasoningEffort[] = ['minimal', 'low', 'medium', 'high'];
 const OPENAI_O_SERIES: ReasoningEffort[] = ['low', 'medium', 'high'];
 const CLAUDE_BASE: ReasoningEffort[] = ['low', 'medium', 'high'];
@@ -17,17 +20,42 @@ function slug(model: string): string {
   return value.includes('/') ? value.split('/').filter(Boolean).pop() || value : value;
 }
 
+/**
+ * Providers whose model settings are governed by this capability policy.
+ *
+ * `ultra` remains a valid internal Ollama thinking hint. It is also a
+ * documented effort for the Codex GPT-5.6 Sol/Terra models, but not for
+ * GPT-5.6 Luna (or the direct OpenAI provider). Callers that persist hosted
+ * provider settings should use this predicate before treating a value as
+ * invalid so custom/local providers can keep their own vocabulary.
+ */
+export function hasReasoningCapabilityPolicy(provider: string): boolean {
+  return MODEL_CAPABILITY_PROVIDERS.has(String(provider || '').trim().toLowerCase());
+}
+
 /** Documentation-driven provider/model reasoning capability policy. */
 export function getReasoningCapability(provider: string, model: string): ReasoningCapability {
   const id = String(provider || '').trim().toLowerCase();
   const name = slug(model);
 
-  if (id === 'openai' || id === 'openai_codex') {
-    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: id === 'openai_codex' ? [...OPENAI_56, 'ultra'] : OPENAI_56, defaultEffort: 'medium' };
-    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: OPENAI_MODERN, defaultEffort: 'medium' };
-    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: OPENAI_MODERN, defaultEffort: 'none' };
-    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: OPENAI_GPT5, defaultEffort: 'medium' };
-    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: OPENAI_O_SERIES, defaultEffort: 'medium' };
+  if (id === 'openai_codex') {
+    // Codex exposes model-specific effort levels. Luna is the fast 5.6
+    // variant and does not advertise Ultra; Sol/Terra do.
+    if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_56_ULTRA], defaultEffort: 'medium' };
+    if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'none' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_GPT5], defaultEffort: 'medium' };
+    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: [...OPENAI_O_SERIES], defaultEffort: 'medium' };
+    return { efforts: [] };
+  }
+
+  if (id === 'openai') {
+    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'none' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_GPT5], defaultEffort: 'medium' };
+    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: [...OPENAI_O_SERIES], defaultEffort: 'medium' };
     return { efforts: [] };
   }
 

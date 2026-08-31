@@ -7398,8 +7398,17 @@ const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
 
 function _documentedReasoningCapability(provider, model) {
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
-  if (provider === 'openai' || provider === 'openai_codex') {
-    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: provider === 'openai_codex' ? ['none','low','medium','high','xhigh','max','ultra'] : ['none','low','medium','high','xhigh','max'], defaultEffort: 'medium' };
+  if (provider === 'openai_codex') {
+    if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh','max','ultra'], defaultEffort: 'medium' };
+    if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh','max'], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
+    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
+    return { efforts: [] };
+  }
+  if (provider === 'openai') {
+    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh','max'], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
     if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
@@ -7527,8 +7536,14 @@ function _formatActiveModelLabel(model, provider, effort = '') {
     : lower === 'gpt-5.3-codex-spark' && provider === 'openai_codex'
       ? '5.3 Spark'
       : raw.replace(/^gpt-/i, 'GPT ').replace(/-/g, ' ');
-  const reasoning = String(effort || '').trim();
+  const reasoning = _normalizeActiveReasoningEffort(provider, raw, effort);
   return reasoning ? `${base} ${reasoning === 'xhigh' ? 'Extra High' : reasoning.charAt(0).toUpperCase() + reasoning.slice(1)}` : base;
+}
+
+function _normalizeActiveReasoningEffort(provider, model, effort) {
+  const raw = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  if (!raw || !EFFORT_CAPABLE_PROVIDERS.has(provider)) return raw;
+  return _effortLevelsForProvider(provider, model).some(level => level.v === raw) ? raw : '';
 }
 
 function _renderActiveModelLabels(model, provider, effort = '') {
@@ -7566,13 +7581,10 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
 
   if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
     const configuredLevel = typeof providerCfg.reasoning_effort === 'string'
-      ? providerCfg.reasoning_effort.trim()
+      ? providerCfg.reasoning_effort.trim().toLowerCase()
       : '';
     const model = _activeModelForProvider(provider, llmCfg);
-    const validLevels = provider === 'perplexity' || provider === 'xai'
-      ? _effortLevelsForProvider(provider, model).map(level => level.v)
-      : _documentedReasoningCapability(provider, model).efforts;
-    window.reasoningLevel = validLevels.includes(configuredLevel) ? configuredLevel : '';
+    window.reasoningLevel = _normalizeActiveReasoningEffort(provider, model, configuredLevel);
     const selectId = _getProviderReasoningControlId(provider);
     const select = selectId ? document.getElementById(selectId) : null;
     if (select) select.value = window.reasoningLevel;
@@ -7681,8 +7693,9 @@ async function refreshActiveChatModelRoute() {
     if (!route?.providerId || !route?.model) return state || null;
     window._activeProvider = route.providerId;
     window._activeModel = route.model;
-    window.reasoningLevel = route.reasoningEffort || '';
-    _renderActiveModelLabels(route.model, route.providerId, route.reasoningEffort || '');
+    const reasoningEffort = _normalizeActiveReasoningEffort(route.providerId, route.model, route.reasoningEffort);
+    window.reasoningLevel = reasoningEffort;
+    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort);
     const follow = document.getElementById('model-switcher-follow-default');
     if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
     window._activeChatModelRoute = state;
@@ -7763,7 +7776,11 @@ async function _loadDesktopSwitcherState() {
   return {
     route, llm, catalog: Array.isArray(catalogData?.items) ? catalogData.items : [], credentialed,
     provider, model, providerConfig,
-    reasoningEffort: String(effective.reasoningEffort ?? providerConfig.reasoning_effort ?? '').trim(),
+    reasoningEffort: _normalizeActiveReasoningEffort(
+      provider,
+      model,
+      effective.reasoningEffort ?? providerConfig.reasoning_effort,
+    ),
   };
 }
 

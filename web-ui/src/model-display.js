@@ -1,3 +1,5 @@
+import { hasReasoningCapabilityPolicy, validEffort } from './reasoning-capabilities.js';
+
 const OPENAI_PROVIDER_IDS = new Set(['openai', 'openai_codex']);
 
 function titleWord(value) {
@@ -52,7 +54,16 @@ export function formatModelDisplayName(model, provider = '') {
 
 export function formatModelWithReasoning(model, provider = '', effort = '') {
   const modelLabel = formatModelDisplayName(model, provider);
-  const reasoningLabel = formatReasoningDisplayName(effort);
+  const rawModel = String(model || '').trim();
+  const slash = rawModel.indexOf('/');
+  const providerId = String(provider || (slash > 0 ? rawModel.slice(0, slash) : '')).trim().toLowerCase();
+  const normalizedEffort = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  const safeEffort = !normalizedEffort || normalizedEffort === 'default' || normalizedEffort === 'provider_default'
+    ? normalizedEffort
+    : hasReasoningCapabilityPolicy(providerId) && !validEffort(providerId, model, normalizedEffort)
+      ? ''
+      : normalizedEffort;
+  const reasoningLabel = formatReasoningDisplayName(safeEffort);
   return reasoningLabel ? `${modelLabel} ${reasoningLabel}` : modelLabel;
 }
 
