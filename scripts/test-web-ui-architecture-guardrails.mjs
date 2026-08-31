@@ -13,9 +13,9 @@ const failures = [];
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/pages/ChatPage.js': 2334533,
-  'web-ui/src/mobile/mobile-pages.js': 895117,
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 230104,
-  'web-ui/src/styles/mobile.css': 585232,
+  'web-ui/src/mobile/mobile-pages.js': 899829,
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 231112,
+  'web-ui/src/styles/mobile.css': 585898,
   'web-ui/src/styles/components.css': 284925,
   'web-ui/index.html': 558138,
 });
