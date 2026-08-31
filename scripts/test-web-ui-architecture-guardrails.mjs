@@ -12,14 +12,16 @@ const failures = [];
 // legacy surface, but raising it alone can never make a growth regression pass.
 // A ceiling change therefore appears as executable policy in review.
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
-  'web-ui/src/pages/ChatPage.js': 2435115,
-  'web-ui/src/mobile/mobile-pages.js': 1738241,
-  'web-ui/src/styles/mobile.css': 585518,
-  'web-ui/index.html': 557079,
+  'web-ui/src/pages/ChatPage.js': 2334533,
+  'web-ui/src/mobile/mobile-pages.js': 895117,
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 230104,
+  'web-ui/src/styles/mobile.css': 585232,
+  'web-ui/src/styles/components.css': 284925,
+  'web-ui/index.html': 557076,
 });
 const CODE_OWNED_NEW_MODULE_CEILING = 400000;
 
-if (baseline.version !== 2) failures.push(`architecture baseline version must be 2 (received ${baseline.version})`);
+if (baseline.version !== 3) failures.push(`architecture baseline version must be 3 (received ${baseline.version})`);
 for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)) {
   const configured = Number(baseline.legacySurfaces?.[relativePath]);
   if (!Number.isFinite(configured)) {
@@ -59,6 +61,31 @@ const maxNewModuleBytes = Math.min(
   CODE_OWNED_NEW_MODULE_CEILING,
 );
 
+function importSpecifiers(source) {
+  const specifiers = [];
+  const patterns = [
+    /\b(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) specifiers.push(match[1]);
+  }
+  return specifiers;
+}
+
+function validateChatFeatureDependencies(absolute, relativePath) {
+  if (!/^web-ui\/src\/features\/chat\/.+\.(?:js|mjs)$/i.test(relativePath)) return;
+  const source = fs.readFileSync(absolute, 'utf8');
+  for (const specifier of importSpecifiers(source)) {
+    if (!specifier.startsWith('.')) continue;
+    const resolved = path.resolve(path.dirname(absolute), specifier).split(path.sep).join('/');
+    const relativeTarget = path.relative(root, resolved).split(path.sep).join('/');
+    if (relativeTarget.startsWith('web-ui/src/pages/') || relativeTarget === 'web-ui/src/mobile/mobile-pages.js') {
+      failures.push(`${relativePath}: chat features must not import page owner ${relativeTarget}`);
+    }
+  }
+}
+
 function walk(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const absolute = path.join(directory, entry.name);
@@ -68,6 +95,7 @@ function walk(directory) {
     }
     if (!/\.(?:js|mjs|css)$/i.test(entry.name)) continue;
     const relativePath = path.relative(root, absolute).split(path.sep).join('/');
+    validateChatFeatureDependencies(absolute, relativePath);
     if (legacy.has(relativePath)) continue;
     const actual = bytes(relativePath);
     if (actual > maxNewModuleBytes) {
