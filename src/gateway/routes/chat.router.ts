@@ -78,7 +78,7 @@ import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMess
 import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../chat/turn-route-snapshot';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import { deriveContextWindowUsage } from '../context/context-window-usage';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, type ToolObservation } from '../tool-observations';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, type ToolObservation, type ToolObservationSnapshot } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
@@ -17215,7 +17215,8 @@ function estimateToolObservationRawTokens(sessionId: string, profile: { tokenize
   return { tokens, bytes, files };
 }
 
-function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }, observations = readToolObservationSnapshot(sessionId, 100_000).observations) {
+function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }, observationSnapshot: ToolObservationSnapshot = readToolObservationSnapshot(sessionId, 512, profile.tokenizer)) {
+  const observations = observationSnapshot.observations;
   const history = Array.isArray(session?.history) ? session.history : [];
   let visibleChatTokens = 0;
   let processEntryTokens = 0;
@@ -17238,7 +17239,7 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
     attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
   }
   const sessionJsonTokens = estimateJsonTokensForModel(session, profile);
-  const toolObservationStoredTokens = estimateJsonTokensForModel(observations, profile);
+  const toolObservationStoredTokens = observationSnapshot.storedObservationTokens;
   const raw = estimateToolObservationRawTokens(sessionId, profile);
   return {
     visibleChatTokens,
@@ -22713,8 +22714,8 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
-    const observationSnapshot = readToolObservationSnapshot(id, 100_000);
-    const storedThread = estimateStoredThreadFootprint(id, session, profile, observationSnapshot.observations);
+    const observationSnapshot = readToolObservationSnapshot(id, 512, profile.tokenizer);
+    const storedThread = estimateStoredThreadFootprint(id, session, profile, observationSnapshot);
     const modelUsage = aggregateSessionModelUsage(id);
     const toolUsage = observationSnapshot.usage;
     const currentState = buildContextWindowCurrentState({

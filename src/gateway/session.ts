@@ -12,7 +12,7 @@ import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
-import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
+import { clearToolObservationSnapshotCache, getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import { listLiveRuntimes } from './live-runtime-registry';
@@ -3266,6 +3266,7 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
 export function deleteSession(id: string): boolean {
   const sessionId = assertSafeStorageId(id, 'session id');
   deleteCachedSession(sessionId);
+  clearToolObservationSnapshotCache(sessionId);
   const existing = sessionSaveTimers.get(sessionId);
   if (existing) {
     clearTimeout(existing);
@@ -3418,6 +3419,7 @@ export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; 
       try {
         fs.unlinkSync(filePath);
         deleteCachedSession(id);
+        clearToolObservationSnapshotCache(id);
         removeSessionSummary(id);
         deleted++;
       } catch {

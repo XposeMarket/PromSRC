@@ -10,14 +10,17 @@ async function main(): Promise<void> {
 
   try {
     const {
+      clearToolObservationSnapshotCache,
+      getToolObservationCacheStatus,
       persistToolObservations,
+      readToolObservations,
       readToolObservationSnapshot,
     } = await import('./tool-observations.js');
 
     const sessionId = 'tool_observation_snapshot_regression';
-    const observation = (id: string, toolName: string, status: 'ok' | 'error', argsTokens: number, resultTokens: number) => ({
+    const observation = (id: string, toolName: string, status: 'ok' | 'error', argsTokens: number, resultTokens: number, observationSessionId = sessionId) => ({
       id,
-      sessionId,
+      sessionId: observationSessionId,
       turnId: 'turn-1',
       stepNum: Number(id.replace(/\D/g, '')) || 1,
       toolName,
@@ -41,6 +44,7 @@ async function main(): Promise<void> {
       observation('obs-2', 'beta', 'error', 3, 11),
       observation('obs-3', 'alpha', 'ok', 1, 4),
     ]);
+    assert.equal(readToolObservations(sessionId, 80).length, 3, 'recent context reads must use the bounded snapshot path');
 
     // The recent observation window is intentionally smaller than the lifetime
     // aggregate here. This proves the cumulative totals are not capped by the
@@ -53,6 +57,7 @@ async function main(): Promise<void> {
     assert.equal(first.usage.argsTokens, 6);
     assert.equal(first.usage.resultTokens, 20);
     assert.equal(first.usage.totalTokens, 26);
+    assert.ok(first.storedObservationTokens > 0);
     assert.equal(first.usage.tools.find((row) => row.tool === 'alpha')?.calls, 2);
     assert.equal(first.usage.tools.find((row) => row.tool === 'beta')?.totalTokens, 14);
 
@@ -66,6 +71,25 @@ async function main(): Promise<void> {
     assert.equal(second.usage.resultTokens, 33);
     assert.equal(second.usage.totalTokens, 46);
     assert.equal(second.usage.tools.find((row) => row.tool === 'alpha')?.calls, 3);
+
+    const beforeClear = getToolObservationCacheStatus();
+    clearToolObservationSnapshotCache(sessionId);
+    const afterClear = getToolObservationCacheStatus();
+    assert.equal(afterClear.entries, beforeClear.entries - 1, 'deleted sessions must release their observation cache entry');
+
+    const cacheLimit = afterClear.maxEntries;
+    for (let index = 0; index < cacheLimit + 4; index += 1) {
+      const cachedSessionId = `cache-bound-${index}`;
+      persistToolObservations(cachedSessionId, [observation(`bound-${index}`, 'bounded_tool', 'ok', 1, 1, cachedSessionId)]);
+      readToolObservationSnapshot(cachedSessionId, 1);
+    }
+    const bounded = getToolObservationCacheStatus();
+    assert.ok(bounded.entries <= bounded.maxEntries, 'observation cache must enforce a maximum session count');
+    assert.equal(bounded.maxRecentObservations, 512);
+    assert.ok(
+      bounded.recentObservationCount <= bounded.entries * bounded.maxRecentObservations,
+      'observation cache recent objects must be bounded per cached session',
+    );
 
     console.log('tool-observation snapshot regression: ok');
   } finally {
