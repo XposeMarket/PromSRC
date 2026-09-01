@@ -105,6 +105,7 @@ interface WorkerSlot {
   lastError?: string;
   lastStderrTail?: string;
   startupTimer?: NodeJS.Timeout;
+  idleTimer?: NodeJS.Timeout;
 }
 
 export interface ModelCallWorkerPoolStatus {
@@ -128,6 +129,9 @@ export interface ModelCallWorkerPoolStatus {
   streamEvents: number;
   shuttingDown: boolean;
   configuredWorkers: number;
+  idleTtlMs: number;
+  warmSlots: number;
+  idleRetired: number;
   recycleAfterJobs: number;
   recycleRssBytes: number;
   maxOldSpaceMb: number;
@@ -139,6 +143,8 @@ export interface ModelCallWorkerPoolStatus {
     requestId?: string;
     completedJobs: number;
     rssBytes: number;
+    warmFloor: boolean;
+    idleTtlMs: number;
     resource?: RuntimeWorkerResourceStatus;
     lastHeartbeatAt?: number;
     lastError?: string;
@@ -177,6 +183,8 @@ function abortError(reason?: unknown): Error {
 
 const enabled = String(process.env.PROMETHEUS_MODEL_CALL_WORKERS || '1').trim() !== '0';
 const workerCount = envInt('PROMETHEUS_MODEL_WORKER_COUNT', 3, 1, 4);
+const idleTtlMs = envInt('PROMETHEUS_MODEL_WORKER_IDLE_TTL_MS', 60_000, 0, 30 * 60_000);
+const warmSlotCount = envInt('PROMETHEUS_MODEL_WORKER_WARM_SLOTS', 1, 0, workerCount);
 const maxQueued = envInt('PROMETHEUS_MODEL_WORKER_MAX_QUEUE', 12, 0, 100);
 const defaultTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_TIMEOUT_MS', 15 * 60_000, 1_000, 60 * 60_000);
 const startupTimeoutMs = envInt('PROMETHEUS_MODEL_WORKER_STARTUP_TIMEOUT_MS', 20_000, 1_000, 120_000);
@@ -244,7 +252,7 @@ if (enabled) {
           }
         : undefined,
       policy: {
-        idleTtlMs: 0,
+        idleTtlMs: slot.id <= warmSlotCount ? 0 : idleTtlMs,
         maxJobs: recycleAfterJobs,
         maxRssBytes: recycleRssBytes,
         maxHeapUsedBytes: 0,
@@ -265,6 +273,7 @@ let fallbacks = 0;
 let providerStartedCount = 0;
 let eventBatches = 0;
 let streamEvents = 0;
+let idleRetired = 0;
 let lastError = '';
 
 function modelWorkerExecArgv(): string[] {
@@ -363,9 +372,64 @@ function queueTaskEvents(slot: WorkerSlot, task: Task, events: ModelCallStreamIt
   scheduleTaskEventDrain(slot, task);
 }
 
+function clearSlotIdleTimer(slot: WorkerSlot): void {
+  if (slot.idleTimer) clearTimeout(slot.idleTimer);
+  slot.idleTimer = undefined;
+}
+
+function isWarmSlot(slot: WorkerSlot): boolean {
+  return slot.id <= warmSlotCount;
+}
+
+function retireIdleSlot(slot: WorkerSlot): void {
+  if (
+    shuttingDown
+    || isWarmSlot(slot)
+    || queue.length > 0
+    || slot.task
+    || slot.state !== 'ready'
+    || !slot.child
+  ) return;
+  clearSlotIdleTimer(slot);
+  const child = slot.child;
+  idleRetired += 1;
+  slot.state = 'stopping';
+  try {
+    if (child.connected) child.send({
+      protocolVersion: MODEL_CALL_WORKER_PROTOCOL_VERSION,
+      type: 'shutdown',
+      reason: 'worker_idle_ttl',
+    } satisfies ModelCallWorkerParentMessage);
+  } catch {}
+  setTimeout(() => {
+    if (slot.child === child) {
+      try { child.kill(); } catch {}
+    }
+  }, 1_000).unref?.();
+}
+
+function armSlotIdleTimer(slot: WorkerSlot): void {
+  clearSlotIdleTimer(slot);
+  if (
+    shuttingDown
+    || idleTtlMs <= 0
+    || isWarmSlot(slot)
+    || queue.length > 0
+    || slot.task
+    || slot.state !== 'ready'
+    || !slot.child
+  ) return;
+  slot.idleTimer = setTimeout(() => {
+    slot.idleTimer = undefined;
+    retireIdleSlot(slot);
+  }, idleTtlMs);
+  slot.idleTimer.unref?.();
+}
+
 function finishSlotTask(slot: WorkerSlot): void {
   slot.task = null;
   slot.state = slot.child?.connected ? 'ready' : 'failed';
+  armSlotIdleTimer(slot);
   scheduleDrain();
 }
 
@@ -392,6 +456,7 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
       slot.rssBytes = message.resourceSample.rssBytes;
     }
     slot.lastError = undefined;
+    armSlotIdleTimer(slot);
     scheduleDrain();
     return;
   }
@@ -519,6 +584,7 @@ function handleExit(slot: WorkerSlot, child: ChildProcess, code: number | null, 
   if (slot.child !== child) return;
   if (slot.startupTimer) clearTimeout(slot.startupTimer);
   slot.startupTimer = undefined;
+  clearSlotIdleTimer(slot);
   const wasStopping = slot.state === 'stopping';
   const task = slot.task;
   slot.child = null;
@@ -542,6 +608,7 @@ function handleExit(slot: WorkerSlot, child: ChildProcess, code: number | null, 
 
 function spawnSlot(slot: WorkerSlot): void {
   if (shuttingDown || slot.child || slot.state === 'starting') return;
+  clearSlotIdleTimer(slot);
   slot.state = 'starting';
   // Recycling replaces the child process, so the per-child job and RSS
   // counters must start fresh. If completedJobs is carried across a recycle,
@@ -649,6 +716,7 @@ function runTask(slot: WorkerSlot, task: Task): void {
     scheduleDrain();
     return;
   }
+  clearSlotIdleTimer(slot);
   slot.task = task;
   slot.state = 'busy';
   task.dispatched = true;
@@ -718,6 +786,7 @@ function scheduleDrain(): void {
 
 async function recycleSlot(slot: WorkerSlot): Promise<void> {
   if (slot.task || !slot.child) return;
+  clearSlotIdleTimer(slot);
   recycled += 1;
   slot.state = 'stopping';
   const child = slot.child;
@@ -861,6 +930,9 @@ export function getModelCallWorkerPoolStatus(): ModelCallWorkerPoolStatus {
     streamEvents,
     shuttingDown,
     configuredWorkers: workerCount,
+    idleTtlMs,
+    warmSlots: warmSlotCount,
+    idleRetired,
     recycleAfterJobs,
     recycleRssBytes,
     maxOldSpaceMb,
@@ -872,6 +944,8 @@ export function getModelCallWorkerPoolStatus(): ModelCallWorkerPoolStatus {
       requestId: slot.task?.id,
       completedJobs: slot.completedJobs,
       rssBytes: slot.rssBytes,
+      warmFloor: isWarmSlot(slot),
+      idleTtlMs: isWarmSlot(slot) ? 0 : idleTtlMs,
       resource: slot.resource
         ? {
             ...slot.resource,
@@ -897,6 +971,7 @@ export async function shutdownModelCallWorkerPool(): Promise<void> {
   const error = new Error('Model-call worker pool is shutting down.');
   for (const task of queue.splice(0)) settle(task, { error });
   await Promise.all(slots.map(async (slot) => {
+    clearSlotIdleTimer(slot);
     const child = slot.child;
     if (!child) return;
     slot.state = 'stopping';
