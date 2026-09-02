@@ -573,6 +573,7 @@ if (!__pmChat.mobileRecoveryOwners || typeof __pmChat.mobileRecoveryOwners !== '
 if (!__pmChat.mobileRecoveryUncertainSince || typeof __pmChat.mobileRecoveryUncertainSince !== 'object') __pmChat.mobileRecoveryUncertainSince = {};
 
 let receipts = null;
+const mobileChatSteerSnapshotWriteQueues = new Map();
 
 const mobileChatRuntimeAdapter = createMobileChatRuntimeAdapter({
   defaultSessionId: MOBILE_CHAT_SESSION_ID,
@@ -2435,6 +2436,52 @@ function _moveMobileQueuedPromptToComposer(sessionId, index) {
   _renderMobileQueuedPromptsPanel(sid);
 }
 
+function _setMobileChatSteerContinuationTurn(sourceTurn, continuationTurn) {
+  if (!sourceTurn || !continuationTurn) return;
+  try {
+    Object.defineProperty(sourceTurn, '_steerContinuationTurn', {
+      value: continuationTurn,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(continuationTurn, '_steerSourceTurn', {
+      value: sourceTurn,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(continuationTurn, '_steerTimerAnchorTurn', {
+      value: sourceTurn._steerTimerAnchorTurn || sourceTurn,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    sourceTurn._steerContinuationTurn = continuationTurn;
+    continuationTurn._steerSourceTurn = sourceTurn;
+    continuationTurn._steerTimerAnchorTurn = sourceTurn._steerTimerAnchorTurn || sourceTurn;
+  }
+}
+
+function _persistMobileChatSteerSnapshot(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const thread = sid ? __pmChat.threads?.[sid] : null;
+  if (!sid || !Array.isArray(thread)) return Promise.resolve(false);
+  mobileChatRuntimeAdapter.sync(sid, { history: thread, source: 'mobile-steer-persist' });
+  const history = _mobileHistoryForServer(thread);
+  const previous = mobileChatSteerSnapshotWriteQueues.get(sid) || Promise.resolve(true);
+  const write = previous.catch(() => false)
+    .then(() => updateMobileChatSessionHistory(sid, history))
+    .then(() => true)
+    .catch((err) => {
+      console.warn('[mobile chat] failed to persist steer state:', err);
+      return false;
+    });
+  mobileChatSteerSnapshotWriteQueues.set(sid, write);
+  write.finally(() => {
+    if (mobileChatSteerSnapshotWriteQueues.get(sid) === write) mobileChatSteerSnapshotWriteQueues.delete(sid);
+  });
+  return write;
+}
+
 function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   const sid = String(sessionId || '').trim();
   const text = String(message || '').trim();
@@ -2496,9 +2543,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
       workflowLabel: 'Response after steer',
     };
     thread.push(continuationTurn);
-    _setMobileSteerContinuationTurn(latestAi, continuationTurn);
+    _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
   }
-  _persistMobileThreadSnapshot(sid);
+  void _persistMobileChatSteerSnapshot(sid);
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
   if (threadEl && String(__pmChat.activeSessionId || '') === sid) {

@@ -83,7 +83,9 @@ const measurements = {
 // positioning guard to this slice, and the deferred Voice runtime now receives
 // its history persistence boundary explicitly. The connector-brand resolver is
 // shared by the cold fallback and rich renderer, so allow its compact brand map
-// while keeping the ceiling narrow enough to catch unrelated growth.
-assert(measurements.gzipBytes <= 254950, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// while keeping the ceiling narrow enough to catch unrelated growth. The chat
+// steer runtime-boundary repair adds a small local persistence/continuation
+// helper so queued steering no longer depends on lazy Voice hydration.
+assert(measurements.gzipBytes <= 255050, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
