@@ -158,7 +158,7 @@
 :root[data-skin="blue"] .main-shell-wrap { background: #0a1426; }
 
 /* ── Main chat background: darkened Olympian Blue art ── */
-:root[data-skin="blue"] #chat-view {
+:root[data-skin="blue"] :is(#chat-view, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(rgba(6, 13, 30, 0.55), rgba(6, 13, 30, 0.62)),
     #07101f url('/assets/chat-main-background-blue.jpeg') center center / cover no-repeat;
@@ -368,7 +368,7 @@
 :root[data-skin="purple"] .main-shell-wrap { background: #110826; }
 
 /* ── Main chat background: darkened Aether Violet art ── */
-:root[data-skin="purple"] #chat-view {
+:root[data-skin="purple"] :is(#chat-view, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(rgba(10, 4, 24, 0.55), rgba(10, 4, 24, 0.62)),
     #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat;
@@ -956,7 +956,7 @@
     radial-gradient(90% 50% at 50% 100%, rgba(109, 90, 43, .055), transparent 70%),
     linear-gradient(180deg, #090909 0%, #060606 100%);
 }
-:root[data-skin="light"] body:not(.pm-mobile-active) :is(.side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell) {
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     radial-gradient(90% 50% at 50% 100%, rgba(109, 90, 43, .055), transparent 70%),
     linear-gradient(180deg, #090909 0%, #060606 100%) !important;
@@ -2934,11 +2934,11 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
    stored on the root so the CSS, canvas, and settings controls share one
    source of truth without changing the existing preset palette definitions.
    ───────────────────────────────────────────────────────────────────────── */
-:root[data-background-visuals="off"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="off"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: var(--bg) !important;
 }
 
-:root[data-background-visuals="off"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="off"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: #000 !important;
 }
 
@@ -2952,31 +2952,31 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   opacity: var(--pm-background-opacity, .82);
 }
 
-:root[data-background-visuals="on"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #050505 url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
 }
 
-:root[data-background-visuals="on"][data-skin="dark"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="dark"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #1a1a1a url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
 }
 
-:root[data-background-visuals="on"][data-skin="blue"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="blue"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #07101f url('/assets/chat-main-background-blue.jpeg') center center / cover no-repeat !important;
 }
 
-:root[data-background-visuals="on"][data-skin="purple"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="purple"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat !important;
 }
 
-:root[data-background-visuals="on"][data-skin="custom"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="custom"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     var(--bg) url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
@@ -3066,7 +3066,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   --composer-input: var(--pm-pinned-chat-bg);
 }
 
-:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: var(--pm-chat-page-bg) !important;
   background-image: none !important;
 }
@@ -3503,7 +3503,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   background-image: none !important;
 }
 
-:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background: var(--pm-chat-page-bg) !important;
   background-image: none !important;
 }
@@ -3592,7 +3592,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   background: var(--bg) !important;
 }
 
-:root[data-background-visuals="on"][data-skin="gray"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+:root[data-background-visuals="on"][data-skin="gray"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane, .unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host) {
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #2e2e2e url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;

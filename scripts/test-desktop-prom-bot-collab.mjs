@@ -22,6 +22,16 @@ assert.match(source, /unified-agent-chat-shell prom-bot-group-shell/);
 assert.match(source, /unified-agent-chat-header/);
 assert.match(source, /unified-agent-chat-messages prom-bot-group-messages/);
 assert.match(source, /window\.__PROM_UNIFIED_DESKTOP_CHAT/);
+assert.match(source, /#chat-view\.prom-bot-group-active/,
+  'Prom Bot group chat must use the normal main-chat flex surface');
+assert.match(source, /function displaceMainChatSurface\(/,
+  'Prom Bot group chat must displace the ordinary main-chat children');
+assert.match(source, /function restoreMainChatSurface\(/,
+  'Prom Bot group chat must restore the ordinary main-chat children on exit');
+assert.match(source, /entry\.node\.hidden = true/,
+  'Prom Bot group chat must not leave the underlying main chat visible');
+assert.doesNotMatch(source, /#\$\{GROUP_HOST_ID\}\s*\{\s*position:absolute/,
+  'Prom Bot group chat must not return to the legacy absolute overlay host');
 
 // The lightweight room projection keeps its own transcript/context while Bot
 // execution still uses the established standalone subagent stream.

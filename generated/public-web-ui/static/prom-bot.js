@@ -372,6 +372,9 @@ async function openPromBotAgent(agentId) {
   if (!promBotMode) setPromBotMode(true);
 
   try {
+    // Direct and group rooms share the primary chat surface; never leave a
+    // group host mounted behind the direct Prom Bot surface during a switch.
+    window.closePromBotGroup?.();
     await ensureSubagentRuntime();
     if (!promBotAgents.some((agent) => String(agent?.id || '') === id)) await refreshPromBotAgents({ force: true });
 
@@ -415,7 +418,10 @@ function setPromBotMode(enabled, { persist = true } = {}) {
   if (persist) writeBool(PROM_BOT_MODE_KEY, promBotMode);
   syncPromBotControls();
   if (promBotMode) void refreshPromBotAgents();
-  else closePromBotChat({ keepMode: true });
+  else {
+    window.closePromBotGroup?.();
+    closePromBotChat({ keepMode: true });
+  }
   return promBotMode;
 }
 

@@ -81,8 +81,14 @@ assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*
   'secondary composers must receive the main desktop grid without restoring legacy chrome');
 assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?width:\s*min\(var\(--chat-content-max-width\), calc\(100% - var\(--chat-content-inline-gutter\) - var\(--chat-content-inline-gutter\)\)\)/,
   'secondary composers must use the full shared chat-column width contract');
-assert.match(themes, /:is\(\.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell\)\s*\{[\s\S]*?linear-gradient\(180deg, #090909/,
+assert.match(themes, /:is\(\.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell[\s\S]*?linear-gradient\(180deg, #090909/,
   'Prometheus One secondary chats must use the theme surface instead of the legacy chat background image');
+assert.match(themes, /data-background-visuals="off"[^\n]*:is\([^\n]*\.unified-agent-chat-shell[^\n]*#prom-bot-main-surface[^\n]*#prom-bot-group-host/,
+  'appearance-off must cover standalone and Prom Bot chat hosts');
+assert.match(themes, /data-background-visuals="on"\]\[data-skin="dark"[^\n]*:is\([^\n]*\.unified-agent-chat-shell[^\n]*#prom-bot-main-surface[^\n]*#prom-bot-group-host/,
+  'appearance-on must cover standalone and Prom Bot chat hosts');
+assert.match(themes, /:is\(main\.main-shell, #chat-view, \.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host\)\s*\{[\s\S]*?background-image: none !important/,
+  'final desktop theme surface must also cover secondary chat hosts');
 
 // Cover every legacy desktop entry point the user can actually see.
 assert.match(canonical, /\.side-chat-composer\.chat-input-area/,

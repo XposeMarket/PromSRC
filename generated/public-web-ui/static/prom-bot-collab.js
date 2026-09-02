@@ -18,6 +18,7 @@ let directMentionAt = 0;
 let chromeObserver = null;
 let chromeObserverTarget = null;
 let chromeBindTimer = 0;
+let displacedMainChatChildren = [];
 
 function esc(value) {
   return String(value ?? '')
@@ -172,7 +173,11 @@ function installStyles() {
     .prom-bot-group-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:700; }
     .prom-bot-group-meta { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; color:var(--sidebar-muted,var(--muted)); }
     .prom-bot-group-delete { border:0; background:transparent; color:var(--sidebar-muted,var(--muted)); cursor:pointer; border-radius:6px; padding:4px; font-size:13px; }
-    #${GROUP_HOST_ID} { position:absolute; inset:0; z-index:14; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--pm-chat-page-bg,var(--bg)); }
+    /* A group room is the active main-chat surface, not an overlay above the
+       existing Prometheus transcript. Its host stays in the normal flex flow
+       so the room receives the same sizing and theme surface as main chat. */
+    #chat-view.prom-bot-group-active { display:flex !important; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+    #${GROUP_HOST_ID} { position:relative; flex:1 1 auto; width:100%; min-width:0; min-height:0; display:flex; overflow:hidden; background:transparent; }
     .prom-bot-group-shell { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; }
     .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 8px; }
     .prom-bot-group-empty { color:var(--muted); text-align:center; padding:56px 20px; font-size:12px; line-height:1.55; }
@@ -331,7 +336,33 @@ function deleteGroup(groupId) {
   renderGroupRows();
 }
 
+function displaceMainChatSurface(chatView, host) {
+  if (displacedMainChatChildren.length) return;
+  displacedMainChatChildren = Array.from(chatView.children)
+    .filter((node) => node !== host)
+    .map((node) => ({
+      node,
+      hidden: node.hidden === true,
+      ariaHidden: node.getAttribute('aria-hidden'),
+    }));
+  for (const entry of displacedMainChatChildren) {
+    entry.node.hidden = true;
+    entry.node.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function restoreMainChatSurface() {
+  for (const entry of displacedMainChatChildren) {
+    if (!entry.node?.isConnected) continue;
+    entry.node.hidden = entry.hidden;
+    if (entry.ariaHidden == null) entry.node.removeAttribute('aria-hidden');
+    else entry.node.setAttribute('aria-hidden', entry.ariaHidden);
+  }
+  displacedMainChatChildren = [];
+}
+
 function closeGroup() {
+  restoreMainChatSurface();
   document.getElementById(GROUP_HOST_ID)?.remove();
   document.getElementById('chat-view')?.classList.remove('prom-bot-group-active');
   activeGroupId = '';
@@ -349,10 +380,10 @@ async function openGroup(groupId) {
   const chatView = document.getElementById('chat-view');
   if (!chatView) return;
   chatView.classList.add('prom-bot-group-active');
-  if (getComputedStyle(chatView).position === 'static') chatView.style.position = 'relative';
   const host = document.createElement('div');
   host.id = GROUP_HOST_ID;
   chatView.appendChild(host);
+  displaceMainChatSurface(chatView, host);
   activeGroupId = group.id;
   window.promBotActiveGroupId = group.id;
   renderGroupRows();
