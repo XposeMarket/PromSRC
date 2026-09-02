@@ -16,6 +16,7 @@ import { renderReasoningSelector, wireReasoningSelector } from '../components/re
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import { SOURCE_PANEL_SURFACE, subagentChatSessionId } from '../source-panel-context.js';
 import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
+import { bindWorkspaceFileTree, renderWorkspaceFileTree } from '../components/workspace-file-tree.js';
 import {
   applyToolActivityEvent,
   coalesceToolActivityEntries,
@@ -29,7 +30,7 @@ installToolActivityExpansionPersistence();
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
 let activeSubagentId = null;     // Currently open detail panel
-let subagentDetailTab = 'overview'; // overview | chat | memory | runs | heartbeat
+let subagentDetailTab = 'overview'; // overview | chat | workspace | memory | runs | heartbeat
 let subagentRuns = [];
 let activeSubagentRunId = '';
 let subagentRunDetails = {};
@@ -53,6 +54,11 @@ let unifiedDesktopChatRendererPromise = null;
 let agentPackImportPath = 'workspace/oss-agents/marketplace-plan/examples/technical-docs-agent';
 let agentPackImportPreview = null;
 let agentPackImportBusy = false;
+let subagentWorkspaceFiles = [];
+let subagentWorkspaceTree = [];
+let subagentWorkspaceData = null;
+let subagentWorkspaceOpenFile = null; // { agentId, relpath, name, content, modifiedAt, dirty, loading, error }
+const subagentWorkspaceFolderExpanded = new Set();
 
 const SUBAGENT_CHAT_TEXT_EXTENSIONS = new Set([
   'txt','md','csv','json','js','ts','jsx','tsx','html','htm','css','scss','less',
@@ -841,6 +847,11 @@ async function openSubagentDetail(agentId) {
   subagentMemoryExists = false;
   subagentHbConfig = { enabled: false, intervalMinutes: 30 };
   subagentHbMd = '';
+  subagentWorkspaceFiles = [];
+  subagentWorkspaceTree = [];
+  subagentWorkspaceData = null;
+  subagentWorkspaceOpenFile = null;
+  subagentWorkspaceFolderExpanded.clear();
 
   const board = document.getElementById('subagent-board');
   const canvasWrap = document.getElementById('subagents-canvas-wrap');
@@ -907,6 +918,22 @@ async function loadSubagentBoardData(agentId) {
     subagentSkillsCache = Array.isArray(skillsData.skills) ? skillsData.skills : [];
   } catch (err) {
     console.error('[Subagents] loadData:', err);
+  }
+}
+
+async function loadSubagentWorkspace(agentId, { render = true } = {}) {
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace`);
+    if (activeSubagentId !== agentId) return;
+    subagentWorkspaceFiles = Array.isArray(data.files) ? data.files : [];
+    subagentWorkspaceTree = Array.isArray(data.tree) ? data.tree : [];
+    subagentWorkspaceData = data;
+    if (render && subagentDetailTab === 'workspace') renderSubagentBoard(agentId);
+  } catch (err) {
+    subagentWorkspaceFiles = [];
+    subagentWorkspaceTree = [];
+    subagentWorkspaceData = { error: err?.message || String(err) };
+    if (render && subagentDetailTab === 'workspace') renderSubagentBoard(agentId);
   }
 }
 
@@ -1947,6 +1974,7 @@ function renderSubagentUnifiedDesktopChat(agent) {
         <div class="side-chat-title">${escHtml(agent.name || agent.id)}</div>
         <div class="unified-agent-chat-participants">Direct channel · tool activity and reasoning summaries stream live</div>
       </div>
+      <button type="button" class="side-chat-workspace-button" onclick="switchSubagentTab('workspace',${agentArg})" title="Open this agent's workspace">Workspace</button>
       <button class="side-chat-close" type="button" onclick="closeUnifiedSubagentChat(${agentArg})" title="Return to overview" aria-label="Return to overview">×</button>
     </header>
     <div class="unified-agent-chat-messages" id="subagent-chat-messages">
@@ -2022,8 +2050,8 @@ function renderSubagentBoard(agentId) {
     ? `<div id="subagent-tab-content" class="unified-agent-chat-tab-content" style="flex:1;min-height:0;overflow:hidden;padding:0">${renderSubagentUnifiedDesktopChat(agent)}</div>`
     : `
       <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
-        ${['overview','chat','memory','runs','heartbeat'].map(tab => {
-          const labels = { overview:'Overview', chat:'Chat', memory:'Memory', runs:`Runs (${subagentRuns.length})`, heartbeat:'Heartbeat' };
+        ${['overview','chat','workspace','memory','runs','heartbeat'].map(tab => {
+          const labels = { overview:'Overview', chat:'Chat', workspace:'Workspace', memory:'Memory', runs:`Runs (${subagentRuns.length})`, heartbeat:'Heartbeat' };
           const isActive = tab === subagentDetailTab;
           return `<button onclick="switchSubagentTab('${tab}','${escHtml(agentId)}')" style="padding:10px 14px;font-size:12px;font-weight:${isActive?'700':'500'};border:none;background:none;cursor:pointer;white-space:nowrap;color:${isActive?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${isActive?'var(--brand)':'transparent'};margin-bottom:-1px;transition:all 0.15s">${labels[tab]}</button>`;
         }).join('')}
@@ -2031,6 +2059,10 @@ function renderSubagentBoard(agentId) {
       <div id="subagent-tab-content" style="flex:1;min-height:0;overflow-y:auto;padding:14px 16px">
         ${renderSubagentTabContent(agent)}
       </div>`;
+
+  if (subagentDetailTab === 'workspace') {
+    bindSubagentWorkspaceTree(document.getElementById(`subagent-workspace-files-${agent.id}`));
+  }
 
   if (subagentDetailTab === 'overview') {
     agentModelPickerHydrate('sa-model', agent);
@@ -2051,6 +2083,7 @@ function renderSubagentBoard(agentId) {
 function renderSubagentTabContent(agent) {
   switch (subagentDetailTab) {
     case 'overview':    return renderSubagentOverviewTab(agent);
+    case 'workspace':   return renderSubagentWorkspaceTab(agent);
     case 'memory':      return renderSubagentMemoryTab(agent);
     case 'heartbeat':   return renderSubagentHeartbeatTab(agent);
     case 'runs':        return renderSubagentRunsTab(agent);
@@ -2066,6 +2099,9 @@ async function switchSubagentTab(tab, agentId) {
 
   if (tab === 'memory') {
     await reloadSubagentMemory(agentId, { render: false });
+  }
+  if (tab === 'workspace') {
+    await loadSubagentWorkspace(agentId, { render: false });
   }
   if (tab === 'heartbeat' && !subagentHbMd) {
     try {
@@ -2301,6 +2337,121 @@ function renderSubagentSystemPromptTab(agent) {
       </div>
       <textarea id="subagent-system-prompt-editor" style="flex:1;min-height:300px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel-2);color:var(--text);line-height:1.6;outline:none" placeholder="Enter this agent's identity and operating instructions…">${escHtml(subagentSystemPrompt)}</textarea>
     </div>`;
+}
+
+function renderSubagentWorkspaceTab(agent) {
+  const workspaceError = subagentWorkspaceData?.error;
+  const tree = subagentWorkspaceTree || [];
+  const treeHtml = workspaceError
+    ? `<div class="prom-file-tree-empty"><div><strong>Workspace unavailable</strong><br><span>${escHtml(workspaceError)}</span></div></div>`
+    : renderWorkspaceFileTree(tree, {
+      expandedPaths: subagentWorkspaceFolderExpanded,
+      selectedPath: subagentWorkspaceOpenFile?.relpath || '',
+      showMetadata: true,
+      timeAgo,
+    });
+  return `
+    <div class="prom-workspace-file-tree-shell">
+      <div class="prom-workspace-file-tree-header">
+        <div style="min-width:0">
+          <div class="prom-workspace-file-tree-title">${escHtml(agent.name || agent.id)} Workspace</div>
+          <div class="prom-workspace-file-tree-path" title="${escHtml(subagentWorkspaceData?.workspacePath || '')}">${escHtml(subagentWorkspaceData?.workspacePath || `subagents/${agent.id}`)}</div>
+        </div>
+        <button type="button" onclick="refreshSubagentWorkspace('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
+      </div>
+      <div class="prom-workspace-file-tree-layout">
+        <div class="prom-file-tree-pane"><div id="subagent-workspace-files-${escHtml(agent.id)}" class="prom-file-tree">${treeHtml}</div></div>
+        <div class="prom-workspace-file-tree-viewer">${renderSubagentWorkspaceViewer(agent)}</div>
+      </div>
+    </div>`;
+}
+
+function renderSubagentWorkspaceViewer(agent) {
+  const open = subagentWorkspaceOpenFile;
+  if (!open || open.agentId !== agent.id) {
+    return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;padding:24px;text-align:center"><div><div style="font-weight:700;margin-bottom:6px">No file open</div><div style="font-size:12px">Choose a file from this agent's workspace tree.</div></div></div>`;
+  }
+  if (open.loading) return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">Loading ${escHtml(open.name)}…</div>`;
+  if (open.error) return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:#b42323;font-size:12px;padding:16px;text-align:center">${escHtml(open.error)}</div>`;
+  return `<div class="workspace-file-viewer-header">
+      <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(open.relpath)}">${escHtml(open.relpath)}${open.dirty ? ' <span style="color:#b06b00;font-weight:800">●</span>' : ''}</div><div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${(open.content || '').length} chars${open.modifiedAt ? ' · modified ' + timeAgo(open.modifiedAt) : ''}</div></div>
+      <button type="button" onclick="reloadSubagentWorkspaceFile('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Reload</button>
+      <button type="button" onclick="saveSubagentWorkspaceFile('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
+      <button type="button" onclick="closeSubagentWorkspaceFile()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer">Close</button>
+    </div>
+    <textarea id="subagent-workspace-editor-${escHtml(agent.id)}" style="flex:1;min-height:0;width:100%;box-sizing:border-box;resize:none;border:0;outline:none;padding:14px;background:var(--panel);color:var(--text);font:12px/1.6 'IBM Plex Mono',monospace" spellcheck="false">${escHtml(open.content || '')}</textarea>
+    <div id="subagent-workspace-status-${escHtml(agent.id)}" style="font-size:11px;color:var(--muted);padding:4px 10px;border-top:1px solid var(--line);min-height:18px;flex-shrink:0"></div>`;
+}
+
+function bindSubagentWorkspaceTree(root) {
+  return bindWorkspaceFileTree(root, {
+    onToggle: (relpath) => {
+      if (subagentWorkspaceFolderExpanded.has(relpath)) subagentWorkspaceFolderExpanded.delete(relpath);
+      else subagentWorkspaceFolderExpanded.add(relpath);
+      if (activeSubagentId && subagentDetailTab === 'workspace') renderSubagentBoard(activeSubagentId);
+    },
+    onSelect: openSubagentWorkspaceFile,
+  });
+}
+
+async function refreshSubagentWorkspace(agentId) {
+  await loadSubagentWorkspace(agentId, { render: true });
+}
+
+async function openSubagentWorkspaceFile(relpath) {
+  const agentId = activeSubagentId;
+  if (!agentId) return;
+  const name = String(relpath).split('/').pop() || relpath;
+  subagentWorkspaceOpenFile = { agentId, relpath, name, content: '', loading: true, dirty: false };
+  renderSubagentBoard(agentId);
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/${encodeURIComponent(name)}?relpath=${encodeURIComponent(relpath)}`);
+    if (activeSubagentId !== agentId) return;
+    subagentWorkspaceOpenFile = { agentId, relpath, name, content: data.content || '', modifiedAt: data.modifiedAt, dirty: false, loading: false };
+  } catch (err) {
+    subagentWorkspaceOpenFile = { agentId, relpath, name, loading: false, dirty: false, error: err?.message || String(err) };
+  }
+  if (activeSubagentId === agentId && subagentDetailTab === 'workspace') renderSubagentBoard(agentId);
+}
+
+async function reloadSubagentWorkspaceFile(agentId) {
+  const open = subagentWorkspaceOpenFile;
+  if (!open || open.agentId !== agentId) return;
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/${encodeURIComponent(open.name)}?relpath=${encodeURIComponent(open.relpath)}`);
+    subagentWorkspaceOpenFile = { ...open, content: data.content || '', modifiedAt: data.modifiedAt, dirty: false, loading: false, error: '' };
+    renderSubagentBoard(agentId);
+  } catch (err) {
+    const status = document.getElementById(`subagent-workspace-status-${agentId}`);
+    if (status) status.textContent = `Reload failed: ${err?.message || err}`;
+  }
+}
+
+async function saveSubagentWorkspaceFile(agentId) {
+  const open = subagentWorkspaceOpenFile;
+  if (!open || open.agentId !== agentId) return;
+  const editor = document.getElementById(`subagent-workspace-editor-${agentId}`);
+  const content = editor?.value ?? open.content ?? '';
+  const status = document.getElementById(`subagent-workspace-status-${agentId}`);
+  if (status) status.textContent = 'Saving…';
+  try {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/${encodeURIComponent(open.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, relpath: open.relpath }),
+    });
+    subagentWorkspaceOpenFile = { ...open, content, modifiedAt: data.modifiedAt || Date.now(), dirty: false, loading: false, error: '' };
+    await loadSubagentWorkspace(agentId, { render: false });
+    renderSubagentBoard(agentId);
+    showToast('Saved', `${open.relpath} updated`, 'success');
+  } catch (err) {
+    if (status) status.textContent = `Save failed: ${err?.message || err}`;
+  }
+}
+
+function closeSubagentWorkspaceFile() {
+  subagentWorkspaceOpenFile = null;
+  if (activeSubagentId && subagentDetailTab === 'workspace') renderSubagentBoard(activeSubagentId);
 }
 
 function renderSubagentMemoryTab(agent) {
@@ -3925,6 +4076,10 @@ window.closeSubagentPanelAttachmentPreview = closeSubagentPanelAttachmentPreview
 window.saveSubagentSystemPrompt = saveSubagentSystemPrompt;
 window.spawnSubagentTask = spawnSubagentTask;
 window.refreshSubagentDetail = refreshSubagentDetail;
+window.refreshSubagentWorkspace = refreshSubagentWorkspace;
+window.reloadSubagentWorkspaceFile = reloadSubagentWorkspaceFile;
+window.saveSubagentWorkspaceFile = saveSubagentWorkspaceFile;
+window.closeSubagentWorkspaceFile = closeSubagentWorkspaceFile;
 window.openSubagentSettings = openSubagentSettings;
 window.reloadSubagentRuns = reloadSubagentRuns;
 window.openSubagentRunDetail = openSubagentRunDetail;

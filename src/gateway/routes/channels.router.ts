@@ -1833,6 +1833,131 @@ function resolveAgentWorkspaceSafe(agent: any): string {
   return ensureAgentWorkspace(agent);
 }
 
+const AGENT_WORKSPACE_MAX_FILE_BYTES = 4 * 1024 * 1024;
+
+function agentWorkspaceMimeHint(name: string): string {
+  const ext = path.extname(String(name || '')).toLowerCase();
+  if (ext === '.json') return 'json';
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (ext === '.csv') return 'csv';
+  if (['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'].includes(ext)) return 'javascript';
+  if (['.html', '.htm', '.xml', '.svg'].includes(ext)) return 'markup';
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico'].includes(ext)) return 'image';
+  if (['.txt', '.log', '.yaml', '.yml', '.css', '.scss', '.py', '.sh'].includes(ext)) return 'text';
+  return 'binary';
+}
+
+function listAgentWorkspaceEntries(root: string, current = root): any[] {
+  if (!fs.existsSync(current)) return [];
+  const entries: any[] = [];
+  for (const dirent of fs.readdirSync(current, { withFileTypes: true })) {
+    // Internal markers and hidden runtime state are not part of the user-facing
+    // workspace tree. They remain available to the runtime on disk.
+    if (dirent.name.startsWith('.')) continue;
+    const absolutePath = path.join(current, dirent.name);
+    const relativePath = path.relative(root, absolutePath).replace(/\\/g, '/');
+    if (dirent.isDirectory()) {
+      let modifiedAt = 0;
+      try { modifiedAt = fs.statSync(absolutePath).mtimeMs; } catch {}
+      entries.push({
+        name: dirent.name,
+        relativePath,
+        modifiedAt,
+        isDirectory: true,
+        children: listAgentWorkspaceEntries(root, absolutePath),
+      });
+      continue;
+    }
+    if (!dirent.isFile()) continue;
+    try {
+      const stat = fs.statSync(absolutePath);
+      entries.push({
+        name: dirent.name,
+        relativePath,
+        size: stat.size,
+        modifiedAt: stat.mtimeMs,
+        createdAt: stat.birthtimeMs,
+        mimeHint: agentWorkspaceMimeHint(dirent.name),
+        isDirectory: false,
+      });
+    } catch {}
+  }
+  return entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' });
+  });
+}
+
+function resolveAgentWorkspaceFileTarget(agent: any, requestedPath: string): { root: string; target: string; relativePath: string } {
+  const root = path.resolve(resolveAgentWorkspaceSafe(agent));
+  const normalized = String(requestedPath || '').replace(/\\/g, '/').trim();
+  if (!normalized || normalized.includes('\0')) throw new Error('A workspace file path is required');
+  const target = path.resolve(root, normalized);
+  const relativePath = path.relative(root, target).replace(/\\/g, '/');
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Workspace path escapes the agent workspace');
+  }
+  return { root, target, relativePath };
+}
+
+router.get('/api/agents/:id/workspace', (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const workspacePath = resolveAgentWorkspaceSafe(agent);
+    const tree = listAgentWorkspaceEntries(workspacePath);
+    const files = tree.flatMap(function flatten(entry: any): any[] {
+      if (entry.isDirectory) return (entry.children || []).flatMap(flatten);
+      return [entry];
+    });
+    res.json({ success: true, agentId, workspacePath, files, tree });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+router.get('/api/agents/:id/workspace/:filename', (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const requestedPath = String(req.query.relpath || req.params.filename || '').trim();
+    const resolved = resolveAgentWorkspaceFileTarget(agent, requestedPath);
+    if (!fs.existsSync(resolved.target) || !fs.statSync(resolved.target).isFile()) {
+      return res.status(404).json({ success: false, error: 'Workspace file not found' });
+    }
+    const stat = fs.statSync(resolved.target);
+    if (stat.size > AGENT_WORKSPACE_MAX_FILE_BYTES) {
+      return res.status(413).json({ success: false, error: 'Workspace file is too large to open in the desktop viewer' });
+    }
+    res.json({ success: true, agentId, name: path.basename(resolved.target), relativePath: resolved.relativePath, content: fs.readFileSync(resolved.target, 'utf-8'), modifiedAt: stat.mtimeMs });
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    res.status(message.includes('escapes') || message.includes('required') ? 400 : 500).json({ success: false, error: message });
+  }
+});
+
+router.post('/api/agents/:id/workspace/:filename', (req, res) => {
+  try {
+    const agentId = _sanitizeAgentId(req.params.id);
+    const agent = getAgentById(agentId);
+    if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+    const requestedPath = String(req.body?.relpath || req.query.relpath || req.params.filename || '').trim();
+    const content = String(req.body?.content ?? '');
+    if (Buffer.byteLength(content, 'utf8') > AGENT_WORKSPACE_MAX_FILE_BYTES) {
+      return res.status(413).json({ success: false, error: 'Workspace file is too large to save' });
+    }
+    const resolved = resolveAgentWorkspaceFileTarget(agent, requestedPath);
+    fs.mkdirSync(path.dirname(resolved.target), { recursive: true });
+    fs.writeFileSync(resolved.target, content, 'utf-8');
+    res.json({ success: true, agentId, name: path.basename(resolved.target), relativePath: resolved.relativePath, modifiedAt: fs.statSync(resolved.target).mtimeMs });
+  } catch (err: any) {
+    const message = err?.message || String(err);
+    res.status(message.includes('escapes') || message.includes('required') ? 400 : 500).json({ success: false, error: message });
+  }
+});
+
 router.get('/api/agents/:id/agents-md', (req, res) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);

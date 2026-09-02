@@ -13,6 +13,11 @@ const performanceGenerated = read('generated/public-web-ui/static/performance.js
 const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js');
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
 const themes = read('web-ui/src/styles/themes.css');
+const workspaceTree = read('web-ui/src/components/workspace-file-tree.js');
+const workspaceTreeGenerated = read('generated/public-web-ui/static/components/workspace-file-tree.js');
+const workspaceCss = read('web-ui/src/styles/workspace-file-tree.css');
+const workspaceCssGenerated = read('generated/public-web-ui/static/styles/workspace-file-tree.css');
+const channelsRouter = read('src/gateway/routes/channels.router.ts');
 
 assert.match(
   subagents,
@@ -59,6 +64,8 @@ assert.match(promBotCollab, /renderer\.renderComposer\(\{[^}]*sessionId, seconda
 
 assert.equal(performance, performanceGenerated, 'performance source/generated copies must match');
 assert.equal(canonical, canonicalGenerated, 'canonical composer source/generated copies must match');
+assert.equal(workspaceTree, workspaceTreeGenerated, 'workspace file tree source/generated copies must match');
+assert.equal(workspaceCss, workspaceCssGenerated, 'workspace file tree CSS source/generated copies must match');
 assert.match(performance, /import\('\.\/features\/chat\/canonical-desktop-composer\.js'\)/,
   'desktop bootstrap must install canonical main-composer reuse');
 
@@ -108,5 +115,22 @@ assert.doesNotMatch(canonical, /clone\.classList\.add\([^\n]*(?:side-chat-compos
   'legacy geometry classes must never be re-added to the visible composer');
 assert.doesNotMatch(canonical, /width:\s*min\(760px|calc\(100% - 52px\)/,
   'canonical reuse must not recreate legacy composer geometry');
+
+// Teams and direct standalone/Prom Bot chats must expose the same actual
+// workspace tree surface. The Prom Bot shell reuses the standalone board, so
+// its Workspace action must lead to the agent-owned workspace tab.
+assert.match(teams, /renderWorkspaceFileTree/);
+assert.match(teams, /bindWorkspaceFileTree/);
+assert.match(teams, /prom-workspace-file-tree-layout/);
+assert.match(subagents, /case 'workspace':\s+return renderSubagentWorkspaceTab/);
+assert.match(subagents, /api\(`\/api\/agents\/\$\{encodeURIComponent\(agentId\)\}\/workspace`\)/);
+assert.match(subagents, /side-chat-workspace-button/);
+assert.match(workspaceTree, /ArrowDown/);
+assert.match(workspaceTree, /ArrowRight/);
+assert.match(workspaceTree, /data-file-tree-folder/);
+assert.match(channelsRouter, /router\.get\('\/api\/agents\/:id\/workspace'/);
+assert.match(channelsRouter, /router\.get\('\/api\/agents\/:id\/workspace\/:filename'/);
+assert.match(channelsRouter, /router\.post\('\/api\/agents\/:id\/workspace\/:filename'/);
+assert.match(channelsRouter, /Workspace path escapes the agent workspace/);
 
 console.log('desktop subagent/team/side composer contract: visible surfaces reuse the real main composer DOM without duplicate main ids');
