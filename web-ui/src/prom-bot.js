@@ -97,6 +97,14 @@ function installPromBotStyles() {
       min-height: 0;
       overflow: hidden;
     }
+    /* The regular chat children have authored display rules (for example
+       #chat-messages is a flex scroller), so the browser's bare [hidden]
+       attribute cannot reliably suppress them. Prom Bot must leave exactly
+       one visible surface in #chat-view. */
+    #chat-view.prom-bot-chat-active > [hidden],
+    #chat-view.prom-bot-group-active > [hidden] {
+      display: none !important;
+    }
     #${PROM_BOT_SURFACE_ID} {
       position: relative;
       display: flex;

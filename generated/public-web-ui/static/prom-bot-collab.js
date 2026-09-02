@@ -177,6 +177,10 @@ function installStyles() {
        existing Prometheus transcript. Its host stays in the normal flex flow
        so the room receives the same sizing and theme surface as main chat. */
     #chat-view.prom-bot-group-active { display:flex !important; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+    /* The ordinary chat transcript/composer have authored display rules that
+       can override the browser's bare [hidden] attribute. Keep the group room
+       as the only visible child of #chat-view while it is active. */
+    #chat-view.prom-bot-group-active > [hidden] { display:none !important; }
     #${GROUP_HOST_ID} { position:relative; flex:1 1 auto; width:100%; min-width:0; min-height:0; display:flex; overflow:hidden; background:transparent; }
     .prom-bot-group-shell { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; }
     .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 8px; }

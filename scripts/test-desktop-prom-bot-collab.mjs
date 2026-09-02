@@ -26,6 +26,8 @@ assert.match(source, /#chat-view\.prom-bot-group-active/,
   'Prom Bot group chat must use the normal main-chat flex surface');
 assert.match(source, /function displaceMainChatSurface\(/,
   'Prom Bot group chat must displace the ordinary main-chat children');
+assert.match(source, /#chat-view\.prom-bot-group-active > \[hidden\][\s\S]*?display:\s*none !important/,
+  'Prom Bot group chat must suppress authored display rules on displaced main-chat children');
 assert.match(source, /function restoreMainChatSurface\(/,
   'Prom Bot group chat must restore the ordinary main-chat children on exit');
 assert.match(source, /entry\.node\.hidden = true/,

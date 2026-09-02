@@ -48,6 +48,8 @@ assert.match(source, /switchSubagentTab\('chat', id\)/);
 assert.match(source, /PROM_BOT_SURFACE_ID = 'prom-bot-main-surface'/);
 assert.match(source, /function displaceMainChatSurface\(/);
 assert.match(source, /entry\.node\.hidden = true/);
+assert.match(source, /#chat-view\.prom-bot-chat-active > \[hidden\][\s\S]*?display: none !important/,
+  'Prom Bot must suppress authored display rules on displaced main-chat children');
 assert.match(source, /function restoreMainChatSurface\(/);
 assert.match(source, /mountSubagentBoardAsMainChatSurface\(\)/);
 assert.doesNotMatch(source, /PROM_BOT_HOST_ID|prom-bot-chat-host/, 'the retired absolute overlay host must not return');
