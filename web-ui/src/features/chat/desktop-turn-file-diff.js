@@ -10,6 +10,30 @@ function decodeInlineString(value) {
 }
 
 function turnFileTarget(row) {
+  const dataPath = String(row?.dataset?.turnFilePath || '').trim();
+  if (dataPath) {
+    const displayPath = String(
+      row.dataset.turnFileLabel
+      || row.querySelector('.file-change-path')?.textContent
+      || dataPath,
+    ).trim();
+    const insertions = Number.parseInt(String(row.querySelector('.file-change-counts .ins')?.textContent || '').replace(/[^0-9]/g, ''), 10) || 0;
+    const deletions = Number.parseInt(String(row.querySelector('.file-change-counts .del')?.textContent || '').replace(/[^0-9]/g, ''), 10) || 0;
+    return {
+      key: `workspace-file:${dataPath}`,
+      type: 'workspace-file',
+      title: displayPath,
+      path: dataPath,
+      displayPath,
+      status: 'modified',
+      insertions,
+      deletions,
+    };
+  }
+
+  // Keep the parser as a compatibility fallback for rows produced by an
+  // older cached bundle. Current rows carry data-turn-file-* attributes so
+  // the click path does not depend on HTML/JS escaping details.
   const handler = String(row?.getAttribute?.('onclick') || '');
   const match = handler.match(/canvasPresentFile\(\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")(?:\s*,|\s*\))/);
   if (!match) return null;

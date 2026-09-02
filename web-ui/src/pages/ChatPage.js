@@ -12068,8 +12068,11 @@ function renderFileChangeRow(file) {
   const pathArg = encodeInlineJsString(file.path);
   const labelArg = encodeInlineJsString(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file');
   const openDiffArgs = canOpen ? `, { openMode: 'diff', diffView: 'turn' }` : '';
+  const turnFileDataAttrs = canOpen
+    ? `data-turn-file-path="${escHtml(file.path)}" data-turn-file-label="${escHtml(file.displayPath)}" data-turn-file-view="turn"`
+    : '';
   const openAttrs = canOpen
-    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})}"`
+    ? `role="button" tabindex="0" ${turnFileDataAttrs} onclick="canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})}"`
     : 'aria-disabled="true"';
   return `
     <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>

@@ -48,6 +48,11 @@ function installTurnDiffIntent() {
     if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
     const row = event.target?.closest?.(selector);
     if (!row) return;
+    // Current end-of-turn rows invoke canvasPresentFile(..., { openMode:
+    // 'diff' }) directly. Do not cancel that explicit handler while the
+    // optional compatibility module is loading; doing so used to make the
+    // row fall through to the old Preview path in a stale/racing bundle.
+    if (row.dataset?.turnFilePath) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     try {
