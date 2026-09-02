@@ -469,6 +469,17 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-gold, var(--brand)) 22%, transparent);
 }
 
+/* Secondary chat renderers still emit their compatibility composer markup
+   before the canonical adapter can clone the real main composer. Keep those
+   legacy shells out of first paint; canonicalizeComposer() replaces each one
+   with a .unified-desktop-chat-composer that deliberately drops these classes. */
+body:not(.pm-mobile-active) :is(
+  .side-chat-composer.chat-input-area,
+  .unified-agent-chat-composer.chat-input-area
+):not([data-canonical-secondary-composer="1"]) {
+  display: none !important;
+}
+
 @media (max-width: 900px) {
   .session-hover-preview { display: none !important; }
 }

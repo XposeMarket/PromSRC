@@ -36,7 +36,6 @@ function activateDesktopPageFeatures(mode) {
       .then(() => import('./prom-bot-collab.js'))
       .then(() => import('./prom-bot-collab-hardening.js'))
       .then(() => import('./team-prom-bot-flow.js')));
-    startDesktopFeature('Canonical Composer', () => import('./features/chat/canonical-desktop-composer.js'));
     startDesktopFeature('Bot Create', () => import('./bot-create.js')
       .then(() => import('./bot-create-settings-bridge.js')));
   }
@@ -69,6 +68,11 @@ if (!shouldBootMobile) {
   // must be ready on the initial Chat route rather than waiting for a
   // Subagents or Teams page activation. The heavier Chat workspace remains
   // page-gated above.
+  // The canonical composer adapter is intentionally booted with the shell.
+  // Secondary chat renderers can be opened from Chat/Prom Bot before a
+  // Subagents or Teams route is activated, so page-gating it permits the old
+  // composer to paint while the adapter is still loading.
+  startDesktopFeature('Canonical Composer', () => import('./features/chat/canonical-desktop-composer.js'));
   startDesktopFeature('Prom Bot', () => import('./prom-bot.js')
     .then(() => import('./prom-bot-roster.js'))
     .then(() => import('./prom-bot-collab.js'))

@@ -13,6 +13,7 @@ const performanceGenerated = read('generated/public-web-ui/static/performance.js
 const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js');
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
 const themes = read('web-ui/src/styles/themes.css');
+const components = read('web-ui/src/styles/components.css');
 const workspaceTree = read('web-ui/src/components/workspace-file-tree.js');
 const workspaceTreeGenerated = read('generated/public-web-ui/static/components/workspace-file-tree.js');
 const workspaceCss = read('web-ui/src/styles/workspace-file-tree.css');
@@ -111,6 +112,8 @@ assert.match(chat, /composerClass:\s*'side-chat-composer'/,
 
 // Never put the classes that trigger the old panel geometry on the replacement.
 assert.match(canonical, /clone\.className = 'chat-input-area unified-desktop-chat-composer'/);
+assert.match(components, /body:not\(\.pm-mobile-active\) :is\([\s\S]*?\.unified-agent-chat-composer\.chat-input-area[\s\S]*?\):not\(\[data-canonical-secondary-composer="1"\]\)\s*\{[\s\S]*?display:\s*none !important/,
+  'legacy secondary composers must be hidden before the canonical adapter replaces them');
 assert.doesNotMatch(canonical, /clone\.classList\.add\([^\n]*(?:side-chat-composer|unified-agent-chat-composer|subagent-panel-chat-composer|team-chat-unified-composer)/,
   'legacy geometry classes must never be re-added to the visible composer');
 assert.doesNotMatch(canonical, /width:\s*min\(760px|calc\(100% - 52px\)/,
