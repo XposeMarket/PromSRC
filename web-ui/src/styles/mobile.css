@@ -227,7 +227,7 @@ body.pm-mobile-active {
   --pm-motion-layout-duration: 300ms;
   --pm-motion-layout-ease: cubic-bezier(.22, .74, .22, 1);
   --pm-motion-fade-duration: 220ms;
-  --pm-drawer-width: min(76vw, 350px);
+  --pm-drawer-width: 100vw;
 }
 
 body.pm-mobile-active :where(
@@ -476,6 +476,8 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-body {
   background-image: none !important;
 }
 body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
+  /* The chat shell leaves the viewport by the same full-screen distance as
+     the drawer enters, so the drawer owns the entire visible surface. */
   transform: translate3d(var(--pm-drawer-width), 0, 0);
   will-change: transform, border-radius;
 }
@@ -514,8 +516,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
 }
 
 body.pm-mobile-drawer-open .pm-app {
-  /* The drawer sits directly behind this edge. Avoid scaling or rounding the
-     edge: both expose the document background as a visible gap. */
+  /* Move the chat shell completely off-canvas while the full-screen drawer
+     enters from the left. Matching distances prevent a background gap. */
   transform: translate3d(var(--pm-drawer-width), 0, 0);
   border-radius: 0;
   box-shadow:
@@ -2004,7 +2006,7 @@ body.pm-model-badge-pressing * {
   position: fixed;
   top: 0; bottom: 0; left: 0;
   width: var(--pm-drawer-width);
-  max-width: 330px;
+  max-width: none;
   box-sizing: border-box;
   background: #050506;
   border-right: 0;
@@ -2073,6 +2075,7 @@ body.pm-model-badge-pressing * {
 .pm-drawer-gateway-pill-dot.is-offline { background: #d8473a; }
 .pm-drawer-gateway-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pm-theme-toggle,
+.pm-drawer-close,
 .pm-drawer-search-toggle {
   appearance: none;
   position: absolute;
@@ -2089,11 +2092,19 @@ body.pm-model-badge-pressing * {
   cursor: pointer;
   box-shadow: none;
 }
-.pm-theme-toggle { right: 18px; }
-.pm-drawer-search-toggle { right: calc(18px + 48px); }
+.pm-theme-toggle,
+.pm-drawer-close,
+.pm-drawer-search-toggle {
+  top: calc(max(env(safe-area-inset-top), 18px) + 7px);
+}
+.pm-drawer-close { right: 18px; }
+.pm-theme-toggle { right: calc(18px + 48px); }
+.pm-drawer-search-toggle { right: calc(18px + 48px + 48px); }
 .pm-theme-toggle svg,
+.pm-drawer-close svg,
 .pm-drawer-search-toggle svg { width: 19px; height: 19px; }
 .pm-theme-toggle:active,
+.pm-drawer-close:active,
 .pm-drawer-search-toggle:active { transform: scale(.96); }
 .pm-drawer-search {
   display: flex;
@@ -16487,11 +16498,13 @@ body.pm-mobile-active .pm-drawer-item {
    navigation should remain easy to tap, but it should not dominate the chat
    list beneath it. */
 body.pm-mobile-active .pm-drawer-list {
-  gap: 5px;
+  gap: 0 !important;
 }
 body.pm-mobile-active .pm-drawer-item {
-  min-height: 50px !important;
-  padding: 8px 13px !important;
+  box-sizing: border-box;
+  height: 52px !important;
+  min-height: 52px !important;
+  padding: 6px 13px !important;
   gap: 11px !important;
 }
 body.pm-mobile-active .pm-drawer-item .pm-icon {
@@ -16519,20 +16532,32 @@ body.pm-mobile-active .pm-drawer-item:active {
   box-shadow: none !important;
 }
 
+/* The drawer rows are the page tabs, not cards. Keep their tap targets
+   accessible while removing the large vertical gaps from the old card rhythm. */
+body.pm-mobile-active .pm-drawer-list .pm-drawer-item {
+  box-sizing: border-box;
+  height: 52px !important;
+  min-height: 52px !important;
+}
+
 /* Keep the hamburger drawer flat across every mobile skin. The drawer is a
    theme surface, so directional lighting here only makes its edges look
    darker than the active theme color. */
 body.pm-mobile-active .pm-drawer {
-  /* Match the desktop left rail while leaving .pm-app on its own mobile
-     surface. The app moves over this panel instead of revealing a gap. */
-  background: var(--sidebar-bg, #050506) !important;
-  background-image: none !important;
-  box-shadow: none !important;
-}
-body.pm-mobile-active .pm-theme-toggle,
-body.pm-mobile-active .pm-drawer-search-toggle {
+  /* The drawer is a full-screen mobile surface. It must follow the active
+     mobile skin rather than falling back to the desktop sidebar token, which
+     made the hamburger menu stay black in blue, purple, and gray themes. */
   background: var(--pm-bg) !important;
   background-image: none !important;
+  box-shadow: none !important;
+  color: var(--pm-text) !important;
+}
+body.pm-mobile-active .pm-theme-toggle,
+body.pm-mobile-active .pm-drawer-close,
+body.pm-mobile-active .pm-drawer-search-toggle {
+  background: color-mix(in srgb, var(--pm-text) 8%, transparent) !important;
+  background-image: none !important;
+  color: var(--pm-text) !important;
 }
 body.pm-mobile-active .pm-drawer-search,
 body.pm-mobile-active .pm-drawer-new-chat,

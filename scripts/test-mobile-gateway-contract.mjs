@@ -119,7 +119,12 @@ function assertContractFiles() {
   assert.match(shell, /type === 'status_changed'/);
   assert.match(shell, /PM_DRAWER_GATEWAY_HEARTBEAT_MS/);
   assert.match(shell, /refreshGatewayStatuses/);
-  assert.match(css, /--pm-drawer-width: min\(76vw, 350px\)/);
+  assert.match(css, /--pm-drawer-width: 100vw/);
+  assert.match(css, /\.pm-drawer\s*\{[\s\S]*?max-width: none;/, 'mobile drawer must occupy the full viewport');
+  assert.match(shell, /data-mobile-drawer-close/, 'full-screen drawer must expose a local back control');
+  assert.match(shell, /data-mobile-drawer-close[\s\S]*?closeDrawer\(\)/, 'drawer back control must close the drawer');
+  assert.match(shell, /data-mobile-drawer-close[\s\S]*?\$\{ICONS\.chev\}/, 'drawer back control must point toward the chat');
+  assert.match(css, /\.pm-drawer-list\s*\{[\s\S]*?gap: 0 !important;/, 'drawer page tabs must use a compact vertical rhythm');
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /\.pm-chat-target-chip \{[\s\S]*display: none/);
   assert.match(css, /pm-target-popover-open/);

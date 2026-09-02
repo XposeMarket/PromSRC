@@ -1216,6 +1216,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
+      <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Back to chat" title="Back to chat">${ICONS.chev}</button>
       <button class="pm-drawer-search-toggle" type="button" data-mobile-drawer-search-toggle aria-label="Search chats" aria-expanded="false">${_searchIcon()}</button>
       <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
       <label class="pm-drawer-search" aria-label="Search chats" hidden>
@@ -1310,6 +1311,11 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       .catch(() => {});
   });
 
+  _drawerEl.querySelector('[data-mobile-drawer-close]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeDrawer();
+  });
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('[data-mobile-drawer-search-toggle]')?.addEventListener('click', (event) => {
     event.preventDefault();
