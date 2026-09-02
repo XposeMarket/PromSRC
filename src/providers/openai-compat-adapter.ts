@@ -317,7 +317,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      stream: !!options?.onToken,
     };
     const speedCfg = (getConfig().getConfig() as any)?.llm?.providers?.[this.id] || {};
-    const configuredSpeed = speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
+    const configuredSpeed = options?.speed || speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
     if (normalizeSpeed(this.id, model, configuredSpeed) === 'fast') body.service_tier = 'priority';
 	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.

@@ -3890,6 +3890,25 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
   color: var(--pm-shell-gold, var(--brand)) !important;
 }
 
+/* Page navigation stays semantically active for keyboard/screen-reader state,
+   but the current page itself should not be painted like a selected chat. Keep
+   hover/focus feedback available when the user is actually interacting. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-group > .nav-item, .nav-more-wrap > .nav-item, .more-popover-item).active:not(:hover):not(:focus-visible) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* In the expanded desktop sidebar the Pages control remains the invisible
+   click target that can collapse/reopen the section, while its orphan divider
+   no longer reads as an extra tab above Chat. The divider remains visible in
+   the collapsed state so Pages can still be reopened. */
+@media (min-width: 901px) {
+  :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar:not(.pages-collapsed) .sidebar-pages-toggle::before {
+    opacity: 0 !important;
+  }
+}
+
 /* Source-panel utility actions are icon affordances, not framed controls. */
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn),
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(#source-panel-refresh, .source-panel-canvas-btn, #sources-minimized-panel .sources-minimized-header .source-panel-icon-btn):is(:hover, :focus-visible) {

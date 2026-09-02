@@ -7551,7 +7551,7 @@ function _normalizeActiveReasoningEffort(provider, model, effort) {
   return _effortLevelsForProvider(provider, model).some(level => level.v === raw) ? raw : '';
 }
 
-function _renderActiveModelLabels(model, provider, effort = '', sessionId = '') {
+function _renderActiveModelLabels(model, provider, effort = '', sessionId = '', speed) {
   const rawModel = String(model || '').trim();
   const baseName = typeof window.formatModelDisplayName === 'function'
     ? window.formatModelDisplayName(rawModel, provider)
@@ -7575,7 +7575,9 @@ function _renderActiveModelLabels(model, provider, effort = '', sessionId = '') 
     ? Array.from(document.querySelectorAll('[data-composer-model-speed="1"]'))
       .find((node) => String(node.dataset.composerModelSessionId || '') === sid)
     : document.getElementById('chat-model-speed-icon');
-  if (speedIcon) speedIcon.hidden = !_supportsFastSpeed(provider, rawModel);
+  if (speedIcon && speed !== undefined) {
+    speedIcon.hidden = !(_supportsFastSpeed(provider, rawModel) && String(speed || '').toLowerCase() === 'fast');
+  }
 }
 
 function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
@@ -7621,7 +7623,7 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
       row.style.display = enabled ? 'block' : 'none';
     }
   }
-  _renderActiveModelLabels(activeModel, provider, EFFORT_CAPABLE_PROVIDERS.has(provider) ? (window.reasoningLevel || '') : '');
+  _renderActiveModelLabels(activeModel, provider, EFFORT_CAPABLE_PROVIDERS.has(provider) ? (window.reasoningLevel || '') : '', '', fast ? 'fast' : 'standard');
 }
 
 async function refreshReasoningPrefsFromSettings(providerOverride) {
@@ -7712,7 +7714,7 @@ async function refreshActiveChatModelRoute(sessionIdOverride = '') {
       window._activeModel = route.model;
       window.reasoningLevel = reasoningEffort;
     }
-    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort, isSecondary ? sessionId : '');
+    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort, isSecondary ? sessionId : '', route.speed || 'standard');
     const follow = isSecondary
       ? Array.from(document.querySelectorAll('[data-model-switcher-follow-default]'))
         .find((node) => String(node.closest('[data-model-switcher-popover]')?.dataset.modelSwitcherSessionId || '') === sessionId)
@@ -7806,6 +7808,7 @@ async function _loadDesktopSwitcherState(sessionId = '') {
       model,
       effective.reasoningEffort ?? providerConfig.reasoning_effort,
     ),
+    speed: String(effective.speed || providerConfig.speed || (providerConfig.fast_mode === true ? 'fast' : 'standard')).toLowerCase() === 'fast' && _supportsFastSpeed(provider, model) ? 'fast' : 'standard',
   };
 }
 
@@ -7861,17 +7864,21 @@ function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherControll
   if (!main) return;
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
+  const speedCapable = _supportsFastSpeed(state.provider, state.model);
+  const speed = state.speed === 'fast' ? 'fast' : 'standard';
   const source = state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   main.innerHTML = `
     <div class="model-switcher-heading">Chat settings</div>
     <button type="button" class="model-switcher-row" data-switcher-view="providers"><span>Providers</span><strong>${escHtml(_desktopSwitcherProviderLabel(state.provider, state.catalog))}</strong><i>›</i></button>
     <button type="button" class="model-switcher-row" data-switcher-view="models"><span>Model</span><strong>${escHtml(typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(state.model, state.provider) : state.model || 'Choose')}</strong><i>›</i></button>
     <button type="button" class="model-switcher-row" data-switcher-view="effort" ${levels.length ? '' : 'disabled'}><span>Effort</span><strong>${escHtml(effort?.label || 'Default')}</strong><i>›</i></button>
+    ${speedCapable ? `<button type="button" class="model-switcher-row" data-switcher-view="speed"><span>Speed</span><strong>${speed === 'fast' ? 'Fast' : 'Standard'}</strong><i>›</i></button>` : ''}
     <div class="model-switcher-source">${escHtml(source)}</div>
     ${state.route?.mode==='explicit' ? `<button type=button class="model-switcher-default" data-model-switcher-follow-default>Use Main Chat Default<small>${window.mainModelLabel?.(state)}</small></button>` : ''}`;
   main.querySelector('[data-switcher-view="providers"]')?.addEventListener('click', () => _renderDesktopSwitcherProviders(state, controller));
   main.querySelector('[data-switcher-view="models"]')?.addEventListener('click', () => _renderDesktopSwitcherModels(state, state.provider, controller));
   main.querySelector('[data-switcher-view="effort"]')?.addEventListener('click', () => _renderDesktopSwitcherEffort(state, controller));
+  main.querySelector('[data-switcher-view="speed"]')?.addEventListener('click', () => _renderDesktopSwitcherSpeed(state, controller));
   main.querySelector('.model-switcher-default')?.addEventListener('click', () => followMainChatDefault(controller.sessionId));
 }
 
@@ -7930,7 +7937,7 @@ function _renderDesktopSwitcherQuick(state, controller = _desktopSwitcherControl
     const effort = levels[index]?.v || '';
     if (!effort || index === activeIndex) return;
     try {
-      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined }, controller.sessionId);
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
       _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   };
@@ -8007,7 +8014,7 @@ async function _renderDesktopSwitcherModels(state, provider, controller = _deskt
     const model = button.getAttribute('data-switcher-model') || '';
     if (!model) return;
     try {
-      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined }, controller.sessionId);
+      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined, speed: provider === state.provider ? state.speed : undefined }, controller.sessionId);
       const next = await _loadDesktopSwitcherState(controller.sessionId);
       _renderDesktopSwitcherMain(next, controller);
       _renderDesktopSwitcherEffort(next, controller);
@@ -8023,11 +8030,34 @@ function _renderDesktopSwitcherEffort(state, controller = _desktopSwitcherContro
   controller.detail?.querySelectorAll('[data-switcher-effort]').forEach((button) => button.addEventListener('click', async () => {
     const effort = button.getAttribute('data-switcher-effort') || '';
     try {
-      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined }, controller.sessionId);
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
       const next = await _loadDesktopSwitcherState(controller.sessionId);
       _renderDesktopSwitcherMain(next, controller);
       _renderDesktopSwitcherEffort(next, controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
+  }));
+}
+
+function _renderDesktopSwitcherSpeed(state, controller = _desktopSwitcherController()) {
+  if (!_supportsFastSpeed(state.provider, state.model)) {
+    _renderDesktopSwitcherMain(state, controller);
+    return;
+  }
+  const options = [
+    { v: 'standard', label: 'Standard' },
+    { v: 'fast', label: 'Fast' },
+  ];
+  _desktopSwitcherShowDetail('Speed', options.map((option) => _desktopSwitcherOption(
+    option.label, '', option.v === state.speed, `data-switcher-speed="${option.v}"`,
+  )).join(''), controller);
+  controller.detail?.querySelectorAll('[data-switcher-speed]').forEach((button) => button.addEventListener('click', async () => {
+    const speed = button.getAttribute('data-switcher-speed') === 'fast' ? 'fast' : 'standard';
+    try {
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: state.reasoningEffort || undefined, speed }, controller.sessionId);
+      const next = await _loadDesktopSwitcherState(controller.sessionId);
+      _renderDesktopSwitcherMain(next, controller);
+      _renderDesktopSwitcherSpeed(next, controller);
+    } catch (err) { showToast('Could not save model speed', String(err?.message || err), 'error'); }
   }));
 }
 
@@ -8084,7 +8114,7 @@ async function switchModel(modelName) {
   try {
     const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
     const route = state?.effective || {};
-    await setActiveChatModelRoute({ providerId: route.providerId || window._activeProvider || 'ollama', model: modelName, reasoningEffort: route.reasoningEffort || undefined, accountId: route.accountId || undefined });
+    await setActiveChatModelRoute({ providerId: route.providerId || window._activeProvider || 'ollama', model: modelName, reasoningEffort: route.reasoningEffort || undefined, speed: route.speed || undefined, accountId: route.accountId || undefined });
   } catch {
     // The next header refresh will retain the currently admitted/global route.
   }
@@ -8137,7 +8167,7 @@ async function setReasoningLevel(level) {
     }
     const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
     const route = state?.effective || {};
-    await setActiveChatModelRoute({ providerId: route.providerId || provider, model: route.model || window._activeModel || '', reasoningEffort: level || undefined, accountId: route.accountId || undefined });
+    await setActiveChatModelRoute({ providerId: route.providerId || provider, model: route.model || window._activeModel || '', reasoningEffort: level || undefined, speed: route.speed || undefined, accountId: route.accountId || undefined });
     _closeModelSwitcher();
   } catch (err) {
     console.warn('setReasoningLevel:', err);
