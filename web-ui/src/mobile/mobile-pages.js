@@ -3654,14 +3654,26 @@ function _isInternalMobileRestartProcessEntry(entry) {
     || packetType === 'runtime_recovery_context';
 }
 
+function _isMobileInternalToolProtocolText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
+    || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
+}
+
 function _isMobileHiddenRuntimeProcessEntry(entry) {
   if (_isInternalMobileRestartProcessEntry(entry)) return true;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   // Plan progress is rendered by the dedicated plan UI. Older runtime
   // checkpoints wrote it as generic `step` process rows, which made recovered
   // tool drawers show fake "Plan: Run …" tools.
-  return String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
-    && String(extra.event || '').toLowerCase() === 'progress_state';
+  if (String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
+    && String(extra.event || '').toLowerCase() === 'progress_state') return true;
+  // Background runtimes may persist provider lifecycle diagnostics as plain
+  // process rows. They are implementation details, not user-facing tools;
+  // real tool calls/results remain visible through the activity coalescer.
+  return !entry?.activity && _isMobileInternalToolProtocolText(
+    entry?.text || entry?.content || entry?.message,
+  );
 }
 
 function _normalizeMobileProcessEntry(entry) {
