@@ -2018,14 +2018,25 @@ body.pm-model-badge-pressing * {
   will-change: transform, opacity;
   z-index: 1;
   display: flex; flex-direction: column;
-  padding: max(env(safe-area-inset-top), 18px) 16px calc(108px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  padding: max(env(safe-area-inset-top), 18px) 16px 0 max(18px, env(safe-area-inset-left));
   box-shadow: none;
-  overflow-y: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   color: #f6f4f0;
   pointer-events: none;
 }
+.pm-drawer-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding-bottom: calc(82px + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.pm-drawer-scroll::-webkit-scrollbar { width: 5px; }
+.pm-drawer-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--pm-orange) 34%, transparent); border-radius: 999px; }
 .pm-drawer::-webkit-scrollbar { width: 5px; }
 .pm-drawer::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--pm-orange) 34%, transparent); border-radius: 999px; }
 .pm-drawer [hidden] { display: none !important; }
@@ -16611,14 +16622,16 @@ body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host {
 body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 52px;
-  height: 52px;
+  min-height: 46px;
+  height: 46px;
   margin: 0 !important;
-  padding: 0 15px;
+  padding: 0 13px;
   box-sizing: border-box;
   border-radius: 999px;
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .12));
-  background: rgba(255,255,255,.04) !important;
+  position: relative;
+  isolation: isolate;
+  border-color: transparent !important;
+  background: rgba(255,255,255,.035) !important;
   background-image: none !important;
   backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
@@ -16633,8 +16646,10 @@ body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search:focus-within {
 }
 body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search input {
   min-width: 0;
+  position: relative;
+  z-index: 1;
   color: var(--pm-text) !important;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search input::placeholder {
@@ -16648,21 +16663,22 @@ body.pm-mobile-active .pm-drawer-bottom-actions {
 }
 body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host {
   display: inline-flex;
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
 }
 body.pm-mobile-active .pm-drawer-bottom-action {
   appearance: none;
   position: relative !important;
   inset: auto !important;
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
   padding: 0;
   border-radius: 50%;
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .12));
-  background: rgba(255,255,255,.04) !important;
+  isolation: isolate;
+  border-color: transparent !important;
+  background: rgba(255,255,255,.035) !important;
   background-image: none !important;
   backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
@@ -16677,6 +16693,8 @@ body.pm-mobile-active .pm-drawer-bottom-action {
     0 1px 4px rgba(0,0,0,.14);
 }
 body.pm-mobile-active .pm-drawer-bottom-action svg {
+  position: relative;
+  z-index: 1;
   width: 23px;
   height: 23px;
   color: currentColor;
@@ -16691,6 +16709,39 @@ body.pm-mobile-active .pm-drawer-new-chat-icon svg {
 }
 body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host > .pm-haptic-switch-overlay {
   inset: 0;
+}
+
+/* One restrained rim for all three drawer controls: the top and bottom catch
+   a soft highlight while the middle of each side fades almost completely. */
+@supports ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search::after,
+  body.pm-mobile-active .pm-drawer-bottom-action::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    box-sizing: border-box;
+    border-radius: inherit;
+    padding: var(--pm-lg-border-width, 1px);
+    background:
+      linear-gradient(to bottom,
+        rgba(255,255,255,.16) 0%,
+        rgba(255,255,255,.065) 20%,
+        rgba(255,255,255,.004) 46%,
+        rgba(255,255,255,.004) 54%,
+        rgba(255,255,255,.065) 80%,
+        rgba(255,255,255,.14) 100%) border-box;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: .74;
+  }
 }
 
 /* Imported source artwork is a title-line affordance on mobile. It must not

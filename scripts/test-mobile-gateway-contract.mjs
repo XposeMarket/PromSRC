@@ -126,6 +126,10 @@ function assertContractFiles() {
   assert.match(shell, /data-mobile-drawer-close[\s\S]*?\$\{ICONS\.chev\}/, 'drawer back control must point toward the chat');
   assert.match(css, /\.pm-drawer-list\s*\{[\s\S]*?gap: 0 !important;/, 'drawer page tabs must use a compact vertical rhythm');
   assert.match(shell, /pm-drawer-bottom-bar/, 'drawer actions must live in the persistent bottom bar');
+  assert.match(shell, /pm-drawer-scroll/, 'drawer content must scroll independently from the bottom actions');
+  assert.match(css, /\.pm-drawer-scroll\s*\{[\s\S]*?overflow-y: auto;/, 'drawer session content must own the scroll container');
+  assert.match(css, /\.pm-drawer-bottom-action\s*\{[\s\S]*?width: 46px[\s\S]*?height: 46px/, 'drawer action buttons must stay compact');
+  assert.match(css, /pm-drawer-bottom-bar > \.pm-drawer-search::after[\s\S]*?linear-gradient\(to bottom/, 'drawer controls must share the fading top/bottom rim');
   assert.match(shell, /pm-drawer-search[\s\S]*?pm-drawer-bottom-bar/, 'drawer search must be mounted with the bottom actions');
   assert.match(shell, /pm-drawer-new-chat-icon[\s\S]*?\$\{ICONS\.compose\}/, 'drawer new chat must use the mobile compose icon');
   assert.doesNotMatch(shell, /pm-drawer-top-actions/, 'drawer must not keep the full-width New Chat row at the top');

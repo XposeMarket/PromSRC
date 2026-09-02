@@ -456,17 +456,18 @@ function _wireDrawerPullToRefresh() {
     if (el) el.style.animation = on ? 'pm-ptr-spin .7s linear infinite' : '';
   };
 
-  _drawerEl.addEventListener('touchstart', (e) => {
+  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
+  scrollEl.addEventListener('touchstart', (e) => {
     if (_drawerSearch) return;
-    if (_drawerEl.scrollTop > 0) return;
+    if (scrollEl.scrollTop > 0) return;
     startY = e.touches?.[0]?.clientY || 0;
     pulling = true;
     armed = false;
   }, { passive: true });
 
-  _drawerEl.addEventListener('touchmove', (e) => {
+  scrollEl.addEventListener('touchmove', (e) => {
     if (!pulling) return;
-    if (_drawerEl.scrollTop > 0) { setPull(0); return; }
+    if (scrollEl.scrollTop > 0) { setPull(0); return; }
     const y = e.touches?.[0]?.clientY || 0;
     const dist = y - startY;
     if (dist <= 0) { setPull(0); return; }
@@ -475,7 +476,7 @@ function _wireDrawerPullToRefresh() {
     armed = dist * 0.5 >= THRESHOLD;
   }, { passive: true });
 
-  _drawerEl.addEventListener('touchend', () => {
+  scrollEl.addEventListener('touchend', () => {
     if (!pulling) return;
     if (armed) {
       setPull(THRESHOLD);
@@ -1216,28 +1217,30 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
       <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Back to chat" title="Back to chat">${ICONS.chev}</button>
-      <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
-      <nav class="pm-drawer-list">
-        ${mobileDrawerItems.map(it => `
-          <button class="pm-drawer-item" data-route="${it.route}">
-            <span class="pm-icon">${ICONS[it.icon] || ''}</span>
-            <span class="pm-flex">${escapeHtml(it.label)}</span>
-            <span class="pm-chev">${ICONS.chev}</span>
-          </button>
-        `).join('')}
-      </nav>
-      <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
-        <div class="pm-drawer-divider"></div>
-        <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
-        <div class="pm-drawer-project-list" id="pm-drawer-project-list"></div>
-        <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
-        <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
-      </section>
-      <section class="pm-drawer-search-results" id="pm-drawer-search-results" aria-label="Search results" hidden>
-        <div class="pm-drawer-section-title">Search Results</div>
-        <div class="pm-drawer-session-list" id="pm-mobile-search-list"></div>
-      </section>
-      <div id="pm-install-slot" style="margin-top:auto;"></div>
+      <div class="pm-drawer-scroll">
+        <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
+        <nav class="pm-drawer-list">
+          ${mobileDrawerItems.map(it => `
+            <button class="pm-drawer-item" data-route="${it.route}">
+              <span class="pm-icon">${ICONS[it.icon] || ''}</span>
+              <span class="pm-flex">${escapeHtml(it.label)}</span>
+              <span class="pm-chev">${ICONS.chev}</span>
+            </button>
+          `).join('')}
+        </nav>
+        <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
+          <div class="pm-drawer-divider"></div>
+          <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
+          <div class="pm-drawer-project-list" id="pm-drawer-project-list"></div>
+          <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
+          <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
+        </section>
+        <section class="pm-drawer-search-results" id="pm-drawer-search-results" aria-label="Search results" hidden>
+          <div class="pm-drawer-section-title">Search Results</div>
+          <div class="pm-drawer-session-list" id="pm-mobile-search-list"></div>
+        </section>
+        <div id="pm-install-slot" style="margin-top:auto;"></div>
+      </div>
       <div class="pm-drawer-bottom-bar" aria-label="Drawer actions">
         <label class="pm-drawer-search" aria-label="Search chats">
           ${_searchIcon()}
@@ -1423,13 +1426,14 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   const sessionList = renderDrawer?.querySelector('#pm-mobile-session-list');
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
   const isCurrent = () => renderSeq === _drawerRenderSeq && renderDrawer === _drawerEl;
-  const preservedScrollTop = preserveScroll ? Math.max(0, Number(renderDrawer.scrollTop) || 0) : null;
+  const scrollEl = renderDrawer?.querySelector('.pm-drawer-scroll') || renderDrawer;
+  const preservedScrollTop = preserveScroll ? Math.max(0, Number(scrollEl?.scrollTop) || 0) : null;
   const restoreScroll = () => {
     if (preservedScrollTop === null || !isCurrent()) return;
     const apply = () => {
       if (!isCurrent()) return;
-      const maxScrollTop = Math.max(0, renderDrawer.scrollHeight - renderDrawer.clientHeight);
-      renderDrawer.scrollTop = Math.min(preservedScrollTop, maxScrollTop);
+      const maxScrollTop = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      scrollEl.scrollTop = Math.min(preservedScrollTop, maxScrollTop);
     };
     apply();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
@@ -1771,7 +1775,8 @@ function _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions
   // Pagination is intentionally explicit on mobile. Scrolling to the bottom
   // must leave the Load more and Settled controls available instead of
   // fetching another page and moving the target out from under the user.
-  _drawerEl.onscroll = null;
+  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
+  scrollEl.onscroll = null;
 }
 
 function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
@@ -1791,7 +1796,8 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
     return;
   }
 
-  if (_drawerEl) _drawerEl.onscroll = null;
+  const scrollEl = _drawerEl.querySelector('.pm-drawer-scroll') || _drawerEl;
+  scrollEl.onscroll = null;
 
   nav.hidden = true;
   sessions.hidden = true;
