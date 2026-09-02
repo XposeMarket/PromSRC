@@ -50,7 +50,13 @@ import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
-import { readModelUsageEventsForSession, getUsageCalibration } from '../../providers/model-usage';
+import {
+  captureModelUsageLogCursor,
+  readModelUsageEventsForSession,
+  readModelUsageEventsSince,
+  getUsageCalibration,
+  type ModelUsageEvent,
+} from '../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
@@ -10991,9 +10997,8 @@ async function runInteractiveTurn(
     }
   })();
   const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined, assignedTaskAttentionCtx || undefined].filter(Boolean).join('\n\n') || undefined;
-  const providerUsageBeforeStartedAt = Date.now();
-  const providerUsageBeforeTurn = aggregateSessionModelUsage(sessionId);
-  turnTiming.mark('model_usage_before_loaded', { durationMs: Date.now() - providerUsageBeforeStartedAt });
+  const providerUsageCursor = captureModelUsageLogCursor();
+  turnTiming.mark('model_usage_cursor_captured', { logBytes: providerUsageCursor.byteOffset });
   turnTiming.mark('handle_chat_start');
   const result = await runWithInternalWatchTurnContext(flags?.internalWatchContext, () => handleChat(
     message,
@@ -11036,9 +11041,13 @@ async function runInteractiveTurn(
     : [];
   turnTiming.mark('tool_observations_persisted', { durationMs: Date.now() - observationPersistStartedAt, count: toolObservations.length });
   const providerUsageAfterStartedAt = Date.now();
-  const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
-  turnTiming.mark('model_usage_after_loaded', { durationMs: Date.now() - providerUsageAfterStartedAt });
-  const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
+  const turnUsageEvents = readModelUsageEventsSince(providerUsageCursor, sessionId, turnTiming.turnId);
+  const turnProviderUsage = aggregateModelUsageEvents(turnUsageEvents);
+  turnTiming.mark('model_usage_after_loaded', {
+    durationMs: Date.now() - providerUsageAfterStartedAt,
+    eventCount: turnUsageEvents.length,
+    incremental: true,
+  });
   const acceptedGoalCompletion = Array.isArray(result.toolResults) && result.toolResults.some((entry: any) => (
     String(entry?.name || entry?.action || '').trim() === 'complete_goal'
     && entry?.error !== true
@@ -17292,8 +17301,7 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
   };
 }
 
-function aggregateSessionModelUsage(sessionId: string) {
-  const events = readModelUsageEventsForSession(sessionId);
+function aggregateModelUsageEvents(events: ModelUsageEvent[]) {
   const totals = {
     calls: events.length,
     providerReportedCalls: 0,
@@ -17335,30 +17343,8 @@ function aggregateSessionModelUsage(sessionId: string) {
   return totals;
 }
 
-function diffModelUsage(before: any, after: any) {
-  const keys = [
-    'calls',
-    'providerReportedCalls',
-    'estimatedCalls',
-    'inputTokens',
-    'outputTokens',
-    'reasoningTokens',
-    'cacheReadTokens',
-    'cacheWriteTokens',
-    'totalTokens',
-    'estimatedMessageInputTokens',
-    'estimatedSystemPromptTokens',
-    'estimatedConversationTokens',
-    'estimatedToolSchemaTokens',
-    'estimatedProviderInputTokens',
-  ];
-  const out: any = {};
-  for (const key of keys) {
-    out[key] = Math.max(0, Number(after?.[key] || 0) - Number(before?.[key] || 0));
-  }
-  out.lastCall = after?.lastCall || null;
-  out.lastContextCall = after?.lastContextCall || null;
-  return out;
+function aggregateSessionModelUsage(sessionId: string) {
+  return aggregateModelUsageEvents(readModelUsageEventsForSession(sessionId));
 }
 
 function summarizeTurnToolResultBudget(observations: ToolObservation[]) {
