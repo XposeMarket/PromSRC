@@ -1,9 +1,20 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const sourcePath = path.resolve('web-ui/src/tool-activity.js');
-const activity = await import(pathToFileURL(sourcePath).href);
+const connectorSourcePath = path.resolve('web-ui/src/features/connectors/connector-logo-runtime.js');
+const [source, connectorSource] = await Promise.all([
+  readFile(sourcePath, 'utf8'),
+  readFile(connectorSourcePath, 'utf8'),
+]);
+const connectorUrl = `data:text/javascript;base64,${Buffer.from(connectorSource).toString('base64')}`;
+const activitySource = source.replace(
+  "'./features/connectors/connector-logo-runtime.js'",
+  `'${connectorUrl}'`,
+);
+assert.notEqual(activitySource, source, 'isolated tool-activity test rewrites the connector ESM import');
+const activity = await import(`data:text/javascript;base64,${Buffer.from(activitySource).toString('base64')}`);
 
 const {
   applyToolActivityEvent,
