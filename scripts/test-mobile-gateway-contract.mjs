@@ -130,6 +130,9 @@ function assertContractFiles() {
   assert.match(css, /\.pm-drawer-scroll\s*\{[\s\S]*?overflow-y: auto;/, 'drawer session content must own the scroll container');
   assert.match(css, /\.pm-drawer-bottom-action\s*\{[\s\S]*?width: 46px[\s\S]*?height: 46px/, 'drawer action buttons must stay compact');
   assert.match(css, /pm-drawer-bottom-bar > \.pm-drawer-search::after[\s\S]*?linear-gradient\(to bottom/, 'drawer controls must share the fading top/bottom rim');
+  assert.match(css, /body\.pm-mobile-active \.pm-drawer-scroll[\s\S]*?scrollbar-width: none/, 'drawer scrolling must not show a scrollbar rail');
+  assert.match(css, /body\.pm-mobile-active \.pm-body[\s\S]*?scrollbar-width: none/, 'chat scrolling must not show a scrollbar rail');
+  assert.match(css, /html:has\(body\.pm-mobile-active\)[\s\S]*?::-webkit-scrollbar/, 'document-scroll mode must hide the browser scrollbar');
   assert.match(shell, /pm-drawer-search[\s\S]*?pm-drawer-bottom-bar/, 'drawer search must be mounted with the bottom actions');
   assert.match(shell, /pm-drawer-new-chat-icon[\s\S]*?\$\{ICONS\.compose\}/, 'drawer new chat must use the mobile compose icon');
   assert.doesNotMatch(shell, /pm-drawer-top-actions/, 'drawer must not keep the full-width New Chat row at the top');

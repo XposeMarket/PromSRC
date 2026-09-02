@@ -18632,3 +18632,23 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage
   content: none !important;
   display: none !important;
 }
+
+/* Mobile chat scrolling stays native and fully usable, but the browser rail
+   itself is visual noise over the liquid-glass UI. Hide it for the drawer,
+   the chat thread, and document-scroll mode without disabling overflow. */
+html:has(body.pm-mobile-active),
+body.pm-mobile-active,
+body.pm-mobile-active .pm-drawer-scroll,
+body.pm-mobile-active .pm-body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html:has(body.pm-mobile-active)::-webkit-scrollbar,
+body.pm-mobile-active::-webkit-scrollbar,
+body.pm-mobile-active .pm-drawer-scroll::-webkit-scrollbar,
+body.pm-mobile-active .pm-body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
