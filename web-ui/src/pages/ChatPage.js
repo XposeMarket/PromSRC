@@ -12221,8 +12221,17 @@ function normalizeLiveTraceProseText(value) {
 
 function isDesktopPreparedTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
-  const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+  const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
   return type === 'tool' && /^Prepared\b/i.test(text);
+}
+
+function isDesktopInternalToolProtocolTraceEntry(entry) {
+  if (!entry || entry.activity) return false;
+  const text = String(entry?.text || entry?.content || entry?.message || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
+    || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
 }
 
 function isDesktopStartupStatusText(text) {
@@ -12262,8 +12271,11 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  return coalesceToolActivityEntries(entries).filter((entry) => {
-    if (!entry || isDesktopPreparedTraceEntry(entry) || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
+  const sourceEntries = (Array.isArray(entries) ? entries : [])
+    .filter((entry) => !isDesktopPreparedTraceEntry(entry) && !isDesktopInternalToolProtocolTraceEntry(entry));
+  return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
+    if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
+      || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
     if ((type === 'preamble' || type === 'think' || type === 'assistant') && !isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
     return !!(String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl));
@@ -12614,7 +12626,7 @@ function liveTraceSummaryKey(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function desktopTraceProgressSummary(entries) {
+function desktopTraceProgressText(entries) {
   const source = Array.isArray(entries) ? entries : [];
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const entry = source[index];
@@ -12623,9 +12635,17 @@ function desktopTraceProgressSummary(entries) {
     const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
       .replace(/\s+/g, ' ')
       .trim();
-    if (!text) continue;
-    const normalized = text.toLowerCase();
-    const duplicatesVisibleReasoning = source.some((candidate) => {
+    if (text) return text.slice(0, 220);
+  }
+  return '';
+}
+
+function desktopTraceProgressSummary(entries) {
+  const source = Array.isArray(entries) ? entries : [];
+  const text = desktopTraceProgressText(source);
+  if (!text) return '';
+  const normalized = text.toLowerCase();
+  const duplicatesVisibleReasoning = source.some((candidate) => {
       if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
       const candidateText = normalizeLiveTraceProseText(candidate?.text || candidate?.content || '')
         .replace(/\s+/g, ' ')
@@ -12634,20 +12654,45 @@ function desktopTraceProgressSummary(entries) {
       return candidateText === normalized
         || (Math.min(candidateText.length, normalized.length) >= 36
           && (candidateText.includes(normalized) || normalized.includes(candidateText)));
-    });
-    if (duplicatesVisibleReasoning) return 'Reasoning';
-    return text.slice(0, 220);
-  }
-  return '';
+  });
+  if (duplicatesVisibleReasoning) return 'Reasoning';
+  return text;
 }
 
 function renderLiveTurnTrace(entries, { streaming = false } = {}) {
-  const groups = liveTraceGroups(entries);
+  let groups = liveTraceGroups(entries);
   if (!groups.length) return '';
   if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
-  const latestToolGroupIndex = groups.reduce((latest, group, index) => (
+  let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
+  const activeProgressText = streaming ? desktopTraceProgressText(entries) : '';
+  // The mutable progress slot is the current tool summary's presentation
+  // owner. Do not render the same packet again as a standalone thought row.
+  if (streaming && activeProgressText && latestToolGroupIndex === groups.length - 1) {
+    groups = groups
+      .map((group) => group.kind === 'thought'
+        ? {
+          ...group,
+          entries: group.entries.filter((entry) => {
+            const source = String(entry?.extra?.source || '').toLowerCase();
+            const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            return source !== 'agent_progress'
+              || !text
+              || !(text.toLowerCase() === activeProgressText.toLowerCase()
+                || (Math.min(text.length, activeProgressText.length) >= 36
+                  && (text.toLowerCase().includes(activeProgressText.toLowerCase())
+                    || activeProgressText.toLowerCase().includes(text.toLowerCase()))));
+          }),
+        }
+        : group)
+      .filter((group) => group.kind !== 'thought' || group.entries.length);
+    latestToolGroupIndex = groups.reduce((latest, group, index) => (
+      group.kind === 'tools' ? index : latest
+    ), -1);
+  }
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
@@ -13789,7 +13834,11 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       agentName: identity.name,
       agentColor: identity.color,
     }),
-    liveTraceEntries: backgroundAgentEventsToLiveTraceEntries(record.events),
+    // Persisted structured traces are authoritative. Older records only have
+    // process events, so retain the event-to-trace recovery fallback.
+    liveTraceEntries: Array.isArray(record.liveTraceEntries) && record.liveTraceEntries.length
+      ? record.liveTraceEntries.slice()
+      : backgroundAgentEventsToLiveTraceEntries(record.events),
     _backgroundAgentLive: running,
     streaming: running,
   };
@@ -18747,6 +18796,9 @@ function backgroundSpawnWorkRecord(lane) {
     error: lane.error,
     fileChanges: lane.fileChanges,
     events: lane.events,
+    liveTraceEntries: Array.isArray(lane.liveTraceEntries) && lane.liveTraceEntries.length
+      ? lane.liveTraceEntries
+      : backgroundAgentEventsToLiveTraceEntries(lane.events),
     streamId: lane.streamId,
     lastSeq: lane.lastSeq,
     steerMessages: lane.steerMessages,
@@ -18806,6 +18858,7 @@ function upsertBackgroundSpawnLane(msg = {}) {
     task: String(msg.task || msg.prompt || existing.task || '').trim(),
     status: String(msg.state || existing.status || 'running').trim(),
     events: Array.isArray(existing.events) ? existing.events : [],
+    liveTraceEntries: Array.isArray(existing.liveTraceEntries) ? existing.liveTraceEntries : [],
     expanded: existing.expanded === true,
     startedAt: Number(existing.startedAt || Date.now()),
     updatedAt: Date.now(),
@@ -18837,6 +18890,39 @@ function backgroundSpawnPreview(value, max = 180) {
   }
   raw = raw.replace(/\s+/g, ' ').trim();
   return raw.length > max ? `${raw.slice(0, max - 3)}...` : raw;
+}
+
+function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
+  const next = String(text || '').trim();
+  if (!next) return;
+  const previous = [...trace].reverse().find((entry) =>
+    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
+  );
+  const visibleExtra = {
+    ...extra,
+    source: 'agent_progress',
+    visibility: 'summary',
+    reasoningKind: 'summary',
+  };
+  if (!previous) {
+    trace.push({
+      id: `background_trace_${index}`,
+      type: 'think',
+      text: next,
+      ts: String(extra?.ts || ''),
+      extra: visibleExtra,
+    });
+    return;
+  }
+  const current = String(previous.text || '').trim();
+  const isSnapshot = next.length > current.length && next.startsWith(current);
+  const canAppend = delta
+    && current
+    && !isSnapshot
+    && !/[.!?:]\s*$/.test(current)
+    && (/^\s/.test(text) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
+  previous.text = canAppend ? `${current}${next}`.replace(/\s+/g, ' ').trim() : next;
+  previous.extra = { ...(previous.extra || {}), ...visibleExtra };
 }
 
 function backgroundAgentEventsToLiveTraceEntries(events = []) {
@@ -18877,6 +18963,11 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       if (action) applyToolActivityEvent(trace, 'progress', payload);
       return;
     }
+    if (eventType === 'reasoning_summary' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_delta') {
+      const text = String(extra.thinking || extra.text || extra.message || entry.content || '').trim();
+      mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType.endsWith('_delta') });
+      return;
+    }
     if (eventType === 'thinking' || eventType === 'agent_thought' || eventType === 'thinking_delta' || entry.type === 'think') {
       const text = String(extra.thinking || extra.text || entry.content || '').trim();
       const visibility = chatProgressVisibility({ ...extra, type: eventType || entry.type });
@@ -18887,7 +18978,9 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
         source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_progress')),
         visibility,
       };
-      if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
+      if (visibility === 'summary') {
+        mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType === 'thinking_delta' });
+      } else if (previous?.type === 'think' && previous.extra?.source === visibleExtra.source && !/[.!?:]\s*$/.test(previous.text || '')) {
         previous.text = `${previous.text || ''}${text}`;
         previous.extra = visibleExtra;
       } else {
@@ -18970,6 +19063,20 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
       const visibility = chatProgressVisibility(msg);
       return text && visibility !== 'private'
         ? { ts, type: 'think', actor: 'Background Agent', content: text.slice(0, 220), extra: { ...extra, source: 'reasoning_summary', visibility } }
+        : null;
+    }
+    case 'reasoning_summary':
+    case 'reasoning_summary_delta':
+    case 'reasoning_delta': {
+      const text = String(msg.thinking || msg.text || msg.message || msg.summary || '').trim();
+      return text
+        ? {
+          ts,
+          type: 'think',
+          actor: 'Background Agent',
+          content: text,
+          extra: { ...extra, source: 'agent_progress', visibility: 'summary', reasoningKind: 'summary' },
+        }
         : null;
     }
     case 'info':
@@ -19067,6 +19174,7 @@ function pushBackgroundSpawnEvent(msg = {}) {
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
     lane.events = mergeBackgroundAgentEvents(lane.events, [entry]);
+    lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   }
   if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
@@ -19120,6 +19228,7 @@ function completeBackgroundSpawnLane(msg = {}) {
     ? `${lane.agentName || 'Agent'} failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
     : `${lane.agentName || 'Agent'} complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
   lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
+  lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   lane.updatedAt = Date.now();
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
   if (typeof renderSourcePanel === 'function') renderSourcePanel();

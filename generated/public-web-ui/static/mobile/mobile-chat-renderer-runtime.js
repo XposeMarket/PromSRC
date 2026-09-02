@@ -473,13 +473,27 @@ export function createMobileChatRendererRuntime(context = {}) {
 
   function _isMobilePreparedTraceEntry(entry) {
     const type = String(entry?.type || '').toLowerCase();
-    const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim();
     return type === 'tool' && /^Prepared\b/i.test(text);
+  }
+
+  function _isMobileInternalToolProtocolTraceEntry(entry) {
+    if (!entry || entry.activity) return false;
+    const text = String(entry?.text || entry?.content || entry?.message || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
+      || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
   }
 
   function _mobileVisibleTraceEntries(entries) {
     const thoughtTexts = [];
-    const sourceEntries = _mobileTracePresentationEntries(entries);
+    // Filter protocol diagnostics before the optional activity coalescer. Its
+    // cold-start fallback intentionally turns every structured batch into a
+    // compact "Preparing tool" card, which would otherwise resurrect a raw
+    // provider latency row under a different label.
+    const sourceEntries = _mobileTracePresentationEntries(entries)
+      .filter((entry) => !_isMobilePreparedTraceEntry(entry) && !_isMobileInternalToolProtocolTraceEntry(entry));
     const replaceableProgressTexts = sourceEntries
       .filter((entry) => String(entry?.extra?.source || '').toLowerCase() === 'agent_progress')
       .map((entry) => String(entry?.text || entry?.content || '').trim())
@@ -487,6 +501,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
       if (_isMobileImageGenerationStreamEntry(entry)) return false;
       if (_isMobilePreparedTraceEntry(entry)) return false;
+      if (_isMobileInternalToolProtocolTraceEntry(entry)) return false;
       if (_isMobileVisionInjectionStatusText(entry?.text)) return false;
       if (_isMobileBareThinkingTraceText(entry?.text)) return false;
       if (_isMobileTransientReasoningTraceEntry(entry) && !_isMobileMutableProgressTraceEntry(entry)) return false;
@@ -3747,9 +3762,15 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
 }
 
 function _mobileBackgroundStoredDetailRecord(stored, id, sessionId, normalizeTrace) {
+  const identity = resolveBackgroundAgentIdentity(id, {
+    existingName: stored?.agentName || stored?.name,
+    existingColor: stored?.agentColor || stored?.color,
+  });
   const record = {
     ...stored,
     id,
+    agentName: identity.name,
+    agentColor: identity.color,
     sessionId: stored.sessionId || sessionId,
     backgroundSessionId: stored.backgroundSessionId || '',
     task: stored.task || stored.prompt || '',
@@ -3977,6 +3998,18 @@ function _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml) {
       <div class="pm-background-spawn-approval">${_renderMobileApprovalCard(approval, { compact: false })}</div>`;
   }
   return `${_renderMobileBackgroundSpawnPrompt(lane)}${planHtml}${processHtml}`;
+}
+
+function _mobileBackgroundSpawnTraceEntries(lane) {
+  const message = lane?.message && typeof lane.message === 'object' ? lane.message : {};
+  const liveEntries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
+  const recoveredEntries = _mobileWorkflowTraceEntriesForMessage(message);
+  // During a live stream, keep the native trace as the source of truth. If
+  // it has not received a tool activity yet, use the durable process log so
+  // a recovered background lane still gets the same grouped UI as chat.
+  if (!liveEntries.length) return recoveredEntries;
+  if (!_mobileTraceHasToolGroup(liveEntries) && _mobileTraceHasToolGroup(recoveredEntries)) return recoveredEntries;
+  return liveEntries;
 }
 
 function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
@@ -4217,29 +4250,38 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
   _reconcileMobileBackgroundSpawnDockMarkup(host, `
     <button type="button" class="pm-background-spawn-close" data-pm-bg-close aria-label="Collapse background agents">&times;<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
     ${lanes.map((lane) => {
-    const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
-    const latest = entries[entries.length - 1];
+    const identity = resolveBackgroundAgentIdentity(lane.id, {
+      existingName: lane.agentName || lane.label,
+      existingColor: lane.agentColor,
+    });
+    const entries = _mobileBackgroundSpawnTraceEntries(lane);
     const status = String(lane.status || 'running').toLowerCase();
     const pendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
     const finalText = status === 'completed' ? String(lane.result || lane.message?.content || '').trim() : '';
     const errorText = status === 'failed' ? String(lane.error || lane.message?.content || '').trim() : '';
+    const traceSummary = entries.length
+      ? (_mobileTraceProgressSummary(entries) || (status === 'running' || status === 'in_progress'
+        ? _mobileTraceCurrentToolLabel(entries)
+        : _mobileTraceToolSummary(entries)))
+      : '';
     const latestText = String(
       pendingApproval
         ? `Approval needed: ${_pmApprovalTitle(lane.approvalRequest)}`
-        : (finalText || errorText || latest?.text || latest?.content || lane.task || 'Working in parallel...')
+        : (finalText || errorText || traceSummary || lane.task || 'Working in parallel...')
     ).trim();
+    const isRunning = !['completed', 'failed', 'timed_out'].includes(status);
     const processHtml = entries.length
-      ? _renderMobileProcess(entries).replace('<details class="pm-process-stream"', `<details class="pm-process-stream"${lane.expanded ? ' open' : ''}`)
+      ? `<div class="pm-trace-drawer pm-background-spawn-trace" data-trace-live="1">${_renderMobileGroupedTrace(entries, { streaming: isRunning, openLiveCurrent: isRunning })}</div>`
       : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
     const planHtml = _renderMobileBackgroundSpawnPlan(lane);
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
     const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
     return `
       <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}" data-pm-row-key="background:${escapeHtml(lane.id)}">
-        <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(lane.agentName || 'background agent')} background work">
-          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(String(lane.agentName || 'Agent').slice(0, 2).toUpperCase())}</span>
+        <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(identity.name)} background work">
+          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(identity.color)}">${escapeHtml(identity.name.slice(0, 2).toUpperCase())}</span>
           <span class="pm-background-spawn-main">
-            <strong style="color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(lane.agentName || 'Agent')}</strong>
+            <strong style="color:${escapeHtml(identity.color)}">${escapeHtml(identity.name)}</strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>

@@ -86,6 +86,14 @@ assert.doesNotMatch(mobileCss, /The standalone voice page is two deliberate, ful
   'standalone Voice snap block must not remain in the shared mobile route stylesheet');
 assert.match(mobileCss, /\.pm-select\s*\{[\s\S]*?appearance:\s*none[\s\S]*?background-image:/,
   'shared select presentation must remain available to every route that renders .pm-select');
+assert.match(mobileCss, /\.pm-schedule-card\s*\{[\s\S]*?border:\s*0;/,
+  'schedule cards must use a borderless surface treatment');
+assert.match(mobileCss, /\.pm-proposal-card,[\s\S]*?\.pm-proposal-review-card\s*\{[\s\S]*?border:\s*0;/,
+  'proposal cards must not render an accent rim');
+assert.match(mobileCss, /\.pm-proposals-page\s*>\s*\.pm-card\s*\{[\s\S]*?border:\s*0;/,
+  'proposal-page card sections must use borderless surfaces');
+assert.match(mobileCss, /\.pm-proposal-step\s*\{[\s\S]*?border:\s*0;/,
+  'proposal execution-step cards must not render a rim');
 assert.doesNotMatch(settingsCss, /(?:^|\n)\s*\.pm-select\s*\{/,
   'Settings CSS must not claim the shared .pm-select component');
 assert.match(proposalsPage, /class="pm-select"/,

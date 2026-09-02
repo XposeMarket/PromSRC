@@ -102,6 +102,7 @@
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",
     "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
+    "test:openai-compat-reasoning": "tsx src/providers/openai-compat-adapter.regression.ts",
     "test:memory-worker-readiness": "tsx src/gateway/memory-index/memory-search-worker-readiness.regression.ts",
     "test:process-hygiene": "tsx src/gateway/process-hygiene.regression.ts",
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
