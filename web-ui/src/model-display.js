@@ -8,7 +8,8 @@ function titleWord(value) {
 }
 
 export function formatReasoningDisplayName(effort) {
-  const value = String(effort || '').trim().toLowerCase();
+  const raw = String(effort || '').trim().toLowerCase();
+  const value = raw === 'none' || raw === 'minimal' ? 'low' : raw;
   if (!value || value === 'default' || value === 'provider_default') return '';
   if (value === 'xhigh' || value === 'extra_high') return 'Extra High';
   return titleWord(value);
@@ -57,7 +58,8 @@ export function formatModelWithReasoning(model, provider = '', effort = '') {
   const rawModel = String(model || '').trim();
   const slash = rawModel.indexOf('/');
   const providerId = String(provider || (slash > 0 ? rawModel.slice(0, slash) : '')).trim().toLowerCase();
-  const normalizedEffort = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  const rawEffort = String(effort || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  const normalizedEffort = rawEffort === 'none' || rawEffort === 'minimal' ? 'low' : rawEffort;
   const safeEffort = !normalizedEffort || normalizedEffort === 'default' || normalizedEffort === 'provider_default'
     ? normalizedEffort
     : hasReasoningCapabilityPolicy(providerId) && !validEffort(providerId, model, normalizedEffort)

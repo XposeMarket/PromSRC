@@ -889,7 +889,7 @@ export class SubagentManager {
 
     if (patch.reasoning_effort !== undefined || patch.reasoningEffort !== undefined) {
       const reasoningEffort = String(patch.reasoning_effort ?? patch.reasoningEffort ?? '').trim().toLowerCase();
-      const allowedReasoningEfforts = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+      const allowedReasoningEfforts = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
       if (!reasoningEffort) {
         delete next.reasoning_effort;
       } else if (!allowedReasoningEfforts.has(reasoningEffort)) {
@@ -1163,7 +1163,7 @@ export const subagentSpawnTool = {
           model: { type: 'string', description: 'Optional provider/model override.' },
           reasoning_effort: {
             type: 'string',
-            enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+            enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
             description: 'Optional provider/model-aware reasoning effort.',
           },
         },

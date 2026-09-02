@@ -644,7 +644,8 @@ function getSessionDefaults() {
 
 function normalizeAuxReasoning(value: unknown): string {
   const effort = String(value || '').trim().toLowerCase();
-  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? effort : '';
+  if (effort === 'none' || effort === 'minimal') return 'low';
+  return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? effort : '';
 }
 
 function mergeMainChatGoalRouting(incoming: any, existing: any): Record<string, any> {

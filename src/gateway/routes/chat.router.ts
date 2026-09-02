@@ -2072,7 +2072,7 @@ function resolveConfiguredAgentReasoning(
 }
 type ReasoningOptions = {
   enabled?: boolean;
-  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high' | 'max' | 'ultra';
+  level?: 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high' | 'max' | 'ultra';
 };
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
@@ -7291,9 +7291,9 @@ RULES:
 	        : undefined;
 	      const requestedThinkMode = reasoningOptions?.enabled
 	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
-	        : (reasoningOptions && !reasoningOptions.enabled ? 'none' : configuredReasoning);
-	      const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
-	      const primaryThinkMode: boolean | 'ultra' | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
+        : (reasoningOptions && !reasoningOptions.enabled ? false : configuredReasoning);
+      const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
+      const primaryThinkMode: boolean | 'ultra' | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | undefined =
 	        requestedThinkMode
 	          || ((multiAgentActive && !isActiveAutomationOp)
 	            ? true

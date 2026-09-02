@@ -98,6 +98,8 @@ assert.match(renderer, /return '';/, 'progress summary fallback must stay empty 
 for (const css of [mobileCss, generatedMobileCss]) {
   assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-control\s*\{[\s\S]*?width: min\(100%, calc\(100vw - max\(var\(--pm-mobile-chrome-inset, 22px\)/,
     'mobile reasoning control must use the same inset-based width calculation as the tab bar');
+  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-control\s*\{[\s\S]*?transform: scale\(\.85\);/,
+    'mobile reasoning control must be visually 15 percent smaller while staying centered');
   assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-track\s*\{[\s\S]*?height: 56px;/,
     'mobile reasoning track must match the tab bar height');
   assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-fill::after\s*\{[\s\S]*?width: 42px;[\s\S]*?aspect-ratio: 1;/,

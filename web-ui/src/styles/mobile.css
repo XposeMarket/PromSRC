@@ -17666,10 +17666,14 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced {
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
   grid-column: 1 / -1;
   grid-row: 2;
-  justify-self: stretch;
+  justify-self: center;
   width: min(100%, calc(100vw - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left, 0px)) - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right, 0px))));
   margin: 0 auto;
   min-height: 0;
+  /* Keep the tab-matched geometry, then scale the complete control together
+     so the 15% reduction stays exact and remains centered on every device. */
+  transform: scale(.85);
+  transform-origin: center center;
 }
 
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
