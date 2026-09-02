@@ -287,6 +287,7 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       try { return fs.statSync(filePath).size; } catch { return 0; }
     })();
     fs.appendFileSync(filePath, line, 'utf-8');
+    clearHistoricalUsageCache();
     if (
       filePath === _usageReadCachePath
       && _usageReadCacheInitialized
@@ -309,10 +310,25 @@ let _usageReadCacheSize = 0;
 let _usageReadCacheEventCount = 0;
 let _usageReadCacheRemainder = '';
 let _usageReadCacheInitialized = false;
+const HISTORICAL_USAGE_CACHE_TTL_MS = 15_000;
+let _historicalUsageCache: {
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  loadedAt: number;
+  events: ModelUsageEvent[];
+} | null = null;
+let _historicalUsageCacheTimer: NodeJS.Timeout | null = null;
 // The resident index exists only for bounded calibration state. Historical
 // usage remains authoritative in model-usage.jsonl and is materialized only
 // for explicit history queries instead of being mirrored in gateway heap.
 const _usageCalibrationEvents = new Map<string, ModelUsageEvent[]>();
+
+function clearHistoricalUsageCache(): void {
+  if (_historicalUsageCacheTimer) clearTimeout(_historicalUsageCacheTimer);
+  _historicalUsageCacheTimer = null;
+  _historicalUsageCache = null;
+}
 
 function usageCalibrationKey(provider: string, model: string): string {
   return `${String(provider || '').trim()}\u0000${String(model || '').trim()}`;
@@ -334,6 +350,7 @@ function indexUsageEvent(event: ModelUsageEvent): void {
 }
 
 function resetUsageReadCache(filePath = ''): void {
+  clearHistoricalUsageCache();
   _usageReadCachePath = filePath;
   _usageReadCacheMtimeMs = 0;
   _usageReadCacheSize = 0;
@@ -416,6 +433,21 @@ function ensureUsageReadCache(): void {
 function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
   const wantedSessionId = String(sessionId || '').trim();
   const filePath = usageLogPath();
+  let stat: fs.Stats;
+  try { stat = fs.statSync(filePath); } catch { return []; }
+  const now = Date.now();
+  const cache = _historicalUsageCache;
+  if (
+    cache
+    && cache.filePath === filePath
+    && cache.size === stat.size
+    && cache.mtimeMs === stat.mtimeMs
+    && now - cache.loadedAt < HISTORICAL_USAGE_CACHE_TTL_MS
+  ) {
+    return wantedSessionId
+      ? cache.events.filter((event) => String(event.sessionId || '').trim() === wantedSessionId)
+      : cache.events.slice();
+  }
   let raw = '';
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
   return parseUsageEvents(raw, wantedSessionId);
@@ -434,6 +466,11 @@ function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
       // Historical usage queries remain best-effort if telemetry contains a
       // malformed row; the resident calibration index follows the same rule.
     }
+  }
+  if (!wantedSessionId) {
+    _historicalUsageCache = { filePath, size: stat.size, mtimeMs: stat.mtimeMs, loadedAt: now, events: out };
+    _historicalUsageCacheTimer = setTimeout(clearHistoricalUsageCache, HISTORICAL_USAGE_CACHE_TTL_MS);
+    _historicalUsageCacheTimer.unref?.();
   }
   return out;
 }

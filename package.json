@@ -32,6 +32,7 @@
     "test:external-import-discovery": "tsx src/gateway/imports/import-discovery.regression.ts",
     "test:session-sidebar-order": "tsx src/gateway/session-sidebar-order.regression.ts",
     "test:session-cache": "tsx src/gateway/session-cache.regression.ts",
+    "test:tool-observation-cache": "tsx src/gateway/tool-observations-cache.regression.ts",
     "test:external-import-sidebar": "node scripts/test-external-import-sidebar.mjs",
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",
