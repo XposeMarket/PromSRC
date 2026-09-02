@@ -1080,10 +1080,78 @@ const chatContextWindowState = {
   planProviderId: '',
   planAccountId: '',
 };
+const chatContextWindowStatesBySession = new Map();
+
+function getChatContextWindowElements(target = null) {
+  const source = target instanceof Element ? target : null;
+  const composer = source?.closest('.chat-input-area[data-canonical-secondary-composer="1"]') || null;
+  if (composer) {
+    const popover = composer.querySelector('.chat-context-window-popover');
+    return {
+      composer,
+      button: composer.querySelector('.chat-context-window-btn'),
+      popover,
+      total: popover?.querySelector('.chat-context-window-total'),
+      fill: popover?.querySelector('.chat-context-window-fill'),
+      toggle: popover?.querySelector('.chat-context-window-toggle'),
+      breakdown: popover?.querySelector('.chat-context-window-breakdown'),
+      metrics: popover?.querySelector('.chat-context-window-metrics'),
+      head: popover?.querySelector('.chat-context-window-head span:first-child'),
+      plan: popover?.querySelector('.chat-context-window-plan'),
+      planBody: popover?.querySelector('.ccw-plan-body'),
+    };
+  }
+  const popover = document.getElementById('chat-context-window-popover');
+  return {
+    composer: document.querySelector('#chat-view > .chat-input-area'),
+    button: document.getElementById('chat-context-window-btn'),
+    popover,
+    total: document.getElementById('chat-context-window-total'),
+    fill: document.getElementById('chat-context-window-fill'),
+    toggle: document.getElementById('chat-context-window-toggle'),
+    breakdown: document.getElementById('chat-context-window-breakdown'),
+    metrics: popover?.querySelector('.chat-context-window-metrics'),
+    head: popover?.querySelector('.chat-context-window-head span:first-child'),
+    plan: document.getElementById('chat-context-window-plan'),
+    planBody: document.getElementById('chat-context-window-plan-body'),
+  };
+}
+
+function getChatContextWindowTargetForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return null;
+  return Array.from(document.querySelectorAll('[data-context-window-session-id]'))
+    .find((node) => String(node.dataset.contextWindowSessionId || '') === sid) || null;
+}
+
+function getChatContextWindowStateForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return chatContextWindowState;
+  let state = chatContextWindowStatesBySession.get(sid);
+  if (!state) {
+    state = {
+      loading: false,
+      open: false,
+      expanded: false,
+      expandedRows: new Set(),
+      liveTurn: null,
+      lastSessionId: '',
+      lastFetchAt: 0,
+      data: null,
+      planFetchAt: 0,
+      planData: null,
+      planProviderId: '',
+      planAccountId: '',
+    };
+    chatContextWindowStatesBySession.set(sid, state);
+  }
+  return state;
+}
 
 function resetChatContextWindowLiveTurn(sessionId) {
   const sid = String(sessionId || '').trim();
-  chatContextWindowState.liveTurn = sid ? {
+  const state = getChatContextWindowStateForSession(sid);
+  state.liveTurn = sid ? {
     sessionId: sid,
     active: true,
     startedAt: Date.now(),
@@ -1098,16 +1166,19 @@ function resetChatContextWindowLiveTurn(sessionId) {
 }
 
 function settleChatContextWindowLiveTurn(sessionId) {
-  const live = chatContextWindowState.liveTurn;
+  const sid = String(sessionId || '').trim();
+  const state = getChatContextWindowStateForSession(sid);
+  const target = getChatContextWindowTargetForSession(sid);
+  const live = state.liveTurn;
   if (!live || String(live.sessionId || '') !== String(sessionId || '')) return;
   live.active = false;
   live.settledAt = Date.now();
   setTimeout(() => {
-    const current = chatContextWindowState.liveTurn;
+    const current = state.liveTurn;
     if (!current || current !== live) return;
     if (Date.now() - Number(current.settledAt || 0) < 7000) return;
-    chatContextWindowState.liveTurn = null;
-    renderChatContextWindow(chatContextWindowState.data);
+    state.liveTurn = null;
+    renderChatContextWindow(state.data, target);
   }, 7500);
   scheduleChatContextWindowRefresh(500);
 }
@@ -1121,10 +1192,12 @@ function estimateContextTokensFromText(text) {
 function recordChatContextWindowToolResult(event, sessionId) {
   const sid = String(sessionId || getChatContextWindowSessionId() || '').trim();
   if (!sid) return;
-  let live = chatContextWindowState.liveTurn;
+  const state = getChatContextWindowStateForSession(sid);
+  const target = getChatContextWindowTargetForSession(sid);
+  let live = state.liveTurn;
   if (!live || String(live.sessionId || '') !== sid) {
     resetChatContextWindowLiveTurn(sid);
-    live = chatContextWindowState.liveTurn;
+    live = state.liveTurn;
   }
   if (!live) return;
   const telemetry = event?.extra?.telemetry || event?.telemetry || {};
@@ -1152,12 +1225,19 @@ function recordChatContextWindowToolResult(event, sessionId) {
     tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
   }
   live.tools.set(action, tool);
-  renderChatContextWindow(chatContextWindowState.data);
+  renderChatContextWindow(state.data, target);
   scheduleChatContextWindowRefresh(1200);
 }
 
-function getChatContextWindowSessionId() {
-  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+function getChatContextWindowSessionId(target = null) {
+  const source = target instanceof Element ? target : null;
+  return String(
+    source?.dataset?.contextWindowSessionId
+    || source?.closest?.('[data-composer-session-id]')?.dataset?.composerSessionId
+    || window.activeChatSessionId
+    || window.agentSessionId
+    || '',
+  ).trim();
 }
 
 function formatContextDurationLabel(value) {
@@ -1192,13 +1272,13 @@ function formatContextTokenCount(value) {
   return String(Math.round(n));
 }
 
-function setChatContextWindowLoading(label = 'Loading...') {
-  const total = document.getElementById('chat-context-window-total');
+function setChatContextWindowLoading(label = 'Loading...', target = null) {
+  const total = getChatContextWindowElements(target).total;
   if (total) total.textContent = label;
 }
 
-function setChatContextWindowHeadLabel(label = 'Context window') {
-  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
+function setChatContextWindowHeadLabel(label = 'Context window', target = null) {
+  const headLabel = getChatContextWindowElements(target).head;
   if (!headLabel) return;
   headLabel.innerHTML = `${escHtml(label)}<svg class="ccw-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 }
@@ -1210,8 +1290,10 @@ function formatContextPercent(tokens, total) {
   return `${Math.max(0, (n / d) * 100).toFixed(1)}%`;
 }
 
-function renderChatContextRows(rows, windowTokens) {
-  const metrics = document.querySelector('#chat-context-window-popover .chat-context-window-metrics');
+function renderChatContextRows(rows, windowTokens, target = null) {
+  const elements = getChatContextWindowElements(target);
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  const metrics = elements.metrics;
   if (!metrics) return;
   const source = Array.isArray(rows) && rows.length ? rows : [];
   const renderRow = (row, depth = 0) => {
@@ -1224,7 +1306,7 @@ function renderChatContextRows(rows, windowTokens) {
     const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
     const rowId = String(row?.id || row?.label || `row_${depth}`);
     const expandable = children.length > 0;
-    const expanded = expandable && chatContextWindowState.expandedRows.has(rowId);
+    const expanded = expandable && state.expandedRows.has(rowId);
     const tag = expandable ? 'button' : 'div';
     const typeAttr = expandable ? ' type="button"' : '';
     const dataAttr = expandable ? ` data-ccw-row-id="${escHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
@@ -1243,7 +1325,7 @@ function renderChatContextRows(rows, windowTokens) {
   };
   metrics.innerHTML = source.map((row) => renderRow(row, 0)).join('');
   metrics.querySelectorAll('[data-ccw-row-id]').forEach((row) => {
-    row.addEventListener('click', toggleChatContextWindowRow);
+    row.addEventListener('click', (event) => toggleChatContextWindowRow(event, target));
   });
 }
 
@@ -1290,20 +1372,25 @@ function applyChatContextWindowLiveOverlay(data) {
   return data;
 }
 
-function toggleChatContextWindowRow(event) {
+function toggleChatContextWindowRow(event, target = null) {
   if (event) event.stopPropagation();
   const id = event?.currentTarget?.dataset?.ccwRowId;
   if (!id) return;
-  if (chatContextWindowState.expandedRows.has(id)) chatContextWindowState.expandedRows.delete(id);
-  else chatContextWindowState.expandedRows.add(id);
-  renderChatContextWindow(chatContextWindowState.data);
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  if (state.expandedRows.has(id)) state.expandedRows.delete(id);
+  else state.expandedRows.add(id);
+  renderChatContextWindow(state.data, target);
 }
 
-function renderChatContextWindow(data = chatContextWindowState.data) {
+function renderChatContextWindow(data, target = null) {
+  const sessionId = getChatContextWindowSessionId(target);
+  const state = getChatContextWindowStateForSession(sessionId);
+  if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
-  const btn = document.getElementById('chat-context-window-btn');
-  const fill = document.getElementById('chat-context-window-fill');
-  const total = document.getElementById('chat-context-window-total');
+  const elements = getChatContextWindowElements(target);
+  const btn = elements.button;
+  const fill = elements.fill;
+  const total = elements.total;
   if (!btn) return;
 
   if (!data || data.success === false) {
@@ -1312,8 +1399,8 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
     if (fill) fill.style.width = '0%';
     if (fill) fill.classList.remove('is-over-capacity');
     if (total) total.textContent = 'Unavailable';
-    setChatContextWindowHeadLabel('Context window');
-    renderChatContextRows([], 0);
+    setChatContextWindowHeadLabel('Context window', target);
+    renderChatContextRows([], 0, target);
     return;
   }
 
@@ -1327,40 +1414,42 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
   btn.title = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
   if (fill) fill.style.width = `${usage.progressPercent.toFixed(1)}%`;
   if (fill) fill.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
-  setChatContextWindowHeadLabel('Context window');
+  setChatContextWindowHeadLabel('Context window', target);
   if (total) {
     total.textContent = usageLabel;
   }
-  renderChatContextRows(currentState.rows, windowTokens);
+  renderChatContextRows(currentState.rows, windowTokens, target);
 }
 
 async function refreshChatContextWindow(options = {}) {
-  const sid = getChatContextWindowSessionId();
-  const btn = document.getElementById('chat-context-window-btn');
+  const target = options.target || getChatContextWindowTargetForSession(options.sessionId);
+  const sid = String(options.sessionId || getChatContextWindowSessionId(target)).trim();
+  const state = getChatContextWindowStateForSession(sid);
+  const btn = getChatContextWindowElements(target).button;
   if (!btn) return null;
   if (!sid) {
-    chatContextWindowState.data = null;
-    renderChatContextWindow(null);
+    state.data = null;
+    renderChatContextWindow(null, target);
     return null;
   }
   const force = options.force === true;
   const now = Date.now();
-  if (chatContextWindowState.loading) return chatContextWindowState.data;
-  if (!force && chatContextWindowState.lastSessionId === sid && now - chatContextWindowState.lastFetchAt < 3500) {
-    return chatContextWindowState.data;
+  if (state.loading) return state.data;
+  if (!force && state.lastSessionId === sid && now - state.lastFetchAt < 3500) {
+    return state.data;
   }
 
-  chatContextWindowState.loading = true;
-  chatContextWindowState.lastSessionId = sid;
-  if (!chatContextWindowState.data) setChatContextWindowLoading();
+  state.loading = true;
+  state.lastSessionId = sid;
+  if (!state.data) setChatContextWindowLoading('Loading...', target);
   try {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
-    chatContextWindowState.lastFetchAt = Date.now();
-    chatContextWindowState.data = data && data.success !== false ? data : null;
-    renderChatContextWindow(chatContextWindowState.data);
-    return chatContextWindowState.data;
+    state.lastFetchAt = Date.now();
+    state.data = data && data.success !== false ? data : null;
+    renderChatContextWindow(state.data, target);
+    return state.data;
   } finally {
-    chatContextWindowState.loading = false;
+    state.loading = false;
   }
 }
 
@@ -1369,39 +1458,49 @@ function scheduleChatContextWindowRefresh(delayMs = 450) {
   chatContextWindowState.refreshTimer = setTimeout(() => {
     chatContextWindowState.refreshTimer = 0;
     refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
+      refreshChatContextWindow({ force: true, target }).catch(() => renderChatContextWindow(null, target));
+    });
   }, Math.max(0, Number(delayMs) || 0));
 }
 
-function toggleChatContextWindowPopover(event) {
+function toggleChatContextWindowPopover(event, target = null) {
   if (event) event.stopPropagation();
-  const popover = document.getElementById('chat-context-window-popover');
-  const btn = document.getElementById('chat-context-window-btn');
+  const source = target || event?.currentTarget || null;
+  const elements = getChatContextWindowElements(source);
+  const popover = elements.popover;
+  const btn = elements.button;
   if (!popover || !btn) return;
-  chatContextWindowState.open = popover.hidden;
-  popover.hidden = !chatContextWindowState.open;
-  btn.setAttribute('aria-expanded', chatContextWindowState.open ? 'true' : 'false');
-  if (chatContextWindowState.open) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
+  state.open = popover.hidden;
+  popover.hidden = !state.open;
+  btn.setAttribute('aria-expanded', state.open ? 'true' : 'false');
+  if (state.open) {
     // Always open collapsed — the detailed breakdown expands only on bar click.
-    setChatContextBreakdown(false);
-    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
-    refreshChatContextPlanUsage().catch(() => {});
+    setChatContextBreakdown(false, source);
+    refreshChatContextWindow({ force: true, target: source }).catch(() => renderChatContextWindow(null, source));
+    refreshChatContextPlanUsage(false, source).catch(() => {});
   }
 }
 
-function closeChatContextWindowPopover() {
-  const popover = document.getElementById('chat-context-window-popover');
-  const btn = document.getElementById('chat-context-window-btn');
+function closeChatContextWindowPopover(target = null) {
+  const source = target || null;
+  const elements = getChatContextWindowElements(source);
+  const popover = elements.popover;
+  const btn = elements.button;
   if (popover) popover.hidden = true;
   if (btn) btn.setAttribute('aria-expanded', 'false');
-  chatContextWindowState.open = false;
+  getChatContextWindowStateForSession(getChatContextWindowSessionId(source)).open = false;
 }
 
 // Collapsible detailed breakdown inside the popover (hidden until the user
 // clicks the context-window bar — mirrors the Claude UI plan-usage popover).
-function setChatContextBreakdown(expanded) {
-  chatContextWindowState.expanded = !!expanded;
-  const breakdown = document.getElementById('chat-context-window-breakdown');
-  const toggle = document.getElementById('chat-context-window-toggle');
+function setChatContextBreakdown(expanded, target = null) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  state.expanded = !!expanded;
+  const elements = getChatContextWindowElements(target);
+  const breakdown = elements.breakdown;
+  const toggle = elements.toggle;
   if (breakdown) breakdown.hidden = !expanded;
   if (toggle) {
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -1409,9 +1508,11 @@ function setChatContextBreakdown(expanded) {
   }
 }
 
-function toggleChatContextBreakdown(event) {
+function toggleChatContextBreakdown(event, target = null) {
   if (event) event.stopPropagation();
-  setChatContextBreakdown(!chatContextWindowState.expanded);
+  const source = target || event?.currentTarget || null;
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
+  setChatContextBreakdown(!state.expanded, source);
 }
 
 // ─── Plan usage (live provider limits) inside the context popover ─────────────
@@ -1436,10 +1537,13 @@ function ccwFmtReset(iso) {
   return `resets in ${days}d`;
 }
 
-function getChatContextPlanProviderId() {
-  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-    ? window._activeChatModelRoute?.effective
-    : null;
+function getChatContextPlanProviderId(target = null) {
+  const sid = getChatContextWindowSessionId(target);
+  const route = sid !== String(window.activeChatSessionId || '').trim()
+    ? window._activeChatModelRoutesBySession?.[sid]?.effective
+    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+      ? window._activeChatModelRoute?.effective
+      : null;
   const fromRoute = String(route?.providerId || route?.provider || '').trim().toLowerCase();
   if (fromRoute) return fromRoute;
   const modelRef = String(route?.modelRef || window._activeModel || '').trim();
@@ -1448,20 +1552,25 @@ function getChatContextPlanProviderId() {
   return String(window._activeProvider || '').trim().toLowerCase();
 }
 
-function getChatContextPlanAccountId() {
-  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-    ? window._activeChatModelRoute?.effective
-    : null;
+function getChatContextPlanAccountId(target = null) {
+  const sid = getChatContextWindowSessionId(target);
+  const route = sid !== String(window.activeChatSessionId || '').trim()
+    ? window._activeChatModelRoutesBySession?.[sid]?.effective
+    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+      ? window._activeChatModelRoute?.effective
+      : null;
   return String(route?.accountId || route?.account_id || window._activeAccountId || '').trim();
 }
 
-function renderChatContextPlanUsage() {
-  const wrap = document.getElementById('chat-context-window-plan');
-  const body = document.getElementById('chat-context-window-plan-body');
+function renderChatContextPlanUsage(target = null) {
+  const elements = getChatContextWindowElements(target);
+  const wrap = elements.plan;
+  const body = elements.planBody;
   if (!wrap || !body) return;
-  const result = chatContextWindowState.planData;
-  const providerId = getChatContextPlanProviderId();
-  const accountId = getChatContextPlanAccountId();
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  const result = state.planData;
+  const providerId = getChatContextPlanProviderId(target);
+  const accountId = getChatContextPlanAccountId(target);
   const providers = (result && Array.isArray(result.providers)) ? result.providers : [];
   // Prefer the provider/account backing the active chat model route, not a
   // stale global status provider (that was why Grok still showed OpenAI weekly).
@@ -1506,26 +1615,27 @@ function renderChatContextPlanUsage() {
   wrap.hidden = false;
 }
 
-async function refreshChatContextPlanUsage(force = false) {
+async function refreshChatContextPlanUsage(force = false, target = null) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
   const now = Date.now();
-  const providerId = getChatContextPlanProviderId();
-  const accountId = getChatContextPlanAccountId();
-  const providerChanged = providerId && providerId !== String(chatContextWindowState.planProviderId || '');
-  const accountChanged = accountId && accountId !== String(chatContextWindowState.planAccountId || '');
-  if (!force && !providerChanged && !accountChanged && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
-    renderChatContextPlanUsage();
+  const providerId = getChatContextPlanProviderId(target);
+  const accountId = getChatContextPlanAccountId(target);
+  const providerChanged = providerId && providerId !== String(state.planProviderId || '');
+  const accountChanged = accountId && accountId !== String(state.planAccountId || '');
+  if (!force && !providerChanged && !accountChanged && state.planData && now - state.planFetchAt < 60000) {
+    renderChatContextPlanUsage(target);
     return;
   }
   try {
     const data = await fetchJsonWithTimeout('/api/usage/limits', 6000);
     if (data && data.success !== false) {
-      chatContextWindowState.planData = data;
-      chatContextWindowState.planFetchAt = Date.now();
-      chatContextWindowState.planProviderId = providerId;
-      chatContextWindowState.planAccountId = accountId;
+      state.planData = data;
+      state.planFetchAt = Date.now();
+      state.planProviderId = providerId;
+      state.planAccountId = accountId;
     }
   } catch { /* leave previous planData */ }
-  renderChatContextPlanUsage();
+  renderChatContextPlanUsage(target);
 }
 
 function toggleVoiceSettingsPopover(event) {
@@ -1551,8 +1661,9 @@ function closeVoiceSettingsPopover() {
 if (!window.__promChatContextWindowHandlersInstalled) {
   window.__promChatContextWindowHandlersInstalled = true;
   document.addEventListener('click', (event) => {
-    const wrap = document.querySelector('.chat-model-switcher-wrap');
-    if (!wrap || !wrap.contains(event.target)) closeChatContextWindowPopover();
+    document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => {
+      if (!wrap.contains(event.target)) closeChatContextWindowPopover(wrap);
+    });
     const voiceWrap = document.querySelector('.voice-settings-wrap');
     if (!voiceWrap || !voiceWrap.contains(event.target)) closeVoiceSettingsPopover();
     if (desktopVoiceRoomPopoverOpen && desktopVoiceOrbDock && !desktopVoiceOrbDock.contains(event.target)) {
@@ -1561,7 +1672,7 @@ if (!window.__promChatContextWindowHandlersInstalled) {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      closeChatContextWindowPopover();
+      document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => closeChatContextWindowPopover(wrap));
       closeVoiceSettingsPopover();
       setDesktopVoiceRoomPopoverOpen(false);
     }
@@ -1576,6 +1687,13 @@ if (!window.__promChatContextWindowHandlersInstalled) {
     if (document.visibilityState === 'hidden') return;
     refreshChatContextWindow({ force: true }).catch(() => {});
     if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
+    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
+      const state = getChatContextWindowStateForSession(target.dataset.contextWindowSessionId);
+      if (state.open) {
+        refreshChatContextWindow({ force: true, target }).catch(() => {});
+        refreshChatContextPlanUsage(false, target).catch(() => {});
+      }
+    });
   }, 5000);
   // Expose for status/model route refresh paths in index.html.
   window.refreshChatContextWindow = refreshChatContextWindow;
@@ -13554,6 +13672,8 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const voiceAction = String(options.voiceAction || '').trim();
   const sendAction = String(options.sendAction || '').trim();
   const footerHint = String(options.footerHint || '').trim();
+  const composerSessionId = String(options.sessionId || '').trim();
+  const secondarySurface = String(options.secondarySurface || '').trim();
   const modelName = String(options.modelName || document.getElementById('chat-model-name')?.textContent || 'your model').trim();
   const queueBadgeId = String(options.queueBadgeId || '').trim();
   const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
@@ -13579,7 +13699,7 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const queueBadge = queueBadgeId
     ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
     : '';
-  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}">
+  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}"${composerSessionId ? ` data-composer-session-id="${escHtml(composerSessionId)}"` : ''}${secondarySurface ? ` data-secondary-surface="${escHtml(secondarySurface)}"` : ''}>
     ${parityTopMarkup}${extraTopMarkup}
     ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
     <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
@@ -13764,6 +13884,8 @@ function renderSideChatPaneHtml(timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'side-chat-input',
+        sessionId: side.id,
+        secondarySurface: 'side-chat',
         placeholder: 'Send Prometheus a message',
         composerClass: 'side-chat-composer',
         attachAction: "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
@@ -13836,6 +13958,8 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'background-agent-chat-input',
+        sessionId: sideSessionId,
+        secondarySurface: 'background-agent',
         placeholder: `Steer ${identity.name} directly`,
         composerClass: 'side-chat-composer background-agent-side-composer',
         attachAction: "showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')",

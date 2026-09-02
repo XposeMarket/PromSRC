@@ -818,7 +818,7 @@ function resizeTeamChatInput() {
   const input = document.getElementById('team-chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(180, Math.max(64, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(180, Math.max(44, input.scrollHeight))}px`;
   syncTeamChatInputMirror(activeTeamId);
 }
 
@@ -2517,6 +2517,8 @@ function renderTeamUnifiedDesktopChat(team) {
     </div>
     ${renderer.renderComposer({
       inputId: 'team-chat-input',
+      sessionId: `team_chat_${team.id}`,
+      secondarySurface: 'team-chat',
       fileInputId: 'team-chat-file-input',
       stagingId: 'team-chat-file-staging',
       sendButtonId: 'team-chat-send-button',

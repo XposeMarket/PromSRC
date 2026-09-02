@@ -154,6 +154,23 @@ body:not(.pm-mobile-active) .unified-agent-chat-composer.chat-input-area .chat-i
   width: 100%;
 }
 
+/* Canonicalized side panes intentionally drop the legacy surface classes so
+   their paint/layout rules stay identical to #chat-view. Keep only the pane
+   placement hook here, scoped to the native side pane. */
+body:not(.pm-mobile-active) .side-chat-pane > .chat-input-area[data-canonical-secondary-composer="1"] {
+  left: 50% !important;
+  right: auto !important;
+  bottom: 18px !important;
+  transform: translateX(-50%) !important;
+  width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter))) !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+body:not(.pm-mobile-active) .side-chat-pane > .chat-input-area[data-canonical-secondary-composer="1"] .chat-input-row {
+  width: 100%;
+}
+
 body:not(.pm-mobile-active) .prom-multi-chat-dropzones {
   position: absolute;
   z-index: 200;

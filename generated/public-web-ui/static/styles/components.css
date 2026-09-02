@@ -4076,7 +4076,8 @@ button.chat-context-window-row {
 .ccw-plan-credit strong { color: var(--text); font-variant-numeric: tabular-nums; }
 .ccw-plan-tokens { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-#model-switcher-popover {
+#model-switcher-popover,
+[data-model-switcher-popover="1"] {
   left: auto !important;
   right: 0 !important;
   display: flex;
@@ -4236,14 +4237,15 @@ button.chat-context-window-row {
 .model-switcher-quick-empty { padding: 10px; color: var(--muted); font-size: 11px; }
 
 @media (max-width: 640px) {
-  #model-switcher-popover { width: min(320px, calc(100vw - 32px)); flex-direction: column; }
+  #model-switcher-popover,
+  [data-model-switcher-popover="1"] { width: min(320px, calc(100vw - 32px)); flex-direction: column; }
   .model-switcher-panel, .model-switcher-detail { width: 100%; }
 }
 
 /* Compact model/reasoning controls. Keep the desktop switcher dense and calm
    so the effort slider reads like a control rather than a second composer. */
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-panel,
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-detail {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-panel,
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-detail {
   width: 220px;
   padding: 6px;
   border-radius: 14px;
@@ -4252,95 +4254,95 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-detail {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-heading,
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-detail-title {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-heading,
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-detail-title {
   padding: 4px 6px 5px;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: .08em;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-row {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-row {
   grid-template-columns: minmax(58px, 1fr) minmax(0, 1.35fr) 12px;
   gap: 5px;
   min-height: 31px;
   padding: 0 6px;
   border-radius: 8px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-row span {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-row span {
   font-size: 10.5px;
   font-weight: 600;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-row strong {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-row strong {
   font-size: 10px;
   font-weight: 550;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-row i {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-row i {
   font-size: 15px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-source {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-source {
   margin: 5px 6px 2px;
   padding-top: 5px;
   font-size: 9.5px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-default {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-default {
   margin-top: 3px;
   padding: 6px;
   font-size: 10px;
   font-weight: 650;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-options { gap: 1px; }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-option {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-options { gap: 1px; }
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-option {
   gap: 5px;
   min-height: 31px;
   padding: 5px 6px;
   border-radius: 8px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-option span {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-option span {
   font-size: 10.5px;
   font-weight: 550;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-option small {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-option small {
   margin-top: -3px;
   font-size: 9px;
   line-height: 1.2;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-check { font-size: 15px !important; }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-advanced {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-check { font-size: 15px !important; }
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-advanced {
   padding: 4px 6px;
   border-radius: 7px;
   font-size: 10px;
   font-weight: 600;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-advanced span {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-advanced span {
   margin-left: 3px;
   font-size: 15px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-effort-slider {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-effort-slider {
   margin: 5px 2px 8px;
   height: 22px;
   box-shadow: none;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-effort-segment { height: 22px; }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-effort-segment::after {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-effort-segment { height: 22px; }
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-effort-segment::after {
   width: 5px;
   height: 5px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-effort-segment.active::after {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-effort-segment.active::after {
   width: 25px;
   height: 25px;
   box-shadow: 0 2px 7px rgba(255,255,255,.18);
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-quick-label {
   min-height: 24px;
   padding: 0 7px;
   gap: 4px;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label strong,
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label span {
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-quick-label strong,
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-quick-label span {
   font-size: 10px;
   font-weight: 550;
 }
-body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label i { font-size: 12px; }
+body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-popover="1"]) .model-switcher-quick-label i { font-size: 12px; }
 
 .chat-input-row {
   position: relative;

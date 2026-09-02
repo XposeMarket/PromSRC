@@ -12,6 +12,7 @@ const performance = read('web-ui/src/performance.js');
 const performanceGenerated = read('generated/public-web-ui/static/performance.js');
 const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js');
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
+const themes = read('web-ui/src/styles/themes.css');
 
 assert.match(
   subagents,
@@ -42,8 +43,19 @@ assert.doesNotMatch(chatTab, /chat-input-area panel-chat-composer/);
 // visible composer is NOT allowed to be a separately styled implementation.
 assert.match(subagents, /renderer\.renderComposer\(\{/);
 assert.match(teams, /renderer\.renderComposer\(\{/);
+assert.match(subagents, /sessionId:\s*getSubagentChatSessionId\(agent\.id\)/,
+  'standalone subagent chat must give the shared composer its session identity');
+assert.match(subagents, /secondarySurface:\s*'subagent-chat'/,
+  'standalone subagent chat must identify its secondary composer surface');
+assert.match(teams, /sessionId:\s*`team_chat_\$\{team\.id\}`/,
+  'standalone team chat must give the shared composer its session identity');
+assert.match(teams, /secondarySurface:\s*'team-chat'/,
+  'standalone team chat must identify its secondary composer surface');
 assert.match(chat, /window\.__PROM_UNIFIED_DESKTOP_CHAT = \{/);
 assert.match(chat, /renderComposer: renderUnifiedDesktopComposerHtml/);
+const promBotCollab = read('web-ui/src/prom-bot-collab.js');
+assert.match(promBotCollab, /renderer\.renderComposer\(\{[^}]*sessionId, secondarySurface:\s*'prom-bot-group'/s,
+  'Prom Bot group chat must use the shared session-aware composer');
 
 assert.equal(performance, performanceGenerated, 'performance source/generated copies must match');
 assert.equal(canonical, canonicalGenerated, 'canonical composer source/generated copies must match');
@@ -61,6 +73,16 @@ assert.match(canonical, /const clone = main\.cloneNode\(true\)/,
 assert.match(canonical, /clone\.querySelectorAll\('\[id\]'\)\.forEach\(\(node\) => node\.removeAttribute\('id'\)\)/,
   'cloned main-only ids must be stripped before restoring secondary identities');
 assert.match(canonical, /clone\.dataset\.canonicalComposerSource = 'main-chat-dom'/);
+assert.match(canonical, /clone\.classList\.add\('canonical-secondary-desktop-composer'\)/,
+  'session-aware secondary composers must opt into the main desktop layout rules');
+assert.match(canonical, /team-chat-mention-popover[\s\S]*inputWrap\.appendChild/,
+  'canonical team composers must retain the @mention popover behavior');
+assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?grid-template-areas:/,
+  'secondary composers must receive the main desktop grid without restoring legacy chrome');
+assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?width:\s*min\(760px, calc\(100% - 52px\)\)/,
+  'secondary composers must use the full shared chat-column width');
+assert.match(themes, /:is\(\.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell\)\s*\{[\s\S]*?linear-gradient\(180deg, #090909/,
+  'Prometheus One secondary chats must use the theme surface instead of the legacy chat background image');
 
 // Cover every legacy desktop entry point the user can actually see.
 assert.match(canonical, /\.side-chat-composer\.chat-input-area/,

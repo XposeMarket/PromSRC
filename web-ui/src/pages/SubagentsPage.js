@@ -469,7 +469,7 @@ function resizeSubagentChatInput() {
   const input = document.getElementById('subagent-chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(150, Math.max(48, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(150, Math.max(44, input.scrollHeight))}px`;
 }
 
 function removeSubagentChatFile(agentId, idx) {
@@ -1954,6 +1954,8 @@ function renderSubagentUnifiedDesktopChat(agent) {
     </div>
     ${renderer.renderComposer({
       inputId: 'subagent-chat-input',
+      sessionId: getSubagentChatSessionId(agent.id),
+      secondarySurface: 'subagent-chat',
       fileInputId: 'subagent-chat-file-input',
       stagingId: 'subagent-chat-file-staging',
       sendButtonId: 'subagent-chat-send-button',
