@@ -147,6 +147,8 @@
     "benchmark:chat-optional-ownership": "node scripts/benchmark-chat-optional-ownership.mjs --enforce",
     "test:chat-optional-ownership": "node scripts/test-chat-optional-ownership.mjs && node scripts/benchmark-chat-optional-ownership.mjs --enforce",
     "test:web-ui-performance": "node scripts/test-web-ui-performance-foundation.mjs && node scripts/benchmark-performance.mjs --deterministic-only --enforce && node scripts/test-keyed-chat-timeline.mjs && node scripts/benchmark-keyed-chat-timeline.mjs --enforce && node scripts/test-chat-optional-ownership.mjs && node scripts/benchmark-chat-optional-ownership.mjs --enforce",
+    "benchmark:first-token": "node scripts/benchmark-first-token-latency.mjs",
+    "benchmark:model-usage-cursor": "tsx scripts/benchmark-model-usage-cursor.ts",
     "benchmark:tool-performance": "node scripts/benchmark-tool-performance.mjs",
     "benchmark:coding-context": "tsx src/gateway/coding-context-benchmark.ts",
     "build:desktop-helper:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop-helper-win.ps1",
