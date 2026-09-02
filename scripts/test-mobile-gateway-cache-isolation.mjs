@@ -20,6 +20,9 @@ assert.match(source, /loadBgTasks[\s\S]*const cacheScope = _mobileGatewayCacheSc
 assert.match(source, /function _sessionCacheKey\(sid, scope = _mobileGatewayCacheScope\(\)\)/, 'chat session cache keys must include gateway identity');
 assert.match(source, /loadMobileChatSession[\s\S]*const gatewayScope = _mobileGatewayCacheScope\(\)[\s\S]*requestKey = `\$\{gatewayScope\}:/, 'session in-flight request keys must include gateway identity');
 assert.match(source, /_sessionCacheSet\(sid, session, gatewayScope\)/, 'a session response must be saved under the gateway scope captured when its request started');
+assert.match(source, /const _sessionCacheSessionGenerations = new Map\(\)/, 'session cache invalidation must track per-session generations');
+assert.match(source, /Array\.from\(_sessionRequests\.keys\(\)\)\.forEach/, 'session invalidation must evict stale coalesced requests');
+assert.match(source, /cacheGeneration === _sessionCacheGenerationFor\(sid, gatewayScope\)/, 'stale session responses must not refill an invalidated cache');
 assert.match(source, /const _mobileHistoryClients = new Map\(\)[\s\S]*loadMobileChatHistoryPage[\s\S]*const gatewayScope = _mobileGatewayCacheScope\(\)[\s\S]*_mobileHistoryClients\.get\(gatewayScope\)\.loadOlder/, 'cursor page request coalescing must not cross gateway identities');
 
 console.log('[test-mobile-gateway-cache-isolation] passed: mobile page/session caches and in-flight requests are gateway-scoped');
