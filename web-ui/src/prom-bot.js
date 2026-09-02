@@ -417,6 +417,11 @@ async function openPromBotAgent(agentId) {
     // absolutely-positioned chat layer above it. The durable subagent runtime
     // still owns transport/state; only the visible host changes.
     if (typeof window.setMode === 'function') window.setMode('chat');
+    // SubagentsPage normally hydrates its private catalog from page activation.
+    // Prom Bot opens from the Chat page, so hydrate that same catalog before
+    // openSubagentDetail() asks it to find the selected agent. Without this,
+    // the board exists but renders no chat surface or composer.
+    await window.refreshSubagents?.();
     await window.openSubagentDetail(id);
     await window.switchSubagentTab('chat', id);
     mountSubagentBoardAsMainChatSurface();

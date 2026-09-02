@@ -89,6 +89,14 @@ assert.match(source, /chromeObserver\.observe\(section, \{ childList: true, subt
 // Group creation/search/navigation stay Prom Bot shell behavior and expose a
 // stable room API so the next Team-flow layer can convert a Group to a Team.
 assert.match(source, /textContent = '\+ Group chat'/);
+assert.match(source, /session-hover-preview prom-bot-group-hover-preview/,
+  'group rename should reuse the regular chat hover-popover styling');
+assert.match(source, /beginGroupHoverRename\(popover\)/,
+  'group hover popover should expose the same inline rename interaction');
+assert.match(source, /group\.title = nextTitle/,
+  'group rename should persist the edited title on the lightweight room');
+assert.match(source, /saveGroups\(\);[\s\S]*?renderGroupRows\(\);[\s\S]*?setPromChatTitleOverride/,
+  'renaming the active group should refresh its sidebar row and title projection');
 assert.match(source, /Choose 2–\$\{MAX_GROUP_MEMBERS\} bots/);
 assert.match(source, /prom-bot-roster-search/);
 assert.match(source, /closePromBotChat\?\.\(\{ keepMode: true \}\)/);

@@ -51,6 +51,8 @@ assert.match(source, /import\('\.\/pages\/SubagentsPage\.js'\)/);
 assert.match(source, /__PROM_UNIFIED_DESKTOP_CHAT/);
 assert.match(source, /openSubagentDetail\(id\)/);
 assert.match(source, /switchSubagentTab\('chat', id\)/);
+assert.match(source, /await window\.refreshSubagents\?\.\(\);[\s\S]*?await window\.openSubagentDetail\(id\)/,
+  'direct Prom Bot must hydrate the shared SubagentsPage catalog before opening the board');
 assert.match(source, /PROM_BOT_SURFACE_ID = 'prom-bot-main-surface'/);
 assert.match(source, /function displaceMainChatSurface\(/);
 assert.match(source, /entry\.node\.hidden = true/);

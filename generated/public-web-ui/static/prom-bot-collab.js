@@ -19,6 +19,9 @@ let chromeObserver = null;
 let chromeObserverTarget = null;
 let chromeBindTimer = 0;
 let displacedMainChatChildren = [];
+let groupHoverPreviewCloseTimer = null;
+let groupHoverPreviewSource = null;
+let groupHoverPreviewEditing = false;
 
 function esc(value) {
   return String(value ?? '')
@@ -158,6 +161,137 @@ function groupMembers(group) {
   return (group?.memberIds || []).map(agentById).filter((agent) => agent.id);
 }
 
+function getGroupHoverPreview() {
+  let popover = document.getElementById('prom-bot-group-hover-preview');
+  if (popover) return popover;
+  popover = document.createElement('div');
+  popover.id = 'prom-bot-group-hover-preview';
+  popover.className = 'session-hover-preview prom-bot-group-hover-preview';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Rename group chat');
+  popover.addEventListener('pointerenter', () => {
+    if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+    groupHoverPreviewCloseTimer = null;
+  });
+  popover.addEventListener('pointerdown', () => {
+    if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+    groupHoverPreviewCloseTimer = null;
+  });
+  popover.addEventListener('pointerleave', scheduleGroupHoverPreviewClose);
+  document.body.appendChild(popover);
+  return popover;
+}
+
+function hideGroupHoverPreview() {
+  if (groupHoverPreviewEditing) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  groupHoverPreviewSource = null;
+  document.getElementById('prom-bot-group-hover-preview')?.classList.remove('is-visible');
+}
+
+function scheduleGroupHoverPreviewClose() {
+  if (groupHoverPreviewEditing) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = setTimeout(hideGroupHoverPreview, 1500);
+}
+
+function renderGroupHoverPreviewTitle(popover, group) {
+  const groupId = String(group?.id || '').trim();
+  const title = String(group?.title || 'Bot group').trim() || 'Bot group';
+  popover.dataset.groupId = groupId;
+  popover.dataset.groupTitle = title;
+  popover.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'session-hover-preview-row';
+  const titleButton = document.createElement('button');
+  titleButton.type = 'button';
+  titleButton.className = 'session-hover-preview-title';
+  titleButton.textContent = title;
+  titleButton.title = 'Rename group chat';
+  titleButton.setAttribute('aria-label', 'Rename group chat');
+  titleButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginGroupHoverRename(popover);
+  });
+  row.appendChild(titleButton);
+  popover.appendChild(row);
+}
+
+function showGroupHoverPreview(source, group) {
+  if (!source?.isConnected || !group || window.matchMedia('(max-width: 900px)').matches) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  groupHoverPreviewSource = source;
+  const popover = getGroupHoverPreview();
+  renderGroupHoverPreviewTitle(popover, group);
+  popover.classList.add('is-visible');
+  const rect = source.getBoundingClientRect();
+  const preferredWidth = 190;
+  const left = Math.min(rect.right + 8, Math.max(8, window.innerWidth - preferredWidth - 12));
+  const width = Math.min(preferredWidth, Math.max(160, window.innerWidth - left - 12));
+  const top = Math.max(8, Math.min(rect.top + (rect.height / 2) - 27, window.innerHeight - 66));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.width = `${width}px`;
+}
+
+function beginGroupHoverRename(popover) {
+  if (!popover?.classList.contains('is-visible')) return;
+  groupHoverPreviewEditing = true;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  const group = groupById(popover.dataset.groupId);
+  const title = String(group?.title || popover.dataset.groupTitle || 'Bot group').trim() || 'Bot group';
+  popover.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'session-hover-preview-input';
+  input.value = title;
+  input.maxLength = 80;
+  input.setAttribute('aria-label', 'Group chat title');
+  const restore = () => {
+    groupHoverPreviewEditing = false;
+    if (group) renderGroupHoverPreviewTitle(popover, group);
+    else hideGroupHoverPreview();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      restore();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const nextTitle = String(input.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!group || !nextTitle || nextTitle === title) {
+      restore();
+      return;
+    }
+    input.disabled = true;
+    group.title = nextTitle;
+    group.updatedAt = Date.now();
+    saveGroups();
+    renderGroupRows();
+    if (activeGroupId === group.id) {
+      window.setPromChatTitleOverride?.('Prom Bot group', group.title, 'prom-bot-group');
+    }
+    groupHoverPreviewEditing = false;
+    hideGroupHoverPreview();
+  });
+  input.addEventListener('blur', () => {
+    if (input.disabled) return;
+    restore();
+    requestAnimationFrame(() => {
+      if (!popover.matches(':hover') && !groupHoverPreviewSource?.matches(':hover')) scheduleGroupHoverPreviewClose();
+    });
+  }, { once: true });
+  popover.appendChild(input);
+  input.focus();
+  input.select();
+}
+
 function installStyles() {
   if (document.getElementById('prom-bot-collab-styles')) return;
   const style = document.createElement('style');
@@ -269,6 +403,8 @@ function renderGroupRows() {
     row.className = `prom-bot-group-row chat-session-item job-item${group.id === activeGroupId ? ' active' : ''}`;
     row.dataset.groupId = group.id;
     row.innerHTML = `<span class="prom-bot-group-avatar">${members.length}</span><span><span class="prom-bot-group-title">${esc(group.title)}</span><span class="prom-bot-group-meta">${esc(members.map((member) => member.name).join(', '))}</span></span><span class="prom-bot-group-delete" title="Delete group" aria-label="Delete group">×</span>`;
+    row.addEventListener('pointerenter', () => showGroupHoverPreview(row, group));
+    row.addEventListener('pointerleave', scheduleGroupHoverPreviewClose);
     row.addEventListener('click', (event) => {
       if (event.target instanceof Element && event.target.closest('.prom-bot-group-delete')) {
         event.stopPropagation();
@@ -334,6 +470,7 @@ function createGroupFromModal() {
 }
 
 function deleteGroup(groupId) {
+  hideGroupHoverPreview();
   groups = groups.filter((group) => group.id !== groupId);
   saveGroups();
   if (activeGroupId === groupId) closeGroup();
