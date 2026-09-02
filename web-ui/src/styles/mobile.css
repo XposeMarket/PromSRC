@@ -3468,13 +3468,14 @@ html.pm-session-context-open * {
 }
 
 .pm-proposals-page { display: flex; flex-direction: column; gap: 12px; }
+.pm-proposals-page > .pm-card { border: 0; }
 .pm-proposal-review-body {
   padding-top: calc(max(env(safe-area-inset-top), 12px) + 58px);
 }
 .pm-proposal-card,
 .pm-proposal-review-card {
   padding: 14px;
-  border-left: 2px solid var(--pm-orange);
+  border: 0;
 }
 .pm-proposal-head {
   display: grid;
@@ -3728,7 +3729,7 @@ html.pm-session-context-open * {
   grid-template-columns: 38px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  border: 1px solid var(--pm-border);
+  border: 0;
   border-radius: 14px;
   background: rgba(255,255,255,.52);
   padding: 12px;
@@ -12418,7 +12419,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-schedule-card {
   position: relative;
   background: color-mix(in srgb, var(--pm-surface) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pm-border) 88%, transparent);
+  border: 0;
   border-radius: 24px;
   padding: 16px 16px 14px;
   margin: 12px 0;
