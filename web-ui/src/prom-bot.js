@@ -50,6 +50,8 @@ function installPromBotStyles() {
     #${PROM_BOT_BUTTON_ID} svg { width: 20px; height: 20px; }
     #${PROM_BOT_SECTION_ID}[hidden] { display: none !important; }
     #${PROM_BOT_LIST_ID} { display: flex; flex-direction: column; gap: 2px; }
+    #${PROM_BOT_LIST_ID}[hidden] { display: none !important; }
+    #${PROM_BOT_SECTION_ID}.is-collapsed > :not(.sidebar-section-toggle) { display: none !important; }
     .prom-bot-agent-row {
       width: 100%;
       display: grid;
@@ -163,6 +165,7 @@ function ensurePromBotSection() {
   header.type = 'button';
   header.setAttribute('aria-controls', PROM_BOT_LIST_ID);
   const collapsed = readBool(PROM_BOT_COLLAPSED_KEY, false);
+  section.classList.toggle('is-collapsed', collapsed);
   header.setAttribute('aria-expanded', String(!collapsed));
   header.innerHTML = '<span>Subagents</span><span class="sidebar-section-decoration" aria-hidden="true"><span class="sidebar-section-icon">✦</span></span>';
 
@@ -174,6 +177,7 @@ function ensurePromBotSection() {
   header.addEventListener('click', () => {
     const nextCollapsed = !list.hidden;
     list.hidden = nextCollapsed;
+    section.classList.toggle('is-collapsed', nextCollapsed);
     header.setAttribute('aria-expanded', String(!nextCollapsed));
     writeBool(PROM_BOT_COLLAPSED_KEY, nextCollapsed);
   });
