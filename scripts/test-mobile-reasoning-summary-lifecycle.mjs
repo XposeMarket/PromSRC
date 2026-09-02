@@ -102,8 +102,8 @@ for (const css of [mobileCss, generatedMobileCss]) {
     'mobile reasoning control must be visually 15 percent smaller while staying centered');
   assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-track\s*\{[\s\S]*?height: 56px;/,
     'mobile reasoning track must match the tab bar height');
-  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-fill::after\s*\{[\s\S]*?width: 50px;[\s\S]*?height: 50px;[\s\S]*?top: 50%;[\s\S]*?transform: translateY\(-50%\);[\s\S]*?border-radius: 50%;/,
-    'mobile reasoning thumb must be a circular tab-sized cap');
+  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-fill::after\s*\{[\s\S]*?width: 54px;[\s\S]*?height: 54px;[\s\S]*?top: 50%;[\s\S]*?transform: translateY\(-50%\);[\s\S]*?border-radius: 50%;/,
+    'mobile reasoning thumb must be a slightly enlarged circular cap');
 }
 
 console.log('mobile reasoning-summary lifecycle regression passed');

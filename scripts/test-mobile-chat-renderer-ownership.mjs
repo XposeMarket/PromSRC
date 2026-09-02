@@ -80,7 +80,8 @@ const measurements = {
 // auto-hide; keep the ceiling at the refreshed measurement plus a small
 // compression variance allowance so unrelated initial-load growth still fails
 // loudly. The keyboard viewport repair adds a small intentional mobile-only
-// positioning guard to this slice.
-assert(measurements.gzipBytes <= 253600, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// positioning guard to this slice, and the deferred Voice runtime now receives
+// its history persistence boundary explicitly; allow only that small addition.
+assert(measurements.gzipBytes <= 253850, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
