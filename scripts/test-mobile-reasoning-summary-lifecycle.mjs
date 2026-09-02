@@ -5,6 +5,8 @@ import { chatProgressVisibility } from '../web-ui/src/features/chat/trace-visibi
 
 const source = fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8');
 const renderer = fs.readFileSync('web-ui/src/mobile/mobile-chat-renderer-runtime.js', 'utf8');
+const mobileCss = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+const generatedMobileCss = fs.readFileSync('generated/public-web-ui/static/styles/mobile.css', 'utf8');
 
 function functionSource(name, nextName) {
   const start = source.indexOf(`function ${name}(`);
@@ -92,5 +94,14 @@ assert.match(renderer, /const bodyEntries = group\.entries\.filter\(\(entry\) =>
 assert.doesNotMatch(source, /_appendMobileReasoningSummary/,
   'the mobile stream must not retain a second durable reasoning-summary writer');
 assert.match(renderer, /return '';/, 'progress summary fallback must stay empty when no mutable slot exists');
+
+for (const css of [mobileCss, generatedMobileCss]) {
+  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-control\s*\{[\s\S]*?width: min\(100%, calc\(100vw - max\(var\(--pm-mobile-chrome-inset, 22px\)/,
+    'mobile reasoning control must use the same inset-based width calculation as the tab bar');
+  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-track\s*\{[\s\S]*?height: 56px;/,
+    'mobile reasoning track must match the tab bar height');
+  assert.match(css, /\.pm-msheet\.is-reasoning \.pm-reasoning-fill::after\s*\{[\s\S]*?width: 42px;[\s\S]*?aspect-ratio: 1;/,
+    'mobile reasoning thumb must be a circular tab-sized cap');
+}
 
 console.log('mobile reasoning-summary lifecycle regression passed');

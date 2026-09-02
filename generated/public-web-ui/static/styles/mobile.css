@@ -17667,7 +17667,8 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
   grid-column: 1 / -1;
   grid-row: 2;
   justify-self: stretch;
-  width: 100%;
+  width: min(100%, calc(100vw - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left, 0px)) - max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right, 0px))));
+  margin: 0 auto;
   min-height: 0;
 }
 
@@ -17720,6 +17721,16 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment + .pm-reason
 
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
   display: block;
+}
+
+/* Match the tab bar's physical bounds. The sheet has 18px content padding,
+   while the tab bar is inset by the mobile chrome inset; using the same
+   measured width keeps both controls centered on the device, including safe
+   area layouts. */
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
+  width: 42px;
+  aspect-ratio: 1;
+  border-radius: 50%;
 }
 
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control.is-dragging .pm-reasoning-fill {
