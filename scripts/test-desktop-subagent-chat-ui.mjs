@@ -79,8 +79,8 @@ assert.match(canonical, /team-chat-mention-popover[\s\S]*inputWrap\.appendChild/
   'canonical team composers must retain the @mention popover behavior');
 assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?grid-template-areas:/,
   'secondary composers must receive the main desktop grid without restoring legacy chrome');
-assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?width:\s*min\(760px, calc\(100% - 52px\)\)/,
-  'secondary composers must use the full shared chat-column width');
+assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?width:\s*min\(var\(--chat-content-max-width\), calc\(100% - var\(--chat-content-inline-gutter\) - var\(--chat-content-inline-gutter\)\)\)/,
+  'secondary composers must use the full shared chat-column width contract');
 assert.match(themes, /:is\(\.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell\)\s*\{[\s\S]*?linear-gradient\(180deg, #090909/,
   'Prometheus One secondary chats must use the theme surface instead of the legacy chat background image');
 

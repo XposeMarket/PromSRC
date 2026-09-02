@@ -4998,6 +4998,32 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
   max-width: 100%;
   min-width: 0;
 }
+.live-turn-thought-group {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.live-turn-thought-summary {
+  min-width: 0;
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.live-turn-thought-summary .t-think {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-turn-thought-body {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
 .live-turn-trace {
   display: flex;
   flex-direction: column;

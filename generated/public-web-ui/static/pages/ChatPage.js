@@ -12357,14 +12357,143 @@ function isBareThinkingLiveTraceText(text) {
   return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
+function isDesktopTraceThoughtType(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
+}
+
+function isDesktopTraceReasoningSummaryType(type) {
+  return String(type || '').toLowerCase() === 'reasoning_summary';
+}
+
+function isDesktopTransientReasoningTraceEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const type = String(entry.type || entry.kind || '').trim().toLowerCase();
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const event = String(entry.event || extra.event || extra.eventType || '').trim().toLowerCase();
+  const source = String(entry.source || extra.source || '').trim().toLowerCase();
+  const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
+  const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  return source === 'agent_progress'
+    || source === 'reasoning_summary'
+    || type === 'reasoning_summary'
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
+    || reasoningKind === 'summary'
+    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+}
+
+function isDesktopMutableProgressTraceEntry(entry) {
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return String(entry?.source || extra.source || '').trim().toLowerCase() === 'agent_progress';
+}
+
+function desktopTracePresentationEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    if (!entry || entry.activity) return entry;
+    const type = String(entry.type || '').toLowerCase();
+    const text = String(entry.text || entry.content || entry.message || '').trim();
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
+    if (['info', 'progress'].includes(type) && !action
+      && String(extra.source || entry.source || '').toLowerCase() === 'agent_progress') {
+      return {
+        ...entry,
+        type: 'think',
+        extra: {
+          ...extra,
+          source: extra.source || 'agent_progress',
+          visibility: extra.visibility || 'user',
+        },
+      };
+    }
+    // Summary packets are transient transport updates. Keep one mutable
+    // agent_progress entry as the live summary owner and discard stale copies
+    // before grouping, so recovery cannot place them back in the timeline.
+    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return null;
+    return entry;
+  }).filter(Boolean);
+}
+
+function desktopTraceComparableText(value) {
+  return normalizeLiveTraceProseText(value)
+    .replace(/\s+/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+    .toLowerCase();
+}
+
+function desktopTraceThoughtTextsSimilar(a, b) {
+  const left = desktopTraceComparableText(a);
+  const right = desktopTraceComparableText(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) >= 40 && (left.includes(right) || right.includes(left))) return true;
+  const leftTokens = new Set(left.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const rightTokens = new Set(right.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const smaller = Math.min(leftTokens.size, rightTokens.size);
+  if (smaller < 8) return false;
+  let overlap = 0;
+  leftTokens.forEach((token) => { if (rightTokens.has(token)) overlap += 1; });
+  return overlap / smaller >= 0.72;
+}
+
+function isDesktopTraceThoughtFragmentText(value) {
+  const raw = String(value || '').trim();
+  const comparable = desktopTraceComparableText(raw);
+  if (!comparable) return true;
+  const words = comparable.split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  if (/[.!?]\s*$/.test(raw) || /\n\s*\n/.test(raw)) return false;
+  return words.length === 1 && comparable.length <= 16;
+}
+
+function dedupeDesktopTraceProseText(value) {
+  const normalized = normalizeLiveTraceProseText(value);
+  if (!normalized || /```/.test(normalized)) return normalized;
+  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3) return normalized;
+  const isTitleLike = (line) => {
+    const clean = String(line || '').replace(/^[#*_`\s]+|[*_`\s]+$/g, '').trim();
+    if (!clean || clean.length > 96 || /[.!?]$/.test(clean)) return false;
+    const words = clean.split(/\s+/).filter(Boolean);
+    return words.length > 0 && words.length <= 9;
+  };
+  for (let i = 0; i < lines.length - 2; i += 1) {
+    if (!isTitleLike(lines[i])) continue;
+    const titleKey = desktopTraceComparableText(lines[i]);
+    if (!titleKey) continue;
+    for (let j = i + 2; j < lines.length; j += 1) {
+      const repeatedLineKey = desktopTraceComparableText(lines[j]);
+      if (repeatedLineKey !== titleKey && !repeatedLineKey.startsWith(`${titleKey} `)) continue;
+      const firstBlock = lines.slice(i, j).join('\n');
+      const duplicateTail = lines.slice(j).join('\n');
+      const firstComparable = desktopTraceComparableText(firstBlock);
+      const tailComparable = desktopTraceComparableText(duplicateTail);
+      if (!tailComparable) continue;
+      if (desktopTraceThoughtTextsSimilar(firstBlock, duplicateTail)
+        || (tailComparable.length >= titleKey.length && firstComparable.startsWith(tailComparable))) {
+        return lines.slice(0, j).join('\n').trim();
+      }
+    }
+  }
+  return normalized;
+}
+
 function isDesktopUserVisibleReasoningTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   if (type === 'preamble' || type === 'assistant') return true;
-  if (type !== 'think') return false;
+  if (type !== 'think' && !isDesktopTraceReasoningSummaryType(type)) return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const reasoningKind = String(extra.reasoningKind || entry?.reasoningKind || '').trim().toLowerCase();
+  if (reasoningKind === 'private') return false;
+  if (reasoningKind === 'summary' || reasoningKind === 'full_thought') return true;
   const source = String(extra.source || entry?.source || '').toLowerCase();
   const visibility = String(extra.visibility || entry?.visibility || '').toLowerCase();
-  return source === 'reasoning_summary' || ['user', 'summary', 'visible'].includes(visibility);
+  return type === 'reasoning_summary'
+    ? source === 'reasoning_summary' || source === 'agent_progress' || ['user', 'summary', 'visible'].includes(visibility)
+    : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
@@ -12380,11 +12509,38 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  return coalesceToolActivityEntries(entries).filter((entry) => {
+  const sourceEntries = desktopTracePresentationEntries(entries);
+  const replaceableProgressTexts = sourceEntries
+    .filter((entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_progress')
+    .map((entry) => String(entry?.text || entry?.content || '').trim())
+    .filter(Boolean);
+  const thoughtTexts = [];
+  return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
-    if ((type === 'preamble' || type === 'think' || type === 'assistant') && !isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
-    return !!(String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl));
+    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return false;
+    const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
+    if (!hasContent) return false;
+    if (isDesktopTraceThoughtType(type)) {
+      if (replaceableProgressTexts.length
+        && type === 'think'
+        && String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'reasoning_summary'
+        && replaceableProgressTexts.some((progressText) => desktopTraceThoughtTextsSimilar(entry?.text || '', progressText))) return false;
+      if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
+      const text = dedupeDesktopTraceProseText(entry?.text || '');
+      if (text) {
+        if (isDesktopTraceThoughtFragmentText(text)) return false;
+        const comparable = desktopTraceComparableText(text);
+        const words = comparable.split(/\s+/).filter(Boolean).length;
+        if (thoughtTexts.some((seen) => {
+          const seenComparable = desktopTraceComparableText(seen);
+          return desktopTraceThoughtTextsSimilar(seen, text)
+            || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
+        })) return false;
+        thoughtTexts.push(text);
+      }
+    }
+    return true;
   });
 }
 
@@ -12395,9 +12551,9 @@ function renderLiveTraceEntry(entry) {
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.ts || entry.time || '')}`).trim();
   const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
-  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+  if (isDesktopTraceThoughtType(type)) {
     return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
-      <div class="live-turn-md">${renderMd(normalizeLiveTraceProseText(text))}</div>
+      <div class="live-turn-md">${renderMd(dedupeDesktopTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
   }
@@ -12440,8 +12596,22 @@ function renderLiveTraceList(entries) {
 }
 
 function isLiveTraceThoughtEntry(entry) {
-  const type = String(entry?.type || 'info').toLowerCase();
-  return type === 'preamble' || type === 'think' || type === 'assistant';
+  return isDesktopTraceThoughtType(entry?.type || 'info');
+}
+
+function desktopTraceThoughtKind(entry) {
+  if (!isLiveTraceThoughtEntry(entry)) return '';
+  if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  if (explicit === 'summary' || explicit === 'full_thought') return explicit;
+  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  return isDesktopTraceReasoningSummaryType(entry?.type)
+    || source === 'reasoning_summary'
+    || source === 'agent_progress'
+    || extra.visibility === 'summary'
+    ? 'summary'
+    : 'full_thought';
 }
 
 function liveTraceGroupStableKey(group, index = 0) {
@@ -12480,7 +12650,10 @@ function liveTraceGroups(entries) {
     }
     if (isLiveTraceThoughtEntry(entry)) {
       activeToolGroup = null;
-      groups.push({ kind: 'thought', entries: [entry] });
+      const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
+      const previous = groups[groups.length - 1];
+      if (previous?.kind === groupKind) previous.entries.push(entry);
+      else groups.push({ kind: groupKind, entries: [entry] });
       return;
     }
     if (!activeToolGroup) {
@@ -12737,38 +12910,55 @@ function desktopTraceProgressSummary(entries) {
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const entry = source[index];
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
+    if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
+    const text = dedupeDesktopTraceProseText(entry?.text || entry?.content || '')
       .replace(/\s+/g, ' ')
       .trim();
     if (!text) continue;
-    const normalized = text.toLowerCase();
-    const duplicatesVisibleReasoning = source.some((candidate) => {
-      if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
-      const candidateText = normalizeLiveTraceProseText(candidate?.text || candidate?.content || '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-      return candidateText === normalized
-        || (Math.min(candidateText.length, normalized.length) >= 36
-          && (candidateText.includes(normalized) || normalized.includes(candidateText)));
-    });
-    if (duplicatesVisibleReasoning) return 'Reasoning';
     return text.slice(0, 220);
   }
   return '';
 }
 
-function renderLiveTurnTrace(entries, { streaming = false } = {}) {
-  const groups = liveTraceGroups(entries);
+function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
+  const kindFilter = Array.isArray(visibleKinds) || visibleKinds instanceof Set
+    ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
+    : null;
+  let groups = liveTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
   if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
-  const latestToolGroupIndex = groups.reduce((latest, group, index) => (
+  if (!streaming
+    && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
+    && !kindFilter?.has('thought')
+    && !kindFilter?.has('thought-summary')) return '';
+  let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
+  const activeProgressSummary = streaming ? desktopTraceProgressSummary(entries) : '';
+  if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
+    groups = groups.filter((group) => !(
+      group.kind === 'thought-summary'
+      && desktopTraceThoughtTextsSimilar(desktopTraceProgressSummary(group.entries), activeProgressSummary)
+    ));
+    latestToolGroupIndex = groups.reduce((latest, group, index) => (
+      group.kind === 'tools' ? index : latest
+    ), -1);
+  }
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
-    if (group.kind === 'thought') {
-      return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    if (group.kind === 'thought' || group.kind === 'thought-summary') {
+      const isSummaryThought = group.kind === 'thought-summary';
+      const isLiveThought = streaming && index === groups.length - 1;
+      const progressSummary = isSummaryThought && isLiveThought ? desktopTraceProgressSummary(group.entries) : '';
+      const bodyEntries = group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+      const summaryMarkup = progressSummary
+        ? `<div class="live-turn-thought-summary" aria-live="polite"><strong class="t-think" data-live-trace-summary-key="${escHtml(liveTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
+        : '';
+      const bodyHtml = bodyEntries.length
+        ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
+        : '';
+      return `<div class="live-turn-thought-group"${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+        ${summaryMarkup}
+        ${bodyHtml}
+      </div>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
@@ -12776,15 +12966,17 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     if (group.kind === 'vision') {
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
-    const isLiveCurrent = streaming && index === latestToolGroupIndex;
-    const progressSummary = isLiveCurrent ? desktopTraceProgressSummary(entries) : '';
+    const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
+    const progressSummary = isLiveCurrent ? activeProgressSummary : '';
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const itemCount = callCount || visibleEntries.length;
+    const nonReasoningEntries = visibleEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
+    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
     const itemLabel = callCount ? 'call' : 'item';
-    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+    const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
+    return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
         <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
@@ -12835,7 +13027,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
         summary: String(extra?.extra?.summary || extra?.summary || normalizedEntry.summary || '').trim(),
       };
     }
-    if ((type === 'preamble' || type === 'think' || type === 'assistant')
+    if (isDesktopTraceThoughtType(type)
       && !isDesktopUserVisibleReasoningTraceEntry({ ...traceEntry, type, extra })) return;
     const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
     const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
@@ -12895,7 +13087,7 @@ function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
       const type = String(entry?.type || 'info').toLowerCase();
       const text = String(entry?.text || entry?.content || '').trim();
       if (!text) return null;
-      if (type !== 'preamble' && type !== 'think') return null;
+      if (!isDesktopTraceThoughtType(type)) return null;
       if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return null;
       const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
       if (existingKeys.has(key)) return null;
@@ -17178,7 +17370,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (isBareThinkingLiveTraceText(content)) return;
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
-    const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+    const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
     const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
     if (append && last && last.type === normalizedType
@@ -46241,7 +46433,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   if (isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
-  const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+  const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
   const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
   if (append && last && last.type === normalizedType
@@ -46278,22 +46470,37 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
     String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
   );
   if (!existing) {
-    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress' } });
+    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
     return true;
   }
-  const merged = replace
-    ? normalizeLiveTraceProseText(incoming)
-    : normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
-  const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
+  const previous = String(existing.text || '').trim();
+  const next = incoming.trim();
+  if (!next) return false;
+  // Providers send both snapshots and token deltas on this channel. Treat a
+  // growing snapshot as replacement, otherwise append only when the previous
+  // sentence can safely continue. That keeps one mutable progress slot instead
+  // of leaving every transport packet behind in the tool timeline.
+  const isSnapshot = next.length > previous.length && next.startsWith(previous);
+  const canAppend = !replace
+    && !isSnapshot
+    && previous
+    && !/[.!?:]\s*$/.test(previous)
+    && (/^\s/.test(incoming) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
+  const merged = canAppend
+    ? dedupeDesktopTraceProseText(appendFinalResponseDelta(previous, incoming))
+    : normalizeLiveTraceProseText(next);
+  const latest = canAppend
+    ? (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged)
+    : merged;
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
-    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
     return visibilityChanged;
   }
   existing.text = latest;
   existing.ts = new Date().toLocaleTimeString();
-  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
   return true;
 }
 
@@ -46313,7 +46520,7 @@ function shouldAppendDesktopReasoningSummary(streamState, chunk) {
 function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
   appendTrace('think', chunk, {
     append: shouldAppendDesktopReasoningSummary(streamState, chunk),
-    extra: { visibility: 'user', source: 'reasoning_summary' },
+    extra: { visibility: 'user', source: 'reasoning_summary', reasoningKind: 'summary' },
   });
 }
 
