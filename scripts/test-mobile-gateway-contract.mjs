@@ -125,6 +125,11 @@ function assertContractFiles() {
   assert.match(shell, /data-mobile-drawer-close[\s\S]*?closeDrawer\(\)/, 'drawer back control must close the drawer');
   assert.match(shell, /data-mobile-drawer-close[\s\S]*?\$\{ICONS\.chev\}/, 'drawer back control must point toward the chat');
   assert.match(css, /\.pm-drawer-list\s*\{[\s\S]*?gap: 0 !important;/, 'drawer page tabs must use a compact vertical rhythm');
+  assert.match(shell, /pm-drawer-bottom-bar/, 'drawer actions must live in the persistent bottom bar');
+  assert.match(shell, /pm-drawer-search[\s\S]*?pm-drawer-bottom-bar/, 'drawer search must be mounted with the bottom actions');
+  assert.match(shell, /pm-drawer-new-chat-icon[\s\S]*?\$\{ICONS\.compose\}/, 'drawer new chat must use the mobile compose icon');
+  assert.doesNotMatch(shell, /pm-drawer-top-actions/, 'drawer must not keep the full-width New Chat row at the top');
+  assert.doesNotMatch(shell, /data-mobile-drawer-search-toggle/, 'drawer search must not be hidden behind a top toggle');
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /\.pm-chat-target-chip \{[\s\S]*display: none/);
   assert.match(css, /pm-target-popover-open/);

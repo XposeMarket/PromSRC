@@ -1215,21 +1215,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
-      <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
       <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Back to chat" title="Back to chat">${ICONS.chev}</button>
-      <button class="pm-drawer-search-toggle" type="button" data-mobile-drawer-search-toggle aria-label="Search chats" aria-expanded="false">${_searchIcon()}</button>
       <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
-      <label class="pm-drawer-search" aria-label="Search chats" hidden>
-        ${_searchIcon()}
-        <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
-      </label>
-      <div class="pm-drawer-top-actions">
-        <button class="pm-drawer-new-chat" type="button" data-mobile-new-chat aria-label="New chat">
-          <span class="pm-icon pm-icon-new-chat-default">${ICONS.plus}</span>
-          <span class="pm-icon pm-icon-new-chat-p1">${ICONS.starburst}</span>
-          <span>New chat</span>
-        </button>
-      </div>
       <nav class="pm-drawer-list">
         ${mobileDrawerItems.map(it => `
           <button class="pm-drawer-item" data-route="${it.route}">
@@ -1251,6 +1238,16 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
         <div class="pm-drawer-session-list" id="pm-mobile-search-list"></div>
       </section>
       <div id="pm-install-slot" style="margin-top:auto;"></div>
+      <div class="pm-drawer-bottom-bar" aria-label="Drawer actions">
+        <label class="pm-drawer-search" aria-label="Search chats">
+          ${_searchIcon()}
+          <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
+        </label>
+        <div class="pm-drawer-bottom-actions">
+          <button class="pm-theme-toggle pm-drawer-bottom-action" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
+          <button class="pm-drawer-new-chat-icon pm-drawer-bottom-action" type="button" data-mobile-new-chat aria-label="New chat" title="New chat">${ICONS.compose}</button>
+        </div>
+      </div>
     </aside>
   `);
   root.insertBefore(_drawerEl, app);
@@ -1317,12 +1314,6 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     closeDrawer();
   });
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
-  _drawerEl.querySelector('[data-mobile-drawer-search-toggle]')?.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const search = _drawerEl.querySelector('.pm-drawer-search');
-    _setDrawerSearchOpen(search?.hidden !== false);
-  });
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
@@ -2460,26 +2451,12 @@ function _searchIcon() {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
 }
 
-function _setDrawerSearchOpen(open, { focus = true } = {}) {
+function _resetDrawerSearch() {
   if (!_drawerEl) return;
-  const nextOpen = open === true;
-  const search = _drawerEl.querySelector('.pm-drawer-search');
   const input = _drawerEl.querySelector('#pm-drawer-search-input');
-  const toggle = _drawerEl.querySelector('[data-mobile-drawer-search-toggle]');
-  if (!nextOpen) {
-    _drawerSearch = '';
-    if (input) input.value = '';
-  }
-  if (search) search.hidden = !nextOpen;
-  if (toggle) {
-    toggle.setAttribute('aria-expanded', String(nextOpen));
-    toggle.setAttribute('aria-label', nextOpen ? 'Close search' : 'Search chats');
-    toggle.innerHTML = _searchIcon();
-  }
+  _drawerSearch = '';
+  if (input) input.value = '';
   if (_drawerCallbacks) _renderDrawerSearchState(_drawerCallbacks);
-  if (nextOpen && focus) {
-    requestAnimationFrame(() => input?.focus());
-  }
 }
 
 function _formatSessionDate(value) {
@@ -2507,7 +2484,7 @@ export function openDrawer() {
 }
 
 export function closeDrawer() {
-  _setDrawerSearchOpen(false, { focus: false });
+  _resetDrawerSearch();
   if (!_drawerEl || !_scrimEl) return;
   document.body.classList.remove('pm-mobile-drawer-open');
   _drawerEl.classList.remove('open');
