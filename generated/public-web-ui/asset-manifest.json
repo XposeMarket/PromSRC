@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "8b5b1902a1d51919",
-  "sourceDigest": "8b5b1902a1d5191900447fa2f38f20f8f20bebbe8fa4601b29f0bd158bb1680c",
+  "buildId": "04a7569ef5cd8322",
+  "sourceDigest": "04a7569ef5cd8322605ede0e204f46016eb73d7f14472375c89fb8dd7fae262d",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-GW7MYSIW.js",
-      "css": "/build/styles/desktop-4ECLDMPL.css",
+      "css": "/build/styles/desktop-34VJBUQY.css",
       "modulePreloads": [
         "/build/chunks/chunk-36KIJFV6.js",
         "/build/chunks/chunk-M5JONE3D.js"
@@ -106,15 +106,15 @@
         "/build/inline/index-inline-08-74c3c585e7d7.js",
         "/build/inline/index-inline-09-4550e6a395a8.js",
         "/build/inline/index-inline-10-d99079ff0017.js",
-        "/build/styles/desktop-4ECLDMPL.css"
+        "/build/styles/desktop-34VJBUQY.css"
       ],
       "files": 14,
-      "bytes": 839464,
-      "gzipBytes": 150253,
+      "bytes": 839548,
+      "gzipBytes": 150262,
       "jsBytes": 195125,
       "jsGzipBytes": 51233,
-      "cssBytes": 644339,
-      "cssGzipBytes": 99020
+      "cssBytes": 644423,
+      "cssGzipBytes": 99029
     },
     "mobile": {
       "paths": [
@@ -3101,10 +3101,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-4ECLDMPL.css",
-      "bytes": 644339,
-      "gzipBytes": 99020,
-      "sha256": "fd491756a210b41c43a40c4927d3d2f8b53dc7f67ea50b5e2d18d08c4b976658",
+      "path": "/build/styles/desktop-34VJBUQY.css",
+      "bytes": 644423,
+      "gzipBytes": 99029,
+      "sha256": "287936013ce7c1f827f23ac10b78e45efbe11719c9b19f5ac4278f5b28f4556a",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {
