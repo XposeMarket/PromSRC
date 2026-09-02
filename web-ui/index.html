@@ -7480,12 +7480,12 @@ function _effortLevelsForProvider(provider, model) {
   if (provider === 'openai' || provider === 'openai_codex') {
     const cap = _documentedReasoningCapability(provider, model);
     return [{ v: '', label: 'Provider Default', desc: cap.defaultEffort ? `Model default: ${cap.defaultEffort}` : 'Use provider default' }]
-      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: 'Supported by this model' })));
+      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: '' })));
   }
   if (provider === 'anthropic') {
     const cap = _documentedReasoningCapability(provider, model);
     return [{ v: '', label: 'Provider Default', desc: 'Anthropic default (High)' }]
-      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: 'Supported by this Claude model' })));
+      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: '' })));
   }
   if (provider === 'xai') {
     if (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || '').trim())) {
@@ -7812,11 +7812,11 @@ function _renderDesktopSwitcherMain(state) {
     <button type="button" class="model-switcher-row" data-switcher-view="models"><span>Model</span><strong>${escHtml(typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(state.model, state.provider) : state.model || 'Choose')}</strong><i>›</i></button>
     <button type="button" class="model-switcher-row" data-switcher-view="effort" ${levels.length ? '' : 'disabled'}><span>Effort</span><strong>${escHtml(effort?.label || 'Default')}</strong><i>›</i></button>
     <div class="model-switcher-source">${escHtml(source)}</div>
-    ${state.route?.mode === 'explicit' ? '<button type="button" class="model-switcher-default" data-switcher-view="default">Use Main Chat Default</button>' : ''}`;
+    ${state.route?.mode==='explicit' ? `<button type=button class="model-switcher-default">Use Main Chat Default<small>${window.mainModelLabel?.(state)}</small></button>` : ''}`;
   main.querySelector('[data-switcher-view="providers"]')?.addEventListener('click', () => _renderDesktopSwitcherProviders(state));
   main.querySelector('[data-switcher-view="models"]')?.addEventListener('click', () => _renderDesktopSwitcherModels(state, state.provider));
   main.querySelector('[data-switcher-view="effort"]')?.addEventListener('click', () => _renderDesktopSwitcherEffort(state));
-  main.querySelector('[data-switcher-view="default"]')?.addEventListener('click', followMainChatDefault);
+  main.querySelector('.model-switcher-default')?.addEventListener('click', followMainChatDefault);
 }
 
 function _renderDesktopSwitcherQuick(state) {
@@ -7954,13 +7954,13 @@ async function _renderDesktopSwitcherModels(state, provider) {
       await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined });
       const next = await _loadDesktopSwitcherState();
       _renderDesktopSwitcherMain(next);
-      _renderDesktopSwitcherModels(next, provider);
+      _renderDesktopSwitcherEffort(next);
     } catch (err) { showToast('Could not switch model', String(err?.message || err), 'error'); }
   }));
 }
 
 function _renderDesktopSwitcherEffort(state) {
-  const levels = _effortLevelsForProvider(state.provider, state.model);
+  const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   _desktopSwitcherShowDetail('Effort', levels.map((level) => _desktopSwitcherOption(
     level.label, level.desc, level.v === state.reasoningEffort, `data-switcher-effort="${escHtml(level.v)}"`,
   )).join(''));

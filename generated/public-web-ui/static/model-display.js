@@ -69,6 +69,14 @@ export function formatModelWithReasoning(model, provider = '', effort = '') {
   return reasoningLabel ? `${modelLabel} ${reasoningLabel}` : modelLabel;
 }
 
+export function formatMainChatDefaultLabel(state = {}) {
+  const llm = state?.llm || {};
+  const provider = String(llm.provider || state?.provider || '').trim();
+  const config = llm.providers?.[provider] || {};
+  const model = String(config.model || llm.model || '').trim();
+  return model ? formatModelWithReasoning(model, provider, config.reasoning_effort || '') : 'Main chat model';
+}
+
 export function relabelModelSelect(select, provider = '') {
   if (!select || select.tagName !== 'SELECT') return;
   for (const option of Array.from(select.options || [])) {

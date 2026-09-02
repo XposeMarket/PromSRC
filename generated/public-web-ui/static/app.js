@@ -20,13 +20,15 @@ import './performance.js';
 import { state, THEME_KEY, APPEARANCE_KEY } from './state.js';
 import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
-import { formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
+import { escHtml } from './utils.js';
+import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
 import './link-router.js';
 
 initGlobalShortcuts();
 
 window.formatModelDisplayName = formatModelDisplayName;
 window.formatModelWithReasoning = formatModelWithReasoning;
+window.mainModelLabel = (state) => escHtml(formatMainChatDefaultLabel(state));
 window.relabelModelSelect = relabelModelSelect;
 
 for (const [id, provider] of [

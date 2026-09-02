@@ -5009,3 +5009,115 @@ body:not(.pm-mobile-active) :is(
   }
 
 }
+
+/* Quiet desktop sidebar controls. Keep the rail readable as a list: icons are
+   glyphs rather than tiles, New chat only receives interaction feedback, and
+   the labels/tabs use a tighter rhythm. This is scoped away from the mobile
+   drawer, whose controls intentionally use different chrome. */
+@media (min-width: 901px) {
+  body:not(.pm-mobile-active) .sidebar-fixed {
+    gap: 6px !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar-scroll {
+    gap: 6px !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .nav-group {
+    gap: 0 !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) {
+    gap: 6px !important;
+    padding: 5px 6px !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .new-chat {
+    gap: 6px !important;
+    padding: 5px 6px !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .new-chat:is(:hover, :focus-visible) {
+    border: 0 !important;
+    background: var(--sidebar-item-hover) !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .sidebar-header-btn[aria-expanded="true"] {
+    background: transparent !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .sidebar-header-btn[aria-expanded="true"]:is(:hover, :focus-visible) {
+    background: var(--sidebar-item-hover) !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item, .new-chat) .nav-icon,
+  body:not(.pm-mobile-active) .sidebar :is(.session-icon, .project-icon, .skill-icon-v2, .project-card-icon, .prom-bot-agent-avatar) {
+    width: 18px !important;
+    height: 18px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item, .new-chat) .nav-icon svg,
+  body:not(.pm-mobile-active) .sidebar :is(.session-icon, .project-icon, .skill-icon-v2, .project-card-icon, .prom-bot-agent-avatar) svg {
+    width: 15px !important;
+    height: 15px !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
+    display: block !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
+    content: none !important;
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .seg-tabs {
+    gap: 1px !important;
+    padding: 1px !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar .seg-btn {
+    padding: 3px 2px !important;
+  }
+
+  /* Prom Bot injects the roster search as a sibling of the list. Collapsing
+     the section must hide both pieces, while the explicit hidden rule keeps
+     the roster's flex declaration from winning the browser's semantics. */
+  body:not(.pm-mobile-active) .sidebar #prom-bot-sidebar-section.is-collapsed > :not(.sidebar-section-toggle),
+  body:not(.pm-mobile-active) .sidebar #prom-bot-subagents-list[hidden] {
+    display: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar #prom-bot-sidebar-section .prom-bot-agent-row,
+  body:not(.pm-mobile-active) .sidebar #prom-bot-sidebar-section .prom-bot-agent-row:is(:hover, :focus, .active, .unread, .is-working) {
+    grid-template-columns: 18px minmax(0, 1fr) auto !important;
+    gap: 6px !important;
+    padding: 5px 4px !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar #prom-bot-sidebar-section .prom-bot-agent-row::before {
+    content: none !important;
+    display: none !important;
+    animation: none !important;
+  }
+
+  body:not(.pm-mobile-active) .sidebar #prom-bot-sidebar-section .prom-bot-agent-row:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--pm-shell-gold, var(--brand)) 58%, transparent);
+    outline-offset: -1px;
+  }
+
+  body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-default { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+  body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-default > small { color: var(--muted); font-size: 9px; font-weight: 550; line-height: 1.25; }
+}
