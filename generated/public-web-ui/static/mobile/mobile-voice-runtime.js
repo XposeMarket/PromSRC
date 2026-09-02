@@ -9,6 +9,7 @@ export function createMobileVoiceRuntime(context = {}) {
     __pmChat,
     __pmRealtimeAgent,
     __pmVoice,
+    appendMobileVoiceRoomTranscript,
     _appendMobileLiveTrace,
     _appendMobilePrimaryWorkerProcess,
     _appendMobileProcess,
@@ -30,14 +31,18 @@ export function createMobileVoiceRuntime(context = {}) {
     _mergeMobileMediaIntoMessage,
     _mergeMobileSessionThreadWithLocal,
     _mobileAssistantWorkStartedAt,
+    _mobileHistoryForServer,
     _mobileMediaKind,
     _mobileToolLabel,
     _mobileToolResultLabel,
     _mobileWorkerStatusLabel,
     _moveMobileVisibleAnswerIntoWorkflowTrace,
     _newMobileClientRequestId,
+    _findLatestAssistantTurn,
+    _mapServerMessageToMobile,
     _normalizeMobileApproval,
     _normalizeMobileFile,
+    _normalizeMobileMedia,
     _normalizeMobileMediaList,
     _normalizeMobileVoiceWorkgroup,
     _notifyMobileChatVoiceUpdate,
@@ -50,9 +55,11 @@ export function createMobileVoiceRuntime(context = {}) {
     _pmLoadApprovalProcessRun,
     _readMobileActiveRun,
     _recordMobileChatError,
+    _rebindMobileCodexBridgeOwnerSession,
     _rememberMobileActiveRun,
     _rememberMobileLastChatSession,
     _renderAgentVoicePicker,
+    _renderMobileChatSessionNow,
     _renderMobileMediaGallery,
     _renderMobileRichArtifacts,
     _restoreMobileVoiceWorkgroupsForSession,
@@ -76,13 +83,19 @@ export function createMobileVoiceRuntime(context = {}) {
     escapeHtml,
     getVoicePreviewDragStyle,
     getVoicePreviewGestureOutcome,
+    getDeviceToken,
     invalidateMobileDrawerSessions,
     isCurrentGateway,
     loadMobileApprovals,
     loadMobileChatSession,
+    loadMobileChatRunStatus,
+    loadMobileSubagentDetail,
     loadMobileSubagents,
     loadVoiceStatus,
+    mobileChatRuntimeAdapter,
     mobileGatewayFetch,
+    mobileGatewayTextFetch,
+    updateMobileChatSessionHistory,
     mountThinkingOrbWhenReady,
     notifyMobileModelChanged,
     openDrawer,
@@ -94,10 +107,13 @@ export function createMobileVoiceRuntime(context = {}) {
     registerAgentVoicePickerOnSaved,
     renderMobileHeader,
     resolveMobileSessionGateway,
+    resolveMobileVoiceRoom,
     setMobileActiveGatewayTarget,
     stopMobileMainChat,
     streamChat,
+    streamVoiceAgentInputMobile,
     streamSubagentChat,
+    createVoiceInterruptionEvent,
     transcribeVoiceAudio,
     window,
     wireHeaderActions,
@@ -1325,7 +1341,7 @@ export function createMobileVoiceRuntime(context = {}) {
       const agentId = String(participant.agentId || participant.id || '').trim();
       if (!agentId) return null;
       const detail = participant.voice && participant.label
-        ? participan
+        ? participant
         : await loadMobileSubagentDetail(agentId).catch(() => null);
       const label = _voiceRoomParticipantLabel(detail || participant);
       const voiceProfile = participant.voice || detail?.voice || detail?.raw?.voice || null;
@@ -1838,7 +1854,7 @@ export function createMobileVoiceRuntime(context = {}) {
           _ensureMobileRealtimeAgentTurnOrder(sid);
         }
         _persistMobileThreadSnapshot(sid);
-        _renderRecent();
+        __pmVoice?.renderRecent?.();
         _renderMobileChatSessionNow(sid);
         _notifyMobileChatVoiceUpdate(sid, { reason: 'voice_room_handoff_user_transcript', force: true });
       }
@@ -2325,7 +2341,7 @@ export function createMobileVoiceRuntime(context = {}) {
     const host = document.getElementById('pm-chat-voice-inline');
     return !!(
       shell
-      && hos
+      && host
       && !shell.hidden
       && !host.hidden
       && host.dataset?.pmVoiceMounted === '1'
@@ -2615,7 +2631,7 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _setMobileVoiceToolActive(active, key = '', payload = {}) {
-    const calls = __pmVoice.activeVoiceToolCalls instanceof Se
+    const calls = __pmVoice.activeVoiceToolCalls instanceof Set
       ? __pmVoice.activeVoiceToolCalls
       : (__pmVoice.activeVoiceToolCalls = new Set());
     const normalized = _mobileVoiceToolKey(payload, key);
@@ -2953,7 +2969,7 @@ export function createMobileVoiceRuntime(context = {}) {
       try { return new URL(raw).hostname.replace(/^www\./i, ''); } catch {}
     }
     const last = raw.split(/[\\/]/).filter(Boolean).pop() || raw;
-    return las
+    return last
       .replace(/\.[a-z0-9]{1,6}$/i, (ext) => ext.replace('.', ' dot '))
       .replace(/[_-]+/g, ' ')
       .replace(/\s+/g, ' ')
@@ -3048,6 +3064,14 @@ export function createMobileVoiceRuntime(context = {}) {
     return true;
   }
 
+  function _voiceWorkerOutputBusy() {
+    return !!(
+      __pmRealtimeAgent?.activeResponse
+      || __pmVoice?.realtimeSpeechActiveResponse
+      || __pmVoice?.speaking
+    );
+  }
+
   async function _speakMobileRealtimeAgentMilestone(text, options = {}) {
     const spoken = _cleanVoiceSpeechText(text);
     if (!spoken || __pmVoice.dictation !== 'milestone') return;
@@ -3090,7 +3114,6 @@ export function createMobileVoiceRuntime(context = {}) {
           }],
         },
       }));
-      if (!sent) return false;
       dc.send(JSON.stringify({
         type: 'response.create',
         response: {
@@ -3189,6 +3212,13 @@ export function createMobileVoiceRuntime(context = {}) {
     const token = getDeviceToken?.();
     if (token) headers['X-Pairing-Token'] = token;
     return headers;
+  }
+
+  async function _synthesizeVoiceAudio(payload = {}) {
+    return mobileGatewayFetch('/api/voice/tts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 
   function _voiceDebug(event, data = {}) {
@@ -4202,7 +4232,7 @@ export function createMobileVoiceRuntime(context = {}) {
         enqueue(text) {
           const t = String(text || '').trim();
           if (!t) return;
-          const fetched = synthesizeVoiceAudio(buildChunkBody(t)).catch((err) => {
+          const fetched = _synthesizeVoiceAudio(buildChunkBody(t)).catch((err) => {
             _voiceDebug('tts-stream-fetch-failed', { provider: ttsProvider, message: err?.message || String(err) });
             return null;
           });
@@ -4328,10 +4358,10 @@ export function createMobileVoiceRuntime(context = {}) {
         const totalChunkChars = Math.max(1, chunks.reduce((sum, chunk) => sum + chunk.length, 0));
         let completedChunkChars = 0;
         _voiceDebug('tts-fetch-start', { provider: ttsProvider, voiceId: xaiVoice, delivery: useUrl ? 'url' : 'base64', chunks: chunks.length });
-        let nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[0]));
+        let nextFetch = _synthesizeVoiceAudio(buildChunkBody(chunks[0]));
         for (let ci = 0; ci < chunks.length; ci++) {
           const audio = await nextFetch;
-          if (ci + 1 < chunks.length) nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[ci + 1]));
+          if (ci + 1 < chunks.length) nextFetch = _synthesizeVoiceAudio(buildChunkBody(chunks[ci + 1]));
           _voiceDebug('tts-fetch-ok', { provider: ttsProvider, chunk: ci, mimeType: audio?.mimeType || '', hasBase64: !!audio?.audioBase64, hasUrl: !!(audio?.audioUrl || audio?.url) });
           __pmVoice.lyricPlayback = {
             text,
@@ -4694,7 +4724,7 @@ export function createMobileVoiceRuntime(context = {}) {
         shouldAbort ? 'warn' : 'info',
         asSteer
           ? (transcriptText ? `Voice steer: ${transcriptText}` : `Voice steer: ${intent}`)
-          : shouldAbor
+          : shouldAbort
           ? (transcriptText ? `Voice interruption: ${intent} - ${transcriptText}` : `Voice interruption: ${intent}`)
           : (transcriptText ? `Voice interruption: ${intent} - ${transcriptText}` : `Voice interruption: ${intent}`),
         eventExtra,
@@ -4971,7 +5001,7 @@ export function createMobileVoiceRuntime(context = {}) {
             __pmVoice.targetSessionLabel = 'Mobile - Chat';
             __pmVoice.targetSessionChannel = 'mobile';
             __pmVoice.targetSessionForced = true;
-            _paintVoiceTarget?.();
+            __pmVoice?.paintTarget?.();
           }
           invalidateMobileDrawerSessions('mobile');
           refreshMobileDrawerSessions({ force: true, channel: 'mobile' }).catch(() => {});
@@ -5021,7 +5051,7 @@ export function createMobileVoiceRuntime(context = {}) {
               voiceInterruptionEventId: eventId || undefined,
             });
             _persistMobileThreadSnapshot(workSid);
-            _renderRecent();
+            __pmVoice?.renderRecent?.();
           }
         }
         if (reply && !alreadySpoken) {

@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const activity = read('web-ui/src/tool-activity.js');
+const connectorLogo = read('web-ui/src/features/connectors/connector-logo-runtime.js');
 const chatCss = read('web-ui/src/styles/mobile-composer-stack.css');
 const mobileCss = read('web-ui/src/styles/mobile.css');
 
@@ -47,6 +48,10 @@ assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expos
 assert.match(activity, /tool-activity-status-icon/, 'tool results must expose a compact status indicator');
 assert.match(activity, /export function renderToolActivityIcon/, 'tool rows must expose the shared icon renderer');
 assert.match(activity, /data-tool-icon/, 'tool icons must identify their mapped category');
+assert.match(activity, /renderConnectorLogo\(activity, esc\)/, 'tool icons must prefer a connector logo when one is available');
+assert.match(connectorLogo, /github:\s*'github'/, 'GitHub must use the bundled connector logo');
+assert.match(connectorLogo, /vercel:\s*'vercel'/, 'Vercel must use the bundled connector logo');
+assert.match(connectorLogo, /connectorIdFromCandidate/, 'connector tool names and explicit connector ids must resolve through one helper');
 assert.match(activity, /state === 'succeeded' \? ''/, 'successful tool rows must not render a repeated checkmark');
 assert.match(chatCss, /\.pm-trace-thought-group/, 'thought disclosure styling must be present in the chat component owner');
 assert.match(chatCss, /\.pm-trace-thought-body[\s\S]*?width:\s*100%[\s\S]*?margin-left:\s*0/, 'thought body must remain full width without a nested rail');
@@ -59,8 +64,12 @@ assert.match(chatCss, /\.pm-trace-compaction\s*\{/, 'chat-owned compaction styli
 assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
 assert.match(chatCss, /phosphor-circle-notch\.svg/, 'live activity spinners must use the packaged icon asset');
 assert.match(chatCss, /@keyframes pm-trace-loading-icon-rotate[\s\S]*?rotate: 360deg/, 'live activity spinners must animate as a centered rotation');
-assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong/, 'active tool summaries must use the live shimmer treatment');
-assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong[\s\S]*?-webkit-text-fill-color:\s*transparent[\s\S]*?background:\s*linear-gradient\(/, 'active tool summaries must clip an explicit shimmer gradient instead of resolving currentColor to transparent');
+assert.match(renderer, /class="t-think" data-pm-trace-summary-key=/, 'live tool summaries must use the two-layer thinking-state markup');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.t-think-text::before/, 'active tool summaries must use the live shimmer treatment');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.t-think-text::before[\s\S]*?content:\s*attr\(data-text\)[\s\S]*?background-image:\s*linear-gradient\(/, 'active tool summaries must clip an explicit shimmer gradient to the current label');
+assert.match(chatCss, /\.pm-trace-tool-group:not\(\[data-pm-trace-live-current="1"\]\) \.t-think-text::before/, 'completed tool summaries must disable the shimmer layer');
+assert.match(chatCss, /\.t-think-text\.is-exit[\s\S]*?transform:\s*translateY\(-8px\)[\s\S]*?filter:\s*blur\(2px\)/, 'outgoing thinking labels must exit upward with blur');
+assert.match(renderer, /animateThinkingTextSwap\(node, previousLabel\)/, 'mobile summary updates must use the outgoing/incoming thinking transition');
 assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
 assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces must use the mobile font token');
 assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');
@@ -70,5 +79,6 @@ assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-famil
 assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?margin:\s*0[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)[\s\S]*?font-weight:\s*420/, 'visible thought prose must match final-response typography');
 assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*13px[\s\S]*?font-weight:\s*650/, 'tool summaries must use the stronger chat typography');
 assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?color:\s*var\(--pm-muted\)/, 'inactive tool summaries must use the same muted gray token as their tool icon');
+assert.match(mobileCss, /\.pm-trace-tool-body \.tool-activity-connector-logo[\s\S]*?width:\s*1\.08em[\s\S]*?height:\s*1\.08em/, 'connector logos must stay aligned while being slightly larger than regular tool icons');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');

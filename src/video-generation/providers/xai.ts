@@ -1,6 +1,5 @@
-import { getConfig } from '../../config/config.js';
 import { getConfiguredProviderConfig } from '../../media-generation/provider-credentials.js';
-import { getValidXAIRuntimeCredentials, isXAIConnected } from '../../auth/xai-oauth.js';
+import { resolveXAIMediaRuntime } from '../../media-generation/xai-runtime.js';
 import type {
   VideoGenerationProvider,
   VideoGenerationResolvedRequest,
@@ -12,7 +11,6 @@ import {
   fetchBinaryAsset,
   getVideoGenerationConfig,
   persistGeneratedVideo,
-  resolveSecretReference,
   resolveVideoInput,
 } from '../utils.js';
 
@@ -55,39 +53,9 @@ function getApiBase(): string {
   return (configured || DEFAULT_ENDPOINT).replace(/\/+$/, '');
 }
 
-function getApiKey(): string | undefined {
-  const providerCfg = getXAIProviderConfig();
-  return resolveSecretReference(providerCfg.api_key) || process.env.XAI_API_KEY;
-}
-
-function getConfiguredAuthMode(): string {
-  const providerCfg = getXAIProviderConfig();
-  const explicit = String(providerCfg.auth_mode || providerCfg.authType || '').trim();
-  if (/^oauth/i.test(explicit)) return 'oauth';
-  if (explicit) return explicit;
-  return isXAIConnected(getConfigDir(), String(providerCfg.accountId || '').trim() || undefined) ? 'oauth' : 'api_key';
-}
-
-function getConfigDir(): string {
-  return getConfig().getConfigDir();
-}
-
-async function getBearerToken(): Promise<string | undefined> {
-  if (getConfiguredAuthMode() === 'oauth') {
-    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
-    const creds = await getValidXAIRuntimeCredentials(getConfigDir(), accountId);
-    return creds.api_key;
-  }
-  return getApiKey();
-}
-
 async function getRequestRuntime(): Promise<{ bearerToken?: string; baseUrl: string }> {
-  if (getConfiguredAuthMode() === 'oauth') {
-    const accountId = String(getXAIProviderConfig().accountId || '').trim() || undefined;
-    const creds = await getValidXAIRuntimeCredentials(getConfigDir(), accountId);
-    return { bearerToken: creds.api_key, baseUrl: creds.base_url };
-  }
-  return { bearerToken: await getBearerToken(), baseUrl: getApiBase() };
+  const runtime = await resolveXAIMediaRuntime(getApiBase());
+  return { bearerToken: runtime.bearerToken, baseUrl: runtime.baseUrl };
 }
 
 function resolveDefaultModel(): string {
@@ -130,7 +98,7 @@ export class XAIVideoGenerationProvider implements VideoGenerationProvider {
 
   async isAvailable(): Promise<boolean> {
     try {
-      return Boolean(await getBearerToken());
+      return Boolean((await resolveXAIMediaRuntime(getApiBase())).bearerToken);
     } catch {
       return false;
     }

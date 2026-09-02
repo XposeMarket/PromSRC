@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+
+const sourcePages = read('web-ui/src/mobile/mobile-pages.js');
+const sourceShell = read('web-ui/src/mobile/mobile-shell.js');
+const sourceCss = read('web-ui/src/styles/mobile.css');
+const sourceRouter = read('web-ui/src/mobile/mobile-router.js');
+const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedShell = read('generated/public-web-ui/static/mobile/mobile-shell.js');
+const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
+
+assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedShell, sourceShell, 'generated mobile-shell.js must mirror source');
+assert.equal(generatedCss, sourceCss, 'generated mobile.css must mirror source');
+
+for (const id of ['pm-chat-mode-launcher', 'pm-chat-mode-voice', 'pm-chat-mode-keyboard']) {
+  assert.match(sourcePages, new RegExp(`id="${id}"`), `chat markup must include ${id}`);
+}
+assert.match(sourceShell, /keyboard:\s*'<svg/, 'mobile shell must provide the keyboard icon');
+assert.match(sourcePages, /form class="pm-composer[\s\S]*pm-composer-mode-hidden[\s\S]*aria-hidden="true" inert/, 'chat composer must start behind the mode launcher');
+assert.match(sourcePages, /function setChatComposerMode\(open,/, 'chat must have an explicit composer mode state transition');
+assert.match(sourcePages, /setChatComposerMode\(false, \{[\s\S]*reason: 'scroll'/, 'upward scroll must close an idle composer');
+assert.match(sourcePages, /const keyboardOpen = document\.body\?\.classList\?\.contains\('pm-keyboard-open'\)/, 'scroll close must respect the keyboard-open state');
+assert.match(sourcePages, /const onComposerModeScrollIntent = \(\) => \{[\s\S]*composerModeScrollIntentUntil/, 'composer auto-hide must require a real scroll gesture');
+assert.match(sourcePages, /if \(\(window\.performance\?\.now\?\.\(\) \|\| 0\) > composerModeScrollIntentUntil\) return;/, 'layout-induced scroll must not close the composer');
+assert.match(sourcePages, /const transitionIgnoreMs = reason === 'keyboard' \? 1800 : 420/, 'keyboard open must ignore delayed iOS layout scroll');
+assert.match(sourcePages, /const keyboardFocusHandoff = _pmKbFocusActive[\s\S]*document\.activeElement === input/, 'composer auto-hide must respect keyboard focus ownership');
+assert.match(sourcePages, /const focusChatComposerInput = \(\) => \{[\s\S]*input\.focus\(\{ preventScroll: true \}\)/, 'keyboard mode must focus the composer without moving the scroll anchor');
+assert.match(sourcePages, /reason: 'keyboard',[\s\S]{0,220}focusChatComposerInput\(\)/, 'keyboard launcher must open the native keyboard');
+assert.match(sourcePages, /const lockedScrollTop = composerModeScrollLockTop/, 'composer mode transitions must preserve the exact scroll position');
+assert.match(sourcePages, /!composerOwnsKeyboard && Math\.abs\(shift\) >= 2/, 'keyboard hand-off must not animate the transcript under the composer');
+assert.match(sourcePages, /chatComposerShiftAnimation\?\.cancel\?\.\(\);[\s\S]*_pmKbApp\.style\.setProperty\('--pm-keyboard-offset'/, 'keyboard focus must cancel a competing transcript shift');
+assert.match(sourcePages, /if \(keyboardViewportSettled && !_pmKbViewportMode\)/, 'keyboard viewport mode must be classified once after settling');
+assert.match(sourcePages, /composer\.style\.getPropertyValue\(property\) !== value/, 'keyboard geometry writes must be idempotent across scroll frames');
+assert.doesNotMatch(sourcePages, /_pmKbAnchorComposer\(visualBottom\)/, 'keyboard scrolling must not apply a second per-frame transform anchor');
+assert.match(sourcePages, /const keyboardHeightOffset = vv[\s\S]*layoutHeight - visualHeight/, 'keyboard height must ignore visualViewport page-pan offsetTop');
+assert.match(sourcePages, /if \(_pmKbFocusActive && _pmKbViewportMode\) \{[\s\S]*_pmKbScheduleComposerPositionRepair\(\);[\s\S]*return;/, 'locked keyboard mode must repair only large scroll displacement without re-running the flicker-prone anchor pass');
+assert.match(sourcePages, /const _pmKbComposerViewportProperties = \[[^\]]*'top'/, 'keyboard-owned composer must clear its explicit top anchor during teardown');
+assert.match(sourcePages, /top: `\$\{top\}px`,[\s\S]*bottom: 'auto'/, 'keyboard-owned composer must use an explicit top anchor instead of static-position bottom anchoring');
+assert.match(sourcePages, /const jumpToLatest = \(\) => \{[\s\S]*_scrollChat\(body\);[\s\S]*requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => _scrollChat\(body\)\)\)/, 'latest-message control must force the shared bottom anchor after render and layout');
+assert.match(sourcePages, /function _scrollChat\(bodyEl\) \{[\s\S]*forceBottom: true/, 'latest-message control must use the force-bottom scroll path');
+assert.match(sourcePages, /reason: 'voice-close'/, 'exiting voice must restore the launcher mode');
+assert.match(sourcePages, /_toggleChatVoiceMode\(\{ autoStart: true \}\)/, 'voice launcher must enter voice mode with auto-start');
+assert.match(sourceCss, /\.pm-chat-mode-launcher\s*\{/, 'mobile CSS must define the launcher rail');
+assert.match(sourceCss, /\.pm-chat-mode-launcher\s*\{[\s\S]*position: fixed;/, 'launcher must stay fixed to the viewport chrome while the page scrolls');
+assert.match(sourceCss, /#pm-composer\.pm-composer-mode-hidden[\s\S]*clip-path: inset\(0 0 0 86%/, 'mobile CSS must morph the hidden composer from the keyboard side');
+assert.match(sourceCss, /#pm-composer:not\(\.pm-composer-mode-hidden\):is\([\s\S]*clip-path: none;/, 'expanded composer must release the launcher clip and keep its card radius');
+assert.match(sourceCss, /#pm-composer\.is-voice-active[\s\S]*clip-path: none !important/, 'voice mode must escape the collapsed composer clip');
+assert.match(sourceCss, /\.pm-keyboard-open #pm-composer:not\(\.pm-composer-mode-hidden\)[\s\S]*transition: none !important[\s\S]*clip-path: none !important/, 'keyboard hand-off must finish the composer morph without flicker');
+assert.doesNotMatch(sourceCss, /pm-chat-mode-launcher-active[\s\S]*pm-new-chat-context-dock/, 'launcher mode must not hide the new-chat selectors');
+assert.match(sourceCss, /\.pm-chat-mode-button\s*\{[\s\S]*inset 0 1px \.7px rgba\(255,255,255,\.10\)/, 'launcher rims must use the subdued highlight');
+assert.match(sourceCss, /\.pm-chat-mode-button svg\s*\{[\s\S]*width: 23px;[\s\S]*color: #fff;[\s\S]*stroke-width: 2\.25/, 'launcher icons must be larger and bold white');
+assert.match(sourceCss, /--pm-lg-glass-fill:\s*rgba\(156, 162, 173, \.035\)/, 'mobile glass surfaces must define a light neutral translucent gray tint');
+assert.match(sourceCss, /--pm-lg-glass-blur:\s*2px/, 'resting mobile glass surfaces must keep the background legible through a shallow blur');
+assert.match(sourceCss, /--pm-lg-glass-open-blur:\s*7px/, 'the opened composer must use a stronger blur than resting glass');
+assert.match(sourceCss, /body\.pm-mobile-active \.pm-header \.pm-icon-btn,[\s\S]*body\.pm-mobile-active \.pm-chat-mode-button,[\s\S]*body\.pm-mobile-active \.pm-composer[\s\S]*backdrop-filter: blur\(var\(--pm-lg-glass-blur\)\)/, 'core glass surfaces must share the same blur material');
+assert.match(sourceCss, /\.pm-chat-composer-mode-open #pm-composer:not\(\.pm-composer-mode-hidden\)[\s\S]*var\(--pm-lg-glass-fill-strong\)/, 'open composer must use the denser gray glass fill');
+assert.match(sourceCss, /body\.pm-mobile-active \.pm-chat-mode-button \{[\s\S]*rgba\(170, 174, 184, \.08\) !important[\s\S]*backdrop-filter: blur\(var\(--pm-lg-glass-blur\)\)/, 'launcher buttons must keep a restrained gray veil and explicit blur');
+assert.match(sourceCss, /body\.pm-mobile-active \.pm-msheet\.is-reasoning \.pm-reasoning-track[\s\S]*var\(--pm-lg-glass-fill\) !important[\s\S]*backdrop-filter: blur\(var\(--pm-lg-glass-blur\)\)/, 'reasoning slider must use the same translucent glass material');
+assert.match(sourceCss, /body\.pm-mobile-active \.pm-composer \.pm-send,[\s\S]*body\.pm-mobile-active \.pm-composer \.pm-send::before[\s\S]*border-radius: 50% !important/, 'mobile send control must be circular like the voice control');
+assert.match(sourceCss, /\.pm-send:not\(\.is-voice\):not\(\.is-abort\) svg[\s\S]*width: 18px !important[\s\S]*height: 18px !important/, 'mobile send arrow must be larger without changing voice or abort icons');
+assert.match(sourceCss, /#pm-composer \.pm-composer-row > #pm-chat-mic-btn[\s\S]*width: 38px !important[\s\S]*height: 38px !important/, 'resting dictation control must match the resting send diameter');
+assert.match(sourceCss, /#pm-composer:is\(\.is-focused, \.has-attachments\) \.pm-composer-row > #pm-chat-mic-btn[\s\S]*width: 40px !important[\s\S]*height: 40px !important/, 'expanded dictation control must match the expanded send diameter');
+assert.match(sourceCss, /#pm-composer #pm-chat-mic-btn svg[\s\S]*width: 23px !important[\s\S]*height: 23px !important/, 'dictation glyph must be larger without changing its button');
+assert.match(sourceCss, /\.pm-composer:is\(\.is-focused, \.has-attachments\) \{[\s\S]*padding: 6px 10px 5px/, 'opened composer must use the compact two-row height');
+assert.match(sourceCss, /\.pm-composer:is\(\.is-focused, \.has-attachments\) \.pm-composer-input \{[\s\S]*min-height: 30px;[\s\S]*padding: 2px 6px 4px/, 'opened composer input must keep the compact text row');
+assert.match(sourceCss, /\.pm-file-changes-card \{[\s\S]*border-radius: 12px/, 'mobile end-of-turn file cards must use compact corners');
+assert.match(sourceCss, /\.pm-file-change-row \{[\s\S]*min-height: 26px;[\s\S]*padding: 4px 8px/, 'mobile end-of-turn file rows must use compact vertical spacing');
+assert.ok(sourcePages.includes('if (/[\\r\\n]/.test(query)) return null;'), 'skill autocomplete must keep spaces inside the query');
+assert.ok(sourcePages.includes(".replace(/[-_]+/g, ' ')"), 'selected skill labels must display hyphenated ids with spaces');
+assert.match(sourceCss, /pm-chat-voice-active \.pm-composer\.is-voice-active,[\s\S]*background-image: none !important;[\s\S]*clip-path: none !important;/, 'inline Voice must stay transparent after the shared glass finish');
+assert.match(sourceRouter, /slot\.dataset\.mobileRouteState = 'loading'/, 'mobile router must expose a loading route state');
+assert.match(sourceRouter, /slot\.dataset\.mobileRouteState = 'ready'/, 'mobile router must mark a route ready after its owner mounts');
+assert.match(sourceRouter, /const missingRouteSurface = !routePending && !routeReady/, 'mobile boot recovery must repair an incomplete shell');
+assert.match(sourceRouter, /slot\.dataset\.mobileRouteState === 'loading'\) safeRender\(\)/, 'a stalled lazy route must retry without a lifecycle event');
+assert.match(sourceRouter, /pm-mobile-route-loading-spinner/, 'mobile shell hand-off must show a loading surface instead of a blank page');
+assert.match(sourceCss, /\.pm-mobile-route-loading\s*\{/, 'mobile CSS must style the route loading surface');
+
+console.log('[test-mobile-composer-launcher] passed: launcher, keyboard focus, boot recovery, scroll lock, and generated parity');

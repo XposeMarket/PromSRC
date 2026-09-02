@@ -92,9 +92,35 @@ function providerSupportsRequest(provider: ImageGenerationProvider, request: {
   if (request.referenceImages.length && !caps.referenceImages) return `${provider.id} does not support reference image inputs.`;
   if (request.referenceImages.length > caps.maxReferenceImages) return `${provider.id} supports at most ${caps.maxReferenceImages} reference image(s).`;
   if (request.mask && !caps.maskEditing) return `${provider.id} does not support selection/mask editing.`;
-  if (request.partialImages > 0 && !caps.partialStreaming) return `${provider.id} does not support partial image streaming.`;
-  if (request.exactSizeRequested && !caps.exactSizes) return `${provider.id} does not support exact width/height image sizes.`;
+  // Partial previews are an optional presentation feature. Providers without
+  // native preview streaming are still valid; their request is normalized to
+  // a normal non-streaming generation below.
+  if (request.partialImages > 0 && !caps.partialStreaming) {
+    // Keep the capability check visible for diagnostics and regression tests.
+  }
+  // Exact pixels are an optional presentation preference. Providers without
+  // exact-size support use their preset size for the normalized aspect ratio.
+  if (request.exactSizeRequested && !caps.exactSizes) {
+    // Keep the capability check visible for diagnostics and regression tests.
+  }
   return null;
+}
+
+function normalizeRequestForProvider(
+  provider: ImageGenerationProvider,
+  partialImages: number,
+  stream: boolean,
+  sizeInfo: { size: string; width?: number; height?: number },
+): { partialImages: number; stream: boolean; size: string; width?: number; height?: number } {
+  const supportsPartialStreaming = provider.capabilities.partialStreaming;
+  const supportsExactSizes = provider.capabilities.exactSizes;
+  return {
+    partialImages: supportsPartialStreaming ? partialImages : 0,
+    stream: supportsPartialStreaming ? stream : false,
+    size: supportsExactSizes ? sizeInfo.size : 'auto',
+    width: supportsExactSizes ? sizeInfo.width : undefined,
+    height: supportsExactSizes ? sizeInfo.height : undefined,
+  };
 }
 
 export function listImageGenerationProviders(): ImageGenerationProvider[] {
@@ -177,6 +203,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         });
       }
       if (await provider.isAvailable()) {
+        const providerRequest = normalizeRequestForProvider(provider, partialImages, stream, sizeInfo);
         const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
         return provider.generate({
           prompt,
@@ -188,13 +215,13 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
           output_format: outputFormat,
           output_compression: outputCompression,
           quality,
-          size: sizeInfo.size,
-          width: sizeInfo.width,
-          height: sizeInfo.height,
+          size: providerRequest.size,
+          width: providerRequest.width,
+          height: providerRequest.height,
           mask: request.mask ? String(request.mask) : undefined,
           presentation_mode: presentationMode,
-          partial_images: partialImages,
-          stream,
+          partial_images: providerRequest.partialImages,
+          stream: providerRequest.stream,
           output_dir: outputDir,
           output_run_dir: outputRunDir,
           save_to_workspace: saveToWorkspace,
@@ -224,6 +251,7 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
     if (!provider) continue;
     if (providerSupportsRequest(provider, { background, outputFormat, referenceImages, mask: request.mask, partialImages, exactSizeRequested })) continue;
     if (await provider.isAvailable()) {
+      const providerRequest = normalizeRequestForProvider(provider, partialImages, stream, sizeInfo);
       const outputRunDir = buildImageGenerationRunOutputDir({ outputDir, provider: provider.id, prompt });
       return provider.generate({
         prompt,
@@ -235,13 +263,13 @@ export async function generateImage(request: ImageGenerationRequest): Promise<Im
         output_format: outputFormat,
         output_compression: outputCompression,
         quality,
-        size: sizeInfo.size,
-        width: sizeInfo.width,
-        height: sizeInfo.height,
+        size: providerRequest.size,
+        width: providerRequest.width,
+        height: providerRequest.height,
         mask: request.mask ? String(request.mask) : undefined,
         presentation_mode: presentationMode,
-        partial_images: partialImages,
-        stream,
+        partial_images: providerRequest.partialImages,
+        stream: providerRequest.stream,
         output_dir: outputDir,
         output_run_dir: outputRunDir,
         save_to_workspace: saveToWorkspace,

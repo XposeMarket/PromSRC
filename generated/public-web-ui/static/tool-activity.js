@@ -10,6 +10,8 @@
  * telemetry instead of adding a second technical panel to every row.
  */
 
+import { renderConnectorLogo } from './features/connectors/connector-logo-runtime.js';
+
 function compact(value, max = 120) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
@@ -407,6 +409,8 @@ function toolActivityIconKind(activity = {}) {
 
 export function renderToolActivityIcon(activity = {}, escapeHtml) {
   const esc = typeof escapeHtml === 'function' ? escapeHtml : (value) => String(value ?? '');
+  const connectorLogo = renderConnectorLogo(activity, esc);
+  if (connectorLogo) return connectorLogo;
   const kind = toolActivityIconKind(activity);
   const path = TOOL_ACTIVITY_ICON_PATHS[kind] || TOOL_ACTIVITY_ICON_PATHS.wrench;
   return `<svg class="tool-activity-tool-icon" data-tool-icon="${esc(kind)}" aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;

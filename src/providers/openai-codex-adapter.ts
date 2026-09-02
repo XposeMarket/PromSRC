@@ -152,9 +152,10 @@ function parseUsage(usage: any): ModelUsage | undefined {
 // Reasoning effort levels accepted by the Codex Responses API.
 // Maps Prometheus-internal "think" hints → the literal effort string sent in the request body.
 export const CODEX_EFFORT_MAP: Record<string, string> = {
-  none: 'none',
-  minimal: 'minimal',
-  fast: 'minimal',
+  // Recover legacy values as the lowest supported public effort.
+  none: 'low',
+  minimal: 'low',
+  fast: 'low',
   low: 'low',
   medium: 'medium',
   high: 'high',

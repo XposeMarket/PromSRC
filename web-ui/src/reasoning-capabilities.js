@@ -1,6 +1,6 @@
 // Browser mirror of src/providers/reasoning-capabilities.ts.
 const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
-const OPENAI_56 = ['none','low','medium','high','xhigh','max'];
+const OPENAI_56 = ['low','medium','high','xhigh','max'];
 const CODEX_56_ULTRA = [...OPENAI_56, 'ultra'];
 
 export function hasReasoningCapabilityPolicy(provider) {
@@ -14,17 +14,17 @@ export function reasoningCapability(provider, model) {
   if (id === 'openai_codex') {
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_56_ULTRA], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
-    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
-    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
-    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
     if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
     return { efforts: [] };
   }
   if (id === 'openai') {
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
-    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
-    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
-    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
     if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
     return { efforts: [] };
   }
@@ -39,7 +39,7 @@ export function reasoningCapability(provider, model) {
     return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
   }
   if (id === 'perplexity') return { efforts: ['low','medium','high'] };
-  if (id === 'xai') return { efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name) ? ['low','medium','high','xhigh'] : ['none','low','medium','high'] };
+  if (id === 'xai') return { efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'] };
   return { efforts: [] };
 }
 
@@ -48,18 +48,18 @@ export function effortOptions(provider, model, includeDefault = true) {
   return includeDefault ? ['', ...efforts] : efforts.slice();
 }
 
-// Shared presentation contract for the mobile and subagent selectors. Keep
-// the empty/default entry in the same position so keyboard, touch, and saved
-// reasoning routes all use identical terminology.
+// Shared presentation contract for the mobile and subagent selectors. The
+// selectable list contains real model effort levels only; provider-default is
+// still available to settings forms that explicitly request includeDefault.
 export function reasoningSelectorOptions(provider, model) {
-  const options = effortOptions(provider, model, true);
-  return options.length > 1 ? options : null;
+  const options = effortOptions(provider, model, false);
+  return options.length ? options : null;
 }
 
 export function formatReasoningSelectorLabel(value, provider) {
   const effort = String(value || '').trim().toLowerCase();
   const id = String(provider || '').trim().toLowerCase();
-  if (!effort) return id === 'anthropic' || id === 'xai' ? 'Auto' : 'None';
+  if (!effort) return 'Provider default';
   if (effort === 'xhigh') return 'X high';
   if (effort === 'max') return 'Max';
   if (effort === 'ultra') return 'Ultra';

@@ -32,8 +32,10 @@ assert.match(defs, /presentation_mode[\s\S]*foreground[\s\S]*background/, 'model
 
 // Registry validation and provider routing.
 assert.match(registry, /providerSupportsRequest\([\s\S]*?transparency[\s\S]*?maskEditing[\s\S]*?partialStreaming/, 'registry must route by provider capabilities');
-assert.match(registry, /partialImages > 0[\s\S]*partialStreaming/, 'partial previews must require provider support');
-assert.match(registry, /exactSizeRequested[\s\S]*exactSizes/, 'exact dimensions must require provider support');
+assert.match(registry, /partialImages > 0[\s\S]*partialStreaming/, 'partial preview capability must remain part of provider routing');
+assert.match(registry, /normalizeRequestForProvider[\s\S]*supportsPartialStreaming[\s\S]*partialImages/, 'providers without partial streaming must receive a normal non-streaming request');
+assert.match(registry, /exactSizeRequested[\s\S]*exactSizes/, 'exact-size capability must remain part of provider routing');
+assert.match(registry, /supportsExactSizes[\s\S]*sizeInfo\.size : 'auto'/, 'providers without exact-size support must receive a preset-size request');
 assert.match(registry, /Mask editing requires at least one reference image edit target/, 'mask edits must require an edit target');
 assert.match(registry, /normalizeImagePresentationMode\(request\.presentation_mode\)/, 'registry must normalize presentation mode centrally');
 assert.match(utils, /normalizeImagePresentationMode[\s\S]*background[\s\S]*foreground/, 'presentation normalization must keep foreground as the direct-deliverable default');
@@ -49,6 +51,7 @@ assert.match(codex, /on_partial_image/, 'Codex OAuth provider must emit partial 
 assert.match(codex, /partial_images: request\.partial_images/, 'Codex OAuth provider must honor partial_images');
 assert.match(codex, /generation_id: generated\.id \|\| null/, 'final Codex images must retain generation identity');
 assert.match(xai, /transparency: false/, 'xAI provider must declare unsupported transparency');
+assert.match(xai, /grok-imagine-image-2\.0/, 'xAI image provider must target the current Imagine image model');
 assert.match(registry, /Prefer it when callers say "openai"/, 'OpenAI routing must prefer saved Codex OAuth before API-key auth');
 assert.match(mediaCredentials, /getConfiguredProviderAccountId/, 'media providers must resolve selected saved accounts');
 assert.match(mediaCredentials, /providerSettings[\s\S]*accountId/, 'media providers must merge account-scoped settings');
@@ -71,7 +74,8 @@ assert.match(preview, /workspacePath: workspacePath \|\| undefined/, 'preview pa
 assert.doesNotMatch(preview, /base64,/i, 'preview payload helper must not embed image bytes as base64');
 
 // Desktop/mobile presentation contracts.
-assert.match(desktop, /hasBackgroundImageGeneration[\s\S]*return false/, 'desktop foreground loader must be suppressed for background working assets');
+assert.match(desktop, /presentationMode !== 'foreground'/, 'desktop foreground loader must require explicit foreground presentation');
+assert.match(desktop, /presentationMode === 'background'\) return/, 'desktop foreground loader must ignore background working assets');
 assert.match(desktop, /activeImageCalls[\s\S]*observedImageActivity/, 'desktop image loading must track open image calls instead of a stale text match');
 assert.match(desktop, /!answerStarted && isGenerateImagePendingFromEntries/, 'desktop image loading must stop once the final response begins');
 assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop must render constrained cache-backed previews');
@@ -80,6 +84,8 @@ assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile must render co
 assert.match(mobileRenderer, /message\?\.finalResponseStarted === true[\s\S]*message\?\._pmFinalReceived === true/, 'mobile image loading must stop at the final-response boundary');
 assert.match(mobileRenderer, /activeImageCalls[\s\S]*observedImageActivity/, 'mobile image loading must reconcile duplicate process/live entries');
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile must replace matching partial previews by stable identity');
+assert.match(mobile, /presentationMode === 'foreground'/, 'mobile image stream filtering must require explicit foreground presentation');
+assert.match(mobileRenderer, /presentationMode !== 'foreground'/, 'mobile foreground loader must require explicit foreground presentation');
 assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not duplicate background working assets into the final gallery');
 assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image events must mark background working assets inline-only');
 
