@@ -159,6 +159,20 @@ function addExplicitTab(sessionId, title = '') {
   return true;
 }
 
+function ensureMainTab(sessionId, title = '') {
+  const sid = clean(sessionId);
+  if (!sid) return false;
+  const existing = state.tabs.find((tab) => tab.sessionId === sid);
+  if (existing) {
+    existing.title = clean(title) || existing.title || titleForSession(sid);
+    return false;
+  }
+  state.tabs.unshift({ sessionId: sid, title: clean(title) || titleForSession(sid) });
+  if (state.tabs.length > MAX_TABS) state.tabs.splice(0, state.tabs.length - MAX_TABS);
+  persistState();
+  return true;
+}
+
 function closeNativeSideIfOwned(sessionId = state.sideSessionId) {
   const sid = clean(sessionId);
   if (!sid) return;
@@ -238,15 +252,9 @@ function patchPaneHeader(header, sessionId) {
   if (!header) return;
   const meta = sessionMeta(sessionId);
   const title = header.querySelector('.side-chat-title');
-  const kicker = header.querySelector('.side-chat-kicker');
   header.classList.add('prom-multi-chat-session-header');
   header.dataset.multiChatSessionId = meta.sessionId;
   if (title) title.textContent = meta.title;
-  if (kicker) {
-    kicker.textContent = meta.projectName ? `Project · ${meta.projectName}` : '';
-    kicker.hidden = !meta.projectName;
-    kicker.setAttribute('aria-hidden', String(!meta.projectName));
-  }
 }
 
 function patchNativeSplitHeaders() {
@@ -328,7 +336,9 @@ function activateMain(sessionId, title = '') {
 
 function openSide(sessionId, title = '') {
   const sid = clean(sessionId);
-  if (!sid || sid === currentMainSessionId()) return;
+  const mainId = currentMainSessionId();
+  if (!sid || !mainId || sid === mainId) return;
+  ensureMainTab(mainId, titleForSession(mainId));
   addExplicitTab(sid, title);
   state.sideSessionId = sid;
   pendingSideSessionId = sid;
@@ -360,15 +370,18 @@ function reorderTabs(draggedId, targetId) {
 
 function ensureTabStrip() {
   let strip = document.getElementById('prom-multi-chat-tabs');
-  if (strip) return strip;
-  const chatView = document.getElementById('chat-view');
-  if (!chatView) return null;
+  const mainShell = document.querySelector('.main-shell');
+  if (!mainShell) return null;
+  if (strip) {
+    if (strip.parentElement !== mainShell) mainShell.insertBefore(strip, mainShell.firstElementChild);
+    return strip;
+  }
   strip = document.createElement('div');
   strip.id = 'prom-multi-chat-tabs';
   strip.className = 'prom-multi-chat-tabs';
   strip.setAttribute('role', 'tablist');
   strip.setAttribute('aria-label', 'Open chats');
-  chatView.prepend(strip);
+  mainShell.insertBefore(strip, mainShell.firstElementChild);
   return strip;
 }
 
@@ -377,6 +390,9 @@ function renderTabStrip() {
   if (!strip) return;
   const mainId = currentMainSessionId();
   state.mainSessionId = mainId;
+  if (state.sideSessionId && state.sideSessionId !== mainId) {
+    ensureMainTab(mainId, titleForSession(mainId));
+  }
   strip.innerHTML = state.tabs.map((tab) => {
     const meta = sessionMeta(tab.sessionId, tab.title);
     tab.title = meta.title;

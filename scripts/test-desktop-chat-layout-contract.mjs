@@ -148,6 +148,9 @@ const openSide = extractFunction(multiChat, 'function openSide(', 'function clos
 if (!/addExplicitTab\(sid, title\)/.test(activateMain) || !/addExplicitTab\(sid, title\)/.test(openSide)) {
   throw new Error('drag/drop pane activation must explicitly enroll the dragged session as a tab');
 }
+if (!/ensureMainTab\(mainId/.test(openSide)) {
+  throw new Error('opening a side chat must enroll the current main chat as a tab too');
+}
 if (!/revealNativeSide\(\)/.test(openSide) || !/refreshNativeSideSession\(sid\)/.test(openSide)) {
   throw new Error('opening the side pane must use the native split immediately and hydrate that existing session in place');
 }
@@ -203,17 +206,16 @@ if (!/projectName/.test(sessionMeta) || !/canvasProjectLabel/.test(sessionMeta))
   throw new Error('multi-chat session headers must retain project metadata from normal chat sessions');
 }
 const patchPaneHeader = extractFunction(multiChat, 'function patchPaneHeader(', 'function patchNativeSplitHeaders');
-if (!/side-chat-title/.test(patchPaneHeader)
-  || !/side-chat-kicker/.test(patchPaneHeader)
-  || !/Project ·/.test(patchPaneHeader)) {
-  throw new Error('native split headers must render the normal session title plus project context and no side-chat role label');
+if (!/side-chat-title/.test(patchPaneHeader) || /Project ·/.test(patchPaneHeader)) {
+  throw new Error('native split headers must preserve ChatPage\'s normal kicker/title hierarchy');
 }
 if (!/prom-multi-chat-session-header/.test(multiChatCss)
   || !/prom-multi-chat-native-split/.test(multiChatCss)) {
   throw new Error('native multi-chat split header styling is missing');
 }
-if (!/:has\(\.prom-multi-chat-tabs:not\(\[hidden\]\)\) #chat-messages/.test(multiChatCss)) {
-  throw new Error('chat tabs must sit above the native main/side headers');
+if (!/\.main-shell:has\(> \.prom-multi-chat-tabs:not\(\[hidden\]\)\) > #chat-context-header/.test(multiChatCss)
+  || /:has\(\.prom-multi-chat-tabs:not\(\[hidden\]\)\) #chat-messages/.test(multiChatCss)) {
+  throw new Error('chat tabs must replace the context header above the native main/side headers');
 }
 
 if (!/function reorderTabs\(/.test(multiChat) || !/state\.tabs\.splice\(to,\s*0,\s*tab\)/.test(multiChat)) {

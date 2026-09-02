@@ -35,7 +35,12 @@ const retryQueue = [];
 const sideCalls = [];
 const classNames = new Set();
 const strip = { setAttribute() {}, innerHTML: '', hidden: false };
-const chatView = { prepend(node) { this.child = node; } };
+const mainShell = {
+  firstElementChild: {},
+  insertBefore(node) {
+    node.parentElement = this;
+  },
+};
 
 globalThis.localStorage = {
   getItem(key) { return storage.get(key) ?? null; },
@@ -53,9 +58,11 @@ globalThis.document = {
     },
   } },
   addEventListener() {},
+  querySelector(selector) {
+    return selector === '.main-shell' ? mainShell : null;
+  },
   querySelectorAll() { return []; },
   getElementById(id) {
-    if (id === 'chat-view') return chatView;
     if (id === 'prom-multi-chat-tabs') return strip;
     return null;
   },
@@ -93,6 +100,8 @@ globalThis.window = {
 const runtimeModule = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const workspace = runtimeModule && window.__PROM_MULTI_CHAT_WORKSPACE;
 workspace.openSide('side-a');
+assert.deepEqual(workspace.getState().tabs.map((tab) => tab.sessionId), ['main', 'side-a'], 'opening a side chat must retain Main as the first tab');
+assert.equal(strip.parentElement, mainShell, 'the multi-chat tab rail must live in the main shell above the context header');
 const staleRetry = retryQueue.shift();
 assert.equal(typeof staleRetry, 'function', 'the first unavailable side open must schedule a retry');
 workspace.openSide('side-b');
