@@ -23,6 +23,29 @@ let sidebarCaptureBound = false;
 
 const ROBOT_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg>`;
 
+function setPromChatTitleOverride(title, subtitle = '', source = 'prom-bot') {
+  const sessionId = String(window.activeChatSessionId || window.state?.activeChatSessionId || window.agentSessionId || '').trim();
+  if (!sessionId) return;
+  window.__PROM_CHAT_TITLE_OVERRIDE = {
+    sessionId,
+    title: String(title || '').trim(),
+    subtitle: String(subtitle || '').trim(),
+    source,
+  };
+  window.syncChatTopbarTitle?.();
+  if (typeof window.refreshPromMultiChatTabs === 'function') window.refreshPromMultiChatTabs();
+  else window.dispatchEvent(new CustomEvent('prometheus:chat-title-override-changed'));
+}
+
+function clearPromChatTitleOverride(source = '') {
+  const current = window.__PROM_CHAT_TITLE_OVERRIDE;
+  if (!current || (source && current.source !== source)) return;
+  delete window.__PROM_CHAT_TITLE_OVERRIDE;
+  window.syncChatTopbarTitle?.();
+  if (typeof window.refreshPromMultiChatTabs === 'function') window.refreshPromMultiChatTabs();
+  else window.dispatchEvent(new CustomEvent('prometheus:chat-title-override-changed'));
+}
+
 function readBool(key, fallback = false) {
   try {
     const value = localStorage.getItem(key);
@@ -365,8 +388,12 @@ function restoreSubagentBoard() {
 }
 
 function closePromBotChat({ keepMode = true } = {}) {
-  if (!activePromBotAgentId && !document.getElementById(PROM_BOT_SURFACE_ID)) return;
+  if (!activePromBotAgentId && !document.getElementById(PROM_BOT_SURFACE_ID)) {
+    clearPromChatTitleOverride('prom-bot');
+    return;
+  }
   restoreSubagentBoard();
+  clearPromChatTitleOverride('prom-bot');
   activePromBotAgentId = '';
   window.promBotActiveAgentId = '';
   renderPromBotAgents();
@@ -396,11 +423,14 @@ async function openPromBotAgent(agentId) {
 
     activePromBotAgentId = id;
     window.promBotActiveAgentId = id;
+    const agent = promBotAgents.find((candidate) => String(candidate?.id || '') === id);
+    setPromChatTitleOverride(agent?.name || id, 'Prom Bot · Subagent chat', 'prom-bot');
     renderPromBotAgents();
     requestAnimationFrame(() => document.getElementById('subagent-chat-input')?.focus({ preventScroll: true }));
   } catch (error) {
     console.error('[Prom Bot] Could not open subagent chat:', error);
     restoreSubagentBoard();
+    clearPromChatTitleOverride('prom-bot');
     activePromBotAgentId = '';
     window.promBotActiveAgentId = '';
     renderPromBotAgents();
@@ -462,6 +492,8 @@ window.togglePromBotMode = () => setPromBotMode(!promBotMode);
 window.refreshPromBotAgents = refreshPromBotAgents;
 window.openPromBotAgent = openPromBotAgent;
 window.closePromBotChat = closePromBotChat;
+window.setPromChatTitleOverride = setPromChatTitleOverride;
+window.clearPromChatTitleOverride = clearPromChatTitleOverride;
 window.promBotActiveAgentId = '';
 window.promBotMode = false;
 

@@ -21,6 +21,14 @@ assert.match(source, /prom-bot-group-row chat-session-item job-item/);
 assert.match(source, /unified-agent-chat-shell prom-bot-group-shell/);
 assert.match(source, /unified-agent-chat-header/);
 assert.match(source, /unified-agent-chat-messages prom-bot-group-messages/);
+assert.match(source, /setPromChatTitleOverride\?\.\('Prom Bot group', group\.title, 'prom-bot-group'\)/,
+  'group rooms must project their identity into the shared chat title slot');
+assert.match(source, /clearPromChatTitleOverride\?\.\('prom-bot-group'\)/,
+  'group title projection must be cleared when leaving the room');
+assert.doesNotMatch(source, /<div class="side-chat-kicker">Prom Bot group<\/div>/,
+  'the group label must not be duplicated inside the room header');
+assert.doesNotMatch(source, /<div class="side-chat-title">\$\{esc\(group\.title\)\}<\/div>/,
+  'the group title must be projected into the main chat title area');
 assert.match(source, /window\.__PROM_UNIFIED_DESKTOP_CHAT/);
 assert.match(source, /#chat-view\.prom-bot-group-active/,
   'Prom Bot group chat must use the normal main-chat flex surface');

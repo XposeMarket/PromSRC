@@ -84,12 +84,18 @@ function sessionRecord(sessionId) {
   return sessionRecords().find((candidate) => recordSessionId(candidate) === sid) || null;
 }
 
+function titleOverrideForSession(sessionId) {
+  const override = window.__PROM_CHAT_TITLE_OVERRIDE;
+  if (!override || clean(override.sessionId) !== clean(sessionId)) return '';
+  return clean(override.title);
+}
+
 function sessionMeta(sessionId, fallbackTitle = '') {
   const sid = clean(sessionId);
   const record = sessionRecord(sid);
   const row = findSidebarRow(sid);
   const rowTitle = clean(row?.querySelector?.('.job-item-title, .chat-session-title, [data-session-title]')?.textContent || row?.textContent);
-  const title = record ? recordTitle(record) : (rowTitle || clean(fallbackTitle) || 'Chat');
+  const title = titleOverrideForSession(sid) || (record ? recordTitle(record) : (rowTitle || clean(fallbackTitle) || 'Chat'));
   const projectName = clean(record?.projectName || record?.canvasProjectLabel || '');
   return {
     sessionId: sid,
@@ -636,6 +642,7 @@ function installWorkspace() {
     patchNativeSplitHeaders();
     if (!document.getElementById('prom-multi-chat-tabs')) renderTabStrip();
   });
+  window.addEventListener('prometheus:chat-title-override-changed', renderTabStrip);
   render();
 }
 
@@ -654,6 +661,7 @@ window.__PROM_MULTI_CHAT_WORKSPACE = {
   selectSources: (sessionId, options = {}) => applyNativeSourceContext(sessionId, options),
   render,
 };
+window.refreshPromMultiChatTabs = renderTabStrip;
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installMultiChatWorkspace, { once: true });
 else installMultiChatWorkspace();

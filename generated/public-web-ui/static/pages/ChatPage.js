@@ -8531,7 +8531,15 @@ function syncChatTopbarTitle() {
 
   const sessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
   const session = sessions.find((candidate) => String(candidate?.id || '') === String(window.activeChatSessionId || '')) || null;
-  const sessionTitle = String(session?.title || '').trim() || 'New chat';
+  const titleOverride = window.__PROM_CHAT_TITLE_OVERRIDE;
+  const hasTitleOverride = Boolean(
+    String(titleOverride?.sessionId || '').trim()
+      && String(titleOverride.sessionId) === String(window.activeChatSessionId || '')
+  );
+  const sessionTitle = hasTitleOverride
+    ? String(titleOverride?.title || '').trim() || 'Chat'
+    : String(session?.title || '').trim() || 'New chat';
+  const titleOverrideSubtitle = hasTitleOverride ? String(titleOverride?.subtitle || '').trim() : '';
   const projectName = String(
     session?.projectName
       || session?.canvasProjectLabel
@@ -8545,9 +8553,9 @@ function syncChatTopbarTitle() {
   );
 
   if (titleEl) titleEl.textContent = sessionTitle;
-  if (subEl) subEl.textContent = isProjectSession && projectName
+  if (subEl) subEl.textContent = titleOverrideSubtitle || (isProjectSession && projectName
     ? `Project · ${projectName}`
-    : DEFAULT_CHAT_TOPBAR_SUBTITLE;
+    : DEFAULT_CHAT_TOPBAR_SUBTITLE);
   if (contextTitleEl) contextTitleEl.textContent = sessionTitle;
   if (contextProjectNameEl) contextProjectNameEl.textContent = projectName;
   if (contextProjectEl) {

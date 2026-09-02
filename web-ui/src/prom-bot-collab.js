@@ -369,6 +369,7 @@ function closeGroup() {
   restoreMainChatSurface();
   document.getElementById(GROUP_HOST_ID)?.remove();
   document.getElementById('chat-view')?.classList.remove('prom-bot-group-active');
+  window.clearPromChatTitleOverride?.('prom-bot-group');
   activeGroupId = '';
   window.promBotActiveGroupId = '';
   hideMentionMenu();
@@ -390,6 +391,7 @@ async function openGroup(groupId) {
   displaceMainChatSurface(chatView, host);
   activeGroupId = group.id;
   window.promBotActiveGroupId = group.id;
+  window.setPromChatTitleOverride?.('Prom Bot group', group.title, 'prom-bot-group');
   renderGroupRows();
   await renderGroupRoom();
 }
@@ -416,7 +418,7 @@ async function renderGroupRoom() {
   const sessionId = `prom_bot_group_${group.id}`;
   const historyHtml = stable.length ? renderer.renderHistory(stable, { sessionId, readonly: true, hideSideChatBoundary: true }) : '';
   const liveHtml = live.map((message) => renderer.renderLiveMessage({ ...message, _backgroundAgentLive: true, streaming: true }, { sessionId })).join('');
-  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="side-chat-kicker">Prom Bot group</div><div class="side-chat-title">${esc(group.title)}</div><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sessionId, secondarySurface: 'prom-bot-group', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
+  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sessionId, secondarySurface: 'prom-bot-group', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
   requestAnimationFrame(() => {
     const messages = document.getElementById('prom-bot-group-messages');
     if (messages) messages.scrollTop = messages.scrollHeight;
