@@ -87,6 +87,8 @@ const measurements = {
 // steer runtime-boundary repair adds a small local persistence/continuation
 // helper so queued steering no longer depends on lazy Voice hydration. The
 // full-screen drawer adds one local back control, which costs 39 gzip bytes.
-assert(measurements.gzipBytes <= 255100, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// The recovery continuity merge and invalidated-session cache generation fence
+// add a small, intentional client-state safety boundary to this slice.
+assert(measurements.gzipBytes <= 255350, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

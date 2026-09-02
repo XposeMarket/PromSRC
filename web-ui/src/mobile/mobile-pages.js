@@ -5463,6 +5463,33 @@ function _mergeMobileHistoryPageWithCurrent(_sessionId, olderHistory, currentThr
   return _reconcileMobileThreadOrder(merged);
 }
 
+function _mobileHistoryHasProtectedLocalContinuity(messages = []) {
+  return (Array.isArray(messages) ? messages : []).some((message) => message
+    && (
+      message.streaming === true
+      || message._pmFinalReceived === true
+      || message._pmRecoveryReplay === true
+      || message._pmOptimistic === true
+      || message._pmAdmissionPending === true
+    ));
+}
+
+function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
+  const serverRows = Array.isArray(mapped) ? mapped : [];
+  const localRows = Array.isArray(durableLocal) ? durableLocal : [];
+  if (!localRows.length) return false;
+  const durableServerCount = serverRows.filter((message) => message
+    && (message.role === 'user' || message.role === 'ai')).length;
+  // A transient empty/short response is not permission to erase a transcript
+  // already painted from the recovery cache. The server-side history write is
+  // itself merge-preserving, so retaining the richer local copy is safe here.
+  if (!durableServerCount || localRows.length > durableServerCount) return true;
+  // Equal-length snapshots can still replace a recovered row with a newer
+  // server row while the replay/final frame is settling. Keep the local
+  // continuity markers in that case as well.
+  return _mobileHistoryHasProtectedLocalContinuity(localRows);
+}
+
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const local = Array.isArray(localThread) ? localThread : [];
@@ -5471,8 +5498,12 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
     && !_isMobileHiddenVoiceDraftMessage(message, index));
   // `/api/sessions/:id` deliberately returns a bounded tail on mobile. Keep
   // every already-loaded local transcript row when that response advertises
-  // older history; otherwise a cold reopen can render and cache only the tail.
-  const base = options.preserveLocalHistory === true
+  // older history, or when recovery has a richer local snapshot. Otherwise a
+  // cold reopen can render and cache only the tail, and a late stale response
+  // can make recovered messages disappear while the user is typing.
+  const preserveLocalHistory = options.preserveLocalHistory === true
+    || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
+  const base = preserveLocalHistory
     ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
