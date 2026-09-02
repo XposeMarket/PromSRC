@@ -5050,9 +5050,6 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 .live-stream-text-refresh .msg-content.markdown-body > :last-child {
   animation: live-stream-text-refresh 240ms cubic-bezier(.16,1,.3,1) both;
 }
-.live-trace-summary-swap {
-  animation: live-trace-summary-swap 220ms cubic-bezier(.16,1,.3,1) both;
-}
 @keyframes live-stream-enter {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -5061,14 +5058,9 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
   from { opacity: .45; transform: translateY(2px); filter: blur(.25px); }
   to { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
-@keyframes live-trace-summary-swap {
-  from { opacity: .18; transform: translateY(4px); filter: blur(.35px); }
-  to { opacity: 1; transform: translateY(0); filter: blur(0); }
-}
 @media (prefers-reduced-motion: reduce) {
   .live-stream-enter,
-  .live-stream-text-refresh .msg-content.markdown-body > :last-child,
-  .live-trace-summary-swap {
+  .live-stream-text-refresh .msg-content.markdown-body > :last-child {
     animation: none !important;
   }
 }
@@ -5121,6 +5113,89 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
   color: var(--text);
   font-size: 12px;
   font-weight: 800;
+}
+.live-turn-tool-summary strong.t-think {
+  position: relative;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-turn-tool-summary .t-think-sizer {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: transparent;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  visibility: hidden;
+}
+.live-turn-tool-summary .t-think-text {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform 150ms ease-in-out,
+    filter 150ms ease-in-out,
+    opacity 150ms ease-in-out;
+  will-change: transform, filter, opacity;
+}
+.live-turn-tool-group[data-live-trace-current="1"] .t-think-text::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+  background-image: linear-gradient(90deg,
+    transparent 0%,
+    transparent 40%,
+    #f5f5f5 50%,
+    transparent 60%,
+    transparent 100%);
+  background-size: 400% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-think-shimmer 2000ms linear infinite;
+}
+.live-turn-tool-group:not([data-live-trace-current="1"]) .t-think-text::before {
+  display: none;
+}
+.live-turn-tool-summary .t-think-text.is-exit {
+  transform: translateY(-8px);
+  filter: blur(2px);
+  opacity: 0;
+}
+.live-turn-tool-summary .t-think-text.is-enter-start {
+  transition: none;
+  transform: translateY(8px);
+  filter: blur(2px);
+  opacity: 0;
+}
+@keyframes t-think-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-turn-tool-summary .t-think-text {
+    transition: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
+  .live-turn-tool-summary .t-think-text::before {
+    display: none !important;
+  }
 }
 .live-turn-tool-summary em {
   color: var(--muted);

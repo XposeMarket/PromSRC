@@ -59,8 +59,12 @@ assert.match(chatCss, /\.pm-trace-compaction\s*\{/, 'chat-owned compaction styli
 assert.match(chatCss, /\.pm-trace-tool-body \.tool-activity-status-icon/, 'tool-result status styling must be scoped to the activity stream');
 assert.match(chatCss, /phosphor-circle-notch\.svg/, 'live activity spinners must use the packaged icon asset');
 assert.match(chatCss, /@keyframes pm-trace-loading-icon-rotate[\s\S]*?rotate: 360deg/, 'live activity spinners must animate as a centered rotation');
-assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong/, 'active tool summaries must use the live shimmer treatment');
-assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.pm-trace-tool-summary strong[\s\S]*?-webkit-text-fill-color:\s*transparent[\s\S]*?background:\s*linear-gradient\(/, 'active tool summaries must clip an explicit shimmer gradient instead of resolving currentColor to transparent');
+assert.match(renderer, /class="t-think" data-pm-trace-summary-key=/, 'live tool summaries must use the two-layer thinking-state markup');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.t-think-text::before/, 'active tool summaries must use the live shimmer treatment');
+assert.match(chatCss, /\.pm-trace-tool-group\[data-pm-trace-live-current="1"\] \.t-think-text::before[\s\S]*?content:\s*attr\(data-text\)[\s\S]*?background-image:\s*linear-gradient\(/, 'active tool summaries must clip an explicit shimmer gradient to the current label');
+assert.match(chatCss, /\.pm-trace-tool-group:not\(\[data-pm-trace-live-current="1"\]\) \.t-think-text::before/, 'completed tool summaries must disable the shimmer layer');
+assert.match(chatCss, /\.t-think-text\.is-exit[\s\S]*?transform:\s*translateY\(-8px\)[\s\S]*?filter:\s*blur\(2px\)/, 'outgoing thinking labels must exit upward with blur');
+assert.match(renderer, /animateThinkingTextSwap\(node, previousLabel\)/, 'mobile summary updates must use the outgoing/incoming thinking transition');
 assert.match(chatCss, /tool-activity-status-icon\[data-status="failed"\]::before/, 'failed tool status marks must be geometrically centered');
 assert.match(mobileCss, /--pm-chat-font:\s*var\(--pm-font\)/, 'chat surfaces must use the mobile font token');
 assert.match(mobileCss, /\.pm-bubble\s*\{[\s\S]*?font-family:\s*var\(--pm-chat-font\)/, 'user and assistant bubbles must share the chat font');

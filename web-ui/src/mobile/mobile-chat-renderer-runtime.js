@@ -5,6 +5,7 @@ import {
   toolActivitySummary,
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
+import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -941,13 +942,13 @@ export function createMobileChatRendererRuntime(context = {}) {
         const progressSummary = isSummaryThought && isLiveThought ? _mobileTraceProgressSummary(group.entries) : '';
         const durationMs = _mobileTraceGroupDurationMs(group.entries, { live: isLiveThought });
         const summaryMarkup = progressSummary
-          ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${escapeHtml(progressSummary)}</strong></div>`
+          ? `<div class="pm-trace-thought-summary" aria-live="polite"><strong class="t-think" data-pm-trace-summary-key="${escapeHtml(_mobileTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
           : '';
         const bodyEntries = group.entries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
         const bodyHtml = bodyEntries.length
           ? `<div class="pm-trace-thought-body"><div class="pm-live-trace">${bodyEntries.map(_renderMobileLiveTraceEntry).join('')}</div></div>`
           : '';
-        return `<div class="pm-trace-thought-group" data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
+        return `<div class="pm-trace-thought-group"${isLiveThought && progressSummary ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}" data-thought-duration-ms="${durationMs}">
           ${summaryMarkup}
           ${bodyHtml}
         </div>`;
@@ -971,7 +972,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
         <summary class="pm-trace-tool-summary">
           <span class="pm-trace-tool-icon${isLiveCurrent ? ' is-live' : ''}" aria-hidden="true">${isLiveCurrent ? '' : renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escapeHtml)}</span>
-          <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
+          <strong class="t-think" data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
         </summary>
@@ -2524,7 +2525,12 @@ export function createMobileChatRendererRuntime(context = {}) {
           if (stable?.node && stable.key === key && stable.node !== node) {
             node.replaceWith(stable.node);
           } else if (!stable || stable.key !== key) {
-            node.classList.add('pm-trace-summary-swap');
+            const previousLabel = String(
+              stable?.node?.querySelector?.('.t-think-text')?.textContent
+              || stable?.node?.textContent
+              || '',
+            ).trim();
+            if (previousLabel) animateThinkingTextSwap(node, previousLabel);
           }
         });
         if (stablePendingImageBatch) {

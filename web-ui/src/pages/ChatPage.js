@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
@@ -12669,7 +12669,7 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
-        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+        <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
@@ -13865,6 +13865,8 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const seen = seenBySession[key] || (seenBySession[key] = new Set());
   const summaryKeysBySession = window.__pmLiveTraceSummaryKeysBySession || (window.__pmLiveTraceSummaryKeysBySession = {});
   const summaryKeys = summaryKeysBySession[key] || (summaryKeysBySession[key] = {});
+  const summaryLabelsBySession = window.__pmLiveTraceSummaryLabelsBySession || (window.__pmLiveTraceSummaryLabelsBySession = {});
+  const summaryLabels = summaryLabelsBySession[key] || (summaryLabelsBySession[key] = {});
   document.querySelectorAll('[data-live-entry-id]').forEach((node) => {
     const id = String(node.getAttribute('data-live-entry-id') || '').trim();
     if (!id) return;
@@ -13877,10 +13879,15 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
     const groupKey = node.closest('details.live-turn-tool-group')?.getAttribute('data-live-trace-group') || '';
     const labelKey = String(node.getAttribute('data-live-trace-summary-key') || '').trim();
     if (!groupKey || !labelKey) return;
+    const currentLabel = String(node.querySelector('.t-think-text')?.textContent || node.textContent || '').trim();
     if (summaryKeys[groupKey] !== labelKey) {
-      node.classList.add('live-trace-summary-swap');
+      const previousLabel = String(summaryLabels[groupKey] || '').trim();
+      if (previousLabel && currentLabel && previousLabel !== currentLabel) {
+        animateThinkingTextSwap(node, previousLabel);
+      }
       summaryKeys[groupKey] = labelKey;
     }
+    if (currentLabel) summaryLabels[groupKey] = currentLabel;
   });
   const streaming = document.getElementById('streaming-text-content');
   const afterTextLen = String(streaming?.textContent || '').length;
