@@ -970,6 +970,18 @@ type MainChatStreamState = {
 const mainChatStreams = new Map<string, MainChatStreamState>();
 const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+// Token deltas and provider-internal stream events are already delivered live
+// through SSE. Retaining every one for reconnect replay makes a long tool turn
+// grow the gateway heap for no user-visible benefit. Keep structural lifecycle
+// events in the replay buffer; a reconnect can still recover tool boundaries,
+// progress, and the terminal result.
+const MAIN_CHAT_STREAM_EPHEMERAL_EVENTS = new Set([
+  'heartbeat',
+  'token',
+  'thinking_delta',
+  'reasoning_summary_delta',
+  'model_stream_event',
+]);
 // A stream/lease without a running runtime can exist briefly while a caller is
 // wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
@@ -1092,6 +1104,13 @@ function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStrea
   finishMainChatStream(sessionId, stream.streamId);
 }
 
+function shouldRetainMainChatStreamEvent(type: string, data: any): boolean {
+  const normalized = String(type || '').trim().toLowerCase();
+  if (normalized !== 'model_stream_event') return !MAIN_CHAT_STREAM_EPHEMERAL_EVENTS.has(normalized);
+  const modelType = String(data?.event?.type || '').trim().toLowerCase();
+  return modelType === 'tool_call_start' || modelType === 'tool_call_done';
+}
+
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return null;
@@ -1102,16 +1121,19 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     at: Date.now(),
     data: cleanData,
   };
-  stream.events.push(frame);
-  if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
-    stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
+  const retain = shouldRetainMainChatStreamEvent(frame.type, frame.data);
+  if (retain) {
+    stream.events.push(frame);
+    if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
+      stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
+    }
   }
   stream.updatedAt = frame.at;
   if (isMainChatSemanticProgressEvent(frame.type)) {
     stream.lastSemanticProgressAt = frame.at;
     stream.lastSemanticEvent = frame.type;
   }
-  if (MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
+  if (retain && MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
     try {
       broadcastWS({
         type: 'main_chat_stream_event',
@@ -1123,7 +1145,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
         data: frame.data,
       });
     } catch {}
-  } else {
+  } else if (retain) {
     scheduleMainChatStreamUpdate(stream, frame);
   }
   return frame;
@@ -7417,10 +7439,25 @@ RULES:
 	      };
 	      const emitModelStreamEvent = (event: any) => {
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
-	        const type = String(event.type || '').trim();
-	        if (!type) return;
-          noteProviderPassEvent(type);
-	        sendSSE('model_stream_event', { event });
+        const type = String(event.type || '').trim().toLowerCase();
+        // The provider emits assistant/reasoning/argument deltas in addition
+        // to the dedicated token and thinking streams. Forwarding that whole
+        // firehose to every web client duplicates work in the gateway and UI.
+        // Tool boundaries are the only model events the chat surface needs.
+        if (type !== 'tool_call_start' && type !== 'tool_call_done') return;
+        noteProviderPassEvent(type);
+        const structuralEvent: Record<string, any> = {
+          type,
+          id: String(event.id || '').slice(0, 240),
+          name: String(event.name || '').slice(0, 240),
+          nativeType: String(event.nativeType || '').slice(0, 240),
+          provider: String(event.provider || generationOverride.providerId || '').slice(0, 120),
+          model: String(event.model || generationOverride.model || '').slice(0, 160),
+        };
+        if (type === 'tool_call_done' && event.arguments !== undefined) {
+          structuralEvent.arguments = String(event.arguments || '').slice(0, 8_000);
+        }
+        sendSSE('model_stream_event', { event: structuralEvent });
 	      };
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
       const providerToolSurface = buildProviderToolSurface(generationOverride);
