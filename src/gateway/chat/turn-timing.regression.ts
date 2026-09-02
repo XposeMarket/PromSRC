@@ -53,6 +53,9 @@ async function main(): Promise<void> {
     const chatRouterSource = fs.readFileSync(path.join(process.cwd(), 'src', 'gateway', 'routes', 'chat.router.ts'), 'utf8');
     assert.match(chatRouterSource, /turnTiming\.mark\(stage, \{ latencyElapsedMs: elapsedMs, \.\.\.extra \}\)/, 'latency SSE stages must also be persisted');
     assert.match(chatRouterSource, /markLatency\('first_visible_token',[\s\S]{0,500}providerTtftMs,/, 'first visible token telemetry must include provider-only TTFT');
+    assert.match(chatRouterSource, /captureModelUsageLogCursor\(\)/, 'interactive turns must capture usage boundaries without a historical scan');
+    assert.match(chatRouterSource, /readModelUsageEventsSince\(providerUsageCursor, sessionId, turnTiming\.turnId\)/, 'turn usage accounting must read the appended usage range');
+    assert.doesNotMatch(chatRouterSource, /providerUsageBeforeTurn = aggregateSessionModelUsage\(sessionId\)/, 'first-token path must not load the full usage history before generation');
 
     const rotationPath = path.join(root, 'rotated.log');
     const oversizedLegacyPath = path.join(root, 'oversized-legacy.log');
