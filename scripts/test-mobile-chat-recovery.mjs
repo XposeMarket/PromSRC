@@ -386,6 +386,11 @@ assert.match(
 );
 assert.match(pages, /mobileRecoveryOwners/, 'mobile recovery ownership must survive page rerenders within a tab');
 assert.match(pages, /const isMobileRecoveryOwner = \(\) => !mobileRecoveryDisposed[\s\S]{0,160}mobileRecoveryOwners/, 'a stale page recovery must stop mutating the current chat');
+assert.match(pages, /const mobilePageInstanceToken = `mobile_page_/, 'mobile page renders must have an instance ownership fence');
+assert.match(pages, /const isCurrentMobilePage = \(\) => !mobilePageDisposed[\s\S]{0,180}mobilePageInstanceToken/, 'same-session remounts must invalidate stale initial hydration');
+const initialHydrationStart = pages.indexOf('gatewayExecutionRefresh.then(() => loadMobileChatSession');
+const initialHydrationOwnerGuard = pages.indexOf('if (!isMobileRecoveryOwner()) return;', initialHydrationStart);
+assert.ok(initialHydrationStart >= 0 && initialHydrationOwnerGuard > initialHydrationStart, 'initial session hydration must be owned by the current page recovery instance');
 assert.match(pages, /function scheduleMobileRunRecovery\([\s\S]{0,260}if \(!isMobileRecoveryOwner\(\)\) return;/, 'a stale page recovery must not replace the current page timer');
 assert.match(pages, /const startingWasBusy = startingRun\.busy === true \|\| !!remembered/, 'recovery must detect a new run that started while an older recovery request was awaiting');
 assert.match(pages, /function _adoptMobileActiveRunState/, 'a tab observing another tab must adopt the server run identity before replay');
@@ -424,9 +429,12 @@ const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requeste
 assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
 assert.match(
   pages,
-  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn && status\?\.recovered !== true\)\)/,
-  'a transient inactive read must preserve the visible turn while another tab or the gateway may still be working',
+  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn\)\)/,
+  'an inactive or recovered read must preserve the visible turn until durable completion is proven',
 );
+assert.match(pages, /const localThreadBeforeClear = localThread\.slice\(\)/, 'inactive recovery must snapshot the live array before destructive cleanup');
+assert.match(pages, /const localThreadForMerge = completedDurableTurn \? localThread : localThreadBeforeClear/, 'inactive recovery must merge the pre-clear snapshot unless durable completion is proven');
+assert.doesNotMatch(pages, /localAiTurn\?\.streaming && !completedDurableTurn && status\?\.recovered !== true/, 'recovered status must not authorize dropping the visible live turn');
 assert.match(pages, /const recoveryStartedAt = Number\([\s\S]{0,260}localAiTurn\?\.timestamp/, 'inactive recovery must scope durable-history completion to the recovered turn boundary');
 assert.match(router, /stream: reconciliation\.stream \? \{[\s\S]{0,300}lastSeq:/, 'run status must expose the canonical stream cursor for cross-tab recovery');
 assert.match(pages, /addEventListener\('pageshow', runRecoveryOnReturn\)/, 'bfcache/app resume must trigger recovery');

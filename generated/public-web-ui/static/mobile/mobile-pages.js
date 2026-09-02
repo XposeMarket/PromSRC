@@ -5484,6 +5484,17 @@ function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
   // already painted from the recovery cache. The server-side history write is
   // itself merge-preserving, so retaining the richer local copy is safe here.
   if (!durableServerCount || localRows.length > durableServerCount) return true;
+  const latestServerUser = [...serverRows].reverse().find((message) => message?.role === 'user') || null;
+  const latestLocalUser = [...localRows].reverse().find((message) => message?.role === 'user') || null;
+  const serverUserTimestamp = Number(latestServerUser?.timestamp || 0) || 0;
+  const localUserTimestamp = Number(latestLocalUser?.timestamp || 0) || 0;
+  // Equal-sized pages can still be stale when a refresh races the durable
+  // history write for the newest prompt. The local prompt is the continuity
+  // boundary for the active turn, so do not let that older page roll it back.
+  if (localUserTimestamp > serverUserTimestamp + 500) return true;
+  const localRequestId = String(latestLocalUser?._clientRequestId || '').trim();
+  if (localRequestId && !serverRows.some((message) => message?.role === 'user'
+    && String(message?._clientRequestId || '').trim() === localRequestId)) return true;
   // Equal-length snapshots can still replace a recovered row with a newer
   // server row while the replay/final frame is settling. Keep the local
   // continuity markers in that case as well.
@@ -9527,6 +9538,13 @@ function _saveMobileLastChatContext(context = {}) {
 }
 
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
+  // A prior render can still have an in-flight history request when the route
+  // is remounted (especially after an iOS refresh/bfcache transition). The
+  // session id alone is not an ownership check: an old response for the same
+  // chat must not repaint the current page with its stale snapshot.
+  const mobilePageInstanceToken = `mobile_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobilePageDisposed = false;
+  __pmChat.mobilePageInstanceToken = mobilePageInstanceToken;
   await loadMobileChatRendererRuntime();
   receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
   await _ensureMobileQuestionController();
@@ -9593,6 +9611,9 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     }).catch(() => gatewayTarget)
     : Promise.resolve(gatewayTarget);
   const isVoiceRoomTranscript = voiceRoomTranscript === true && requestedSession.startsWith('voice_room_');
+  const isCurrentMobilePage = () => !mobilePageDisposed
+    && __pmChat.mobilePageInstanceToken === mobilePageInstanceToken
+    && __pmChat.activeSessionId === requestedSession;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
@@ -12008,7 +12029,7 @@ void main() {
     }
   };
   const showChatLoadRetry = (message = 'Chat is taking too long to load.') => {
-    if (__pmChat.activeSessionId !== requestedSession) return;
+    if (!isCurrentMobilePage()) return;
     if (__pmChat.threads[requestedSession]?.length) return;
     threadEl.innerHTML = `
       <div class="pm-chat-loading error">
@@ -12026,6 +12047,16 @@ void main() {
     invalidateMobileChatSessionCache(requestedSession);
     renderChatPage(page, { navigate, sessionId: requestedSession });
   });
+
+  // Register recovery ownership before starting the initial history request.
+  // This lets a later render invalidate the old request even if both renders
+  // target the same session id.
+  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobileRecoveryDisposed = false;
+  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
+  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
+    && isCurrentMobilePage()
+    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
 
   let initialSessionLoadPending = false;
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
@@ -12054,7 +12085,7 @@ void main() {
       fullProcess: false,
     }))
       .then((session) => {
-        if (__pmChat.activeSessionId !== requestedSession) return;
+        if (!isMobileRecoveryOwner()) return;
         clearChatLoadRetryTimer();
         hideReconnectingStatus();
         targetProjectId = String(session?.projectId || session?.project?.id || '').trim();
@@ -12098,7 +12129,7 @@ void main() {
         refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: false });
       })
       .catch((err) => {
-        if (__pmChat.activeSessionId !== requestedSession) return;
+        if (!isMobileRecoveryOwner()) return;
         clearChatLoadRetryTimer();
         if (!__pmChat.threads[requestedSession]?.length) {
           showChatLoadRetry(`Could not load chat: ${err.message || 'Unknown error'}`);
@@ -12116,12 +12147,6 @@ void main() {
     _restoreMobileVoiceWorkgroupsForSession(requestedSession).catch(() => {});
   }
 
-  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  let mobileRecoveryDisposed = false;
-  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
-  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
-    && __pmChat.activeSessionId === requestedSession
-    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
   let mobileRecoveryInFlight = null;
   let mobileRecoveryInFlightOptions = null;
   let queuedMobileRecovery = null;
@@ -12498,6 +12523,11 @@ void main() {
       const localThread = Array.isArray(__pmChat.threads?.[requestedSession])
         ? __pmChat.threads[requestedSession]
         : [];
+      // `_clearMobileLiveRunForSession` removes streaming rows in place. Keep
+      // a separate array for the final merge so a transient inactive/recovered
+      // read cannot erase the only copy of the current stream before the
+      // server snapshot is reconciled.
+      const localThreadBeforeClear = localThread.slice();
       const inactiveRecoveryClientRequestId = String(
         status?.run?.clientRequestId
         || status?.activeRun?.clientRequestId
@@ -12557,7 +12587,7 @@ void main() {
       ) || 0;
       const completedDurableTurn = recoveryStartedAt > 0
         && _mobileHistoryHasCompletedTurnSince(history, recoveryStartedAt, {});
-      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn && status?.recovered !== true)) {
+      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn)) {
         if (!isCurrentRecoveryTarget()) return;
         _adoptMobileActiveRunState(requestedSession, {
           run: status?.run || status?.activeRun || null,
@@ -12589,8 +12619,14 @@ void main() {
       if (!isCurrentRecoveryTarget()) return;
       _clearMobileLiveRunForSession(requestedSession);
       if (history.length) {
-        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
-          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+        // If durable history positively contains this turn's completion, the
+        // post-clear array is intentional: it drops the old streaming row and
+        // lets the durable answer win. Otherwise merge the pre-clear snapshot
+        // so a stale/equal-sized page cannot roll back newer local messages.
+        const localThreadForMerge = completedDurableTurn ? localThread : localThreadBeforeClear;
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThreadForMerge, {
+          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history)
+            || (!completedDurableTurn && _mobileHistoryHasProtectedLocalContinuity(localThreadBeforeClear)),
         });
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
@@ -16661,6 +16697,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   page._pmCleanup = () => {
     previousCleanup?.();
     releaseActiveChatRuntime();
+    mobilePageDisposed = true;
+    if (__pmChat.mobilePageInstanceToken === mobilePageInstanceToken) {
+      __pmChat.mobilePageInstanceToken = '';
+    }
     mobileRecoveryDisposed = true;
     if (__pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken) {
       delete __pmChat.mobileRecoveryOwners[requestedSession];
