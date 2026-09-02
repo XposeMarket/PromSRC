@@ -3108,6 +3108,7 @@
         <div id="canvas-publish-controls" style="display:none;align-items:center;gap:6px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)"></div>
         <div style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.06)">
           <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Code</button>
+          <button id="canvas-diff-btn" onclick="setCanvasMode('diff')" class="canvas-mode-btn" style="display:none;border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Diff</button>
           <button id="canvas-preview-btn" onclick="setCanvasMode('preview')" class="canvas-mode-btn" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Preview</button>
         </div>
         <div id="canvas-save-controls" style="display:flex;align-items:stretch;position:relative;z-index:1000">
@@ -3177,6 +3178,7 @@
           </div>
         </div>
         <div id="canvas-editor-wrap" style="display:none;flex:1;min-height:0;overflow:hidden"></div>
+        <div id="canvas-diff-wrap" class="canvas-diff-wrap" style="display:none;flex:1;min-height:0;overflow:auto"></div>
         <div id="canvas-creative-shell" class="creative-studio-shell" style="display:none">
           <div class="creative-studio-toolbar">
             <div class="creative-studio-title-wrap">
@@ -6708,7 +6710,12 @@ function getSessionLastMessageAt(s) {
 function getSessionSortTime(s) {
   const sidebarOrder = Number(s?.sidebarOrder);
   if (Number.isFinite(sidebarOrder)) return sidebarOrder;
-  return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
+  // Manual sidebar ranks use a millisecond*1000 clock so adjacent reorder
+  // operations can share the same timestamp. Keep the activity fallback in
+  // that same unit; otherwise a new local chat (plain milliseconds) sorts
+  // behind every existing manually-ranked chat until the next server refresh.
+  const activity = getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
+  return activity * 1000;
 }
 
 function _priorityTimestampMillis(value) {

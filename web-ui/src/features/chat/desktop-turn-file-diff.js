@@ -11,7 +11,7 @@ function decodeInlineString(value) {
 
 function turnFileTarget(row) {
   const handler = String(row?.getAttribute?.('onclick') || '');
-  const match = handler.match(/canvasPresentFile\(\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")\s*\)/);
+  const match = handler.match(/canvasPresentFile\(\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")(?:\s*,|\s*\))/);
   if (!match) return null;
 
   const path = decodeInlineString(match[1]);
@@ -36,8 +36,14 @@ function turnFileTarget(row) {
 
 export function openTurnFileDiff(row) {
   const target = turnFileTarget(row);
-  if (!target || typeof window.openCodingWorkspace !== 'function') return false;
-  window.openCodingWorkspace('', target);
+  if (!target || typeof window.canvasPresentFile !== 'function') return false;
+  // End-of-turn files belong in the already-open Canvas surface. The full
+  // Coding workspace modal is still available from the Sources panel, but it
+  // should not interrupt the chat just because a file-change row was clicked.
+  window.canvasPresentFile(target.path, target.displayPath, {
+    openMode: 'diff',
+    diffView: 'turn',
+  });
   return true;
 }
 

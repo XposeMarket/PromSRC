@@ -12067,8 +12067,9 @@ function renderFileChangeRow(file) {
   const canOpen = file.path && file.status !== 'deleted';
   const pathArg = encodeInlineJsString(file.path);
   const labelArg = encodeInlineJsString(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file');
+  const openDiffArgs = canOpen ? `, { openMode: 'diff', diffView: 'turn' }` : '';
   const openAttrs = canOpen
-    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg})}"`
+    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})}"`
     : 'aria-disabled="true"';
   return `
     <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>
@@ -19820,6 +19821,7 @@ let canvasPublishState = null;
 let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
 let canvasPreviewUpdateVersion = 0;
+let canvasDiffRequestVersion = 0;
 const canvasFolderExpanded = new Set();
 
 function sourcePanelContext() {
@@ -42752,6 +42754,19 @@ function canvasCloseTab(id, ev) {
 function setCanvasMode(mode) {
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!tab) return;
+  if (mode === 'diff') {
+    tab.openMode = 'diff';
+    tab.diffAvailable = true;
+    tab.diffView = tab.diffView || 'turn';
+    tab.mode = 'code';
+    applyCanvasViewMode('code', tab);
+    canvasRenderTabs();
+    return;
+  }
+  // Code and Preview are the normal editable/preview views. Leaving the diff
+  // view should return to the same Canvas tab rather than creating another
+  // surface or losing the file that was just reviewed.
+  if (tab.openMode === 'diff') delete tab.openMode;
   // sync editor -> tab before switching
   if (canvasEditor && tab.mode !== 'preview') tab.content = canvasEditor.getValue();
   tab.mode = mode;
@@ -42759,28 +42774,87 @@ function setCanvasMode(mode) {
   canvasRenderTabs();
 }
 
+function canvasDiffRoot(tab) {
+  return String(
+    tab?.diffRoot
+    || sourcePanelState?.codingContext?.root
+    || sourcePanelState?.gitRoot
+    || '',
+  ).trim();
+}
+
+function canvasDiffFilePath(tab) {
+  return String(tab?.diskPath || tab?.workspacePath || tab?.originalPath || '').trim();
+}
+
+async function renderCanvasDiffInto(host, tab) {
+  if (!host || !tab) return;
+  const filePath = canvasDiffFilePath(tab);
+  if (!filePath) {
+    host.innerHTML = '<div class="canvas-diff-loading">This file has no workspace path to compare.</div>';
+    return;
+  }
+  const requestVersion = ++canvasDiffRequestVersion;
+  host.innerHTML = '<div class="canvas-diff-loading">Loading diff…</div>';
+  try {
+    const params = new URLSearchParams({
+      file: filePath,
+      view: String(tab.diffView || 'turn'),
+      sessionId: String(window.activeChatSessionId || window.agentSessionId || ''),
+    });
+    const root = canvasDiffRoot(tab);
+    if (root) params.set('root', root);
+    const data = await api(`/api/coding/diff?${params.toString()}`, { timeoutMs: 12000, dedupe: false });
+    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
+    const { renderUnifiedDiffMarkup } = await loadCodingDiffRenderer();
+    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
+    const baseline = data?.baselineKind === 'none'
+      ? 'No baseline'
+      : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot'
+        ? 'Snapshot'
+        : data?.baselineKind === 'git-index'
+          ? 'Staged'
+          : 'Git working tree';
+    const additions = Number(data?.insertions) || 0;
+    const deletions = Number(data?.deletions) || 0;
+    host.innerHTML = `
+      <div class="canvas-diff-toolbar">
+        <span class="canvas-diff-title">Turn diff · ${escHtml(tab.name || filePath)}</span>
+        <span class="canvas-diff-meta">${escHtml(baseline)} · +${additions} · -${deletions}</span>
+      </div>
+      ${renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined })}`;
+  } catch (error) {
+    if (requestVersion !== canvasDiffRequestVersion) return;
+    host.innerHTML = `<div class="canvas-diff-loading">${escHtml(error?.message || 'Unable to load diff.')}</div>`;
+  }
+}
+
 function applyCanvasViewMode(mode, tab) {
   const creativeShell = document.getElementById('canvas-creative-shell');
   const browserShell = document.getElementById('canvas-browser-shell');
   const editorWrap = document.getElementById('canvas-editor-wrap');
+  const diffWrap = document.getElementById('canvas-diff-wrap');
   const previewShell = document.getElementById('canvas-preview-shell');
   const previewFrame = document.getElementById('canvas-preview-frame');
   const emptyState = document.getElementById('canvas-empty-state');
   const noFilesHint = document.getElementById('canvas-no-files-hint');
   const fileBrowser = document.getElementById('canvas-file-browser');
   const codeModeBtn = document.getElementById('canvas-code-btn');
+  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   updateCanvasWorkspaceChrome();
   if (isStructuredCreativeMode()) {
     if (creativeShell) creativeShell.style.display = 'flex';
     if (browserShell) browserShell.style.display = 'none';
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderCreativeWorkspace();
     syncCanvasSurfaceWidthLock(tab);
@@ -42790,12 +42864,14 @@ function applyCanvasViewMode(mode, tab) {
   if (isBrowserCanvasSurfaceActive()) {
     if (browserShell) browserShell.style.display = 'flex';
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderBrowserCanvasSurface();
     syncCanvasSurfaceWidthLock(tab);
@@ -42805,26 +42881,31 @@ function applyCanvasViewMode(mode, tab) {
   if (!tab) {
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'design') clearDesignSelectionContext();
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'flex';
     if (noFilesHint) noFilesHint.style.display = 'flex';
     if (fileBrowser) fileBrowser.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     syncCanvasSurfaceWidthLock(tab);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
   if (noFilesHint) noFilesHint.style.display = 'none';
   if (fileBrowser) fileBrowser.style.display = 'none';
+  if (diffWrap) diffWrap.style.display = 'none';
   if (normalizeCreativeMode(window.currentCreativeMode) !== 'design' || mode !== 'preview') {
     clearDesignSelectionContext();
   }
   // Image tabs always show in preview mode — hide code/preview toggle buttons
   if (tab.isImage || tab.isBinary) {
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
     if (previewFrame) { previewFrame.style.display = 'block'; previewFrame.style.flex = 'none'; }
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     canvasUpdatePreview();
     syncCanvasPreviewDeviceFrame();
@@ -42833,7 +42914,21 @@ function applyCanvasViewMode(mode, tab) {
   }
   // Restore buttons for non-image tabs
   if (codeModeBtn) codeModeBtn.style.display = '';
+  if (diffModeBtn) diffModeBtn.style.display = tab.diffAvailable || tab.openMode === 'diff' ? '' : 'none';
   if (previewModeBtn) previewModeBtn.style.display = '';
+  if (tab.openMode === 'diff') {
+    if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'flex';
+    if (previewShell) previewShell.style.display = 'none';
+    if (previewFrame) previewFrame.style.display = 'none';
+    if (codeModeBtn) codeModeBtn.classList.remove('active');
+    if (diffModeBtn) diffModeBtn.classList.add('active');
+    if (previewModeBtn) previewModeBtn.classList.remove('active');
+    renderCanvasDiffInto(diffWrap, tab).catch(() => {});
+    syncCanvasSurfaceWidthLock(tab);
+    return;
+  }
+  if (diffModeBtn) diffModeBtn.classList.remove('active');
   if (mode === 'preview') {
     if (editorWrap) editorWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
@@ -42866,10 +42961,12 @@ function canvasRenderTabs() {
     const label = getStructuredCreativeModeLabel(window.currentCreativeMode);
     tabsEl.innerHTML = `<div class="canvas-tab active" style="cursor:default"><span>${escHtml(label)}</span></div>`;
     const codeModeBtn = document.getElementById('canvas-code-btn');
+    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -42879,10 +42976,12 @@ function canvasRenderTabs() {
   if (isBrowserCanvasSurfaceActive()) {
     tabsEl.innerHTML = '<div class="canvas-tab active" style="cursor:default"><span>Live Browser</span></div>';
     const codeModeBtn = document.getElementById('canvas-code-btn');
+    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -42897,10 +42996,15 @@ function canvasRenderTabs() {
   `).join('') + `<button class="canvas-new-tab" onclick="canvasNewFile()" title="New file">+</button>`;
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   const codeModeBtn = document.getElementById('canvas-code-btn');
+  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   const saveBtn = document.getElementById('canvas-save-btn');
-  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || tab.mode !== 'preview');
-  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview'));
+  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || (tab.mode !== 'preview' && tab.openMode !== 'diff'));
+  if (diffModeBtn) {
+    diffModeBtn.style.display = tab?.diffAvailable || tab?.openMode === 'diff' ? '' : 'none';
+    diffModeBtn.classList.toggle('active', tab?.openMode === 'diff');
+  }
+  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview' && tab.openMode !== 'diff'));
   // Show save controls only for non-image files with a disk path. Keep the
   // original target disabled unless this tab came from an external file.
   const saveControls = document.getElementById('canvas-save-controls');
@@ -44470,6 +44574,10 @@ async function refreshOpenCanvasFiles(payload = {}, options = {}) {
         setCanvasEditorValue(tab.content);
         canvasEditor.setOption('mode', tab.language || getCanvasLang(tab.name));
       }
+      if (activeCanvasTabId === tab.id && tab.openMode === 'diff') {
+        const diffWrap = document.getElementById('canvas-diff-wrap');
+        if (diffWrap) renderCanvasDiffInto(diffWrap, tab).catch(() => {});
+      }
       refreshed += 1;
     } catch {
       tab.externalChanged = true;
@@ -44591,6 +44699,18 @@ async function canvasPresentFile(diskPath, label, options = {}) {
     if (dot) dot.style.display = 'block';
   };
   const name = label || diskPath.split('/').pop() || diskPath;
+  const requestedDiff = String(options.openMode || '').toLowerCase() === 'diff';
+  const requestedDiffRoot = String(options.diffRoot || '').trim();
+  const applyRequestedOpenMode = (candidate) => {
+    if (!candidate || !requestedDiff) return;
+    candidate.openMode = 'diff';
+    candidate.diffAvailable = true;
+    candidate.diffView = String(options.diffView || candidate.diffView || 'turn');
+    if (requestedDiffRoot) candidate.diffRoot = requestedDiffRoot;
+  };
+  const requestedOpenMode = requestedDiff
+    ? { openMode: 'diff', diffAvailable: true, diffView: String(options.diffView || 'turn'), ...(requestedDiffRoot ? { diffRoot: requestedDiffRoot } : {}) }
+    : {};
   let tab = canvasTabs.find((candidate) => candidate.diskPath === diskPath);
   if (tab) {
     try {
@@ -44630,6 +44750,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         tab.dirty = false;
       }
     } catch {}
+    applyRequestedOpenMode(tab);
     if (!canvasOpen && shouldAutoOpen) toggleCanvas();
     else markCanvasHasHiddenFile();
     canvasOpenTab(tab.id);
@@ -44670,6 +44791,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: dataUrl, savedContent: dataUrl,
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isImage: true,
@@ -44680,6 +44802,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: '', savedContent: '',
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isBinary: true,
@@ -44693,6 +44816,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: data.content, savedContent: data.content,
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: autoPreview ? 'preview' : 'code',
         language: getCanvasLang(name),
       });
