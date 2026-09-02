@@ -558,12 +558,16 @@ body.right-canvas-open .page-title {
   position: static;
   display: block;
   grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   width: 100%;
   height: 1px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold, var(--pm-gold, var(--brand))) 56%, transparent), color-mix(in srgb, var(--pm-shell-gold, var(--pm-gold, var(--brand))) 16%, transparent) 84%, transparent);
 }
-.sidebar.pages-collapsed .sidebar-pages-toggle :is(span, svg) { display: block; }
+.sidebar.pages-collapsed .sidebar-pages-toggle :is(span, svg) {
+  display: block;
+  grid-row: 1;
+}
 .sidebar.pages-collapsed .sidebar-pages-toggle span { grid-column: 1; }
 .sidebar.pages-collapsed .sidebar-pages-toggle svg {
   grid-column: 3;

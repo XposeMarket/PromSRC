@@ -608,7 +608,7 @@
   height: 44px;
   border-radius: 0;
   background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
-  filter: drop-shadow(0 0 12px rgba(214, 183, 94, .16));
+  filter: none;
 }
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .logo img {
   opacity: 0;
@@ -3137,7 +3137,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   gap: 8px;
 }
 
-:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo {
+:root:is([data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo {
   width: 44px;
   height: 44px;
   border-radius: 0;
