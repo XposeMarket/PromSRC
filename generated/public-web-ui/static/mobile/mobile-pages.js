@@ -17939,6 +17939,7 @@ const mobileVoicePageContext = Object.freeze(Object.defineProperties({}, {
   "loadMobileChatSession": { enumerable: true, get: () => loadMobileChatSession },
   "loadMobileSubagents": { enumerable: true, get: () => loadMobileSubagents },
   "loadVoiceStatus": { enumerable: true, get: () => loadVoiceStatus },
+  "mobileChatRuntimeAdapter": { enumerable: true, get: () => mobileChatRuntimeAdapter },
   "mobileGatewayFetch": { enumerable: true, get: () => mobileGatewayFetch },
   "mountThinkingOrbWhenReady": { enumerable: true, get: () => mountThinkingOrbWhenReady },
   "notifyMobileModelChanged": { enumerable: true, get: () => notifyMobileModelChanged },

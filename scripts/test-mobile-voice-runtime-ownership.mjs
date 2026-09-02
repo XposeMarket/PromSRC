@@ -29,12 +29,14 @@ assert.doesNotMatch(sourcePages, /function _createMobileXaiPlayback\s*\(/, 'xAI 
 assert.doesNotMatch(sourcePages, /const PM_VOICE_SETTINGS_KEY\s*=\s*/, 'Voice configuration must not remain in Chat owner');
 assert.match(sourcePages, /"_notifyMobileVoiceAgentConnection": \{ enumerable: true, get: \(\) => _notifyMobileVoiceAgentConnection \}/, 'Voice page context must expose the connection-status bridge');
 assert.match(sourcePages, /"_markMobileRealtimeAgentBackendReady": \{ enumerable: true, get: \(\) => _markMobileRealtimeAgentBackendReady \}/, 'Voice page context must expose the backend-ready bridge');
+assert.match(sourcePages, /"mobileChatRuntimeAdapter": \{ enumerable: true, get: \(\) => mobileChatRuntimeAdapter \}/, 'Voice page context must expose the shared chat runtime adapter');
 assert.match(sourcePages, /function _voiceRoomParticipantKey\(\.\.\.args\) \{ return _mobileVoiceRuntimeInvoke\('_voiceRoomParticipantKey', args\); \}/, 'Voice Room ownership must be a Voice runtime facade');
 assert.doesNotMatch(sourcePages, /function _voiceRoomParticipantKey\(participant\s*=\s*\{\}\)/, 'Voice Room ownership must not remain in Chat owner');
 assert.match(sourceVoicePage, /import \{ createMobileVoiceRuntime \} from ['"]\.\/mobile-voice-runtime\.js['"];/, 'Voice page must own runtime creation');
 assert.match(sourceVoicePage, /const runtime = createMobileVoiceRuntime\(baseContext\)/, 'Voice page must hydrate the runtime before rendering');
 assert.match(sourceRuntime, /const PM_VOICE_SETTINGS_KEY\s*=\s*/, 'Voice runtime entry must contain Voice configuration');
 assert.match(sourceRuntime, /from ['"]\.\/mobile-voice-realtime-runtime\.js['"];/, 'Voice runtime entry must statically own the deferred realtime implementation');
+assert.match(sourceRuntime, /    mobileChatRuntimeAdapter,\r?\n    mobileGatewayFetch,/, 'Voice runtime must receive the shared chat runtime adapter');
 assert.match(sourceRealtimeRuntime, /MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED/, 'Voice realtime runtime must contain realtime transport');
 assert.match(sourceRealtimeRuntime, /function _startMobileOpenAiRealtimeWebSocketSession\s*\(/, 'Voice realtime runtime must contain OpenAI realtime transport');
 

@@ -17732,8 +17732,8 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
    measured width keeps both controls centered on the device, including safe
    area layouts. */
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
-  width: 42px;
-  height: 42px;
+  width: 50px;
+  height: 50px;
   top: 50%;
   transform: translateY(-50%);
   border-radius: 50%;

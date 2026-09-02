@@ -82,6 +82,7 @@ export function createMobileVoiceRuntime(context = {}) {
     loadMobileChatSession,
     loadMobileSubagents,
     loadVoiceStatus,
+    mobileChatRuntimeAdapter,
     mobileGatewayFetch,
     mountThinkingOrbWhenReady,
     notifyMobileModelChanged,
