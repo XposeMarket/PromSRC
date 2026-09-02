@@ -17733,7 +17733,9 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
    area layouts. */
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
   width: 42px;
-  aspect-ratio: 1;
+  height: 42px;
+  top: 50%;
+  transform: translateY(-50%);
   border-radius: 50%;
 }
 
