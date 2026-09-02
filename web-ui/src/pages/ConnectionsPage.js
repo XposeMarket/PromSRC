@@ -6,6 +6,7 @@
  */
 
 import { api, ENDPOINTS } from '../api.js';
+import { getConnectorLogoUrl as getSharedConnectorLogoUrl } from '../features/connectors/connector-logo-runtime.js';
 import { escHtml, showToast } from '../utils.js';
 
 let CONNECTORS = [];
@@ -22,36 +23,8 @@ const oauthPollIntervals = new Map();
 let connectorViewLayoutObserver = null;
 let connectorViewLayoutFrame = null;
 
-// These are bundled Simple Icons brand marks, not generated monograms. The
-// mapping stays presentation-only so manifests and connection contracts remain
-// the source of truth for connector identity and behavior.
-const connectorLogoSlugs = Object.freeze({
-  ga4: 'googleanalytics',
-  github: 'github',
-  gmail: 'gmail',
-  google_drive: 'googledrive',
-  hubspot: 'hubspot',
-  instagram: 'instagram',
-  linkedin: 'linkedin',
-  notion: 'notion',
-  obsidian: 'obsidian',
-  reddit: 'reddit',
-  salesforce: 'salesforce',
-  slack: 'slack',
-  stripe: 'stripe',
-  tiktok: 'tiktok',
-  vercel: 'vercel',
-  x: 'x',
-});
-
 function getConnectorLogoUrl(connector) {
-  const slug = connectorLogoSlugs[connector?.id];
-  if (!slug) return '';
-  try {
-    return new URL(`../assets/connectors/${slug}.svg`, import.meta.url).href;
-  } catch {
-    return `../assets/connectors/${slug}.svg`;
-  }
+  return getSharedConnectorLogoUrl(connector?.id);
 }
 
 function getConnectorSurface() {

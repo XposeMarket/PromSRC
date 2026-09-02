@@ -8,6 +8,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
 const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const activity = read('web-ui/src/tool-activity.js');
+const connectorLogo = read('web-ui/src/features/connectors/connector-logo-runtime.js');
 const chatCss = read('web-ui/src/styles/mobile-composer-stack.css');
 const mobileCss = read('web-ui/src/styles/mobile.css');
 
@@ -47,6 +48,10 @@ assert.match(renderer, /aria-busy="true"/, 'streaming final responses must expos
 assert.match(activity, /tool-activity-status-icon/, 'tool results must expose a compact status indicator');
 assert.match(activity, /export function renderToolActivityIcon/, 'tool rows must expose the shared icon renderer');
 assert.match(activity, /data-tool-icon/, 'tool icons must identify their mapped category');
+assert.match(activity, /renderConnectorLogo\(activity, esc\)/, 'tool icons must prefer a connector logo when one is available');
+assert.match(connectorLogo, /github:\s*'github'/, 'GitHub must use the bundled connector logo');
+assert.match(connectorLogo, /vercel:\s*'vercel'/, 'Vercel must use the bundled connector logo');
+assert.match(connectorLogo, /connectorIdFromCandidate/, 'connector tool names and explicit connector ids must resolve through one helper');
 assert.match(activity, /state === 'succeeded' \? ''/, 'successful tool rows must not render a repeated checkmark');
 assert.match(chatCss, /\.pm-trace-thought-group/, 'thought disclosure styling must be present in the chat component owner');
 assert.match(chatCss, /\.pm-trace-thought-body[\s\S]*?width:\s*100%[\s\S]*?margin-left:\s*0/, 'thought body must remain full width without a nested rail');
@@ -74,5 +79,6 @@ assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?font-famil
 assert.match(chatCss, /\.pm-trace-thought-body \.pm-live-prose[\s\S]*?margin:\s*0[\s\S]*?font-size:\s*var\(--pm-chat-reading-size\)[\s\S]*?font-weight:\s*420/, 'visible thought prose must match final-response typography');
 assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?font-family:\s*var\(--pm-chat-font\)[\s\S]*?font-size:\s*13px[\s\S]*?font-weight:\s*650/, 'tool summaries must use the stronger chat typography');
 assert.match(mobileCss, /\.pm-trace-tool-summary strong[\s\S]*?color:\s*var\(--pm-muted\)/, 'inactive tool summaries must use the same muted gray token as their tool icon');
+assert.match(mobileCss, /\.pm-trace-tool-body \.tool-activity-connector-logo[\s\S]*?width:\s*1\.08em[\s\S]*?height:\s*1\.08em/, 'connector logos must stay aligned while being slightly larger than regular tool icons');
 
 console.log('[mobile-agent-activity-ui] live thoughts, collapsed tools, terminal status, and streaming response contract passed');

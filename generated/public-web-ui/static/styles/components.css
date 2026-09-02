@@ -5274,6 +5274,22 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 .tool-activity-tool-icon[data-tool-icon="image"],
 .tool-activity-tool-icon[data-tool-icon="video"] { color: color-mix(in srgb, #a78bfa 72%, var(--text)); }
 .tool-activity-tool-icon svg { display: block; width: 1em; height: 1em; }
+.tool-activity-connector-logo {
+  display: inline-block;
+  width: 1.08em;
+  height: 1.08em;
+  flex: 0 0 1.08em;
+  background: var(--connector-logo-color, currentColor);
+  -webkit-mask-image: var(--connector-logo-url);
+  mask-image: var(--connector-logo-url);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  vertical-align: middle;
+}
 .tool-activity-status-icon {
   display: inline-flex;
   width: 15px;
