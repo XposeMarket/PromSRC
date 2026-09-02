@@ -27,6 +27,8 @@ assert.doesNotMatch(sourcePages, /MOBILE_REALTIME_HANDOFF_RECOVERY_ENABLED/, 're
 assert.doesNotMatch(sourcePages, /function _startMobileOpenAiRealtimeWebSocketSession\s*\(/, 'OpenAI realtime transport must not remain in Chat owner');
 assert.doesNotMatch(sourcePages, /function _createMobileXaiPlayback\s*\(/, 'xAI realtime playback must not remain in Chat owner');
 assert.doesNotMatch(sourcePages, /const PM_VOICE_SETTINGS_KEY\s*=\s*/, 'Voice configuration must not remain in Chat owner');
+assert.match(sourcePages, /"_notifyMobileVoiceAgentConnection": \{ enumerable: true, get: \(\) => _notifyMobileVoiceAgentConnection \}/, 'Voice page context must expose the connection-status bridge');
+assert.match(sourcePages, /"_markMobileRealtimeAgentBackendReady": \{ enumerable: true, get: \(\) => _markMobileRealtimeAgentBackendReady \}/, 'Voice page context must expose the backend-ready bridge');
 assert.match(sourcePages, /function _voiceRoomParticipantKey\(\.\.\.args\) \{ return _mobileVoiceRuntimeInvoke\('_voiceRoomParticipantKey', args\); \}/, 'Voice Room ownership must be a Voice runtime facade');
 assert.doesNotMatch(sourcePages, /function _voiceRoomParticipantKey\(participant\s*=\s*\{\}\)/, 'Voice Room ownership must not remain in Chat owner');
 assert.match(sourceVoicePage, /import \{ createMobileVoiceRuntime \} from ['"]\.\/mobile-voice-runtime\.js['"];/, 'Voice page must own runtime creation');

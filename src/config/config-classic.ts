@@ -131,7 +131,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
         model: process.env.CODEX_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'gpt-image-2-medium',
       },
       xai: {
-        model: process.env.XAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'grok-imagine-image-quality',
+        model: process.env.XAI_IMAGE_MODEL ?? process.env.PROMETHEUS_IMAGE_MODEL ?? 'grok-imagine-image-2.0',
         endpoint: process.env.XAI_IMAGE_ENDPOINT ?? process.env.XAI_ENDPOINT ?? 'https://api.x.ai/v1',
         resolution: process.env.XAI_IMAGE_RESOLUTION ?? '1k',
       },

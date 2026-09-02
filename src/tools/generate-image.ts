@@ -133,7 +133,7 @@ export const generateImageTool = {
     aspect_ratio: 'Optional aspect ratio: landscape, square, or portrait',
     count: 'Optional number of images to generate at once (1-4)',
     provider: 'Optional provider override: auto, openai, openai_codex, or xai. openai may use either an OpenAI API key or saved OpenAI OAuth/Codex auth; use xai for Grok Imagine.',
-    model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
+    model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-2.0',
     background: 'Optional background mode: transparent, opaque, or auto. Use transparent for real alpha in generated PNG/WebP files.',
     output_format: 'Optional output file format: png, jpeg, or webp. Transparency requires png or webp; png is used when transparent is requested.',
     output_compression: 'Optional compression/quality control for JPEG/WebP where supported, 0-100',
@@ -174,7 +174,7 @@ export const generateImageTool = {
         enum: ['auto', 'openai', 'openai_codex', 'xai'],
         description: 'Provider override.',
       },
-      model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality' },
+      model: { type: 'string', description: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-2.0' },
       background: {
         type: 'string',
         enum: ['transparent', 'opaque', 'auto'],

@@ -389,9 +389,29 @@ function render() {
   // voice accents native in Blue/Violet while allowing the rest of the app to
   // share the Prometheus One gold component language.
   slot.dataset.mobilePage = page;
+  // The shell is created synchronously, but each route owner is lazy-loaded.
+  // Keep that hand-off explicit so a slow chunk cannot look like a valid empty
+  // page (and so resume recovery can distinguish a real route from a shell
+  // that never finished mounting).
+  slot.dataset.mobileRouteState = 'loading';
+  slot.dataset.mobileRouteStartedAt = String(Date.now());
+  slot.setAttribute('aria-busy', 'true');
+  slot.innerHTML = `
+    <div class="pm-mobile-route-loading" role="status" aria-live="polite">
+      <span class="pm-mobile-route-loading-spinner" aria-hidden="true"></span>
+      <span>Loading Prometheus…</span>
+    </div>
+  `;
   window.__pmMobileCleanup = () => {
     if (typeof slot._pmCleanup === 'function') slot._pmCleanup();
   };
+  // If a cold PWA launch loses its first lazy-chunk request, there may be no
+  // later focus/pageshow event to trigger recovery. Retry the hand-off once
+  // after the same window used by foreground recovery.
+  window.setTimeout(() => {
+    if (renderGeneration !== mobileRenderGeneration || slot.isConnected === false) return;
+    if (slot.dataset.mobileRouteState === 'loading') safeRender();
+  }, 8500);
   if (getDeviceToken()) {
     queueMicrotask(() => {
       try {
@@ -434,9 +454,9 @@ function render() {
     case 'tasks':     return owner.renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
     case 'settings':
       if (document.getElementById('settings-modal')) {
-        owner.renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
+        const chatRender = owner.renderChatPage(slot, { navigate: mobileNavigate, sessionId: null });
         openMobileSettings(arg ? decodeURIComponent(arg) : '');
-        return undefined;
+        return chatRender;
       }
       openMobileSettings(arg ? decodeURIComponent(arg) : '');
       return undefined;
@@ -450,6 +470,19 @@ function render() {
     case 'more':      return owner.renderMorePage(slot, { section: arg || '', navigate: mobileNavigate });
     default:          return owner.renderChatPage(slot, { navigate: mobileNavigate });
     }
+  }).then((result) => {
+    if (renderGeneration === mobileRenderGeneration && slot.isConnected !== false) {
+      slot.dataset.mobileRouteState = 'ready';
+      slot.removeAttribute('aria-busy');
+    }
+    return result;
+  }).catch((error) => {
+    // An old lazy render can reject after navigation. It no longer owns the
+    // document and must not replace the current route with a stale boot error.
+    if (renderGeneration !== mobileRenderGeneration || slot.isConnected === false) return undefined;
+    slot.dataset.mobileRouteState = 'error';
+    slot.removeAttribute('aria-busy');
+    throw error;
   });
 }
 
@@ -509,6 +542,15 @@ function recoverMobileBootSurface() {
   if (!isMobileRoute()) return;
   const root = document.getElementById('mobile-root');
   const route = mobileRouteFromLocation();
+  const needsPairing = !getDeviceToken() && !hasAnyGatewayCredential() && route.page !== 'pair';
+  const expectedPage = needsPairing ? 'pair' : route.page;
+  const slot = root?.querySelector('.pm-page');
+  const routePending = slot?.dataset?.mobileRouteState === 'loading';
+  const routeAge = Date.now() - Number(slot?.dataset?.mobileRouteStartedAt || 0);
+  const chatSurfaceReady = expectedPage !== 'chat' || !!slot?.querySelector('#pm-chat-body');
+  const routeReady = slot?.dataset?.mobileRouteState === 'ready'
+    && slot?.dataset?.mobilePage === expectedPage
+    && chatSurfaceReady;
   let targetedChat = false;
   if (route.page === 'chat' && route.arg) {
     try { targetedChat = Boolean(parseTargetNamespacedId(decodeURIComponent(route.arg))); } catch {}
@@ -517,7 +559,12 @@ function recoverMobileBootSurface() {
   // underneath it. Re-render targeted chats on resume/focus so route repair can
   // clear a stale unavailable-gateway banner without forcing the user to leave
   // the thread first.
-  if (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat) {
+  // Do not restart a route merely because its lazy owner is still loading; the
+  // loading surface is intentional. If it remains pending for eight seconds,
+  // retry it. A completed route with a missing chat body is always repairable.
+  const routeStalled = routePending && routeAge > 8000;
+  const missingRouteSurface = !routePending && !routeReady;
+  if (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat || routeStalled || missingRouteSurface) {
     safeRender();
   }
   if (getDeviceToken()) {

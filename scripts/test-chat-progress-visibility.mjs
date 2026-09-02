@@ -7,6 +7,7 @@ assert.equal(chatProgressVisibility({ type: 'thinking_delta', text: 'raw provide
 assert.equal(chatProgressVisibility({ type: 'thinking_delta', source: 'reasoning_summary', text: 'Checking files' }), 'summary');
 assert.equal(chatProgressVisibility({ type: 'reasoning_summary_delta', visibility: 'user' }), 'summary');
 assert.equal(chatProgressVisibility({ type: 'agent_thought', text: 'Inspecting the current layout' }), 'user');
+assert.equal(chatProgressVisibility({ type: 'agent_thought', visibility: 'summary', text: 'Inspecting the current layout' }), 'summary');
 assert.equal(chatProgressVisibility({ type: 'thinking', text: 'raw completed thought' }), 'private');
 assert.equal(chatProgressVisibility({ type: 'thinking', visibility: 'user', text: 'curated progress' }), 'user');
 assert.equal(chatProgressVisibility({ type: 'thinking', visibility: 'private' }), 'private');

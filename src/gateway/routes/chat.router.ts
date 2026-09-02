@@ -14976,7 +14976,7 @@ function buildVoiceToolDefinitions(): any[] {
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired image aspect ratio.' },
             count: { type: 'integer', minimum: 1, maximum: 4, description: 'How many separate image outputs to generate (1-4). Use > 1 for options or variations.' },
             provider: { type: 'string', enum: ['auto', 'openai', 'openai_codex', 'xai'], description: 'Provider override. auto picks the best available. Use xai for Grok Imagine.' },
-            model: { type: 'string', description: 'Optional model override, e.g. gpt-image-2-medium or grok-imagine-image-quality.' },
+            model: { type: 'string', description: 'Optional model override, e.g. gpt-image-2-medium or grok-imagine-image-2.0.' },
             background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Background mode. Use transparent for real alpha; Prometheus also infers this when the prompt asks for a transparent/no background sprite or cutout.' },
             output_format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Output format. Transparency requires png or webp; png is used when transparent is requested.' },
             quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Image generation quality.' },
@@ -14991,7 +14991,7 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_generate_video',
-        description: 'Generate a short AI video (MP4) using xAI Grok Imagine Video or another configured provider. Supports text-to-video, image-to-video, reference-to-video, video editing, and video extension. Use when the user asks to generate, create, or make a video/clip/animation. Hand off to Worker for HyperFrames/timeline/multi-clip editing work.',
+        description: 'Generate a short AI video (MP4) using xAI Grok Imagine Video. Supports text-to-video, image-to-video, reference-to-video, video editing, and video extension. Use when the user asks to generate, create, or make a video/clip/animation. Hand off to Worker for HyperFrames/timeline/multi-clip editing work.',
         parameters: {
           type: 'object',
           required: ['prompt'],
@@ -15009,7 +15009,7 @@ function buildVoiceToolDefinitions(): any[] {
             aspect_ratio: { type: 'string', enum: ['landscape', 'square', 'portrait'], description: 'Desired video aspect ratio.' },
             duration: { type: 'number', minimum: 1, maximum: 15, description: 'Video duration in seconds. xAI supports 1-15 for generation, max 10 for reference/extension.' },
             resolution: { type: 'string', enum: ['480p', '720p'], description: 'Video resolution.' },
-            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Provider override. Default auto.' },
+            provider: { type: 'string', enum: ['auto', 'xai'], description: 'Provider override. Default auto; use xai for Grok Imagine Video.' },
             model: { type: 'string', description: 'Optional video model override, e.g. grok-imagine-video.' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory. Default: generated/videos.' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the video only in Prometheus cache.' },

@@ -87,6 +87,14 @@
   --pm-lg-rim-saturate: 1;
   --pm-lg-rim-brightness: 1.04;
   --pm-lg-halo-width: 0px;
+  /* Shared neutral liquid-glass material. The gray tint keeps translucent
+     chrome legible over black without turning it into an opaque panel. */
+  --pm-lg-glass-fill: rgba(156, 162, 173, .035);
+  --pm-lg-glass-fill-strong: rgba(156, 162, 173, .065);
+  --pm-lg-glass-blur: 2px;
+  --pm-lg-glass-open-blur: 7px;
+  --pm-lg-glass-saturate: 1.02;
+  --pm-lg-glass-brightness: 1.01;
 }
 
 :root[data-theme="dark"] {
@@ -108,6 +116,8 @@
   --pm-shadow-md:     0 8px 22px rgba(0, 0, 0, .28);
   --pm-shadow-lg:     0 18px 48px rgba(0, 0, 0, .42);
   --pm-lg-lens-opacity: .48;
+  --pm-lg-glass-fill: rgba(170, 174, 184, .038);
+  --pm-lg-glass-fill-strong: rgba(170, 174, 184, .075);
 }
 
 :root[data-skin="blue"] {
@@ -424,6 +434,32 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-background-spawn-dock,
 body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-chip,
 body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-popover {
   position: fixed;
+}
+
+body.pm-mobile-active .pm-mobile-route-loading {
+  flex: 1 1 auto;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--pm-muted);
+  font-size: 15px;
+}
+body.pm-mobile-active .pm-mobile-route-loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--pm-muted) 28%, transparent);
+  border-top-color: var(--pm-orange);
+  border-radius: 50%;
+  animation: pm-mobile-route-loading-spin 700ms linear infinite;
+}
+@keyframes pm-mobile-route-loading-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active .pm-mobile-route-loading-spinner { animation: none; }
 }
 
 /* Document-scroll mode moves the page body while composer/tabbar chrome stays
@@ -6996,6 +7032,13 @@ html.pm-session-context-open * {
     border-radius var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
     min-height var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
+/* The keyboard controller and iOS visualViewport both update this surface
+   during the focus hand-off. Finish the mode morph immediately in that state
+   so clip-path/opacity transitions cannot race the fixed-position updates. */
+.pm-keyboard-open #pm-composer:not(.pm-composer-mode-hidden) {
+  transition: none !important;
+  clip-path: none !important;
+}
 /* iOS re-anchors every fixed element to the shrunken visual viewport when the
    keyboard opens. Remove the covered navigation until the keyboard closes so
    only the composer follows the visual viewport. */
@@ -9692,19 +9735,21 @@ html.pm-session-context-open * {
   left: 10px;
   right: 10px;
   border-radius: 28px;
-  padding: 10px 12px 9px;
+  /* Keep the opened composer compact: one text row plus the action row,
+     without the extra vertical space that made it read as three lines tall. */
+  padding: 6px 10px 5px;
 }
 .pm-composer:is(.is-focused, .has-attachments) .pm-composer-input {
-  min-height: 34px;
+  min-height: 30px;
   max-height: min(50dvh, 280px);
-  padding: 3px 6px 8px;
+  padding: 2px 6px 4px;
   align-self: stretch;
   overflow-wrap: anywhere;
 }
 .pm-composer:is(.is-focused, .has-attachments) .pm-composer-rich-preview {
-  min-height: 34px;
+  min-height: 30px;
   max-height: min(50dvh, 280px);
-  padding: 3px 6px 8px;
+  padding: 2px 6px 4px;
 }
 /* A retained draft does not keep the composer in its editing layout after the
    keyboard closes. Collapse back to the original pill and show one clipped
@@ -16819,7 +16864,9 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-cl
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked #pm-chat-thread {
   visibility: visible !important;
 }
-body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-composer.is-voice-active { clip-path: inset(1px 0 0); outline: 0 !important; }
+/* The docked voice layer is already transparent and full-bleed. Clipping its
+   first pixel creates the visible horizontal split above the dock. */
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-composer.is-voice-active { clip-path: none !important; outline: 0 !important; }
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
   --pm-inline-orb-drag-y: 0px;
   position: fixed !important;
@@ -17975,10 +18022,411 @@ body.pm-mobile-active .pm-tab svg {
   color: currentColor;
 }
 
+/* Chat mode launcher: keep the first-run chat surface to two compact glass
+   controls. The composer remains mounted behind the launcher so its measured
+   bottom clearance does not change when the user switches modes. */
+body.pm-mobile-active .pm-chat-mode-launcher {
+  position: fixed;
+  left: var(--pm-mobile-chrome-inset, 22px);
+  right: var(--pm-mobile-chrome-inset, 22px);
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px));
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 180ms ease, transform 300ms cubic-bezier(.22,.74,.22,1), visibility 0s linear 0s;
+}
+
+body.pm-mobile-active .pm-chat-mode-launcher[aria-hidden="true"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: scale(.94);
+  transition: opacity 180ms ease, transform 300ms cubic-bezier(.22,.74,.22,1), visibility 0s linear 300ms;
+}
+
+body.pm-mobile-active .pm-chat-mode-button {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 999px;
+  color: rgba(242,238,231,.82);
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.15) 0%, rgba(255,255,255,.025) 18%,
+      transparent 70%, rgba(255,255,255,.06) 100%),
+    rgba(255,255,255,.07);
+  box-shadow:
+    inset 0 1px .7px rgba(255,255,255,.10),
+    inset 0 -1px 1px rgba(255,255,255,.055),
+    0 8px 18px rgba(0,0,0,.22),
+    0 1px 4px rgba(0,0,0,.16);
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 300ms cubic-bezier(.22,.74,.22,1), opacity 180ms ease, background 180ms ease;
+}
+
+body.pm-mobile-active .pm-chat-mode-button:active {
+  transform: scale(.92);
+}
+
+body.pm-mobile-active .pm-chat-mode-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-orange) 70%, white);
+  outline-offset: 3px;
+}
+
+body.pm-mobile-active .pm-chat-mode-button svg {
+  width: 23px;
+  height: 23px;
+  color: #fff;
+  stroke: #fff;
+  stroke-width: 2.25;
+  pointer-events: none;
+}
+
+body.pm-mobile-active .pm-chat-mode-button-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+body.pm-mobile-active .pm-chat-mode-launcher.is-transitioning .pm-chat-mode-button--voice {
+  opacity: 0;
+  transform: translateX(22px) scale(.72);
+}
+
+body.pm-mobile-active .pm-chat-mode-launcher.is-transitioning .pm-chat-mode-button--keyboard {
+  opacity: 0;
+  transform: scale(.82);
+}
+
+body.pm-mobile-active #pm-composer.pm-composer-mode-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  clip-path: inset(0 0 0 86% round 999px);
+  transition:
+    opacity 180ms ease,
+    clip-path 300ms cubic-bezier(.22,.74,.22,1),
+    visibility 0s linear 300ms;
+}
+
+body.pm-mobile-active #pm-composer:not(.pm-composer-mode-hidden) {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  clip-path: inset(0 0 0 0 round 999px);
+  transition:
+    opacity 180ms ease,
+    clip-path 300ms cubic-bezier(.22,.74,.22,1),
+    visibility 0s linear 0s;
+}
+
+/* Once the composer has entered its editing layout, release the launcher's
+   pill-shaped clip. The composer owns its own 28px card radius in this state;
+   keeping the 999px clip here creates a second, visibly overlaid edge. */
+body.pm-mobile-active #pm-composer:not(.pm-composer-mode-hidden):is(
+  .is-focused,
+  .has-text,
+  .has-attachments,
+  .has-pending-question
+) {
+  clip-path: none;
+}
+
+/* Voice mode owns the composer surface after either launcher path. Keep the
+   inline voice runtime from inheriting the launcher's collapsed clip. */
+body.pm-mobile-active #pm-composer.is-voice-active {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  clip-path: none !important;
+}
+
+:root:not([data-theme="dark"]) body.pm-mobile-active .pm-chat-mode-button {
+  color: rgba(34,26,20,.74);
+  border-color: rgba(34,26,20,.07);
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.58) 0%, rgba(255,255,255,.16) 18%,
+      transparent 70%, rgba(255,255,255,.28) 100%),
+    rgba(255,255,255,.30);
+  box-shadow:
+    inset 0 1px .7px rgba(255,255,255,.30),
+    inset 0 -1px 1px rgba(255,255,255,.10),
+    0 8px 18px rgba(0,0,0,.12),
+    0 1px 4px rgba(0,0,0,.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active .pm-chat-mode-launcher,
+  body.pm-mobile-active .pm-chat-mode-button,
+  body.pm-mobile-active #pm-composer.pm-composer-mode-hidden,
+  body.pm-mobile-active #pm-composer:not(.pm-composer-mode-hidden) {
+    transition: none !important;
+  }
+}
+
 /* Selected computer filters need dark content against their white pill. */
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-label,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-icon,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active svg {
   color: #111;
+}
+
+/* Unified liquid-glass material ------------------------------------------------
+   Keep the major mobile chrome on one blur/tint recipe. The neutral gray veil
+   is intentionally very light so content remains visible through the glass,
+   then the editing composer gets only a small extra lift for legibility. */
+body.pm-mobile-active .pm-header .pm-icon-btn,
+body.pm-mobile-active .pm-header .pm-online,
+body.pm-mobile-active .pm-header-action-cluster,
+body.pm-mobile-active .pm-completion-toast,
+body.pm-mobile-active .pm-tabbar,
+body.pm-mobile-active .pm-tab-indicator,
+body.pm-mobile-active .pm-chat-mode-button,
+body.pm-mobile-active .pm-composer {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.014), transparent 34%, rgba(255,255,255,.004)),
+    var(--pm-lg-glass-fill) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+}
+
+/* The indicator is a second glass lens inside the tab bar; keep its tint
+   distinct enough to read as the active slider without becoming a white blob. */
+body.pm-mobile-active .pm-tab-indicator {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.018), transparent 42%, rgba(255,255,255,.005)),
+    var(--pm-lg-glass-fill) !important;
+}
+
+/* An open/focused composer gets a little more neutral body fill while retaining
+   the same blur and edge treatment as the resting glass surfaces. */
+body.pm-mobile-active .pm-chat-composer-mode-open #pm-composer:not(.pm-composer-mode-hidden),
+body.pm-mobile-active .pm-keyboard-open #pm-composer:not(.pm-composer-mode-hidden),
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-text, .has-attachments, .has-pending-question) {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.022), transparent 34%, rgba(255,255,255,.006)),
+    var(--pm-lg-glass-fill-strong) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-open-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+}
+
+/* The launcher buttons are standalone surfaces, so explicitly give them the
+   same inner glass rim that the tab bar uses instead of relying on inheritance. */
+body.pm-mobile-active .pm-chat-mode-button {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.028), transparent 36%, rgba(255,255,255,.007)),
+    rgba(170, 174, 184, .08) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  border-color: rgba(255,255,255,.065) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.12),
+    inset 0 -1px 1px rgba(255,255,255,.045),
+    0 8px 18px rgba(0,0,0,.18),
+    0 1px 4px rgba(0,0,0,.12) !important;
+}
+
+/* The reasoning control is another glass surface, not a gray-filled slider.
+   Keep its track translucent so the sheet/content behind it remains legible. */
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.018), transparent 42%, rgba(255,255,255,.005)),
+    var(--pm-lg-glass-fill) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-blur)) saturate(var(--pm-lg-glass-saturate)) brightness(var(--pm-lg-glass-brightness)) !important;
+  border-color: rgba(255,255,255,.065) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.08),
+    inset 0 -1px 1px rgba(255,255,255,.035),
+    0 8px 20px rgba(0,0,0,.16) !important;
+}
+
+/* The old shared finish left a bright inset rim on every major surface. Keep
+   only a whisper of it; the translucent body material should do the visual
+   work, not a white edge or a gray fill. */
+body.pm-mobile-active :where(
+  .pm-header .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-completion-toast,
+  .pm-tabbar,
+  .pm-tab-indicator,
+  .pm-composer
+) {
+  border-color: rgba(255,255,255,.055) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.07),
+    inset 0 -1px 1px rgba(255,255,255,.025),
+    0 6px 16px rgba(0,0,0,.16) !important;
+}
+
+@supports ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  body.pm-mobile-active .pm-header .pm-icon-btn::after,
+  body.pm-mobile-active .pm-header .pm-online::after,
+  body.pm-mobile-active .pm-header-action-cluster::after,
+  body.pm-mobile-active .pm-completion-toast::after,
+  body.pm-mobile-active .pm-composer > .pm-glass-border,
+  body.pm-mobile-active .pm-tabbar > .pm-glass-border {
+    background:
+      linear-gradient(to bottom,
+        rgba(255,255,255,.12) 0%,
+        rgba(255,255,255,.045) 20%,
+        rgba(255,255,255,.003) 46%,
+        rgba(255,255,255,.003) 54%,
+        rgba(255,255,255,.045) 80%,
+        rgba(255,255,255,.10) 100%) border-box;
+    opacity: .42;
+  }
+}
+
+/* Match the regular send control to the circular voice control. The mobile
+   dimensions are already square in both resting and expanded composer states;
+   only the old 13px card radius was preventing a true circle. */
+body.pm-mobile-active .pm-composer .pm-send,
+body.pm-mobile-active .pm-composer .pm-send::before {
+  border-radius: 50% !important;
+}
+
+/* Give the normal send arrow a little more visual weight without changing the
+   separate voice waveform or abort/X icon sizing. */
+body.pm-mobile-active .pm-composer .pm-send:not(.is-voice):not(.is-abort) svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* The dictation button should align to the send button's outer diameter. Keep
+   this about the control box only; the mic SVG keeps its existing glyph size. */
+body.pm-mobile-active #pm-composer .pm-composer-row > #pm-chat-mic-btn {
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  flex-basis: 38px !important;
+}
+body.pm-mobile-active #pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > #pm-chat-mic-btn {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px !important;
+  flex-basis: 40px !important;
+}
+
+/* Enlarge only the dictation glyph; the button and its glass highlight keep
+   their existing dimensions. */
+body.pm-mobile-active #pm-composer #pm-chat-mic-btn svg {
+  width: 23px !important;
+  height: 23px !important;
+}
+
+/* Keep end-of-turn file edits compact on phones.  These cards are information
+   rows, not full-size settings controls, so use the same tight vertical rhythm
+   as the native ChatGPT-style turn summary. */
+body.pm-mobile-active .pm-file-changes-card {
+  margin-top: 6px;
+  border-radius: 12px;
+}
+body.pm-mobile-active .pm-file-changes-grouped {
+  gap: 5px;
+  margin-top: 6px;
+}
+body.pm-mobile-active .pm-file-changes-head {
+  min-height: 28px;
+  padding: 5px 8px;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.1;
+}
+body.pm-mobile-active .pm-file-changes-actions,
+body.pm-mobile-active .pm-file-changes-total {
+  gap: 4px;
+  font-size: 10px;
+}
+body.pm-mobile-active .pm-file-change-restore-btn {
+  font-size: 8px;
+  padding: 4px 6px;
+}
+body.pm-mobile-active .pm-file-change-row {
+  min-height: 26px;
+  padding: 4px 8px;
+  gap: 6px;
+  line-height: 1.15;
+}
+body.pm-mobile-active .pm-file-change-main {
+  gap: 4px;
+}
+body.pm-mobile-active .pm-file-change-status {
+  min-width: 40px;
+  padding: 0 4px;
+  font-size: 7px;
+  line-height: 1.15;
+}
+body.pm-mobile-active .pm-file-change-path {
+  font-size: 10px;
+  line-height: 1.15;
+}
+body.pm-mobile-active .pm-file-change-counts {
+  gap: 4px;
+  font-size: 10px;
+}
+body.pm-mobile-active .pm-file-change-more summary {
+  min-height: 26px;
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.15;
+}
+
+/* Inline Voice is a positioning layer only.  This rule intentionally comes
+   after the shared liquid-glass finish above: the generic composer material
+   must not repaint the lower viewport as a rectangular sheet while the orb is
+   focused or dragged down over the transcript. */
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-shell,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-body,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-body,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-body > section,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  border-top: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active::before,
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active::after,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-shell::before,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-shell::after,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage::before,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage::after {
+  content: none !important;
+  display: none !important;
 }
