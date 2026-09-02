@@ -58,6 +58,60 @@ export function setText(id, text) {
   if (el) el.textContent = String(text || '');
 }
 
+// Render a stable-width thinking label. The hidden sizer keeps a summary row
+// from changing width while its live text is replaced during a stream.
+export function renderThinkingState(text) {
+  const value = String(text || '').trim();
+  const escaped = escHtml(value);
+  return `<span class="t-think-sizer" aria-hidden="true">${escaped}</span><span class="t-think-text" data-text="${escaped}">${escaped}</span>`;
+}
+
+// Transition a freshly-rendered thinking label from the previous state. The
+// renderer owns the state changes; this helper only supplies the visual hand
+// off so the stream never needs a timer or synthetic status text.
+export function animateThinkingTextSwap(root, previousText) {
+  const previous = String(previousText || '').trim();
+  const incoming = root?.querySelector?.('.t-think-text');
+  if (!incoming || !previous) return false;
+  const next = String(incoming.textContent || '').trim();
+  if (!next || next === previous) return false;
+
+  root.querySelectorAll?.('.t-think-text').forEach((node) => {
+    if (node !== incoming) node.remove();
+  });
+
+  const outgoing = incoming.cloneNode(true);
+  outgoing.classList.remove('is-enter-start');
+  outgoing.classList.add('is-exit');
+  outgoing.textContent = previous;
+  outgoing.setAttribute('data-text', previous);
+  incoming.classList.remove('is-exit');
+  incoming.classList.add('is-enter-start');
+
+  const sizer = root.querySelector?.('.t-think-sizer');
+  if (sizer && previous.length > String(sizer.textContent || '').length) {
+    sizer.textContent = previous;
+  }
+  root.appendChild(outgoing);
+
+  // Force the starting state to be committed before releasing the incoming
+  // line, otherwise browsers can coalesce the two styles into a hard swap.
+  void incoming.offsetWidth;
+  const release = () => {
+    if (incoming.isConnected !== false) incoming.classList.remove('is-enter-start');
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(release);
+  else if (typeof setTimeout === 'function') setTimeout(release, 0);
+
+  if (typeof setTimeout === 'function') {
+    setTimeout(() => {
+      if (outgoing.isConnected !== false) outgoing.remove();
+      if (incoming.isConnected !== false) incoming.classList.remove('is-enter-start');
+    }, 420);
+  }
+  return true;
+}
+
 export function setMeter(id, pct) {
   const el = document.getElementById(id);
   if (!el) return;

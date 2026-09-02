@@ -481,12 +481,12 @@ function renderProviderFields(provider, cfg = {}) {
     `;
   }
   if (provider === 'perplexity') {
-    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="pplx-..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'sonar-pro')), cfg.model || 'sonar-pro'))}${field('Reasoning Effort', select(effortId, ['', 'low', 'medium', 'high'].map(v => ({ value: v, label: v || 'none' })), cfg.reasoning_effort || ''))}`;
+    return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="pplx-..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'sonar-pro')), cfg.model || 'sonar-pro'))}${field('Reasoning Effort', select(effortId, ['', 'low', 'medium', 'high'].map(v => ({ value: v, label: v || 'provider default' })), cfg.reasoning_effort || ''))}`;
   }
   if (provider === 'xai') {
     const xaiEffortValues = /^grok-4\.20-multi-agent(?:-|$)/i.test(String(cfg.model || '').trim())
       ? ['', 'low', 'medium', 'high', 'xhigh']
-      : ['', 'none', 'low', 'medium', 'high'];
+      : ['', 'low', 'medium', 'high'];
     const xaiEfforts = xaiEffortValues.map(v => ({ value: v, label: v === 'xhigh' ? 'extra high' : (v || 'provider default') }));
     return `${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="xai-..."'))}${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'grok-4.3')), cfg.model || 'grok-4.3'))}${field('Reasoning Effort', select(effortId, xaiEfforts, cfg.reasoning_effort || ''))}${field('Endpoint', input(endpointId, cfg.endpoint || '', 'placeholder="https://api.x.ai/v1"'))}`;
   }

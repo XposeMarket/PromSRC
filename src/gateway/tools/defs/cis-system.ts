@@ -545,7 +545,7 @@ export function getCisSystemTools(): any[] {
             },
             reasoning_effort: {
               type: 'string',
-              enum: ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+              enum: ['', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
               description: 'Provider/model-aware reasoning effort. Empty string clears the override. May be updated without changing model.',
             },
             agent_type: {

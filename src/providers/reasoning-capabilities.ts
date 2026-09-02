@@ -1,4 +1,7 @@
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+// Public, selectable reasoning levels. `none` and `minimal` remain accepted
+// only as legacy input aliases and are normalized to `low`; they must never
+// be advertised as model capabilities or selector options.
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface ReasoningCapability {
   efforts: ReasoningEffort[];
@@ -8,10 +11,10 @@ export interface ReasoningCapability {
 
 const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
 
-const OPENAI_MODERN: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
-const OPENAI_56: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+const OPENAI_MODERN: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
+const OPENAI_56: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const CODEX_56_ULTRA: ReasoningEffort[] = [...OPENAI_56, 'ultra'];
-const OPENAI_GPT5: ReasoningEffort[] = ['minimal', 'low', 'medium', 'high'];
+const OPENAI_GPT5: ReasoningEffort[] = ['low', 'medium', 'high'];
 const OPENAI_O_SERIES: ReasoningEffort[] = ['low', 'medium', 'high'];
 const CLAUDE_BASE: ReasoningEffort[] = ['low', 'medium', 'high'];
 
@@ -44,7 +47,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_56_ULTRA], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'medium' };
-    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'none' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'low' };
     if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_GPT5], defaultEffort: 'medium' };
     if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: [...OPENAI_O_SERIES], defaultEffort: 'medium' };
     return { efforts: [] };
@@ -53,7 +56,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   if (id === 'openai') {
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'medium' };
-    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'none' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: [...OPENAI_MODERN], defaultEffort: 'low' };
     if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_GPT5], defaultEffort: 'medium' };
     if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: [...OPENAI_O_SERIES], defaultEffort: 'medium' };
     return { efforts: [] };
@@ -77,7 +80,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     return {
       efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name)
         ? ['low', 'medium', 'high', 'xhigh']
-        : ['none', 'low', 'medium', 'high'],
+        : ['low', 'medium', 'high'],
     };
   }
 
@@ -85,7 +88,10 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
 }
 
 export function normalizeReasoningEffort(provider: string, model: string, value: unknown): ReasoningEffort | undefined {
-  const raw = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh') as ReasoningEffort;
+  const rawValue = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  // Older saved routes used these as a disabled/minimal level. Keep them
+  // recoverable without allowing either value back into the public contract.
+  const raw = (rawValue === 'none' || rawValue === 'minimal' ? 'low' : rawValue) as ReasoningEffort;
   if (!raw) return undefined;
   const capability = getReasoningCapability(provider, model);
   return capability.efforts.includes(raw) ? raw : undefined;

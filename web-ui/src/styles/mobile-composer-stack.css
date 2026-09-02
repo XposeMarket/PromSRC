@@ -588,19 +588,86 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
+.pm-trace-tool-summary strong.t-think,
+.pm-trace-thought-summary strong.t-think {
+  position: relative;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-trace-tool-summary .t-think-sizer,
+.pm-trace-thought-summary .t-think-sizer {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   color: transparent;
-  -webkit-text-fill-color: transparent;
-  background: linear-gradient(
-    105deg,
-    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 28%,
-    color-mix(in srgb, var(--pm-text) 88%, white) 50%,
-    color-mix(in srgb, var(--pm-text) 52%, var(--pm-muted)) 72%
-  );
-  background-size: 220% 100%;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  visibility: hidden;
+}
+.pm-trace-tool-summary .t-think-text,
+.pm-trace-thought-summary .t-think-text {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  color: var(--pm-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform 150ms ease-in-out,
+    filter 150ms ease-in-out,
+    opacity 150ms ease-in-out;
+  will-change: transform, filter, opacity;
+}
+.pm-trace-tool-group[data-pm-trace-live-current="1"] .t-think-text::before,
+.pm-trace-thought-group[data-pm-trace-live-current="1"] .t-think-text::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+  background-image: linear-gradient(90deg,
+    transparent 0%,
+    transparent 40%,
+    #f5f5f5 50%,
+    transparent 60%,
+    transparent 100%);
+  background-size: 400% 100%;
+  background-repeat: no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: pm-trace-thought-shimmer 2.2s linear infinite;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-think-shimmer 2000ms linear infinite;
+}
+.pm-trace-tool-group:not([data-pm-trace-live-current="1"]) .t-think-text::before,
+.pm-trace-thought-group:not([data-pm-trace-live-current="1"]) .t-think-text::before {
+  display: none;
+}
+.pm-trace-tool-summary .t-think-text.is-exit,
+.pm-trace-thought-summary .t-think-text.is-exit {
+  transform: translateY(-8px);
+  filter: blur(2px);
+  opacity: 0;
+}
+.pm-trace-tool-summary .t-think-text.is-enter-start,
+.pm-trace-thought-summary .t-think-text.is-enter-start {
+  transition: none;
+  transform: translateY(8px);
+  filter: blur(2px);
+  opacity: 0;
+}
+@keyframes t-think-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
 }
 .pm-trace-tool-icon.is-live {
   box-sizing: border-box;
@@ -642,12 +709,17 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
 @keyframes pm-trace-loading-icon-rotate {
   to { rotate: 360deg; }
 }
-@keyframes pm-trace-thought-shimmer {
-  from { background-position: 220% 0; }
-  to { background-position: -40% 0; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong { animation: none; }
+  .pm-trace-tool-summary .t-think-text,
+  .pm-trace-thought-summary .t-think-text {
+    transition: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
+  .pm-trace-tool-summary .t-think-text::before,
+  .pm-trace-thought-summary .t-think-text::before {
+    display: none !important;
+  }
 }
 .pm-trace-tool-body .tool-activity-entry-summary {
   gap: 7px;
@@ -709,7 +781,8 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   .pm-trace-tool-body .tool-activity-status-icon[data-status="running"],
   .pm-trace-tool-body .tool-activity-status-icon[data-status="preparing"],
   .pm-trace-tool-icon.is-live,
-  .pm-trace-tool-group[data-pm-trace-live-current="1"] .pm-trace-tool-summary strong {
+  .pm-trace-tool-group[data-pm-trace-live-current="1"] .t-think-text::before,
+  .pm-trace-thought-group[data-pm-trace-live-current="1"] .t-think-text::before {
     animation: none;
   }
 }

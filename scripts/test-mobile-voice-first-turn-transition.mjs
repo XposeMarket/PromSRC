@@ -12,7 +12,12 @@ assert.match(
 assert.match(pages, /requestedSession = sid;[\s\S]{0,1200}_setChatVoiceActive\(true\)/, 'the mounted chat must recompute draft Voice chrome when the first spoken turn materializes a session');
 assert.match(voicePage, /context\._ensureDurableMobileVoiceSession\(/, 'Voice first turn must materialize a durable chat session');
 const mobileCss = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
-assert.match(mobileCss, /pm-chat-voice-docked \.pm-composer\.is-voice-active \{ clip-path: inset\(1px 0 0\); outline: 0 !important; \}/, 'docked inline Voice must clip its former top-edge seam');
+assert.match(mobileCss, /pm-chat-voice-docked \.pm-composer\.is-voice-active \{ clip-path: none !important; outline: 0 !important; \}/, 'docked inline Voice must not clip a horizontal top-edge seam');
+assert.match(
+  mobileCss,
+  /pm-chat-voice-active \.pm-composer\.is-voice-active,[\s\S]{0,1100}background-color: transparent !important;[\s\S]{0,350}clip-path: none !important;/,
+  'inline Voice must stay a transparent positioning layer after the shared glass finish',
+);
 assert.doesNotMatch(
   voicePage,
   /pm-mobile-voice-first-turn-materialized/,

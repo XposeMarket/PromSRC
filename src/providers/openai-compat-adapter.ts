@@ -32,7 +32,9 @@ function sanitizeCacheMarkers(messages: ChatMessage[]): ChatMessage[] {
 // 'xhigh' / 'extra_high' are Codex-only for most providers; xAI additionally
 // accepts xhigh for Grok 4.20 multi-agent, handled below by model slug.
 const EFFORT_MAP: Record<string, string> = {
-  none: 'none', minimal: 'minimal', fast: 'minimal',
+  // Legacy disabled/minimal spellings are recovered as the lowest public
+  // level. They are not valid selector values or provider IDs anymore.
+  none: 'low', minimal: 'low', fast: 'low',
   low: 'low', medium: 'medium', high: 'high',
   xhigh: 'xhigh', extra_high: 'xhigh', max: 'max',
 };
@@ -81,17 +83,17 @@ function normalizeReasoningEffortForProvider(providerId: string, rawEffort: stri
 
 function shouldSendReasoningEffort(providerId: string, effort: string, modelName?: string): boolean {
   const id = String(providerId || '').trim().toLowerCase();
-  // xAI defaults grok-4.3 to low if omitted, so "none" must be sent explicitly
-  // for effort-capable models. Other Grok slugs reject the effort field.
+  // xAI accepts only real effort levels for supported Grok slugs. Other Grok
+  // slugs reject the effort field.
   if (id === 'xai') {
     if (!xaiModelSupportsReasoningEffort(modelName || '')) return false;
     if (xaiModelSupportsXHighReasoningEffort(modelName || '')) {
       return effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh';
     }
-    return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high';
+    return effort === 'low' || effort === 'medium' || effort === 'high';
   }
   if (id === 'openai') return !!normalizeReasoningEffort('openai', modelName || '', effort);
-  return effort !== 'none' && effort !== 'xhigh' && effort !== 'max';
+  return effort !== 'xhigh' && effort !== 'max';
 }
 
 function providerToolLimit(providerId: string): number | null {

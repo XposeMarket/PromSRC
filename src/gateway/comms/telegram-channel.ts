@@ -222,14 +222,12 @@ function idResolve(key: string): string | null {
 const TELEGRAM_REASONING_EFFORTS: Record<string, Array<{ key: string; value: string; label: string }>> = {
   openai: [
     { key: 'off', value: '', label: 'Off' },
-    { key: 'minimal', value: 'minimal', label: 'Minimal' },
     { key: 'low', value: 'low', label: 'Low' },
     { key: 'medium', value: 'medium', label: 'Medium' },
     { key: 'high', value: 'high', label: 'High' },
   ],
   openai_codex: [
     { key: 'off', value: '', label: 'Off' },
-    { key: 'minimal', value: 'minimal', label: 'Minimal' },
     { key: 'low', value: 'low', label: 'Low' },
     { key: 'medium', value: 'medium', label: 'Medium' },
     { key: 'high', value: 'high', label: 'High' },
@@ -245,7 +243,6 @@ const TELEGRAM_REASONING_EFFORTS: Record<string, Array<{ key: string; value: str
   ],
   perplexity: [
     { key: 'off', value: '', label: 'Off' },
-    { key: 'minimal', value: 'minimal', label: 'Minimal' },
     { key: 'low', value: 'low', label: 'Low' },
     { key: 'medium', value: 'medium', label: 'Medium' },
     { key: 'high', value: 'high', label: 'High' },

@@ -149,7 +149,7 @@ function _modelOptionsHtml(provider, currentModel) {
 function _reasoningRowHtml(prefix, agentId, provider, model, currentEffort = '', inheritedEffort = '') {
   if (!provider || !model) return '<div style="font-size:10px;color:var(--muted);margin-top:7px">No adjustable reasoning levels for the selected model.</div>';
   const opts = effortOptions(provider, model, true);
-  if (opts.length <= 1) return `<div style="font-size:10px;color:var(--muted);margin-top:7px">No adjustable reasoning levels for ${escHtml(formatModelDisplayName(model, provider))}.</div>`;
+  if (!opts.some((value) => value)) return `<div style="font-size:10px;color:var(--muted);margin-top:7px">No adjustable reasoning levels for ${escHtml(formatModelDisplayName(model, provider))}.</div>`;
   const cur = String(currentEffort || '').trim().toLowerCase();
   const inherited = String(inheritedEffort || '').trim().toLowerCase();
   const selected = cur || inherited;

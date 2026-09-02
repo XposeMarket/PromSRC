@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
+import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
@@ -12669,7 +12669,7 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
-        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+        <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
@@ -12878,21 +12878,8 @@ function attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, entries,
   return true;
 }
 
-function isImageGenerationTerminalText(text) {
-  const value = String(text || '');
-  return /\b(?:generate[_ ]image|generating[_ ]image|generated[_ ]image|image[_ ](?:gen|generation)|imagegen)\b[\s\S]*\b(?:complete|completed|failed|failure|error|succeeded|success)\b/i.test(value)
-    || /\b(?:failed|error)\b[\s\S]*\b(?:generate[_ ]image|image[_ ](?:gen|generation)|imagegen)\b/i.test(value);
-}
-
 function isGenerateImagePendingFromEntries(...entryGroups) {
   const rawEntries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
-  const hasBackgroundImageGeneration = rawEntries.some((entry) => {
-    const args = entry?.activity?.args || entry?.extra?.args || entry?.args || {};
-    const action = String(entry?.activity?.action || entry?.activity?.toolName || entry?.extra?.action || entry?.extra?.toolName || entry?.action || entry?.toolName || '').toLowerCase();
-    return ['generate_image', 'image_gen', 'imagegen'].includes(action)
-      && String(args?.presentation_mode || args?.presentationMode || '').toLowerCase() === 'background';
-  });
-  if (hasBackgroundImageGeneration) return false;
   const entries = [];
   const seen = new Set();
   rawEntries.forEach((entry) => {
@@ -12914,14 +12901,40 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
     const type = String(entry?.type || '').toLowerCase();
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
     const activity = entry?.activity && typeof entry.activity === 'object' ? entry.activity : {};
-    const presentationMode = String(extra.presentation_mode || extra.presentationMode || activity.presentation_mode || activity.presentationMode || entry?.presentation_mode || '').trim().toLowerCase();
-    if (presentationMode === 'background') return;
-    const action = String(activity.action || activity.toolName || extra.action || extra.toolName || entry?.action || entry?.toolName || '').trim().toLowerCase();
-    const text = String(entry?.text || entry?.content || entry?.message || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const isImageActivity = ['generate_image', 'image_gen', 'imagegen'].includes(action)
-      || /\b(generate_image|image_gen|imagegen|generate image|generating image|generated image|image generation|i am generating the image)\b/.test(text);
-    if (!isImageActivity) return;
-    observedImageActivity = true;
+    const args = activity.args && typeof activity.args === 'object'
+      ? activity.args
+      : extra.args && typeof extra.args === 'object'
+        ? extra.args
+        : entry?.args && typeof entry.args === 'object'
+          ? entry.args
+          : {};
+    const action = String(
+      activity.action
+      || activity.toolName
+      || activity.tool_name
+      || activity.name
+      || extra.action
+      || extra.toolName
+      || extra.tool_name
+      || extra.name
+      || entry?.action
+      || entry?.toolName
+      || entry?.tool_name
+      || entry?.name
+      || '',
+    ).trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (!['generate_image', 'image_gen', 'imagegen', 'image_generation', 'voice_generate_image', 'creative_generate_image_shot'].includes(action)) return;
+    const presentationMode = String(
+      args.presentation_mode
+      || args.presentationMode
+      || activity.presentation_mode
+      || activity.presentationMode
+      || extra.presentation_mode
+      || extra.presentationMode
+      || entry?.presentation_mode
+      || entry?.presentationMode
+      || '',
+    ).trim().toLowerCase();
     const key = String(
       activity.callId
       || activity.call_id
@@ -12937,17 +12950,32 @@ function isGenerateImagePendingFromEntries(...entryGroups) {
       || extra.eventKey
       || `${action || 'image'}:anonymous`,
     ).trim();
-    const terminalText = isImageGenerationTerminalText(text);
-    if (type === 'result' || type === 'error' || type === 'tool_result' || terminalText) {
+    const hasIdentity = !!(
+      entry?.callId
+      || entry?.eventKey
+      || extra.callId
+      || extra.call_id
+      || extra.toolCallId
+      || extra.tool_call_id
+      || extra.eventKey
+      || activity.callId
+      || activity.activityId
+    );
+    if (type === 'result' || type === 'error' || type === 'tool_result') {
+      if (presentationMode === 'background') return;
       if (entry?.callId || entry?.eventKey || extra.callId || extra.call_id || extra.toolCallId || extra.tool_call_id || extra.eventKey || activity.callId || activity.activityId) activeImageCalls.delete(key);
       else activeImageCalls.clear();
       return;
     }
-    if (type === 'tool' || type === 'call') {
+    if (type === 'tool' || type === 'call' || type === 'tool_call') {
+      if (presentationMode !== 'foreground') return;
+      observedImageActivity = true;
       activeImageCalls.add(key);
       return;
     }
-    if (activeImageCalls.size === 0) activeImageCalls.add(key);
+    // A progress or prose row can mention image generation, but it cannot
+    // create this loader without an explicit foreground tool call.
+    if (presentationMode === 'background' || !hasIdentity || !activeImageCalls.has(key)) return;
   });
   return observedImageActivity && activeImageCalls.size > 0;
 }
@@ -13837,6 +13865,8 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
   const seen = seenBySession[key] || (seenBySession[key] = new Set());
   const summaryKeysBySession = window.__pmLiveTraceSummaryKeysBySession || (window.__pmLiveTraceSummaryKeysBySession = {});
   const summaryKeys = summaryKeysBySession[key] || (summaryKeysBySession[key] = {});
+  const summaryLabelsBySession = window.__pmLiveTraceSummaryLabelsBySession || (window.__pmLiveTraceSummaryLabelsBySession = {});
+  const summaryLabels = summaryLabelsBySession[key] || (summaryLabelsBySession[key] = {});
   document.querySelectorAll('[data-live-entry-id]').forEach((node) => {
     const id = String(node.getAttribute('data-live-entry-id') || '').trim();
     if (!id) return;
@@ -13849,10 +13879,15 @@ function markLiveStreamMotionAfterRender(sessionId, beforeTextLen = 0) {
     const groupKey = node.closest('details.live-turn-tool-group')?.getAttribute('data-live-trace-group') || '';
     const labelKey = String(node.getAttribute('data-live-trace-summary-key') || '').trim();
     if (!groupKey || !labelKey) return;
+    const currentLabel = String(node.querySelector('.t-think-text')?.textContent || node.textContent || '').trim();
     if (summaryKeys[groupKey] !== labelKey) {
-      node.classList.add('live-trace-summary-swap');
+      const previousLabel = String(summaryLabels[groupKey] || '').trim();
+      if (previousLabel && currentLabel && previousLabel !== currentLabel) {
+        animateThinkingTextSwap(node, previousLabel);
+      }
       summaryKeys[groupKey] = labelKey;
     }
+    if (currentLabel) summaryLabels[groupKey] = currentLabel;
   });
   const streaming = document.getElementById('streaming-text-content');
   const afterTextLen = String(streaming?.textContent || '').length;

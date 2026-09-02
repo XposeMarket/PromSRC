@@ -677,7 +677,8 @@ function _effortOptions(provider, cfg = {}) {
 }
 
 function _normalizedReasoningEffort(provider, model, value) {
-  const effort = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  const rawEffort = String(value || '').trim().toLowerCase().replace(/^extra[-_ ]high$/, 'xhigh');
+  const effort = rawEffort === 'none' || rawEffort === 'minimal' ? 'low' : rawEffort;
   if (!effort || effort === 'default' || effort === 'provider_default') return effort;
   if (!hasReasoningCapabilityPolicy(provider)) return effort;
   return validEffort(provider, model, effort) ? effort : '';
