@@ -1238,6 +1238,7 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
             durationMs: result.durationMs,
             thinking: result.thinking,
             processEntries: result.processEntries,
+            liveTraceEntries: result.liveTraceEntries,
           },
         });
         broadcastTeamEvent({

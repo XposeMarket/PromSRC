@@ -25,6 +25,7 @@ import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
 
 type HandleChatFn = (
   message: string,
@@ -69,6 +70,8 @@ interface TeamMemberTurnTracker {
   thinking: string;
   replyText: string;
   processEntries: TeamMemberProcessEntry[];
+  liveTraceEntries: Array<Record<string, any>>;
+  traceSeq: number;
 }
 
 const TEAM_MEMBER_ROOM_SESSION_PREFIX = 'team_room_member_';
@@ -298,6 +301,8 @@ function createTeamMemberTurnTracker(teamId: string, agentId: string): TeamMembe
     thinking: '',
     replyText: '',
     processEntries: [],
+    liveTraceEntries: [],
+    traceSeq: 0,
   };
 }
 
@@ -411,6 +416,7 @@ function buildTeamMemberTurnMetadata(
   durationMs?: number;
   thinking?: string;
   processEntries?: TeamMemberProcessEntry[];
+  liveTraceEntries?: Array<Record<string, any>>;
 } {
   const reply = String(finalText || tracker.replyText || '').trim();
   const processEntries = Array.isArray(tracker.processEntries) ? [...tracker.processEntries] : [];
@@ -429,6 +435,7 @@ function buildTeamMemberTurnMetadata(
     durationMs: Math.max(0, Date.now() - tracker.startedAt),
     thinking: String(tracker.thinking || '').trim() || undefined,
     processEntries: processEntries.length > 0 ? processEntries : undefined,
+    liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
   };
 }
 
@@ -796,6 +803,13 @@ export async function runTeamMemberRoomTurn(
     }
     const trackingSse = (event: string, data: any) => {
       captureTeamMemberStreamEvent(tracker, event, data);
+      appendBackgroundSseTrace([], tracker.liveTraceEntries, event, data, {
+        seq: ++tracker.traceSeq,
+        type: event,
+        at: Date.now(),
+        streamId: tracker.streamId,
+        data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
+      });
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -870,6 +884,7 @@ export async function runTeamMemberRoomTurn(
       result: responseText,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
+      liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
       durationMs: Math.max(0, Date.now() - startedAt),
       stepCount: tracker.stepCount,
       agentName,
@@ -908,6 +923,7 @@ export async function runTeamMemberRoomTurn(
       error: errorText,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
+      liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
       durationMs: Math.max(0, Date.now() - startedAt),
       stepCount: tracker.stepCount,
       agentName,
@@ -1036,6 +1052,13 @@ export async function runTeamMemberDirectTurn(
 
     const trackingSse = (event: string, data: any) => {
       captureTeamMemberStreamEvent(tracker, event, data);
+      appendBackgroundSseTrace([], tracker.liveTraceEntries, event, data, {
+        seq: ++tracker.traceSeq,
+        type: event,
+        at: Date.now(),
+        streamId: tracker.streamId,
+        data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
+      });
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -1111,6 +1134,7 @@ export async function runTeamMemberDirectTurn(
       result: responseText,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
+      liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
       durationMs: Math.max(0, Date.now() - tracker.startedAt),
       stepCount: tracker.stepCount,
       agentName,
@@ -1153,6 +1177,7 @@ export async function runTeamMemberDirectTurn(
       error: errorText,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
+      liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
       durationMs: Math.max(0, Date.now() - tracker.startedAt),
       stepCount: tracker.stepCount,
       agentName,

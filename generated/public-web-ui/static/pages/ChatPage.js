@@ -13098,8 +13098,22 @@ function desktopWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
   const liveSources = normalizeRecoveredTraceEntries(message?.liveTraceEntries);
-  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
-  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
+  const structuredActions = new Set(liveSources.map((entry) => String(
+    entry?.activity?.action
+      || entry?.extra?.action
+      || entry?.action
+      || entry?.toolName
+      || entry?.extra?.toolName
+      || '',
+  ).trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(
+    entry?.activity?.callId
+      || entry?.extra?.callId
+      || entry?.extra?.toolCallId
+      || entry?.callId
+      || entry?.toolCallId
+      || '',
+  ).trim()).filter(Boolean));
   const finalText = String(message?.content || message?.body?.text || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;

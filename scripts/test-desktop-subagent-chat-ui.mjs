@@ -22,6 +22,10 @@ const workspaceCssGenerated = read('generated/public-web-ui/static/styles/worksp
 const channelsRouter = read('src/gateway/routes/channels.router.ts');
 const teamsRouter = read('src/gateway/routes/teams.router.ts');
 const modelPicker = read('web-ui/src/components/agent-model-picker.js');
+const teamDispatchRuntime = read('src/gateway/teams/team-dispatch-runtime.ts');
+const teamMemberRoom = read('src/gateway/teams/team-member-room.ts');
+const cronScheduler = read('src/gateway/scheduling/cron-scheduler.ts');
+const subagentExecutor = read('src/gateway/agents-runtime/subagent-executor.ts');
 
 assert.match(
   subagents,
@@ -119,6 +123,26 @@ assert.match(teams, /const managerId = getTeamManagerId\(team\);[\s\S]*?Manager[
   'team subagent controls must expose the manager above the subagent list');
 assert.match(teams, /const tabs = \['overview','memory','heartbeat'\]/,
   'team agent detail must use the shared read-only Memory tab');
+assert.match(teams, /api\('\/api\/schedules'\)/,
+  'team Runs must load schedules so team-owned jobs are visible');
+assert.match(teams, /async function openTeamScheduledJob\(jobId\)[\s\S]*?setMode\('schedule'\)[\s\S]*?editSchedule\(id\)/,
+  'team schedule rows must open the matching Schedule-page modal');
+assert.match(teams, /team_member_stream_done[\s\S]*?loadTeamBoardData\(msg\.teamId\)[\s\S]*?teamBoardTab === 'runs'/,
+  'member stream completion must refresh the Runs tab');
+assert.match(teams, /function _renderTeamRunActivity\(run\)[\s\S]*?renderLiveTrace\(/,
+  'team Runs must render the durable member tool/reasoning trace');
+assert.match(teamDispatchRuntime, /appendBackgroundSseTrace\(\[\], liveTraceEntries/,
+  'dispatched team members must capture the shared structured trace format');
+assert.match(teamMemberRoom, /appendBackgroundSseTrace\(\[\], tracker\.liveTraceEntries/,
+  'team-room member turns must capture the shared structured trace format');
+assert.match(teamMemberRoom, /liveTraceEntries: tracker\.liveTraceEntries/,
+  'member final messages must retain the structured trace for history and Runs');
+assert.match(subagentExecutor, /recordTeamRun\(teamId,[\s\S]*?liveTraceEntries: result\?\.liveTraceEntries/,
+  'the active legacy manager executor must record member room turns in team Runs');
+assert.match(subagentExecutor, /processEntries: result\.processEntries,[\s\S]*?liveTraceEntries: result\.liveTraceEntries/,
+  'the active legacy dispatch executor must retain member traces in team chat');
+assert.match(cronScheduler, /chatMessage,/,
+  'scheduled team-member output must use the team chat message field');
 assert.match(teams, /memory-md/,
   'team agent detail must load team-scoped MEMORY.md');
 assert.match(teams, /isManager \? `triggerManagerReview\('/,

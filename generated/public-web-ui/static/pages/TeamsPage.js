@@ -55,6 +55,7 @@ let teamMemberIds = new Set(); // agentIds belonging to any team
 let activeTeamId = null;      // currently focused team (board open)
 let teamBoardTab = 'context'; // context | memory | runs | chat
 let teamRuns = [];            // cached runs for active team
+let teamSchedules = [];       // schedules belonging to the team or one of its agents
 let teamRoomState = null;     // live room state for active team
 let teamRunExpanded = {};     // runId -> expanded/collapsed in Runs tab
 let teamChatMessages = [];    // cached chat for active team
@@ -1200,6 +1201,22 @@ function applyTeamDesktopToolActivity(stream, phase, event) {
   applyToolActivityEvent(stream.liveTraceEntries, phase, event);
 }
 
+function appendTeamVisibleThought(stream, thought, event = {}) {
+  const source = String(event?.source || event?.extra?.source || '').trim().toLowerCase();
+  const reasoningKind = String(event?.reasoningKind || event?.presentationKind || event?.extra?.reasoningKind || '').trim().toLowerCase();
+  const visibility = String(event?.visibility || event?.extra?.visibility || '').trim().toLowerCase();
+  const isSummary = source === 'reasoning_summary' || reasoningKind === 'summary' || visibility === 'summary';
+  appendTeamDesktopLiveTrace(stream, isSummary ? 'reasoning_summary' : 'think', thought, {
+    append: isSummary,
+    extra: {
+      source: isSummary ? 'reasoning_summary' : 'agent_thought',
+      visibility: 'user',
+      ...(event?.actor ? { actor: event.actor } : {}),
+      ...(isSummary ? { reasoningKind: 'summary' } : {}),
+    },
+  });
+}
+
 function pushTeamChatProgressLine(line) {
   if (!teamChatStreamingState) return;
   const text = String(line || '').trim();
@@ -1306,9 +1323,9 @@ function formatTeamDispatchElapsed(stream) {
 }
 
 function refreshTeamDispatchTicker() {
-  const hasActive = Object.values(teamDispatchStreamsByTeam).some((streamMap) =>
+  const hasActive = [teamDispatchStreamsByTeam, teamMemberStreamsByTeam, teamManagerStreamsByTeam].some((streamsByTeam) => Object.values(streamsByTeam).some((streamMap) =>
     Object.values(streamMap || {}).some((stream) => stream && stream.completed !== true)
-  );
+  ));
   if (!hasActive) {
     if (teamDispatchTicker) {
       clearInterval(teamDispatchTicker);
@@ -1318,8 +1335,17 @@ function refreshTeamDispatchTicker() {
   }
   if (teamDispatchTicker) return;
   teamDispatchTicker = setInterval(() => {
-    if (activeTeamId && teamBoardTab === 'chat' && getTeamDispatchStreams(activeTeamId).length > 0) {
+    const hasLiveTeamStream = activeTeamId && (
+      getTeamDispatchStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+      || getTeamMemberStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+      || getTeamManagerStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+    );
+    if (activeTeamId && teamBoardTab === 'chat' && hasLiveTeamStream) {
       renderActiveTeamChat(activeTeamId, { forceBottom: false });
+    } else if (activeTeamId && teamBoardTab === 'runs' && hasLiveTeamStream) {
+      const contentEl = document.getElementById('team-tab-content');
+      const team = getTeamById(activeTeamId);
+      if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
     }
   }, 1000);
 }
@@ -1329,6 +1355,12 @@ function scheduleTeamDispatchRefresh(teamId, forceBottom = false) {
   if (teamDispatchRefreshTimers[teamId]) return;
   teamDispatchRefreshTimers[teamId] = setTimeout(() => {
     delete teamDispatchRefreshTimers[teamId];
+    if (activeTeamId === teamId && teamBoardTab === 'runs') {
+      const contentEl = document.getElementById('team-tab-content');
+      const team = getTeamById(teamId);
+      if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      return;
+    }
     refreshVisibleTeamChat(teamId, forceBottom);
   }, 70);
 }
@@ -1422,7 +1454,12 @@ function applyTeamManagerStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -1609,7 +1646,12 @@ function applyTeamMemberStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -2311,7 +2353,12 @@ function applyTeamDispatchStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -2478,6 +2525,7 @@ function teamDesktopStreamMessage(stream, label, idPrefix) {
     workStartedAt: startedAt,
     workEndedAt: finishedAt,
     workDurationMs: durationMs,
+    thinking: String(stream?.thinking || '').trim() || undefined,
     processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
     liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
     liveProgressLines: Array.isArray(stream?.progressLines) ? [...stream.progressLines] : [],
@@ -2488,6 +2536,7 @@ function teamDesktopStreamMessage(stream, label, idPrefix) {
     metadata: {
       processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
       liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
+      thinking: String(stream?.thinking || '').trim() || undefined,
       startedAt,
       finishedAt,
       durationMs,
@@ -3312,16 +3361,18 @@ function closeTeamBoard() {
 
 async function loadTeamBoardData(teamId) {
   try {
-    const [runsData, chatData, workspaceData, agentsData] = await Promise.all([
+    const [runsData, chatData, workspaceData, agentsData, schedulesData] = await Promise.all([
       api(`/api/teams/${teamId}/runs?limit=50`),
       api(`/api/teams/${teamId}/chat?limit=100`),
       api(`/api/teams/${teamId}/workspace`).catch(() => ({ files: [] })),
       api('/api/agents').catch(() => ({ agents: [] })),
+      api('/api/schedules').catch(() => ({ schedules: [] })),
     ]);
     if (agentsData?.agents) {
       window._allAgentsForTeam = agentsData.agents;
     }
     teamRuns = runsData.runs || [];
+    teamSchedules = Array.isArray(schedulesData?.schedules) ? schedulesData.schedules : [];
     teamRoomState = runsData.roomState || null;
     const nextLive = {};
     for (const run of teamRuns) {
@@ -4587,13 +4638,127 @@ function renderTeamRunsTabLegacy(team) {
     </div>`;
 }
 
+function getTeamScheduledJobs(team) {
+  const teamId = String(team?.id || '').trim();
+  if (!teamId) return [];
+  const memberIds = new Set([
+    ...(Array.isArray(team?.subagentIds) ? team.subagentIds : []),
+    getTeamManagerId(team),
+  ].map((id) => String(id || '').trim()).filter(Boolean));
+  return (Array.isArray(teamSchedules) ? teamSchedules : [])
+    .filter((job) => {
+      const jobTeamId = String(job?.team_id || job?.teamId || '').trim();
+      const jobAgentId = String(job?.subagent_id || job?.subagentId || '').trim();
+      return jobTeamId === teamId || (jobAgentId && memberIds.has(jobAgentId));
+    })
+    .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+}
+
+function _formatTeamScheduleDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Not scheduled';
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleString();
+}
+
+function _renderTeamScheduledJobs(team) {
+  const jobs = getTeamScheduledJobs(team);
+  if (jobs.length === 0) return '';
+  return `<section style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Scheduled jobs</div>
+      <div style="font-size:11px;color:var(--muted)">${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${jobs.map((job) => {
+        const jobId = _escapeOnclickArg(job?.id || '');
+        const jobTeamId = String(job?.team_id || job?.teamId || '').trim();
+        const jobAgentId = String(job?.subagent_id || job?.subagentId || '').trim();
+        const owner = jobTeamId === String(team.id) ? 'Team manager' : String(_findAgentInTeam(jobAgentId)?.name || jobAgentId || 'Team member');
+        const enabled = job?.enabled !== false && String(job?.status || '').toLowerCase() !== 'paused';
+        return `<button type="button" onclick="openTeamScheduledJob('${jobId}')" style="width:100%;border:1px solid var(--line);background:var(--panel-2);color:inherit;border-radius:8px;padding:9px 11px;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${enabled ? '#31b884' : 'var(--muted)'};flex:0 0 8px"></span>
+          <span style="min-width:0;flex:1">
+            <span style="display:block;font-size:12px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(job?.name || 'Unnamed schedule')}</span>
+            <span style="display:block;font-size:10px;color:var(--muted);margin-top:2px">${escHtml(owner)} · next ${escHtml(_formatTeamScheduleDate(job?.next_run || job?.nextRun))}</span>
+          </span>
+          <span style="font-size:14px;color:var(--muted)">&#8250;</span>
+        </button>`;
+      }).join('')}
+    </div>
+  </section>`;
+}
+
+async function openTeamScheduledJob(jobId) {
+  const id = String(jobId || '').trim();
+  if (!id) return;
+  try {
+    if (typeof window.setMode === 'function') await window.setMode('schedule');
+    if (typeof window.refreshSchedules === 'function') await window.refreshSchedules();
+    if (typeof window.editSchedule === 'function') window.editSchedule(id);
+  } catch (err) {
+    bgtToast('Schedule unavailable', err?.message || 'Could not open this scheduled job.');
+  }
+}
+
+function _teamRunsForDisplay(team) {
+  const merged = new Map();
+  for (const run of Array.isArray(teamRuns) ? teamRuns : []) {
+    const key = String(run?.taskId || run?.id || `${run?.agentId || 'agent'}_${run?.startedAt || 0}`).trim();
+    if (key) merged.set(key, { ...run });
+  }
+  const liveStreams = [getTeamMemberStreams(team.id), getTeamDispatchStreams(team.id)].flat();
+  for (const stream of liveStreams) {
+    const taskId = String(stream?.taskId || stream?.streamId || '').trim();
+    if (!taskId) continue;
+    const existing = merged.get(taskId) || {};
+    const traceEntries = Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [];
+    const processEntries = Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [];
+    merged.set(taskId, {
+      ...existing,
+      id: existing.id || `live_${taskId}`,
+      taskId,
+      agentId: existing.agentId || stream.agentId,
+      agentName: existing.agentName || stream.agentName,
+      trigger: existing.trigger || 'team_dispatch',
+      startedAt: existing.startedAt || stream.startedAt,
+      finishedAt: existing.finishedAt || stream.finishedAt,
+      durationMs: existing.durationMs || stream.durationMs,
+      stepCount: existing.stepCount || stream.stepCount,
+      inProgress: stream.completed !== true && existing.inProgress !== false,
+      success: existing.success ?? (stream.completed === true && stream.status !== 'failed'),
+      resultPreview: existing.resultPreview || stream.finalReply || stream.content || '',
+      processEntries: Array.isArray(existing.processEntries) && existing.processEntries.length ? existing.processEntries : processEntries,
+      liveTraceEntries: Array.isArray(existing.liveTraceEntries) && existing.liveTraceEntries.length ? existing.liveTraceEntries : traceEntries,
+    });
+  }
+  return [...merged.values()].sort((a, b) => Number(b?.startedAt || 0) - Number(a?.startedAt || 0));
+}
+
+function _renderTeamRunActivity(run) {
+  const traceEntries = Array.isArray(run?.liveTraceEntries) ? run.liveTraceEntries : [];
+  const processEntries = Array.isArray(run?.processEntries) ? run.processEntries : [];
+  if (traceEntries.length === 0 && processEntries.length === 0) return '';
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  const activityHtml = traceEntries.length > 0 && renderer && typeof renderer.renderLiveTrace === 'function'
+    ? renderer.renderLiveTrace(traceEntries, { streaming: run?.inProgress === true })
+    : renderTeamChatProcessPill(processEntries, `team_run_${String(run?.id || run?.taskId || 'activity')}`);
+  return `<div>
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Agent activity</div>
+    <div style="border:1px solid var(--line);border-radius:8px;background:var(--panel-2);padding:8px;max-height:320px;overflow:auto">${activityHtml}</div>
+  </div>`;
+}
+
 function renderTeamRunsTab(team) {
-  if (teamRuns.length === 0) {
-    return '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>';
+  const scheduledHtml = _renderTeamScheduledJobs(team);
+  const runs = _teamRunsForDisplay(team);
+  if (runs.length === 0) {
+    return `${scheduledHtml}<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>`;
   }
   return `
+    ${scheduledHtml}
     <div style="display:flex;flex-direction:column;gap:10px">
-      ${teamRuns.map(r => {
+      ${runs.map(r => {
         const runId = String(r.id || r.taskId || `${r.agentId}-${r.startedAt}`);
         const expanded = teamRunExpanded[runId] === true;
         const snap = r.roomSnapshot || _teamRoomState();
@@ -4621,6 +4786,7 @@ function renderTeamRunsTab(team) {
                 <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Final Summary</div>
                 <div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:10px;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:${r.error ? '#b42323' : 'var(--text)'}">${escHtml(finalText || 'No summary captured.')}</div>
               </div>
+              ${_renderTeamRunActivity(r)}
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                 <div>
                   <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Member States</div>
@@ -5711,6 +5877,8 @@ function handleTeamWsEvent(msg) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
       }
@@ -5845,7 +6013,13 @@ function handleTeamWsEvent(msg) {
         completed: false,
       });
       refreshTeamHeaderControls(msg.teamId);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        const contentEl = document.getElementById('team-tab-content');
+        const team = getTeamById(msg.teamId);
+        if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_manager_stream_event') {
@@ -5853,6 +6027,8 @@ function handleTeamWsEvent(msg) {
     if (stream) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
@@ -5892,7 +6068,13 @@ function handleTeamWsEvent(msg) {
         completed: false,
       });
       refreshTeamHeaderControls(msg.teamId);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        const contentEl = document.getElementById('team-tab-content');
+        const team = getTeamById(msg.teamId);
+        if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_member_stream_event') {
@@ -5900,6 +6082,8 @@ function handleTeamWsEvent(msg) {
     if (stream) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
@@ -5915,6 +6099,8 @@ function handleTeamWsEvent(msg) {
       });
       if (stream) {
         stream.completed = true;
+        stream.success = msg.success === true;
+        stream.status = msg.success === true ? 'completed' : 'failed';
         stream.finishedAt = Number(msg.completedAt || Date.now());
         stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
       }
@@ -5925,7 +6111,13 @@ function handleTeamWsEvent(msg) {
         removeTeamMemberStream(msg.teamId, msg.streamId);
         refreshVisibleTeamChat(msg.teamId, false);
       }, 3000);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        loadTeamBoardData(msg.teamId).then(() => {
+          if (activeTeamId === msg.teamId && teamBoardTab === 'runs') renderTeamBoard(msg.teamId);
+        });
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_dispatch') {
@@ -5958,6 +6150,8 @@ function handleTeamWsEvent(msg) {
       loadTeamBoardData(msg.teamId).then(() => {
         if (teamBoardTab === 'chat') {
           renderActiveTeamChat(msg.teamId, { forceBottom: false });
+        } else if (teamBoardTab === 'runs') {
+          renderTeamBoard(msg.teamId);
         } else if (teamBoardTab === 'workspace') {
           refreshTeamWorkspace(msg.teamId);
           renderTeamBoard(msg.teamId);
@@ -6425,3 +6619,4 @@ function teamsPageActivate() {
 window.refreshTeams = refreshTeams;
 window.renderTeamsCanvas = renderTeamsCanvas;
 window.teamsPageActivate = teamsPageActivate;
+window.openTeamScheduledJob = openTeamScheduledJob;

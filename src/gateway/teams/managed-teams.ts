@@ -61,6 +61,7 @@ export interface TeamChatMessage {
       actor?: string;
       [key: string]: any;
     }>;
+    liveTraceEntries?: Array<Record<string, any>>;
   };
 }
 
@@ -302,6 +303,8 @@ export interface TeamRunEntry {
   zeroToolCalls?: boolean;   // true when agent returned 0 tool calls (Issue 12 signal)
   error?: string;
   resultPreview?: string;
+  processEntries?: Array<Record<string, any>>;
+  liveTraceEntries?: Array<Record<string, any>>;
   quality?: {
     warning?: string;
     zeroToolCalls?: boolean;
