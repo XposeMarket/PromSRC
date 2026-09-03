@@ -65,8 +65,8 @@ let teamWorkspaceTree = [];   // cached workspace tree (nested) for active team
 let teamWorkspaceData = null; // full workspace API response (incl. workspacePath)
 let teamMemoryFiles = { memory: null, lastRun: null, pending: null, loading: false };
 let teamSubagentDetailId = null;     // currently-open subagent inside the Subagents tab
-let teamSubagentDetailTab = 'overview'; // overview | systemprompt | heartbeat
-let teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+let teamSubagentDetailTab = 'overview'; // overview | memory | heartbeat
+let teamSubagentDetail = { systemPrompt: '', memoryNotes: '', memoryExists: false, heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
 let _teamCmEditors = {};      // CodeMirror instances for the Subagents tab editors
 let teamWorkspaceOpenFile = null; // { teamId, relpath, name, content, modifiedAt, dirty, mode }
 let _teamWorkspaceCm = null;
@@ -3359,10 +3359,11 @@ function renderTeamBoard(teamId) {
   if (!header || !body) return;
   const runWorking = isTeamRunWorking(teamId);
   const runAborting = teamRunAbortInFlightByTeam[teamId] === true;
+  const teamEmoji = String(team.emoji || '').trim().toLowerCase() === 'team' ? '' : (team.emoji || '🏠');
 
   header.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-      <div style="font-size:22px">${team.emoji || '🏠'}</div>
+      ${teamEmoji ? `<div style="font-size:22px" aria-hidden="true">${escHtml(teamEmoji)}</div>` : ''}
       <div style="min-width:0">
         <div id="team-name-display-${teamId}" style="font-size:15px;font-weight:800;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Click to rename" onclick="startTeamRename('${teamId}')">${escHtml(team.name)}<span style="font-size:11px;opacity:0;transition:opacity 0.15s" class="team-rename-hint">✏️</span></div>
         <input id="team-name-input-${teamId}" type="text" value="${escHtml(team.name)}" style="display:none;font-size:15px;font-weight:800;letter-spacing:-0.01em;border:none;border-bottom:2px solid var(--brand);outline:none;background:transparent;color:var(--text);padding:0;width:220px" />
@@ -3431,10 +3432,11 @@ async function switchTeamTab(tab, teamId) {
     setTimeout(() => _mountWorkspaceCm(), 50);
   }
   if (tab === 'subagents') {
-    // First open: pick the first agent if none selected
+    // First open: default to the manager, then the first subagent.
     const team = teamsData.find(t => t.id === teamId);
-    if (team && !teamSubagentDetailId && (team.subagentIds || []).length > 0) {
-      openTeamSubagentDetail(teamId, team.subagentIds[0]);
+    const managerId = team ? String(team.managerAgentId || `${team.id}_manager`) : '';
+    if (team && !teamSubagentDetailId && (managerId || (team.subagentIds || []).length > 0)) {
+      openTeamSubagentDetail(teamId, managerId || team.subagentIds[0]);
     }
   }
 }
@@ -4170,6 +4172,14 @@ function _findAgentInTeam(agentId) {
   return (window._allAgentsForTeam || []).find(a => a.id === agentId) || { id: agentId, name: agentId };
 }
 
+function getTeamManagerId(team) {
+  return String(team?.managerAgentId || (team?.id ? `${team.id}_manager` : '')).trim();
+}
+
+function renderTeamAgentPanelIcon() {
+  return `<span aria-hidden="true" style="width:22px;height:22px;display:inline-grid;place-items:center;flex:0 0 22px;border-radius:7px;color:var(--pm-gold,var(--brand));background:var(--sidebar-icon-bg,var(--panel));border:1px solid var(--sidebar-icon-border,var(--line))"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="15" height="15"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg></span>`;
+}
+
 async function refreshTeamSubagentOverviewAfterAgentSave(agentId) {
   try {
     const data = await api('/api/agents');
@@ -4190,29 +4200,35 @@ registerAgentVoicePickerOnSaved('ts-voice', refreshTeamSubagentOverviewAfterAgen
 
 function renderTeamSubagentsTab(team) {
   const agentIds = team.subagentIds || [];
-  if (agentIds.length === 0) {
+  const managerId = getTeamManagerId(team);
+  const allIds = [managerId, ...agentIds].filter((id, index, ids) => id && ids.indexOf(id) === index);
+  if (allIds.length === 0) {
     return `<div style="text-align:center;color:var(--muted);font-size:13px;padding:32px 16px">
-      <div style="font-weight:700;margin-bottom:6px">No subagents on this team</div>
+      <div style="font-weight:700;margin-bottom:6px">No agents on this team</div>
       <div style="font-size:12px;line-height:1.6">Add agents from the Context tab.</div>
     </div>`;
   }
-  const activeId = teamSubagentDetailId && agentIds.includes(teamSubagentDetailId) ? teamSubagentDetailId : agentIds[0];
-  const list = agentIds.map(id => {
+  const activeId = teamSubagentDetailId && allIds.includes(teamSubagentDetailId) ? teamSubagentDetailId : allIds[0];
+  const renderAgentRow = (id, isManager = false) => {
     const ag = _findAgentInTeam(id);
     const isActive = id === activeId;
     const sched = ag.cronSchedule || '';
-    return `<button onclick="openTeamSubagentDetail('${team.id}','${escHtml(id)}')" style="text-align:left;border:1px solid ${isActive?'var(--brand)':'var(--line)'};background:${isActive?'var(--panel)':'var(--panel-2)'};border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:2px;width:100%">
-      <div style="font-size:12px;font-weight:700;color:${isActive?'var(--brand)':'var(--text)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || id)}</div>
-      <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace">${escHtml(id)}</div>
+    const displayName = isManager && (!ag.name || ag.name === id) ? 'Manager' : (ag.name || id);
+    return `<button onclick="openTeamSubagentDetail('${team.id}','${escHtml(id)}')" style="text-align:left;border:1px solid ${isActive?'var(--brand)':'var(--line)'};background:${isActive?'var(--panel)':'var(--panel-2)'};border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:flex-start;gap:8px;width:100%">
+      ${renderTeamAgentPanelIcon()}<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-size:12px;font-weight:700;color:${isActive?'var(--brand)':'var(--text)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(displayName)}</span>
+      <span style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace">${escHtml(id)}</span>
       ${sched ? `<div style="font-size:10px;color:#0d4faf;margin-top:2px">${escHtml(sched)}</div>` : ''}
-    </button>`;
-  }).join('');
+      </span></button>`;
+  };
+  const managerHtml = managerId ? renderAgentRow(managerId, true) : '';
+  const subagentHtml = agentIds.map(id => renderAgentRow(id)).join('');
 
   return `
     <div style="display:flex;gap:12px;flex:1;min-height:0;height:calc(100vh - 220px)">
       <div style="width:220px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;overflow-y:auto">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:0 2px 4px">Subagents (${agentIds.length})</div>
-        ${list}
+        ${managerHtml ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:0 2px 4px">Manager</div>${managerHtml}` : ''}
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:${managerHtml ? '10px' : '0'} 2px 4px">Subagents (${agentIds.length})</div>
+        ${subagentHtml || '<div style="font-size:11px;color:var(--muted);padding:4px 2px">No subagents on this team.</div>'}
       </div>
       <div id="team-subagent-detail-panel" style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden">
         ${renderTeamSubagentDetail(team, activeId)}
@@ -4223,16 +4239,18 @@ function renderTeamSubagentsTab(team) {
 function renderTeamSubagentDetail(team, agentId) {
   if (!agentId) return '<div style="padding:24px;color:var(--muted);font-size:13px;text-align:center">Select a subagent to view details.</div>';
   const ag = _findAgentInTeam(agentId);
-  const tabs = ['overview','systemprompt','heartbeat'];
-  const labels = { overview:'Overview', systemprompt:'AGENT.md', heartbeat:'Heartbeat' };
+  const isManager = agentId === getTeamManagerId(team);
+  const displayName = isManager && (!ag.name || ag.name === agentId) ? 'Manager' : (ag.name || agentId);
+  const tabs = ['overview','memory','heartbeat'];
+  const labels = { overview:'Overview', memory:'Memory', heartbeat:'Heartbeat' };
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);flex-shrink:0">
       <div style="min-width:0">
-        <div style="font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || agentId)}</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${renderTeamAgentPanelIcon()}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(displayName)}</span></div>
         ${ag.description ? `<div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.description)}</div>` : ''}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
-        <button onclick="runSubagentNow('${escHtml(agentId)}',this,'${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--brand);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Run Now</button>
+        <button onclick="${isManager ? `triggerManagerReview('${team.id}')` : `runSubagentNow('${escHtml(agentId)}',this,'${team.id}')`}" style="border:1px solid var(--line);background:var(--panel-2);color:var(--brand);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">${isManager ? 'Review Now' : 'Run Now'}</button>
       </div>
     </div>
     <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0">
@@ -4249,7 +4267,7 @@ function renderTeamSubagentDetail(team, agentId) {
 function renderTeamSubagentDetailBody(team, agentId) {
   switch (teamSubagentDetailTab) {
     case 'overview': return renderTeamSubagentOverview(team, agentId);
-    case 'systemprompt': return renderTeamSubagentSystemPrompt(team, agentId);
+    case 'memory': return renderTeamSubagentMemory(team, agentId);
     case 'heartbeat': return renderTeamSubagentHeartbeat(team, agentId);
     default: return '';
   }
@@ -4301,21 +4319,24 @@ function renderTeamSubagentOverview(team, agentId) {
     </div>`;
 }
 
-function renderTeamSubagentSystemPrompt(team, agentId) {
+function renderTeamSubagentMemory(team, agentId) {
+  const files = [
+    { title: 'AGENT.md', content: teamSubagentDetail.systemPrompt, exists: !!teamSubagentDetail.systemPrompt, empty: 'No AGENT.md is set for this agent yet.' },
+    { title: 'MEMORY.md', content: teamSubagentDetail.memoryNotes, exists: teamSubagentDetail.memoryExists, empty: 'No personal memory file exists for this agent yet.' },
+  ];
   return `
-    <div style="display:flex;flex-direction:column;gap:10px;height:100%">
+    <div style="display:flex;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:12px;font-weight:800">AGENT.md</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Defines this agent's persona, role, and constraints</div>
+          <div style="font-size:12px;font-weight:800">Memory</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Private, read-only context for this team-scoped agent</div>
         </div>
-        <div style="display:flex;gap:6px">
-          <button onclick="reloadTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Reload</button>
-          <button onclick="saveTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
-        </div>
+        <button onclick="reloadTeamSubagentMemory('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">↻ Reload</button>
       </div>
-      <div id="ts-sysprompt-cm-${escHtml(agentId)}" style="flex:1;min-height:340px;border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
-      <div id="ts-sysprompt-status-${escHtml(agentId)}" style="font-size:11px;color:var(--muted);min-height:14px"></div>
+      ${files.map(file => `<details style="border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden">
+        <summary style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:11px 12px;font-size:12px;font-weight:800;list-style:none"><span>📄 ${file.title}</span><span style="font-size:10px;color:var(--muted);font-weight:700">${file.exists ? 'Read-only' : 'Not found'}</span></summary>
+        <div style="border-top:1px solid var(--line)">${file.content ? `<pre style="margin:0;max-height:360px;overflow:auto;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text)">${escHtml(file.content)}</pre>` : `<div style="padding:14px;color:var(--muted);font-size:12px">${file.empty}</div>`}</div>
+      </details>`).join('')}
     </div>`;
 }
 
@@ -4384,17 +4405,20 @@ function _mountCm(elId, value, mode) {
 async function openTeamSubagentDetail(teamId, agentId) {
   teamSubagentDetailId = agentId;
   // Reset detail caches when switching agents
-  teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+  teamSubagentDetail = { systemPrompt: '', memoryNotes: '', memoryExists: false, heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
   _disposeTeamCmEditors();
 
   // Fetch in parallel
-  const [sp, hbMd, hbCfg, refs] = await Promise.all([
+  const [sp, memory, hbMd, hbCfg, refs] = await Promise.all([
     api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({ content: '' })),
+    api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => ({ content: '', exists: false })),
     api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({ content: '' })),
     api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({ config: {} })),
     api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ references: [] })),
   ]);
   teamSubagentDetail.systemPrompt = sp.content || '';
+  teamSubagentDetail.memoryNotes = memory.content || '';
+  teamSubagentDetail.memoryExists = memory.exists === true || !!teamSubagentDetail.memoryNotes;
   teamSubagentDetail.heartbeatMd = hbMd.content || '';
   const cfg = hbCfg.config || {};
   teamSubagentDetail.heartbeatCfg = { enabled: cfg.enabled === true, intervalMinutes: cfg.intervalMinutes || 30 };
@@ -4429,42 +4453,29 @@ function switchTeamSubagentTab(teamId, agentId, tab) {
 }
 
 function _mountTeamSubagentEditors(agentId) {
-  if (teamSubagentDetailTab === 'systemprompt') {
-    const cm = _mountCm(`ts-sysprompt-cm-${agentId}`, teamSubagentDetail.systemPrompt, 'markdown');
-    if (cm) _teamCmEditors[`sysprompt:${agentId}`] = cm;
-  }
   if (teamSubagentDetailTab === 'heartbeat') {
     const cm = _mountCm(`ts-heartbeat-cm-${agentId}`, teamSubagentDetail.heartbeatMd, 'markdown');
     if (cm) _teamCmEditors[`heartbeat:${agentId}`] = cm;
   }
 }
 
-async function saveTeamSubagentSystemPrompt(teamId, agentId) {
-  const cm = _teamCmEditors[`sysprompt:${agentId}`];
-  if (!cm) return;
-  const status = document.getElementById(`ts-sysprompt-status-${agentId}`);
-  if (status) status.textContent = 'Saving…';
+async function reloadTeamSubagentMemory(teamId, agentId) {
   try {
-    await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: cm.getValue() }),
-    });
-    teamSubagentDetail.systemPrompt = cm.getValue();
-    if (status) status.textContent = 'Saved.';
-    bgtToast('Saved', `AGENT.md updated for ${agentId}`);
+    const [agentMd, memory] = await Promise.all([
+      api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`),
+      api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/memory-md`),
+    ]);
+    teamSubagentDetail.systemPrompt = agentMd.content || '';
+    teamSubagentDetail.memoryNotes = memory.content || '';
+    teamSubagentDetail.memoryExists = memory.exists === true || !!teamSubagentDetail.memoryNotes;
+    const body = document.getElementById('team-subagent-detail-body');
+    const team = teamsData.find(t => t.id === teamId);
+    if (body && team && teamSubagentDetailId === agentId && teamSubagentDetailTab === 'memory') {
+      body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+    }
   } catch (err) {
-    if (status) status.textContent = `Error: ${err?.message || err}`;
+    bgtToast('Error', `Could not reload memory: ${err?.message || err}`);
   }
-}
-
-async function reloadTeamSubagentSystemPrompt(teamId, agentId) {
-  try {
-    const d = await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`);
-    teamSubagentDetail.systemPrompt = d.content || '';
-    const cm = _teamCmEditors[`sysprompt:${agentId}`];
-    if (cm) cm.setValue(teamSubagentDetail.systemPrompt);
-  } catch {}
 }
 
 async function saveTeamSubagentHeartbeatMd(teamId, agentId) {
@@ -6329,8 +6340,7 @@ window.closeTeamWorkspaceFile = closeTeamWorkspaceFile;
 window.renderTeamSubagentsTab = renderTeamSubagentsTab;
 window.openTeamSubagentDetail = openTeamSubagentDetail;
 window.switchTeamSubagentTab = switchTeamSubagentTab;
-window.saveTeamSubagentSystemPrompt = saveTeamSubagentSystemPrompt;
-window.reloadTeamSubagentSystemPrompt = reloadTeamSubagentSystemPrompt;
+window.reloadTeamSubagentMemory = reloadTeamSubagentMemory;
 window.saveTeamSubagentHeartbeatMd = saveTeamSubagentHeartbeatMd;
 window.saveTeamSubagentHbConfig = saveTeamSubagentHbConfig;
 window.tickTeamSubagentHeartbeat = tickTeamSubagentHeartbeat;

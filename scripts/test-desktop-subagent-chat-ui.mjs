@@ -20,6 +20,8 @@ const workspaceTreeGenerated = read('generated/public-web-ui/static/components/w
 const workspaceCss = read('web-ui/src/styles/workspace-file-tree.css');
 const workspaceCssGenerated = read('generated/public-web-ui/static/styles/workspace-file-tree.css');
 const channelsRouter = read('src/gateway/routes/channels.router.ts');
+const teamsRouter = read('src/gateway/routes/teams.router.ts');
+const modelPicker = read('web-ui/src/components/agent-model-picker.js');
 
 assert.match(
   subagents,
@@ -113,6 +115,24 @@ assert.match(subagents, /workflowAvatarHtml:\s*renderSubagentWorkflowAvatar/,
   'direct subagent history/live rows must carry the left-panel identity icon');
 assert.match(teams, /workflowAvatarHtml:\s*renderTeamWorkflowAvatar/,
   'team history/live rows must carry the team identity icon');
+assert.match(teams, /const managerId = getTeamManagerId\(team\);[\s\S]*?Manager[\s\S]*?Subagents \(\$\{agentIds\.length\}\)/,
+  'team subagent controls must expose the manager above the subagent list');
+assert.match(teams, /const tabs = \['overview','memory','heartbeat'\]/,
+  'team agent detail must use the shared read-only Memory tab');
+assert.match(teams, /memory-md/,
+  'team agent detail must load team-scoped MEMORY.md');
+assert.match(teams, /isManager \? `triggerManagerReview\('/,
+  'the Manager row must trigger manager review instead of subagent dispatch');
+assert.doesNotMatch(teams, /labels = \{ overview:'Overview', systemprompt:'AGENT\.md'/,
+  'team subagent detail must not expose the old AGENT.md tab');
+assert.match(teamsRouter, /function resolveTeamAgentIdentity[\s\S]*?ensureManagedTeamManagerAgent/,
+  'team identity routes must resolve both managers and subagents');
+assert.match(teamsRouter, /router\.get\('\/api\/teams\/:id\/agents\/:agentId\/memory-md'/,
+  'gateway must expose team-scoped MEMORY.md');
+assert.match(modelPicker, /effectiveModelProvider/,
+  'agent model picker must surface the resolved provider for bare model overrides');
+assert.match(modelPicker, /const provider = parsed\.provider \|\| \(explicitRaw && effectiveProvider/,
+  'agent model picker must preserve provider selection for legacy bare models');
 assert.match(promBotCollab, /workflowAvatarHtml:\s*PROM_BOT_WORKFLOW_ICON/,
   'Prom Bot group rows must carry the Prom Bot sidebar icon');
 assert.match(promBotCollab, /async function renderGroupRoom\(\{ forceBottom = false \}/,

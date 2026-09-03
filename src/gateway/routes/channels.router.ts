@@ -1197,6 +1197,8 @@ router.get('/api/agents', (_req, res) => {
       teamName: teamInfo?.teamName || null,
       teamEmoji: teamInfo?.teamEmoji || null,
       effectiveModel: effectiveModel.model,
+      effectiveModelProvider: effectiveModel.providerId || '',
+      effectiveModelName: effectiveModel.modelName || '',
       effectiveModelSource: effectiveModel.source,
       effectiveReasoningEffort: effectiveModel.reasoningEffort || '',
       effectiveReasoningSource: effectiveModel.reasoningSource || '',
