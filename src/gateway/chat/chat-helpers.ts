@@ -664,12 +664,18 @@ export async function buildPersonalityContext(
 // ─── Tool Definitions ──────────────────────────────────────────────────────────
 
 // buildTools is imported from tool-builder.ts
-export function buildTools(sessionId?: string) {
+export function buildTools(
+  sessionId?: string,
+  options: { allowNativeWorkspaceTools?: boolean } = {},
+) {
   const activatedCategories = sessionId ? getActivatedToolCategories(sessionId) : undefined;
   return _buildTools(
     { getMCPManager },
     activatedCategories,
-    { includeBrainThoughtTools: !!sessionId && isBrainThoughtRunActive(sessionId) },
+    {
+      includeBrainThoughtTools: !!sessionId && isBrainThoughtRunActive(sessionId),
+      allowNativeWorkspaceTools: options.allowNativeWorkspaceTools === true,
+    },
   );
 }
 
