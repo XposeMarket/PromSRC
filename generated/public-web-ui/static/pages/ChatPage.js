@@ -7726,6 +7726,14 @@ async function _loadSessionFromServer(id, options = {}) {
   const sess = window.chatSessions.find(s => s.id === id);
   const force = options.force === true;
   if (!sess || (!force && !sess._needsServerLoad)) return;
+  // An active SSE turn keeps a reference to these arrays while it appends the
+  // final assistant message. Keep the references stable across an async
+  // recovery fetch; assigning a new array here detaches that turn and makes it
+  // appear to disappear until the next server refresh.
+  const historyRef = Array.isArray(sess.history) ? sess.history : [];
+  const processLogRef = Array.isArray(sess.processLog) ? sess.processLog : [];
+  if (sess.history !== historyRef) sess.history = historyRef;
+  if (sess.processLog !== processLogRef) sess.processLog = processLogRef;
   try {
     const params = new URLSearchParams();
     if (options.full === true) {
@@ -7740,8 +7748,8 @@ async function _loadSessionFromServer(id, options = {}) {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, 3000);
     const s = data.session;
     if (!s) return;
-    const localHistory = Array.isArray(sess.history) ? sess.history.slice() : [];
-    const localProcessLog = Array.isArray(sess.processLog) ? sess.processLog.slice() : [];
+    const localHistory = historyRef.slice();
+    const localProcessLog = processLogRef.slice();
     const serverHistory = (s.history || [])
       .filter((m) => !isInternalChatMessage(m))
       .map(m => ({
@@ -7750,11 +7758,26 @@ async function _loadSessionFromServer(id, options = {}) {
         content: m.content || '',
         timestamp: m.timestamp,
       }));
-    sess.history = mergeServerAndLocalHistory(localHistory, serverHistory);
+    // Include anything appended while the fetch was in flight, even if
+    // another lifecycle path temporarily swapped the session field. Then
+    // commit into the original array so the owning stream sees the merge.
+    const currentHistory = Array.isArray(sess.history) ? sess.history : historyRef;
+    const historyToMerge = currentHistory === historyRef
+      ? currentHistory
+      : [...localHistory, ...currentHistory];
+    const mergedHistory = mergeServerAndLocalHistory(historyToMerge, serverHistory);
+    historyRef.splice(0, historyRef.length, ...mergedHistory);
+    sess.history = historyRef;
     applyDesktopInitialHistoryPage(sess, s);
     const serverProcessLog = Array.isArray(s.processLog) ? s.processLog : [];
-    const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
-    sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
+    const currentProcessLog = Array.isArray(sess.processLog) ? sess.processLog : processLogRef;
+    const processLogToMerge = currentProcessLog === processLogRef
+      ? currentProcessLog
+      : [...localProcessLog, ...currentProcessLog];
+    const messageProcessLog = historyRef.flatMap((m) => processEntriesForMessage(m));
+    const mergedProcessLog = mergeProcessEntryLists(processLogToMerge, serverProcessLog, messageProcessLog);
+    processLogRef.splice(0, processLogRef.length, ...mergedProcessLog);
+    sess.processLog = processLogRef;
     sess.creativeMode = normalizeCreativeMode(s.creativeMode);
     sess.projectId = String(s.projectId || sess.projectId || '').trim() || null;
     sess.projectName = String(s.projectName || sess.projectName || '').trim() || null;
@@ -13039,16 +13062,16 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  const activeProgressSummary = streaming ? desktopTraceProgressSummary(entries) : '';
-  if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
-    groups = groups.filter((group) => !(
-      group.kind === 'thought-summary'
-      && desktopTraceThoughtTextsSimilar(desktopTraceProgressSummary(group.entries), activeProgressSummary)
-    ));
-    latestToolGroupIndex = groups.reduce((latest, group, index) => (
-      group.kind === 'tools' ? index : latest
-    ), -1);
-  }
+  // Only the last raw trace entry can still be receiving mutable progress.
+  // Reverse-searching the whole stream here promotes an old thought summary
+  // after the next tool event arrives, then removes that thought group and
+  // rewrites the tool header. Apart from losing the thought visually, that
+  // changes the keyed timeline shape and forces the streaming patcher to
+  // replace a previously painted group instead of updating it in place.
+  const latestTraceEntry = Array.isArray(entries) ? entries.at(-1) : null;
+  const activeProgressSummary = streaming && isDesktopMutableProgressTraceEntry(latestTraceEntry)
+    ? desktopTraceProgressSummary(entries)
+    : '';
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
@@ -18205,7 +18228,10 @@ async function sendChat(queuedMessage = null, options = {}) {
                 if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
               }
               if (isSummary) {
-	                // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+                // reasoning_summary is already an explicit user-safe progress channel.
+                // Treat every transport delta as part of the single replaceable status slot;
+                // classifying individual chunks leaks markdown/token boundaries into the UI.
+                setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	              }
 	            }
 	            break;
@@ -18214,7 +18240,10 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'reasoning_summary_delta': {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
-	              // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+              // reasoning_summary is already an explicit user-safe progress channel.
+              // Treat every transport delta as part of the single replaceable status slot;
+              // classifying individual chunks leaks markdown/token boundaries into the UI.
+              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	            }
 	            break;
 	          }
@@ -47511,7 +47540,10 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-      // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+      // reasoning_summary is already an explicit user-safe progress channel.
+      // Treat every transport delta as part of the single replaceable status slot;
+      // classifying individual chunks leaks markdown/token boundaries into the UI.
+      setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking_delta') {
@@ -47523,7 +47555,10 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       if (!isSummary) streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
       if (isSummary) {
         const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-        // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+        // reasoning_summary is already an explicit user-safe progress channel.
+        // Treat every transport delta as part of the single replaceable status slot;
+        // classifying individual chunks leaks markdown/token boundaries into the UI.
+        setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
