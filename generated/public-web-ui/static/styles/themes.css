@@ -2766,6 +2766,44 @@ body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area {
   box-shadow: none !important;
 }
 
+/* Secondary desktop chats use the same composer surface as the main chat.
+   Keep the user's bubble on that exact surface in the blue and purple skins,
+   including team, group, direct-bot, and side-chat renderers. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(
+  #chat-view,
+  .side-chat-main-pane,
+  .side-chat-pane,
+  .unified-agent-chat-shell,
+  #prom-bot-main-surface,
+  #prom-bot-group-host
+) .msg.user .msg-body {
+  background: var(--composer-bg) !important;
+  color: var(--text) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(
+  #chat-view,
+  .side-chat-main-pane,
+  .side-chat-pane,
+  .unified-agent-chat-shell,
+  #prom-bot-main-surface,
+  #prom-bot-group-host
+) .msg.user .msg-body::before,
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(
+  #chat-view,
+  .side-chat-main-pane,
+  .side-chat-pane,
+  .unified-agent-chat-shell,
+  #prom-bot-main-surface,
+  #prom-bot-group-host
+) .msg.user .msg-body::after {
+  content: none !important;
+  display: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
 body:not(.pm-mobile-active) #chat-view.chat-empty.desktop-voice-mode > .chat-input-area {
   position: absolute;
   bottom: 18px;
@@ -3830,7 +3868,7 @@ body:not(.pm-mobile-active):not(.side-chat-split-active) #chat-view > .chat-inpu
    This is intentionally limited to active conversations; the empty-chat
    Brain-card composition has its own flow layout. */
 body:not(.pm-mobile-active).right-canvas-open #chat-view:not(.chat-empty) > #chat-messages {
-  --chat-canvas-composer-clearance: clamp(212px, 24vh, 292px);
+  --chat-canvas-composer-clearance: var(--desktop-composer-clearance, clamp(212px, 24vh, 292px));
   padding-top: clamp(30px, 4vh, 44px);
   padding-bottom: var(--chat-canvas-composer-clearance);
   scroll-padding-bottom: var(--chat-canvas-composer-clearance);

@@ -738,6 +738,10 @@ function drawAgentSVG(agent, isActive, scale = 1) {
   </svg>`;
 }
 
+function renderSubagentWorkflowAvatar(agent) {
+  return drawAgentSVG(agent || { id: '' }, false, 0.24);
+}
+
 // ── Fetch & Render ────────────────────────────────────────────────────────────
 async function refreshSubagents() {
   console.log('[SubagentsPage] refreshSubagents called');
@@ -1623,6 +1627,7 @@ function refreshSubagentStreamingUI(agentId, force = false) {
   if (!activeSubagentId || activeSubagentId !== agentId || subagentDetailTab !== 'chat') return;
   const streamState = syncActiveSubagentStreamingState();
   if (!streamState || streamState.agentId !== agentId) return;
+  const chatScrollSnapshot = getSubagentChatScrollSnapshot();
   if (force) {
     renderSubagentBoard(agentId);
   } else {
@@ -1642,10 +1647,7 @@ function refreshSubagentStreamingUI(agentId, force = false) {
       processEl.innerHTML = renderSubagentProcessPill(streamState.processEntries || [], 'sa_stream_proc');
     }
   }
-  requestAnimationFrame(() => {
-    const msgs = document.getElementById('subagent-chat-messages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
-  });
+  restoreSubagentChatScroll(chatScrollSnapshot, { forceBottom: force });
 }
 
 function getSubagentChatScrollSnapshot() {
@@ -1923,8 +1925,12 @@ function subagentUnifiedDesktopHistory(agent) {
   const agentLabel = String(agent.name || agent.id || 'Subagent').trim();
   const history = subagentChatHistory.map((message) => {
     const normalized = normalizeSubagentDesktopChatMessage(message);
-    return normalized.role === 'assistant' && !normalized.workflowLabel
-      ? { ...normalized, workflowLabel: agentLabel }
+    return normalized.role === 'assistant'
+      ? {
+        ...normalized,
+        workflowLabel: normalized.workflowLabel || agentLabel,
+        workflowAvatarHtml: renderSubagentWorkflowAvatar(agent),
+      }
       : normalized;
   });
   const liveMessages = [];
@@ -1942,6 +1948,7 @@ function subagentUnifiedDesktopHistory(agent) {
       _backgroundAgentLive: true,
       streaming: stream.completed !== true,
       workflowLabel: agent.name || agent.id,
+      workflowAvatarHtml: renderSubagentWorkflowAvatar(agent),
     });
   }
   const historyHtml = renderer.renderHistory(history, {

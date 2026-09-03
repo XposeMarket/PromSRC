@@ -13827,6 +13827,28 @@ function workflowTransitionLabel(msg) {
   return String(msg?.workflowLabel || '').trim();
 }
 
+function renderWorkflowTransitionLabelHtml(msg, label) {
+  const text = String(label || '').trim();
+  if (!text) return '';
+  // Page-specific bot/team renderers provide this from the same local avatar
+  // markup used by their left navigation. It is intentionally kept out of
+  // durable message storage and only rendered for the current desktop view.
+  const avatarHtml = typeof msg?.workflowAvatarHtml === 'string'
+    ? msg.workflowAvatarHtml.trim()
+    : '';
+  const avatar = avatarHtml
+    ? `<span class="workflow-transition-avatar" aria-hidden="true">${avatarHtml}</span>`
+    : '';
+  return `<div class="workflow-transition-label${avatar ? ' has-agent-avatar' : ''}">${avatar}<span>${escHtml(text)}</span></div>`;
+}
+
+function renderBackgroundAgentWorkflowAvatar(identity) {
+  const name = String(identity?.name || 'Agent').trim() || 'Agent';
+  const initials = name.split(/\s+/).map((part) => part[0] || '').join('').slice(0, 2).toUpperCase();
+  const color = String(identity?.color || 'var(--brand)').trim();
+  return `<span class="background-spawn-avatar" style="--background-agent-color:${escHtml(color)};width:20px;height:20px;font-size:8px">${escHtml(initials)}</span>`;
+}
+
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
   const sourceEntries = Array.isArray(options.entries)
     ? options.entries
@@ -13904,7 +13926,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}" data-chat-row-key="${escHtml(String(key || `message:${originalIndex}`))}" data-chat-row-signature="${escHtml(`${String(signature || desktopTimelineRowSignature(msg))}:${isEditingThisUserMessage ? 'editing' : 'view'}`)}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         <div class="msg-bubble-stack">
-          ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
+          ${renderWorkflowTransitionLabelHtml(msg, workflowLabel)}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
                 ${assistantWorkTimerHtml}
@@ -14209,6 +14231,8 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       agentName: identity.name,
       agentColor: identity.color,
     }),
+    workflowLabel: identity.name,
+    workflowAvatarHtml: renderBackgroundAgentWorkflowAvatar(identity),
     // Persisted structured traces are authoritative. Older records only have
     // process events, so retain the event-to-trace recovery fallback.
     liveTraceEntries: Array.isArray(record.liveTraceEntries) && record.liveTraceEntries.length

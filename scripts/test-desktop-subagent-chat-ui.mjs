@@ -14,6 +14,7 @@ const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js')
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
 const themes = read('web-ui/src/styles/themes.css');
 const components = read('web-ui/src/styles/components.css');
+const promBotCollab = read('web-ui/src/prom-bot-collab.js');
 const workspaceTree = read('web-ui/src/components/workspace-file-tree.js');
 const workspaceTreeGenerated = read('generated/public-web-ui/static/components/workspace-file-tree.js');
 const workspaceCss = read('web-ui/src/styles/workspace-file-tree.css');
@@ -59,7 +60,6 @@ assert.match(teams, /secondarySurface:\s*'team-chat'/,
   'standalone team chat must identify its secondary composer surface');
 assert.match(chat, /window\.__PROM_UNIFIED_DESKTOP_CHAT = \{/);
 assert.match(chat, /renderComposer: renderUnifiedDesktopComposerHtml/);
-const promBotCollab = read('web-ui/src/prom-bot-collab.js');
 assert.match(promBotCollab, /renderer\.renderComposer\(\{[^}]*sessionId, secondarySurface:\s*'prom-bot-group'/s,
   'Prom Bot group chat must use the shared session-aware composer');
 
@@ -83,6 +83,10 @@ assert.match(canonical, /clone\.querySelectorAll\('\[id\]'\)\.forEach\(\(node\) 
 assert.match(canonical, /clone\.dataset\.canonicalComposerSource = 'main-chat-dom'/);
 assert.match(canonical, /clone\.classList\.add\('canonical-secondary-desktop-composer'\)/,
   'session-aware secondary composers must opt into the main desktop layout rules');
+assert.match(canonical, /DESKTOP_MESSAGE_SCROLLER_SELECTOR/,
+  'secondary composer clearance must target every desktop message scroller');
+assert.match(canonical, /ResizeObserver[\s\S]*syncDesktopComposerLayout/,
+  'composer growth must update the reserved message clearance');
 assert.match(canonical, /team-chat-mention-popover[\s\S]*inputWrap\.appendChild/,
   'canonical team composers must retain the @mention popover behavior');
 assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?grid-template-areas:/,
@@ -97,6 +101,26 @@ assert.match(themes, /data-background-visuals="on"\]\[data-skin="dark"[^\n]*:is\
   'appearance-on must cover standalone and Prom Bot chat hosts');
 assert.match(themes, /:is\(main\.main-shell, #chat-view, \.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host\)\s*\{[\s\S]*?background-image: none !important/,
   'final desktop theme surface must also cover secondary chat hosts');
+assert.match(components, /#chat-messages\s*\{[\s\S]*?scroll-padding-bottom:\s*var\(--desktop-composer-clearance/,
+  'main desktop history must reserve space below the composer');
+assert.match(components, /\.unified-agent-chat-messages\s*\{[\s\S]*?scroll-padding-bottom:\s*var\(--desktop-composer-clearance/,
+  'unified secondary history must reserve space below the composer');
+assert.match(components, /\.workflow-transition-avatar/,
+  'subagent identity rows must have a dedicated avatar slot');
+assert.match(themes, /\[data-skin="blue"\], \[data-skin="purple"\][\s\S]*?\.msg\.user \.msg-body[\s\S]*?background:\s*var\(--composer-bg\) !important/,
+  'blue and purple user bubbles must use the composer surface');
+assert.match(subagents, /workflowAvatarHtml:\s*renderSubagentWorkflowAvatar/,
+  'direct subagent history/live rows must carry the left-panel identity icon');
+assert.match(teams, /workflowAvatarHtml:\s*renderTeamWorkflowAvatar/,
+  'team history/live rows must carry the team identity icon');
+assert.match(promBotCollab, /workflowAvatarHtml:\s*PROM_BOT_WORKFLOW_ICON/,
+  'Prom Bot group rows must carry the Prom Bot sidebar icon');
+assert.match(promBotCollab, /async function renderGroupRoom\(\{ forceBottom = false \}/,
+  'Prom Bot group rerenders must preserve the reading anchor');
+assert.match(subagents, /restoreSubagentChatScroll\(chatScrollSnapshot, \{ forceBottom: force \}\)/,
+  'subagent streaming refreshes must not unconditionally jump a scrolled user');
+assert.match(teams, /const wasNearBottom = messagesBefore[\s\S]*?Math\.min\(previousScrollTop/,
+  'team streaming refreshes must not unconditionally jump a scrolled user');
 
 // Cover every legacy desktop entry point the user can actually see.
 assert.match(canonical, /\.side-chat-composer\.chat-input-area/,

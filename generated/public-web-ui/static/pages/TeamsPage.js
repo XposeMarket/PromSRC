@@ -1832,6 +1832,12 @@ function renderTeamChatBubbleFrame(options) {
   `;
 }
 
+function renderTeamActorLine(label, status = '', agentId = '') {
+  const cleanLabel = String(label || 'Team member').trim() || 'Team member';
+  const icon = cleanLabel.toLowerCase() === 'you' ? '' : renderTeamWorkflowAvatar(agentId, cleanLabel);
+  return `<div class="team-chat-actor-line" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);font-weight:600">${icon}<span>${escHtml(cleanLabel)}${status ? ` · ${escHtml(status)}` : ''}</span></div>`;
+}
+
 function renderTeamChatMessageBubble(message) {
   const isUser = message.from === 'user';
   const label = String(message.fromName || (isUser ? 'You' : message.from === 'manager' ? 'Manager' : 'Subagent'));
@@ -1852,11 +1858,11 @@ function renderTeamChatMessageBubble(message) {
     : '';
   return renderTeamChatBubbleFrame({
     align: isUser ? 'right' : 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(label)} · ${timeLabel}</div>`,
+    actorLine: renderTeamActorLine(label, timeLabel, message.agentId),
     targetLine,
-    bubbleBg: isUser ? 'linear-gradient(180deg, rgba(76,141,255,0.98) 0%, rgba(47,111,255,0.98) 100%)' : 'var(--panel-2)',
-    bubbleColor: isUser ? '#f7fbff' : 'var(--text)',
-    bubbleBorder: isUser ? '1px solid rgba(125,182,255,0.34)' : '1px solid var(--line)',
+    bubbleBg: isUser ? 'var(--composer-bg)' : 'var(--panel-2)',
+    bubbleColor: 'var(--text)',
+    bubbleBorder: isUser ? '1px solid transparent' : '1px solid var(--line)',
     radius: isUser ? '18px 18px 8px 18px' : '18px 18px 18px 8px',
     shadow: isUser ? '0 10px 24px rgba(46,111,255,0.18)' : '0 6px 18px rgba(0,0,0,0.10)',
     bodyHtml: `${renderTeamAttachmentPreviews(attachments, activeTeamId, message.id)}${renderedContent ? `<div>${renderedContent}</div>` : ''}`,
@@ -1882,7 +1888,7 @@ function renderTeamManagerBackgroundStreamingBubble(stream) {
     : '';
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    actorLine: renderTeamActorLine('Manager', stream.completed ? 'finalizing' : 'live'),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1916,7 +1922,7 @@ function renderTeamMemberStreamingBubble(stream) {
     : '';
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(String(stream.agentName || stream.agentId || 'Team Member'))} · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    actorLine: renderTeamActorLine(String(stream.agentName || stream.agentId || 'Team Member'), stream.completed ? 'finalizing' : 'live', stream.agentId),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1945,7 +1951,7 @@ function renderTeamChatStreamingBubble(team) {
   const processHtml = renderTeamChatProcessPill(teamChatStreamingState.processEntries || [], 'team_stream_proc');
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · live</div>`,
+    actorLine: renderTeamActorLine('Manager', 'live'),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1972,6 +1978,11 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
   if (!teamChatStreamingState || teamChatStreamingState.teamId !== teamId || activeTeamId !== teamId || teamBoardTab !== 'chat') return;
   refreshTeamChatComposerState(teamId);
   if (!teamChatStreamingState.managerStarted) return;
+  const messagesBefore = document.getElementById('team-chat-messages');
+  const previousScrollTop = messagesBefore?.scrollTop || 0;
+  const wasNearBottom = messagesBefore
+    ? (messagesBefore.scrollHeight - messagesBefore.scrollTop - messagesBefore.clientHeight) < 96
+    : true;
   if (force) {
     renderActiveTeamChat(teamId, { forceBottom: true });
   } else {
@@ -1979,7 +1990,7 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
     if (textEl) {
       textEl.textContent = String(teamChatStreamingState.content || teamChatStreamingState.finalReply || '');
     } else {
-      renderActiveTeamChat(teamId, { forceBottom: true });
+      renderActiveTeamChat(teamId, { forceBottom: false });
     }
     const progressEl = document.getElementById('team-chat-streaming-progress-lines');
     if (progressEl) {
@@ -1993,7 +2004,12 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
   }
   requestAnimationFrame(() => {
     const msgs = document.getElementById('team-chat-messages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    if (!msgs) return;
+    if (force || wasNearBottom) {
+      msgs.scrollTop = msgs.scrollHeight;
+      return;
+    }
+    msgs.scrollTop = Math.min(previousScrollTop, Math.max(0, msgs.scrollHeight - msgs.clientHeight));
   });
 }
 
@@ -2415,6 +2431,9 @@ function normalizeTeamDesktopChatMessage(message) {
   const timestamp = Number(message?.timestamp || message?.ts || Date.now()) || Date.now();
   const durationMs = Number(message?.workDurationMs || metadata.durationMs || (Number(message?.duration || 0) * 1000)) || 0;
   const actorLabel = String(message?.fromName || (isUser ? '' : message?.from === 'manager' ? 'Manager' : 'Team member')).trim();
+  const workflowAvatarHtml = !isUser
+    ? renderTeamWorkflowAvatar(message?.agentId || metadata.agentId, actorLabel)
+    : '';
   return {
     ...message,
     role: isUser ? 'user' : 'assistant',
@@ -2427,7 +2446,24 @@ function normalizeTeamDesktopChatMessage(message) {
     workEndedAt: Number(message?.workEndedAt || metadata.finishedAt || (durationMs ? timestamp + durationMs : 0)) || 0,
     workDurationMs: durationMs,
     ...(actorLabel && !isUser ? { workflowLabel: actorLabel } : {}),
+    ...(workflowAvatarHtml ? { workflowAvatarHtml } : {}),
   };
+}
+
+function renderTeamWorkflowAvatar(agentId, label = '') {
+  const cleanAgentId = String(agentId || '').trim();
+  const isManager = !cleanAgentId || String(label || '').trim().toLowerCase() === 'manager';
+  const team = getTeamById(activeTeamId);
+  const memberIndex = cleanAgentId && team
+    ? (team.subagentIds || []).findIndex((id) => String(id) === cleanAgentId)
+    : -1;
+  const colors = ['#4c8dff', '#31b884', '#d6a64f', '#e05c5c', '#a78bfa', '#4c8dff'];
+  const emojis = ['🧠', '🤖', '👾', '🦾', '⚡', '🛸'];
+  const agent = cleanAgentId ? _findAgentInTeam(cleanAgentId) : null;
+  const paletteIndex = memberIndex >= 0 ? (memberIndex + 1) % colors.length : 0;
+  const emoji = isManager ? '🧠' : (agent?.emoji || emojis[paletteIndex]);
+  const color = isManager ? colors[0] : colors[paletteIndex];
+  return `<span class="team-workflow-avatar" style="display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;flex:0 0 20px;border:1px solid ${color};border-radius:7px;background:${color};font-size:12px;line-height:1">${escHtml(emoji)}</span>`;
 }
 
 function teamDesktopStreamMessage(stream, label, idPrefix) {
@@ -2448,6 +2484,7 @@ function teamDesktopStreamMessage(stream, label, idPrefix) {
     workflowLabel: label,
     _backgroundAgentLive: stream?.completed !== true,
     streaming: stream?.completed !== true,
+    workflowAvatarHtml: renderTeamWorkflowAvatar(stream?.agentId, label),
     metadata: {
       processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
       liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
