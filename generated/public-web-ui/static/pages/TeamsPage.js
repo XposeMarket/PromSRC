@@ -1167,8 +1167,21 @@ function appendTeamDesktopLiveTrace(stream, type, text, { append = false, extra 
   if (!content) return;
   if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase() === 'reasoning_summary' ? 'think' : String(type || 'info').toLowerCase();
+  const incomingExtra = extra && typeof extra === 'object' ? extra : {};
+  const isSummary = normalizedType === 'think' && (
+    String(type || '').toLowerCase() === 'reasoning_summary'
+    || String(incomingExtra.source || '').toLowerCase() === 'reasoning_summary'
+    || String(incomingExtra.reasoningKind || '').toLowerCase() === 'summary'
+    || String(incomingExtra.visibility || '').toLowerCase() === 'summary'
+  );
   const safeExtra = normalizedType === 'think'
-    ? { source: 'reasoning_summary', visibility: 'user', ...(extra && typeof extra === 'object' ? extra : {}) }
+    ? {
+      source: isSummary ? 'agent_progress' : 'agent_thought',
+      visibility: 'user',
+      ...(isSummary ? { reasoningKind: 'summary' } : {}),
+      ...incomingExtra,
+      ...(isSummary ? { source: 'agent_progress', visibility: 'user', reasoningKind: 'summary' } : {}),
+    }
     : (extra && typeof extra === 'object' ? extra : null);
   const last = stream.liveTraceEntries[stream.liveTraceEntries.length - 1];
   const incomingSource = String(safeExtra?.source || '').toLowerCase();
@@ -1195,6 +1208,10 @@ function appendTeamDesktopLiveTrace(stream, type, text, { append = false, extra 
   });
 }
 
+function teamEventSource(event) {
+  return String(event?.source || event?.extra?.source || '').trim().toLowerCase();
+}
+
 function applyTeamDesktopToolActivity(stream, phase, event) {
   if (!stream) return;
   if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
@@ -1209,7 +1226,7 @@ function appendTeamVisibleThought(stream, thought, event = {}) {
   appendTeamDesktopLiveTrace(stream, isSummary ? 'reasoning_summary' : 'think', thought, {
     append: isSummary,
     extra: {
-      source: isSummary ? 'reasoning_summary' : 'agent_thought',
+      source: isSummary ? 'agent_progress' : 'agent_thought',
       visibility: 'user',
       ...(event?.actor ? { actor: event.actor } : {}),
       ...(isSummary ? { reasoningKind: 'summary' } : {}),
@@ -1435,7 +1452,7 @@ function applyTeamManagerStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -1627,7 +1644,7 @@ function applyTeamMemberStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -2165,7 +2182,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
       if (chunk) {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = `${teamChatStreamingState.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(teamChatStreamingState, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamChatProgressLine('Thinking...');
@@ -2189,6 +2206,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = teamChatStreamingState.thinking ? `${teamChatStreamingState.thinking}\n\n${thought}` : thought;
         addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
+        appendTeamVisibleThought(teamChatStreamingState, thought, event);
       }
       break;
     }
@@ -2334,7 +2352,7 @@ function applyTeamDispatchStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -5078,7 +5096,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             if (chunk) {
               const becameVisible = markTeamChatManagerStarted(teamId);
               streamState.thinking = `${streamState.thinking || ''}${chunk}`;
-              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+              if (teamEventSource(event) === 'reasoning_summary') {
                 appendTeamDesktopLiveTrace(streamState, 'reasoning_summary', chunk, { append: true });
               }
               pushTeamChatProgressLine('Thinking...');
@@ -5104,6 +5122,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
               markTeamChatManagerStarted(teamId);
               streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
               addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
+              appendTeamVisibleThought(streamState, thought, event);
               refreshTeamChatStreamingUI(teamId, true);
             }
             break;

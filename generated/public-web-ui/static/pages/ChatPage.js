@@ -13054,7 +13054,13 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       const isSummaryThought = group.kind === 'thought-summary';
       const isLiveThought = streaming && index === groups.length - 1;
       const progressSummary = isSummaryThought && isLiveThought ? desktopTraceProgressSummary(group.entries) : '';
-      const bodyEntries = group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+      // The active summary is rendered by the compact narration label. Once
+      // another group follows it, keep the old progress entry as prose so
+      // the completed thought remains visible in the timeline.
+      const hideMutableProgress = isSummaryThought && isLiveThought && Boolean(progressSummary);
+      const bodyEntries = hideMutableProgress
+        ? group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry))
+        : group.entries;
       const summaryMarkup = progressSummary
         ? `<div class="live-turn-thought-summary" aria-live="polite"><strong class="t-think" data-live-trace-summary-key="${escHtml(liveTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
         : '';
@@ -18214,7 +18220,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          }
 
 	          case 'agent_thought': {
-	            const thoughtText = String(event.text || '').trim();
+	            const thoughtText = String(event.thinking || event.text || '').trim();
 	            const visibility = chatProgressVisibility(event);
 	            if (thoughtText && visibility !== 'private') {
 	              if (isDesktopSummaryThoughtEvent(event)) {
@@ -46791,9 +46797,16 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
   const incoming = String(text || '');
   if (!incoming) return false;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
-  const existing = [...streamState.liveTraceEntries].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  // A progress narration is mutable only while it is the current trace
+  // segment. Searching backwards here lets a later summary (after a tool
+  // event) rewrite an older narration and collapse the visible timeline.
+  const latestTraceEntry = streamState.liveTraceEntries.at(-1);
+  const latestTraceExtra = latestTraceEntry?.extra || {};
+  const existing = latestTraceEntry
+    && String(latestTraceEntry.type || '').toLowerCase() === 'think'
+    && String(latestTraceExtra.source || latestTraceEntry.source || '').toLowerCase() === 'agent_progress'
+    ? latestTraceEntry
+    : null;
   if (!existing) {
     appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
     return true;
