@@ -21,6 +21,7 @@ export function createDesktopChatRuntimeAdapter({
   request,
   getStreamState = () => null,
   recordProcess = () => {},
+  onOlderPageApplied = () => {},
 } = {}) {
   if (!windowRef || typeof getSession !== 'function') {
     throw new TypeError('Desktop chat runtime adapter requires a window and getSession.');
@@ -231,6 +232,13 @@ export function createDesktopChatRuntimeAdapter({
       session.history = historyRef;
       session.historyPage = { ...result.pageInfo, loadingOlder: false, error: null, loadedCount: session.history.length };
       sync(session, { source: 'desktop-older-page', pageInfo: session.historyPage });
+      try {
+        onOlderPageApplied({
+          sessionId: sid,
+          history: session.history,
+          pageInfo: session.historyPage,
+        });
+      } catch {}
       persist();
       if (sid === windowRef.activeChatSessionId) {
         windowRef.chatHistory = session.history;

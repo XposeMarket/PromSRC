@@ -80,6 +80,28 @@ handlers._handleMobileCleanThought(message, {
 assert.equal(message.processEntries.length, 1, 'full thoughts must remain journaled');
 assert.equal(message.processEntries[0].text, 'I will compare the public model claims with primary sources.');
 
+// A later summary starts a new replaceable slot instead of reaching back into
+// the completed summary, and a thought that resembles the summary remains a
+// separate durable surface.
+const boundaryMessage = { liveTraceEntries: [], processEntries: [], _thinking: '' };
+handlers._handleMobileReasoningSummaryDelta(boundaryMessage, {
+  type: 'reasoning_summary_delta',
+  text: 'Investigating H3 Max model licensing',
+});
+handlers._handleMobileCleanThought(boundaryMessage, {
+  type: 'agent_thought',
+  reasoningKind: 'full_thought',
+  text: 'Investigating H3 Max model licensing',
+});
+handlers._handleMobileReasoningSummaryDelta(boundaryMessage, {
+  type: 'reasoning_summary_delta',
+  text: 'Checking the next source now',
+});
+const progressAfterThought = boundaryMessage.liveTraceEntries.filter((entry) => entry.extra?.source === 'agent_progress');
+assert.equal(progressAfterThought.length, 2, 'a summary after a thought must get a new mutable progress slot');
+assert.equal(boundaryMessage.liveTraceEntries.filter((entry) => entry.extra?.reasoningKind === 'full_thought').length, 1,
+  'full thoughts after summaries must remain durable and distinct');
+
 const durable = transientEntry._mobileDurableReasoningEntries([
   ...message.liveTraceEntries,
   { type: 'think', text: 'Launching parallel H3 Max queries', extra: { source: 'reasoning_summary' } },

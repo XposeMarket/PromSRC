@@ -116,6 +116,36 @@ assert.match(renderedThoughtBeforeTool, /Planning the next step/, 'a tool event 
 assert.match(renderedThoughtBeforeTool, /Session in browser/, 'the tool group must remain rendered after a thought');
 assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 2, 'thought and tool must remain separate keyed groups');
 
+const visibleContext = {
+  desktopTracePresentationEntries: (entries) => Array.isArray(entries) ? entries : [],
+  isDesktopInternalToolProtocolTraceEntry: () => false,
+  coalesceToolActivityEntries: (entries) => Array.isArray(entries) ? entries : [],
+  isDesktopPreparedTraceEntry: () => false,
+  isVisionInjectionStatusText: () => false,
+  isBareThinkingLiveTraceText: () => false,
+  isDesktopTransientReasoningTraceEntry: (entry) => String(entry?.extra?.reasoningKind || '') === 'summary',
+  isDesktopMutableProgressTraceEntry: (entry) => String(entry?.extra?.source || '') === 'agent_progress',
+  isRenderableLiveTraceImageSource: () => false,
+  isDesktopTraceThoughtType: (type) => ['preamble', 'think', 'assistant'].includes(String(type || '').toLowerCase()),
+  isDesktopTraceThoughtTextsSimilar: (left, right) => String(left || '') === String(right || ''),
+  isDesktopUserVisibleReasoningTraceEntry: () => true,
+  dedupeDesktopTraceProseText: (value) => String(value || ''),
+  isDesktopTraceThoughtFragmentText: () => false,
+  desktopTraceComparableText: (value) => String(value || '').toLowerCase(),
+  desktopTraceThoughtKind: (entry) => String(entry?.extra?.reasoningKind || '') === 'summary' ? 'summary' : 'full_thought',
+};
+vm.runInNewContext(
+  `${extractFunction(desktop, 'visibleLiveTraceEntries')}`
+    + '\nthis.visibleLiveTraceEntries = visibleLiveTraceEntries;',
+  visibleContext,
+);
+const similarSummaryAndThought = visibleContext.visibleLiveTraceEntries([
+  { id: 'summary', type: 'think', text: 'Investigating the current model behavior', extra: { source: 'agent_progress', reasoningKind: 'summary' } },
+  { id: 'thought', type: 'think', text: 'Investigating the current model behavior', extra: { source: 'agent_thought', reasoningKind: 'full_thought' } },
+]);
+assert.equal(similarSummaryAndThought.length, 2,
+  'a full thought that resembles the preceding summary must not be deduped away');
+
 assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,100}event\.thinking \|\| event\.text/);
 assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
 assert.match(desktop, /const latestTraceEntry = Array\.isArray\(entries\) \? entries\.at\(-1\) : null/);

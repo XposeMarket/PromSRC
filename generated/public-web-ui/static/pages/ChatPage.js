@@ -241,6 +241,11 @@ const {
   request: api,
   getStreamState: getSessionStreamState,
   recordProcess: addSessionProcessEntry,
+  onOlderPageApplied: ({ sessionId, history }) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return;
+    desktopTimelineController.retainEarlier(`desktop:main:${sid}`, desktopTimelineEntries(history, sid));
+  },
 });
 
 const desktopQuestionTransport = createDesktopQuestionTransport({
@@ -12443,6 +12448,10 @@ function isDesktopTransientReasoningTraceEntry(entry) {
   const source = String(entry.source || extra.source || '').trim().toLowerCase();
   const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
   const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  // A provider may carry summary visibility/source fields onto a following
+  // curated thought packet. An explicit full_thought marker is authoritative;
+  // never let the summary cleanup path delete that durable thought.
+  if (reasoningKind === 'full_thought') return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -12569,6 +12578,7 @@ function isDesktopSummaryThoughtEvent(event = {}) {
   const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
   const reasoningKind = String(event?.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
   const source = String(event?.source || extra.source || '').trim().toLowerCase();
+  if (reasoningKind === 'full_thought') return false;
   return chatProgressVisibility(event) === 'summary'
     || reasoningKind === 'summary'
     || source === 'reasoning_summary';
@@ -12626,7 +12636,10 @@ function visibleLiveTraceEntries(entries) {
     .filter((entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_progress')
     .map((entry) => String(entry?.text || entry?.content || '').trim())
     .filter(Boolean);
-  const thoughtTexts = [];
+  // Summary narration and full thoughts are different presentation surfaces.
+  // Similar prose is only a duplicate inside the same surface; otherwise a
+  // thought that follows a summary disappears during the next tool repaint.
+  const thoughtTextsByKind = new Map();
   return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
       || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
@@ -12645,11 +12658,14 @@ function visibleLiveTraceEntries(entries) {
         if (isDesktopTraceThoughtFragmentText(text)) return false;
         const comparable = desktopTraceComparableText(text);
         const words = comparable.split(/\s+/).filter(Boolean).length;
+        const thoughtKind = desktopTraceThoughtKind(entry);
+        const thoughtTexts = thoughtTextsByKind.get(thoughtKind) || [];
         if (thoughtTexts.some((seen) => {
           const seenComparable = desktopTraceComparableText(seen);
           return desktopTraceThoughtTextsSimilar(seen, text)
             || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
         })) return false;
+        thoughtTextsByKind.set(thoughtKind, thoughtTexts);
         thoughtTexts.push(text);
       }
     }
@@ -12716,7 +12732,7 @@ function desktopTraceThoughtKind(entry) {
   if (!isLiveTraceThoughtEntry(entry)) return '';
   if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  const explicit = String(extra.reasoningKind || extra.presentationKind || entry?.reasoningKind || '').trim().toLowerCase();
   if (explicit === 'summary' || explicit === 'full_thought') return explicit;
   const source = String(extra.source || entry?.source || '').trim().toLowerCase();
   return isDesktopTraceReasoningSummaryType(entry?.type)
@@ -13191,7 +13207,10 @@ function desktopWorkflowTraceEntriesForMessage(message) {
       if (!previewData) return;
     }
     if (type === 'skill') type = 'tool';
-    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
+    const thoughtKind = isDesktopTraceThoughtType(type)
+      ? desktopTraceThoughtKind({ ...traceEntry, type, extra })
+      : '';
+    const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
@@ -17495,17 +17514,17 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
     const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
-    const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+    const thoughtKind = isThoughtLike ? desktopTraceThoughtKind({ type: normalizedType, extra }) : '';
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
     if (append && last && last.type === normalizedType
-      && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+      && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)) {
       last.text = `${last.text || ''}${content}`;
       if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     } else {
       const trimmed = content.trim();
       if (!trimmed) return;
       if (last && last.type === normalizedType
-        && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+        && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)
         && String(last.text || '').trim() === trimmed) return;
       streamState.liveTraceEntries.push({
         id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -19301,9 +19320,11 @@ function backgroundSpawnPreview(value, max = 180) {
 function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
   const next = String(text || '').trim();
   if (!next) return;
-  const previous = [...trace].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  const latest = trace.at(-1);
+  const previous = latest
+    && String(latest?.extra?.source || '').toLowerCase() === 'agent_progress'
+    ? latest
+    : null;
   const visibleExtra = {
     ...extra,
     source: 'agent_progress',
@@ -19381,8 +19402,9 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       const previous = trace[trace.length - 1];
       const visibleExtra = {
         ...extra,
-        source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_progress')),
+        source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_thought')),
         visibility,
+        ...(visibility === 'summary' ? { reasoningKind: 'summary' } : { reasoningKind: 'full_thought' }),
       };
       if (visibility === 'summary') {
         mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType === 'thinking_delta' });
@@ -19461,7 +19483,18 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
       const text = String(msg.thinking || msg.text || '').trim();
       const visibility = chatProgressVisibility(msg);
       return text && visibility !== 'private'
-        ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: { ...extra, source: visibility === 'summary' ? 'reasoning_summary' : 'agent_progress', visibility } }
+        ? {
+          ts,
+          type: 'think',
+          actor: 'Background Agent',
+          content: text,
+          extra: {
+            ...extra,
+            source: visibility === 'summary' ? 'reasoning_summary' : 'agent_thought',
+            visibility,
+            reasoningKind: visibility === 'summary' ? 'summary' : 'full_thought',
+          },
+        }
         : null;
     }
     case 'thinking_delta': {
@@ -46794,10 +46827,10 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
-  const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+  const thoughtKind = isThoughtLike ? desktopTraceThoughtKind({ type: normalizedType, extra }) : '';
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
   if (append && last && last.type === normalizedType
-    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+    && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)) {
     last.text = `${last.text || ''}${content}`;
     if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     return;
@@ -46805,7 +46838,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   const trimmed = content.trim();
   if (!trimmed) return;
   if (last && last.type === normalizedType
-    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+    && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)
     && String(last.text || '').trim() === trimmed) return;
   streamState.liveTraceEntries.push({
     id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
