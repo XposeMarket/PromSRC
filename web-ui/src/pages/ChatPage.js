@@ -12542,6 +12542,48 @@ function isDesktopUserVisibleReasoningTraceEntry(entry) {
     : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
+function isDesktopSummaryThoughtEvent(event = {}) {
+  const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
+  const reasoningKind = String(event?.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  const source = String(event?.source || extra.source || '').trim().toLowerCase();
+  return chatProgressVisibility(event) === 'summary'
+    || reasoningKind === 'summary'
+    || source === 'reasoning_summary';
+}
+
+function desktopThoughtMetadata(event = {}, visibility = 'user') {
+  const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
+  const streamId = String(event?.streamId || extra.streamId || '').trim();
+  const seqValue = Number(event?.seq ?? extra.seq);
+  const seq = Number.isFinite(seqValue) && seqValue >= 0 ? Math.floor(seqValue) : null;
+  const eventKey = String(event?.eventKey || extra.eventKey || '').trim()
+    || (streamId && seq != null ? `${streamId}:${seq}` : '');
+  return {
+    source: String(event?.source || extra.source || '').trim() || 'agent_thought',
+    visibility,
+    event: String(event?.type || event?.eventType || extra.eventType || '').trim() || 'agent_thought',
+    reasoningKind: String(event?.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase() || 'full_thought',
+    ...(streamId ? { streamId } : {}),
+    ...(eventKey ? { eventKey } : {}),
+    ...(seq != null ? { seq } : {}),
+  };
+}
+
+function appendDesktopDurableThought(streamState, text, appendTrace, event = {}) {
+  const thoughtText = String(text || '').trim();
+  if (!streamState || !thoughtText || typeof appendTrace !== 'function') return false;
+  const visibility = chatProgressVisibility(event);
+  if (visibility === 'private' || isDesktopSummaryThoughtEvent(event)) return false;
+  const thoughtExtra = desktopThoughtMetadata(event, visibility);
+  const eventKey = String(thoughtExtra.eventKey || '').trim();
+  if (eventKey && Array.isArray(streamState.liveTraceEntries)
+    && streamState.liveTraceEntries.some((entry) => (
+      String(entry?.eventKey || entry?.extra?.eventKey || '').trim() === eventKey
+    ))) return true;
+  appendTrace('think', thoughtText, { extra: thoughtExtra });
+  return true;
+}
+
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
   const trace = String(text || '').replace(/\s+/g, ' ').trim();
   const final = String(finalText || '').replace(/\s+/g, ' ').trim();
@@ -18112,10 +18154,13 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'thinking_delta': {
 	            const chunk = String(event.thinking || event.text || '');
 	            if (chunk) {
-	              pendingThinkingBurst += chunk;
-	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
-	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
-	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+              const isSummary = chatProgressVisibility(event) === 'summary';
+              if (!isSummary) {
+                pendingThinkingBurst += chunk;
+                streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
+                if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
+              }
+              if (isSummary) {
 	                // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	              }
 	            }
@@ -18125,7 +18170,6 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'reasoning_summary_delta': {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
-	              collectTurnThinking(chunk);
 	              // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	            }
 	            break;
@@ -18135,8 +18179,12 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            const thoughtText = String(event.text || '').trim();
 	            const visibility = chatProgressVisibility(event);
 	            if (thoughtText && visibility !== 'private') {
-	              collectTurnThinking(thoughtText);
-	              setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility });
+	              if (isDesktopSummaryThoughtEvent(event)) {
+	                setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	              } else {
+	                collectTurnThinking(thoughtText);
+	                appendDesktopDurableThought(streamState, thoughtText, appendLiveTrace, event);
+	              }
 	            }
 	            break;
 	          }
@@ -18144,13 +18192,14 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'thinking':
 	            if (event.thinking && String(event.thinking).trim() && chatProgressVisibility(event) !== 'private') {
 	              const thinkingText = String(event.thinking).trim();
-	              collectTurnThinking(thinkingText);
-	              setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, {
-	                replace: true,
-	                visibility: chatProgressVisibility(event),
-	              });
-	            }
-	            break;
+	              if (isDesktopSummaryThoughtEvent(event)) {
+	                setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	              } else {
+	                collectTurnThinking(thinkingText);
+	                appendDesktopDurableThought(streamState, thinkingText, appendLiveTrace, event);
+	              }
+            }
+            break;
 
           case 'model_stream_event': {
             const modelEvent = event.event && typeof event.event === 'object' ? event.event : {};
@@ -47419,23 +47468,24 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-      streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
-      if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
+      const isSummary = chatProgressVisibility(evt) === 'summary';
+      if (!isSummary) streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
+      if (isSummary) {
         const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
         // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
-  } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
+	} else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
     const visibility = chatProgressVisibility(evt);
     if (text && visibility !== 'private') {
-      setDesktopLiveProgressNarration(
-        streamState,
-        text,
-        (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options),
-        { replace: true, visibility },
-      );
+      const appendTrace = (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options);
+      if (isDesktopSummaryThoughtEvent(evt)) {
+        setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace: true, visibility: 'summary' });
+      } else {
+        appendDesktopDurableThought(streamState, text, appendTrace, evt);
+      }
       renderIfViewing();
     }
   } else if (evt.type === 'model_stream_event') {
