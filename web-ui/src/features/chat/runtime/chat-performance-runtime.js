@@ -52,9 +52,7 @@ export function createChatPerformanceRuntime({
 
   function scheduleRender(scheduler, key, renderFn, options = {}) {
     if (typeof renderFn !== 'function') return;
-    const task = () => {
-      try { renderFn(); } catch {}
-    };
+    const task = () => renderFn();
     if (options.immediate === true) scheduler.flush(key, task);
     else scheduler.schedule(key, task);
   }

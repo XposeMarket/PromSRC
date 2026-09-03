@@ -49,12 +49,25 @@ import {
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
-  persistBackgroundAgentWork,
-  appendBackgroundAgentEvent,
+  mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
+  writeBackgroundAgentWork,
 } from '../background-agent-work.js';
+import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+
+const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
+  mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
+  writeBackgroundAgentWork,
+});
+
 const chatPerformanceRuntime = createChatPerformanceRuntime({
   persistSession,
   persistActiveChat,

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function importSource(relativePath) {
-  const source = fs.readFileSync(path.join(root, relativePath), 'utf8');
-  return import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+  return import(pathToFileURL(path.join(root, relativePath)).href);
 }
 
 const pairs = [
@@ -68,6 +67,14 @@ globalThis.localStorage = {
 };
 
 const background = await importSource('web-ui/src/features/chat/core/background-agent-work.js');
+const desktopBackgroundModule = await importSource('web-ui/src/features/chat/core/desktop-background-agent-work.js');
+const desktopBackground = desktopBackgroundModule.createDesktopBackgroundAgentWork({
+  mergeBackgroundAgentEvents: background.mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries: background.mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork: background.normalizeBackgroundAgentWork,
+  readBackgroundAgentWork: background.readBackgroundAgentWork,
+  writeBackgroundAgentWork: background.writeBackgroundAgentWork,
+});
 const normalized = background.normalizeBackgroundAgentWork({
   id: 'bg-1',
   sessionId: 'session-1',
@@ -82,20 +89,20 @@ assert.equal(normalized.events.length, 1);
 assert.equal(background.backgroundAgentPreview('a '.repeat(100), 20).length <= 20, true);
 assert.equal(background.backgroundAgentAgeLabel(Date.now(), Date.now()), 'just now');
 assert.equal(background.resolveBackgroundAgentIdentity('bg-1').name.length > 0, true);
-const firstLiveEvent = background.appendBackgroundAgentEvent([], {
+const firstLiveEvent = desktopBackground.appendBackgroundAgentEvent([], {
   streamId: 'stream-test',
   seq: 1,
   type: 'tool',
   content: 'first',
 });
-const secondLiveEvent = background.appendBackgroundAgentEvent(firstLiveEvent, {
+const secondLiveEvent = desktopBackground.appendBackgroundAgentEvent(firstLiveEvent, {
   streamId: 'stream-test',
   seq: 2,
   type: 'result',
   content: 'second',
 });
 assert.deepEqual(secondLiveEvent.map((event) => event.seq), [1, 2]);
-assert.equal(background.appendBackgroundAgentEvent(secondLiveEvent, {
+assert.equal(desktopBackground.appendBackgroundAgentEvent(secondLiveEvent, {
   streamId: 'stream-test',
   seq: 2,
   type: 'result',
@@ -121,7 +128,7 @@ assert.strictEqual(background.readBackgroundAgentWork(), written, 'writes should
 assert.equal(written[0].id, 'bg-cache-3');
 
 const writesBeforeDeferredPersist = backgroundWriteCount;
-background.persistBackgroundAgentWork({
+desktopBackground.persistBackgroundAgentWork({
   id: 'bg-live',
   sessionId: 'session-live',
   status: 'running',
@@ -130,7 +137,7 @@ background.persistBackgroundAgentWork({
   events: [firstLiveEvent[0]],
   updatedAt: 4,
 });
-background.persistBackgroundAgentWork({
+desktopBackground.persistBackgroundAgentWork({
   id: 'bg-live',
   sessionId: 'session-live',
   status: 'running',
@@ -140,13 +147,13 @@ background.persistBackgroundAgentWork({
   updatedAt: 5,
 });
 assert.equal(backgroundWriteCount, writesBeforeDeferredPersist, 'live persistence should be deferred');
-background.flushBackgroundAgentWorkPersistence();
+desktopBackground.flushBackgroundAgentWorkPersistence();
 assert.equal(backgroundWriteCount, writesBeforeDeferredPersist + 1, 'flush should coalesce deferred persistence into one write');
 assert.deepEqual(
   background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
   [1, 2],
 );
-background.persistBackgroundAgentWork({
+desktopBackground.persistBackgroundAgentWork({
   id: 'bg-live',
   sessionId: 'session-live',
   status: 'running',
@@ -155,7 +162,7 @@ background.persistBackgroundAgentWork({
   events: [{ streamId: 'stream-test', seq: 3, type: 'tool', content: 'third' }],
   updatedAt: 6,
 });
-background.flushBackgroundAgentWorkPersistence();
+desktopBackground.flushBackgroundAgentWorkPersistence();
 assert.deepEqual(
   background.findBackgroundAgentWork('bg-live', 'session-live').events.map((event) => event.seq),
   [1, 2, 3],
