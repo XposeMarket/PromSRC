@@ -18,6 +18,7 @@ import {
 } from '../features/chat/optional/tool-activity-runtime.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
+import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
 } from '../features/chat/questions/question-model.js';
@@ -48,12 +49,35 @@ import {
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,
-  persistBackgroundAgentWork,
   mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
+  writeBackgroundAgentWork,
 } from '../background-agent-work.js';
+import { createDesktopBackgroundAgentWork } from '../features/chat/core/desktop-background-agent-work.js';
 installToolActivityExpansionPersistence();
 const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33, ceilingMs: 240, hiddenMs: 180 });
+
+const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
+  mergeBackgroundAgentEvents,
+  mergeBackgroundAgentTraceEntries,
+  normalizeBackgroundAgentWork,
+  readBackgroundAgentWork,
+  writeBackgroundAgentWork,
+});
+
+const chatPerformanceRuntime = createChatPerformanceRuntime({
+  persistSession,
+  persistActiveChat,
+  getChatSessionById,
+  getSessionStreamState,
+  renderProcessLog,
+  maybeAutoScrollRightColumn,
+  formatProcessLines,
+});
+const { addProcessEntry, addSessionProcessEntry, clearProcessLog } = chatPerformanceRuntime;
 
 let creativeSceneGraph = null;
 let CREATIVE_LIBRARY_PACKS = [];
@@ -8228,6 +8252,7 @@ function refreshVisibleChannelsList() {
 }
 
 function persistActiveChat() {
+  chatPerformanceRuntime.cancelProcessLogPersistence(window.activeChatSessionId);
   const idx = window.chatSessions.findIndex(s => s.id === window.activeChatSessionId);
   if (idx === -1) return;
   window.chatSessions[idx].history = window.chatHistory;
@@ -16245,60 +16270,6 @@ function renderProgressPanel() {
   });
 }
 
-function clearProcessLog() {
-  window.processLogEntries.length = 0;
-  const el = document.getElementById('process-log');
-  if (el) el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>';
-  window.processLogAutoFollow = true;
-  window.rightColumnAutoFollow = true;
-  maybeAutoScrollRightColumn(true);
-  persistActiveChat();
-}
-
-function addProcessEntry(type, content, extra) {
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  const contentText = String(content || '');
-  if (!actor && contentText.startsWith('Task "') && (contentText.includes('check sidebar') || contentText.includes('nothing to report'))) return;
-  window.processLogEntries.push({ ts, type, content, extra, actor });
-  renderProcessLog();
-  maybeAutoScrollRightColumn(window.isThinking || window.rightColumnAutoFollow);
-  persistActiveChat();
-  if (window.isThinking) {
-    const panel = document.getElementById('current-turn-process');
-    if (panel && panel.style.display !== 'none' && window.currentTurnStartIndex >= 0) {
-      panel.innerHTML = formatProcessLines(window.processLogEntries.slice(window.currentTurnStartIndex));
-    }
-  }
-}
-
-function addSessionProcessEntry(sessionId, type, content, extra) {
-  const sess = getChatSessionById(sessionId);
-  if (!sess) {
-    addProcessEntry(type, content, extra);
-    return;
-  }
-  if (!Array.isArray(sess.processLog)) sess.processLog = [];
-  const ts = new Date().toLocaleTimeString();
-  const actor = (extra && typeof extra === 'object' && extra.actor) ? String(extra.actor) : undefined;
-  sess.processLog.push({ ts, type, content, extra, actor });
-  const st = getSessionStreamState(sessionId);
-  const isViewing = window.activeChatSessionId === sessionId;
-  if (isViewing) {
-    window.processLogEntries = sess.processLog;
-    renderProcessLog();
-    maybeAutoScrollRightColumn(!!window._sessionThinking?.[sessionId] || window.rightColumnAutoFollow);
-    if (window._sessionThinking?.[sessionId]) {
-      const panel = document.getElementById('current-turn-process');
-      const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
-      if (panel && panel.style.display !== 'none' && startIndex >= 0) {
-        panel.innerHTML = formatProcessLines(sess.processLog.slice(startIndex));
-      }
-    }
-  }
-  persistSession(sessionId);
-}
-
 function renderProcessLog() {
   const el = document.getElementById('process-log');
   if (!el) return;
@@ -17187,6 +17158,7 @@ function syncSessionSidebarSummary(session) {
 
 // Persist a specific session by ID (used by SSE handler to target the right session even after a switch)
 function persistSession(id) {
+  chatPerformanceRuntime.cancelProcessLogPersistence(id);
   const idx = window.chatSessions.findIndex(s => s.id === id);
   if (idx === -1) return;
   const s = window.chatSessions[idx];
@@ -19046,6 +19018,8 @@ function toggleAgentPanel(agentId) {
 }
 
 // ---- Background Spawn Dock (one-shot background_spawn agents only) ----
+let backgroundSpawnDockRenderSignature = null;
+
 function ensureBackgroundSpawnDockMap() {
   if (!(window.backgroundSpawnDockMap instanceof Map)) window.backgroundSpawnDockMap = new Map();
   return window.backgroundSpawnDockMap;
@@ -19463,6 +19437,17 @@ function renderBackgroundSpawnPlan(lane) {
   `;
 }
 
+function renderBackgroundAgentUi() {
+  const detailId = String(window.backgroundAgentDetailId || '').trim();
+  if (detailId) renderBackgroundAgentDetail();
+  else renderBackgroundSpawnDock();
+  if (typeof renderSourcePanel === 'function' && sourcePanelEnvironmentIsVisible()) renderSourcePanel();
+}
+
+function scheduleBackgroundAgentUiUpdate(options = {}) {
+  chatPerformanceRuntime.scheduleBackgroundAgentUiUpdate(renderBackgroundAgentUi, options);
+}
+
 function pushBackgroundSpawnEvent(msg = {}) {
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
@@ -19483,14 +19468,12 @@ function pushBackgroundSpawnEvent(msg = {}) {
   }
   const entry = backgroundSpawnProcessEntryFromEvent(msg);
   if (entry) {
-    lane.events = mergeBackgroundAgentEvents(lane.events, [entry]);
+    lane.events = appendBackgroundAgentEvent(lane.events, entry);
     lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   }
   if (streamId && seq) lane.lastSeq = seq;
   persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  scheduleBackgroundAgentUiUpdate();
 }
 
 function completeBackgroundSpawnLane(msg = {}) {
@@ -19519,9 +19502,8 @@ function completeBackgroundSpawnLane(msg = {}) {
       error: String(msg.error || existing.error || '').trim(),
       fileChanges: msg.fileChanges || existing.fileChanges || null,
       events: existing.events || [],
-    });
-    if (typeof renderSourcePanel === 'function') renderSourcePanel();
-    renderBackgroundAgentDetail();
+    }, { immediate: true });
+    scheduleBackgroundAgentUiUpdate({ immediate: true });
     return;
   }
   if (!backgroundSpawnEventSessionMatches(msg)) return;
@@ -19537,13 +19519,17 @@ function completeBackgroundSpawnLane(msg = {}) {
   const content = failed
     ? `${lane.agentName || 'Agent'} failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
     : `${lane.agentName || 'Agent'} complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
-  lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
+  lane.events = appendBackgroundAgentEvent(lane.events, {
+    ts,
+    type: failed ? 'error' : 'final',
+    actor: 'Background Agent',
+    content,
+    extra: msg,
+  });
   lane.liveTraceEntries = backgroundAgentEventsToLiveTraceEntries(lane.events);
   lane.updatedAt = Date.now();
-  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
-  if (typeof renderSourcePanel === 'function') renderSourcePanel();
-  renderBackgroundSpawnDock();
-  if (String(window.backgroundAgentDetailId || '') === String(lane.id || '')) renderBackgroundAgentDetail();
+  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane), { immediate: true });
+  scheduleBackgroundAgentUiUpdate({ immediate: true });
 }
 
 function toggleBackgroundSpawnLane(id) {
@@ -19629,10 +19615,29 @@ function closeBackgroundAgentDetail() {
 function renderBackgroundSpawnDock() {
   const dock = document.getElementById('background-spawn-dock');
   if (!dock) return;
-  updateBackgroundSpawnDockOffset();
   const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
     .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
     .sort((a, b) => a.startedAt - b.startedAt);
+  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
+  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
+  const signature = [
+    String(window.activeChatSessionId || '').trim(),
+    dockOpen ? 'open' : 'collapsed',
+    lanes.map((lane) => [
+      lane.id,
+      lane.status,
+      lane.updatedAt,
+      lane.lastSeq,
+      lane.events?.length || 0,
+      lane.result,
+      lane.error,
+      lane.expanded === true ? 'expanded' : '',
+    ].join(':')).join('|'),
+  ].join('::');
+  if (signature === backgroundSpawnDockRenderSignature && dock.dataset.backgroundRenderSignature === signature) return;
+  backgroundSpawnDockRenderSignature = signature;
+  dock.dataset.backgroundRenderSignature = signature;
+  updateBackgroundSpawnDockOffset();
   dock.hidden = lanes.length === 0;
   dock.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
@@ -19640,8 +19645,6 @@ function renderBackgroundSpawnDock() {
     updateBackgroundSpawnDockOffset();
     return;
   }
-  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
-  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
   dock.classList.toggle('is-open', dockOpen);
   dock.classList.toggle('is-collapsed', !dockOpen);
   if (!dockOpen) {

@@ -99,7 +99,7 @@ if (!shouldBootMobile) {
 const MAX_EVENTS = 400;
 const events = [];
 const SAFE_STRING_KEYS = new Set(['traceId', 'clientRequestId', 'runtimeId', 'streamId', 'surface', 'telemetryId', 'toolCallId', 'toolFamily', 'toolName']);
-const SAFE_NUMBER_KEYS = new Set(['elapsedMs', 'durationMs', 'seq', 'count', 'size', 'bytes', 'eventCount', 'resultBytes', 'resultTokens', 'dispatchMs', 'executorMs', 'firstOutputMs', 'resultToModelMs', 'modelToVisibleMs', 'toolWallMs', 'transportMs']);
+const SAFE_NUMBER_KEYS = new Set(['elapsedMs', 'durationMs', 'seq', 'count', 'size', 'bytes', 'eventCount', 'resultBytes', 'resultTokens', 'dispatchMs', 'executorMs', 'firstOutputMs', 'resultToModelMs', 'modelToVisibleMs', 'toolWallMs', 'transportMs', 'jsHeapUsedBytes', 'jsHeapTotalBytes', 'jsHeapLimitBytes', 'domNodes', 'longTaskMaxMs']);
 
 function safeString(value) {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 160);
@@ -146,3 +146,11 @@ export function getClientPerformanceEvents() {
 
 window.__PROM_PERF_MARK = markClientPerformance;
 window.__PROM_PERF_GET_EVENTS = getClientPerformanceEvents;
+
+// Keep the first sample in this shared module so mobile lifecycle tests and
+// diagnostics see it immediately. Desktop installs the heavier observer/timer
+// code from app.js, outside the mobile boot graph.
+markClientPerformance('renderer_sample', {
+  surface: shouldBootMobile ? 'mobile' : 'desktop',
+  domNodes: document.all.length,
+});
