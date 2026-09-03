@@ -124,9 +124,17 @@ function aggregate(observations: ToolObservation[], currentToolNames: Set<string
   const top = (field: string, limit = 20) => [...serializedTools]
     .sort((a: any, b: any) => numberValue(b[field]) - numberValue(a[field]) || String(a.tool).localeCompare(String(b.tool)))
     .slice(0, limit);
+  const createdTimes = observations
+    .map((observation) => numberValue(observation.createdAt))
+    .filter((value) => value > 0)
+    .sort((a, b) => a - b);
 
   return {
     observations: observations.length,
+    window: {
+      startedAt: createdTimes.length ? new Date(createdTimes[0]).toISOString() : null,
+      endedAt: createdTimes.length ? new Date(createdTimes[createdTimes.length - 1]).toISOString() : null,
+    },
     uniqueTools: serializedTools.length,
     uniqueFamilies: serializedFamilies.length,
     currentRegisteredTools: serializedTools.filter((row: any) => row.currentlyRegistered).length,
@@ -172,6 +180,7 @@ const report = {
     latency: 'durationMs from universal tool telemetry; p50/p95/p99 use observed calls with positive duration.',
     tokens: 'args/result/context token estimates recorded with each observation; not provider billing usage.',
     cost: 'estimatedCostMicros from recorded telemetry; not a provider invoice.',
+    window: 'The report exposes the oldest and newest retained observation timestamps; persisted history is not a controlled current baseline.',
     privacy: 'Only tool names, families, counts, sizes, timings, and costs are emitted; previews and payload contents are excluded.',
   },
   aggregate: aggregate(observations, currentToolNames, extensionNames),

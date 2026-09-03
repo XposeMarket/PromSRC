@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "benchmark": "prometheus-native-tool-surface",
-  "capturedAt": "2026-09-03T02:05:38.673Z",
+  "capturedAt": "2026-09-03T02:37:41.039Z",
   "environment": {
     "node": "v20.20.2",
     "platform": "win32",
@@ -19,7 +19,7 @@
     "nativeToolCount": 131,
     "extensionToolCount": 64,
     "extensionRuntimeToolCount": 64,
-    "registryAccessMs": 148.914,
+    "registryAccessMs": 131.7,
     "samplesPerProfile": 20
   },
   "counts": {
@@ -29,14 +29,14 @@
     },
     "byFamily": {
       "automation": 1,
-      "creative_media": 6,
+      "creative_media": 7,
       "desktop": 51,
       "mcp_connector": 66,
       "other": 26,
       "skills_memory": 12,
       "subagent_task": 5,
       "terminal": 8,
-      "web_search_fetch": 7,
+      "web_search_fetch": 6,
       "workspace": 13
     },
     "byPolicyTier": {
@@ -54,13 +54,13 @@
       "toolCount": 4,
       "definitionBytes": 3397,
       "estimatedDefinitionTokens": 1092,
-      "firstBuildMs": 1.022,
+      "firstBuildMs": 1.033,
       "repeatedBuildMs": {
         "samples": 20,
-        "minMs": 0.024,
-        "p50Ms": 0.028,
-        "p95Ms": 0.053,
-        "maxMs": 0.142
+        "minMs": 0.023,
+        "p50Ms": 0.029,
+        "p95Ms": 0.071,
+        "maxMs": 0.183
       },
       "toolNames": [
         "manage_team_context_ref",
@@ -73,13 +73,13 @@
       "toolCount": 15,
       "definitionBytes": 7645,
       "estimatedDefinitionTokens": 2463,
-      "firstBuildMs": 0.144,
+      "firstBuildMs": 0.114,
       "repeatedBuildMs": {
         "samples": 20,
-        "minMs": 0.043,
-        "p50Ms": 0.045,
-        "p95Ms": 0.054,
-        "maxMs": 0.056
+        "minMs": 0.041,
+        "p50Ms": 0.043,
+        "p95Ms": 0.053,
+        "maxMs": 0.053
       },
       "toolNames": [
         "append",
@@ -103,13 +103,13 @@
       "toolCount": 8,
       "definitionBytes": 9389,
       "estimatedDefinitionTokens": 3026,
-      "firstBuildMs": 0.088,
+      "firstBuildMs": 0.136,
       "repeatedBuildMs": {
         "samples": 20,
-        "minMs": 0.044,
-        "p50Ms": 0.086,
-        "p95Ms": 0.117,
-        "maxMs": 0.138
+        "minMs": 0.041,
+        "p50Ms": 0.043,
+        "p95Ms": 0.079,
+        "maxMs": 0.093
       },
       "toolNames": [
         "manage_team_context_ref",
@@ -126,13 +126,13 @@
       "toolCount": 150,
       "definitionBytes": 96639,
       "estimatedDefinitionTokens": 31165,
-      "firstBuildMs": 1.508,
+      "firstBuildMs": 1.163,
       "repeatedBuildMs": {
         "samples": 20,
-        "minMs": 0.593,
-        "p50Ms": 1.035,
-        "p95Ms": 1.979,
-        "maxMs": 3.481
+        "minMs": 0.418,
+        "p50Ms": 0.608,
+        "p95Ms": 1.099,
+        "maxMs": 3.257
       },
       "toolNames": [
         "agent_info",
@@ -291,13 +291,13 @@
       "toolCount": 10,
       "definitionBytes": 14153,
       "estimatedDefinitionTokens": 4562,
-      "firstBuildMs": 0.545,
+      "firstBuildMs": 0.118,
       "repeatedBuildMs": {
         "samples": 20,
-        "minMs": 0.164,
-        "p50Ms": 0.267,
-        "p95Ms": 1.352,
-        "maxMs": 1.382
+        "minMs": 0.076,
+        "p50Ms": 0.077,
+        "p95Ms": 0.096,
+        "maxMs": 0.104
       },
       "toolNames": [
         "desktop_apps",
@@ -3205,7 +3205,7 @@
     {
       "name": "fetch_image",
       "source": "native",
-      "family": "web_search_fetch",
+      "family": "creative_media",
       "policyTier": "read",
       "capabilities": {
         "readOnly": true,
