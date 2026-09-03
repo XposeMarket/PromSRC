@@ -27,7 +27,7 @@ function hashBackgroundAgent(value) {
 
 function isGenericBackgroundAgentName(value) {
   return !String(value || '').trim()
-    || /^(?:background\s*spawn|background\s*agent|agent|subagent)$/i.test(String(value || '').trim());
+    || /^(?:undefined|null|background\s*spawn|background\s*agent|agent|subagent)$/i.test(String(value || '').trim());
 }
 
 export function resolveBackgroundAgentIdentity(id, options = {}) {
@@ -123,6 +123,10 @@ export function normalizeBackgroundAgentWork(record = {}) {
   const id = String(record.id || record.bgId || record.backgroundId || record.agentId || '').trim();
   const sessionId = String(record.sessionId || record.spawnerSessionId || record.parentSessionId || '').trim();
   if (!id || !sessionId) return null;
+  const identity = resolveBackgroundAgentIdentity(id, {
+    existingName: record.agentName || record.name,
+    existingColor: record.agentColor || record.color,
+  });
   const status = String(record.status || record.state || 'completed').trim().toLowerCase();
   const updatedAt = Number(record.updatedAt || record.completedAt || record.workEndedAt || Date.now()) || Date.now();
   const terminal = ['completed', 'failed', 'timed_out'].includes(status);
@@ -139,8 +143,8 @@ export function normalizeBackgroundAgentWork(record = {}) {
     id,
     sessionId,
     backgroundSessionId: String(record.backgroundSessionId || record.bgSessionId || '').trim(),
-    agentName: String(record.agentName || record.name || '').trim(),
-    agentColor: String(record.agentColor || record.color || '').trim(),
+    agentName: identity.name,
+    agentColor: identity.color,
     task: String(record.task || record.prompt || '').trim(),
     status,
     startedAt: Number(record.startedAt || record.workStartedAt || record.createdAt || 0) || 0,
@@ -325,12 +329,17 @@ export function backgroundAgentAgeLabel(timestamp, now = Date.now()) {
 }
 
 export function backgroundAgentRecordToMessage(record = {}) {
+  const identity = resolveBackgroundAgentIdentity(record.id, {
+    existingName: record.agentName || record.name,
+    existingColor: record.agentColor || record.color,
+  });
+  const agentName = identity.name || 'Background agent';
   const result = String(record.result || record.error || '').trim();
   return {
     role: 'ai',
-    from: String(record.agentName || 'Background agent'),
+    from: agentName,
     content: result,
-    body: { sender: String(record.agentName || 'Background agent'), text: result },
+    body: { sender: agentName, text: result },
     processEntries: Array.isArray(record.events) ? record.events.slice() : [],
     liveTraceEntries: Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.slice() : [],
     streaming: ['running', 'queued', 'in_progress'].includes(String(record.status || '').toLowerCase()),

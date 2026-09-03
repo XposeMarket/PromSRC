@@ -488,10 +488,10 @@ function attachShortcutsContext(
 function rememberSnapshot(session: BrowserSession, snapshot: string): void {
   const previousUrl = session.lastPageUrl || '';
   const previousTitle = session.lastPageTitle || '';
-  session.lastSnapshot = snapshot;
+  session.lastSnapshot = boundedBrowserSnapshot(snapshot);
   session.lastSnapshotAt = Date.now();
-  const titleMatch = snapshot.match(/^Page:\s*(.+)$/m);
-  const urlMatch = snapshot.match(/^URL:\s*(.+)$/m);
+  const titleMatch = session.lastSnapshot.match(/^Page:\s*(.+)$/m);
+  const urlMatch = session.lastSnapshot.match(/^URL:\s*(.+)$/m);
   if (titleMatch?.[1]) session.lastPageTitle = titleMatch[1].trim();
   if (urlMatch?.[1]) session.lastPageUrl = urlMatch[1].trim();
   if (session.lastPageUrl !== previousUrl || session.lastPageTitle !== previousTitle) {
@@ -800,6 +800,7 @@ function attachUserChromeRelayObservers(session: BrowserSession): void {
     if (Number(event?.tabId) !== (session.page as UserChromePage).tabId()) return;
     if (event?.event === 'tab_removed' || event?.event === 'debugger_detach') {
       releaseUserChromeTabLocks(session.sessionId);
+      clearBrowserSessionEphemeralState(session.sessionId, session);
       sessions.delete(session.sessionId);
       return;
     }
@@ -816,7 +817,7 @@ function attachUserChromeRelayObservers(session: BrowserSession): void {
       const response = params.response || {};
       const entries = _networkInterceptLog.get(session.sessionId) || [];
       entries.push({ url: String(response.url || ''), method: String(params.type || 'GET'), status: Number(response.status || 0), contentType: String(response.mimeType || ''), ts: Date.now() });
-      if (entries.length > 500) entries.splice(0, entries.length - 500);
+      if (entries.length > MAX_NETWORK_INTERCEPT_ENTRIES) entries.splice(0, entries.length - MAX_NETWORK_INTERCEPT_ENTRIES);
       _networkInterceptLog.set(session.sessionId, entries);
     }
   });
@@ -2757,7 +2758,9 @@ export function setInHouseBrowserProfilePreference(sessionId: string, profileId:
 }
 
 function clearInHouseSession(sessionId: string): void {
-  inHouseSessions.delete(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  clearBrowserSessionEphemeralState(resolved);
+  inHouseSessions.delete(resolved);
 }
 
 // Per-session in-house browser profile selection. Each profile id maps to an
@@ -3115,6 +3118,7 @@ async function getOrCreateSessionUncoalesced(
     markBrowserPerformance(onPerformanceStage, 'session_reconnect_start', { reason: 'session_not_alive' });
     console.log(`[Browser] Session "${sessionId}" is dead (Chrome was closed). Evicting and relaunching...`);
     await stopBrowserLiveStream(sessionId, 'Live browser stream stopped because the Chrome session ended.').catch(() => {});
+    clearBrowserSessionEphemeralState(sessionId, existing);
     sessions.delete(sessionId);
     if (existing.transport === 'extension') releaseUserChromeTabLocks(existing.sessionId);
     try { await existing.page.close(); } catch {}
@@ -3280,6 +3284,7 @@ async function replaceDetachedBrowserSession(parentSessionId: string, suffix: st
   const existing = sessions.get(detachedSessionId);
   if (existing) {
     try { await stopBrowserLiveStream(detachedSessionId, 'Detached browser session reset.'); } catch {}
+    clearBrowserSessionEphemeralState(detachedSessionId, existing);
     try { await existing.page.close(); } catch {}
     sessions.delete(detachedSessionId);
     clearBrowserInteractionState(detachedSessionId);
@@ -4621,6 +4626,39 @@ interface BrowserLiveSelectionTracker {
 }
 const browserLiveSelectionTrackers = new Map<string, BrowserLiveSelectionTracker>();
 
+const MAX_CACHED_BROWSER_SNAPSHOT_CHARS = 120_000;
+const MAX_NETWORK_INTERCEPT_ENTRIES = 500;
+
+function boundedBrowserSnapshot(value: unknown): string {
+  const snapshot = String(value || '');
+  if (snapshot.length <= MAX_CACHED_BROWSER_SNAPSHOT_CHARS) return snapshot;
+  return `${snapshot.slice(0, MAX_CACHED_BROWSER_SNAPSHOT_CHARS)}\n[Snapshot truncated to the gateway cache limit.]`;
+}
+
+/**
+ * Drop state whose lifetime should match the browser session rather than the
+ * chat session. In-house sessions do not have a Playwright BrowserSession
+ * object, so callers may omit the second argument.
+ */
+function clearBrowserSessionEphemeralState(sessionId: string, session?: BrowserSession): void {
+  const resolved = resolveSessionId(sessionId);
+  const activeSession = session || sessions.get(resolved);
+  const networkHandler = _networkInterceptHandlers.get(resolved);
+  if (networkHandler && activeSession) {
+    try { activeSession.context.off('response', networkHandler); } catch {}
+  }
+  _networkInterceptHandlers.delete(resolved);
+  _networkInterceptLog.delete(resolved);
+  _lastBrowserScreenshot.delete(resolved);
+  _lastBrowserDownload.delete(resolved);
+  _snapshotHashCache.delete(resolved);
+  browserLiveSelectionTrackers.delete(resolved);
+  browserTeachSessions.delete(resolved);
+  browserSessionInitInFlight.delete(resolved);
+  clearBrowserInteractionState(resolved);
+  releaseUserChromeTabLocks(resolved);
+}
+
 function setBrowserLiveSelectionTracker(sessionId: string, pack: BrowserSelectorPack | null): void {
   const resolved = resolveSessionId(sessionId);
   if (!pack) { browserLiveSelectionTrackers.delete(resolved); return; }
@@ -4883,6 +4921,7 @@ export async function browserSetProfileTarget(
   const existing = sessions.get(resolved);
   if (existing && existing.browserTarget !== nextTarget && options?.closeExisting !== false) {
     await stopBrowserLiveStream(resolved, `Browser profile target changed to ${getBrowserProfileLabel(nextTarget)}.`).catch(() => {});
+    clearBrowserSessionEphemeralState(resolved, existing);
     sessions.delete(resolved);
     if (existing.transport === 'extension') releaseUserChromeTabLocks(existing.sessionId);
     try { await existing.page.close(); } catch {}
@@ -5058,7 +5097,11 @@ export async function browserCloseTab(sessionId: string, index?: number): Promis
     await getUserChromeRelay().request('tabs.remove', { tabId: tab.id });
     userChromeTabLocks.delete(tab.id);
     const remaining = await getUserChromeRelay().request('tabs.list');
-    if (!remaining.length) { sessions.delete(resolved); return 'Closed the last Chrome tab; Personal Chrome session is now inactive.'; }
+    if (!remaining.length) {
+      clearBrowserSessionEphemeralState(resolved, session);
+      sessions.delete(resolved);
+      return 'Closed the last Chrome tab; Personal Chrome session is now inactive.';
+    }
     session.page = new UserChromePage(remaining.find((item: any) => item.active) || remaining[Math.min(idx, remaining.length - 1)]);
     await syncPageMetadata(session).catch(() => {});
     return `Closed Personal Chrome tab [${idx}].\n${await browserListTabs(sessionId)}`;
@@ -5070,6 +5113,7 @@ export async function browserCloseTab(sessionId: string, index?: number): Promis
   await page.close().catch(() => {});
   const remaining = session.context.pages();
   if (!remaining.length) {
+    clearBrowserSessionEphemeralState(resolved, session);
     sessions.delete(resolved);
     await stopBrowserLiveStream(resolved, 'Live browser stream stopped because the last browser tab closed.').catch(() => {});
     try { await session.browser.close(); } catch {}
@@ -5188,9 +5232,9 @@ async function browserSnapshotInHouse(sessionId: string): Promise<string> {
   try {
     const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
     const inHouse = upsertInHouseSession(resolved, result);
-    inHouse.lastSnapshot = String(result?.snapshot || '');
+    inHouse.lastSnapshot = boundedBrowserSnapshot(result?.snapshot || '');
     inHouse.lastSnapshotAt = Date.now();
-    const snapshot = String(result?.snapshot || `Page: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`);
+    const snapshot = boundedBrowserSnapshot(result?.snapshot || `Page: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`);
     broadcastInHouseBrowserStatus(resolved, 'browser_snapshot', 'Snapshot captured from Prometheus in-house browser.', {
       active: true,
       url: inHouse.url,
@@ -5458,6 +5502,7 @@ export async function browserOpen(
       // Recreate the session once, then retry the same read/navigation request.
       markBrowserPerformance(options?.onPerformanceStage, 'session_reconnect_start', { reason: 'navigation_target_closed' });
       await stopBrowserLiveStream(resolvedSessionId, 'Live browser stream stopped before browser-session recovery.').catch(() => {});
+      clearBrowserSessionEphemeralState(resolvedSessionId, session);
       sessions.delete(resolvedSessionId);
       if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
       try { await session.page.close(); } catch {}
@@ -5507,6 +5552,7 @@ export async function browserSnapshot(
     });
     console.log(`[Browser] browserSnapshot: session dead, evicting.`);
     await stopBrowserLiveStream(resolved, 'Live browser stream stopped before browser-session recovery.').catch(() => {});
+    clearBrowserSessionEphemeralState(resolved, session);
     sessions.delete(resolved);
     if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     try { await session.page.close(); } catch {}
@@ -5542,8 +5588,8 @@ export async function browserSnapshot(
     markBrowserPerformance(options?.onPerformanceStage, 'snapshot_error', { errorCode: classifyBrowserLifecycleError(err) });
     if (classifyBrowserLifecycleError(err) === 'session_closed') {
       await stopBrowserLiveStream(resolved, 'Live browser stream stopped after the browser session closed.').catch(() => {});
+      clearBrowserSessionEphemeralState(resolved, session);
       sessions.delete(resolved);
-      if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
       try { await session.page.close(); } catch {}
       try { await session.browser.close(); } catch {}
     }
@@ -6447,20 +6493,18 @@ export async function browserClose(sessionId: string): Promise<string> {
     if (session.ownsBrowser) {
       try { await session.browser.close(); } catch {}
     }
+    clearBrowserSessionEphemeralState(resolved, session);
     sessions.delete(resolved);
-    if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     if (resolved !== sessionId) sessions.delete(sessionId);
-    clearBrowserInteractionState(resolved);
     browserSessionMetadata.delete(resolved);
     removePersistedBrowserSessionRecord(persistedSessionId);
     console.log(`[Browser] Session closed for ${sessionId}`);
     return 'Browser tab closed.';
   } catch (err: any) {
     await stopBrowserLiveStream(resolved, 'Live browser stream stopped because the browser tab closed.').catch(() => {});
+    clearBrowserSessionEphemeralState(resolved, session);
     sessions.delete(resolved);
-    if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     if (resolved !== sessionId) sessions.delete(sessionId);
-    clearBrowserInteractionState(resolved);
     browserSessionMetadata.delete(resolved);
     removePersistedBrowserSessionRecord(persistedSessionId);
     return `Browser closed (with warning: ${err.message})`;
@@ -8516,6 +8560,7 @@ export async function browserInterceptNetwork(
   }
 
   if (action === 'start') {
+    const captureLimit = Math.max(1, Math.min(MAX_NETWORK_INTERCEPT_ENTRIES, Math.floor(Number(maxEntries || 200))));
     // Remove old handler if already intercepting
     const oldHandler = _networkInterceptHandlers.get(resolved);
     if (oldHandler) session.context.off('response', oldHandler);
@@ -8526,7 +8571,7 @@ export async function browserInterceptNetwork(
         const url: string = response.url();
         if (urlFilter && !url.includes(urlFilter)) return;
         const log = _networkInterceptLog.get(resolved);
-        if (!log || log.length >= maxEntries) return;
+        if (!log || log.length >= captureLimit) return;
         const req = response.request();
         const headers = response.headers();
         const contentType = (headers['content-type'] || '').split(';')[0].trim();
@@ -8544,7 +8589,7 @@ export async function browserInterceptNetwork(
     };
     _networkInterceptHandlers.set(resolved, handler);
     session.context.on('response', handler);
-    const limit = String(maxEntries);
+    const limit = String(captureLimit);
     const filterNote = urlFilter ? ` (url filter: "${urlFilter}")` : '';
     return `Network interception started${filterNote}. Capturing up to ${limit} responses. Use browser_intercept_network(action="read") to inspect, "stop" to disable.`;
   }

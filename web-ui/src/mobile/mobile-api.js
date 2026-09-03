@@ -1858,6 +1858,13 @@ const _sessionRequests = new Map(); // scoped session/detail → in-flight Promi
 const _mobileHistoryWriteQueues = new Map(); // scoped session id → serialized write Promise
 const _SESSION_CACHE_TTL = 30_000; // ms
 const _mobileHistoryClients = new Map();
+// A request can outlive a history write (or a reconnect invalidation). Keep a
+// generation beside the memory cache so that an older response cannot refill
+// the cache after it was explicitly invalidated. The request itself may still
+// resolve for its original caller, but it must not become the next hydration
+// source for the chat.
+let _sessionCacheGeneration = 0;
+const _sessionCacheSessionGenerations = new Map();
 
 function _sessionCacheKey(sid, scope = _mobileGatewayCacheScope()) {
   return `${scope}::${String(sid || '').trim()}`;
@@ -1881,9 +1888,34 @@ function _sessionCacheSet(sid, session, scope = _mobileGatewayCacheScope()) {
   }
 }
 
+function _sessionCacheGenerationFor(sid, scope = _mobileGatewayCacheScope()) {
+  const key = _sessionCacheKey(sid, scope);
+  return `${_sessionCacheGeneration}:${Number(_sessionCacheSessionGenerations.get(key) || 0) || 0}`;
+}
+
 export function invalidateMobileChatSessionCache(sessionId) {
-  if (sessionId) _sessionCache.delete(_sessionCacheKey(String(sessionId)));
-  else _sessionCache.clear();
+  if (sessionId) {
+    const sid = String(sessionId || '').trim();
+    const scope = _mobileGatewayCacheScope();
+    const cacheKey = _sessionCacheKey(sid, scope);
+    _sessionCache.delete(cacheKey);
+    _sessionCacheSessionGenerations.set(
+      cacheKey,
+      (Number(_sessionCacheSessionGenerations.get(cacheKey) || 0) || 0) + 1,
+    );
+    // Do not let a new caller coalesce onto a request that started before the
+    // invalidation. Existing holders still receive that request's result, but
+    // the next caller gets a new read against the current gateway state.
+    const requestPrefix = `${scope}:${sid}:`;
+    Array.from(_sessionRequests.keys()).forEach((key) => {
+      if (String(key).startsWith(requestPrefix)) _sessionRequests.delete(key);
+    });
+  } else {
+    _sessionCache.clear();
+    _sessionCacheGeneration += 1;
+    _sessionCacheSessionGenerations.clear();
+    _sessionRequests.clear();
+  }
 }
 
 export async function loadMobileChatSession(sessionId, options = {}) {
@@ -1908,11 +1940,18 @@ export async function loadMobileChatSession(sessionId, options = {}) {
   const requestKey = `${gatewayScope}:${sid}:${force ? 'recovery' : 'normal'}:${historyLimit}:${processLimit}:${fullProcess ? 'full-process' : 'compact-process'}`;
   const existingRequest = _sessionRequests.get(requestKey);
   if (existingRequest) return existingRequest;
+  const cacheGeneration = _sessionCacheGenerationFor(sid, gatewayScope);
   const request = mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${fullProcess ? '&fullProcess=1' : ''}${force ? '&_fresh=1' : ''}`, {
     timeoutMs: force ? 30000 : 20000,
   }).then((r) => {
     const session = r?.session || null;
-    if (session && !isBoundedPageRequest) _sessionCacheSet(sid, session, gatewayScope);
+    if (
+      session
+      && !isBoundedPageRequest
+      && cacheGeneration === _sessionCacheGenerationFor(sid, gatewayScope)
+    ) {
+      _sessionCacheSet(sid, session, gatewayScope);
+    }
     return session;
   }).finally(() => {
     if (_sessionRequests.get(requestKey) === request) _sessionRequests.delete(requestKey);

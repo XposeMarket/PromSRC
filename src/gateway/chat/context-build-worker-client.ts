@@ -74,6 +74,7 @@ const enabled = String(process.env.PROMETHEUS_CONTEXT_BUILD_WORKERS || '1').trim
 const fallbackEnabled = String(process.env.PROMETHEUS_CONTEXT_BUILD_IN_PROCESS_FALLBACK || '1').trim() !== '0';
 const workerCount = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_COUNT', 2, 1, 4);
 const warmWorkerCount = envInt('PROMETHEUS_CONTEXT_BUILD_WARM_WORKER_COUNT', 1, 0, workerCount);
+const idleTtlMs = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_IDLE_TTL_MS', 60_000, 0, 30 * 60_000);
 const maxQueued = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_MAX_QUEUE', 4, 0, 32);
 const timeoutMs = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_TIMEOUT_MS', 15_000, 1_000, 120_000);
 const startupTimeoutMs = envInt('PROMETHEUS_CONTEXT_BUILD_WORKER_STARTUP_TIMEOUT_MS', 15_000, 1_000, 120_000);
@@ -89,6 +90,7 @@ const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
     maxMessageBytes,
     startupTimeoutMs,
     defaultJobTimeoutMs: timeoutMs,
+    idleTtlMs: index < warmWorkerCount ? 0 : idleTtlMs,
     maxJobs: recycleAfterJobs,
     maxRssBytes: recycleRssBytes,
     maxHeapUsedBytes,

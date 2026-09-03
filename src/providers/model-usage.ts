@@ -54,6 +54,11 @@ export interface ModelUsageEvent {
   activeToolCategories?: string[];
 }
 
+export interface ModelUsageLogCursor {
+  filePath: string;
+  byteOffset: number;
+}
+
 function usageLogPath(): string {
   try {
     return path.join(getConfig().getConfigDir(), 'model-usage.jsonl');
@@ -413,6 +418,11 @@ function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
   const filePath = usageLogPath();
   let raw = '';
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  return parseUsageEvents(raw, wantedSessionId);
+}
+
+function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
+  const wantedSessionId = String(sessionId || '').trim();
   const out: ModelUsageEvent[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -426,6 +436,57 @@ function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
     }
   }
   return out;
+}
+
+/**
+ * Capture the current end of the append-only usage log without parsing its
+ * history. This is used around a single model turn so post-turn accounting
+ * can inspect only rows written by that turn.
+ */
+export function captureModelUsageLogCursor(): ModelUsageLogCursor {
+  const filePath = usageLogPath();
+  try {
+    return { filePath, byteOffset: fs.statSync(filePath).size };
+  } catch {
+    return { filePath, byteOffset: 0 };
+  }
+}
+
+/**
+ * Read model-usage rows appended after a cursor. Normal operation is an
+ * O(new-bytes) tail read. If the log was rotated or replaced while the turn
+ * was running, fall back to a trace-scoped historical read so accounting does
+ * not silently include unrelated old turns.
+ */
+export function readModelUsageEventsSince(
+  cursor: ModelUsageLogCursor,
+  sessionId?: string,
+  traceId?: string,
+): ModelUsageEvent[] {
+  const filePath = usageLogPath();
+  let currentSize = 0;
+  try {
+    currentSize = fs.statSync(filePath).size;
+  } catch {
+    return [];
+  }
+
+  const fallback = (): ModelUsageEvent[] => {
+    const historical = readHistoricalUsageEvents(sessionId);
+    const wantedTraceId = String(traceId || '').trim();
+    return wantedTraceId
+      ? historical.filter((event) => String(event.traceId || '').trim() === wantedTraceId)
+      : historical;
+  };
+
+  if (cursor.filePath !== filePath || currentSize < cursor.byteOffset) return fallback();
+  if (currentSize === cursor.byteOffset) return [];
+
+  try {
+    return parseUsageEvents(readUsageTail(filePath, cursor.byteOffset, currentSize), sessionId);
+  } catch {
+    return fallback();
+  }
 }
 
 export function readModelUsageEvents(): ModelUsageEvent[] {
