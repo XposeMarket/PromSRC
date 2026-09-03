@@ -94,6 +94,14 @@ const extractFunction = (source, startMarker, endMarker) => {
   return source.slice(start, end < 0 ? source.length : end);
 };
 
+const toggleCanvasFullscreen = extractFunction(sourceChat, 'function toggleCanvasFullscreen()', 'function setCanvasEditorValue');
+if (!/panel\.style\.position\s*=\s*'fixed'/.test(toggleCanvasFullscreen)
+  || !/electron-shell/.test(toggleCanvasFullscreen)
+  || !/--window-chrome-height/.test(toggleCanvasFullscreen)
+  || !/panel\.style\.inset\s*=\s*electronTitlebarInset/.test(toggleCanvasFullscreen)) {
+  throw new Error('Electron Canvas fullscreen must preserve the native titlebar inset');
+}
+
 const toggleSources = extractFunction(sourceChat, 'function toggleSources(', 'function openChatResourceFile');
 if (!/sourcePanelMiniItems\('all'\)\.length\s*===\s*0/.test(toggleSources)
   || !/showSourcesMinimizedPanel\(\)/.test(toggleSources)) {

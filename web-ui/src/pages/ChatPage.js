@@ -42595,8 +42595,17 @@ function toggleCanvasFullscreen() {
   if (!panel || !canvasOpen) return;
   canvasFullscreenMode = !canvasFullscreenMode;
   if (canvasFullscreenMode) {
+    // Electron's titlebar is a 30px native overlay. A fixed panel does not
+    // inherit the app's `.app { padding-top: ... }` inset, so keep the
+    // fullscreen Canvas below that overlay instead of putting its controls
+    // underneath the Windows caption buttons. Browser/PWA Canvas retains the
+    // original edge-to-edge fullscreen behavior.
+    const electronTitlebarInset = document.body.classList.contains('electron-shell')
+      && !document.body.classList.contains('pm-mobile-active')
+      ? 'var(--window-chrome-height) 0 0'
+      : '0';
     panel.style.position = 'fixed';
-    panel.style.inset = '0';
+    panel.style.inset = electronTitlebarInset;
     panel.style.zIndex = '1000';
     panel.style.background = '#2a2a2a';
   } else {
