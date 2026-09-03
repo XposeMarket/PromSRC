@@ -400,6 +400,9 @@ export function createMobileChatRendererRuntime(context = {}) {
     const source = String(entry.source || extra.source || '').trim().toLowerCase();
     const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
     const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+    // An explicit full thought is durable even when a provider echoes summary
+    // metadata on the same packet.
+    if (reasoningKind === 'full_thought') return false;
     return source === 'agent_progress'
       || source === 'reasoning_summary'
       || type === 'reasoning_summary'
@@ -487,7 +490,9 @@ export function createMobileChatRendererRuntime(context = {}) {
   }
 
   function _mobileVisibleTraceEntries(entries) {
-    const thoughtTexts = [];
+    // Summary narration and full thoughts are separate surfaces. Similar text
+    // is only a duplicate within the same surface.
+    const thoughtTextsByKind = new Map();
     // Filter protocol diagnostics before the optional activity coalescer. Its
     // cold-start fallback intentionally turns every structured batch into a
     // compact "Preparing tool" card, which would otherwise resurrect a raw
@@ -523,11 +528,14 @@ export function createMobileChatRendererRuntime(context = {}) {
           if (_isMobileTraceThoughtFragmentText(text)) return false;
           const comparable = _mobileTraceComparableText(text);
           const words = comparable.split(/\s+/).filter(Boolean).length;
+          const thoughtKind = _mobileTraceThoughtKind(entry);
+          const thoughtTexts = thoughtTextsByKind.get(thoughtKind) || [];
           if (thoughtTexts.some((seen) => {
             const seenComparable = _mobileTraceComparableText(seen);
             return _mobileTraceThoughtTextsSimilar(seen, text)
               || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
           })) return false;
+          thoughtTextsByKind.set(thoughtKind, thoughtTexts);
           thoughtTexts.push(text);
         }
       }
@@ -936,7 +944,10 @@ export function createMobileChatRendererRuntime(context = {}) {
     let latestToolGroupIndex = groups.reduce((latest, group, index) => (
       group.kind === 'tools' ? index : latest
     ), -1);
-    const activeProgressSummary = streaming ? _mobileTraceProgressSummary(entries) : '';
+    const latestTraceEntry = Array.isArray(entries) ? entries.at(-1) : null;
+    const activeProgressSummary = streaming && _isMobileMutableProgressTraceEntry(latestTraceEntry)
+      ? _mobileTraceProgressSummary(entries)
+      : '';
     // The mutable progress slot belongs to the current live tool phase. Once
     // a tool group is the last group, hide its matching Thought copy so the
     // text has one visual owner and cannot appear to overwrite an earlier
@@ -944,7 +955,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
       groups = groups.filter((group) => !(
         group.kind === 'thought-summary'
-        && _mobileTraceThoughtTextsSimilar(_mobileTraceProgressSummary(group.entries), activeProgressSummary)
+          && _mobileTraceThoughtTextsSimilar(_mobileTraceProgressSummary(group.entries), activeProgressSummary)
       ));
       latestToolGroupIndex = groups.reduce((latest, group, index) => (
         group.kind === 'tools' ? index : latest

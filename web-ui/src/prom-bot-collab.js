@@ -9,6 +9,7 @@ const MAX_GROUP_MESSAGES = 300;
 const MAX_GROUP_MEMBERS = 6;
 const MAX_GROUP_STREAMS = 3;
 const MAX_GROUP_HANDOFF_WAVES = 2;
+const PROM_BOT_WORKFLOW_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg>';
 
 let groups = [];
 let activeGroupId = '';
@@ -317,7 +318,7 @@ function installStyles() {
     #chat-view.prom-bot-group-active > [hidden] { display:none !important; }
     #${GROUP_HOST_ID} { position:relative; flex:1 1 auto; width:100%; min-width:0; min-height:0; display:flex; overflow:hidden; background:transparent; }
     .prom-bot-group-shell { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; }
-    .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 8px; }
+    .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 var(--desktop-composer-clearance, 180px); scroll-padding-bottom:var(--desktop-composer-clearance, 180px); }
     .prom-bot-group-empty { color:var(--muted); text-align:center; padding:56px 20px; font-size:12px; line-height:1.55; }
     .prom-bot-group-modal { position:fixed; inset:0; z-index:10020; display:grid; place-items:center; background:rgba(0,0,0,.48); backdrop-filter:blur(8px); }
     .prom-bot-group-modal-card { width:min(460px,calc(100vw - 32px)); max-height:min(650px,calc(100vh - 48px)); overflow:auto; border:1px solid var(--line); border-radius:16px; background:var(--panel); color:var(--text); box-shadow:0 28px 90px rgba(0,0,0,.38); padding:16px; }
@@ -530,25 +531,32 @@ async function openGroup(groupId) {
   window.promBotActiveGroupId = group.id;
   window.setPromChatTitleOverride?.('Prom Bot group', group.title, 'prom-bot-group');
   renderGroupRows();
-  await renderGroupRoom();
+  await renderGroupRoom({ forceBottom: true });
 }
 
 function normalizedGroupMessage(message) {
+  const agentId = String(message.agentId || '').trim();
   return {
     ...message,
     role: message.role === 'user' ? 'user' : 'assistant',
     content: String(message.content || ''),
     timestamp: Number(message.timestamp || Date.now()) || Date.now(),
-    workflowLabel: message.workflowLabel || (message.agentId ? agentById(message.agentId).name : ''),
+    workflowLabel: message.workflowLabel || (agentId ? agentById(agentId).name : ''),
+    ...(agentId ? { workflowAvatarHtml: PROM_BOT_WORKFLOW_ICON } : {}),
   };
 }
 
-async function renderGroupRoom() {
+async function renderGroupRoom({ forceBottom = false } = {}) {
   const group = groupById(activeGroupId);
   const host = document.getElementById(GROUP_HOST_ID);
   if (!group || !host) return;
   const renderer = await ensureRenderer();
   if (!renderer || activeGroupId !== group.id || !host.isConnected) return;
+  const previousMessages = document.getElementById('prom-bot-group-messages');
+  const previousScrollTop = previousMessages?.scrollTop || 0;
+  const wasNearBottom = previousMessages
+    ? (previousMessages.scrollHeight - previousMessages.scrollTop - previousMessages.clientHeight) < 96
+    : true;
   const members = groupMembers(group);
   const stable = group.messages.filter((message) => !message.streaming).map(normalizedGroupMessage);
   const live = group.messages.filter((message) => message.streaming).map(normalizedGroupMessage);
@@ -558,7 +566,12 @@ async function renderGroupRoom() {
   host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sessionId, secondarySurface: 'prom-bot-group', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
   requestAnimationFrame(() => {
     const messages = document.getElementById('prom-bot-group-messages');
-    if (messages) messages.scrollTop = messages.scrollHeight;
+    if (!messages) return;
+    if (forceBottom || wasNearBottom) {
+      messages.scrollTop = messages.scrollHeight;
+    } else {
+      messages.scrollTop = Math.min(previousScrollTop, Math.max(0, messages.scrollHeight - messages.clientHeight));
+    }
     const input = document.getElementById('prom-bot-group-input');
     bindMentionInput(input, () => groupMembers(group));
     input?.focus({ preventScroll: true });
@@ -625,7 +638,7 @@ async function consumeAgentStream(agent, message, onUpdate = null, options = {})
 async function streamGroupReply(group, agent, roomText, sourceAgent = null) {
   const pending = { id: uid('reply'), role: 'assistant', content: '', timestamp: Date.now(), agentId: agent.id, workflowLabel: agent.name, streaming: true };
   group.messages.push(pending);
-  await renderGroupRoom();
+  await renderGroupRoom({ forceBottom: true });
   let reply = '';
   try {
     reply = await consumeAgentStream(
@@ -699,7 +712,7 @@ async function sendGroupMessage() {
   if (input) input.value = '';
   hideMentionMenu();
   persistGroupMessage(group, { id: uid('user'), role: 'user', content: text, timestamp: Date.now() });
-  await renderGroupRoom();
+  await renderGroupRoom({ forceBottom: true });
   const members = groupMembers(group);
   const mentioned = resolveMentions(text, members);
   const targets = mentioned.length ? mentioned : members;

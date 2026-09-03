@@ -3483,6 +3483,9 @@ function _isMobileTransientReasoningTraceEntry(entry) {
   const source = String(entry.source || extra.source || '').trim().toLowerCase();
   const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
   const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  // Full thoughts are durable journal entries even if a provider echoes a
+  // summary field alongside them. Summary cleanup must never remove one.
+  if (reasoningKind === 'full_thought') return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -3501,9 +3504,13 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   const incoming = String(text || '');
   if (!incoming) return false;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
-  const existing = [...message.liveTraceEntries].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  // Only the current tail can still be mutable. Reusing an older progress
+  // row after a thought/tool boundary makes the next summary rewrite history.
+  const activeProgressEntry = message.liveTraceEntries.at(-1);
+  const existing = activeProgressEntry
+    && String(activeProgressEntry?.extra?.source || activeProgressEntry?.source || '').toLowerCase() === 'agent_progress'
+    ? activeProgressEntry
+    : null;
   if (!existing) {
     message.liveTraceEntries.push({
       id: `mtrace_progress_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -3579,7 +3586,8 @@ function _handleMobileCleanThought(message, evt) {
   if (!text) return false;
   const reasoningKind = String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase();
   const source = String(evt?.source || evt?.extra?.source || '').trim().toLowerCase();
-  const isSummary = visibility === 'summary' || reasoningKind === 'summary' || source === 'reasoning_summary';
+  const isSummary = reasoningKind !== 'full_thought'
+    && (visibility === 'summary' || reasoningKind === 'summary' || source === 'reasoning_summary');
   if (isSummary) {
     // Some gateways replay a safe summary through the legacy thought event.
     // Treat it exactly like the explicit summary channel: update one mutable
@@ -3591,10 +3599,10 @@ function _handleMobileCleanThought(message, evt) {
   const eventKey = String(evt?.eventKey || '').trim()
     || (streamId && Number.isFinite(seq) && seq >= 0 ? `${streamId}:${Math.floor(seq)}` : '');
   const thoughtExtra = {
-    source: String(evt?.source || '').trim() || 'agent_thought',
+    source: String(evt?.source || evt?.extra?.source || '').trim() || 'agent_thought',
     visibility,
     event: String(evt?.type || '').trim() || 'agent_thought',
-    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || '').trim().toLowerCase() || 'full_thought',
+    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase() || 'full_thought',
     ...(streamId ? { streamId } : {}),
     ...(eventKey ? { eventKey } : {}),
     ...(Number.isFinite(seq) && seq >= 0 ? { seq: Math.floor(seq) } : {}),
@@ -3735,6 +3743,8 @@ function _isMobileReasoningSummaryTraceEntry(entry) {
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const event = String(extra.event || entry?.event || '').trim().toLowerCase();
   const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  const reasoningKind = String(extra.reasoningKind || entry?.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  if (reasoningKind === 'full_thought') return false;
   return ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
     || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
     || source === 'reasoning_summary';
@@ -3793,7 +3803,7 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
   }
   if ((normalizedType === 'think' || normalizedType === 'reasoning_summary') && text) {
     const source = String(normalizedExtra.source || entry.source || '').trim().toLowerCase();
-    const kind = String(normalizedExtra.reasoningKind || '').trim().toLowerCase()
+    const kind = String(normalizedExtra.reasoningKind || normalizedExtra.presentationKind || entry.reasoningKind || entry.presentationKind || '').trim().toLowerCase()
       || (source === 'reasoning_summary' || source === 'agent_progress' || normalizedType === 'reasoning_summary'
         ? 'summary'
         : 'full_thought');
@@ -4083,7 +4093,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
-  const isUserVisibleThought = isThoughtLike && _isMobileUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+  const thoughtKind = isThoughtLike ? _mobileTraceThoughtKind({ type: normalizedType, extra }) : '';
   if (!isThoughtLike) {
     _closeMobileTraceThoughts(message);
     _flushMobileTraceThoughtProbe(message, { force: true });
@@ -4111,12 +4121,12 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   const existingThoughtText = isThoughtLike ? message.liveTraceEntries.some((entry) => {
     const entryType = String(entry?.type || '').toLowerCase();
     if (!_isMobileTraceThoughtType(entryType)) return false;
-    if (_isMobileUserVisibleReasoningTraceEntry(entry) !== isUserVisibleThought) return false;
+    if (_mobileTraceThoughtKind(entry) !== thoughtKind) return false;
     return _mobileTraceThoughtTextsSimilar(entry?.text || '', content);
   }) : false;
   if (existingThoughtText) return;
   if (append && last && last.type === normalizedType
-    && (!isThoughtLike || _isMobileUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+    && (!isThoughtLike || _mobileTraceThoughtKind(last) === thoughtKind)) {
     last.text = _appendMobileStreamingText(last.text || '', content);
     if (isThoughtLike) {
       if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
@@ -4419,7 +4429,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
   if (!traces.length) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const existing = new Set(message.processEntries.map((entry) =>
-    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+    `${String(entry?.type || '').toLowerCase()}|${_mobileTraceThoughtKind(entry)}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
   ));
   for (const trace of traces) {
     if (_isMobileTransientReasoningTraceEntry(trace)) continue;
@@ -4429,7 +4439,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
     if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
-    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    const key = `${type}|${_mobileTraceThoughtKind({ ...trace, type })}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
     message.processEntries.unshift({
@@ -4447,7 +4457,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
   const traces = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!traces.length) return out;
   const existing = new Set(out.map((entry) =>
-    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+    `${String(entry?.type || '').toLowerCase()}|${_mobileTraceThoughtKind(entry)}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
   ));
   const liveEntries = [];
   for (const trace of traces) {
@@ -4458,7 +4468,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
     if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
-    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    const key = `${type}|${_mobileTraceThoughtKind({ ...trace, type })}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
     liveEntries.push({
@@ -4542,7 +4552,8 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     if (type === 'process' || type === 'info') {
       if (!previewData) return;
     }
-    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
+    const thoughtKind = _mobileTraceThoughtKind({ ...entry, type, extra });
+    const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
@@ -4572,7 +4583,8 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
     const preview = String(entry?.preview?.dataUrl || entry?.dataUrl || '').slice(0, 120);
     const thoughtType = type === 'preamble' || type === 'think' || type === 'assistant';
-    return `${thoughtType ? 'thought' : type}|${text}|${preview}`;
+    const thoughtKind = thoughtType ? _mobileTraceThoughtKind(entry) : '';
+    return `${thoughtType ? 'thought' : type}|${thoughtKind}|${text}|${preview}`;
   };
   const isThoughtTraceEntry = (entry) => {
     const type = String(entry?.type || '').toLowerCase();
@@ -4587,8 +4599,11 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   ));
   const existingThoughts = message.liveTraceEntries
     .filter(isThoughtTraceEntry)
-    .map((entry) => _dedupeMobileTraceProseText(entry?.text || entry?.content || ''))
-    .filter(Boolean);
+    .map((entry) => ({
+      kind: _mobileTraceThoughtKind(entry),
+      text: _dedupeMobileTraceProseText(entry?.text || entry?.content || ''),
+    }))
+    .filter((entry) => entry.text);
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
@@ -4596,8 +4611,9 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
-      if (existingThoughts.some((seen) => _mobileTraceThoughtTextsSimilar(seen, text))) continue;
-      existingThoughts.push(text);
+      const thoughtKind = _mobileTraceThoughtKind(entry);
+      if (existingThoughts.some((seen) => seen.kind === thoughtKind && _mobileTraceThoughtTextsSimilar(seen.text, text))) continue;
+      existingThoughts.push({ kind: thoughtKind, text });
     }
     existing.add(key);
     message.liveTraceEntries.push({
@@ -4820,10 +4836,10 @@ function _compactMobileTraceThoughtEntries(message) {
       changed = true;
       continue;
     }
-    const visibleReasoning = _isMobileUserVisibleReasoningTraceEntry(entry);
+    const thoughtKind = _mobileTraceThoughtKind(entry);
     const existingIndex = kept.findIndex((candidate) => {
       if (!_isMobileTraceThoughtType(candidate?.type)) return false;
-      if (_isMobileUserVisibleReasoningTraceEntry(candidate) !== visibleReasoning) return false;
+      if (_mobileTraceThoughtKind(candidate) !== thoughtKind) return false;
       const existing = _mobileTraceComparableText(candidate?.text || candidate?.content || '');
       if (!existing) return false;
       return existing === comparable
@@ -4851,6 +4867,22 @@ function _isMobileTraceThoughtType(type) {
   return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
 }
 
+function _mobileTraceThoughtKind(entry) {
+  if (!_isMobileTraceThoughtType(entry?.type)) return '';
+  if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const explicit = String(extra.reasoningKind || extra.presentationKind || entry?.reasoningKind || '').trim().toLowerCase();
+  if (explicit === 'full_thought') return 'full_thought';
+  if (explicit === 'summary') return 'summary';
+  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  return String(entry?.type || '').toLowerCase() === 'reasoning_summary'
+    || source === 'reasoning_summary'
+    || source === 'agent_progress'
+    || String(extra.visibility || entry?.visibility || '').trim().toLowerCase() === 'summary'
+    ? 'summary'
+    : 'full_thought';
+}
+
 function _isMobileTraceReasoningSummaryType(type) {
   return String(type || '').toLowerCase() === 'reasoning_summary';
 }
@@ -4876,12 +4908,12 @@ function _mobileTraceThoughtCoveredByEarlier(message, text, excludeEntry = null,
   const canUseContainedTail = candidate.length >= 18 && candidateWords >= 3;
   const canUseSimilarity = candidate.length >= 36;
   if (!canUseContainedTail && !canUseSimilarity) return false;
-  const visibleReasoning = _isMobileUserVisibleReasoningTraceEntry(candidateEntry || { type: excludeEntry?.type || 'think' });
+  const thoughtKind = _mobileTraceThoughtKind(candidateEntry || { type: excludeEntry?.type || 'think' });
   const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   return entries.some((entry) => {
     if (!entry || entry === excludeEntry) return false;
     if (!_isMobileTraceThoughtType(entry.type)) return false;
-    if (_isMobileUserVisibleReasoningTraceEntry(entry) !== visibleReasoning) return false;
+    if (_mobileTraceThoughtKind(entry) !== thoughtKind) return false;
     const existing = _mobileTraceComparableText(entry.text || entry.content || '');
     if (!existing || existing === candidate) return !!existing;
     if (canUseContainedTail && existing.length >= candidate.length && existing.includes(candidate)) return true;
@@ -4894,8 +4926,8 @@ function _mobileTraceShouldProbeThought(message, type, append, extra = null) {
   const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   const last = entries[entries.length - 1];
   if (!last || String(last.type || '').toLowerCase() !== String(type || '').toLowerCase()) return true;
-  return _isMobileUserVisibleReasoningTraceEntry(last)
-    !== _isMobileUserVisibleReasoningTraceEntry({ type, extra });
+  return _mobileTraceThoughtKind(last)
+    !== _mobileTraceThoughtKind({ type, extra });
 }
 
 function _pushMobileTraceThoughtEntry(message, type, text, time = '', extra = null) {
@@ -13043,6 +13075,13 @@ void main() {
       limit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
     }).then(({ applied }) => {
       if (!applied) return;
+      // The server page is a real prepend. Expand the retained timeline range
+      // to include the new oldest block before repainting, so the existing
+      // newer block remains in place instead of being replaced by the page.
+      mobileTimelineController.retainEarlier(
+        timelineKey,
+        _mobileTimelineEntries(requestedSession),
+      );
       _renderThread(threadEl, requestedSession);
       _scheduleMobileThreadCacheSave(requestedSession, 120);
     }).catch((err) => {

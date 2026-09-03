@@ -25,6 +25,68 @@ const MAIN_ONLY_SELECTOR = [
   '#chat-command-chip',
 ].join(', ');
 
+const DESKTOP_MESSAGE_SCROLLER_SELECTOR = [
+  '#chat-messages',
+  '.side-chat-main-messages',
+  '.side-chat-messages',
+  '.unified-agent-chat-messages',
+].join(', ');
+
+let desktopComposerResizeObserver = null;
+let desktopComposerLayoutFrame = 0;
+const observedDesktopComposers = new WeakSet();
+
+function visibleDesktopElement(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) return false;
+  const style = window.getComputedStyle(element);
+  return style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && element.getClientRects().length > 0;
+}
+
+function messageScrollerForComposer(composer) {
+  const scope = composer.closest('.unified-agent-chat-shell, .side-chat-main-pane, .side-chat-pane, #chat-view');
+  if (!scope) return null;
+  const candidates = [];
+  if (scope.matches?.(DESKTOP_MESSAGE_SCROLLER_SELECTOR)) candidates.push(scope);
+  candidates.push(...scope.querySelectorAll(DESKTOP_MESSAGE_SCROLLER_SELECTOR));
+  return candidates.find(visibleDesktopElement) || null;
+}
+
+function syncDesktopComposerLayout(composer) {
+  if (!visibleDesktopElement(composer)) return;
+  const messages = messageScrollerForComposer(composer);
+  if (!messages) return;
+
+  const messagesRect = messages.getBoundingClientRect();
+  const composerRect = composer.getBoundingClientRect();
+  const overlap = Math.max(0, messagesRect.bottom - composerRect.top);
+  // Keep the original breathing room for short composers, then grow the
+  // clearance when attachments, queue rows, or a taller textarea expand it.
+  const clearance = Math.max(180, Math.ceil(overlap + 24));
+  messages.style.setProperty('--desktop-composer-clearance', `${clearance}px`);
+  if (messages.id === 'chat-messages') {
+    messages.style.setProperty('--chat-canvas-composer-clearance', `${clearance}px`);
+  }
+}
+
+function syncAllDesktopComposerLayouts() {
+  desktopComposerLayoutFrame = 0;
+  document.querySelectorAll('.chat-input-area').forEach(syncDesktopComposerLayout);
+}
+
+function queueDesktopComposerLayoutSync() {
+  if (desktopComposerLayoutFrame || typeof requestAnimationFrame !== 'function') return;
+  desktopComposerLayoutFrame = requestAnimationFrame(syncAllDesktopComposerLayouts);
+}
+
+function observeDesktopComposer(composer) {
+  if (!(composer instanceof HTMLElement) || observedDesktopComposers.has(composer)) return;
+  observedDesktopComposers.add(composer);
+  desktopComposerResizeObserver?.observe(composer);
+  syncDesktopComposerLayout(composer);
+}
+
 function copyBehaviorAttributes(target, source, names) {
   if (!target || !source) return;
   for (const name of names) {
@@ -277,6 +339,7 @@ function canonicalizeComposer(legacy) {
   try {
     clone.dispatchEvent(new CustomEvent('prometheus:canonical-composer-mounted', { bubbles: true }));
   } catch {}
+  observeDesktopComposer(clone);
   return clone;
 }
 
@@ -287,11 +350,16 @@ function scan(root = document) {
   }
   const scope = root?.querySelectorAll ? root : document;
   scope.querySelectorAll(SECONDARY_COMPOSER_SELECTOR).forEach((node) => canonicalizeComposer(node));
+  if (scope.matches?.('.chat-input-area')) observeDesktopComposer(scope);
+  scope.querySelectorAll('.chat-input-area').forEach(observeDesktopComposer);
 }
 
 function install() {
   if (window.__PROM_CANONICAL_DESKTOP_COMPOSER_INSTALLED) return;
   window.__PROM_CANONICAL_DESKTOP_COMPOSER_INSTALLED = true;
+  if (typeof ResizeObserver === 'function') {
+    desktopComposerResizeObserver = new ResizeObserver(queueDesktopComposerLayoutSync);
+  }
   scan(document);
   const observer = new MutationObserver((records) => {
     for (const record of records) {
@@ -301,6 +369,8 @@ function install() {
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('resize', queueDesktopComposerLayoutSync, { passive: true });
+  queueDesktopComposerLayoutSync();
   window.__PROM_CANONICAL_DESKTOP_COMPOSER = { scan, canonicalizeComposer };
 }
 

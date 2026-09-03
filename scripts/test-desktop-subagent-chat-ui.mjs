@@ -14,11 +14,18 @@ const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js')
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
 const themes = read('web-ui/src/styles/themes.css');
 const components = read('web-ui/src/styles/components.css');
+const promBotCollab = read('web-ui/src/prom-bot-collab.js');
 const workspaceTree = read('web-ui/src/components/workspace-file-tree.js');
 const workspaceTreeGenerated = read('generated/public-web-ui/static/components/workspace-file-tree.js');
 const workspaceCss = read('web-ui/src/styles/workspace-file-tree.css');
 const workspaceCssGenerated = read('generated/public-web-ui/static/styles/workspace-file-tree.css');
 const channelsRouter = read('src/gateway/routes/channels.router.ts');
+const teamsRouter = read('src/gateway/routes/teams.router.ts');
+const modelPicker = read('web-ui/src/components/agent-model-picker.js');
+const teamDispatchRuntime = read('src/gateway/teams/team-dispatch-runtime.ts');
+const teamMemberRoom = read('src/gateway/teams/team-member-room.ts');
+const cronScheduler = read('src/gateway/scheduling/cron-scheduler.ts');
+const subagentExecutor = read('src/gateway/agents-runtime/subagent-executor.ts');
 
 assert.match(
   subagents,
@@ -59,7 +66,6 @@ assert.match(teams, /secondarySurface:\s*'team-chat'/,
   'standalone team chat must identify its secondary composer surface');
 assert.match(chat, /window\.__PROM_UNIFIED_DESKTOP_CHAT = \{/);
 assert.match(chat, /renderComposer: renderUnifiedDesktopComposerHtml/);
-const promBotCollab = read('web-ui/src/prom-bot-collab.js');
 assert.match(promBotCollab, /renderer\.renderComposer\(\{[^}]*sessionId, secondarySurface:\s*'prom-bot-group'/s,
   'Prom Bot group chat must use the shared session-aware composer');
 
@@ -83,6 +89,10 @@ assert.match(canonical, /clone\.querySelectorAll\('\[id\]'\)\.forEach\(\(node\) 
 assert.match(canonical, /clone\.dataset\.canonicalComposerSource = 'main-chat-dom'/);
 assert.match(canonical, /clone\.classList\.add\('canonical-secondary-desktop-composer'\)/,
   'session-aware secondary composers must opt into the main desktop layout rules');
+assert.match(canonical, /DESKTOP_MESSAGE_SCROLLER_SELECTOR/,
+  'secondary composer clearance must target every desktop message scroller');
+assert.match(canonical, /ResizeObserver[\s\S]*syncDesktopComposerLayout/,
+  'composer growth must update the reserved message clearance');
 assert.match(canonical, /team-chat-mention-popover[\s\S]*inputWrap\.appendChild/,
   'canonical team composers must retain the @mention popover behavior');
 assert.match(themes, /\.chat-input-area\.canonical-secondary-desktop-composer\s*\{[\s\S]*?grid-template-areas:/,
@@ -97,6 +107,64 @@ assert.match(themes, /data-background-visuals="on"\]\[data-skin="dark"[^\n]*:is\
   'appearance-on must cover standalone and Prom Bot chat hosts');
 assert.match(themes, /:is\(main\.main-shell, #chat-view, \.side-chat-main-pane, \.side-chat-pane, \.unified-agent-chat-shell, #prom-bot-main-surface, #prom-bot-group-host\)\s*\{[\s\S]*?background-image: none !important/,
   'final desktop theme surface must also cover secondary chat hosts');
+assert.match(components, /#chat-messages\s*\{[\s\S]*?scroll-padding-bottom:\s*var\(--desktop-composer-clearance/,
+  'main desktop history must reserve space below the composer');
+assert.match(components, /\.unified-agent-chat-messages\s*\{[\s\S]*?scroll-padding-bottom:\s*var\(--desktop-composer-clearance/,
+  'unified secondary history must reserve space below the composer');
+assert.match(components, /\.workflow-transition-avatar/,
+  'subagent identity rows must have a dedicated avatar slot');
+assert.match(themes, /\[data-skin="blue"\], \[data-skin="purple"\][\s\S]*?\.msg\.user \.msg-body[\s\S]*?background:\s*var\(--composer-bg\) !important/,
+  'blue and purple user bubbles must use the composer surface');
+assert.match(subagents, /workflowAvatarHtml:\s*renderSubagentWorkflowAvatar/,
+  'direct subagent history/live rows must carry the left-panel identity icon');
+assert.match(teams, /workflowAvatarHtml:\s*renderTeamWorkflowAvatar/,
+  'team history/live rows must carry the team identity icon');
+assert.match(teams, /const managerId = getTeamManagerId\(team\);[\s\S]*?Manager[\s\S]*?Subagents \(\$\{agentIds\.length\}\)/,
+  'team subagent controls must expose the manager above the subagent list');
+assert.match(teams, /const tabs = \['overview','memory','heartbeat'\]/,
+  'team agent detail must use the shared read-only Memory tab');
+assert.match(teams, /api\('\/api\/schedules'\)/,
+  'team Runs must load schedules so team-owned jobs are visible');
+assert.match(teams, /async function openTeamScheduledJob\(jobId\)[\s\S]*?setMode\('schedule'\)[\s\S]*?editSchedule\(id\)/,
+  'team schedule rows must open the matching Schedule-page modal');
+assert.match(teams, /team_member_stream_done[\s\S]*?loadTeamBoardData\(msg\.teamId\)[\s\S]*?teamBoardTab === 'runs'/,
+  'member stream completion must refresh the Runs tab');
+assert.match(teams, /function _renderTeamRunActivity\(run\)[\s\S]*?renderLiveTrace\(/,
+  'team Runs must render the durable member tool/reasoning trace');
+assert.match(teamDispatchRuntime, /appendBackgroundSseTrace\(\[\], liveTraceEntries/,
+  'dispatched team members must capture the shared structured trace format');
+assert.match(teamMemberRoom, /appendBackgroundSseTrace\(\[\], tracker\.liveTraceEntries/,
+  'team-room member turns must capture the shared structured trace format');
+assert.match(teamMemberRoom, /liveTraceEntries: tracker\.liveTraceEntries/,
+  'member final messages must retain the structured trace for history and Runs');
+assert.match(subagentExecutor, /recordTeamRun\(teamId,[\s\S]*?liveTraceEntries: result\?\.liveTraceEntries/,
+  'the active legacy manager executor must record member room turns in team Runs');
+assert.match(subagentExecutor, /processEntries: result\.processEntries,[\s\S]*?liveTraceEntries: result\.liveTraceEntries/,
+  'the active legacy dispatch executor must retain member traces in team chat');
+assert.match(cronScheduler, /chatMessage,/,
+  'scheduled team-member output must use the team chat message field');
+assert.match(teams, /memory-md/,
+  'team agent detail must load team-scoped MEMORY.md');
+assert.match(teams, /isManager \? `triggerManagerReview\('/,
+  'the Manager row must trigger manager review instead of subagent dispatch');
+assert.doesNotMatch(teams, /labels = \{ overview:'Overview', systemprompt:'AGENT\.md'/,
+  'team subagent detail must not expose the old AGENT.md tab');
+assert.match(teamsRouter, /function resolveTeamAgentIdentity[\s\S]*?ensureManagedTeamManagerAgent/,
+  'team identity routes must resolve both managers and subagents');
+assert.match(teamsRouter, /router\.get\('\/api\/teams\/:id\/agents\/:agentId\/memory-md'/,
+  'gateway must expose team-scoped MEMORY.md');
+assert.match(modelPicker, /effectiveModelProvider/,
+  'agent model picker must surface the resolved provider for bare model overrides');
+assert.match(modelPicker, /const provider = parsed\.provider \|\| \(explicitRaw && effectiveProvider/,
+  'agent model picker must preserve provider selection for legacy bare models');
+assert.match(promBotCollab, /workflowAvatarHtml:\s*PROM_BOT_WORKFLOW_ICON/,
+  'Prom Bot group rows must carry the Prom Bot sidebar icon');
+assert.match(promBotCollab, /async function renderGroupRoom\(\{ forceBottom = false \}/,
+  'Prom Bot group rerenders must preserve the reading anchor');
+assert.match(subagents, /restoreSubagentChatScroll\(chatScrollSnapshot, \{ forceBottom: force \}\)/,
+  'subagent streaming refreshes must not unconditionally jump a scrolled user');
+assert.match(teams, /const wasNearBottom = messagesBefore[\s\S]*?Math\.min\(previousScrollTop/,
+  'team streaming refreshes must not unconditionally jump a scrolled user');
 
 // Cover every legacy desktop entry point the user can actually see.
 assert.match(canonical, /\.side-chat-composer\.chat-input-area/,

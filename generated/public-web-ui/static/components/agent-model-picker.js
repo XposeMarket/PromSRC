@@ -168,14 +168,21 @@ function _reasoningRowHtml(prefix, agentId, provider, model, currentEffort = '',
 
 export function renderAgentModelPicker(agent, prefix) {
   const id = agent.id;
-  const parsed = _parseAgentModel(agent.model);
-  const provider = parsed.provider;
-  const model = parsed.model;
+  const explicitRaw = String(agent.model || '').trim();
+  const parsed = _parseAgentModel(explicitRaw);
   const eff = String(agent.effectiveModel || '').trim();
   const effSrc = String(agent.effectiveModelSource || '').trim();
   const effectiveParsed = _parseAgentModel(eff);
-  const reasoningProvider = provider || effectiveParsed.provider;
-  const reasoningModel = model || effectiveParsed.model;
+  // Older agent records may contain a bare model name even though the
+  // effective route already resolved it through a concrete provider. Keep the
+  // model override intact, but surface that provider so saving the form writes
+  // the durable provider/model pair and the reasoning selector can hydrate.
+  const effectiveProvider = String(agent.effectiveModelProvider || effectiveParsed.provider || '').trim();
+  const effectiveModelName = String(agent.effectiveModelName || effectiveParsed.model || '').trim();
+  const provider = parsed.provider || (explicitRaw && effectiveProvider ? effectiveProvider : '');
+  const model = parsed.model;
+  const reasoningProvider = provider || effectiveProvider;
+  const reasoningModel = model || effectiveModelName;
   const inheritedReasoning = String(agent.effectiveReasoningEffort || '').trim();
   const agentReasoning = String(agent.reasoning_effort || '').trim();
   const item = _getCatalogItem(provider);

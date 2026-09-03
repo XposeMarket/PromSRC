@@ -21,6 +21,7 @@ export function createDesktopChatRuntimeAdapter({
   request,
   getStreamState = () => null,
   recordProcess = () => {},
+  onOlderPageApplied = () => {},
 } = {}) {
   if (!windowRef || typeof getSession !== 'function') {
     throw new TypeError('Desktop chat runtime adapter requires a window and getSession.');
@@ -212,6 +213,11 @@ export function createDesktopChatRuntimeAdapter({
     const session = getSession(sid);
     const cursor = String(session?.historyPage?.olderCursor || '').trim();
     if (!session || !cursor || session.historyPage?.loadingOlder === true) return false;
+    // The main SSE sender may still hold this exact history array while an
+    // older page is loading. Preserve its identity when the page returns so a
+    // concurrent final assistant turn cannot be detached from the session.
+    const historyRef = Array.isArray(session.history) ? session.history : [];
+    if (session.history !== historyRef) session.history = historyRef;
     session.historyPage = { ...session.historyPage, loadingOlder: true, error: null };
     runtimeFor(sid)?.setPaging({ loadingOlder: true, error: null });
     if (sid === windowRef.activeChatSessionId) render();
@@ -220,9 +226,19 @@ export function createDesktopChatRuntimeAdapter({
       const olderHistory = result.items
         .filter((message) => !isInternalMessage(message))
         .map((message) => ({ ...message, role: message.role, content: message.content || '', timestamp: message.timestamp }));
-      session.history = mergeHistory(olderHistory, session.history || []);
+      const currentHistory = Array.isArray(session.history) ? session.history : historyRef;
+      const mergedHistory = mergeHistory(olderHistory, currentHistory);
+      historyRef.splice(0, historyRef.length, ...mergedHistory);
+      session.history = historyRef;
       session.historyPage = { ...result.pageInfo, loadingOlder: false, error: null, loadedCount: session.history.length };
       sync(session, { source: 'desktop-older-page', pageInfo: session.historyPage });
+      try {
+        onOlderPageApplied({
+          sessionId: sid,
+          history: session.history,
+          pageInfo: session.historyPage,
+        });
+      } catch {}
       persist();
       if (sid === windowRef.activeChatSessionId) {
         windowRef.chatHistory = session.history;

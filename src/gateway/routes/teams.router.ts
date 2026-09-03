@@ -12,6 +12,7 @@ import {
   listTeamContextReferences, addTeamContextReference, updateTeamContextReference,
   deleteTeamContextReference, buildTeamContextRuntimeBlock,
   computeTeamHealth, getTeamRunHistory, getTeamRoomState,
+  ensureManagedTeamManagerAgent,
 } from '../teams/managed-teams';
 import { createTask, listTaskSummaries, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
 import { findRecoveryTaskForTeamChatTarget, handleTaskRecoveryMessage } from '../tasks/task-router';
@@ -38,16 +39,41 @@ import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
 
 export const router = Router();
 
+function resolveTeamAgentIdentity(teamId: string, agentId: string): {
+  team?: any;
+  agent?: any;
+  workspace?: string;
+  error?: { status: number; message: string };
+} {
+  const team = getManagedTeam(teamId);
+  if (!team) return { error: { status: 404, message: 'Team not found' } };
+
+  const managerId = String(team.managerAgentId || `${team.id}_manager`).trim();
+  const isManager = agentId === managerId;
+  if (!isManager && !(team.subagentIds || []).includes(agentId)) {
+    return { error: { status: 404, message: 'Agent is not a member of this team' } };
+  }
+
+  if (isManager) {
+    const ensured = ensureManagedTeamManagerAgent(team);
+    const agent = getAgentById(ensured.agentId) as any;
+    if (!agent) return { error: { status: 404, message: 'Agent not found' } };
+    return { team, agent, workspace: ensured.identityPath };
+  }
+
+  const agent = getAgentById(agentId) as any;
+  if (!agent) return { error: { status: 404, message: 'Agent not found' } };
+  const globalWorkspace = String(agent.workspace || ensureAgentWorkspace(agent) || '').trim();
+  const workspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
+  return { team, agent, workspace };
+}
+
 router.get('/api/teams/:id/agents/:agentId/agent-md', (req, res) => {
   const teamId = String(req.params.id || '').trim();
   const agentId = String(req.params.agentId || '').trim();
-  const team = getManagedTeam(teamId);
-  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
-  if (!team.subagentIds.includes(agentId)) return res.status(404).json({ success: false, error: 'Agent is not a member of this team' });
-  const agent = getAgentById(agentId) as any;
-  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
-  const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
-  const workspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
+  const resolved = resolveTeamAgentIdentity(teamId, agentId);
+  if (resolved.error) return res.status(resolved.error.status).json({ success: false, error: resolved.error.message });
+  const workspace = resolved.workspace as string;
   const prompt = readAgentPromptFile(workspace, { migrateLegacy: true });
   res.json({
     success: true,
@@ -61,15 +87,25 @@ router.get('/api/teams/:id/agents/:agentId/agent-md', (req, res) => {
 router.put('/api/teams/:id/agents/:agentId/agent-md', (req, res) => {
   const teamId = String(req.params.id || '').trim();
   const agentId = String(req.params.agentId || '').trim();
-  const team = getManagedTeam(teamId);
-  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
-  if (!team.subagentIds.includes(agentId)) return res.status(404).json({ success: false, error: 'Agent is not a member of this team' });
-  const agent = getAgentById(agentId) as any;
-  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
-  const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
-  const workspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
+  const resolved = resolveTeamAgentIdentity(teamId, agentId);
+  if (resolved.error) return res.status(resolved.error.status).json({ success: false, error: resolved.error.message });
+  const workspace = resolved.workspace as string;
   const filePath = writeAgentPromptFile(workspace, String(req.body?.content || ''));
   res.json({ success: true, teamId, agentId, path: filePath });
+});
+
+router.get('/api/teams/:id/agents/:agentId/memory-md', (req, res) => {
+  const teamId = String(req.params.id || '').trim();
+  const agentId = String(req.params.agentId || '').trim();
+  const resolved = resolveTeamAgentIdentity(teamId, agentId);
+  if (resolved.error) return res.status(resolved.error.status).json({ success: false, error: resolved.error.message });
+  const filePath = path.join(resolved.workspace as string, 'MEMORY.md');
+  const exists = fs.existsSync(filePath);
+  let content = '';
+  if (exists) {
+    try { content = fs.readFileSync(filePath, 'utf-8'); } catch { content = ''; }
+  }
+  res.json({ success: true, teamId, agentId, path: filePath, exists, content });
 });
 
 const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
@@ -1202,6 +1238,7 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
             durationMs: result.durationMs,
             thinking: result.thinking,
             processEntries: result.processEntries,
+            liveTraceEntries: result.liveTraceEntries,
           },
         });
         broadcastTeamEvent({
