@@ -450,7 +450,13 @@ function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
   }
   let raw = '';
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
-  return parseUsageEvents(raw, wantedSessionId);
+  const events = parseUsageEvents(raw, wantedSessionId);
+  if (!wantedSessionId) {
+    _historicalUsageCache = { filePath, size: stat.size, mtimeMs: stat.mtimeMs, loadedAt: now, events };
+    _historicalUsageCacheTimer = setTimeout(clearHistoricalUsageCache, HISTORICAL_USAGE_CACHE_TTL_MS);
+    _historicalUsageCacheTimer.unref?.();
+  }
+  return events;
 }
 
 function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
@@ -466,11 +472,6 @@ function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
       // Historical usage queries remain best-effort if telemetry contains a
       // malformed row; the resident calibration index follows the same rule.
     }
-  }
-  if (!wantedSessionId) {
-    _historicalUsageCache = { filePath, size: stat.size, mtimeMs: stat.mtimeMs, loadedAt: now, events: out };
-    _historicalUsageCacheTimer = setTimeout(clearHistoricalUsageCache, HISTORICAL_USAGE_CACHE_TTL_MS);
-    _historicalUsageCacheTimer.unref?.();
   }
   return out;
 }
