@@ -10,8 +10,32 @@ function decodeInlineString(value) {
 }
 
 function turnFileTarget(row) {
+  const dataPath = String(row?.dataset?.turnFilePath || '').trim();
+  if (dataPath) {
+    const displayPath = String(
+      row.dataset.turnFileLabel
+      || row.querySelector('.file-change-path')?.textContent
+      || dataPath,
+    ).trim();
+    const insertions = Number.parseInt(String(row.querySelector('.file-change-counts .ins')?.textContent || '').replace(/[^0-9]/g, ''), 10) || 0;
+    const deletions = Number.parseInt(String(row.querySelector('.file-change-counts .del')?.textContent || '').replace(/[^0-9]/g, ''), 10) || 0;
+    return {
+      key: `workspace-file:${dataPath}`,
+      type: 'workspace-file',
+      title: displayPath,
+      path: dataPath,
+      displayPath,
+      status: 'modified',
+      insertions,
+      deletions,
+    };
+  }
+
+  // Keep the parser as a compatibility fallback for rows produced by an
+  // older cached bundle. Current rows carry data-turn-file-* attributes so
+  // the click path does not depend on HTML/JS escaping details.
   const handler = String(row?.getAttribute?.('onclick') || '');
-  const match = handler.match(/canvasPresentFile\(\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")\s*\)/);
+  const match = handler.match(/canvasPresentFile\(\s*("(?:\\.|[^"\\])*")\s*,\s*("(?:\\.|[^"\\])*")(?:\s*,|\s*\))/);
   if (!match) return null;
 
   const path = decodeInlineString(match[1]);
@@ -36,8 +60,14 @@ function turnFileTarget(row) {
 
 export function openTurnFileDiff(row) {
   const target = turnFileTarget(row);
-  if (!target || typeof window.openCodingWorkspace !== 'function') return false;
-  window.openCodingWorkspace('', target);
+  if (!target || typeof window.canvasPresentFile !== 'function') return false;
+  // End-of-turn files belong in the already-open Canvas surface. The full
+  // Coding workspace modal is still available from the Sources panel, but it
+  // should not interrupt the chat just because a file-change row was clicked.
+  window.canvasPresentFile(target.path, target.displayPath, {
+    openMode: 'diff',
+    diffView: 'turn',
+  });
   return true;
 }
 

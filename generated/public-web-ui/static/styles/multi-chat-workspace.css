@@ -1,15 +1,15 @@
 /* Desktop multi-chat workspace. Loaded by features/chat/multi-chat-workspace-v2.js. */
 
-body:not(.pm-mobile-active) #chat-view {
+body:not(.pm-mobile-active) .main-shell {
   --prom-multi-chat-tabs-height: 40px;
 }
 
 body:not(.pm-mobile-active) .prom-multi-chat-tabs {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  position: relative;
   z-index: 38;
+  flex: 0 0 var(--prom-multi-chat-tabs-height);
+  width: 100%;
+  box-sizing: border-box;
   height: var(--prom-multi-chat-tabs-height);
   display: flex;
   align-items: stretch;
@@ -110,49 +110,23 @@ body:not(.pm-mobile-active) .prom-multi-chat-tab-close:hover {
   color: var(--text);
 }
 
-/* The browser-like tab row sits above the normal chat headers. The actual
-   main/side content below continues to be rendered by ChatPage's native split. */
-body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #chat-messages {
-  top: var(--prom-multi-chat-tabs-height);
+/* The tab row takes the same top slot as the normal context header. Native
+   split panes therefore keep their own MAIN CHAT/SIDE CHAT headers below it. */
+body:not(.pm-mobile-active) .main-shell:has(> .prom-multi-chat-tabs:not([hidden])) > #chat-context-header {
+  display: none !important;
 }
 
-body:not(.pm-mobile-active):has(.prom-multi-chat-tabs:not([hidden])) #chat-view > .chat-input-area {
-  bottom: 18px;
-}
-
-/* Multi-chat now reuses the native split renderer. These overrides only make
-   its two pane headers read like normal sessions instead of MAIN CHAT/SIDE CHAT. */
+/* Multi-chat reuses the native split renderer. Keep its normal header order
+   and only constrain long session titles to the available pane width. */
 body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header > div,
 body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-title-wrap {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
-body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-title {
-  order: 0;
+body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header :is(.side-chat-title, .side-chat-kicker) {
   overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-kicker {
-  order: 1;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.2;
-  text-transform: none;
-}
-
-body:not(.pm-mobile-active).prom-multi-chat-native-split .prom-multi-chat-session-header .side-chat-kicker[hidden] {
-  display: none !important;
 }
 
 /* Keep the main composer in the left native pane on the same shared responsive
@@ -177,6 +151,23 @@ body:not(.pm-mobile-active) .unified-agent-chat-composer.chat-input-area {
 
 body:not(.pm-mobile-active) .side-chat-composer.chat-input-area .chat-input-row,
 body:not(.pm-mobile-active) .unified-agent-chat-composer.chat-input-area .chat-input-row {
+  width: 100%;
+}
+
+/* Canonicalized side panes intentionally drop the legacy surface classes so
+   their paint/layout rules stay identical to #chat-view. Keep only the pane
+   placement hook here, scoped to the native side pane. */
+body:not(.pm-mobile-active) .side-chat-pane > .chat-input-area[data-canonical-secondary-composer="1"] {
+  left: 50% !important;
+  right: auto !important;
+  bottom: 18px !important;
+  transform: translateX(-50%) !important;
+  width: min(var(--chat-content-max-width), calc(100% - var(--chat-content-inline-gutter) - var(--chat-content-inline-gutter))) !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+body:not(.pm-mobile-active) .side-chat-pane > .chat-input-area[data-canonical-secondary-composer="1"] .chat-input-row {
   width: 100%;
 }
 

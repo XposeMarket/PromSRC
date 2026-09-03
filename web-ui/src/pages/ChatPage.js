@@ -1080,10 +1080,78 @@ const chatContextWindowState = {
   planProviderId: '',
   planAccountId: '',
 };
+const chatContextWindowStatesBySession = new Map();
+
+function getChatContextWindowElements(target = null) {
+  const source = target instanceof Element ? target : null;
+  const composer = source?.closest('.chat-input-area[data-canonical-secondary-composer="1"]') || null;
+  if (composer) {
+    const popover = composer.querySelector('.chat-context-window-popover');
+    return {
+      composer,
+      button: composer.querySelector('.chat-context-window-btn'),
+      popover,
+      total: popover?.querySelector('.chat-context-window-total'),
+      fill: popover?.querySelector('.chat-context-window-fill'),
+      toggle: popover?.querySelector('.chat-context-window-toggle'),
+      breakdown: popover?.querySelector('.chat-context-window-breakdown'),
+      metrics: popover?.querySelector('.chat-context-window-metrics'),
+      head: popover?.querySelector('.chat-context-window-head span:first-child'),
+      plan: popover?.querySelector('.chat-context-window-plan'),
+      planBody: popover?.querySelector('.ccw-plan-body'),
+    };
+  }
+  const popover = document.getElementById('chat-context-window-popover');
+  return {
+    composer: document.querySelector('#chat-view > .chat-input-area'),
+    button: document.getElementById('chat-context-window-btn'),
+    popover,
+    total: document.getElementById('chat-context-window-total'),
+    fill: document.getElementById('chat-context-window-fill'),
+    toggle: document.getElementById('chat-context-window-toggle'),
+    breakdown: document.getElementById('chat-context-window-breakdown'),
+    metrics: popover?.querySelector('.chat-context-window-metrics'),
+    head: popover?.querySelector('.chat-context-window-head span:first-child'),
+    plan: document.getElementById('chat-context-window-plan'),
+    planBody: document.getElementById('chat-context-window-plan-body'),
+  };
+}
+
+function getChatContextWindowTargetForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return null;
+  return Array.from(document.querySelectorAll('[data-context-window-session-id]'))
+    .find((node) => String(node.dataset.contextWindowSessionId || '') === sid) || null;
+}
+
+function getChatContextWindowStateForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return chatContextWindowState;
+  let state = chatContextWindowStatesBySession.get(sid);
+  if (!state) {
+    state = {
+      loading: false,
+      open: false,
+      expanded: false,
+      expandedRows: new Set(),
+      liveTurn: null,
+      lastSessionId: '',
+      lastFetchAt: 0,
+      data: null,
+      planFetchAt: 0,
+      planData: null,
+      planProviderId: '',
+      planAccountId: '',
+    };
+    chatContextWindowStatesBySession.set(sid, state);
+  }
+  return state;
+}
 
 function resetChatContextWindowLiveTurn(sessionId) {
   const sid = String(sessionId || '').trim();
-  chatContextWindowState.liveTurn = sid ? {
+  const state = getChatContextWindowStateForSession(sid);
+  state.liveTurn = sid ? {
     sessionId: sid,
     active: true,
     startedAt: Date.now(),
@@ -1098,16 +1166,19 @@ function resetChatContextWindowLiveTurn(sessionId) {
 }
 
 function settleChatContextWindowLiveTurn(sessionId) {
-  const live = chatContextWindowState.liveTurn;
+  const sid = String(sessionId || '').trim();
+  const state = getChatContextWindowStateForSession(sid);
+  const target = getChatContextWindowTargetForSession(sid);
+  const live = state.liveTurn;
   if (!live || String(live.sessionId || '') !== String(sessionId || '')) return;
   live.active = false;
   live.settledAt = Date.now();
   setTimeout(() => {
-    const current = chatContextWindowState.liveTurn;
+    const current = state.liveTurn;
     if (!current || current !== live) return;
     if (Date.now() - Number(current.settledAt || 0) < 7000) return;
-    chatContextWindowState.liveTurn = null;
-    renderChatContextWindow(chatContextWindowState.data);
+    state.liveTurn = null;
+    renderChatContextWindow(state.data, target);
   }, 7500);
   scheduleChatContextWindowRefresh(500);
 }
@@ -1121,10 +1192,12 @@ function estimateContextTokensFromText(text) {
 function recordChatContextWindowToolResult(event, sessionId) {
   const sid = String(sessionId || getChatContextWindowSessionId() || '').trim();
   if (!sid) return;
-  let live = chatContextWindowState.liveTurn;
+  const state = getChatContextWindowStateForSession(sid);
+  const target = getChatContextWindowTargetForSession(sid);
+  let live = state.liveTurn;
   if (!live || String(live.sessionId || '') !== sid) {
     resetChatContextWindowLiveTurn(sid);
-    live = chatContextWindowState.liveTurn;
+    live = state.liveTurn;
   }
   if (!live) return;
   const telemetry = event?.extra?.telemetry || event?.telemetry || {};
@@ -1152,12 +1225,19 @@ function recordChatContextWindowToolResult(event, sessionId) {
     tool.durationMsMax = Math.max(tool.durationMsMax, durationMs);
   }
   live.tools.set(action, tool);
-  renderChatContextWindow(chatContextWindowState.data);
+  renderChatContextWindow(state.data, target);
   scheduleChatContextWindowRefresh(1200);
 }
 
-function getChatContextWindowSessionId() {
-  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+function getChatContextWindowSessionId(target = null) {
+  const source = target instanceof Element ? target : null;
+  return String(
+    source?.dataset?.contextWindowSessionId
+    || source?.closest?.('[data-composer-session-id]')?.dataset?.composerSessionId
+    || window.activeChatSessionId
+    || window.agentSessionId
+    || '',
+  ).trim();
 }
 
 function formatContextDurationLabel(value) {
@@ -1192,13 +1272,13 @@ function formatContextTokenCount(value) {
   return String(Math.round(n));
 }
 
-function setChatContextWindowLoading(label = 'Loading...') {
-  const total = document.getElementById('chat-context-window-total');
+function setChatContextWindowLoading(label = 'Loading...', target = null) {
+  const total = getChatContextWindowElements(target).total;
   if (total) total.textContent = label;
 }
 
-function setChatContextWindowHeadLabel(label = 'Context window') {
-  const headLabel = document.querySelector('#chat-context-window-popover .chat-context-window-head span:first-child');
+function setChatContextWindowHeadLabel(label = 'Context window', target = null) {
+  const headLabel = getChatContextWindowElements(target).head;
   if (!headLabel) return;
   headLabel.innerHTML = `${escHtml(label)}<svg class="ccw-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>`;
 }
@@ -1210,8 +1290,10 @@ function formatContextPercent(tokens, total) {
   return `${Math.max(0, (n / d) * 100).toFixed(1)}%`;
 }
 
-function renderChatContextRows(rows, windowTokens) {
-  const metrics = document.querySelector('#chat-context-window-popover .chat-context-window-metrics');
+function renderChatContextRows(rows, windowTokens, target = null) {
+  const elements = getChatContextWindowElements(target);
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  const metrics = elements.metrics;
   if (!metrics) return;
   const source = Array.isArray(rows) && rows.length ? rows : [];
   const renderRow = (row, depth = 0) => {
@@ -1224,7 +1306,7 @@ function renderChatContextRows(rows, windowTokens) {
     const children = Array.isArray(row?.children) ? row.children.filter(Boolean) : [];
     const rowId = String(row?.id || row?.label || `row_${depth}`);
     const expandable = children.length > 0;
-    const expanded = expandable && chatContextWindowState.expandedRows.has(rowId);
+    const expanded = expandable && state.expandedRows.has(rowId);
     const tag = expandable ? 'button' : 'div';
     const typeAttr = expandable ? ' type="button"' : '';
     const dataAttr = expandable ? ` data-ccw-row-id="${escHtml(rowId)}" aria-expanded="${expanded ? 'true' : 'false'}"` : '';
@@ -1243,7 +1325,7 @@ function renderChatContextRows(rows, windowTokens) {
   };
   metrics.innerHTML = source.map((row) => renderRow(row, 0)).join('');
   metrics.querySelectorAll('[data-ccw-row-id]').forEach((row) => {
-    row.addEventListener('click', toggleChatContextWindowRow);
+    row.addEventListener('click', (event) => toggleChatContextWindowRow(event, target));
   });
 }
 
@@ -1290,20 +1372,25 @@ function applyChatContextWindowLiveOverlay(data) {
   return data;
 }
 
-function toggleChatContextWindowRow(event) {
+function toggleChatContextWindowRow(event, target = null) {
   if (event) event.stopPropagation();
   const id = event?.currentTarget?.dataset?.ccwRowId;
   if (!id) return;
-  if (chatContextWindowState.expandedRows.has(id)) chatContextWindowState.expandedRows.delete(id);
-  else chatContextWindowState.expandedRows.add(id);
-  renderChatContextWindow(chatContextWindowState.data);
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  if (state.expandedRows.has(id)) state.expandedRows.delete(id);
+  else state.expandedRows.add(id);
+  renderChatContextWindow(state.data, target);
 }
 
-function renderChatContextWindow(data = chatContextWindowState.data) {
+function renderChatContextWindow(data, target = null) {
+  const sessionId = getChatContextWindowSessionId(target);
+  const state = getChatContextWindowStateForSession(sessionId);
+  if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
-  const btn = document.getElementById('chat-context-window-btn');
-  const fill = document.getElementById('chat-context-window-fill');
-  const total = document.getElementById('chat-context-window-total');
+  const elements = getChatContextWindowElements(target);
+  const btn = elements.button;
+  const fill = elements.fill;
+  const total = elements.total;
   if (!btn) return;
 
   if (!data || data.success === false) {
@@ -1312,8 +1399,8 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
     if (fill) fill.style.width = '0%';
     if (fill) fill.classList.remove('is-over-capacity');
     if (total) total.textContent = 'Unavailable';
-    setChatContextWindowHeadLabel('Context window');
-    renderChatContextRows([], 0);
+    setChatContextWindowHeadLabel('Context window', target);
+    renderChatContextRows([], 0, target);
     return;
   }
 
@@ -1327,40 +1414,42 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
   btn.title = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
   if (fill) fill.style.width = `${usage.progressPercent.toFixed(1)}%`;
   if (fill) fill.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
-  setChatContextWindowHeadLabel('Context window');
+  setChatContextWindowHeadLabel('Context window', target);
   if (total) {
     total.textContent = usageLabel;
   }
-  renderChatContextRows(currentState.rows, windowTokens);
+  renderChatContextRows(currentState.rows, windowTokens, target);
 }
 
 async function refreshChatContextWindow(options = {}) {
-  const sid = getChatContextWindowSessionId();
-  const btn = document.getElementById('chat-context-window-btn');
+  const target = options.target || getChatContextWindowTargetForSession(options.sessionId);
+  const sid = String(options.sessionId || getChatContextWindowSessionId(target)).trim();
+  const state = getChatContextWindowStateForSession(sid);
+  const btn = getChatContextWindowElements(target).button;
   if (!btn) return null;
   if (!sid) {
-    chatContextWindowState.data = null;
-    renderChatContextWindow(null);
+    state.data = null;
+    renderChatContextWindow(null, target);
     return null;
   }
   const force = options.force === true;
   const now = Date.now();
-  if (chatContextWindowState.loading) return chatContextWindowState.data;
-  if (!force && chatContextWindowState.lastSessionId === sid && now - chatContextWindowState.lastFetchAt < 3500) {
-    return chatContextWindowState.data;
+  if (state.loading) return state.data;
+  if (!force && state.lastSessionId === sid && now - state.lastFetchAt < 3500) {
+    return state.data;
   }
 
-  chatContextWindowState.loading = true;
-  chatContextWindowState.lastSessionId = sid;
-  if (!chatContextWindowState.data) setChatContextWindowLoading();
+  state.loading = true;
+  state.lastSessionId = sid;
+  if (!state.data) setChatContextWindowLoading('Loading...', target);
   try {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
-    chatContextWindowState.lastFetchAt = Date.now();
-    chatContextWindowState.data = data && data.success !== false ? data : null;
-    renderChatContextWindow(chatContextWindowState.data);
-    return chatContextWindowState.data;
+    state.lastFetchAt = Date.now();
+    state.data = data && data.success !== false ? data : null;
+    renderChatContextWindow(state.data, target);
+    return state.data;
   } finally {
-    chatContextWindowState.loading = false;
+    state.loading = false;
   }
 }
 
@@ -1369,39 +1458,49 @@ function scheduleChatContextWindowRefresh(delayMs = 450) {
   chatContextWindowState.refreshTimer = setTimeout(() => {
     chatContextWindowState.refreshTimer = 0;
     refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
+      refreshChatContextWindow({ force: true, target }).catch(() => renderChatContextWindow(null, target));
+    });
   }, Math.max(0, Number(delayMs) || 0));
 }
 
-function toggleChatContextWindowPopover(event) {
+function toggleChatContextWindowPopover(event, target = null) {
   if (event) event.stopPropagation();
-  const popover = document.getElementById('chat-context-window-popover');
-  const btn = document.getElementById('chat-context-window-btn');
+  const source = target || event?.currentTarget || null;
+  const elements = getChatContextWindowElements(source);
+  const popover = elements.popover;
+  const btn = elements.button;
   if (!popover || !btn) return;
-  chatContextWindowState.open = popover.hidden;
-  popover.hidden = !chatContextWindowState.open;
-  btn.setAttribute('aria-expanded', chatContextWindowState.open ? 'true' : 'false');
-  if (chatContextWindowState.open) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
+  state.open = popover.hidden;
+  popover.hidden = !state.open;
+  btn.setAttribute('aria-expanded', state.open ? 'true' : 'false');
+  if (state.open) {
     // Always open collapsed — the detailed breakdown expands only on bar click.
-    setChatContextBreakdown(false);
-    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
-    refreshChatContextPlanUsage().catch(() => {});
+    setChatContextBreakdown(false, source);
+    refreshChatContextWindow({ force: true, target: source }).catch(() => renderChatContextWindow(null, source));
+    refreshChatContextPlanUsage(false, source).catch(() => {});
   }
 }
 
-function closeChatContextWindowPopover() {
-  const popover = document.getElementById('chat-context-window-popover');
-  const btn = document.getElementById('chat-context-window-btn');
+function closeChatContextWindowPopover(target = null) {
+  const source = target || null;
+  const elements = getChatContextWindowElements(source);
+  const popover = elements.popover;
+  const btn = elements.button;
   if (popover) popover.hidden = true;
   if (btn) btn.setAttribute('aria-expanded', 'false');
-  chatContextWindowState.open = false;
+  getChatContextWindowStateForSession(getChatContextWindowSessionId(source)).open = false;
 }
 
 // Collapsible detailed breakdown inside the popover (hidden until the user
 // clicks the context-window bar — mirrors the Claude UI plan-usage popover).
-function setChatContextBreakdown(expanded) {
-  chatContextWindowState.expanded = !!expanded;
-  const breakdown = document.getElementById('chat-context-window-breakdown');
-  const toggle = document.getElementById('chat-context-window-toggle');
+function setChatContextBreakdown(expanded, target = null) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  state.expanded = !!expanded;
+  const elements = getChatContextWindowElements(target);
+  const breakdown = elements.breakdown;
+  const toggle = elements.toggle;
   if (breakdown) breakdown.hidden = !expanded;
   if (toggle) {
     toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -1409,9 +1508,11 @@ function setChatContextBreakdown(expanded) {
   }
 }
 
-function toggleChatContextBreakdown(event) {
+function toggleChatContextBreakdown(event, target = null) {
   if (event) event.stopPropagation();
-  setChatContextBreakdown(!chatContextWindowState.expanded);
+  const source = target || event?.currentTarget || null;
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(source));
+  setChatContextBreakdown(!state.expanded, source);
 }
 
 // ─── Plan usage (live provider limits) inside the context popover ─────────────
@@ -1436,10 +1537,13 @@ function ccwFmtReset(iso) {
   return `resets in ${days}d`;
 }
 
-function getChatContextPlanProviderId() {
-  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-    ? window._activeChatModelRoute?.effective
-    : null;
+function getChatContextPlanProviderId(target = null) {
+  const sid = getChatContextWindowSessionId(target);
+  const route = sid !== String(window.activeChatSessionId || '').trim()
+    ? window._activeChatModelRoutesBySession?.[sid]?.effective
+    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+      ? window._activeChatModelRoute?.effective
+      : null;
   const fromRoute = String(route?.providerId || route?.provider || '').trim().toLowerCase();
   if (fromRoute) return fromRoute;
   const modelRef = String(route?.modelRef || window._activeModel || '').trim();
@@ -1448,20 +1552,25 @@ function getChatContextPlanProviderId() {
   return String(window._activeProvider || '').trim().toLowerCase();
 }
 
-function getChatContextPlanAccountId() {
-  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
-    ? window._activeChatModelRoute?.effective
-    : null;
+function getChatContextPlanAccountId(target = null) {
+  const sid = getChatContextWindowSessionId(target);
+  const route = sid !== String(window.activeChatSessionId || '').trim()
+    ? window._activeChatModelRoutesBySession?.[sid]?.effective
+    : (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+      ? window._activeChatModelRoute?.effective
+      : null;
   return String(route?.accountId || route?.account_id || window._activeAccountId || '').trim();
 }
 
-function renderChatContextPlanUsage() {
-  const wrap = document.getElementById('chat-context-window-plan');
-  const body = document.getElementById('chat-context-window-plan-body');
+function renderChatContextPlanUsage(target = null) {
+  const elements = getChatContextWindowElements(target);
+  const wrap = elements.plan;
+  const body = elements.planBody;
   if (!wrap || !body) return;
-  const result = chatContextWindowState.planData;
-  const providerId = getChatContextPlanProviderId();
-  const accountId = getChatContextPlanAccountId();
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
+  const result = state.planData;
+  const providerId = getChatContextPlanProviderId(target);
+  const accountId = getChatContextPlanAccountId(target);
   const providers = (result && Array.isArray(result.providers)) ? result.providers : [];
   // Prefer the provider/account backing the active chat model route, not a
   // stale global status provider (that was why Grok still showed OpenAI weekly).
@@ -1506,26 +1615,27 @@ function renderChatContextPlanUsage() {
   wrap.hidden = false;
 }
 
-async function refreshChatContextPlanUsage(force = false) {
+async function refreshChatContextPlanUsage(force = false, target = null) {
+  const state = getChatContextWindowStateForSession(getChatContextWindowSessionId(target));
   const now = Date.now();
-  const providerId = getChatContextPlanProviderId();
-  const accountId = getChatContextPlanAccountId();
-  const providerChanged = providerId && providerId !== String(chatContextWindowState.planProviderId || '');
-  const accountChanged = accountId && accountId !== String(chatContextWindowState.planAccountId || '');
-  if (!force && !providerChanged && !accountChanged && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
-    renderChatContextPlanUsage();
+  const providerId = getChatContextPlanProviderId(target);
+  const accountId = getChatContextPlanAccountId(target);
+  const providerChanged = providerId && providerId !== String(state.planProviderId || '');
+  const accountChanged = accountId && accountId !== String(state.planAccountId || '');
+  if (!force && !providerChanged && !accountChanged && state.planData && now - state.planFetchAt < 60000) {
+    renderChatContextPlanUsage(target);
     return;
   }
   try {
     const data = await fetchJsonWithTimeout('/api/usage/limits', 6000);
     if (data && data.success !== false) {
-      chatContextWindowState.planData = data;
-      chatContextWindowState.planFetchAt = Date.now();
-      chatContextWindowState.planProviderId = providerId;
-      chatContextWindowState.planAccountId = accountId;
+      state.planData = data;
+      state.planFetchAt = Date.now();
+      state.planProviderId = providerId;
+      state.planAccountId = accountId;
     }
   } catch { /* leave previous planData */ }
-  renderChatContextPlanUsage();
+  renderChatContextPlanUsage(target);
 }
 
 function toggleVoiceSettingsPopover(event) {
@@ -1551,8 +1661,9 @@ function closeVoiceSettingsPopover() {
 if (!window.__promChatContextWindowHandlersInstalled) {
   window.__promChatContextWindowHandlersInstalled = true;
   document.addEventListener('click', (event) => {
-    const wrap = document.querySelector('.chat-model-switcher-wrap');
-    if (!wrap || !wrap.contains(event.target)) closeChatContextWindowPopover();
+    document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => {
+      if (!wrap.contains(event.target)) closeChatContextWindowPopover(wrap);
+    });
     const voiceWrap = document.querySelector('.voice-settings-wrap');
     if (!voiceWrap || !voiceWrap.contains(event.target)) closeVoiceSettingsPopover();
     if (desktopVoiceRoomPopoverOpen && desktopVoiceOrbDock && !desktopVoiceOrbDock.contains(event.target)) {
@@ -1561,7 +1672,7 @@ if (!window.__promChatContextWindowHandlersInstalled) {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      closeChatContextWindowPopover();
+      document.querySelectorAll('.chat-model-switcher-wrap').forEach((wrap) => closeChatContextWindowPopover(wrap));
       closeVoiceSettingsPopover();
       setDesktopVoiceRoomPopoverOpen(false);
     }
@@ -1576,6 +1687,13 @@ if (!window.__promChatContextWindowHandlersInstalled) {
     if (document.visibilityState === 'hidden') return;
     refreshChatContextWindow({ force: true }).catch(() => {});
     if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
+    document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
+      const state = getChatContextWindowStateForSession(target.dataset.contextWindowSessionId);
+      if (state.open) {
+        refreshChatContextWindow({ force: true, target }).catch(() => {});
+        refreshChatContextPlanUsage(false, target).catch(() => {});
+      }
+    });
   }, 5000);
   // Expose for status/model route refresh paths in index.html.
   window.refreshChatContextWindow = refreshChatContextWindow;
@@ -8413,7 +8531,15 @@ function syncChatTopbarTitle() {
 
   const sessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
   const session = sessions.find((candidate) => String(candidate?.id || '') === String(window.activeChatSessionId || '')) || null;
-  const sessionTitle = String(session?.title || '').trim() || 'New chat';
+  const titleOverride = window.__PROM_CHAT_TITLE_OVERRIDE;
+  const hasTitleOverride = Boolean(
+    String(titleOverride?.sessionId || '').trim()
+      && String(titleOverride.sessionId) === String(window.activeChatSessionId || '')
+  );
+  const sessionTitle = hasTitleOverride
+    ? String(titleOverride?.title || '').trim() || 'Chat'
+    : String(session?.title || '').trim() || 'New chat';
+  const titleOverrideSubtitle = hasTitleOverride ? String(titleOverride?.subtitle || '').trim() : '';
   const projectName = String(
     session?.projectName
       || session?.canvasProjectLabel
@@ -8427,9 +8553,9 @@ function syncChatTopbarTitle() {
   );
 
   if (titleEl) titleEl.textContent = sessionTitle;
-  if (subEl) subEl.textContent = isProjectSession && projectName
+  if (subEl) subEl.textContent = titleOverrideSubtitle || (isProjectSession && projectName
     ? `Project · ${projectName}`
-    : DEFAULT_CHAT_TOPBAR_SUBTITLE;
+    : DEFAULT_CHAT_TOPBAR_SUBTITLE);
   if (contextTitleEl) contextTitleEl.textContent = sessionTitle;
   if (contextProjectNameEl) contextProjectNameEl.textContent = projectName;
   if (contextProjectEl) {
@@ -11949,8 +12075,12 @@ function renderFileChangeRow(file) {
   const canOpen = file.path && file.status !== 'deleted';
   const pathArg = encodeInlineJsString(file.path);
   const labelArg = encodeInlineJsString(file.displayPath.split(/[\\/]/).pop() || file.displayPath || 'file');
+  const openDiffArgs = canOpen ? `, { openMode: 'diff', diffView: 'turn' }` : '';
+  const turnFileDataAttrs = canOpen
+    ? `data-turn-file-path="${escHtml(file.path)}" data-turn-file-label="${escHtml(file.displayPath)}" data-turn-file-view="turn"`
+    : '';
   const openAttrs = canOpen
-    ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg})}"`
+    ? `role="button" tabindex="0" ${turnFileDataAttrs} onclick="canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg}${openDiffArgs})}"`
     : 'aria-disabled="true"';
   return `
     <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>
@@ -12248,14 +12378,143 @@ function isBareThinkingLiveTraceText(text) {
   return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
+function isDesktopTraceThoughtType(type) {
+  const value = String(type || '').toLowerCase();
+  return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
+}
+
+function isDesktopTraceReasoningSummaryType(type) {
+  return String(type || '').toLowerCase() === 'reasoning_summary';
+}
+
+function isDesktopTransientReasoningTraceEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const type = String(entry.type || entry.kind || '').trim().toLowerCase();
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const event = String(entry.event || extra.event || extra.eventType || '').trim().toLowerCase();
+  const source = String(entry.source || extra.source || '').trim().toLowerCase();
+  const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
+  const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  return source === 'agent_progress'
+    || source === 'reasoning_summary'
+    || type === 'reasoning_summary'
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
+    || reasoningKind === 'summary'
+    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+}
+
+function isDesktopMutableProgressTraceEntry(entry) {
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  return String(entry?.source || extra.source || '').trim().toLowerCase() === 'agent_progress';
+}
+
+function desktopTracePresentationEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    if (!entry || entry.activity) return entry;
+    const type = String(entry.type || '').toLowerCase();
+    const text = String(entry.text || entry.content || entry.message || '').trim();
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const action = String(extra.action || extra.toolName || entry.action || entry.toolName || '').trim();
+    if (['info', 'progress'].includes(type) && !action
+      && String(extra.source || entry.source || '').toLowerCase() === 'agent_progress') {
+      return {
+        ...entry,
+        type: 'think',
+        extra: {
+          ...extra,
+          source: extra.source || 'agent_progress',
+          visibility: extra.visibility || 'user',
+        },
+      };
+    }
+    // Summary packets are transient transport updates. Keep one mutable
+    // agent_progress entry as the live summary owner and discard stale copies
+    // before grouping, so recovery cannot place them back in the timeline.
+    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return null;
+    return entry;
+  }).filter(Boolean);
+}
+
+function desktopTraceComparableText(value) {
+  return normalizeLiveTraceProseText(value)
+    .replace(/\s+/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .trim()
+    .toLowerCase();
+}
+
+function desktopTraceThoughtTextsSimilar(a, b) {
+  const left = desktopTraceComparableText(a);
+  const right = desktopTraceComparableText(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) >= 40 && (left.includes(right) || right.includes(left))) return true;
+  const leftTokens = new Set(left.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const rightTokens = new Set(right.split(/[^a-z0-9_']+/i).filter((token) => token.length > 2));
+  const smaller = Math.min(leftTokens.size, rightTokens.size);
+  if (smaller < 8) return false;
+  let overlap = 0;
+  leftTokens.forEach((token) => { if (rightTokens.has(token)) overlap += 1; });
+  return overlap / smaller >= 0.72;
+}
+
+function isDesktopTraceThoughtFragmentText(value) {
+  const raw = String(value || '').trim();
+  const comparable = desktopTraceComparableText(raw);
+  if (!comparable) return true;
+  const words = comparable.split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  if (/[.!?]\s*$/.test(raw) || /\n\s*\n/.test(raw)) return false;
+  return words.length === 1 && comparable.length <= 16;
+}
+
+function dedupeDesktopTraceProseText(value) {
+  const normalized = normalizeLiveTraceProseText(value);
+  if (!normalized || /```/.test(normalized)) return normalized;
+  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3) return normalized;
+  const isTitleLike = (line) => {
+    const clean = String(line || '').replace(/^[#*_`\s]+|[*_`\s]+$/g, '').trim();
+    if (!clean || clean.length > 96 || /[.!?]$/.test(clean)) return false;
+    const words = clean.split(/\s+/).filter(Boolean);
+    return words.length > 0 && words.length <= 9;
+  };
+  for (let i = 0; i < lines.length - 2; i += 1) {
+    if (!isTitleLike(lines[i])) continue;
+    const titleKey = desktopTraceComparableText(lines[i]);
+    if (!titleKey) continue;
+    for (let j = i + 2; j < lines.length; j += 1) {
+      const repeatedLineKey = desktopTraceComparableText(lines[j]);
+      if (repeatedLineKey !== titleKey && !repeatedLineKey.startsWith(`${titleKey} `)) continue;
+      const firstBlock = lines.slice(i, j).join('\n');
+      const duplicateTail = lines.slice(j).join('\n');
+      const firstComparable = desktopTraceComparableText(firstBlock);
+      const tailComparable = desktopTraceComparableText(duplicateTail);
+      if (!tailComparable) continue;
+      if (desktopTraceThoughtTextsSimilar(firstBlock, duplicateTail)
+        || (tailComparable.length >= titleKey.length && firstComparable.startsWith(tailComparable))) {
+        return lines.slice(0, j).join('\n').trim();
+      }
+    }
+  }
+  return normalized;
+}
+
 function isDesktopUserVisibleReasoningTraceEntry(entry) {
   const type = String(entry?.type || '').toLowerCase();
   if (type === 'preamble' || type === 'assistant') return true;
-  if (type !== 'think') return false;
+  if (type !== 'think' && !isDesktopTraceReasoningSummaryType(type)) return false;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const reasoningKind = String(extra.reasoningKind || entry?.reasoningKind || '').trim().toLowerCase();
+  if (reasoningKind === 'private') return false;
+  if (reasoningKind === 'summary' || reasoningKind === 'full_thought') return true;
   const source = String(extra.source || entry?.source || '').toLowerCase();
   const visibility = String(extra.visibility || entry?.visibility || '').toLowerCase();
-  return source === 'reasoning_summary' || ['user', 'summary', 'visible'].includes(visibility);
+  return type === 'reasoning_summary'
+    ? source === 'reasoning_summary' || source === 'agent_progress' || ['user', 'summary', 'visible'].includes(visibility)
+    : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
@@ -12271,14 +12530,40 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  const sourceEntries = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => !isDesktopPreparedTraceEntry(entry) && !isDesktopInternalToolProtocolTraceEntry(entry));
+  const sourceEntries = desktopTracePresentationEntries(entries)
+    .filter((entry) => !isDesktopInternalToolProtocolTraceEntry(entry));
+  const replaceableProgressTexts = sourceEntries
+    .filter((entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_progress')
+    .map((entry) => String(entry?.text || entry?.content || '').trim())
+    .filter(Boolean);
+  const thoughtTexts = [];
   return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
       || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
     const type = String(entry?.type || '').toLowerCase();
-    if ((type === 'preamble' || type === 'think' || type === 'assistant') && !isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
-    return !!(String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl));
+    if (isDesktopTransientReasoningTraceEntry(entry) && !isDesktopMutableProgressTraceEntry(entry)) return false;
+    const hasContent = String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl);
+    if (!hasContent) return false;
+    if (isDesktopTraceThoughtType(type)) {
+      if (replaceableProgressTexts.length
+        && type === 'think'
+        && String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'reasoning_summary'
+        && replaceableProgressTexts.some((progressText) => desktopTraceThoughtTextsSimilar(entry?.text || '', progressText))) return false;
+      if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
+      const text = dedupeDesktopTraceProseText(entry?.text || '');
+      if (text) {
+        if (isDesktopTraceThoughtFragmentText(text)) return false;
+        const comparable = desktopTraceComparableText(text);
+        const words = comparable.split(/\s+/).filter(Boolean).length;
+        if (thoughtTexts.some((seen) => {
+          const seenComparable = desktopTraceComparableText(seen);
+          return desktopTraceThoughtTextsSimilar(seen, text)
+            || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
+        })) return false;
+        thoughtTexts.push(text);
+      }
+    }
+    return true;
   });
 }
 
@@ -12289,9 +12574,9 @@ function renderLiveTraceEntry(entry) {
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.ts || entry.time || '')}`).trim();
   const attr = entryId ? ` data-live-entry-id="${escHtml(entryId)}"` : '';
   const previewHtml = renderLiveTracePreview(entry);
-  if (type === 'preamble' || type === 'think' || type === 'assistant') {
+  if (isDesktopTraceThoughtType(type)) {
     return `<div class="live-turn-prose live-turn-${escHtml(type)}"${attr}>
-      <div class="live-turn-md">${renderMd(normalizeLiveTraceProseText(text))}</div>
+      <div class="live-turn-md">${renderMd(dedupeDesktopTraceProseText(text))}</div>
       ${previewHtml}
     </div>`;
   }
@@ -12334,8 +12619,22 @@ function renderLiveTraceList(entries) {
 }
 
 function isLiveTraceThoughtEntry(entry) {
-  const type = String(entry?.type || 'info').toLowerCase();
-  return type === 'preamble' || type === 'think' || type === 'assistant';
+  return isDesktopTraceThoughtType(entry?.type || 'info');
+}
+
+function desktopTraceThoughtKind(entry) {
+  if (!isLiveTraceThoughtEntry(entry)) return '';
+  if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  if (explicit === 'summary' || explicit === 'full_thought') return explicit;
+  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  return isDesktopTraceReasoningSummaryType(entry?.type)
+    || source === 'reasoning_summary'
+    || source === 'agent_progress'
+    || extra.visibility === 'summary'
+    ? 'summary'
+    : 'full_thought';
 }
 
 function liveTraceGroupStableKey(group, index = 0) {
@@ -12374,7 +12673,10 @@ function liveTraceGroups(entries) {
     }
     if (isLiveTraceThoughtEntry(entry)) {
       activeToolGroup = null;
-      groups.push({ kind: 'thought', entries: [entry] });
+      const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
+      const previous = groups[groups.length - 1];
+      if (previous?.kind === groupKind) previous.entries.push(entry);
+      else groups.push({ kind: groupKind, entries: [entry] });
       return;
     }
     if (!activeToolGroup) {
@@ -12631,11 +12933,12 @@ function desktopTraceProgressText(entries) {
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const entry = source[index];
     const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-    if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
-    const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
+    if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
+    const text = dedupeDesktopTraceProseText(entry?.text || entry?.content || '')
       .replace(/\s+/g, ' ')
       .trim();
-    if (text) return text.slice(0, 220);
+    if (!text) continue;
+    return text.slice(0, 220);
   }
   return '';
 }
@@ -12644,58 +12947,57 @@ function desktopTraceProgressSummary(entries) {
   const source = Array.isArray(entries) ? entries : [];
   const text = desktopTraceProgressText(source);
   if (!text) return '';
-  const normalized = text.toLowerCase();
+  const normalized = desktopTraceComparableText(text);
   const duplicatesVisibleReasoning = source.some((candidate) => {
-      if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
-      const candidateText = normalizeLiveTraceProseText(candidate?.text || candidate?.content || '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-      return candidateText === normalized
-        || (Math.min(candidateText.length, normalized.length) >= 36
-          && (candidateText.includes(normalized) || normalized.includes(candidateText)));
+    if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
+    const candidateText = desktopTraceComparableText(dedupeDesktopTraceProseText(candidate?.text || candidate?.content || ''));
+    return candidateText === normalized
+      || (Math.min(candidateText.length, normalized.length) >= 36
+        && (candidateText.includes(normalized) || normalized.includes(candidateText)));
   });
   if (duplicatesVisibleReasoning) return 'Reasoning';
   return text;
 }
 
-function renderLiveTurnTrace(entries, { streaming = false } = {}) {
-  let groups = liveTraceGroups(entries);
+function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = false, visibleKinds = null, openThoughts = false } = {}) {
+  const kindFilter = Array.isArray(visibleKinds) || visibleKinds instanceof Set
+    ? new Set(Array.from(visibleKinds).map((kind) => String(kind || '').toLowerCase()))
+    : null;
+  let groups = liveTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
   if (!groups.length) return '';
-  if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
+  if (!streaming
+    && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
+    && !kindFilter?.has('thought')
+    && !kindFilter?.has('thought-summary')) return '';
   let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  const activeProgressText = streaming ? desktopTraceProgressText(entries) : '';
-  // The mutable progress slot is the current tool summary's presentation
-  // owner. Do not render the same packet again as a standalone thought row.
-  if (streaming && activeProgressText && latestToolGroupIndex === groups.length - 1) {
-    groups = groups
-      .map((group) => group.kind === 'thought'
-        ? {
-          ...group,
-          entries: group.entries.filter((entry) => {
-            const source = String(entry?.extra?.source || '').toLowerCase();
-            const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
-              .replace(/\s+/g, ' ')
-              .trim();
-            return source !== 'agent_progress'
-              || !text
-              || !(text.toLowerCase() === activeProgressText.toLowerCase()
-                || (Math.min(text.length, activeProgressText.length) >= 36
-                  && (text.toLowerCase().includes(activeProgressText.toLowerCase())
-                    || activeProgressText.toLowerCase().includes(text.toLowerCase()))));
-          }),
-        }
-        : group)
-      .filter((group) => group.kind !== 'thought' || group.entries.length);
+  const activeProgressSummary = streaming ? desktopTraceProgressSummary(entries) : '';
+  if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
+    groups = groups.filter((group) => !(
+      group.kind === 'thought-summary'
+      && desktopTraceThoughtTextsSimilar(desktopTraceProgressSummary(group.entries), activeProgressSummary)
+    ));
     latestToolGroupIndex = groups.reduce((latest, group, index) => (
       group.kind === 'tools' ? index : latest
     ), -1);
   }
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
-    if (group.kind === 'thought') {
-      return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
+    if (group.kind === 'thought' || group.kind === 'thought-summary') {
+      const isSummaryThought = group.kind === 'thought-summary';
+      const isLiveThought = streaming && index === groups.length - 1;
+      const progressSummary = isSummaryThought && isLiveThought ? desktopTraceProgressSummary(group.entries) : '';
+      const bodyEntries = group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+      const summaryMarkup = progressSummary
+        ? `<div class="live-turn-thought-summary" aria-live="polite"><strong class="t-think" data-live-trace-summary-key="${escHtml(liveTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
+        : '';
+      const bodyHtml = bodyEntries.length
+        ? `<div class="live-turn-thought-body"><div class="live-turn-trace">${bodyEntries.map(renderLiveTraceEntry).join('')}</div></div>`
+        : '';
+      return `<div class="live-turn-thought-group"${isLiveThought && progressSummary ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+        ${summaryMarkup}
+        ${bodyHtml}
+      </div>`;
     }
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
@@ -12703,15 +13005,17 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     if (group.kind === 'vision') {
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
-    const isLiveCurrent = streaming && index === latestToolGroupIndex;
-    const progressSummary = isLiveCurrent ? desktopTraceProgressSummary(entries) : '';
+    const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
+    const progressSummary = isLiveCurrent ? activeProgressSummary : '';
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const itemCount = callCount || visibleEntries.length;
+    const nonReasoningEntries = visibleEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
+    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
     const itemLabel = callCount ? 'call' : 'item';
-    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+    const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
+    return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">${renderToolActivityIcon({ family: 'tool', key: 'tool.summary' }, escHtml)}</span>
         <strong class="t-think" data-live-trace-summary-key="${escHtml(summaryKey)}">${renderThinkingState(summary)}</strong>
@@ -12762,7 +13066,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
         summary: String(extra?.extra?.summary || extra?.summary || normalizedEntry.summary || '').trim(),
       };
     }
-    if ((type === 'preamble' || type === 'think' || type === 'assistant')
+    if (isDesktopTraceThoughtType(type)
       && !isDesktopUserVisibleReasoningTraceEntry({ ...traceEntry, type, extra })) return;
     const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
     const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
@@ -12822,7 +13126,7 @@ function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
       const type = String(entry?.type || 'info').toLowerCase();
       const text = String(entry?.text || entry?.content || '').trim();
       if (!text) return null;
-      if (type !== 'preamble' && type !== 'think') return null;
+      if (!isDesktopTraceThoughtType(type)) return null;
       if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return null;
       const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
       if (existingKeys.has(key)) return null;
@@ -13599,6 +13903,8 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const voiceAction = String(options.voiceAction || '').trim();
   const sendAction = String(options.sendAction || '').trim();
   const footerHint = String(options.footerHint || '').trim();
+  const composerSessionId = String(options.sessionId || '').trim();
+  const secondarySurface = String(options.secondarySurface || '').trim();
   const modelName = String(options.modelName || document.getElementById('chat-model-name')?.textContent || 'your model').trim();
   const queueBadgeId = String(options.queueBadgeId || '').trim();
   const queueCount = Math.max(0, Number(options.queueCount || 0) || 0);
@@ -13624,7 +13930,7 @@ function renderUnifiedDesktopComposerHtml(options = {}) {
   const queueBadge = queueBadgeId
     ? `<span id="${escHtml(queueBadgeId)}" class="unified-chat-queue-badge" style="display:${queueCount ? 'inline-flex' : 'none'}">${queueCount} queued</span>`
     : '';
-  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}">
+  return `<div class="chat-input-area unified-desktop-chat-composer ${escHtml(composerClass)}" data-unified-composer="1" data-main-composer-parity="${mainComposerParity ? '1' : '0'}"${composerSessionId ? ` data-composer-session-id="${escHtml(composerSessionId)}"` : ''}${secondarySurface ? ` data-secondary-surface="${escHtml(secondarySurface)}"` : ''}>
     ${parityTopMarkup}${extraTopMarkup}
     ${stagingId ? `<div class="chat-composer-attachment-stack"><div id="${escHtml(stagingId)}" class="chat-file-staging" style="display:none"></div></div>` : ''}
     <input id="${escHtml(fileInputId)}" type="file" multiple style="display:none"${fileInputOnChange ? ` onchange="${fileInputOnChange}"` : ''}>
@@ -13809,6 +14115,8 @@ function renderSideChatPaneHtml(timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'side-chat-input',
+        sessionId: side.id,
+        secondarySurface: 'side-chat',
         placeholder: 'Send Prometheus a message',
         composerClass: 'side-chat-composer',
         attachAction: "showToast('Side chat attachments use the main chat context.', 'Attach files in the main composer before opening side context.', 'info')",
@@ -13885,6 +14193,8 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       </div>
       ${renderUnifiedDesktopComposerHtml({
         inputId: 'background-agent-chat-input',
+        sessionId: sideSessionId,
+        secondarySurface: 'background-agent',
         placeholder: `Steer ${identity.name} directly`,
         composerClass: 'side-chat-composer background-agent-side-composer',
         attachAction: "showToast('Attachments stay on the main composer while you steer a background agent.', '', 'info')",
@@ -17103,7 +17413,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (isBareThinkingLiveTraceText(content)) return;
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
-    const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+    const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
     const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
     if (append && last && last.type === normalizedType
@@ -19613,6 +19923,7 @@ let canvasPublishState = null;
 let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
 let canvasPreviewUpdateVersion = 0;
+let canvasDiffRequestVersion = 0;
 const canvasFolderExpanded = new Set();
 
 function sourcePanelContext() {
@@ -42375,8 +42686,17 @@ function toggleCanvasFullscreen() {
   if (!panel || !canvasOpen) return;
   canvasFullscreenMode = !canvasFullscreenMode;
   if (canvasFullscreenMode) {
+    // Electron's titlebar is a 30px native overlay. A fixed panel does not
+    // inherit the app's `.app { padding-top: ... }` inset, so keep the
+    // fullscreen Canvas below that overlay instead of putting its controls
+    // underneath the Windows caption buttons. Browser/PWA Canvas retains the
+    // original edge-to-edge fullscreen behavior.
+    const electronTitlebarInset = document.body.classList.contains('electron-shell')
+      && !document.body.classList.contains('pm-mobile-active')
+      ? 'var(--window-chrome-height) 0 0'
+      : '0';
     panel.style.position = 'fixed';
-    panel.style.inset = '0';
+    panel.style.inset = electronTitlebarInset;
     panel.style.zIndex = '1000';
     panel.style.background = '#2a2a2a';
   } else {
@@ -42545,6 +42865,19 @@ function canvasCloseTab(id, ev) {
 function setCanvasMode(mode) {
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!tab) return;
+  if (mode === 'diff') {
+    tab.openMode = 'diff';
+    tab.diffAvailable = true;
+    tab.diffView = tab.diffView || 'turn';
+    tab.mode = 'code';
+    applyCanvasViewMode('code', tab);
+    canvasRenderTabs();
+    return;
+  }
+  // Code and Preview are the normal editable/preview views. Leaving the diff
+  // view should return to the same Canvas tab rather than creating another
+  // surface or losing the file that was just reviewed.
+  if (tab.openMode === 'diff') delete tab.openMode;
   // sync editor -> tab before switching
   if (canvasEditor && tab.mode !== 'preview') tab.content = canvasEditor.getValue();
   tab.mode = mode;
@@ -42552,28 +42885,87 @@ function setCanvasMode(mode) {
   canvasRenderTabs();
 }
 
+function canvasDiffRoot(tab) {
+  return String(
+    tab?.diffRoot
+    || sourcePanelState?.codingContext?.root
+    || sourcePanelState?.gitRoot
+    || '',
+  ).trim();
+}
+
+function canvasDiffFilePath(tab) {
+  return String(tab?.diskPath || tab?.workspacePath || tab?.originalPath || '').trim();
+}
+
+async function renderCanvasDiffInto(host, tab) {
+  if (!host || !tab) return;
+  const filePath = canvasDiffFilePath(tab);
+  if (!filePath) {
+    host.innerHTML = '<div class="canvas-diff-loading">This file has no workspace path to compare.</div>';
+    return;
+  }
+  const requestVersion = ++canvasDiffRequestVersion;
+  host.innerHTML = '<div class="canvas-diff-loading">Loading diff…</div>';
+  try {
+    const params = new URLSearchParams({
+      file: filePath,
+      view: String(tab.diffView || 'turn'),
+      sessionId: String(window.activeChatSessionId || window.agentSessionId || ''),
+    });
+    const root = canvasDiffRoot(tab);
+    if (root) params.set('root', root);
+    const data = await api(`/api/coding/diff?${params.toString()}`, { timeoutMs: 12000, dedupe: false });
+    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
+    const { renderUnifiedDiffMarkup } = await loadCodingDiffRenderer();
+    if (requestVersion !== canvasDiffRequestVersion || activeCanvasTabId !== tab.id || tab.openMode !== 'diff') return;
+    const baseline = data?.baselineKind === 'none'
+      ? 'No baseline'
+      : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot'
+        ? 'Snapshot'
+        : data?.baselineKind === 'git-index'
+          ? 'Staged'
+          : 'Git working tree';
+    const additions = Number(data?.insertions) || 0;
+    const deletions = Number(data?.deletions) || 0;
+    host.innerHTML = `
+      <div class="canvas-diff-toolbar">
+        <span class="canvas-diff-title">Turn diff · ${escHtml(tab.name || filePath)}</span>
+        <span class="canvas-diff-meta">${escHtml(baseline)} · +${additions} · -${deletions}</span>
+      </div>
+      ${renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined })}`;
+  } catch (error) {
+    if (requestVersion !== canvasDiffRequestVersion) return;
+    host.innerHTML = `<div class="canvas-diff-loading">${escHtml(error?.message || 'Unable to load diff.')}</div>`;
+  }
+}
+
 function applyCanvasViewMode(mode, tab) {
   const creativeShell = document.getElementById('canvas-creative-shell');
   const browserShell = document.getElementById('canvas-browser-shell');
   const editorWrap = document.getElementById('canvas-editor-wrap');
+  const diffWrap = document.getElementById('canvas-diff-wrap');
   const previewShell = document.getElementById('canvas-preview-shell');
   const previewFrame = document.getElementById('canvas-preview-frame');
   const emptyState = document.getElementById('canvas-empty-state');
   const noFilesHint = document.getElementById('canvas-no-files-hint');
   const fileBrowser = document.getElementById('canvas-file-browser');
   const codeModeBtn = document.getElementById('canvas-code-btn');
+  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   updateCanvasWorkspaceChrome();
   if (isStructuredCreativeMode()) {
     if (creativeShell) creativeShell.style.display = 'flex';
     if (browserShell) browserShell.style.display = 'none';
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderCreativeWorkspace();
     syncCanvasSurfaceWidthLock(tab);
@@ -42583,12 +42975,14 @@ function applyCanvasViewMode(mode, tab) {
   if (isBrowserCanvasSurfaceActive()) {
     if (browserShell) browserShell.style.display = 'flex';
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
     if (noFilesHint) noFilesHint.style.display = 'none';
     if (fileBrowser) fileBrowser.style.display = 'none';
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     renderBrowserCanvasSurface();
     syncCanvasSurfaceWidthLock(tab);
@@ -42598,26 +42992,31 @@ function applyCanvasViewMode(mode, tab) {
   if (!tab) {
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'design') clearDesignSelectionContext();
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) previewShell.style.display = 'none';
     if (previewFrame) previewFrame.style.display = 'none';
     if (emptyState) emptyState.style.display = 'flex';
     if (noFilesHint) noFilesHint.style.display = 'flex';
     if (fileBrowser) fileBrowser.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     syncCanvasSurfaceWidthLock(tab);
     return;
   }
   if (emptyState) emptyState.style.display = 'none';
   if (noFilesHint) noFilesHint.style.display = 'none';
   if (fileBrowser) fileBrowser.style.display = 'none';
+  if (diffWrap) diffWrap.style.display = 'none';
   if (normalizeCreativeMode(window.currentCreativeMode) !== 'design' || mode !== 'preview') {
     clearDesignSelectionContext();
   }
   // Image tabs always show in preview mode — hide code/preview toggle buttons
   if (tab.isImage || tab.isBinary) {
     if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
     if (previewFrame) { previewFrame.style.display = 'block'; previewFrame.style.flex = 'none'; }
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     canvasUpdatePreview();
     syncCanvasPreviewDeviceFrame();
@@ -42626,7 +43025,21 @@ function applyCanvasViewMode(mode, tab) {
   }
   // Restore buttons for non-image tabs
   if (codeModeBtn) codeModeBtn.style.display = '';
+  if (diffModeBtn) diffModeBtn.style.display = tab.diffAvailable || tab.openMode === 'diff' ? '' : 'none';
   if (previewModeBtn) previewModeBtn.style.display = '';
+  if (tab.openMode === 'diff') {
+    if (editorWrap) editorWrap.style.display = 'none';
+    if (diffWrap) diffWrap.style.display = 'flex';
+    if (previewShell) previewShell.style.display = 'none';
+    if (previewFrame) previewFrame.style.display = 'none';
+    if (codeModeBtn) codeModeBtn.classList.remove('active');
+    if (diffModeBtn) diffModeBtn.classList.add('active');
+    if (previewModeBtn) previewModeBtn.classList.remove('active');
+    renderCanvasDiffInto(diffWrap, tab).catch(() => {});
+    syncCanvasSurfaceWidthLock(tab);
+    return;
+  }
+  if (diffModeBtn) diffModeBtn.classList.remove('active');
   if (mode === 'preview') {
     if (editorWrap) editorWrap.style.display = 'none';
     if (previewShell) { previewShell.style.display = 'flex'; previewShell.style.flex = '1'; }
@@ -42659,10 +43072,12 @@ function canvasRenderTabs() {
     const label = getStructuredCreativeModeLabel(window.currentCreativeMode);
     tabsEl.innerHTML = `<div class="canvas-tab active" style="cursor:default"><span>${escHtml(label)}</span></div>`;
     const codeModeBtn = document.getElementById('canvas-code-btn');
+    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -42672,10 +43087,12 @@ function canvasRenderTabs() {
   if (isBrowserCanvasSurfaceActive()) {
     tabsEl.innerHTML = '<div class="canvas-tab active" style="cursor:default"><span>Live Browser</span></div>';
     const codeModeBtn = document.getElementById('canvas-code-btn');
+    const diffModeBtn = document.getElementById('canvas-diff-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
     const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
+    if (diffModeBtn) diffModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
     if (saveControls) saveControls.style.display = 'none';
@@ -42690,10 +43107,15 @@ function canvasRenderTabs() {
   `).join('') + `<button class="canvas-new-tab" onclick="canvasNewFile()" title="New file">+</button>`;
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   const codeModeBtn = document.getElementById('canvas-code-btn');
+  const diffModeBtn = document.getElementById('canvas-diff-btn');
   const previewModeBtn = document.getElementById('canvas-preview-btn');
   const saveBtn = document.getElementById('canvas-save-btn');
-  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || tab.mode !== 'preview');
-  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview'));
+  if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || (tab.mode !== 'preview' && tab.openMode !== 'diff'));
+  if (diffModeBtn) {
+    diffModeBtn.style.display = tab?.diffAvailable || tab?.openMode === 'diff' ? '' : 'none';
+    diffModeBtn.classList.toggle('active', tab?.openMode === 'diff');
+  }
+  if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview' && tab.openMode !== 'diff'));
   // Show save controls only for non-image files with a disk path. Keep the
   // original target disabled unless this tab came from an external file.
   const saveControls = document.getElementById('canvas-save-controls');
@@ -44263,6 +44685,10 @@ async function refreshOpenCanvasFiles(payload = {}, options = {}) {
         setCanvasEditorValue(tab.content);
         canvasEditor.setOption('mode', tab.language || getCanvasLang(tab.name));
       }
+      if (activeCanvasTabId === tab.id && tab.openMode === 'diff') {
+        const diffWrap = document.getElementById('canvas-diff-wrap');
+        if (diffWrap) renderCanvasDiffInto(diffWrap, tab).catch(() => {});
+      }
       refreshed += 1;
     } catch {
       tab.externalChanged = true;
@@ -44384,6 +44810,18 @@ async function canvasPresentFile(diskPath, label, options = {}) {
     if (dot) dot.style.display = 'block';
   };
   const name = label || diskPath.split('/').pop() || diskPath;
+  const requestedDiff = String(options.openMode || '').toLowerCase() === 'diff';
+  const requestedDiffRoot = String(options.diffRoot || '').trim();
+  const applyRequestedOpenMode = (candidate) => {
+    if (!candidate || !requestedDiff) return;
+    candidate.openMode = 'diff';
+    candidate.diffAvailable = true;
+    candidate.diffView = String(options.diffView || candidate.diffView || 'turn');
+    if (requestedDiffRoot) candidate.diffRoot = requestedDiffRoot;
+  };
+  const requestedOpenMode = requestedDiff
+    ? { openMode: 'diff', diffAvailable: true, diffView: String(options.diffView || 'turn'), ...(requestedDiffRoot ? { diffRoot: requestedDiffRoot } : {}) }
+    : {};
   let tab = canvasTabs.find((candidate) => candidate.diskPath === diskPath);
   if (tab) {
     try {
@@ -44423,6 +44861,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         tab.dirty = false;
       }
     } catch {}
+    applyRequestedOpenMode(tab);
     if (!canvasOpen && shouldAutoOpen) toggleCanvas();
     else markCanvasHasHiddenFile();
     canvasOpenTab(tab.id);
@@ -44463,6 +44902,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: dataUrl, savedContent: dataUrl,
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isImage: true,
@@ -44473,6 +44913,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: '', savedContent: '',
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: 'preview',
         language: 'null',
         isBinary: true,
@@ -44486,6 +44927,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
         id, name, content: data.content, savedContent: data.content,
         diskPath, dirty: false,
         ...canvasPathMeta,
+        ...requestedOpenMode,
         mode: autoPreview ? 'preview' : 'code',
         language: getCanvasLang(name),
       });
@@ -46226,7 +46668,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   if (isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
-  const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+  const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
   const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
   if (append && last && last.type === normalizedType
@@ -46263,22 +46705,37 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
     String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
   );
   if (!existing) {
-    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress' } });
+    appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
     return true;
   }
-  const merged = replace
-    ? normalizeLiveTraceProseText(incoming)
-    : normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
-  const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
+  const previous = String(existing.text || '').trim();
+  const next = incoming.trim();
+  if (!next) return false;
+  // Providers send both snapshots and token deltas on this channel. Treat a
+  // growing snapshot as replacement, otherwise append only when the previous
+  // sentence can safely continue. That keeps one mutable progress slot instead
+  // of leaving every transport packet behind in the tool timeline.
+  const isSnapshot = next.length > previous.length && next.startsWith(previous);
+  const canAppend = !replace
+    && !isSnapshot
+    && previous
+    && !/[.!?:]\s*$/.test(previous)
+    && (/^\s/.test(incoming) || /^[a-z0-9,'"‘’“”\-—.;:!?)}\]]/.test(next));
+  const merged = canAppend
+    ? dedupeDesktopTraceProseText(appendFinalResponseDelta(previous, incoming))
+    : normalizeLiveTraceProseText(next);
+  const latest = canAppend
+    ? (merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged)
+    : merged;
   if (!latest) return false;
   const visibilityChanged = String(existing?.extra?.visibility || '') !== visibility;
   if (latest === String(existing.text || '').trim()) {
-    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+    if (visibilityChanged) existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
     return visibilityChanged;
   }
   existing.text = latest;
   existing.ts = new Date().toLocaleTimeString();
-  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress' };
+  existing.extra = { ...(existing.extra || {}), visibility, source: 'agent_progress', reasoningKind: 'summary' };
   return true;
 }
 
@@ -46298,7 +46755,7 @@ function shouldAppendDesktopReasoningSummary(streamState, chunk) {
 function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
   appendTrace('think', chunk, {
     append: shouldAppendDesktopReasoningSummary(streamState, chunk),
-    extra: { visibility: 'user', source: 'reasoning_summary' },
+    extra: { visibility: 'user', source: 'reasoning_summary', reasoningKind: 'summary' },
   });
 }
 

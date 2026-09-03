@@ -284,6 +284,7 @@
 <link rel="stylesheet" href="src/styles/fonts.css">
 <link rel="stylesheet" href="src/styles/base.css?v=electron-titlebar-overlay-v6">
 <link rel="stylesheet" href="src/styles/components.css?v=desktop-sidebar-priority-v2">
+<link rel="stylesheet" href="src/styles/workspace-file-tree.css?v=workspace-file-tree-v1">
 <link rel="stylesheet" href="src/styles/onboarding.css">
 <link rel="stylesheet" href="src/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="src/styles/projects.css?v=desktop-sidebar-priority-v2">
@@ -3108,6 +3109,7 @@
         <div id="canvas-publish-controls" style="display:none;align-items:center;gap:6px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)"></div>
         <div style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.06)">
           <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Code</button>
+          <button id="canvas-diff-btn" onclick="setCanvasMode('diff')" class="canvas-mode-btn" style="display:none;border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Diff</button>
           <button id="canvas-preview-btn" onclick="setCanvasMode('preview')" class="canvas-mode-btn" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Preview</button>
         </div>
         <div id="canvas-save-controls" style="display:flex;align-items:stretch;position:relative;z-index:1000">
@@ -3177,6 +3179,7 @@
           </div>
         </div>
         <div id="canvas-editor-wrap" style="display:none;flex:1;min-height:0;overflow:hidden"></div>
+        <div id="canvas-diff-wrap" class="canvas-diff-wrap" style="display:none;flex:1;min-height:0;overflow:auto"></div>
         <div id="canvas-creative-shell" class="creative-studio-shell" style="display:none">
           <div class="creative-studio-toolbar">
             <div class="creative-studio-title-wrap">
@@ -6708,7 +6711,12 @@ function getSessionLastMessageAt(s) {
 function getSessionSortTime(s) {
   const sidebarOrder = Number(s?.sidebarOrder);
   if (Number.isFinite(sidebarOrder)) return sidebarOrder;
-  return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
+  // Manual sidebar ranks use a millisecond*1000 clock so adjacent reorder
+  // operations can share the same timestamp. Keep the activity fallback in
+  // that same unit; otherwise a new local chat (plain milliseconds) sorts
+  // behind every existing manually-ranked chat until the next server refresh.
+  const activity = getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
+  return activity * 1000;
 }
 
 function _priorityTimestampMillis(value) {
@@ -7544,7 +7552,7 @@ function _normalizeActiveReasoningEffort(provider, model, effort) {
   return _effortLevelsForProvider(provider, model).some(level => level.v === raw) ? raw : '';
 }
 
-function _renderActiveModelLabels(model, provider, effort = '') {
+function _renderActiveModelLabels(model, provider, effort = '', sessionId = '', speed) {
   const rawModel = String(model || '').trim();
   const baseName = typeof window.formatModelDisplayName === 'function'
     ? window.formatModelDisplayName(rawModel, provider)
@@ -7554,11 +7562,22 @@ function _renderActiveModelLabels(model, provider, effort = '') {
   if (header) header.textContent = fullName;
   const runtime = document.getElementById('r-model');
   if (runtime) runtime.textContent = fullName;
-  const composer = document.getElementById('chat-model-name');
+  const sid = String(sessionId || '').trim();
+  const composer = sid
+    ? Array.from(document.querySelectorAll('[data-composer-model-name="1"]'))
+      .find((node) => String(node.dataset.composerModelSessionId || '') === sid)
+    : document.getElementById('chat-model-name');
   if (composer) {
     composer.dataset.baseName = baseName;
     composer.dataset.rawModel = rawModel;
     composer.textContent = fullName;
+  }
+  const speedIcon = sid
+    ? Array.from(document.querySelectorAll('[data-composer-model-speed="1"]'))
+      .find((node) => String(node.dataset.composerModelSessionId || '') === sid)
+    : document.getElementById('chat-model-speed-icon');
+  if (speedIcon && speed !== undefined) {
+    speedIcon.hidden = !(_supportsFastSpeed(provider, rawModel) && String(speed || '').toLowerCase() === 'fast');
   }
 }
 
@@ -7605,7 +7624,7 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
       row.style.display = enabled ? 'block' : 'none';
     }
   }
-  _renderActiveModelLabels(activeModel, provider, EFFORT_CAPABLE_PROVIDERS.has(provider) ? (window.reasoningLevel || '') : '');
+  _renderActiveModelLabels(activeModel, provider, EFFORT_CAPABLE_PROVIDERS.has(provider) ? (window.reasoningLevel || '') : '', '', fast ? 'fast' : 'standard');
 }
 
 async function refreshReasoningPrefsFromSettings(providerOverride) {
@@ -7677,27 +7696,38 @@ window.applyReasoningPrefsFromProviderConfig = applyReasoningPrefsFromProviderCo
 window.refreshReasoningPrefsFromSettings = refreshReasoningPrefsFromSettings;
 window.persistProviderReasoningPrefs = persistProviderReasoningPrefs;
 
-function getActiveChatModelRouteSessionId() {
-  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+function getActiveChatModelRouteSessionId(sessionId = '') {
+  return String(sessionId || window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
-async function refreshActiveChatModelRoute() {
-  const sessionId = getActiveChatModelRouteSessionId();
+async function refreshActiveChatModelRoute(sessionIdOverride = '') {
+  const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) return null;
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
     const state = data?.chatModelRoute;
     const route = state?.effective;
     if (!route?.providerId || !route?.model) return state || null;
-    window._activeProvider = route.providerId;
-    window._activeModel = route.model;
     const reasoningEffort = _normalizeActiveReasoningEffort(route.providerId, route.model, route.reasoningEffort);
-    window.reasoningLevel = reasoningEffort;
-    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort);
-    const follow = document.getElementById('model-switcher-follow-default');
+    const isSecondary = sessionId !== String(window.activeChatSessionId || '').trim();
+    if (!isSecondary) {
+      window._activeProvider = route.providerId;
+      window._activeModel = route.model;
+      window.reasoningLevel = reasoningEffort;
+    }
+    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort, isSecondary ? sessionId : '', route.speed || 'standard');
+    const follow = isSecondary
+      ? Array.from(document.querySelectorAll('[data-model-switcher-follow-default]'))
+        .find((node) => String(node.closest('[data-model-switcher-popover]')?.dataset.modelSwitcherSessionId || '') === sessionId)
+      : document.getElementById('model-switcher-follow-default');
     if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
-    window._activeChatModelRoute = state;
-    window._activeChatModelRouteSessionId = sessionId;
+    if (!isSecondary) {
+      window._activeChatModelRoute = state;
+      window._activeChatModelRouteSessionId = sessionId;
+    } else {
+      if (!window._activeChatModelRoutesBySession) window._activeChatModelRoutesBySession = {};
+      window._activeChatModelRoutesBySession[sessionId] = state;
+    }
     return state;
   } catch (err) {
     console.warn('refreshActiveChatModelRoute:', err);
@@ -7705,25 +7735,25 @@ async function refreshActiveChatModelRoute() {
   }
 }
 
-async function setActiveChatModelRoute(route) {
-  const sessionId = getActiveChatModelRouteSessionId();
+async function setActiveChatModelRoute(route, sessionIdOverride = '') {
+  const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) throw new Error('No active chat');
   const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
-  await refreshActiveChatModelRoute();
+  await refreshActiveChatModelRoute(sessionId);
   if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(50);
   return data?.chatModelRoute;
 }
 
-async function followMainChatDefault() {
-  const sessionId = getActiveChatModelRouteSessionId();
+async function followMainChatDefault(sessionIdOverride = '') {
+  const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) return;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
-    await refreshActiveChatModelRoute();
-    _closeModelSwitcher();
+    await refreshActiveChatModelRoute(sessionId);
+    _closeModelSwitcher(sessionId);
   } catch (err) { console.warn('followMainChatDefault:', err); }
 }
 
@@ -7755,9 +7785,9 @@ async function _desktopSwitcherModelsFor(provider, state) {
   return models;
 }
 
-async function _loadDesktopSwitcherState() {
+async function _loadDesktopSwitcherState(sessionId = '') {
   const [route, settings, catalogData, credentialData] = await Promise.all([
-    refreshActiveChatModelRoute(),
+    refreshActiveChatModelRoute(sessionId),
     api('/api/settings/provider').catch(() => null),
     api('/api/extensions/catalog?kind=provider').catch(() => null),
     api('/api/settings/credentialed-model-providers').catch(() => null),
@@ -7779,18 +7809,35 @@ async function _loadDesktopSwitcherState() {
       model,
       effective.reasoningEffort ?? providerConfig.reasoning_effort,
     ),
+    speed: String(effective.speed || providerConfig.speed || (providerConfig.fast_mode === true ? 'fast' : 'standard')).toLowerCase() === 'fast' && _supportsFastSpeed(provider, model) ? 'fast' : 'standard',
   };
 }
 
-function _desktopSwitcherShowDetail(title, body) {
-  const detail = document.getElementById('model-switcher-detail');
+function _desktopSwitcherController(root = null) {
+  const candidate = root instanceof Element
+    ? (root.matches('.chat-model-switcher-wrap') ? root : root.closest('.chat-model-switcher-wrap'))
+    : null;
+  const wrap = candidate || document.getElementById('model-switcher-popover')?.closest('.chat-model-switcher-wrap') || null;
+  const scope = wrap || document;
+  const popover = scope.querySelector?.('[data-model-switcher-popover]') || document.getElementById('model-switcher-popover');
+  return {
+    wrap,
+    popover,
+    main: popover?.querySelector('[data-model-switcher-main]') || document.getElementById('model-switcher-main'),
+    detail: popover?.querySelector('[data-model-switcher-detail]') || document.getElementById('model-switcher-detail'),
+    sessionId: String(wrap?.closest('[data-composer-session-id]')?.dataset.composerSessionId || '').trim(),
+  };
+}
+
+function _desktopSwitcherShowDetail(title, body, controller = _desktopSwitcherController()) {
+  const detail = controller.detail;
   if (!detail) return;
   detail.hidden = false;
   detail.innerHTML = `<div class="model-switcher-detail-title">${escHtml(title)}</div><div class="model-switcher-options">${body}</div>`;
 }
 
-function _desktopSwitcherClearDetail() {
-  const detail = document.getElementById('model-switcher-detail');
+function _desktopSwitcherClearDetail(controller = _desktopSwitcherController()) {
+  const detail = controller.detail;
   if (!detail) return;
   detail.hidden = true;
   detail.innerHTML = '';
@@ -7800,27 +7847,44 @@ function _desktopSwitcherOption(label, value, selected, attrs = '') {
   return `<button type="button" class="model-switcher-option${selected ? ' selected' : ''}" ${attrs}><span>${escHtml(label)}</span><span class="model-switcher-check">${selected ? '✓' : ''}</span>${value ? `<small>${escHtml(value)}</small>` : ''}</button>`;
 }
 
-function _renderDesktopSwitcherMain(state) {
-  const main = document.getElementById('model-switcher-main');
+function mainModelLabel() {
+  const composerLabel = document.getElementById('chat-model-name')?.textContent
+    ?.replace(/\s+/g, ' ')
+    .trim();
+  if (composerLabel) return composerLabel;
+  return _formatActiveModelLabel(
+    window._activeModel || '',
+    window._activeProvider || '',
+    window.reasoningLevel || '',
+  );
+}
+window.mainModelLabel = mainModelLabel;
+
+function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherController()) {
+  const main = controller.main;
   if (!main) return;
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
+  const speedCapable = _supportsFastSpeed(state.provider, state.model);
+  const speed = state.speed === 'fast' ? 'fast' : 'standard';
   const source = state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   main.innerHTML = `
     <div class="model-switcher-heading">Chat settings</div>
     <button type="button" class="model-switcher-row" data-switcher-view="providers"><span>Providers</span><strong>${escHtml(_desktopSwitcherProviderLabel(state.provider, state.catalog))}</strong><i>›</i></button>
     <button type="button" class="model-switcher-row" data-switcher-view="models"><span>Model</span><strong>${escHtml(typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(state.model, state.provider) : state.model || 'Choose')}</strong><i>›</i></button>
     <button type="button" class="model-switcher-row" data-switcher-view="effort" ${levels.length ? '' : 'disabled'}><span>Effort</span><strong>${escHtml(effort?.label || 'Default')}</strong><i>›</i></button>
+    ${speedCapable ? `<button type="button" class="model-switcher-row" data-switcher-view="speed"><span>Speed</span><strong>${speed === 'fast' ? 'Fast' : 'Standard'}</strong><i>›</i></button>` : ''}
     <div class="model-switcher-source">${escHtml(source)}</div>
-    ${state.route?.mode==='explicit' ? `<button type=button class="model-switcher-default">Use Main Chat Default<small>${window.mainModelLabel?.(state)}</small></button>` : ''}`;
-  main.querySelector('[data-switcher-view="providers"]')?.addEventListener('click', () => _renderDesktopSwitcherProviders(state));
-  main.querySelector('[data-switcher-view="models"]')?.addEventListener('click', () => _renderDesktopSwitcherModels(state, state.provider));
-  main.querySelector('[data-switcher-view="effort"]')?.addEventListener('click', () => _renderDesktopSwitcherEffort(state));
-  main.querySelector('.model-switcher-default')?.addEventListener('click', followMainChatDefault);
+    ${state.route?.mode==='explicit' ? `<button type=button class="model-switcher-default" data-model-switcher-follow-default>Use Main Chat Default<small>${window.mainModelLabel?.(state)}</small></button>` : ''}`;
+  main.querySelector('[data-switcher-view="providers"]')?.addEventListener('click', () => _renderDesktopSwitcherProviders(state, controller));
+  main.querySelector('[data-switcher-view="models"]')?.addEventListener('click', () => _renderDesktopSwitcherModels(state, state.provider, controller));
+  main.querySelector('[data-switcher-view="effort"]')?.addEventListener('click', () => _renderDesktopSwitcherEffort(state, controller));
+  main.querySelector('[data-switcher-view="speed"]')?.addEventListener('click', () => _renderDesktopSwitcherSpeed(state, controller));
+  main.querySelector('.model-switcher-default')?.addEventListener('click', () => followMainChatDefault(controller.sessionId));
 }
 
-function _renderDesktopSwitcherQuick(state) {
-  const main = document.getElementById('model-switcher-main');
+function _renderDesktopSwitcherQuick(state, controller = _desktopSwitcherController()) {
+  const main = controller.main;
   if (!main) return;
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   const activeIndex = Math.max(0, levels.findIndex((item) => item.v === state.reasoningEffort));
@@ -7836,8 +7900,8 @@ function _renderDesktopSwitcherQuick(state) {
   const openAdvanced = (event) => {
     event?.preventDefault();
     event?.stopPropagation();
-    _desktopSwitcherClearDetail();
-    _renderDesktopSwitcherMain(state);
+    _desktopSwitcherClearDetail(controller);
+    _renderDesktopSwitcherMain(state, controller);
   };
   // The composer has outside-click handling of its own. Open on pointer-down
   // and suppress the follow-up click so that handler cannot consume Advanced
@@ -7874,8 +7938,8 @@ function _renderDesktopSwitcherQuick(state) {
     const effort = levels[index]?.v || '';
     if (!effort || index === activeIndex) return;
     try {
-      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined });
-      _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState());
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
+      _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   };
   if (slider) {
@@ -7918,80 +7982,132 @@ function _renderDesktopSwitcherQuick(state) {
   }));
 }
 
-async function _renderDesktopSwitcherProviders(state) {
+async function _renderDesktopSwitcherProviders(state, controller = _desktopSwitcherController()) {
   if (!state.credentialed.length) {
-    _desktopSwitcherShowDetail('Providers', '<div class="model-switcher-empty">No providers with saved credentials.</div>');
+    _desktopSwitcherShowDetail('Providers', '<div class="model-switcher-empty">No providers with saved credentials.</div>', controller);
     return;
   }
   _desktopSwitcherShowDetail('Providers', state.credentialed.map((id) => _desktopSwitcherOption(
     _desktopSwitcherProviderLabel(id, state.catalog), '', id === state.provider, `data-switcher-provider="${escHtml(id)}"`,
-  )).join(''));
-  document.querySelectorAll('[data-switcher-provider]').forEach((button) => button.addEventListener('click', async () => {
+  )).join(''), controller);
+  controller.detail?.querySelectorAll('[data-switcher-provider]').forEach((button) => button.addEventListener('click', async () => {
     const provider = button.getAttribute('data-switcher-provider') || '';
     const models = await _desktopSwitcherModelsFor(provider, state);
     const model = String(state.llm?.providers?.[provider]?.model || models[0] || '');
-    if (!model) return _renderDesktopSwitcherModels(state, provider);
+    if (!model) return _renderDesktopSwitcherModels(state, provider, controller);
     try {
-      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: undefined });
-      const next = await _loadDesktopSwitcherState();
-      _renderDesktopSwitcherMain(next);
-      _renderDesktopSwitcherModels(next, provider);
+      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: undefined }, controller.sessionId);
+      const next = await _loadDesktopSwitcherState(controller.sessionId);
+      _renderDesktopSwitcherMain(next, controller);
+      _renderDesktopSwitcherModels(next, provider, controller);
     } catch (err) { showToast('Could not switch provider', String(err?.message || err), 'error'); }
   }));
 }
 
-async function _renderDesktopSwitcherModels(state, provider) {
-  _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>');
+async function _renderDesktopSwitcherModels(state, provider, controller = _desktopSwitcherController()) {
+  _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>', controller);
   const models = await _desktopSwitcherModelsFor(provider, state);
   _desktopSwitcherShowDetail('Model', models.length ? models.map((model) => _desktopSwitcherOption(
     typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, provider) : model,
     '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`,
-  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>');
-  document.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', async () => {
+  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>', controller);
+  controller.detail?.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', async () => {
     const model = button.getAttribute('data-switcher-model') || '';
     if (!model) return;
     try {
-      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined });
-      const next = await _loadDesktopSwitcherState();
-      _renderDesktopSwitcherMain(next);
-      _renderDesktopSwitcherEffort(next);
+      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined, speed: provider === state.provider ? state.speed : undefined }, controller.sessionId);
+      const next = await _loadDesktopSwitcherState(controller.sessionId);
+      _renderDesktopSwitcherMain(next, controller);
+      _renderDesktopSwitcherEffort(next, controller);
     } catch (err) { showToast('Could not switch model', String(err?.message || err), 'error'); }
   }));
 }
 
-function _renderDesktopSwitcherEffort(state) {
+function _renderDesktopSwitcherEffort(state, controller = _desktopSwitcherController()) {
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   _desktopSwitcherShowDetail('Effort', levels.map((level) => _desktopSwitcherOption(
     level.label, level.desc, level.v === state.reasoningEffort, `data-switcher-effort="${escHtml(level.v)}"`,
-  )).join(''));
-  document.querySelectorAll('[data-switcher-effort]').forEach((button) => button.addEventListener('click', async () => {
+  )).join(''), controller);
+  controller.detail?.querySelectorAll('[data-switcher-effort]').forEach((button) => button.addEventListener('click', async () => {
     const effort = button.getAttribute('data-switcher-effort') || '';
     try {
-      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined });
-      const next = await _loadDesktopSwitcherState();
-      _renderDesktopSwitcherMain(next);
-      _renderDesktopSwitcherEffort(next);
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined, speed: state.speed }, controller.sessionId);
+      const next = await _loadDesktopSwitcherState(controller.sessionId);
+      _renderDesktopSwitcherMain(next, controller);
+      _renderDesktopSwitcherEffort(next, controller);
     } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
   }));
 }
 
+function _renderDesktopSwitcherSpeed(state, controller = _desktopSwitcherController()) {
+  if (!_supportsFastSpeed(state.provider, state.model)) {
+    _renderDesktopSwitcherMain(state, controller);
+    return;
+  }
+  const options = [
+    { v: 'standard', label: 'Standard' },
+    { v: 'fast', label: 'Fast' },
+  ];
+  _desktopSwitcherShowDetail('Speed', options.map((option) => _desktopSwitcherOption(
+    option.label, '', option.v === state.speed, `data-switcher-speed="${option.v}"`,
+  )).join(''), controller);
+  controller.detail?.querySelectorAll('[data-switcher-speed]').forEach((button) => button.addEventListener('click', async () => {
+    const speed = button.getAttribute('data-switcher-speed') === 'fast' ? 'fast' : 'standard';
+    try {
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: state.reasoningEffort || undefined, speed }, controller.sessionId);
+      const next = await _loadDesktopSwitcherState(controller.sessionId);
+      _renderDesktopSwitcherMain(next, controller);
+      _renderDesktopSwitcherSpeed(next, controller);
+    } catch (err) { showToast('Could not save model speed', String(err?.message || err), 'error'); }
+  }));
+}
+
 async function toggleModelSwitcher() {
-  const popover = document.getElementById('model-switcher-popover');
+  const controller = _desktopSwitcherController();
+  const popover = controller.popover;
   if (!popover) return;
   _modelSwitcherOpen = !_modelSwitcherOpen;
-  if (!_modelSwitcherOpen) { _closeModelSwitcher(); return; }
+  if (!_modelSwitcherOpen) { _closeModelSwitcher(controller); return; }
   popover.style.display = 'flex';
-  _desktopSwitcherClearDetail();
-  const main = document.getElementById('model-switcher-main');
+  _desktopSwitcherClearDetail(controller);
+  const main = controller.main;
   if (main) main.innerHTML = '<div class="model-switcher-loading">Loading controls…</div>';
-  try { _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState()); }
+  try { _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller); }
   catch (err) { if (main) main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`; }
 }
 
-function _closeModelSwitcher() {
-  const popover = document.getElementById('model-switcher-popover');
+function _closeModelSwitcher(sessionIdOrController = '') {
+  const controller = sessionIdOrController && typeof sessionIdOrController === 'object'
+    ? sessionIdOrController
+    : sessionIdOrController
+      ? _desktopSwitcherController(Array.from(document.querySelectorAll('[data-model-switcher-popover]'))
+        .find((node) => String(node.dataset.modelSwitcherSessionId || '') === String(sessionIdOrController))?.closest('.chat-model-switcher-wrap'))
+      : _desktopSwitcherController();
+  const popover = controller.popover;
   if (popover) popover.style.display = 'none';
-  _modelSwitcherOpen = false;
+  if (!controller.sessionId) _modelSwitcherOpen = false;
+}
+
+async function toggleDesktopComposerModelSwitcher(event, button) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const controller = _desktopSwitcherController(button);
+  if (!controller.sessionId || !controller.popover) return;
+  const isOpen = controller.popover.style.display !== 'none';
+  document.querySelectorAll('[data-model-switcher-popover="1"]').forEach((popover) => {
+    popover.style.display = 'none';
+  });
+  if (isOpen) return;
+  controller.popover.style.display = 'flex';
+  _desktopSwitcherClearDetail(controller);
+  if (controller.main) controller.main.innerHTML = '<div class="model-switcher-loading">Loading controls…</div>';
+  try {
+    _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
+  } catch (err) {
+    if (controller.main) controller.main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`;
+  }
 }
 
 async function switchModel(modelName) {
@@ -7999,7 +8115,7 @@ async function switchModel(modelName) {
   try {
     const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
     const route = state?.effective || {};
-    await setActiveChatModelRoute({ providerId: route.providerId || window._activeProvider || 'ollama', model: modelName, reasoningEffort: route.reasoningEffort || undefined, accountId: route.accountId || undefined });
+    await setActiveChatModelRoute({ providerId: route.providerId || window._activeProvider || 'ollama', model: modelName, reasoningEffort: route.reasoningEffort || undefined, speed: route.speed || undefined, accountId: route.accountId || undefined });
   } catch {
     // The next header refresh will retain the currently admitted/global route.
   }
@@ -8052,7 +8168,7 @@ async function setReasoningLevel(level) {
     }
     const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
     const route = state?.effective || {};
-    await setActiveChatModelRoute({ providerId: route.providerId || provider, model: route.model || window._activeModel || '', reasoningEffort: level || undefined, accountId: route.accountId || undefined });
+    await setActiveChatModelRoute({ providerId: route.providerId || provider, model: route.model || window._activeModel || '', reasoningEffort: level || undefined, speed: route.speed || undefined, accountId: route.accountId || undefined });
     _closeModelSwitcher();
   } catch (err) {
     console.warn('setReasoningLevel:', err);
@@ -8087,6 +8203,11 @@ document.addEventListener('click', (e) => {
       _modelSwitcherOpen = false;
     }
   }
+  document.querySelectorAll('[data-model-switcher-popover="1"]').forEach((pop) => {
+    const wrap = pop.closest('.chat-model-switcher-wrap');
+    const button = wrap?.querySelector('button');
+    if (wrap && !wrap.contains(e.target) && button && !button.contains(e.target)) pop.style.display = 'none';
+  });
 });
 
 // ---- Select job ----

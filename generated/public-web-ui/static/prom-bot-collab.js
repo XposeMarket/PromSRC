@@ -18,6 +18,10 @@ let directMentionAt = 0;
 let chromeObserver = null;
 let chromeObserverTarget = null;
 let chromeBindTimer = 0;
+let displacedMainChatChildren = [];
+let groupHoverPreviewCloseTimer = null;
+let groupHoverPreviewSource = null;
+let groupHoverPreviewEditing = false;
 
 function esc(value) {
   return String(value ?? '')
@@ -157,6 +161,137 @@ function groupMembers(group) {
   return (group?.memberIds || []).map(agentById).filter((agent) => agent.id);
 }
 
+function getGroupHoverPreview() {
+  let popover = document.getElementById('prom-bot-group-hover-preview');
+  if (popover) return popover;
+  popover = document.createElement('div');
+  popover.id = 'prom-bot-group-hover-preview';
+  popover.className = 'session-hover-preview prom-bot-group-hover-preview';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Rename group chat');
+  popover.addEventListener('pointerenter', () => {
+    if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+    groupHoverPreviewCloseTimer = null;
+  });
+  popover.addEventListener('pointerdown', () => {
+    if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+    groupHoverPreviewCloseTimer = null;
+  });
+  popover.addEventListener('pointerleave', scheduleGroupHoverPreviewClose);
+  document.body.appendChild(popover);
+  return popover;
+}
+
+function hideGroupHoverPreview() {
+  if (groupHoverPreviewEditing) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  groupHoverPreviewSource = null;
+  document.getElementById('prom-bot-group-hover-preview')?.classList.remove('is-visible');
+}
+
+function scheduleGroupHoverPreviewClose() {
+  if (groupHoverPreviewEditing) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = setTimeout(hideGroupHoverPreview, 1500);
+}
+
+function renderGroupHoverPreviewTitle(popover, group) {
+  const groupId = String(group?.id || '').trim();
+  const title = String(group?.title || 'Bot group').trim() || 'Bot group';
+  popover.dataset.groupId = groupId;
+  popover.dataset.groupTitle = title;
+  popover.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'session-hover-preview-row';
+  const titleButton = document.createElement('button');
+  titleButton.type = 'button';
+  titleButton.className = 'session-hover-preview-title';
+  titleButton.textContent = title;
+  titleButton.title = 'Rename group chat';
+  titleButton.setAttribute('aria-label', 'Rename group chat');
+  titleButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginGroupHoverRename(popover);
+  });
+  row.appendChild(titleButton);
+  popover.appendChild(row);
+}
+
+function showGroupHoverPreview(source, group) {
+  if (!source?.isConnected || !group || window.matchMedia('(max-width: 900px)').matches) return;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  groupHoverPreviewSource = source;
+  const popover = getGroupHoverPreview();
+  renderGroupHoverPreviewTitle(popover, group);
+  popover.classList.add('is-visible');
+  const rect = source.getBoundingClientRect();
+  const preferredWidth = 190;
+  const left = Math.min(rect.right + 8, Math.max(8, window.innerWidth - preferredWidth - 12));
+  const width = Math.min(preferredWidth, Math.max(160, window.innerWidth - left - 12));
+  const top = Math.max(8, Math.min(rect.top + (rect.height / 2) - 27, window.innerHeight - 66));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.width = `${width}px`;
+}
+
+function beginGroupHoverRename(popover) {
+  if (!popover?.classList.contains('is-visible')) return;
+  groupHoverPreviewEditing = true;
+  if (groupHoverPreviewCloseTimer) clearTimeout(groupHoverPreviewCloseTimer);
+  groupHoverPreviewCloseTimer = null;
+  const group = groupById(popover.dataset.groupId);
+  const title = String(group?.title || popover.dataset.groupTitle || 'Bot group').trim() || 'Bot group';
+  popover.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'session-hover-preview-input';
+  input.value = title;
+  input.maxLength = 80;
+  input.setAttribute('aria-label', 'Group chat title');
+  const restore = () => {
+    groupHoverPreviewEditing = false;
+    if (group) renderGroupHoverPreviewTitle(popover, group);
+    else hideGroupHoverPreview();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      restore();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const nextTitle = String(input.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!group || !nextTitle || nextTitle === title) {
+      restore();
+      return;
+    }
+    input.disabled = true;
+    group.title = nextTitle;
+    group.updatedAt = Date.now();
+    saveGroups();
+    renderGroupRows();
+    if (activeGroupId === group.id) {
+      window.setPromChatTitleOverride?.('Prom Bot group', group.title, 'prom-bot-group');
+    }
+    groupHoverPreviewEditing = false;
+    hideGroupHoverPreview();
+  });
+  input.addEventListener('blur', () => {
+    if (input.disabled) return;
+    restore();
+    requestAnimationFrame(() => {
+      if (!popover.matches(':hover') && !groupHoverPreviewSource?.matches(':hover')) scheduleGroupHoverPreviewClose();
+    });
+  }, { once: true });
+  popover.appendChild(input);
+  input.focus();
+  input.select();
+}
+
 function installStyles() {
   if (document.getElementById('prom-bot-collab-styles')) return;
   const style = document.createElement('style');
@@ -172,7 +307,15 @@ function installStyles() {
     .prom-bot-group-title { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:700; }
     .prom-bot-group-meta { display:block; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; color:var(--sidebar-muted,var(--muted)); }
     .prom-bot-group-delete { border:0; background:transparent; color:var(--sidebar-muted,var(--muted)); cursor:pointer; border-radius:6px; padding:4px; font-size:13px; }
-    #${GROUP_HOST_ID} { position:absolute; inset:0; z-index:14; display:flex; min-width:0; min-height:0; overflow:hidden; background:var(--pm-chat-page-bg,var(--bg)); }
+    /* A group room is the active main-chat surface, not an overlay above the
+       existing Prometheus transcript. Its host stays in the normal flex flow
+       so the room receives the same sizing and theme surface as main chat. */
+    #chat-view.prom-bot-group-active { display:flex !important; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+    /* The ordinary chat transcript/composer have authored display rules that
+       can override the browser's bare [hidden] attribute. Keep the group room
+       as the only visible child of #chat-view while it is active. */
+    #chat-view.prom-bot-group-active > [hidden] { display:none !important; }
+    #${GROUP_HOST_ID} { position:relative; flex:1 1 auto; width:100%; min-width:0; min-height:0; display:flex; overflow:hidden; background:transparent; }
     .prom-bot-group-shell { width:100%; height:100%; min-height:0; display:flex; flex-direction:column; }
     .prom-bot-group-messages { flex:1; min-height:0; overflow-y:auto; padding:16px 0 8px; }
     .prom-bot-group-empty { color:var(--muted); text-align:center; padding:56px 20px; font-size:12px; line-height:1.55; }
@@ -260,6 +403,8 @@ function renderGroupRows() {
     row.className = `prom-bot-group-row chat-session-item job-item${group.id === activeGroupId ? ' active' : ''}`;
     row.dataset.groupId = group.id;
     row.innerHTML = `<span class="prom-bot-group-avatar">${members.length}</span><span><span class="prom-bot-group-title">${esc(group.title)}</span><span class="prom-bot-group-meta">${esc(members.map((member) => member.name).join(', '))}</span></span><span class="prom-bot-group-delete" title="Delete group" aria-label="Delete group">×</span>`;
+    row.addEventListener('pointerenter', () => showGroupHoverPreview(row, group));
+    row.addEventListener('pointerleave', scheduleGroupHoverPreviewClose);
     row.addEventListener('click', (event) => {
       if (event.target instanceof Element && event.target.closest('.prom-bot-group-delete')) {
         event.stopPropagation();
@@ -325,15 +470,43 @@ function createGroupFromModal() {
 }
 
 function deleteGroup(groupId) {
+  hideGroupHoverPreview();
   groups = groups.filter((group) => group.id !== groupId);
   saveGroups();
   if (activeGroupId === groupId) closeGroup();
   renderGroupRows();
 }
 
+function displaceMainChatSurface(chatView, host) {
+  if (displacedMainChatChildren.length) return;
+  displacedMainChatChildren = Array.from(chatView.children)
+    .filter((node) => node !== host)
+    .map((node) => ({
+      node,
+      hidden: node.hidden === true,
+      ariaHidden: node.getAttribute('aria-hidden'),
+    }));
+  for (const entry of displacedMainChatChildren) {
+    entry.node.hidden = true;
+    entry.node.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function restoreMainChatSurface() {
+  for (const entry of displacedMainChatChildren) {
+    if (!entry.node?.isConnected) continue;
+    entry.node.hidden = entry.hidden;
+    if (entry.ariaHidden == null) entry.node.removeAttribute('aria-hidden');
+    else entry.node.setAttribute('aria-hidden', entry.ariaHidden);
+  }
+  displacedMainChatChildren = [];
+}
+
 function closeGroup() {
+  restoreMainChatSurface();
   document.getElementById(GROUP_HOST_ID)?.remove();
   document.getElementById('chat-view')?.classList.remove('prom-bot-group-active');
+  window.clearPromChatTitleOverride?.('prom-bot-group');
   activeGroupId = '';
   window.promBotActiveGroupId = '';
   hideMentionMenu();
@@ -349,12 +522,13 @@ async function openGroup(groupId) {
   const chatView = document.getElementById('chat-view');
   if (!chatView) return;
   chatView.classList.add('prom-bot-group-active');
-  if (getComputedStyle(chatView).position === 'static') chatView.style.position = 'relative';
   const host = document.createElement('div');
   host.id = GROUP_HOST_ID;
   chatView.appendChild(host);
+  displaceMainChatSurface(chatView, host);
   activeGroupId = group.id;
   window.promBotActiveGroupId = group.id;
+  window.setPromChatTitleOverride?.('Prom Bot group', group.title, 'prom-bot-group');
   renderGroupRows();
   await renderGroupRoom();
 }
@@ -381,7 +555,7 @@ async function renderGroupRoom() {
   const sessionId = `prom_bot_group_${group.id}`;
   const historyHtml = stable.length ? renderer.renderHistory(stable, { sessionId, readonly: true, hideSideChatBoundary: true }) : '';
   const liveHtml = live.map((message) => renderer.renderLiveMessage({ ...message, _backgroundAgentLive: true, streaming: true }, { sessionId })).join('');
-  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="side-chat-kicker">Prom Bot group</div><div class="side-chat-title">${esc(group.title)}</div><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
+  host.innerHTML = `<section class="unified-agent-chat-shell prom-bot-group-shell" aria-label="${esc(group.title)} group chat"><header class="unified-agent-chat-header"><div class="side-chat-title-wrap"><div class="unified-agent-chat-participants">${esc(members.map((agent) => `${agent.name} · @${mentionHandle(agent)}`).join('   '))}</div></div><button class="side-chat-close" type="button" onclick="closePromBotGroup()" aria-label="Close group">×</button></header><div id="prom-bot-group-messages" class="unified-agent-chat-messages prom-bot-group-messages">${historyHtml || liveHtml ? `${historyHtml}${liveHtml}` : '<div class="prom-bot-group-empty">Start chatting with the room.<br>@mention a bot to target them, or send without a mention to ask everyone.</div>'}</div>${renderer.renderComposer({ inputId: 'prom-bot-group-input', sessionId, secondarySurface: 'prom-bot-group', sendButtonId: 'prom-bot-group-send', composerClass: 'unified-agent-chat-composer prom-bot-group-composer', placeholder: 'Message the room or @mention a bot', attachAction: "window.showToast?.('Prom Bot groups','Group attachments are not wired in this lightweight room yet.','info')", voiceAction: 'startPromBotGroupVoice()', sendAction: 'sendPromBotGroupMessage()', inputAttributes: 'oninput="refreshPromBotMentionMenu(this)" onkeydown="handlePromBotGroupKeydown(event)"', footerHint: '@Bot targets members · Bots can @ each other · no mention asks the room' })}</section>`;
   requestAnimationFrame(() => {
     const messages = document.getElementById('prom-bot-group-messages');
     if (messages) messages.scrollTop = messages.scrollHeight;

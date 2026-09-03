@@ -2423,6 +2423,7 @@ interface ContextCompactorRunInput {
   numPredict: number;
   model?: string;
   provider?: any;
+  routeSnapshot?: TurnRouteSnapshot;
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
   recordMeta: Record<string, any>;
 }
@@ -2492,6 +2493,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
         num_predict: input.numPredict,
         ...(input.model ? { model: input.model } : {}),
         ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.routeSnapshot?.speed ? { speed: input.routeSnapshot.speed } : {}),
         usageContext: { sessionId: input.sessionId, agentId: 'context_compactor' },
       },
     );
@@ -7537,6 +7539,7 @@ RULES:
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
         num_predict: grokGreetingLikeTurn ? 256 : 4096,
 	        think: primaryThinkMode,
+	        speed: activeGenerationRouteSnapshot?.speed,
 	        model: generationOverride.model,
 	        provider: generationOverride.provider,
 	        onToken: emitStreamToken,
@@ -22614,10 +22617,12 @@ router.get('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) 
 router.put('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id || '').trim();
+    const requestedSpeed = String(req.body?.speed || '').trim().toLowerCase();
     const route = {
       providerId: String(req.body?.providerId || req.body?.provider || '').trim(),
       model: String(req.body?.model || '').trim(),
       reasoningEffort: String(req.body?.reasoningEffort ?? req.body?.reasoning_effort ?? '').trim() || undefined,
+      ...((requestedSpeed === 'standard' || requestedSpeed === 'fast') ? { speed: requestedSpeed as 'standard' | 'fast' } : {}),
       accountId: String(req.body?.accountId ?? req.body?.account_id ?? '').trim() || undefined,
     };
     const state = validateChatModelRoute(route);

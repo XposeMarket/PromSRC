@@ -101,6 +101,7 @@ try {
   for (const expected of [
     '/src/prom-bot.js',
     '/src/bot-create.js',
+    '/src/features/chat/canonical-desktop-composer.js',
   ]) {
     assert.equal(requestedPaths.includes(expected), true, `desktop initial boot did not request ${expected}`);
   }
@@ -117,7 +118,6 @@ try {
   }
   for (const forbidden of [
     '/src/features/chat/multi-chat-workspace-v2.js',
-    '/src/features/chat/canonical-desktop-composer.js',
     '/src/features/chat/desktop-turn-file-diff.js',
   ]) {
     assert.equal(desktopRequests.includes(forbidden), false, `desktop Chat activation eagerly requested ${forbidden}`);
@@ -129,8 +129,8 @@ try {
   await page.waitForTimeout(100);
   assert.equal(
     requestedPaths.includes('/src/features/chat/canonical-desktop-composer.js'),
-    true,
-    'desktop Subagents activation did not request the canonical composer owner',
+    false,
+    'desktop Subagents activation unexpectedly re-requested the already booted canonical composer owner',
   );
   await context.close();
 } finally {

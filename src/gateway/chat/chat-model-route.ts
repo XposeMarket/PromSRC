@@ -1,13 +1,13 @@
 import { getConfig } from '../../config/config';
 import { isKnownProviderId } from '../../providers/provider-registry.js';
-import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
+import { normalizeReasoningEffort, normalizeSpeed } from '../../providers/reasoning-capabilities';
 import { getChatModelRoute, type ChatModelRoute } from '../session';
 import { captureTurnRouteSnapshot, type ResolvedTurnRouteSource, type TurnRouteSnapshot } from './turn-route-snapshot';
 
 export type ChatModelRouteState = {
   mode: 'explicit' | 'inherited';
   override?: ChatModelRoute;
-  effective: { providerId: string; model: string; reasoningEffort?: string; accountId?: string };
+  effective: { providerId: string; model: string; reasoningEffort?: string; speed: 'standard' | 'fast'; accountId?: string };
   availability: 'ready' | 'unavailable';
   error?: string;
 };
@@ -27,6 +27,7 @@ export function resolveConfiguredMainChatRouteSource(raw = getConfig().getConfig
     providerId,
     model: String(raw?.llm?.providers?.[providerId]?.model || raw?.models?.primary || '').trim(),
     reasoningEffort: raw?.agent_model_default_reasoning?.main_chat,
+    speed: raw?.llm?.providers?.[providerId]?.speed || (raw?.llm?.providers?.[providerId]?.fast_mode === true ? 'fast' : 'standard'),
     accountId: raw?.llm?.accountId,
   };
 }
@@ -35,15 +36,19 @@ export function resolveChatModelRouteSource(sessionId: string): { source: Resolv
   const raw = getConfig().getConfig() as any;
   const override = getChatModelRoute(sessionId);
   const source = override
-    ? { config: raw, providerId: override.providerId, model: override.model, reasoningEffort: override.reasoningEffort, accountId: override.accountId }
+    ? { config: raw, providerId: override.providerId, model: override.model, reasoningEffort: override.reasoningEffort, speed: override.speed, accountId: override.accountId }
     : resolveConfiguredMainChatRouteSource(raw);
   const providerId = String(source.providerId || '').trim();
   const model = String(source.model || '').trim();
   const reasoningEffort = normalizeReasoningEffort(providerId, model, source.reasoningEffort);
+  const providerConfig = raw?.llm?.providers?.[providerId] || {};
+  const speed = normalizeSpeed(providerId, model, source.speed === undefined
+    ? providerConfig.speed || (providerConfig.fast_mode === true ? 'fast' : 'standard')
+    : source.speed);
   const state: ChatModelRouteState = {
     mode: override ? 'explicit' : 'inherited',
     ...(override ? { override } : {}),
-    effective: { providerId, model, ...(reasoningEffort ? { reasoningEffort } : {}), ...(source.accountId ? { accountId: String(source.accountId) } : {}) },
+    effective: { providerId, model, ...(reasoningEffort ? { reasoningEffort } : {}), speed, ...(source.accountId ? { accountId: String(source.accountId) } : {}) },
     availability: 'ready',
   };
   if (override && !isKnownProviderId(providerId)) {
@@ -67,6 +72,7 @@ export function captureChatTurnRouteSnapshot(sessionId: string): { snapshot: Tur
       providerId: snapshot.providerId,
       model: snapshot.model,
       ...(snapshot.reasoningEffort ? { reasoningEffort: snapshot.reasoningEffort } : {}),
+      speed: snapshot.speed,
       ...(snapshot.accountId ? { accountId: snapshot.accountId } : {}),
     };
     return { snapshot, state };
@@ -88,12 +94,13 @@ export function validateChatModelRoute(route: Omit<ChatModelRoute, 'version' | '
     providerId: route.providerId,
     model: route.model,
     reasoningEffort: route.reasoningEffort,
+    speed: route.speed,
     accountId: route.accountId,
   };
   const state: ChatModelRouteState = {
     mode: 'explicit',
     override: { version: 1, ...route, updatedAt: Date.now() },
-    effective: { providerId: route.providerId, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}), ...(route.accountId ? { accountId: route.accountId } : {}) },
+    effective: { providerId: route.providerId, model: route.model, ...(route.reasoningEffort ? { reasoningEffort: route.reasoningEffort } : {}), speed: normalizeSpeed(route.providerId, route.model, route.speed), ...(route.accountId ? { accountId: route.accountId } : {}) },
     availability: 'ready',
   };
   if (!isKnownProviderId(String(route.providerId || ''))) {
@@ -115,7 +122,7 @@ export function validateChatModelRoute(route: Omit<ChatModelRoute, 'version' | '
   }
   try {
     const snapshot = captureTurnRouteSnapshot(source);
-    state.effective = { providerId: snapshot.providerId, model: snapshot.model, ...(snapshot.reasoningEffort ? { reasoningEffort: snapshot.reasoningEffort } : {}), ...(snapshot.accountId ? { accountId: snapshot.accountId } : {}) };
+    state.effective = { providerId: snapshot.providerId, model: snapshot.model, ...(snapshot.reasoningEffort ? { reasoningEffort: snapshot.reasoningEffort } : {}), speed: snapshot.speed, ...(snapshot.accountId ? { accountId: snapshot.accountId } : {}) };
   } catch (error: any) {
     state.availability = 'unavailable';
     state.error = String(error?.message || error);

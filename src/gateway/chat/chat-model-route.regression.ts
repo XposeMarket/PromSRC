@@ -18,7 +18,7 @@ assert.match(router, /captureChatTurnRouteSnapshot\(sessionId\)/);
 assert.match(router, /\/api\/sessions\/:id\/model-route/);
 assert.doesNotMatch(route, /pinnedAt|setSessionPinned/);
 
-const config = {
+const config: any = {
   llm: {
     provider: 'openai',
     providers: {
@@ -31,6 +31,14 @@ const config = {
 const fakeFactory = () => ({}) as any;
 const inherited = captureTurnRouteSnapshot({ config, providerId: 'openai', model: 'gpt-5.6-terra', reasoningEffort: 'high' }, { buildProvider: fakeFactory });
 const explicit = captureTurnRouteSnapshot({ config, providerId: 'openai_codex', model: 'gpt-5.6-sol', reasoningEffort: 'medium', accountId: 'sol' }, { buildProvider: fakeFactory });
+
+// Speed is route-owned when selected, while inherited chats still follow the
+// provider setting. It must remain independent from reasoning selection.
+config.llm.providers.openai.speed = 'fast';
+const inheritedFast = captureTurnRouteSnapshot({ config, providerId: 'openai', model: 'gpt-5.6-terra', reasoningEffort: 'high' }, { buildProvider: fakeFactory });
+const explicitStandard = captureTurnRouteSnapshot({ config, providerId: 'openai', model: 'gpt-5.6-terra', reasoningEffort: 'low', speed: 'standard' }, { buildProvider: fakeFactory });
+assert.equal(inheritedFast.speed, 'fast');
+assert.equal(explicitStandard.speed, 'standard');
 
 // Explicit routes are independent of a later global Main Chat selection.
 config.llm.provider = 'openai_codex';

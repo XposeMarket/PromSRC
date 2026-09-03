@@ -17,6 +17,7 @@ import { escHtml, renderMd, bgtToast, timeAgo, showToast, showConfirm } from '..
 import { wsEventBus } from '../ws.js';
 import { applyToolActivityEvent } from '../tool-activity.js';
 import { chatProgressVisibility } from '../features/chat/trace-visibility.js';
+import { bindWorkspaceFileTree, renderWorkspaceFileTree } from '../components/workspace-file-tree.js';
 
 // ── Stubs for cross-module globals not yet migrated ──────────────
 let _teamsDataSig = '';
@@ -818,7 +819,7 @@ function resizeTeamChatInput() {
   const input = document.getElementById('team-chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(180, Math.max(64, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(180, Math.max(44, input.scrollHeight))}px`;
   syncTeamChatInputMirror(activeTeamId);
 }
 
@@ -2517,6 +2518,8 @@ function renderTeamUnifiedDesktopChat(team) {
     </div>
     ${renderer.renderComposer({
       inputId: 'team-chat-input',
+      sessionId: `team_chat_${team.id}`,
+      secondarySurface: 'team-chat',
       fileInputId: 'team-chat-file-input',
       stagingId: 'team-chat-file-staging',
       sendButtonId: 'team-chat-send-button',
@@ -3359,6 +3362,9 @@ function renderTeamBoard(teamId) {
     <div id="team-tab-content" style="${tabContentStyle}">
       ${teamBoardTab === 'chat' ? renderTeamUnifiedDesktopChat(team) : renderTeamTabContent(team)}
     </div>`;
+  if (teamBoardTab === 'workspace') {
+    bindTeamWorkspaceTree(document.getElementById(`team-workspace-files-${team.id}`));
+  }
   const newTeamChatInput = document.getElementById('team-chat-input');
   if (newTeamChatInput) newTeamChatInput.value = teamChatDraftByTeam[teamId] || '';
   if (teamBoardTab === 'chat') {
@@ -3431,36 +3437,6 @@ function renderTeamTabContent(team) {
     case 'chat': return renderTeamChatTab(team);
     default: return '';
   }
-}
-
-// --- Workspace file type label (color + 3-letter tag, no emojis) ----------
-function _wsFileTag(name) {
-  const ext = (name || '').split('.').pop().toLowerCase();
-  const map = {
-    json: ['JSN', '#0d4faf', '#eaf2ff'],
-    md:   ['MD',  '#0f6e3a', '#eafaf0'],
-    txt:  ['TXT', '#666',    '#f0f0f0'],
-    log:  ['LOG', '#7a5a00', '#fff7e0'],
-    csv:  ['CSV', '#0f6e3a', '#eafaf0'],
-    html: ['HTM', '#b04a00', '#fff1e6'],
-    htm:  ['HTM', '#b04a00', '#fff1e6'],
-    js:   ['JS',  '#7a5a00', '#fff7e0'],
-    ts:   ['TS',  '#0d4faf', '#eaf2ff'],
-    jsx:  ['JSX', '#7a5a00', '#fff7e0'],
-    tsx:  ['TSX', '#0d4faf', '#eaf2ff'],
-    py:   ['PY',  '#0d4faf', '#eaf2ff'],
-    sh:   ['SH',  '#444',    '#ececec'],
-    png:  ['IMG', '#7a3aa8', '#f3eaff'],
-    jpg:  ['IMG', '#7a3aa8', '#f3eaff'],
-    jpeg: ['IMG', '#7a3aa8', '#f3eaff'],
-    gif:  ['IMG', '#7a3aa8', '#f3eaff'],
-    svg:  ['SVG', '#7a3aa8', '#f3eaff'],
-    zip:  ['ZIP', '#666',    '#f0f0f0'],
-    gz:   ['GZ',  '#666',    '#f0f0f0'],
-    env:  ['ENV', '#b42323', '#fff0f0'],
-  };
-  const [label, fg, bg] = map[ext] || [(ext || 'FIL').slice(0,3).toUpperCase(), '#555', '#eee'];
-  return `<span style="font-size:9px;font-weight:800;letter-spacing:0.04em;color:${fg};background:${bg};border-radius:3px;padding:1px 5px;font-family:'IBM Plex Mono',monospace;flex-shrink:0">${label}</span>`;
 }
 
 function _teamRoomState() {
@@ -3583,53 +3559,21 @@ function _renderTeamBlockersList(blockers) {
   </div>`;
 }
 
-function _wsFileSize(bytes) {
-  if (bytes == null) return '';
-  if (bytes > 1024*1024) return (bytes/1024/1024).toFixed(1)+'MB';
-  if (bytes > 1024) return (bytes/1024).toFixed(1)+'KB';
-  return bytes+'B';
+function renderWorkspaceTree(entries, depth) {
+  return renderWorkspaceFileTree(entries, {
+    expandedPaths: workspaceFolderExpanded,
+    selectedPath: teamWorkspaceOpenFile?.relpath || '',
+    showMetadata: true,
+    showAgentMetadata: true,
+    timeAgo,
+  });
 }
 
-// Render a workspace tree entry (file or folder) at a given indent depth.
-// Clean directory tree, no emojis. Folders are flat rows; files are indented
-// under their parent with a left guide line.
-function renderWorkspaceTree(entries, depth) {
-  if (!entries || entries.length === 0) return '';
-  const indent = depth * 14;
-  return entries.map(entry => {
-    if (entry.isDirectory) {
-      const relPath = entry.relativePath || entry.name;
-      const isOpen = workspaceFolderExpanded.has(relPath);
-      const chevron = isOpen ? '▾' : '▸'; // ▾ ▸
-      const count = (entry.children || []).length;
-      const childrenHtml = isOpen ? renderWorkspaceTree(entry.children || [], depth + 1) : '';
-      return `
-        <div>
-          <div onclick="toggleWorkspaceFolder('${escHtml(relPath)}')" style="display:flex;align-items:center;gap:7px;padding:5px 8px;padding-left:${indent + 8}px;border-radius:5px;cursor:pointer;user-select:none" onmouseover="this.style.background='var(--panel-2)'" onmouseout="this.style.background='transparent'">
-            <span style="color:var(--muted);font-size:10px;width:10px;flex-shrink:0;text-align:center">${chevron}</span>
-            <span style="font-size:13px;font-weight:700;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(entry.name)}</span>
-            <span style="font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums">${count}</span>
-          </div>
-          ${isOpen ? `<div style="margin-left:${indent + 13}px;border-left:1px solid var(--line);padding-left:0">${childrenHtml}</div>` : ''}
-        </div>`;
-    }
-    // File row — compact single line with tag, name, size, time. Click to open in viewer.
-    const tag = _wsFileTag(entry.name);
-    const size = _wsFileSize(entry.size);
-    const agentTag = entry.writtenBy ? `<span style="font-size:10px;background:#eaf2ff;color:#0d4faf;border-radius:3px;padding:0 5px;font-weight:600">w: ${escHtml(entry.writtenBy)}</span>` : '';
-    const readTags = (entry.readBy || []).slice(0,3).map(id => `<span style="font-size:10px;background:#f0fdf4;color:#166534;border-radius:3px;padding:0 5px">r: ${escHtml(id)}</span>`).join('');
-    const rel = (entry.relativePath || entry.name).replace(/'/g, "\\'");
-    const isOpen = teamWorkspaceOpenFile && teamWorkspaceOpenFile.relpath === (entry.relativePath || entry.name);
-    return `
-      <div onclick="openTeamWorkspaceFile('${rel}')" style="display:flex;align-items:center;gap:8px;padding:4px 8px;padding-left:${indent + 8}px;border-radius:5px;font-size:12px;cursor:pointer;${isOpen?'background:var(--panel-2);outline:1px solid var(--brand)':''}" onmouseover="if(!this.dataset.open)this.style.background='var(--panel-2)'" onmouseout="if(!this.dataset.open)this.style.background='${isOpen?'var(--panel-2)':'transparent'}'" data-open="${isOpen?'1':''}" title="${escHtml(entry.relativePath || entry.name)}">
-        ${tag}
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${escHtml(entry.name)}</span>
-        ${agentTag}
-        ${readTags}
-        ${size ? `<span style="font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${size}</span>` : ''}
-        ${entry.modifiedAt ? `<span style="font-size:10px;color:var(--muted);min-width:64px;text-align:right">${timeAgo(entry.modifiedAt)}</span>` : ''}
-      </div>`;
-  }).join('');
+function bindTeamWorkspaceTree(root) {
+  return bindWorkspaceFileTree(root, {
+    onToggle: toggleWorkspaceFolder,
+    onSelect: openTeamWorkspaceFile,
+  });
 }
 
 function toggleWorkspaceFolder(relPath) {
@@ -3641,32 +3585,28 @@ function toggleWorkspaceFolder(relPath) {
   // Re-render the workspace tab in place without a network round-trip
   const tree = teamWorkspaceTree || [];
   const el = document.querySelector('[id^="team-workspace-files-"]');
-  if (el) el.innerHTML = tree.length === 0 ? '' : renderWorkspaceTree(tree, 0);
+  if (el) {
+    el.innerHTML = renderWorkspaceTree(tree, 0);
+    bindTeamWorkspaceTree(el);
+  }
   // Also re-render the full tab if open
   if (teamBoardTab === 'workspace' && activeTeamId) renderTeamBoard(activeTeamId);
 }
 
 function renderTeamWorkspaceTab(team) {
   const tree = teamWorkspaceTree || [];
-  const treeBody = tree.length === 0
-    ? `<div style="text-align:center;color:var(--muted);font-size:12px;padding:24px 12px">
-        <div style="font-weight:700;margin-bottom:6px">No workspace files yet</div>
-        <div style="line-height:1.6">Agents write shared files here during runs.</div>
-      </div>`
-    : `<div id="team-workspace-files-${team.id}" style="display:flex;flex-direction:column;gap:0">${renderWorkspaceTree(tree, 0)}</div>`;
-
   return `
-    <div style="display:flex;flex-direction:column;gap:10px;flex:1;min-height:0;height:calc(100vh - 220px)">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+    <div class="prom-workspace-file-tree-shell">
+      <div class="prom-workspace-file-tree-header">
         <div style="min-width:0">
-          <div style="font-size:13px;font-weight:800">Shared Workspace</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(teamWorkspaceData?.workspacePath || '')}">${escHtml(teamWorkspaceData?.workspacePath || `teams/${team.id}/workspace`)}</div>
+          <div class="prom-workspace-file-tree-title">Shared Workspace</div>
+          <div class="prom-workspace-file-tree-path" title="${escHtml(teamWorkspaceData?.workspacePath || '')}">${escHtml(teamWorkspaceData?.workspacePath || `teams/${team.id}/workspace`)}</div>
         </div>
         <button onclick="refreshTeamWorkspace('${team.id}');switchTeamTab('workspace','${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
       </div>
-      <div style="display:flex;gap:10px;flex:1;min-height:0">
-        <div style="width:340px;flex-shrink:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px;overflow:auto">${treeBody}</div>
-        <div id="team-workspace-viewer" style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden">${renderTeamWorkspaceViewer(team)}</div>
+      <div class="prom-workspace-file-tree-layout">
+        <div class="prom-file-tree-pane"><div id="team-workspace-files-${team.id}" class="prom-file-tree">${tree.length === 0 ? '<div class="prom-file-tree-empty"><div><strong>No workspace files yet</strong><br><span>Agents write shared files here during runs.</span></div></div>' : renderWorkspaceTree(tree, 0)}</div></div>
+        <div id="team-workspace-viewer" class="prom-workspace-file-tree-viewer">${renderTeamWorkspaceViewer(team)}</div>
       </div>
     </div>`;
 }
@@ -3700,7 +3640,7 @@ function renderTeamWorkspaceViewer(team) {
     return `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:#b42323;font-size:12px;padding:16px;text-align:center">${escHtml(open.error)}</div>`;
   }
   return `
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel-2);flex-shrink:0">
+    <div class="workspace-file-viewer-header">
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(open.relpath)}">${escHtml(open.relpath)}${open.dirty ? ' <span style="color:#b06b00;font-weight:800">●</span>' : ''}</div>
         <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${(open.content || '').length} chars${open.modifiedAt ? ' · modified ' + timeAgo(open.modifiedAt) : ''}</div>
@@ -3737,7 +3677,10 @@ async function openTeamWorkspaceFile(relpath) {
   // Re-render the tree row highlight
   if (teamBoardTab === 'workspace') {
     const treePane = document.querySelector('#team-tab-content [id^="team-workspace-files-"]');
-    if (treePane) treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+    if (treePane) {
+      treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+      bindTeamWorkspaceTree(treePane);
+    }
   }
 }
 
@@ -3835,7 +3778,10 @@ function closeTeamWorkspaceFile() {
   _renderWorkspaceViewerOnly();
   if (teamBoardTab === 'workspace' && activeTeamId) {
     const treePane = document.querySelector('#team-tab-content [id^="team-workspace-files-"]');
-    if (treePane) treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+    if (treePane) {
+      treePane.innerHTML = renderWorkspaceTree(teamWorkspaceTree || [], 0);
+      bindTeamWorkspaceTree(treePane);
+    }
   }
 }
 

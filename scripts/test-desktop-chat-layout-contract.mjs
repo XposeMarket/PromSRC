@@ -7,6 +7,7 @@ const paths = {
   multiChatIntent: 'web-ui/src/features/chat/multi-chat-intent.js',
   multiChat: 'web-ui/src/features/chat/multi-chat-workspace-v2.js',
   multiChatCss: 'web-ui/src/styles/multi-chat-workspace.css',
+  themes: 'web-ui/src/styles/themes.css',
   performance: 'web-ui/src/performance.js',
   sourceContext: 'web-ui/src/source-panel-context.js',
   generatedBase: 'generated/public-web-ui/static/styles/base.css',
@@ -15,6 +16,7 @@ const paths = {
   generatedMultiChatIntent: 'generated/public-web-ui/static/features/chat/multi-chat-intent.js',
   generatedMultiChat: 'generated/public-web-ui/static/features/chat/multi-chat-workspace-v2.js',
   generatedMultiChatCss: 'generated/public-web-ui/static/styles/multi-chat-workspace.css',
+  generatedThemes: 'generated/public-web-ui/static/styles/themes.css',
   generatedPerformance: 'generated/public-web-ui/static/performance.js',
   generatedSourceContext: 'generated/public-web-ui/static/source-panel-context.js',
 };
@@ -26,6 +28,7 @@ const sourceChat = read(paths.chat);
 const multiChatIntent = read(paths.multiChatIntent);
 const multiChat = read(paths.multiChat);
 const multiChatCss = read(paths.multiChatCss);
+const themes = read(paths.themes);
 const performance = read(paths.performance);
 const sourceContext = read(paths.sourceContext);
 const generatedBase = read(paths.generatedBase);
@@ -34,6 +37,7 @@ const generatedChat = read(paths.generatedChat);
 const generatedMultiChatIntent = read(paths.generatedMultiChatIntent);
 const generatedMultiChat = read(paths.generatedMultiChat);
 const generatedMultiChatCss = read(paths.generatedMultiChatCss);
+const generatedThemes = read(paths.generatedThemes);
 const generatedPerformance = read(paths.generatedPerformance);
 const generatedSourceContext = read(paths.generatedSourceContext);
 
@@ -43,6 +47,7 @@ if (sourceChat !== generatedChat) throw new Error('ChatPage.js source/generated 
 if (multiChatIntent !== generatedMultiChatIntent) throw new Error('multi-chat intent source/generated copies are out of sync');
 if (multiChat !== generatedMultiChat) throw new Error('multi-chat v2 workspace source/generated copies are out of sync');
 if (multiChatCss !== generatedMultiChatCss) throw new Error('multi-chat workspace styles source/generated copies are out of sync');
+if (themes !== generatedThemes) throw new Error('themes.css source/generated copies are out of sync');
 if (performance !== generatedPerformance) throw new Error('performance.js source/generated copies are out of sync');
 if (sourceContext !== generatedSourceContext) throw new Error('source-panel-context source/generated copies are out of sync');
 
@@ -88,6 +93,14 @@ const extractFunction = (source, startMarker, endMarker) => {
   const end = source.indexOf(endMarker, start);
   return source.slice(start, end < 0 ? source.length : end);
 };
+
+const toggleCanvasFullscreen = extractFunction(sourceChat, 'function toggleCanvasFullscreen()', 'function setCanvasEditorValue');
+if (!/panel\.style\.position\s*=\s*'fixed'/.test(toggleCanvasFullscreen)
+  || !/electron-shell/.test(toggleCanvasFullscreen)
+  || !/--window-chrome-height/.test(toggleCanvasFullscreen)
+  || !/panel\.style\.inset\s*=\s*electronTitlebarInset/.test(toggleCanvasFullscreen)) {
+  throw new Error('Electron Canvas fullscreen must preserve the native titlebar inset');
+}
 
 const toggleSources = extractFunction(sourceChat, 'function toggleSources(', 'function openChatResourceFile');
 if (!/sourcePanelMiniItems\('all'\)\.length\s*===\s*0/.test(toggleSources)
@@ -148,6 +161,9 @@ const openSide = extractFunction(multiChat, 'function openSide(', 'function clos
 if (!/addExplicitTab\(sid, title\)/.test(activateMain) || !/addExplicitTab\(sid, title\)/.test(openSide)) {
   throw new Error('drag/drop pane activation must explicitly enroll the dragged session as a tab');
 }
+if (!/ensureMainTab\(mainId/.test(openSide)) {
+  throw new Error('opening a side chat must enroll the current main chat as a tab too');
+}
 if (!/revealNativeSide\(\)/.test(openSide) || !/refreshNativeSideSession\(sid\)/.test(openSide)) {
   throw new Error('opening the side pane must use the native split immediately and hydrate that existing session in place');
 }
@@ -203,17 +219,26 @@ if (!/projectName/.test(sessionMeta) || !/canvasProjectLabel/.test(sessionMeta))
   throw new Error('multi-chat session headers must retain project metadata from normal chat sessions');
 }
 const patchPaneHeader = extractFunction(multiChat, 'function patchPaneHeader(', 'function patchNativeSplitHeaders');
-if (!/side-chat-title/.test(patchPaneHeader)
-  || !/side-chat-kicker/.test(patchPaneHeader)
-  || !/Project ·/.test(patchPaneHeader)) {
-  throw new Error('native split headers must render the normal session title plus project context and no side-chat role label');
+if (!/side-chat-title/.test(patchPaneHeader) || /Project ·/.test(patchPaneHeader)) {
+  throw new Error('native split headers must preserve ChatPage\'s normal kicker/title hierarchy');
 }
 if (!/prom-multi-chat-session-header/.test(multiChatCss)
   || !/prom-multi-chat-native-split/.test(multiChatCss)) {
   throw new Error('native multi-chat split header styling is missing');
 }
-if (!/:has\(\.prom-multi-chat-tabs:not\(\[hidden\]\)\) #chat-messages/.test(multiChatCss)) {
-  throw new Error('chat tabs must sit above the native main/side headers');
+if (!/\.main-shell:has\(> \.prom-multi-chat-tabs:not\(\[hidden\]\)\) > #chat-context-header/.test(multiChatCss)
+  || /:has\(\.prom-multi-chat-tabs:not\(\[hidden\]\)\) #chat-messages/.test(multiChatCss)) {
+  throw new Error('chat tabs must replace the context header above the native main/side headers');
+}
+const tabHeaderRules = themes.match(/body:not\(\.pm-mobile-active\):not\(\.electron-shell\) \.main-shell-wrap:has\(> \.topbar \+ \.main-shell > \.prom-multi-chat-tabs:not\(\[hidden\]\)\)[\s\S]*?(?=\/\* Give the jump-to-message rail)/)?.[0] || '';
+if (!tabHeaderRules
+  || !/\.topbar\s*\{[\s\S]*?height:\s*0\s*!important/.test(tabHeaderRules)
+  || !/\.topbar-left\s*\{[\s\S]*?display:\s*none\s*!important/.test(tabHeaderRules)
+  || !/\.topbar-right\s*\{[\s\S]*?position:\s*absolute/.test(tabHeaderRules)) {
+  throw new Error('browser tab placement must not collapse the Electron shared header');
+}
+if (/body:not\(\.pm-mobile-active\) \.main-shell-wrap:has\(> \.topbar \+ \.main-shell > \.prom-multi-chat-tabs:not\(\[hidden\]\)\) > \.topbar/.test(themes)) {
+  throw new Error('multi-chat tabs must not change the Electron topbar geometry');
 }
 
 if (!/function reorderTabs\(/.test(multiChat) || !/state\.tabs\.splice\(to,\s*0,\s*tab\)/.test(multiChat)) {
