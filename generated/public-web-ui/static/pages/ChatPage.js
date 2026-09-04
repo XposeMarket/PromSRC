@@ -241,6 +241,11 @@ const {
   request: api,
   getStreamState: getSessionStreamState,
   recordProcess: addSessionProcessEntry,
+  onOlderPageApplied: ({ sessionId, history }) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return;
+    desktopTimelineController.retainEarlier(`desktop:main:${sid}`, desktopTimelineEntries(history, sid));
+  },
 });
 
 const desktopQuestionTransport = createDesktopQuestionTransport({
@@ -7726,6 +7731,14 @@ async function _loadSessionFromServer(id, options = {}) {
   const sess = window.chatSessions.find(s => s.id === id);
   const force = options.force === true;
   if (!sess || (!force && !sess._needsServerLoad)) return;
+  // An active SSE turn keeps a reference to these arrays while it appends the
+  // final assistant message. Keep the references stable across an async
+  // recovery fetch; assigning a new array here detaches that turn and makes it
+  // appear to disappear until the next server refresh.
+  const historyRef = Array.isArray(sess.history) ? sess.history : [];
+  const processLogRef = Array.isArray(sess.processLog) ? sess.processLog : [];
+  if (sess.history !== historyRef) sess.history = historyRef;
+  if (sess.processLog !== processLogRef) sess.processLog = processLogRef;
   try {
     const params = new URLSearchParams();
     if (options.full === true) {
@@ -7740,8 +7753,8 @@ async function _loadSessionFromServer(id, options = {}) {
     const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, 3000);
     const s = data.session;
     if (!s) return;
-    const localHistory = Array.isArray(sess.history) ? sess.history.slice() : [];
-    const localProcessLog = Array.isArray(sess.processLog) ? sess.processLog.slice() : [];
+    const localHistory = historyRef.slice();
+    const localProcessLog = processLogRef.slice();
     const serverHistory = (s.history || [])
       .filter((m) => !isInternalChatMessage(m))
       .map(m => ({
@@ -7750,11 +7763,26 @@ async function _loadSessionFromServer(id, options = {}) {
         content: m.content || '',
         timestamp: m.timestamp,
       }));
-    sess.history = mergeServerAndLocalHistory(localHistory, serverHistory);
+    // Include anything appended while the fetch was in flight, even if
+    // another lifecycle path temporarily swapped the session field. Then
+    // commit into the original array so the owning stream sees the merge.
+    const currentHistory = Array.isArray(sess.history) ? sess.history : historyRef;
+    const historyToMerge = currentHistory === historyRef
+      ? currentHistory
+      : [...localHistory, ...currentHistory];
+    const mergedHistory = mergeServerAndLocalHistory(historyToMerge, serverHistory);
+    historyRef.splice(0, historyRef.length, ...mergedHistory);
+    sess.history = historyRef;
     applyDesktopInitialHistoryPage(sess, s);
     const serverProcessLog = Array.isArray(s.processLog) ? s.processLog : [];
-    const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
-    sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
+    const currentProcessLog = Array.isArray(sess.processLog) ? sess.processLog : processLogRef;
+    const processLogToMerge = currentProcessLog === processLogRef
+      ? currentProcessLog
+      : [...localProcessLog, ...currentProcessLog];
+    const messageProcessLog = historyRef.flatMap((m) => processEntriesForMessage(m));
+    const mergedProcessLog = mergeProcessEntryLists(processLogToMerge, serverProcessLog, messageProcessLog);
+    processLogRef.splice(0, processLogRef.length, ...mergedProcessLog);
+    sess.processLog = processLogRef;
     sess.creativeMode = normalizeCreativeMode(s.creativeMode);
     sess.projectId = String(s.projectId || sess.projectId || '').trim() || null;
     sess.projectName = String(s.projectName || sess.projectName || '').trim() || null;
@@ -12420,6 +12448,10 @@ function isDesktopTransientReasoningTraceEntry(entry) {
   const source = String(entry.source || extra.source || '').trim().toLowerCase();
   const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
   const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  // A provider may carry summary visibility/source fields onto a following
+  // curated thought packet. An explicit full_thought marker is authoritative;
+  // never let the summary cleanup path delete that durable thought.
+  if (reasoningKind === 'full_thought') return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -12542,6 +12574,49 @@ function isDesktopUserVisibleReasoningTraceEntry(entry) {
     : source === 'reasoning_summary' || source === 'agent_progress' || source === 'agent_thought' || ['user', 'summary', 'visible'].includes(visibility);
 }
 
+function isDesktopSummaryThoughtEvent(event = {}) {
+  const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
+  const reasoningKind = String(event?.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  const source = String(event?.source || extra.source || '').trim().toLowerCase();
+  if (reasoningKind === 'full_thought') return false;
+  return chatProgressVisibility(event) === 'summary'
+    || reasoningKind === 'summary'
+    || source === 'reasoning_summary';
+}
+
+function desktopThoughtMetadata(event = {}, visibility = 'user') {
+  const extra = event?.extra && typeof event.extra === 'object' ? event.extra : {};
+  const streamId = String(event?.streamId || extra.streamId || '').trim();
+  const seqValue = Number(event?.seq ?? extra.seq);
+  const seq = Number.isFinite(seqValue) && seqValue >= 0 ? Math.floor(seqValue) : null;
+  const eventKey = String(event?.eventKey || extra.eventKey || '').trim()
+    || (streamId && seq != null ? `${streamId}:${seq}` : '');
+  return {
+    source: String(event?.source || extra.source || '').trim() || 'agent_thought',
+    visibility,
+    event: String(event?.type || event?.eventType || extra.eventType || '').trim() || 'agent_thought',
+    reasoningKind: String(event?.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase() || 'full_thought',
+    ...(streamId ? { streamId } : {}),
+    ...(eventKey ? { eventKey } : {}),
+    ...(seq != null ? { seq } : {}),
+  };
+}
+
+function appendDesktopDurableThought(streamState, text, appendTrace, event = {}) {
+  const thoughtText = String(text || '').trim();
+  if (!streamState || !thoughtText || typeof appendTrace !== 'function') return false;
+  const visibility = chatProgressVisibility(event);
+  if (visibility === 'private' || isDesktopSummaryThoughtEvent(event)) return false;
+  const thoughtExtra = desktopThoughtMetadata(event, visibility);
+  const eventKey = String(thoughtExtra.eventKey || '').trim();
+  if (eventKey && Array.isArray(streamState.liveTraceEntries)
+    && streamState.liveTraceEntries.some((entry) => (
+      String(entry?.eventKey || entry?.extra?.eventKey || '').trim() === eventKey
+    ))) return true;
+  appendTrace('think', thoughtText, { extra: thoughtExtra });
+  return true;
+}
+
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
   const trace = String(text || '').replace(/\s+/g, ' ').trim();
   const final = String(finalText || '').replace(/\s+/g, ' ').trim();
@@ -12561,7 +12636,10 @@ function visibleLiveTraceEntries(entries) {
     .filter((entry) => String(entry?.extra?.source || entry?.source || '').toLowerCase() === 'agent_progress')
     .map((entry) => String(entry?.text || entry?.content || '').trim())
     .filter(Boolean);
-  const thoughtTexts = [];
+  // Summary narration and full thoughts are different presentation surfaces.
+  // Similar prose is only a duplicate inside the same surface; otherwise a
+  // thought that follows a summary disappears during the next tool repaint.
+  const thoughtTextsByKind = new Map();
   return coalesceToolActivityEntries(sourceEntries).filter((entry) => {
     if (!entry || isDesktopPreparedTraceEntry(entry) || isDesktopInternalToolProtocolTraceEntry(entry)
       || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
@@ -12580,11 +12658,14 @@ function visibleLiveTraceEntries(entries) {
         if (isDesktopTraceThoughtFragmentText(text)) return false;
         const comparable = desktopTraceComparableText(text);
         const words = comparable.split(/\s+/).filter(Boolean).length;
+        const thoughtKind = desktopTraceThoughtKind(entry);
+        const thoughtTexts = thoughtTextsByKind.get(thoughtKind) || [];
         if (thoughtTexts.some((seen) => {
           const seenComparable = desktopTraceComparableText(seen);
           return desktopTraceThoughtTextsSimilar(seen, text)
             || (comparable.length >= 18 && words >= 3 && seenComparable.includes(comparable));
         })) return false;
+        thoughtTextsByKind.set(thoughtKind, thoughtTexts);
         thoughtTexts.push(text);
       }
     }
@@ -12651,7 +12732,7 @@ function desktopTraceThoughtKind(entry) {
   if (!isLiveTraceThoughtEntry(entry)) return '';
   if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-  const explicit = String(extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  const explicit = String(extra.reasoningKind || extra.presentationKind || entry?.reasoningKind || '').trim().toLowerCase();
   if (explicit === 'summary' || explicit === 'full_thought') return explicit;
   const source = String(extra.source || entry?.source || '').trim().toLowerCase();
   return isDesktopTraceReasoningSummaryType(entry?.type)
@@ -12997,22 +13078,28 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  const activeProgressSummary = streaming ? desktopTraceProgressSummary(entries) : '';
-  if (streaming && activeProgressSummary && latestToolGroupIndex === groups.length - 1) {
-    groups = groups.filter((group) => !(
-      group.kind === 'thought-summary'
-      && desktopTraceThoughtTextsSimilar(desktopTraceProgressSummary(group.entries), activeProgressSummary)
-    ));
-    latestToolGroupIndex = groups.reduce((latest, group, index) => (
-      group.kind === 'tools' ? index : latest
-    ), -1);
-  }
+  // Only the last raw trace entry can still be receiving mutable progress.
+  // Reverse-searching the whole stream here promotes an old thought summary
+  // after the next tool event arrives, then removes that thought group and
+  // rewrites the tool header. Apart from losing the thought visually, that
+  // changes the keyed timeline shape and forces the streaming patcher to
+  // replace a previously painted group instead of updating it in place.
+  const latestTraceEntry = Array.isArray(entries) ? entries.at(-1) : null;
+  const activeProgressSummary = streaming && isDesktopMutableProgressTraceEntry(latestTraceEntry)
+    ? desktopTraceProgressSummary(entries)
+    : '';
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
       const isLiveThought = streaming && index === groups.length - 1;
       const progressSummary = isSummaryThought && isLiveThought ? desktopTraceProgressSummary(group.entries) : '';
-      const bodyEntries = group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+      // The active summary is rendered by the compact narration label. Once
+      // another group follows it, keep the old progress entry as prose so
+      // the completed thought remains visible in the timeline.
+      const hideMutableProgress = isSummaryThought && isLiveThought && Boolean(progressSummary);
+      const bodyEntries = hideMutableProgress
+        ? group.entries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry))
+        : group.entries;
       const summaryMarkup = progressSummary
         ? `<div class="live-turn-thought-summary" aria-live="polite"><strong class="t-think" data-live-trace-summary-key="${escHtml(liveTraceSummaryKey(progressSummary))}">${renderThinkingState(progressSummary)}</strong></div>`
         : '';
@@ -13056,8 +13143,22 @@ function desktopWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
   const liveSources = normalizeRecoveredTraceEntries(message?.liveTraceEntries);
-  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
-  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
+  const structuredActions = new Set(liveSources.map((entry) => String(
+    entry?.activity?.action
+      || entry?.extra?.action
+      || entry?.action
+      || entry?.toolName
+      || entry?.extra?.toolName
+      || '',
+  ).trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(
+    entry?.activity?.callId
+      || entry?.extra?.callId
+      || entry?.extra?.toolCallId
+      || entry?.callId
+      || entry?.toolCallId
+      || '',
+  ).trim()).filter(Boolean));
   const finalText = String(message?.content || message?.body?.text || '').replace(/\s+/g, ' ').trim();
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
@@ -13106,7 +13207,10 @@ function desktopWorkflowTraceEntriesForMessage(message) {
       if (!previewData) return;
     }
     if (type === 'skill') type = 'tool';
-    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
+    const thoughtKind = isDesktopTraceThoughtType(type)
+      ? desktopTraceThoughtKind({ ...traceEntry, type, extra })
+      : '';
+    const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
@@ -13785,6 +13889,28 @@ function workflowTransitionLabel(msg) {
   return String(msg?.workflowLabel || '').trim();
 }
 
+function renderWorkflowTransitionLabelHtml(msg, label) {
+  const text = String(label || '').trim();
+  if (!text) return '';
+  // Page-specific bot/team renderers provide this from the same local avatar
+  // markup used by their left navigation. It is intentionally kept out of
+  // durable message storage and only rendered for the current desktop view.
+  const avatarHtml = typeof msg?.workflowAvatarHtml === 'string'
+    ? msg.workflowAvatarHtml.trim()
+    : '';
+  const avatar = avatarHtml
+    ? `<span class="workflow-transition-avatar" aria-hidden="true">${avatarHtml}</span>`
+    : '';
+  return `<div class="workflow-transition-label${avatar ? ' has-agent-avatar' : ''}">${avatar}<span>${escHtml(text)}</span></div>`;
+}
+
+function renderBackgroundAgentWorkflowAvatar(identity) {
+  const name = String(identity?.name || 'Agent').trim() || 'Agent';
+  const initials = name.split(/\s+/).map((part) => part[0] || '').join('').slice(0, 2).toUpperCase();
+  const color = String(identity?.color || 'var(--brand)').trim();
+  return `<span class="background-spawn-avatar" style="--background-agent-color:${escHtml(color)};width:20px;height:20px;font-size:8px">${escHtml(initials)}</span>`;
+}
+
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
   const sourceEntries = Array.isArray(options.entries)
     ? options.entries
@@ -13862,7 +13988,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}" data-chat-row-key="${escHtml(String(key || `message:${originalIndex}`))}" data-chat-row-signature="${escHtml(`${String(signature || desktopTimelineRowSignature(msg))}:${isEditingThisUserMessage ? 'editing' : 'view'}`)}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         <div class="msg-bubble-stack">
-          ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
+          ${renderWorkflowTransitionLabelHtml(msg, workflowLabel)}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
                 ${assistantWorkTimerHtml}
@@ -14167,6 +14293,8 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
       agentName: identity.name,
       agentColor: identity.color,
     }),
+    workflowLabel: identity.name,
+    workflowAvatarHtml: renderBackgroundAgentWorkflowAvatar(identity),
     // Persisted structured traces are authoritative. Older records only have
     // process events, so retain the event-to-trace recovery fallback.
     liveTraceEntries: Array.isArray(record.liveTraceEntries) && record.liveTraceEntries.length
@@ -17386,17 +17514,17 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
     const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
-    const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+    const thoughtKind = isThoughtLike ? desktopTraceThoughtKind({ type: normalizedType, extra }) : '';
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
     if (append && last && last.type === normalizedType
-      && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+      && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)) {
       last.text = `${last.text || ''}${content}`;
       if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     } else {
       const trimmed = content.trim();
       if (!trimmed) return;
       if (last && last.type === normalizedType
-        && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+        && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)
         && String(last.text || '').trim() === trimmed) return;
       streamState.liveTraceEntries.push({
         id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -18112,11 +18240,17 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'thinking_delta': {
 	            const chunk = String(event.thinking || event.text || '');
 	            if (chunk) {
-	              pendingThinkingBurst += chunk;
-	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
-	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
-	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
-	                // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+              const isSummary = chatProgressVisibility(event) === 'summary';
+              if (!isSummary) {
+                pendingThinkingBurst += chunk;
+                streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
+                if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
+              }
+              if (isSummary) {
+                // reasoning_summary is already an explicit user-safe progress channel.
+                // Treat every transport delta as part of the single replaceable status slot;
+                // classifying individual chunks leaks markdown/token boundaries into the UI.
+                setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	              }
 	            }
 	            break;
@@ -18125,18 +18259,24 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'reasoning_summary_delta': {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
-	              collectTurnThinking(chunk);
-	              // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+              // reasoning_summary is already an explicit user-safe progress channel.
+              // Treat every transport delta as part of the single replaceable status slot;
+              // classifying individual chunks leaks markdown/token boundaries into the UI.
+              setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
 	            }
 	            break;
 	          }
 
 	          case 'agent_thought': {
-	            const thoughtText = String(event.text || '').trim();
+	            const thoughtText = String(event.thinking || event.text || '').trim();
 	            const visibility = chatProgressVisibility(event);
 	            if (thoughtText && visibility !== 'private') {
-	              collectTurnThinking(thoughtText);
-	              setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility });
+	              if (isDesktopSummaryThoughtEvent(event)) {
+	                setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	              } else {
+	                collectTurnThinking(thoughtText);
+	                appendDesktopDurableThought(streamState, thoughtText, appendLiveTrace, event);
+	              }
 	            }
 	            break;
 	          }
@@ -18144,13 +18284,14 @@ async function sendChat(queuedMessage = null, options = {}) {
 	          case 'thinking':
 	            if (event.thinking && String(event.thinking).trim() && chatProgressVisibility(event) !== 'private') {
 	              const thinkingText = String(event.thinking).trim();
-	              collectTurnThinking(thinkingText);
-	              setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, {
-	                replace: true,
-	                visibility: chatProgressVisibility(event),
-	              });
-	            }
-	            break;
+	              if (isDesktopSummaryThoughtEvent(event)) {
+	                setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace, { replace: true, visibility: 'summary' });
+	              } else {
+	                collectTurnThinking(thinkingText);
+	                appendDesktopDurableThought(streamState, thinkingText, appendLiveTrace, event);
+	              }
+            }
+            break;
 
           case 'model_stream_event': {
             const modelEvent = event.event && typeof event.event === 'object' ? event.event : {};
@@ -19179,9 +19320,11 @@ function backgroundSpawnPreview(value, max = 180) {
 function mergeBackgroundReasoningSummary(trace, text, extra, index, { delta = false } = {}) {
   const next = String(text || '').trim();
   if (!next) return;
-  const previous = [...trace].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  const latest = trace.at(-1);
+  const previous = latest
+    && String(latest?.extra?.source || '').toLowerCase() === 'agent_progress'
+    ? latest
+    : null;
   const visibleExtra = {
     ...extra,
     source: 'agent_progress',
@@ -19259,8 +19402,9 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
       const previous = trace[trace.length - 1];
       const visibleExtra = {
         ...extra,
-        source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_progress')),
+        source: String(extra.source || (visibility === 'summary' ? 'reasoning_summary' : 'agent_thought')),
         visibility,
+        ...(visibility === 'summary' ? { reasoningKind: 'summary' } : { reasoningKind: 'full_thought' }),
       };
       if (visibility === 'summary') {
         mergeBackgroundReasoningSummary(trace, text, extra, index, { delta: eventType === 'thinking_delta' });
@@ -19339,7 +19483,18 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
       const text = String(msg.thinking || msg.text || '').trim();
       const visibility = chatProgressVisibility(msg);
       return text && visibility !== 'private'
-        ? { ts, type: 'think', actor: 'Background Agent', content: text, extra: { ...extra, source: visibility === 'summary' ? 'reasoning_summary' : 'agent_progress', visibility } }
+        ? {
+          ts,
+          type: 'think',
+          actor: 'Background Agent',
+          content: text,
+          extra: {
+            ...extra,
+            source: visibility === 'summary' ? 'reasoning_summary' : 'agent_thought',
+            visibility,
+            reasoningKind: visibility === 'summary' ? 'summary' : 'full_thought',
+          },
+        }
         : null;
     }
     case 'thinking_delta': {
@@ -46672,10 +46827,10 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = isDesktopTraceThoughtType(normalizedType);
-  const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+  const thoughtKind = isThoughtLike ? desktopTraceThoughtKind({ type: normalizedType, extra }) : '';
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
   if (append && last && last.type === normalizedType
-    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+    && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)) {
     last.text = `${last.text || ''}${content}`;
     if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     return;
@@ -46683,7 +46838,7 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   const trimmed = content.trim();
   if (!trimmed) return;
   if (last && last.type === normalizedType
-    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+    && (!isThoughtLike || desktopTraceThoughtKind(last) === thoughtKind)
     && String(last.text || '').trim() === trimmed) return;
   streamState.liveTraceEntries.push({
     id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -46704,9 +46859,16 @@ function setDesktopLiveProgressNarration(streamState, text, appendTrace, { repla
   const incoming = String(text || '');
   if (!incoming) return false;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
-  const existing = [...streamState.liveTraceEntries].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  // A progress narration is mutable only while it is the current trace
+  // segment. Searching backwards here lets a later summary (after a tool
+  // event) rewrite an older narration and collapse the visible timeline.
+  const latestTraceEntry = streamState.liveTraceEntries.at(-1);
+  const latestTraceExtra = latestTraceEntry?.extra || {};
+  const existing = latestTraceEntry
+    && String(latestTraceEntry.type || '').toLowerCase() === 'think'
+    && String(latestTraceExtra.source || latestTraceEntry.source || '').toLowerCase() === 'agent_progress'
+    ? latestTraceEntry
+    : null;
   if (!existing) {
     appendTrace('think', incoming, { extra: { visibility, source: 'agent_progress', reasoningKind: 'summary' } });
     return true;
@@ -47411,7 +47573,10 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-      // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+      // reasoning_summary is already an explicit user-safe progress channel.
+      // Treat every transport delta as part of the single replaceable status slot;
+      // classifying individual chunks leaks markdown/token boundaries into the UI.
+      setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking_delta') {
@@ -47419,23 +47584,27 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-      streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
-      if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
+      const isSummary = chatProgressVisibility(evt) === 'summary';
+      if (!isSummary) streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
+      if (isSummary) {
         const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
-        // reasoning_summary is already an explicit user-safe progress channel.\n              // Treat every transport delta as part of the single replaceable status slot;\n              // classifying individual chunks leaks markdown/token boundaries into the UI.\n              setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+        // reasoning_summary is already an explicit user-safe progress channel.
+        // Treat every transport delta as part of the single replaceable status slot;
+        // classifying individual chunks leaks markdown/token boundaries into the UI.
+        setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
-  } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
+	} else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
     const visibility = chatProgressVisibility(evt);
     if (text && visibility !== 'private') {
-      setDesktopLiveProgressNarration(
-        streamState,
-        text,
-        (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options),
-        { replace: true, visibility },
-      );
+      const appendTrace = (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options);
+      if (isDesktopSummaryThoughtEvent(evt)) {
+        setDesktopLiveProgressNarration(streamState, text, appendTrace, { replace: true, visibility: 'summary' });
+      } else {
+        appendDesktopDurableThought(streamState, text, appendTrace, evt);
+      }
       renderIfViewing();
     }
   } else if (evt.type === 'model_stream_event') {

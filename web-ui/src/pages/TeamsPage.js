@@ -55,6 +55,7 @@ let teamMemberIds = new Set(); // agentIds belonging to any team
 let activeTeamId = null;      // currently focused team (board open)
 let teamBoardTab = 'context'; // context | memory | runs | chat
 let teamRuns = [];            // cached runs for active team
+let teamSchedules = [];       // schedules belonging to the team or one of its agents
 let teamRoomState = null;     // live room state for active team
 let teamRunExpanded = {};     // runId -> expanded/collapsed in Runs tab
 let teamChatMessages = [];    // cached chat for active team
@@ -65,8 +66,8 @@ let teamWorkspaceTree = [];   // cached workspace tree (nested) for active team
 let teamWorkspaceData = null; // full workspace API response (incl. workspacePath)
 let teamMemoryFiles = { memory: null, lastRun: null, pending: null, loading: false };
 let teamSubagentDetailId = null;     // currently-open subagent inside the Subagents tab
-let teamSubagentDetailTab = 'overview'; // overview | systemprompt | heartbeat
-let teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+let teamSubagentDetailTab = 'overview'; // overview | memory | heartbeat
+let teamSubagentDetail = { systemPrompt: '', memoryNotes: '', memoryExists: false, heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
 let _teamCmEditors = {};      // CodeMirror instances for the Subagents tab editors
 let teamWorkspaceOpenFile = null; // { teamId, relpath, name, content, modifiedAt, dirty, mode }
 let _teamWorkspaceCm = null;
@@ -1166,8 +1167,21 @@ function appendTeamDesktopLiveTrace(stream, type, text, { append = false, extra 
   if (!content) return;
   if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase() === 'reasoning_summary' ? 'think' : String(type || 'info').toLowerCase();
+  const incomingExtra = extra && typeof extra === 'object' ? extra : {};
+  const isSummary = normalizedType === 'think' && (
+    String(type || '').toLowerCase() === 'reasoning_summary'
+    || String(incomingExtra.source || '').toLowerCase() === 'reasoning_summary'
+    || String(incomingExtra.reasoningKind || '').toLowerCase() === 'summary'
+    || String(incomingExtra.visibility || '').toLowerCase() === 'summary'
+  );
   const safeExtra = normalizedType === 'think'
-    ? { source: 'reasoning_summary', visibility: 'user', ...(extra && typeof extra === 'object' ? extra : {}) }
+    ? {
+      source: isSummary ? 'agent_progress' : 'agent_thought',
+      visibility: 'user',
+      ...(isSummary ? { reasoningKind: 'summary' } : {}),
+      ...incomingExtra,
+      ...(isSummary ? { source: 'agent_progress', visibility: 'user', reasoningKind: 'summary' } : {}),
+    }
     : (extra && typeof extra === 'object' ? extra : null);
   const last = stream.liveTraceEntries[stream.liveTraceEntries.length - 1];
   const incomingSource = String(safeExtra?.source || '').toLowerCase();
@@ -1194,10 +1208,30 @@ function appendTeamDesktopLiveTrace(stream, type, text, { append = false, extra 
   });
 }
 
+function teamEventSource(event) {
+  return String(event?.source || event?.extra?.source || '').trim().toLowerCase();
+}
+
 function applyTeamDesktopToolActivity(stream, phase, event) {
   if (!stream) return;
   if (!Array.isArray(stream.liveTraceEntries)) stream.liveTraceEntries = [];
   applyToolActivityEvent(stream.liveTraceEntries, phase, event);
+}
+
+function appendTeamVisibleThought(stream, thought, event = {}) {
+  const source = String(event?.source || event?.extra?.source || '').trim().toLowerCase();
+  const reasoningKind = String(event?.reasoningKind || event?.presentationKind || event?.extra?.reasoningKind || '').trim().toLowerCase();
+  const visibility = String(event?.visibility || event?.extra?.visibility || '').trim().toLowerCase();
+  const isSummary = source === 'reasoning_summary' || reasoningKind === 'summary' || visibility === 'summary';
+  appendTeamDesktopLiveTrace(stream, isSummary ? 'reasoning_summary' : 'think', thought, {
+    append: isSummary,
+    extra: {
+      source: isSummary ? 'agent_progress' : 'agent_thought',
+      visibility: 'user',
+      ...(event?.actor ? { actor: event.actor } : {}),
+      ...(isSummary ? { reasoningKind: 'summary' } : {}),
+    },
+  });
 }
 
 function pushTeamChatProgressLine(line) {
@@ -1306,9 +1340,9 @@ function formatTeamDispatchElapsed(stream) {
 }
 
 function refreshTeamDispatchTicker() {
-  const hasActive = Object.values(teamDispatchStreamsByTeam).some((streamMap) =>
+  const hasActive = [teamDispatchStreamsByTeam, teamMemberStreamsByTeam, teamManagerStreamsByTeam].some((streamsByTeam) => Object.values(streamsByTeam).some((streamMap) =>
     Object.values(streamMap || {}).some((stream) => stream && stream.completed !== true)
-  );
+  ));
   if (!hasActive) {
     if (teamDispatchTicker) {
       clearInterval(teamDispatchTicker);
@@ -1318,8 +1352,17 @@ function refreshTeamDispatchTicker() {
   }
   if (teamDispatchTicker) return;
   teamDispatchTicker = setInterval(() => {
-    if (activeTeamId && teamBoardTab === 'chat' && getTeamDispatchStreams(activeTeamId).length > 0) {
+    const hasLiveTeamStream = activeTeamId && (
+      getTeamDispatchStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+      || getTeamMemberStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+      || getTeamManagerStreams(activeTeamId).some((stream) => stream && stream.completed !== true)
+    );
+    if (activeTeamId && teamBoardTab === 'chat' && hasLiveTeamStream) {
       renderActiveTeamChat(activeTeamId, { forceBottom: false });
+    } else if (activeTeamId && teamBoardTab === 'runs' && hasLiveTeamStream) {
+      const contentEl = document.getElementById('team-tab-content');
+      const team = getTeamById(activeTeamId);
+      if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
     }
   }, 1000);
 }
@@ -1329,6 +1372,12 @@ function scheduleTeamDispatchRefresh(teamId, forceBottom = false) {
   if (teamDispatchRefreshTimers[teamId]) return;
   teamDispatchRefreshTimers[teamId] = setTimeout(() => {
     delete teamDispatchRefreshTimers[teamId];
+    if (activeTeamId === teamId && teamBoardTab === 'runs') {
+      const contentEl = document.getElementById('team-tab-content');
+      const team = getTeamById(teamId);
+      if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      return;
+    }
     refreshVisibleTeamChat(teamId, forceBottom);
   }, 70);
 }
@@ -1403,7 +1452,7 @@ function applyTeamManagerStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -1422,7 +1471,12 @@ function applyTeamManagerStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -1590,7 +1644,7 @@ function applyTeamMemberStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -1609,7 +1663,12 @@ function applyTeamMemberStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -1832,6 +1891,12 @@ function renderTeamChatBubbleFrame(options) {
   `;
 }
 
+function renderTeamActorLine(label, status = '', agentId = '') {
+  const cleanLabel = String(label || 'Team member').trim() || 'Team member';
+  const icon = cleanLabel.toLowerCase() === 'you' ? '' : renderTeamWorkflowAvatar(agentId, cleanLabel);
+  return `<div class="team-chat-actor-line" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:var(--muted);font-weight:600">${icon}<span>${escHtml(cleanLabel)}${status ? ` · ${escHtml(status)}` : ''}</span></div>`;
+}
+
 function renderTeamChatMessageBubble(message) {
   const isUser = message.from === 'user';
   const label = String(message.fromName || (isUser ? 'You' : message.from === 'manager' ? 'Manager' : 'Subagent'));
@@ -1852,11 +1917,11 @@ function renderTeamChatMessageBubble(message) {
     : '';
   return renderTeamChatBubbleFrame({
     align: isUser ? 'right' : 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(label)} · ${timeLabel}</div>`,
+    actorLine: renderTeamActorLine(label, timeLabel, message.agentId),
     targetLine,
-    bubbleBg: isUser ? 'linear-gradient(180deg, rgba(76,141,255,0.98) 0%, rgba(47,111,255,0.98) 100%)' : 'var(--panel-2)',
-    bubbleColor: isUser ? '#f7fbff' : 'var(--text)',
-    bubbleBorder: isUser ? '1px solid rgba(125,182,255,0.34)' : '1px solid var(--line)',
+    bubbleBg: isUser ? 'var(--composer-bg)' : 'var(--panel-2)',
+    bubbleColor: 'var(--text)',
+    bubbleBorder: isUser ? '1px solid transparent' : '1px solid var(--line)',
     radius: isUser ? '18px 18px 8px 18px' : '18px 18px 18px 8px',
     shadow: isUser ? '0 10px 24px rgba(46,111,255,0.18)' : '0 6px 18px rgba(0,0,0,0.10)',
     bodyHtml: `${renderTeamAttachmentPreviews(attachments, activeTeamId, message.id)}${renderedContent ? `<div>${renderedContent}</div>` : ''}`,
@@ -1882,7 +1947,7 @@ function renderTeamManagerBackgroundStreamingBubble(stream) {
     : '';
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    actorLine: renderTeamActorLine('Manager', stream.completed ? 'finalizing' : 'live'),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1916,7 +1981,7 @@ function renderTeamMemberStreamingBubble(stream) {
     : '';
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">${escHtml(String(stream.agentName || stream.agentId || 'Team Member'))} · ${escHtml(stream.completed ? 'finalizing' : 'live')}</div>`,
+    actorLine: renderTeamActorLine(String(stream.agentName || stream.agentId || 'Team Member'), stream.completed ? 'finalizing' : 'live', stream.agentId),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1945,7 +2010,7 @@ function renderTeamChatStreamingBubble(team) {
   const processHtml = renderTeamChatProcessPill(teamChatStreamingState.processEntries || [], 'team_stream_proc');
   return renderTeamChatBubbleFrame({
     align: 'left',
-    actorLine: `<div style="font-size:10px;color:var(--muted);font-weight:600">Manager · live</div>`,
+    actorLine: renderTeamActorLine('Manager', 'live'),
     radius: '18px 18px 18px 8px',
     bubbleBg: 'var(--panel-2)',
     bubbleColor: 'var(--text)',
@@ -1972,6 +2037,11 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
   if (!teamChatStreamingState || teamChatStreamingState.teamId !== teamId || activeTeamId !== teamId || teamBoardTab !== 'chat') return;
   refreshTeamChatComposerState(teamId);
   if (!teamChatStreamingState.managerStarted) return;
+  const messagesBefore = document.getElementById('team-chat-messages');
+  const previousScrollTop = messagesBefore?.scrollTop || 0;
+  const wasNearBottom = messagesBefore
+    ? (messagesBefore.scrollHeight - messagesBefore.scrollTop - messagesBefore.clientHeight) < 96
+    : true;
   if (force) {
     renderActiveTeamChat(teamId, { forceBottom: true });
   } else {
@@ -1979,7 +2049,7 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
     if (textEl) {
       textEl.textContent = String(teamChatStreamingState.content || teamChatStreamingState.finalReply || '');
     } else {
-      renderActiveTeamChat(teamId, { forceBottom: true });
+      renderActiveTeamChat(teamId, { forceBottom: false });
     }
     const progressEl = document.getElementById('team-chat-streaming-progress-lines');
     if (progressEl) {
@@ -1993,7 +2063,12 @@ function refreshTeamChatStreamingUI(teamId, force = false) {
   }
   requestAnimationFrame(() => {
     const msgs = document.getElementById('team-chat-messages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    if (!msgs) return;
+    if (force || wasNearBottom) {
+      msgs.scrollTop = msgs.scrollHeight;
+      return;
+    }
+    msgs.scrollTop = Math.min(previousScrollTop, Math.max(0, msgs.scrollHeight - msgs.clientHeight));
   });
 }
 
@@ -2107,7 +2182,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
       if (chunk) {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = `${teamChatStreamingState.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(teamChatStreamingState, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamChatProgressLine('Thinking...');
@@ -2131,6 +2206,7 @@ function applyTeamChatStreamFrame(teamId, frame) {
         markTeamChatManagerStarted(teamId);
         teamChatStreamingState.thinking = teamChatStreamingState.thinking ? `${teamChatStreamingState.thinking}\n\n${thought}` : thought;
         addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
+        appendTeamVisibleThought(teamChatStreamingState, thought, event);
       }
       break;
     }
@@ -2276,7 +2352,7 @@ function applyTeamDispatchStreamEvent(msg) {
       const chunk = String(event.thinking || event.text || '');
       if (chunk) {
         stream.thinking = `${stream.thinking || ''}${chunk}`;
-        if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+        if (teamEventSource(event) === 'reasoning_summary') {
           appendTeamDesktopLiveTrace(stream, 'reasoning_summary', chunk, { append: true });
         }
         pushTeamDispatchProgressLine(stream, 'Thinking...');
@@ -2295,7 +2371,12 @@ function applyTeamDispatchStreamEvent(msg) {
       const thought = String(event.thinking || event.text || '').trim();
       if (!thought || chatProgressVisibility(event) === 'private') break;
       stream.thinking = stream.thinking ? `${stream.thinking}\n\n${thought}` : thought;
-      addTeamDispatchProcessEntry(stream, 'think', thought, event.actor ? { actor: event.actor } : undefined);
+      addTeamDispatchProcessEntry(stream, 'think', thought, {
+        ...(event.actor ? { actor: event.actor } : {}),
+        source: String(event.source || '').trim() || 'agent_thought',
+        visibility: 'user',
+      });
+      appendTeamVisibleThought(stream, thought, event);
       break;
     }
     case 'info': {
@@ -2415,6 +2496,9 @@ function normalizeTeamDesktopChatMessage(message) {
   const timestamp = Number(message?.timestamp || message?.ts || Date.now()) || Date.now();
   const durationMs = Number(message?.workDurationMs || metadata.durationMs || (Number(message?.duration || 0) * 1000)) || 0;
   const actorLabel = String(message?.fromName || (isUser ? '' : message?.from === 'manager' ? 'Manager' : 'Team member')).trim();
+  const workflowAvatarHtml = !isUser
+    ? renderTeamWorkflowAvatar(message?.agentId || metadata.agentId, actorLabel)
+    : '';
   return {
     ...message,
     role: isUser ? 'user' : 'assistant',
@@ -2427,7 +2511,24 @@ function normalizeTeamDesktopChatMessage(message) {
     workEndedAt: Number(message?.workEndedAt || metadata.finishedAt || (durationMs ? timestamp + durationMs : 0)) || 0,
     workDurationMs: durationMs,
     ...(actorLabel && !isUser ? { workflowLabel: actorLabel } : {}),
+    ...(workflowAvatarHtml ? { workflowAvatarHtml } : {}),
   };
+}
+
+function renderTeamWorkflowAvatar(agentId, label = '') {
+  const cleanAgentId = String(agentId || '').trim();
+  const isManager = !cleanAgentId || String(label || '').trim().toLowerCase() === 'manager';
+  const team = getTeamById(activeTeamId);
+  const memberIndex = cleanAgentId && team
+    ? (team.subagentIds || []).findIndex((id) => String(id) === cleanAgentId)
+    : -1;
+  const colors = ['#4c8dff', '#31b884', '#d6a64f', '#e05c5c', '#a78bfa', '#4c8dff'];
+  const emojis = ['🧠', '🤖', '👾', '🦾', '⚡', '🛸'];
+  const agent = cleanAgentId ? _findAgentInTeam(cleanAgentId) : null;
+  const paletteIndex = memberIndex >= 0 ? (memberIndex + 1) % colors.length : 0;
+  const emoji = isManager ? '🧠' : (agent?.emoji || emojis[paletteIndex]);
+  const color = isManager ? colors[0] : colors[paletteIndex];
+  return `<span class="team-workflow-avatar" style="display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;flex:0 0 20px;border:1px solid ${color};border-radius:7px;background:${color};font-size:12px;line-height:1">${escHtml(emoji)}</span>`;
 }
 
 function teamDesktopStreamMessage(stream, label, idPrefix) {
@@ -2442,15 +2543,18 @@ function teamDesktopStreamMessage(stream, label, idPrefix) {
     workStartedAt: startedAt,
     workEndedAt: finishedAt,
     workDurationMs: durationMs,
+    thinking: String(stream?.thinking || '').trim() || undefined,
     processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
     liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
     liveProgressLines: Array.isArray(stream?.progressLines) ? [...stream.progressLines] : [],
     workflowLabel: label,
     _backgroundAgentLive: stream?.completed !== true,
     streaming: stream?.completed !== true,
+    workflowAvatarHtml: renderTeamWorkflowAvatar(stream?.agentId, label),
     metadata: {
       processEntries: Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [],
       liveTraceEntries: Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [],
+      thinking: String(stream?.thinking || '').trim() || undefined,
       startedAt,
       finishedAt,
       durationMs,
@@ -3275,16 +3379,18 @@ function closeTeamBoard() {
 
 async function loadTeamBoardData(teamId) {
   try {
-    const [runsData, chatData, workspaceData, agentsData] = await Promise.all([
+    const [runsData, chatData, workspaceData, agentsData, schedulesData] = await Promise.all([
       api(`/api/teams/${teamId}/runs?limit=50`),
       api(`/api/teams/${teamId}/chat?limit=100`),
       api(`/api/teams/${teamId}/workspace`).catch(() => ({ files: [] })),
       api('/api/agents').catch(() => ({ agents: [] })),
+      api('/api/schedules').catch(() => ({ schedules: [] })),
     ]);
     if (agentsData?.agents) {
       window._allAgentsForTeam = agentsData.agents;
     }
     teamRuns = runsData.runs || [];
+    teamSchedules = Array.isArray(schedulesData?.schedules) ? schedulesData.schedules : [];
     teamRoomState = runsData.roomState || null;
     const nextLive = {};
     for (const run of teamRuns) {
@@ -3322,10 +3428,11 @@ function renderTeamBoard(teamId) {
   if (!header || !body) return;
   const runWorking = isTeamRunWorking(teamId);
   const runAborting = teamRunAbortInFlightByTeam[teamId] === true;
+  const teamEmoji = String(team.emoji || '').trim().toLowerCase() === 'team' ? '' : (team.emoji || '🏠');
 
   header.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">
-      <div style="font-size:22px">${team.emoji || '🏠'}</div>
+      ${teamEmoji ? `<div style="font-size:22px" aria-hidden="true">${escHtml(teamEmoji)}</div>` : ''}
       <div style="min-width:0">
         <div id="team-name-display-${teamId}" style="font-size:15px;font-weight:800;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Click to rename" onclick="startTeamRename('${teamId}')">${escHtml(team.name)}<span style="font-size:11px;opacity:0;transition:opacity 0.15s" class="team-rename-hint">✏️</span></div>
         <input id="team-name-input-${teamId}" type="text" value="${escHtml(team.name)}" style="display:none;font-size:15px;font-weight:800;letter-spacing:-0.01em;border:none;border-bottom:2px solid var(--brand);outline:none;background:transparent;color:var(--text);padding:0;width:220px" />
@@ -3394,10 +3501,11 @@ async function switchTeamTab(tab, teamId) {
     setTimeout(() => _mountWorkspaceCm(), 50);
   }
   if (tab === 'subagents') {
-    // First open: pick the first agent if none selected
+    // First open: default to the manager, then the first subagent.
     const team = teamsData.find(t => t.id === teamId);
-    if (team && !teamSubagentDetailId && (team.subagentIds || []).length > 0) {
-      openTeamSubagentDetail(teamId, team.subagentIds[0]);
+    const managerId = team ? String(team.managerAgentId || `${team.id}_manager`) : '';
+    if (team && !teamSubagentDetailId && (managerId || (team.subagentIds || []).length > 0)) {
+      openTeamSubagentDetail(teamId, managerId || team.subagentIds[0]);
     }
   }
 }
@@ -4133,6 +4241,14 @@ function _findAgentInTeam(agentId) {
   return (window._allAgentsForTeam || []).find(a => a.id === agentId) || { id: agentId, name: agentId };
 }
 
+function getTeamManagerId(team) {
+  return String(team?.managerAgentId || (team?.id ? `${team.id}_manager` : '')).trim();
+}
+
+function renderTeamAgentPanelIcon() {
+  return `<span aria-hidden="true" style="width:22px;height:22px;display:inline-grid;place-items:center;flex:0 0 22px;border-radius:7px;color:var(--pm-gold,var(--brand));background:var(--sidebar-icon-bg,var(--panel));border:1px solid var(--sidebar-icon-border,var(--line))"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="15" height="15"><rect x="4" y="5" width="8" height="7" rx="2"/><circle cx="6" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="8" r="1" fill="currentColor" stroke="none"/><line x1="8" y1="2" x2="8" y2="5"/><circle cx="8" cy="1.5" r="1" fill="currentColor" stroke="none"/></svg></span>`;
+}
+
 async function refreshTeamSubagentOverviewAfterAgentSave(agentId) {
   try {
     const data = await api('/api/agents');
@@ -4153,29 +4269,35 @@ registerAgentVoicePickerOnSaved('ts-voice', refreshTeamSubagentOverviewAfterAgen
 
 function renderTeamSubagentsTab(team) {
   const agentIds = team.subagentIds || [];
-  if (agentIds.length === 0) {
+  const managerId = getTeamManagerId(team);
+  const allIds = [managerId, ...agentIds].filter((id, index, ids) => id && ids.indexOf(id) === index);
+  if (allIds.length === 0) {
     return `<div style="text-align:center;color:var(--muted);font-size:13px;padding:32px 16px">
-      <div style="font-weight:700;margin-bottom:6px">No subagents on this team</div>
+      <div style="font-weight:700;margin-bottom:6px">No agents on this team</div>
       <div style="font-size:12px;line-height:1.6">Add agents from the Context tab.</div>
     </div>`;
   }
-  const activeId = teamSubagentDetailId && agentIds.includes(teamSubagentDetailId) ? teamSubagentDetailId : agentIds[0];
-  const list = agentIds.map(id => {
+  const activeId = teamSubagentDetailId && allIds.includes(teamSubagentDetailId) ? teamSubagentDetailId : allIds[0];
+  const renderAgentRow = (id, isManager = false) => {
     const ag = _findAgentInTeam(id);
     const isActive = id === activeId;
     const sched = ag.cronSchedule || '';
-    return `<button onclick="openTeamSubagentDetail('${team.id}','${escHtml(id)}')" style="text-align:left;border:1px solid ${isActive?'var(--brand)':'var(--line)'};background:${isActive?'var(--panel)':'var(--panel-2)'};border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column;gap:2px;width:100%">
-      <div style="font-size:12px;font-weight:700;color:${isActive?'var(--brand)':'var(--text)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || id)}</div>
-      <div style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace">${escHtml(id)}</div>
+    const displayName = isManager && (!ag.name || ag.name === id) ? 'Manager' : (ag.name || id);
+    return `<button onclick="openTeamSubagentDetail('${team.id}','${escHtml(id)}')" style="text-align:left;border:1px solid ${isActive?'var(--brand)':'var(--line)'};background:${isActive?'var(--panel)':'var(--panel-2)'};border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:flex-start;gap:8px;width:100%">
+      ${renderTeamAgentPanelIcon()}<span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-size:12px;font-weight:700;color:${isActive?'var(--brand)':'var(--text)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(displayName)}</span>
+      <span style="font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace">${escHtml(id)}</span>
       ${sched ? `<div style="font-size:10px;color:#0d4faf;margin-top:2px">${escHtml(sched)}</div>` : ''}
-    </button>`;
-  }).join('');
+      </span></button>`;
+  };
+  const managerHtml = managerId ? renderAgentRow(managerId, true) : '';
+  const subagentHtml = agentIds.map(id => renderAgentRow(id)).join('');
 
   return `
     <div style="display:flex;gap:12px;flex:1;min-height:0;height:calc(100vh - 220px)">
       <div style="width:220px;flex-shrink:0;display:flex;flex-direction:column;gap:6px;overflow-y:auto">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:0 2px 4px">Subagents (${agentIds.length})</div>
-        ${list}
+        ${managerHtml ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:0 2px 4px">Manager</div>${managerHtml}` : ''}
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);padding:${managerHtml ? '10px' : '0'} 2px 4px">Subagents (${agentIds.length})</div>
+        ${subagentHtml || '<div style="font-size:11px;color:var(--muted);padding:4px 2px">No subagents on this team.</div>'}
       </div>
       <div id="team-subagent-detail-panel" style="flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden">
         ${renderTeamSubagentDetail(team, activeId)}
@@ -4186,16 +4308,18 @@ function renderTeamSubagentsTab(team) {
 function renderTeamSubagentDetail(team, agentId) {
   if (!agentId) return '<div style="padding:24px;color:var(--muted);font-size:13px;text-align:center">Select a subagent to view details.</div>';
   const ag = _findAgentInTeam(agentId);
-  const tabs = ['overview','systemprompt','heartbeat'];
-  const labels = { overview:'Overview', systemprompt:'AGENT.md', heartbeat:'Heartbeat' };
+  const isManager = agentId === getTeamManagerId(team);
+  const displayName = isManager && (!ag.name || ag.name === agentId) ? 'Manager' : (ag.name || agentId);
+  const tabs = ['overview','memory','heartbeat'];
+  const labels = { overview:'Overview', memory:'Memory', heartbeat:'Heartbeat' };
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);flex-shrink:0">
       <div style="min-width:0">
-        <div style="font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.name || agentId)}</div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${renderTeamAgentPanelIcon()}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(displayName)}</span></div>
         ${ag.description ? `<div style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(ag.description)}</div>` : ''}
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0">
-        <button onclick="runSubagentNow('${escHtml(agentId)}',this,'${team.id}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--brand);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Run Now</button>
+        <button onclick="${isManager ? `triggerManagerReview('${team.id}')` : `runSubagentNow('${escHtml(agentId)}',this,'${team.id}')`}" style="border:1px solid var(--line);background:var(--panel-2);color:var(--brand);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">${isManager ? 'Review Now' : 'Run Now'}</button>
       </div>
     </div>
     <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0">
@@ -4212,7 +4336,7 @@ function renderTeamSubagentDetail(team, agentId) {
 function renderTeamSubagentDetailBody(team, agentId) {
   switch (teamSubagentDetailTab) {
     case 'overview': return renderTeamSubagentOverview(team, agentId);
-    case 'systemprompt': return renderTeamSubagentSystemPrompt(team, agentId);
+    case 'memory': return renderTeamSubagentMemory(team, agentId);
     case 'heartbeat': return renderTeamSubagentHeartbeat(team, agentId);
     default: return '';
   }
@@ -4264,21 +4388,24 @@ function renderTeamSubagentOverview(team, agentId) {
     </div>`;
 }
 
-function renderTeamSubagentSystemPrompt(team, agentId) {
+function renderTeamSubagentMemory(team, agentId) {
+  const files = [
+    { title: 'AGENT.md', content: teamSubagentDetail.systemPrompt, exists: !!teamSubagentDetail.systemPrompt, empty: 'No AGENT.md is set for this agent yet.' },
+    { title: 'MEMORY.md', content: teamSubagentDetail.memoryNotes, exists: teamSubagentDetail.memoryExists, empty: 'No personal memory file exists for this agent yet.' },
+  ];
   return `
-    <div style="display:flex;flex-direction:column;gap:10px;height:100%">
+    <div style="display:flex;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:12px;font-weight:800">AGENT.md</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Defines this agent's persona, role, and constraints</div>
+          <div style="font-size:12px;font-weight:800">Memory</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Private, read-only context for this team-scoped agent</div>
         </div>
-        <div style="display:flex;gap:6px">
-          <button onclick="reloadTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">Reload</button>
-          <button onclick="saveTeamSubagentSystemPrompt('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
-        </div>
+        <button onclick="reloadTeamSubagentMemory('${team.id}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer">↻ Reload</button>
       </div>
-      <div id="ts-sysprompt-cm-${escHtml(agentId)}" style="flex:1;min-height:340px;border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
-      <div id="ts-sysprompt-status-${escHtml(agentId)}" style="font-size:11px;color:var(--muted);min-height:14px"></div>
+      ${files.map(file => `<details style="border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden">
+        <summary style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:11px 12px;font-size:12px;font-weight:800;list-style:none"><span>📄 ${file.title}</span><span style="font-size:10px;color:var(--muted);font-weight:700">${file.exists ? 'Read-only' : 'Not found'}</span></summary>
+        <div style="border-top:1px solid var(--line)">${file.content ? `<pre style="margin:0;max-height:360px;overflow:auto;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text)">${escHtml(file.content)}</pre>` : `<div style="padding:14px;color:var(--muted);font-size:12px">${file.empty}</div>`}</div>
+      </details>`).join('')}
     </div>`;
 }
 
@@ -4347,17 +4474,20 @@ function _mountCm(elId, value, mode) {
 async function openTeamSubagentDetail(teamId, agentId) {
   teamSubagentDetailId = agentId;
   // Reset detail caches when switching agents
-  teamSubagentDetail = { systemPrompt: '', heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
+  teamSubagentDetail = { systemPrompt: '', memoryNotes: '', memoryExists: false, heartbeatMd: '', heartbeatCfg: { enabled: false, intervalMinutes: 30 }, contextRefs: [] };
   _disposeTeamCmEditors();
 
   // Fetch in parallel
-  const [sp, hbMd, hbCfg, refs] = await Promise.all([
+  const [sp, memory, hbMd, hbCfg, refs] = await Promise.all([
     api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({ content: '' })),
+    api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => ({ content: '', exists: false })),
     api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({ content: '' })),
     api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({ config: {} })),
     api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ references: [] })),
   ]);
   teamSubagentDetail.systemPrompt = sp.content || '';
+  teamSubagentDetail.memoryNotes = memory.content || '';
+  teamSubagentDetail.memoryExists = memory.exists === true || !!teamSubagentDetail.memoryNotes;
   teamSubagentDetail.heartbeatMd = hbMd.content || '';
   const cfg = hbCfg.config || {};
   teamSubagentDetail.heartbeatCfg = { enabled: cfg.enabled === true, intervalMinutes: cfg.intervalMinutes || 30 };
@@ -4392,42 +4522,29 @@ function switchTeamSubagentTab(teamId, agentId, tab) {
 }
 
 function _mountTeamSubagentEditors(agentId) {
-  if (teamSubagentDetailTab === 'systemprompt') {
-    const cm = _mountCm(`ts-sysprompt-cm-${agentId}`, teamSubagentDetail.systemPrompt, 'markdown');
-    if (cm) _teamCmEditors[`sysprompt:${agentId}`] = cm;
-  }
   if (teamSubagentDetailTab === 'heartbeat') {
     const cm = _mountCm(`ts-heartbeat-cm-${agentId}`, teamSubagentDetail.heartbeatMd, 'markdown');
     if (cm) _teamCmEditors[`heartbeat:${agentId}`] = cm;
   }
 }
 
-async function saveTeamSubagentSystemPrompt(teamId, agentId) {
-  const cm = _teamCmEditors[`sysprompt:${agentId}`];
-  if (!cm) return;
-  const status = document.getElementById(`ts-sysprompt-status-${agentId}`);
-  if (status) status.textContent = 'Saving…';
+async function reloadTeamSubagentMemory(teamId, agentId) {
   try {
-    await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: cm.getValue() }),
-    });
-    teamSubagentDetail.systemPrompt = cm.getValue();
-    if (status) status.textContent = 'Saved.';
-    bgtToast('Saved', `AGENT.md updated for ${agentId}`);
+    const [agentMd, memory] = await Promise.all([
+      api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`),
+      api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/memory-md`),
+    ]);
+    teamSubagentDetail.systemPrompt = agentMd.content || '';
+    teamSubagentDetail.memoryNotes = memory.content || '';
+    teamSubagentDetail.memoryExists = memory.exists === true || !!teamSubagentDetail.memoryNotes;
+    const body = document.getElementById('team-subagent-detail-body');
+    const team = teamsData.find(t => t.id === teamId);
+    if (body && team && teamSubagentDetailId === agentId && teamSubagentDetailTab === 'memory') {
+      body.innerHTML = renderTeamSubagentDetailBody(team, agentId);
+    }
   } catch (err) {
-    if (status) status.textContent = `Error: ${err?.message || err}`;
+    bgtToast('Error', `Could not reload memory: ${err?.message || err}`);
   }
-}
-
-async function reloadTeamSubagentSystemPrompt(teamId, agentId) {
-  try {
-    const d = await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`);
-    teamSubagentDetail.systemPrompt = d.content || '';
-    const cm = _teamCmEditors[`sysprompt:${agentId}`];
-    if (cm) cm.setValue(teamSubagentDetail.systemPrompt);
-  } catch {}
 }
 
 async function saveTeamSubagentHeartbeatMd(teamId, agentId) {
@@ -4539,13 +4656,127 @@ function renderTeamRunsTabLegacy(team) {
     </div>`;
 }
 
+function getTeamScheduledJobs(team) {
+  const teamId = String(team?.id || '').trim();
+  if (!teamId) return [];
+  const memberIds = new Set([
+    ...(Array.isArray(team?.subagentIds) ? team.subagentIds : []),
+    getTeamManagerId(team),
+  ].map((id) => String(id || '').trim()).filter(Boolean));
+  return (Array.isArray(teamSchedules) ? teamSchedules : [])
+    .filter((job) => {
+      const jobTeamId = String(job?.team_id || job?.teamId || '').trim();
+      const jobAgentId = String(job?.subagent_id || job?.subagentId || '').trim();
+      return jobTeamId === teamId || (jobAgentId && memberIds.has(jobAgentId));
+    })
+    .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
+}
+
+function _formatTeamScheduleDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Not scheduled';
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleString();
+}
+
+function _renderTeamScheduledJobs(team) {
+  const jobs = getTeamScheduledJobs(team);
+  if (jobs.length === 0) return '';
+  return `<section style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Scheduled jobs</div>
+      <div style="font-size:11px;color:var(--muted)">${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:7px">
+      ${jobs.map((job) => {
+        const jobId = _escapeOnclickArg(job?.id || '');
+        const jobTeamId = String(job?.team_id || job?.teamId || '').trim();
+        const jobAgentId = String(job?.subagent_id || job?.subagentId || '').trim();
+        const owner = jobTeamId === String(team.id) ? 'Team manager' : String(_findAgentInTeam(jobAgentId)?.name || jobAgentId || 'Team member');
+        const enabled = job?.enabled !== false && String(job?.status || '').toLowerCase() !== 'paused';
+        return `<button type="button" onclick="openTeamScheduledJob('${jobId}')" style="width:100%;border:1px solid var(--line);background:var(--panel-2);color:inherit;border-radius:8px;padding:9px 11px;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${enabled ? '#31b884' : 'var(--muted)'};flex:0 0 8px"></span>
+          <span style="min-width:0;flex:1">
+            <span style="display:block;font-size:12px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(job?.name || 'Unnamed schedule')}</span>
+            <span style="display:block;font-size:10px;color:var(--muted);margin-top:2px">${escHtml(owner)} · next ${escHtml(_formatTeamScheduleDate(job?.next_run || job?.nextRun))}</span>
+          </span>
+          <span style="font-size:14px;color:var(--muted)">&#8250;</span>
+        </button>`;
+      }).join('')}
+    </div>
+  </section>`;
+}
+
+async function openTeamScheduledJob(jobId) {
+  const id = String(jobId || '').trim();
+  if (!id) return;
+  try {
+    if (typeof window.setMode === 'function') await window.setMode('schedule');
+    if (typeof window.refreshSchedules === 'function') await window.refreshSchedules();
+    if (typeof window.editSchedule === 'function') window.editSchedule(id);
+  } catch (err) {
+    bgtToast('Schedule unavailable', err?.message || 'Could not open this scheduled job.');
+  }
+}
+
+function _teamRunsForDisplay(team) {
+  const merged = new Map();
+  for (const run of Array.isArray(teamRuns) ? teamRuns : []) {
+    const key = String(run?.taskId || run?.id || `${run?.agentId || 'agent'}_${run?.startedAt || 0}`).trim();
+    if (key) merged.set(key, { ...run });
+  }
+  const liveStreams = [getTeamMemberStreams(team.id), getTeamDispatchStreams(team.id)].flat();
+  for (const stream of liveStreams) {
+    const taskId = String(stream?.taskId || stream?.streamId || '').trim();
+    if (!taskId) continue;
+    const existing = merged.get(taskId) || {};
+    const traceEntries = Array.isArray(stream?.liveTraceEntries) ? [...stream.liveTraceEntries] : [];
+    const processEntries = Array.isArray(stream?.processEntries) ? [...stream.processEntries] : [];
+    merged.set(taskId, {
+      ...existing,
+      id: existing.id || `live_${taskId}`,
+      taskId,
+      agentId: existing.agentId || stream.agentId,
+      agentName: existing.agentName || stream.agentName,
+      trigger: existing.trigger || 'team_dispatch',
+      startedAt: existing.startedAt || stream.startedAt,
+      finishedAt: existing.finishedAt || stream.finishedAt,
+      durationMs: existing.durationMs || stream.durationMs,
+      stepCount: existing.stepCount || stream.stepCount,
+      inProgress: stream.completed !== true && existing.inProgress !== false,
+      success: existing.success ?? (stream.completed === true && stream.status !== 'failed'),
+      resultPreview: existing.resultPreview || stream.finalReply || stream.content || '',
+      processEntries: Array.isArray(existing.processEntries) && existing.processEntries.length ? existing.processEntries : processEntries,
+      liveTraceEntries: Array.isArray(existing.liveTraceEntries) && existing.liveTraceEntries.length ? existing.liveTraceEntries : traceEntries,
+    });
+  }
+  return [...merged.values()].sort((a, b) => Number(b?.startedAt || 0) - Number(a?.startedAt || 0));
+}
+
+function _renderTeamRunActivity(run) {
+  const traceEntries = Array.isArray(run?.liveTraceEntries) ? run.liveTraceEntries : [];
+  const processEntries = Array.isArray(run?.processEntries) ? run.processEntries : [];
+  if (traceEntries.length === 0 && processEntries.length === 0) return '';
+  const renderer = window.__PROM_UNIFIED_DESKTOP_CHAT;
+  const activityHtml = traceEntries.length > 0 && renderer && typeof renderer.renderLiveTrace === 'function'
+    ? renderer.renderLiveTrace(traceEntries, { streaming: run?.inProgress === true })
+    : renderTeamChatProcessPill(processEntries, `team_run_${String(run?.id || run?.taskId || 'activity')}`);
+  return `<div>
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Agent activity</div>
+    <div style="border:1px solid var(--line);border-radius:8px;background:var(--panel-2);padding:8px;max-height:320px;overflow:auto">${activityHtml}</div>
+  </div>`;
+}
+
 function renderTeamRunsTab(team) {
-  if (teamRuns.length === 0) {
-    return '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>';
+  const scheduledHtml = _renderTeamScheduledJobs(team);
+  const runs = _teamRunsForDisplay(team);
+  if (runs.length === 0) {
+    return `${scheduledHtml}<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px">No runs yet. Runs will appear here once subagents execute.</div>`;
   }
   return `
+    ${scheduledHtml}
     <div style="display:flex;flex-direction:column;gap:10px">
-      ${teamRuns.map(r => {
+      ${runs.map(r => {
         const runId = String(r.id || r.taskId || `${r.agentId}-${r.startedAt}`);
         const expanded = teamRunExpanded[runId] === true;
         const snap = r.roomSnapshot || _teamRoomState();
@@ -4573,6 +4804,7 @@ function renderTeamRunsTab(team) {
                 <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Final Summary</div>
                 <div style="border:1px solid var(--line);background:var(--panel-2);border-radius:8px;padding:10px;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:${r.error ? '#b42323' : 'var(--text)'}">${escHtml(finalText || 'No summary captured.')}</div>
               </div>
+              ${_renderTeamRunActivity(r)}
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                 <div>
                   <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:6px">Member States</div>
@@ -4864,7 +5096,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
             if (chunk) {
               const becameVisible = markTeamChatManagerStarted(teamId);
               streamState.thinking = `${streamState.thinking || ''}${chunk}`;
-              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
+              if (teamEventSource(event) === 'reasoning_summary') {
                 appendTeamDesktopLiveTrace(streamState, 'reasoning_summary', chunk, { append: true });
               }
               pushTeamChatProgressLine('Thinking...');
@@ -4890,6 +5122,7 @@ async function sendTeamChat(teamId, queuedMessage = null) {
               markTeamChatManagerStarted(teamId);
               streamState.thinking = streamState.thinking ? `${streamState.thinking}\n\n${thought}` : thought;
               addTeamChatProcessEntry('think', thought, event.actor ? { actor: event.actor } : undefined);
+              appendTeamVisibleThought(streamState, thought, event);
               refreshTeamChatStreamingUI(teamId, true);
             }
             break;
@@ -5663,6 +5896,8 @@ function handleTeamWsEvent(msg) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
       }
@@ -5797,7 +6032,13 @@ function handleTeamWsEvent(msg) {
         completed: false,
       });
       refreshTeamHeaderControls(msg.teamId);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        const contentEl = document.getElementById('team-tab-content');
+        const team = getTeamById(msg.teamId);
+        if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_manager_stream_event') {
@@ -5805,6 +6046,8 @@ function handleTeamWsEvent(msg) {
     if (stream) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
@@ -5844,7 +6087,13 @@ function handleTeamWsEvent(msg) {
         completed: false,
       });
       refreshTeamHeaderControls(msg.teamId);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        const contentEl = document.getElementById('team-tab-content');
+        const team = getTeamById(msg.teamId);
+        if (contentEl && team) contentEl.innerHTML = renderTeamRunsTab(team);
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_member_stream_event') {
@@ -5852,6 +6101,8 @@ function handleTeamWsEvent(msg) {
     if (stream) {
       const eventType = String(msg?.eventType || '').trim();
       if (eventType === 'token' || eventType === 'thinking_delta') {
+        scheduleTeamDispatchRefresh(stream.teamId, false);
+      } else if (activeTeamId === stream.teamId && teamBoardTab === 'runs') {
         scheduleTeamDispatchRefresh(stream.teamId, false);
       } else {
         refreshVisibleTeamChat(stream.teamId, false);
@@ -5867,6 +6118,8 @@ function handleTeamWsEvent(msg) {
       });
       if (stream) {
         stream.completed = true;
+        stream.success = msg.success === true;
+        stream.status = msg.success === true ? 'completed' : 'failed';
         stream.finishedAt = Number(msg.completedAt || Date.now());
         stream.durationMs = Math.max(Number(stream.durationMs || 0), Number(msg.durationMs || 0), stream.finishedAt - Number(stream.startedAt || Date.now()));
       }
@@ -5877,7 +6130,13 @@ function handleTeamWsEvent(msg) {
         removeTeamMemberStream(msg.teamId, msg.streamId);
         refreshVisibleTeamChat(msg.teamId, false);
       }, 3000);
-      refreshVisibleTeamChat(msg.teamId, false);
+      if (activeTeamId === msg.teamId && teamBoardTab === 'runs') {
+        loadTeamBoardData(msg.teamId).then(() => {
+          if (activeTeamId === msg.teamId && teamBoardTab === 'runs') renderTeamBoard(msg.teamId);
+        });
+      } else {
+        refreshVisibleTeamChat(msg.teamId, false);
+      }
     }
   }
   if (msg.type === 'team_dispatch') {
@@ -5910,6 +6169,8 @@ function handleTeamWsEvent(msg) {
       loadTeamBoardData(msg.teamId).then(() => {
         if (teamBoardTab === 'chat') {
           renderActiveTeamChat(msg.teamId, { forceBottom: false });
+        } else if (teamBoardTab === 'runs') {
+          renderTeamBoard(msg.teamId);
         } else if (teamBoardTab === 'workspace') {
           refreshTeamWorkspace(msg.teamId);
           renderTeamBoard(msg.teamId);
@@ -6292,8 +6553,7 @@ window.closeTeamWorkspaceFile = closeTeamWorkspaceFile;
 window.renderTeamSubagentsTab = renderTeamSubagentsTab;
 window.openTeamSubagentDetail = openTeamSubagentDetail;
 window.switchTeamSubagentTab = switchTeamSubagentTab;
-window.saveTeamSubagentSystemPrompt = saveTeamSubagentSystemPrompt;
-window.reloadTeamSubagentSystemPrompt = reloadTeamSubagentSystemPrompt;
+window.reloadTeamSubagentMemory = reloadTeamSubagentMemory;
 window.saveTeamSubagentHeartbeatMd = saveTeamSubagentHeartbeatMd;
 window.saveTeamSubagentHbConfig = saveTeamSubagentHbConfig;
 window.tickTeamSubagentHeartbeat = tickTeamSubagentHeartbeat;
@@ -6378,3 +6638,4 @@ function teamsPageActivate() {
 window.refreshTeams = refreshTeams;
 window.renderTeamsCanvas = renderTeamsCanvas;
 window.teamsPageActivate = teamsPageActivate;
+window.openTeamScheduledJob = openTeamScheduledJob;

@@ -4242,7 +4242,12 @@ function setAgentForm(agent) {
     const prov  = hasProv ? raw.slice(0, slashIdx) : '';
     const mdl   = hasProv ? raw.slice(slashIdx + 1) : raw;
     const canUseProvider = !prov || isCredentialedModelProviderId(prov);
-    const selectedProv = canUseProvider ? prov : '';
+    // A legacy/newly-created agent can store a bare model while the gateway
+    // has already resolved its provider. Show that resolved provider in the
+    // form so reasoning options are available and the next save persists the
+    // full provider/model route.
+    const effectiveProvider = String(a.effectiveModelProvider || '').trim();
+    const selectedProv = canUseProvider ? (prov || (raw && effectiveProvider ? effectiveProvider : '')) : '';
     const selectedModel = canUseProvider ? mdl : '';
     const provSel = document.getElementById('agent-edit-provider');
     const mdlSel  = document.getElementById('agent-edit-model-select');

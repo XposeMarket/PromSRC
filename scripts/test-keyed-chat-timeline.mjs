@@ -65,8 +65,21 @@ function messages(count, { rich = false } = {}) {
 
   assert.equal(desktop.stepEarlier('desktop', entries), true, 'stepped backfill must move into loaded history');
   const older = desktop.select('desktop', entries);
-  assert.ok(older.omittedAfter > 0, 'stepped backfill must release newer paint rows instead of growing forever');
-  assert.ok(older.estimatedDomRows <= 96, 'stepped backfill must stay bounded');
+  assert.equal(older.omittedAfter, 0, 'stepped backfill must retain the newer loaded rows');
+  assert.ok(older.paintEntries.length > desktopTail.paintEntries.length, 'stepped backfill must add an older block to the retained range');
+  assert.ok(older.paintEntries.some((entry) => entry.key === desktopTail.paintEntries.at(-1).key), 'the original tail block must remain painted');
+
+  const paged = createWeightedTimelineController({ surface: 'desktop' });
+  paged.select('paged', entries, { followTail: true });
+  const prependedEntries = createTimelineEntries([
+    { messageId: 'page-0', role: 'user', timestamp: 1_699_000_000_000, content: 'older page' },
+    ...plain,
+  ]);
+  paged.retainEarlier('paged', prependedEntries);
+  const pagedResult = paged.select('paged', prependedEntries);
+  assert.equal(pagedResult.paintEntries[0].key, 'id:page-0', 'a prepended server page must be painted above the existing block');
+  assert.equal(pagedResult.paintEntries.at(-1).key, desktopTail.paintEntries.at(-1).key, 'a prepended server page must retain the existing tail');
+  assert.equal(pagedResult.omittedAfter, 0, 'a prepended server page must not omit the existing newer history');
 
   desktop.focusIndex('desktop', entries, 500);
   const focused = desktop.select('desktop', entries);

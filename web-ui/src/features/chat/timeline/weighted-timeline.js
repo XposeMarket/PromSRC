@@ -227,7 +227,13 @@ export function createWeightedTimelineController(defaults = {}) {
 
   function stateFor(key) {
     const id = String(key || 'chat');
-    if (!states.has(id)) states.set(id, { mode: 'tail', anchorKey: '', anchorIndex: -1, last: null });
+    if (!states.has(id)) states.set(id, {
+      mode: 'tail',
+      anchorKey: '',
+      anchorIndex: -1,
+      accumulatedStartKey: '',
+      last: null,
+    });
     return states.get(id);
   }
 
@@ -235,12 +241,23 @@ export function createWeightedTimelineController(defaults = {}) {
     const id = String(key || 'chat');
     const state = stateFor(id);
     const list = Array.isArray(entries) ? entries : [];
-    if (options.followTail === true) state.mode = 'tail';
+    if (options.followTail === true) {
+      state.mode = 'tail';
+      state.accumulatedStartKey = '';
+    }
     if (options.anchorKey) {
-      state.mode = 'anchor';
+      // Once the user has backfilled an older block, scrolling within the
+      // retained range must not turn it back into a single anchor window.
+      // Keep the anchor as metadata for scroll intent, but leave the additive
+      // history range intact so newer rows cannot disappear on the next paint.
+      if (state.mode !== 'accumulate') state.mode = 'anchor';
       state.anchorKey = String(options.anchorKey);
     }
-    let anchorIndex = list.length - 1;
+    const accumulated = state.mode === 'accumulate';
+    const accumulatedStart = accumulated && state.accumulatedStartKey
+      ? Math.max(0, list.findIndex((entry) => entry.key === state.accumulatedStartKey))
+      : 0;
+    let anchorIndex = accumulated ? accumulatedStart : list.length - 1;
     if (state.mode === 'anchor') {
       const keyedIndex = state.anchorKey ? list.findIndex((entry) => entry.key === state.anchorKey) : -1;
       anchorIndex = keyedIndex >= 0 ? keyedIndex : clamp(state.anchorIndex, 0, Math.max(0, list.length - 1));
@@ -248,10 +265,14 @@ export function createWeightedTimelineController(defaults = {}) {
       state.anchorKey = list[anchorIndex]?.key || '';
     }
     const budgets = resolveTimelineBudgets({ ...defaults, ...options });
-    const materializedRange = rangeByWeight(list, anchorIndex, budgets.materializedWeight, state.mode === 'tail');
+    const materializedRange = accumulated
+      ? { start: accumulatedStart, end: list.length, weight: 0 }
+      : rangeByWeight(list, anchorIndex, budgets.materializedWeight, state.mode === 'tail');
     const materializedBase = list.slice(materializedRange.start, materializedRange.end);
     const localAnchor = Math.max(0, anchorIndex - materializedRange.start);
-    const paintRange = rangeByWeight(materializedBase, localAnchor, budgets.paintWeight, state.mode === 'tail');
+    const paintRange = accumulated
+      ? { start: 0, end: materializedBase.length }
+      : rangeByWeight(materializedBase, localAnchor, budgets.paintWeight, state.mode === 'tail');
     const paintBase = materializedBase.slice(paintRange.start, paintRange.end);
     const materializedEntries = includePinned(list, materializedBase, options.pinnedKeys).map(materializeEntry);
     const materializedByKey = new Map(materializedEntries.map((entry) => [entry.key, entry]));
@@ -291,9 +312,21 @@ export function createWeightedTimelineController(defaults = {}) {
       next -= 1;
       spent += Number(list[next]?.weight || 1);
     }
-    state.mode = 'anchor';
+    state.mode = 'accumulate';
+    state.accumulatedStartKey = list[next]?.key || list[0]?.key || '';
     state.anchorIndex = next;
     state.anchorKey = list[next]?.key || '';
+    return true;
+  }
+
+  function retainEarlier(key, entries = []) {
+    const state = stateFor(key);
+    const list = Array.isArray(entries) ? entries : [];
+    if (!list.length) return false;
+    state.mode = 'accumulate';
+    state.accumulatedStartKey = list[0]?.key || '';
+    state.anchorIndex = 0;
+    state.anchorKey = state.accumulatedStartKey;
     return true;
   }
 
@@ -312,7 +345,7 @@ export function createWeightedTimelineController(defaults = {}) {
     const clean = String(value || '').trim();
     if (!clean) return false;
     const state = stateFor(key);
-    state.mode = 'anchor';
+    if (state.mode !== 'accumulate') state.mode = 'anchor';
     state.anchorKey = clean;
     return true;
   }
@@ -322,12 +355,13 @@ export function createWeightedTimelineController(defaults = {}) {
     state.mode = 'tail';
     state.anchorKey = '';
     state.anchorIndex = -1;
+    state.accumulatedStartKey = '';
   }
 
   function peek(key) { return stateFor(key).last; }
   function forget(key) { states.delete(String(key || 'chat')); }
 
-  return Object.freeze({ select, stepEarlier, focusIndex, anchorKey, followTail, peek, forget });
+  return Object.freeze({ select, stepEarlier, retainEarlier, focusIndex, anchorKey, followTail, peek, forget });
 }
 
 export const CHAT_TIMELINE_DEFAULT_BUDGETS = DEFAULT_BUDGETS;

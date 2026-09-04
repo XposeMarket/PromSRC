@@ -17,6 +17,9 @@ assert.match(desktop, /normalizeRecoveredTraceEntries\(message\?\.liveTraceEntri
 assert.match(desktop, /\['user', 'summary', 'visible'\]\.includes\(visibility\)/, 'desktop must retain user-visible reasoning summaries');
 assert.match(desktop, /params\.set\('fullProcess', '1'\)/, 'desktop recovery must request the complete per-message process trace');
 assert.match(desktop, /mergeTraceField\('liveTraceEntries', 500\)/, 'desktop server/local merges must preserve recovered live traces');
+assert.match(desktop, /const historyRef = Array\.isArray\(sess\.history\) \? sess\.history : \[\]/, 'recovery must retain the in-flight history array identity');
+assert.match(desktop, /historyRef\.splice\(0, historyRef\.length, \.\.\.mergedHistory\)/, 'recovery must commit history merges in place');
+assert.match(desktop, /const processLogRef = Array\.isArray\(sess\.processLog\) \? sess\.processLog : \[\]/, 'recovery must retain the in-flight process log identity');
 
 const recovered = [
   {

@@ -90,6 +90,9 @@ const measurements = {
 // The recovery continuity merge and invalidated-session cache generation fence
 // add a small, intentional client-state safety boundary to this slice. The
 // page-instance fence and pre-clear snapshot add the next measured increment.
-assert(measurements.gzipBytes <= 255550, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// Additive older-message pagination retains the existing tail while a page is
+// prepended, adding the next measured increment. Keep the ceiling narrow.
+// Durable thought/summary separation adds the next small measured increment.
+assert(measurements.gzipBytes <= 255950, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');
