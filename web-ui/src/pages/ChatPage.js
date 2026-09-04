@@ -261,6 +261,12 @@ const desktopQuestionTransport = createDesktopQuestionTransport({
   warn: (error) => console.warn('[ChatPage] could not fetch question details:', error),
 });
 
+// Pending question answers live in the composer popover, which is rebuilt as
+// the stream updates. Keep the step and partial answers outside that DOM so a
+// stream repaint cannot move the user back to the first question or discard
+// answers from earlier steps.
+const desktopQuestionDrafts = new Map();
+
 const desktopQuestionController = createQuestionController({
   runtimeFor: desktopChatRuntime,
   getActiveSessionId: () => window.activeChatSessionId,
@@ -306,7 +312,7 @@ const desktopQuestionController = createQuestionController({
   focusComposer: focusPrometheusQuestionComposer,
   onValidationMissing: (missing) => {
     const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
-    showToast('Answer required', `Use the composer to answer: ${labels}`, 'warning');
+    showToast('Answer required', `Answer the current question: ${labels}`, 'warning');
   },
   onSubmitSuccess: () => loadSessionApprovals(),
   onCancelSuccess: () => loadSessionApprovals(),
@@ -14492,7 +14498,21 @@ function captureQuestionDraftState() {
       // Only the card root carries data-question-id with a child input structure.
       const qid = card.getAttribute('data-question-id');
       if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
-      const state = { checked: [], texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-question-compose-target') || '', focus: null };
+      const previous = desktopQuestionDrafts.get(qid) || {};
+      const visibleQuestionIds = Array.from(card.querySelectorAll('[data-question-compose-id]'))
+        .map((el) => String(el.getAttribute('data-question-compose-id') || '').trim())
+        .filter(Boolean);
+      const visibleQuestionPrefixes = visibleQuestionIds.map((id) => `${id}::`);
+      const state = {
+        checked: (Array.isArray(previous.checked) ? previous.checked : [])
+          .filter((value) => !visibleQuestionPrefixes.some((prefix) => String(value || '').startsWith(prefix))),
+        texts: { ...(previous.texts || {}) },
+        others: { ...(previous.others || {}) },
+        general: String(previous.general || ''),
+        index: Number(card.getAttribute('data-question-current-index')) || 0,
+        composeTarget: card.getAttribute('data-question-compose-target') || '',
+        focus: null,
+      };
       card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
         state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
       });
@@ -14520,6 +14540,7 @@ function captureQuestionDraftState() {
         }
       } catch {}
       out[qid] = state;
+      desktopQuestionDrafts.set(qid, state);
     });
   } catch {}
   return out;
@@ -14529,9 +14550,11 @@ function restoreQuestionDraftState(map) {
   try {
     Object.keys(map).forEach((qid) => {
       const sel = (window.CSS && CSS.escape) ? CSS.escape(qid) : qid;
-      const card = document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
+      const card = document.querySelector(`.chat-question-popover .chat-question-card[data-question-id="${sel}"]`)
+        || document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
       if (!card) return;
       const state = map[qid];
+      if (Number.isFinite(Number(state.index))) card.setAttribute('data-question-current-index', String(state.index));
       if (state.composeTarget) card.setAttribute('data-question-compose-target', state.composeTarget);
       const want = new Set(state.checked || []);
       card.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((el) => {
@@ -14543,7 +14566,17 @@ function restoreQuestionDraftState(map) {
       });
       Object.entries(state.others || {}).forEach(([id, info]) => {
         const el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
-        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
+        if (el) {
+          el.value = info.value || '';
+          if (!info.hidden) el.removeAttribute('hidden');
+          else el.setAttribute('hidden', '');
+          const toggle = el.closest('.pq-other-row')?.querySelector('.pq-other-toggle');
+          if (toggle) {
+            toggle.classList.toggle('selected', !info.hidden);
+            toggle.setAttribute('aria-expanded', String(!info.hidden));
+            toggle.setAttribute('aria-pressed', String(!info.hidden));
+          }
+        }
       });
       const gen = card.querySelector('[data-question-general-other="1"]');
       if (gen) gen.value = state.general || '';
@@ -16314,6 +16347,60 @@ function renderStreamingPrometheusQuestionHtml(sessionId) {
   return '';
 }
 
+function desktopQuestionStepIndex(question, state = null) {
+  const total = Array.isArray(question?.questions) ? question.questions.length : 0;
+  if (!total) return 0;
+  const draft = state || desktopQuestionDrafts.get(String(question?.id || '').trim());
+  const raw = draft?.index ?? question?.currentIndex;
+  return Number.isFinite(Number(raw))
+    ? Math.max(0, Math.min(total - 1, Math.floor(Number(raw))))
+    : 0;
+}
+
+function rememberDesktopQuestionPayload(question, payload, index) {
+  const qid = String(question?.id || '').trim();
+  if (!qid || !payload) return null;
+  const previous = desktopQuestionDrafts.get(qid) || {};
+  const state = {
+    ...previous,
+    index: desktopQuestionStepIndex(question, { index }),
+    checked: Array.isArray(previous.checked) ? previous.checked.slice() : [],
+    texts: { ...(previous.texts || {}) },
+    others: { ...(previous.others || {}) },
+    general: String(payload.generalOther || '').trim(),
+    composeTarget: previous.composeTarget || '',
+    focus: previous.focus || null,
+  };
+  (payload.answers || []).forEach((answer) => {
+    const aid = String(answer?.id || '').trim();
+    if (!aid) return;
+    const prefix = `${aid}::`;
+    state.checked = state.checked.filter((value) => !String(value || '').startsWith(prefix));
+    (Array.isArray(answer.selected) ? answer.selected : []).forEach((value) => {
+      const clean = String(value || '').trim();
+      if (clean) state.checked.push(`${prefix}${clean}`);
+    });
+    state.texts[aid] = String(answer.text || '');
+    state.others[aid] = {
+      ...(state.others[aid] || {}),
+      value: String(answer.other || ''),
+    };
+  });
+  desktopQuestionDrafts.set(qid, state);
+  return state;
+}
+
+function saveDesktopQuestionDraftFromCard(question) {
+  const captured = captureQuestionDraftState();
+  return captured[String(question?.id || '').trim()] || desktopQuestionDrafts.get(String(question?.id || '').trim()) || null;
+}
+
+function syncDesktopQuestionCardAfterStep(question, payload, nextIndex, sessionId) {
+  const state = rememberDesktopQuestionPayload(question, payload, nextIndex);
+  syncDesktopQuestionComposerPopover(sessionId || question?.sessionId || window.activeChatSessionId);
+  restoreQuestionDraftState(state ? { [question.id]: state } : {});
+}
+
 function syncDesktopQuestionComposerPopover(sessionId = window.activeChatSessionId) {
   const host = document.getElementById('chat-question-popover');
   if (!host) return;
@@ -16325,9 +16412,13 @@ function syncDesktopQuestionComposerPopover(sessionId = window.activeChatSession
     if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
     return;
   }
-  host.innerHTML = renderInlinePrometheusQuestion(question);
+  const qid = String(question.id || '').trim();
+  const draft = desktopQuestionDrafts.get(qid) || null;
+  const currentIndex = desktopQuestionStepIndex(question, draft);
+  host.innerHTML = renderInlinePrometheusQuestion({ ...question, currentIndex });
   host.style.display = 'block';
-  host.setAttribute('data-question-id', String(question.id || ''));
+  host.setAttribute('data-question-id', qid);
+  if (draft) restoreQuestionDraftState({ [qid]: { ...draft, index: currentIndex } });
   if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
 }
 
@@ -45572,7 +45663,7 @@ function cssEscapeValue(value) {
   return raw.replace(/["\\\]\[]/g, '\\$&');
 }
 
-function renderInlinePrometheusQuestion(item) {
+function renderInlinePrometheusQuestion(item, options = {}) {
   if (!item || !item.id) return '';
   const question = normalizeQuestionRecord(item);
   if (!question.id) return '';
@@ -45581,7 +45672,11 @@ function renderInlinePrometheusQuestion(item) {
   const idArg = encodeInlineJsString(question.id);
   const statusLabel = question.status === 'answered' ? 'answered' : question.status;
   const answerMap = new Map((question.answers || []).map((answer) => [String(answer?.id || ''), answer || {}]));
-  const questionBlocks = question.questions.map((q, index) => {
+  const requestedIndex = options.currentIndex ?? item.currentIndex ?? desktopQuestionDrafts.get(question.id)?.index;
+  const currentIndex = desktopQuestionStepIndex(question, { index: requestedIndex });
+  const visibleQuestions = pending ? [question.questions[currentIndex]] : question.questions;
+  const questionBlocks = visibleQuestions.map((q, visibleIndex) => {
+    if (!q) return '';
     const answer = answerMap.get(q.id) || {};
     const qName = `${question.id}__${q.id}`;
     const qIdArg = encodeInlineJsString(q.id);
@@ -45599,25 +45694,34 @@ function renderInlinePrometheusQuestion(item) {
       // For single_select radios, allow re-clicking a checked option to deselect it.
       const deselect = type === 'radio' ? ` onmousedown="toggleQuestionRadio(${encodeInlineJsString(inputId)})"` : '';
       return `<label for="${escHtml(inputId)}" class="pq-option">
-        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}"${deselect} />
+        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" onchange="handleDesktopQuestionOptionChange(${idArg}, ${qIdArg}, ${encodeInlineJsString(q.mode)})"${deselect} />
         <span class="pq-option-check" aria-hidden="true"></span>
         <span class="pq-option-label">${escHtml(option)}</span>
       </label>`;
     }).join('');
     const otherInput = q.allowOther && q.mode !== 'text'
-      ? `<div class="pq-other-row"><button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})"><span class="pq-option-check" aria-hidden="true"></span><span>Other…</span></button></div>`
+      ? `<div class="pq-other-row">
+          <button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})" aria-expanded="false" aria-pressed="false"><span class="pq-option-check" aria-hidden="true"></span><span>Other…</span></button>
+          <textarea class="pq-input" data-question-other="${escHtml(q.id)}" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escHtml(q.label)}" hidden></textarea>
+        </div>`
       : '';
-    return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${index ? 10 : 0}px">
+    const textInput = q.mode === 'text'
+      ? `<textarea class="pq-input" data-question-text="${escHtml(q.id)}" rows="3" placeholder="Type your answer" aria-label="${escHtml(q.label)}"></textarea>`
+      : '';
+    return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${visibleIndex ? 10 : 0}px">
       <div class="pq-q-label">${escHtml(q.label)}</div>
       ${options ? `<div class="pq-options">${options}</div>` : ''}
+      ${textInput}
       ${otherInput}
     </div>`;
   }).join('');
-  return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}">
+  return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}" data-question-current-index="${currentIndex}">
+    ${pending && question.questions.length > 1 ? `<div class="pq-head"><span class="pq-progress" aria-label="Question ${currentIndex + 1} of ${question.questions.length}"><span class="pq-progress-current">${currentIndex + 1}</span><span class="pq-progress-total">/${question.questions.length}</span></span></div>` : ''}
     ${questionBlocks}
     ${pending
-      ? `<div class="chat-approval-actions">
-          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
+      ? `<div class="pq-actions">
+          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
+          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
         </div>`
       : ''}
   </div>`;
@@ -45627,8 +45731,24 @@ function toggleQuestionOther(questionId, itemId) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
   const block = card?.querySelector?.(`[data-question-compose-id="${cssEscapeValue(itemId)}"]`);
   if (!card || !block) return;
-  card.setAttribute('data-question-compose-target', `${String(itemId)}::other`);
-  document.getElementById('chat-input')?.focus?.();
+  const input = block.querySelector('[data-question-other]');
+  const toggle = block.querySelector('.pq-other-toggle');
+  if (!input || !toggle) return;
+  const isOpen = !input.hasAttribute('hidden');
+  if (isOpen) {
+    input.setAttribute('hidden', '');
+    card.removeAttribute('data-question-compose-target');
+  } else {
+    input.removeAttribute('hidden');
+    card.setAttribute('data-question-compose-target', `${String(itemId)}::other`);
+  }
+  toggle.classList.toggle('selected', !isOpen);
+  toggle.setAttribute('aria-expanded', String(!isOpen));
+  toggle.setAttribute('aria-pressed', String(!isOpen));
+  if (!isOpen) {
+    try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+  }
+  captureQuestionDraftState();
 }
 
 // Single_select radios can't be deselected natively. On mousedown, if the radio
@@ -45644,19 +45764,63 @@ function toggleQuestionRadio(inputId) {
   } catch {}
 }
 
+function desktopQuestionAnswerFromDraft(state, questionId) {
+  const prefix = `${String(questionId || '').trim()}::`;
+  const selected = (state?.checked || [])
+    .map((value) => String(value || ''))
+    .filter((value) => value.startsWith(prefix))
+    .map((value) => value.slice(prefix.length).trim())
+    .filter(Boolean);
+  return {
+    selected,
+    text: String(state?.texts?.[questionId] || '').trim(),
+    other: String(state?.others?.[questionId]?.value || '').trim(),
+  };
+}
+
 function collectPrometheusQuestionAnswers(question) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
   if (!card) return { answers: [], generalOther: '' };
+  // The card intentionally contains only the active step. Start with the
+  // external draft for earlier steps, then overlay the active DOM controls.
+  const state = saveDesktopQuestionDraftFromCard(question) || {};
   const answers = question.questions.map((q) => {
-    const checked = Array.from(card.querySelectorAll(`[data-question-id="${cssEscapeValue(q.id)}"]:checked`))
-      .map((input) => String(input.value || '').trim())
-      .filter(Boolean);
-    const text = String(card.querySelector(`[data-question-text="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
-    const other = String(card.querySelector(`[data-question-other="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
+    const block = card.querySelector(`[data-question-compose-id="${cssEscapeValue(q.id)}"]`);
+    const draft = desktopQuestionAnswerFromDraft(state, q.id);
+    const checked = block
+      ? Array.from(block.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked'))
+        .map((input) => String(input.value || '').trim())
+        .filter(Boolean)
+      : draft.selected;
+    const textEl = block?.querySelector(`[data-question-text="${cssEscapeValue(q.id)}"]`);
+    const otherEl = block?.querySelector(`[data-question-other="${cssEscapeValue(q.id)}"]`);
+    const text = textEl ? String(textEl.value || '').trim() : draft.text;
+    const other = otherEl ? String(otherEl.value || '').trim() : draft.other;
     return { id: q.id, label: q.label, mode: q.mode, selected: q.mode === 'single_select' ? checked.slice(0, 1) : checked, text, other };
   });
-  const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || '').trim();
+  const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || state.general || '').trim();
   return { answers, generalOther };
+}
+
+async function handleDesktopQuestionOptionChange(questionId, itemId, mode) {
+  if (String(mode || '').trim().toLowerCase() !== 'single_select') return;
+  // Let the native radio state settle before reading the card. This also
+  // allows the radio deselection helper to finish its deferred update.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const question = findPendingPrometheusQuestionForSession(window.activeChatSessionId);
+  if (!question || String(question.id || '') !== String(questionId || '')) return;
+  const normalized = normalizeQuestionRecord(question);
+  const currentIndex = desktopQuestionStepIndex(normalized);
+  const currentQuestion = normalized.questions[currentIndex];
+  if (!currentQuestion || String(currentQuestion.id || '') !== String(itemId || '')) return;
+  const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
+  const selected = card?.querySelector(`input[data-question-id="${cssEscapeValue(itemId)}"]:checked`);
+  if (!selected) return;
+  await submitInlinePrometheusQuestion(questionId, {
+    stepIndex: currentIndex,
+    advanceStep: true,
+    autoAdvance: true,
+  });
 }
 
 function focusPrometheusQuestionComposer() {
@@ -45674,8 +45838,21 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
 }
 
 async function submitInlinePrometheusQuestion(id, options = {}) {
-  const result = await desktopQuestionController.submit(id, {
+  const local = desktopQuestionController.findQuestion(id, options.sessionId);
+  const localQuestion = local?.record ? normalizeQuestionRecord(local.record) : null;
+  const currentIndex = localQuestion ? desktopQuestionStepIndex(localQuestion) : 0;
+  const submitOptions = {
     ...options,
+    stepIndex: options.stepIndex === undefined ? currentIndex : options.stepIndex,
+    // The desktop card only renders the active question. Intermediate steps
+    // therefore advance locally; only the final step calls the backend.
+    advanceStep: options.advanceStep !== false,
+    onStepAdvance: options.onStepAdvance || ((details) => {
+      syncDesktopQuestionCardAfterStep(details.question, details.payload, details.nextIndex, details.sessionId);
+    }),
+  };
+  const result = await desktopQuestionController.submit(id, {
+    ...submitOptions,
     readAnswers: (question) => collectPrometheusQuestionAnswers(question),
     getComposerTarget: (question) => {
       const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
@@ -46029,6 +46206,7 @@ if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitIn
 if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
+if (typeof window.handleDesktopQuestionOptionChange !== 'function') window.handleDesktopQuestionOptionChange = handleDesktopQuestionOptionChange;
 if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.generateSessionId = generateSessionId;
