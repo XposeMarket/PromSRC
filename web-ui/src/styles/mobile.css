@@ -2018,7 +2018,7 @@ body.pm-model-badge-pressing * {
   will-change: transform, opacity;
   z-index: 1;
   display: flex; flex-direction: column;
-  padding: max(env(safe-area-inset-top), 18px) 16px 0 max(18px, env(safe-area-inset-left));
+  padding: max(env(safe-area-inset-top), 12px) 16px 0 max(18px, env(safe-area-inset-left));
   box-shadow: none;
   overflow: hidden;
   overscroll-behavior: contain;
@@ -2047,12 +2047,13 @@ body.pm-model-badge-pressing * {
 }
 .pm-drawer-brand {
   display: flex; align-items: center; gap: 10px;
-  margin: 8px 104px 22px 0;
+  min-height: 44px;
+  margin: 0 94px 8px 0;
   font-size: 18px; font-weight: 800; letter-spacing: 0;
 }
 .pm-drawer-brand .pm-brand-flame { font-size: 22px; width: 26px; height: 26px; }
 .pm-drawer-gateway-filter {
-  margin: -8px 0 10px;
+  margin: 0 0 8px;
   padding: 0;
   color: var(--pm-text, #f6f4f0);
 }
@@ -10157,8 +10158,8 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-brand {
-  min-height: 50px;
-  margin: 2px 94px 20px 0;
+  min-height: 46px;
+  margin: 0 94px 8px 0;
   gap: 8px;
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer-brand .pm-brand-flame,
@@ -18395,7 +18396,7 @@ body.pm-mobile-active .pm-drawer-gateway-pill.is-active,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-label,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active .pm-drawer-gateway-pill-icon,
 body.pm-mobile-active .pm-drawer-gateway-pill.is-active svg {
-  color: #111;
+  color: #111 !important;
 }
 
 /* Unified liquid-glass material ------------------------------------------------
