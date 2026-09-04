@@ -12,6 +12,7 @@ import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
+import { normalizeSpeed } from '../providers/reasoning-capabilities';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
@@ -333,6 +334,7 @@ export interface ChatModelRoute {
   providerId: string;
   model: string;
   reasoningEffort?: string;
+  speed?: 'standard' | 'fast';
   accountId?: string;
   updatedAt: number;
 }
@@ -1206,12 +1208,15 @@ function normalizeChatModelRoute(input: any): ChatModelRoute | undefined {
   const model = String(input.model || '').trim();
   if (!providerId || !model) return undefined;
   const reasoningEffort = String(input.reasoningEffort || input.reasoning_effort || '').trim();
+  const hasSpeed = Object.prototype.hasOwnProperty.call(input, 'speed');
+  const speed = hasSpeed ? normalizeSpeed(providerId, model, input.speed) : undefined;
   const accountId = String(input.accountId || input.account_id || '').trim();
   return {
     version: 1,
     providerId,
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(speed ? { speed } : {}),
     ...(accountId ? { accountId } : {}),
     updatedAt: Number.isFinite(Number(input.updatedAt)) ? Number(input.updatedAt) : Date.now(),
   };

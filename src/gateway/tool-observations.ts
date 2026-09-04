@@ -55,6 +55,27 @@ export interface ObservationContextOptions {
 
 const SECRET_KEY_RE = /(password|token|secret|api[_-]?key|authorization|credential|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)/i;
 
+// Hub analytics requests commonly arrive together (tokens, tools, and model
+// cards). Re-reading the complete observation corpus for each card turns a
+// read-only dashboard into a multi-second event-loop stop. Keep one short-lived
+// snapshot and invalidate it whenever this process appends a new observation.
+// The TTL is deliberately short because external writers can update the store
+// without going through persistToolObservations().
+const ALL_OBSERVATIONS_CACHE_TTL_MS = 15_000;
+let allObservationsCache: {
+  root: string;
+  limit: number;
+  loadedAt: number;
+  observations: ToolObservation[];
+} | null = null;
+let allObservationsCacheTimer: NodeJS.Timeout | null = null;
+
+function clearAllObservationsCache(): void {
+  if (allObservationsCacheTimer) clearTimeout(allObservationsCacheTimer);
+  allObservationsCacheTimer = null;
+  allObservationsCache = null;
+}
+
 function safeSessionFileName(sessionId: string): string {
   return String(sessionId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_') || 'unknown';
 }
@@ -326,6 +347,7 @@ export function createToolObservationsFromResults(sessionId: string, turnId: str
 
 export function persistToolObservations(sessionId: string, observations: ToolObservation[]): void {
   if (!observations.length) return;
+  clearAllObservationsCache();
   const filePath = observationJsonlPath(sessionId);
   // Commit the recovery-safe audit hint before canonical persistence so a hard
   // crash between these writes still leaves continuity evidence.
@@ -429,6 +451,17 @@ export function buildToolBenchmarkAggregate(sessionId: string, maxObservations =
 export function readAllToolObservations(maxObservations = 50_000): ToolObservation[] {
   try {
     const root = observationRoot();
+    const limit = Math.max(1, Math.min(250_000, Math.floor(Number(maxObservations || 50_000))));
+    const now = Date.now();
+    if (
+      allObservationsCache
+      && allObservationsCache.root === root
+      && allObservationsCache.limit >= limit
+      && now - allObservationsCache.loadedAt < ALL_OBSERVATIONS_CACHE_TTL_MS
+    ) {
+      const cached = allObservationsCache.observations;
+      return cached.length > limit ? cached.slice(cached.length - limit) : cached.slice();
+    }
     if (!fs.existsSync(root)) return [];
     const files = fs.readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
@@ -443,8 +476,11 @@ export function readAllToolObservations(maxObservations = 50_000): ToolObservati
       }
     }
     out.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
-    const limit = Math.max(1, Math.min(250_000, Math.floor(Number(maxObservations || 50_000))));
-    return out.length > limit ? out.slice(out.length - limit) : out;
+    const bounded = out.length > limit ? out.slice(out.length - limit) : out;
+    allObservationsCache = { root, limit, loadedAt: Date.now(), observations: bounded };
+    allObservationsCacheTimer = setTimeout(clearAllObservationsCache, ALL_OBSERVATIONS_CACHE_TTL_MS);
+    allObservationsCacheTimer.unref?.();
+    return bounded.slice();
   } catch {
     return [];
   }

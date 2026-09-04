@@ -84,12 +84,18 @@ function sessionRecord(sessionId) {
   return sessionRecords().find((candidate) => recordSessionId(candidate) === sid) || null;
 }
 
+function titleOverrideForSession(sessionId) {
+  const override = window.__PROM_CHAT_TITLE_OVERRIDE;
+  if (!override || clean(override.sessionId) !== clean(sessionId)) return '';
+  return clean(override.title);
+}
+
 function sessionMeta(sessionId, fallbackTitle = '') {
   const sid = clean(sessionId);
   const record = sessionRecord(sid);
   const row = findSidebarRow(sid);
   const rowTitle = clean(row?.querySelector?.('.job-item-title, .chat-session-title, [data-session-title]')?.textContent || row?.textContent);
-  const title = record ? recordTitle(record) : (rowTitle || clean(fallbackTitle) || 'Chat');
+  const title = titleOverrideForSession(sid) || (record ? recordTitle(record) : (rowTitle || clean(fallbackTitle) || 'Chat'));
   const projectName = clean(record?.projectName || record?.canvasProjectLabel || '');
   return {
     sessionId: sid,
@@ -154,6 +160,20 @@ function addExplicitTab(sessionId, title = '') {
     return false;
   }
   state.tabs.push({ sessionId: sid, title: clean(title) || titleForSession(sid) });
+  if (state.tabs.length > MAX_TABS) state.tabs.splice(0, state.tabs.length - MAX_TABS);
+  persistState();
+  return true;
+}
+
+function ensureMainTab(sessionId, title = '') {
+  const sid = clean(sessionId);
+  if (!sid) return false;
+  const existing = state.tabs.find((tab) => tab.sessionId === sid);
+  if (existing) {
+    existing.title = clean(title) || existing.title || titleForSession(sid);
+    return false;
+  }
+  state.tabs.unshift({ sessionId: sid, title: clean(title) || titleForSession(sid) });
   if (state.tabs.length > MAX_TABS) state.tabs.splice(0, state.tabs.length - MAX_TABS);
   persistState();
   return true;
@@ -238,15 +258,9 @@ function patchPaneHeader(header, sessionId) {
   if (!header) return;
   const meta = sessionMeta(sessionId);
   const title = header.querySelector('.side-chat-title');
-  const kicker = header.querySelector('.side-chat-kicker');
   header.classList.add('prom-multi-chat-session-header');
   header.dataset.multiChatSessionId = meta.sessionId;
   if (title) title.textContent = meta.title;
-  if (kicker) {
-    kicker.textContent = meta.projectName ? `Project · ${meta.projectName}` : '';
-    kicker.hidden = !meta.projectName;
-    kicker.setAttribute('aria-hidden', String(!meta.projectName));
-  }
 }
 
 function patchNativeSplitHeaders() {
@@ -328,7 +342,9 @@ function activateMain(sessionId, title = '') {
 
 function openSide(sessionId, title = '') {
   const sid = clean(sessionId);
-  if (!sid || sid === currentMainSessionId()) return;
+  const mainId = currentMainSessionId();
+  if (!sid || !mainId || sid === mainId) return;
+  ensureMainTab(mainId, titleForSession(mainId));
   addExplicitTab(sid, title);
   state.sideSessionId = sid;
   pendingSideSessionId = sid;
@@ -360,15 +376,18 @@ function reorderTabs(draggedId, targetId) {
 
 function ensureTabStrip() {
   let strip = document.getElementById('prom-multi-chat-tabs');
-  if (strip) return strip;
-  const chatView = document.getElementById('chat-view');
-  if (!chatView) return null;
+  const mainShell = document.querySelector('.main-shell');
+  if (!mainShell) return null;
+  if (strip) {
+    if (strip.parentElement !== mainShell) mainShell.insertBefore(strip, mainShell.firstElementChild);
+    return strip;
+  }
   strip = document.createElement('div');
   strip.id = 'prom-multi-chat-tabs';
   strip.className = 'prom-multi-chat-tabs';
   strip.setAttribute('role', 'tablist');
   strip.setAttribute('aria-label', 'Open chats');
-  chatView.prepend(strip);
+  mainShell.insertBefore(strip, mainShell.firstElementChild);
   return strip;
 }
 
@@ -377,6 +396,9 @@ function renderTabStrip() {
   if (!strip) return;
   const mainId = currentMainSessionId();
   state.mainSessionId = mainId;
+  if (state.sideSessionId && state.sideSessionId !== mainId) {
+    ensureMainTab(mainId, titleForSession(mainId));
+  }
   strip.innerHTML = state.tabs.map((tab) => {
     const meta = sessionMeta(tab.sessionId, tab.title);
     tab.title = meta.title;
@@ -620,6 +642,7 @@ function installWorkspace() {
     patchNativeSplitHeaders();
     if (!document.getElementById('prom-multi-chat-tabs')) renderTabStrip();
   });
+  window.addEventListener('prometheus:chat-title-override-changed', renderTabStrip);
   render();
 }
 
@@ -638,6 +661,7 @@ window.__PROM_MULTI_CHAT_WORKSPACE = {
   selectSources: (sessionId, options = {}) => applyNativeSourceContext(sessionId, options),
   render,
 };
+window.refreshPromMultiChatTabs = renderTabStrip;
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installMultiChatWorkspace, { once: true });
 else installMultiChatWorkspace();

@@ -21,7 +21,27 @@ assert.match(source, /prom-bot-group-row chat-session-item job-item/);
 assert.match(source, /unified-agent-chat-shell prom-bot-group-shell/);
 assert.match(source, /unified-agent-chat-header/);
 assert.match(source, /unified-agent-chat-messages prom-bot-group-messages/);
+assert.match(source, /setPromChatTitleOverride\?\.\('Prom Bot group', group\.title, 'prom-bot-group'\)/,
+  'group rooms must project their identity into the shared chat title slot');
+assert.match(source, /clearPromChatTitleOverride\?\.\('prom-bot-group'\)/,
+  'group title projection must be cleared when leaving the room');
+assert.doesNotMatch(source, /<div class="side-chat-kicker">Prom Bot group<\/div>/,
+  'the group label must not be duplicated inside the room header');
+assert.doesNotMatch(source, /<div class="side-chat-title">\$\{esc\(group\.title\)\}<\/div>/,
+  'the group title must be projected into the main chat title area');
 assert.match(source, /window\.__PROM_UNIFIED_DESKTOP_CHAT/);
+assert.match(source, /#chat-view\.prom-bot-group-active/,
+  'Prom Bot group chat must use the normal main-chat flex surface');
+assert.match(source, /function displaceMainChatSurface\(/,
+  'Prom Bot group chat must displace the ordinary main-chat children');
+assert.match(source, /#chat-view\.prom-bot-group-active > \[hidden\][\s\S]*?display:\s*none !important/,
+  'Prom Bot group chat must suppress authored display rules on displaced main-chat children');
+assert.match(source, /function restoreMainChatSurface\(/,
+  'Prom Bot group chat must restore the ordinary main-chat children on exit');
+assert.match(source, /entry\.node\.hidden = true/,
+  'Prom Bot group chat must not leave the underlying main chat visible');
+assert.doesNotMatch(source, /#\$\{GROUP_HOST_ID\}\s*\{\s*position:absolute/,
+  'Prom Bot group chat must not return to the legacy absolute overlay host');
 
 // The lightweight room projection keeps its own transcript/context while Bot
 // execution still uses the established standalone subagent stream.
@@ -69,6 +89,14 @@ assert.match(source, /chromeObserver\.observe\(section, \{ childList: true, subt
 // Group creation/search/navigation stay Prom Bot shell behavior and expose a
 // stable room API so the next Team-flow layer can convert a Group to a Team.
 assert.match(source, /textContent = '\+ Group chat'/);
+assert.match(source, /session-hover-preview prom-bot-group-hover-preview/,
+  'group rename should reuse the regular chat hover-popover styling');
+assert.match(source, /beginGroupHoverRename\(popover\)/,
+  'group hover popover should expose the same inline rename interaction');
+assert.match(source, /group\.title = nextTitle/,
+  'group rename should persist the edited title on the lightweight room');
+assert.match(source, /saveGroups\(\);[\s\S]*?renderGroupRows\(\);[\s\S]*?setPromChatTitleOverride/,
+  'renaming the active group should refresh its sidebar row and title projection');
 assert.match(source, /Choose 2–\$\{MAX_GROUP_MEMBERS\} bots/);
 assert.match(source, /prom-bot-roster-search/);
 assert.match(source, /closePromBotChat\?\.\(\{ keepMode: true \}\)/);

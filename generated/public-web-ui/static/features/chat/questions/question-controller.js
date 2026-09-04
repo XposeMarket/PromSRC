@@ -268,12 +268,15 @@ export function createQuestionController(options = {}) {
   async function submit(id, inputOptions = {}) {
     const targetId = questionId(id);
     if (!targetId) return { ok: false, reason: 'missing_id' };
-    if (inFlightSubmissions.has(targetId)) return { ok: false, reason: 'in_flight' };
-    inFlightSubmissions.add(targetId);
+    const local = findQuestion(targetId, inputOptions.sessionId);
+    const sid = resolveSessionId(local?.record, local?.sessionId || inputOptions.sessionId);
+    const submissionKey = `${sid}\u0000${targetId}`;
+    if (inFlightSubmissions.has(submissionKey)) return { ok: false, reason: 'in_flight' };
+    inFlightSubmissions.add(submissionKey);
     try {
       return await submitQuestion(targetId, inputOptions);
     } finally {
-      inFlightSubmissions.delete(targetId);
+      inFlightSubmissions.delete(submissionKey);
     }
   }
 

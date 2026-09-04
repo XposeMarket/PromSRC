@@ -1,7 +1,7 @@
 import { getConfig } from '../../config/config';
 import { buildProviderForLLM, getProviderRuntimeIdentity } from '../../providers/factory';
 import type { LLMProvider } from '../../providers/LLMProvider';
-import { normalizeReasoningEffort, type ReasoningEffort } from '../../providers/reasoning-capabilities';
+import { normalizeReasoningEffort, normalizeSpeed, type ReasoningEffort } from '../../providers/reasoning-capabilities';
 import { buildContextBudget, resolveModelContextProfile, type ContextBudget, type ModelContextProfile } from '../context/model-context';
 
 export interface TurnRouteSnapshot {
@@ -9,6 +9,7 @@ export interface TurnRouteSnapshot {
   readonly model: string;
   readonly accountId?: string;
   readonly reasoningEffort?: ReasoningEffort;
+  readonly speed: 'standard' | 'fast';
   /** A private immutable config copy used to create this turn's client. */
   readonly llm: any;
   /** The exact provider/client instance used for every ordinary model call. */
@@ -26,6 +27,7 @@ export interface ResolvedTurnRouteSource {
   providerId?: string;
   model?: string;
   reasoningEffort?: unknown;
+  speed?: unknown;
   accountId?: string;
 }
 
@@ -60,6 +62,11 @@ export function captureTurnRouteSnapshot(
   const model = resolveModel(raw, providerId, input.model);
   const requestedAccountId = String(input.accountId || '').trim();
   const accountId = requestedAccountId || resolveAccount(raw, providerId);
+  const providerConfig = raw?.llm?.providers?.[providerId] || {};
+  const configuredSpeed = input.speed === undefined
+    ? providerConfig.speed || (providerConfig.fast_mode === true ? 'fast' : 'standard')
+    : input.speed;
+  const speed = normalizeSpeed(providerId, model, configuredSpeed);
   const llm = cloneAndFreeze({
     ...(raw?.llm || {}),
     provider: providerId,
@@ -78,6 +85,7 @@ export function captureTurnRouteSnapshot(
     model,
     accountId: identity?.accountId || accountId,
     reasoningEffort,
+    speed,
     llm,
     provider,
     contextProfile,

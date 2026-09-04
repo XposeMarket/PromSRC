@@ -55,9 +55,19 @@ export function createDesktopQuestionTransport(options = {}) {
       switchSession(targetSessionId);
       syncActiveChat();
     }
-    schedule(() => sendResume(resumePrompt, {
-      clientRequestId: createClientRequestId(targetSessionId || getActiveSessionId()),
-    }), 100);
+    await new Promise((resolve, reject) => {
+      try {
+        schedule(() => {
+          Promise.resolve()
+            .then(() => sendResume(resumePrompt, {
+              clientRequestId: createClientRequestId(targetSessionId || getActiveSessionId()),
+            }))
+            .then(() => resolve(true), reject);
+        }, 100);
+      } catch (error) {
+        reject(error);
+      }
+    });
     return true;
   }
 

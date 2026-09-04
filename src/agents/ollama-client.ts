@@ -95,6 +95,7 @@ export class OllamaClient {
       num_predict?: number;
       think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
+      speed?: 'standard' | 'fast';
       onToken?: (chunk: string) => void;
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;
@@ -110,6 +111,7 @@ export class OllamaClient {
       num_ctx: options?.num_ctx,
       tools: options?.tools,
       think: options?.think,
+      speed: options?.speed,
       onToken: options?.onToken,
       onThinking: options?.onThinking,
       onReasoningSummary: options?.onReasoningSummary,
@@ -135,6 +137,7 @@ export class OllamaClient {
         numCtx: options?.num_ctx,
         tools: options?.tools,
         think: options?.think,
+        speed: options?.speed,
         omitIntradayNotes: options?.omitIntradayNotes,
       },
     };
@@ -230,6 +233,7 @@ export class OllamaClient {
       think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
+      speed?: 'standard' | 'fast';
       onToken?: (chunk: string) => void;
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;

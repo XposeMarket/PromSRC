@@ -152,6 +152,7 @@ import {
   appendTeamRoomMessage,
   appendMainAgentThread,
   queueAgentMessage,
+  recordTeamRun,
   updateTeamFocus,
   updateTeamMission,
   logCompletedWork,
@@ -6650,6 +6651,36 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           text: String(inviteChatMsg?.content || ''),
         });
 
+        const startedAt = Date.now();
+        const publishTeamMemberRoomResult = (result: any, fallbackTaskId?: string) => {
+          const finishedAt = Date.now();
+          recordTeamRun(teamId, {
+            agentId,
+            agentName: result?.agentName || agentName,
+            trigger: 'manual',
+            taskId: result?.taskId || fallbackTaskId,
+            success: result?.success === true,
+            startedAt,
+            finishedAt,
+            durationMs: Number(result?.durationMs || Math.max(0, finishedAt - startedAt)),
+            stepCount: Number(result?.stepCount || 0),
+            error: result?.success === true ? undefined : String(result?.error || result?.result || 'unknown error'),
+            resultPreview: result?.success === true ? String(result?.result || '').slice(0, 3000) : undefined,
+            processEntries: result?.processEntries,
+            liveTraceEntries: result?.liveTraceEntries,
+          });
+          deps.broadcastTeamEvent({
+            type: 'team_subagent_completed',
+            teamId,
+            teamName: team.name,
+            agentId,
+            agentName: result?.agentName || agentName,
+            taskId: result?.taskId || fallbackTaskId,
+            success: result?.success === true,
+            resultPreview: String(result?.result || result?.error || '').slice(0, 800),
+            trigger: 'manual',
+          });
+        };
         const run = async () => {
           const result = await runTeamMemberRoomTurn(teamId, agentId, prompt);
           return result;
@@ -6659,6 +6690,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const taskId = `team_room_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
           const promise = run()
             .then((result) => {
+              publishTeamMemberRoomResult(result, taskId);
               const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = result.success ? 'complete' : 'failed';
@@ -6684,13 +6716,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               return result;
             })
             .catch((err: any) => {
-              const result = {
+              const result: any = {
                 success: false,
                 result: '',
                 error: String(err?.message || err),
                 durationMs: 0,
                 agentName,
               };
+              publishTeamMemberRoomResult(result, taskId);
               const entry = getBgAgentResults().get(taskId);
               if (entry) {
                 entry.status = 'failed';
@@ -6734,6 +6767,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
 
         const result = await run();
+        publishTeamMemberRoomResult(result);
         try {
           const subagentChatMsg = appendSubagentChatMessage(agentId, {
             role: 'agent',
@@ -6866,6 +6900,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               durationMs: result.durationMs,
               thinking: result.thinking,
               processEntries: result.processEntries,
+              liveTraceEntries: result.liveTraceEntries,
             },
           });
           try {
@@ -6884,6 +6919,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 durationMs: result.durationMs,
                 thinking: result.thinking,
                 processEntries: result.processEntries,
+                liveTraceEntries: result.liveTraceEntries,
               },
             });
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId, message: subagentChatMsg });
@@ -15996,6 +16032,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                     durationMs: result.durationMs,
                     thinking: result.thinking,
                     processEntries: result.processEntries,
+                    liveTraceEntries: result.liveTraceEntries,
                   },
                 });
                 deps.broadcastTeamEvent({

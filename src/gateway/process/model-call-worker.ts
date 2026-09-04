@@ -234,6 +234,7 @@ async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, bat
       num_ctx: request.options?.numCtx,
       tools: request.options?.tools,
       think: request.options?.think,
+      speed: request.options?.speed,
       omitIntradayNotes: request.options?.omitIntradayNotes,
       abortSignal: signal,
       onToken: (value) => batcher.enqueue('token', value),

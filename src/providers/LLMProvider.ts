@@ -62,6 +62,8 @@ export interface ChatOptions {
   num_ctx?: number;
   tools?: any[];
   think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  /** Provider speed tier for this chat route. */
+  speed?: 'standard' | 'fast';
   /** Called with each text token as it streams from the model. */
   onToken?: (chunk: string) => void;
   /** Called with provider-visible reasoning/thinking deltas as they stream. */
