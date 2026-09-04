@@ -2275,8 +2275,23 @@ export function createMobileChatRendererRuntime(context = {}) {
         _restoreMobileTraceDetailsState(currentBody, detailsState);
       }
     } else if (currentGroup.innerHTML !== nextGroup.innerHTML) {
+      // Vision groups contain decoded screenshots. A normal innerHTML
+      // replacement throws those image nodes away on every following tool
+      // event, so mobile can show a blank/loading card until the turn or a
+      // reconnect causes a later paint. Keep each preview button by its
+      // stable preview key while updating the surrounding trace markup.
+      const stablePreviews = new Map();
+      currentGroup.querySelectorAll?.('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        if (key) stablePreviews.set(key, node);
+      });
       const detailsState = _captureMobileTraceDetailsState(currentGroup);
       currentGroup.innerHTML = nextGroup.innerHTML;
+      currentGroup.querySelectorAll?.('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        const stable = key ? stablePreviews.get(key) : null;
+        if (stable && stable !== node) node.replaceWith(stable);
+      });
       _restoreMobileTraceDetailsState(currentGroup, detailsState);
     }
     if ('open' in currentGroup) currentGroup.open = wasOpen;

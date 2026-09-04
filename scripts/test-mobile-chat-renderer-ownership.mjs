@@ -93,6 +93,10 @@ const measurements = {
 // Additive older-message pagination retains the existing tail while a page is
 // prepended, adding the next measured increment. Keep the ceiling narrow.
 // Durable thought/summary separation adds the next small measured increment.
-assert(measurements.gzipBytes <= 255950, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
+// Live mobile vision previews add eager loading, paired-gateway URL
+// normalization, and stable DOM-node reuse so screenshots remain visible while
+// subsequent tool events patch the same turn. Keep the ceiling narrow around
+// the refreshed production measurement.
+assert(measurements.gzipBytes <= 256500, `Chat renderer slice regressed to ${measurements.gzipBytes} gzip bytes`);
 console.log(JSON.stringify({ buildId: manifest.buildId, measurements, rendererOutput }, null, 2));
 console.log('Mobile Chat renderer ownership contract passed.');

@@ -1004,6 +1004,7 @@ const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
   'progress_state',
   'thinking',
   'agent_thought',
+  'vision_injected',
   'final',
   'done',
   'error',

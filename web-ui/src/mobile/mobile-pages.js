@@ -58,7 +58,7 @@ import {
   loadMobileCommandModels, loadMobileStopTargets, stopMobileMainChat, stopMobileRuntime,
   runMobileScreenshotCommand, restartMobileGateway, requestMobileUpdate,
   loadMobileWorkspaceFiles, loadMobileFileScreenshot,
-  loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl, buildDownloadMediaUrl, buildWorkspaceCanvasUrl,
+  loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl, buildMobileVisionPreviewUrl, buildDownloadMediaUrl, buildWorkspaceCanvasUrl,
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentMemory, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
@@ -1102,6 +1102,32 @@ function _compactMobileThreadCacheActivity(activity) {
   return Object.keys(compact).length ? compact : undefined;
 }
 
+function _compactMobileThreadCachePreview(preview, fallbackDataUrl = '') {
+  const source = preview && typeof preview === 'object' ? preview : {};
+  const rawDataUrl = String(source.dataUrl || fallbackDataUrl || '').trim();
+  const dataUrl = buildMobileVisionPreviewUrl(rawDataUrl);
+  if (!dataUrl) return undefined;
+  // Keep reconnect snapshots bounded and never persist a truncated data URL.
+  // Route-backed desktop/canvas previews are small; browser capture data URLs
+  // are retained only when they can fit as a complete image in the cache.
+  if (/^data:image\//i.test(dataUrl) && dataUrl.length > 180_000) return undefined;
+  const compact = {
+    dataUrl,
+    mimeType: String(source.mimeType || '').trim() || undefined,
+    width: Number(source.width || 0) || undefined,
+    height: Number(source.height || 0) || undefined,
+    screenshotId: String(source.screenshotId || '').trim() || undefined,
+    capturedAt: Number(source.capturedAt || 0) || undefined,
+    title: String(source.title || '').trim() || undefined,
+    artifactKind: String(source.artifactKind || '').trim() || undefined,
+    previewId: String(source.previewId || '').trim() || undefined,
+    generationId: String(source.generationId || '').trim() || undefined,
+    workspacePath: String(source.workspacePath || '').trim() || undefined,
+    cacheKey: String(source.cacheKey || '').trim() || undefined,
+  };
+  return Object.fromEntries(Object.entries(compact).filter(([, value]) => value !== undefined));
+}
+
 function _compactMobileThreadCacheTrace(entries, limit = 180) {
   return (Array.isArray(entries) ? entries : [])
     .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry))
@@ -1111,6 +1137,7 @@ function _compactMobileThreadCacheTrace(entries, limit = 180) {
     const text = String(entry.text || entry.content || entry.message || '').slice(0, 4200);
     const extra = _compactMobileThreadCacheExtra(entry.extra);
     const activity = _compactMobileThreadCacheActivity(entry.activity);
+    const preview = _compactMobileThreadCachePreview(entry.preview, entry.dataUrl);
     const compact = {
       id: String(entry.id || '').trim() || undefined,
       type: String(entry.type || entry.kind || 'event').trim() || 'event',
@@ -1120,6 +1147,7 @@ function _compactMobileThreadCacheTrace(entries, limit = 180) {
       endTs: Number(entry.endTs || 0) || undefined,
       ...(extra ? { extra } : {}),
       ...(activity ? { activity } : {}),
+      ...(preview ? { preview } : {}),
     };
     return compact;
     }).filter((entry) => entry && (entry.text || entry.activity || entry.extra));
@@ -4265,18 +4293,18 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
 }
 
 function _isRenderableMobileTraceImageSource(value) {
-  const source = String(value || '').trim();
-  return /^data:image\//i.test(source)
-    || /^\/api\/canvas\/inline\?path=/i.test(source)
-    || /^\/api\/canvas\/generated-image-preview\?cache=/i.test(source)
-    || /^\/api\/chat\/desktop-screenshot-preview\//i.test(source);
+  return !!buildMobileVisionPreviewUrl(value);
 }
 
 function _appendMobileVisionTrace(message, evt) {
   if (!message || !evt) return;
   const preview = evt.preview && typeof evt.preview === 'object' ? evt.preview : {};
-  const dataUrl = String(preview.dataUrl || evt.dataUrl || '').trim();
+  const rawDataUrl = String(preview.dataUrl || evt.dataUrl || '').trim();
+  const dataUrl = buildMobileVisionPreviewUrl(rawDataUrl);
   if (!_isRenderableMobileTraceImageSource(dataUrl)) return;
+  const normalizedPreview = preview.dataUrl === dataUrl
+    ? preview
+    : { ...preview, dataUrl };
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const sourceValue = String(evt.source || '').toLowerCase();
   if (sourceValue === 'generated_image') message._pmBackgroundImageGeneration = true;
@@ -4284,10 +4312,10 @@ function _appendMobileVisionTrace(message, evt) {
   const tool = String(evt.tool || evt.action || evt.name || '').trim();
   const text = String(evt.label || `Vision injected: ${tool ? _mobileToolLabel({ ...evt, action: tool }) : `${source} observation`}`).trim();
   if (sourceValue === 'generated_image') {
-    const incomingPreviewId = String(preview.previewId || '').trim();
-    const incomingGenerationId = String(preview.generationId || '').trim();
-    const incomingWorkspacePath = String(preview.workspacePath || '').trim();
-    const incomingCacheKey = String(preview.cacheKey || '').trim();
+    const incomingPreviewId = String(normalizedPreview.previewId || '').trim();
+    const incomingGenerationId = String(normalizedPreview.generationId || '').trim();
+    const incomingWorkspacePath = String(normalizedPreview.workspacePath || '').trim();
+    const incomingCacheKey = String(normalizedPreview.cacheKey || '').trim();
     const priorIndex = message.liveTraceEntries.findIndex((entry) =>
       entry?.type === 'vision'
       && String(entry?.preview?.artifactKind || '') === 'generated_image_partial'
@@ -4307,9 +4335,9 @@ function _appendMobileVisionTrace(message, evt) {
     type: 'vision',
     text,
     time: _nowTime(),
-    preview,
-    previewTitle: String(evt.previewTitle || preview.title || `${source} preview`),
-    previewKey: _mobileVisionPreviewKey(dataUrl, preview),
+    preview: normalizedPreview,
+    previewTitle: String(evt.previewTitle || normalizedPreview.title || `${source} preview`),
+    previewKey: _mobileVisionPreviewKey(dataUrl, normalizedPreview),
   });
 }
 
@@ -4696,6 +4724,8 @@ function _renderMobileLiveTracePreview(entry) {
   const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
   const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
   if (!_isRenderableMobileTraceImageSource(dataUrl)) return '';
+  const source = buildMobileVisionPreviewUrl(dataUrl);
+  if (!source) return '';
   const title = String(entry?.previewTitle || preview?.title || entry?.text || 'Vision preview').trim();
   const width = Number(preview?.width || entry?.width || 0);
   const height = Number(preview?.height || entry?.height || 0);
@@ -4703,7 +4733,7 @@ function _renderMobileLiveTracePreview(entry) {
   const aspect = width > 0 && height > 0 ? `${Math.max(1, Math.round(width))} / ${Math.max(1, Math.round(height))}` : '16 / 9';
   const key = String(entry?.previewKey || _mobileVisionPreviewKey(dataUrl, preview)).trim();
   return `<button type="button" class="pm-live-vision-preview" data-pm-live-vision-preview="${escapeHtml(key)}" title="${escapeHtml(title + dims)}" style="--pm-vision-aspect:${escapeHtml(aspect)}">
-    <img src="${escapeHtml(dataUrl)}" alt="${escapeHtml(title)}" loading="lazy" decoding="async"${width > 0 ? ` width="${escapeHtml(String(Math.round(width)))}"` : ''}${height > 0 ? ` height="${escapeHtml(String(Math.round(height)))}"` : ''}>
+    <img src="${escapeHtml(source)}" alt="${escapeHtml(title)}" loading="eager" decoding="async"${width > 0 ? ` width="${escapeHtml(String(Math.round(width)))}"` : ''}${height > 0 ? ` height="${escapeHtml(String(Math.round(height)))}"` : ''}>
   </button>`;
 }
 

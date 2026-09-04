@@ -10,7 +10,9 @@ const router = read('src/gateway/routes/chat.router.ts');
 const durableTrace = read('src/gateway/durable-chat-trace.ts');
 const executor = read('src/gateway/agents-runtime/subagent-executor.ts');
 const desktop = read('web-ui/src/pages/ChatPage.js');
+const mobileApi = read('web-ui/src/mobile/mobile-api.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
+const mobileRuntime = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 
 assert.match(
   router,
@@ -45,16 +47,21 @@ assert.match(executor, /case 'analyze_image':[\s\S]{0,900}?data: toolResult\.suc
 assert.match(executor, /case 'analyze_video':[\s\S]{0,1600}?data: toolResult\.success === true \? toolResult\.data : undefined/, 'analyze_video must preserve contact-sheet and frame metadata for preview emission');
 
 assert.match(mobile, /case 'vision_injected':[\s\S]{0,180}?_appendMobileVisionTrace\(aiTurn, evt\)/, 'mobile live streams must append screenshot previews');
-assert.match(mobile, /liveTraceEntries: Array\.isArray\(msg\.liveTraceEntries\)[\s\S]{0,100}?msg\.liveTraceEntries/, 'mobile session history must retain screenshot trace entries');
+assert.match(mobile, /liveTraceEntries: Array\.isArray\(m\??\.liveTraceEntries\)[\s\S]{0,120}?m\??\.liveTraceEntries/, 'mobile session history must retain screenshot trace entries');
 assert.match(desktop, /liveTraceEntries: Array\.isArray\(streamState\.liveTraceEntries\) \? streamState\.liveTraceEntries\.slice\(\) : undefined/, 'desktop completed turns must retain screenshot trace entries');
 assert.match(desktop, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/, 'desktop screenshots must break out of collapsible tool groups');
 assert.match(desktop, /class="live-turn-vision-break"/, 'desktop must render a standalone screenshot timeline card');
-assert.match(mobile, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/, 'mobile screenshots must break out of collapsible tool groups');
-assert.match(mobile, /class="pm-trace-vision-break"/, 'mobile must render a standalone screenshot timeline card');
+assert.match(mobileRuntime, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/, 'mobile screenshots must break out of collapsible tool groups');
+assert.match(mobileRuntime, /class="pm-trace-vision-break"/, 'mobile must render a standalone screenshot timeline card');
 assert.match(desktop, /isRenderableLiveTraceImageSource[\s\S]{0,180}?api\\\/canvas\\\/inline/, 'desktop must accept same-origin analysis preview URLs');
-assert.match(mobile, /_isRenderableMobileTraceImageSource[\s\S]{0,180}?api\\\/canvas\\\/inline/, 'mobile must accept same-origin analysis preview URLs');
 assert.match(desktop, /isRenderableLiveTraceImageSource[\s\S]{0,320}?desktop-screenshot-preview/, 'desktop must accept wrapper screenshot preview URLs');
-assert.match(mobile, /_isRenderableMobileTraceImageSource[\s\S]{0,320}?desktop-screenshot-preview/, 'mobile must accept wrapper screenshot preview URLs');
+assert.match(mobileApi, /export function buildMobileVisionPreviewUrl/, 'mobile must expose a vision preview URL normalizer');
+assert.match(mobileApi, /isMobileVisionPreviewPath[\s\S]{0,260}?desktop-screenshot-preview/, 'mobile must normalize wrapper screenshot preview URLs');
+assert.match(mobileApi, /isMobileVisionPreviewPath[\s\S]{0,360}?canvas\/inline/, 'mobile must normalize same-origin analysis preview URLs');
+assert.match(mobile, /const dataUrl = buildMobileVisionPreviewUrl\(rawDataUrl\)/, 'mobile live vision events must normalize their preview source');
+assert.match(mobile, /loading="eager"/, 'mobile live vision previews must load immediately');
+assert.match(mobileRuntime, /stablePreviews[\s\S]{0,900}?data-pm-live-vision-preview[\s\S]{0,500}?currentGroup\.innerHTML/, 'mobile timeline patches must preserve decoded vision preview nodes');
+assert.match(router, /MAIN_CHAT_WS_DIRECT_EVENTS[\s\S]{0,300}?vision_injected/, 'mobile websocket streams must deliver vision events immediately');
 assert.match(router, /desktop-screenshot-preview\/:sessionId\/:screenshotId/, 'gateway must expose exact desktop packet previews');
 assert.doesNotMatch(router, /sendSSE\('info', \{ message: `Vision screenshot injected \(desktop\)/, 'desktop injection status noise must stay hidden');
 assert.match(desktop, /isVisionInjectionStatusText\(normalizedText\)/, 'desktop recovery must hide legacy injection status rows');
