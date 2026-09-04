@@ -1,6 +1,6 @@
 // Chat and inline Voice route owner.
 import {
-  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
+  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
 import {
@@ -9755,8 +9755,11 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     pop.id = 'pm-chat-settings-popover';
     pop.className = 'pm-chat-settings-popover';
     pop.setAttribute('aria-label', 'Chat settings menu');
+    const activeChatSessionId = String(window.__pmChat?.activeSessionId || '').trim();
+    const activeChatPinned = activeChatSessionId ? isMobileChatPinned(activeChatSessionId) : false;
     pop.innerHTML = `
       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications" aria-pressed="false"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.bell}</span><span class="pm-chat-settings-menu-label">Notifications</span><span class="pm-chat-settings-menu-status" id="pm-chat-settings-notifications-status" aria-hidden="true" hidden>${ICONS.check}</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-pin" type="button" data-action="pin" aria-pressed="${activeChatPinned ? 'true' : 'false'}"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.pin}</span><span class="pm-chat-settings-menu-label">${activeChatPinned ? 'Unpin from top' : 'Pin to top'}</span></button>
       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-files" type="button" data-action="files"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.doc}</span><span class="pm-chat-settings-menu-label">Files</span></button>
       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-resources" type="button" data-action="resources"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.layers}</span><span class="pm-chat-settings-menu-label">Resources</span></button>
       <button class="pm-chat-settings-menu-item" id="pm-chat-settings-permissions" type="button" data-action="permissions"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.shield}</span><span class="pm-chat-settings-menu-label">Permissions</span></button>
@@ -9796,6 +9799,26 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
       requestAnimationFrame(() => {
         _toggleMobileChatPushNotifications().catch(() => {});
       });
+    }, { passive: true });
+
+    pop.querySelector('#pm-chat-settings-pin')?.addEventListener('click', async () => {
+      if (!activeChatSessionId) {
+        closeMenu();
+        pmToast('No active chat to pin', 'error');
+        return;
+      }
+      const pinButton = pop.querySelector('#pm-chat-settings-pin');
+      if (pinButton) pinButton.disabled = true;
+      try {
+        const nowPinned = await toggleMobileChatPin(activeChatSessionId);
+        closeMenu();
+        invalidateMobileDrawerSessions();
+        refreshMobileDrawerSessions({ force: true }).catch(() => {});
+        pmToast(nowPinned ? 'Chat pinned to top' : 'Chat unpinned', 'success');
+      } catch (err) {
+        if (pinButton) pinButton.disabled = false;
+        pmToast(err?.message || 'Could not update pin', 'error');
+      }
     }, { passive: true });
 
     pop.querySelector('#pm-chat-settings-files')?.addEventListener('click', () => {

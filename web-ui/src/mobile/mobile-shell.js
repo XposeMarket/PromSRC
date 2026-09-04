@@ -194,6 +194,14 @@ function _mobileSessionRequest(sessionId, suffix = '', options = {}) {
   return gatewayFetchJson(target, path, options);
 }
 
+export function isMobileChatPinned(sessionId) {
+  return _isPinned(sessionId);
+}
+
+export async function toggleMobileChatPin(sessionId) {
+  return _togglePin(sessionId);
+}
+
 async function _togglePin(sessionId) {
   const id = String(sessionId || '');
   if (!id) return false;
