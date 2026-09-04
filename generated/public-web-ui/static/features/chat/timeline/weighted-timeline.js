@@ -253,10 +253,32 @@ export function createWeightedTimelineController(defaults = {}) {
       if (state.mode !== 'accumulate') state.mode = 'anchor';
       state.anchorKey = String(options.anchorKey);
     }
-    const accumulated = state.mode === 'accumulate';
-    const accumulatedStart = accumulated && state.accumulatedStartKey
-      ? Math.max(0, list.findIndex((entry) => entry.key === state.accumulatedStartKey))
-      : 0;
+    let accumulated = state.mode === 'accumulate';
+    let accumulatedStart = 0;
+    if (accumulated) {
+      accumulatedStart = state.accumulatedStartKey
+        ? list.findIndex((entry) => entry.key === state.accumulatedStartKey)
+        : -1;
+      if (accumulatedStart < 0) {
+        // A refresh/recovery can replace or trim the backing transcript while
+        // leaving the timeline controller alive. Do not interpret a missing
+        // accumulated-start key as index zero: that would paint/materialize the
+        // entire replacement transcript and bypass the normal weight budgets.
+        const recoveredAnchorIndex = state.anchorKey
+          ? list.findIndex((entry) => entry.key === state.anchorKey)
+          : -1;
+        state.accumulatedStartKey = '';
+        if (recoveredAnchorIndex >= 0) {
+          state.mode = 'anchor';
+          state.anchorIndex = recoveredAnchorIndex;
+        } else {
+          state.mode = 'tail';
+          state.anchorKey = '';
+          state.anchorIndex = -1;
+        }
+        accumulated = false;
+      }
+    }
     let anchorIndex = accumulated ? accumulatedStart : list.length - 1;
     if (state.mode === 'anchor') {
       const keyedIndex = state.anchorKey ? list.findIndex((entry) => entry.key === state.anchorKey) : -1;
