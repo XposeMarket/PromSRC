@@ -76,10 +76,15 @@ export function isPrometheusFileToolName(name: unknown): boolean {
 export function filterToolDefinitionsForWorkspaceMode(
   toolDefs: any[],
   modeOrConfig: WorkspaceToolMode | any = DEFAULT_WORKSPACE_TOOL_MODE,
+  options: { allowNativeFileTools?: boolean } = {},
 ): any[] {
   const mode = typeof modeOrConfig === 'string'
     ? normalizeWorkspaceToolMode(modeOrConfig)
     : getWorkspaceToolMode(modeOrConfig);
-  if (mode !== 'terminal-first') return toolDefs;
+  // Brain Thought/Dream runs are explicitly scoped trusted runtimes. They
+  // still use the configured terminal-first policy for ordinary turns, but
+  // may opt back into native file tools when their prompt and mutation scope
+  // require them. This does not change the global workspace-tool setting.
+  if (mode !== 'terminal-first' || options.allowNativeFileTools === true) return toolDefs;
   return toolDefs.filter((tool: any) => !isPrometheusFileToolName(tool?.function?.name));
 }
