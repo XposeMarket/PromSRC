@@ -103,6 +103,7 @@
     "test:brain-proposal-policy": "tsx src/gateway/brain/brain-proposal-policy.regression.ts",
     "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:brain-runtime-policy": "tsx src/gateway/brain/brain-runner-progress.regression.ts",
+    "test:brain-scheduled-chat": "tsx src/gateway/brain/brain-runner-scheduled-chat.regression.ts",
     "test:brain-provider-diagnostics": "tsx src/gateway/brain/brain-provider-diagnostics.regression.ts && tsx src/providers/openai-codex-adapter.regression.ts",
     "test:openai-compat-reasoning": "tsx src/providers/openai-compat-adapter.regression.ts",
     "test:memory-worker-readiness": "tsx src/gateway/memory-index/memory-search-worker-readiness.regression.ts",
