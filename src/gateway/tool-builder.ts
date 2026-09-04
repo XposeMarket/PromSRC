@@ -47,6 +47,8 @@ export interface BuildToolsDeps {
 export interface BuildToolsOptions {
   /** Expose run-scoped Brain Thought tools only to an active Thought session. */
   includeBrainThoughtTools?: boolean;
+  /** Permit an explicitly scoped Brain runtime to see native workspace tools. */
+  allowNativeWorkspaceTools?: boolean;
 }
 
 // ─── Tool Category System ─────────────────────────────────────────────────────
@@ -1048,6 +1050,7 @@ function trimToolBuildCache(): void {
 export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>, options: BuildToolsOptions = {}) {
   const { getMCPManager } = deps;
   const includeBrainThoughtTools = options.includeBrainThoughtTools === true;
+  const allowNativeWorkspaceTools = options.allowNativeWorkspaceTools === true;
   const configSnapshot = getConfig().getConfig() as any;
   const workspaceToolMode = getWorkspaceToolMode(configSnapshot);
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
@@ -1098,6 +1101,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
       `workspaceMode:${workspaceToolMode}`,
       `brainThought:${includeBrainThoughtTools ? '1' : '0'}`,
+      `nativeWorkspace:${allowNativeWorkspaceTools ? '1' : '0'}`,
       `extensions:${extensionRevision}`,
       `mcp:${mcpToolSignature}`,
       `cats:${stableCategoryKey(normalizedActiveCategories)}`,
@@ -1617,6 +1621,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const visibleToolDefs = filterToolDefinitionsForWorkspaceMode(
     runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || ''))),
     workspaceToolMode,
+    { allowNativeFileTools: allowNativeWorkspaceTools },
   );
 
   // Canonical classification is authoritative by default. Keep the legacy

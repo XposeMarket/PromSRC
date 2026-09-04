@@ -2756,7 +2756,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2815,6 +2815,7 @@ async function handleChat(
     : undefined;
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isBrainThoughtRuntime = runtimeOptions?.brainThoughtRuntime === true;
+  const allowNativeWorkspaceTools = runtimeOptions?.allowNativeWorkspaceTools === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
   const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
@@ -3188,11 +3189,13 @@ async function handleChat(
     const activeCategories = categoryOverride
       ? [...categoryOverride].map(String).sort()
       : [...getActivatedToolCategories(sessionId)].map(String).sort();
-    const cacheKey = `${categoryOverride ? 'override' : 'session'}:${activeCategories.join(',')}`;
+    const cacheKey = `${categoryOverride ? 'override' : 'session'}:${activeCategories.join(',')}:nativeWorkspace:${allowNativeWorkspaceTools ? '1' : '0'}`;
     const cacheHit = builtToolSurfaceCache.has(cacheKey);
     const surfaceStartedAt = Date.now();
     const allBuiltTools = builtToolSurfaceCache.get(cacheKey)
-      || (categoryOverride ? _buildTools({ getMCPManager }, categoryOverride) : buildTools(sessionId));
+      || (categoryOverride
+        ? _buildTools({ getMCPManager }, categoryOverride, { allowNativeWorkspaceTools })
+        : buildTools(sessionId, { allowNativeWorkspaceTools }));
     if (!cacheHit) {
       builtToolSurfaceCache.set(cacheKey, allBuiltTools);
       toolSurfaceGeneration += 1;

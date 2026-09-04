@@ -33,6 +33,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Verify Brain provider diagnostics and bounded failures
         run: npm run test:brain-provider-diagnostics
+      - name: Verify scheduled Brain chat runtime contract
+        run: npm run test:brain-scheduled-chat
       - name: Verify proposal approval durability
         run: |
           npx tsx src/gateway/proposals/proposal-approval-flow.regression.ts
