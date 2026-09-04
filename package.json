@@ -94,6 +94,7 @@
     "test:reasoning-capabilities": "npm run build:backend && node scripts/test-reasoning-capabilities.mjs",
     "test:p6-subagents-runs-proposals-ui": "node scripts/test-p6-subagents-runs-proposals-ui.mjs",
     "test:desktop-subagent-chat": "node scripts/test-desktop-subagent-chat-ui.mjs",
+    "test:multi-chat-main-tab-cap": "node scripts/test-multi-chat-main-tab-cap.mjs",
     "test:work-narrative": "npm run build:backend && node scripts/test-work-narrative-stream.mjs",
     "test:goal-restart": "npm run build:backend && node scripts/test-main-chat-goal-restart-contract.mjs && node scripts/test-main-chat-goal-crash-recovery.mjs && node scripts/test-main-chat-goal-steer-contract.mjs",
     "test:goal-continuity": "tsx src/gateway/main-chat-goal-continuity.regression.ts",

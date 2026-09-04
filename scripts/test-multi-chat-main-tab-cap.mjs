@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const sourcePath = path.join(process.cwd(), 'web-ui', 'src', 'features', 'chat', 'multi-chat-workspace-v2.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
-const match = source.match(/function ensureMainTab\([\s\S]*?\n}\n\nfunction closeNativeSideIfOwned/);
+const match = source.match(/function ensureMainTab\([\s\S]*?\r?\n}\r?\n\r?\nfunction closeNativeSideIfOwned/);
 if (!match) throw new Error('ensureMainTab implementation not found');
 const block = match[0];
 if (!/state\.tabs\.unshift\(/.test(block)) throw new Error('ensureMainTab must prepend the current main tab');
