@@ -38,8 +38,23 @@ if (!/id="canvas-diff-btn"/.test(read('web-ui/index.html'))
   || !/id="canvas-diff-wrap"/.test(read('web-ui/index.html'))
   || !/function renderCanvasDiffInto\(/.test(chatPage)
   || !/\/api\/coding\/diff\?/.test(chatPage)
-  || !/tab\.openMode === 'diff'/.test(chatPage)) {
+  || !/tab\.openMode === 'diff'/.test(chatPage)
+  || !/tab\?\.workspacePath \|\| tab\?\.diskPath \|\| tab\?\.originalPath/.test(chatPage)) {
   throw new Error('Canvas must expose a turn-scoped diff surface for opened files');
+}
+
+const codingRouter = read('src/gateway/routes/coding.router.ts');
+if (!/function resolveDiffRoot\(/.test(codingRouter)
+  || !/findCodingGitRoot\(file\)/.test(codingRouter)
+  || !/path\.isAbsolute\(file\) && !fileIsInsideRoot/.test(codingRouter)) {
+  throw new Error('Coding Diff must resolve an opened absolute file against its own repository root');
+}
+
+const workspaceContext = read('src/gateway/coding/workspace-context.ts');
+if (!/readSessionFileChanges\(input\.sessionId, root, filePath\)/.test(workspaceContext)
+  || !/historyHasTarget/.test(workspaceContext)
+  || !/if \(preferred\) return preferred;[\s\S]*?return null;\s*\}\s*const snapshotRoot/.test(workspaceContext)) {
+  throw new Error('Coding Diff must avoid the unbounded process/snapshot scans on a targeted turn lookup');
 }
 
 console.log('desktop turn-file diff contract: end-of-turn rows reuse Canvas Diff and keep the modal out of the chat flow');

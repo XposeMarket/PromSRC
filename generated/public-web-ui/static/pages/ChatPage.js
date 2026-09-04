@@ -43191,7 +43191,11 @@ function canvasDiffRoot(tab) {
 }
 
 function canvasDiffFilePath(tab) {
-  return String(tab?.diskPath || tab?.workspacePath || tab?.originalPath || '').trim();
+  // Keep the workspace-relative/native workspace path in the request when it
+  // is available. This matches the mobile Canvas contract and lets the
+  // gateway associate the file with the turn's workspace baseline before
+  // falling back to an external/original disk path.
+  return String(tab?.workspacePath || tab?.diskPath || tab?.originalPath || '').trim();
 }
 
 async function renderCanvasDiffInto(host, tab) {

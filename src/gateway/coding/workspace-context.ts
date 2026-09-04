@@ -307,10 +307,22 @@ function parseStatus(root: string): Array<{ path: string; status: CodingFileStat
   return rows;
 }
 
-function readSessionFileChanges(sessionId: string, workspaceRoot: string): Array<{ path: string; displayPath: string; updatedAt: number; status?: CodingFileStatus; insertions?: number; deletions?: number; baselineId?: string; baselineKind?: CodingBaselineKind; diffPreview?: string }> {
+type SessionFileChange = {
+  path: string;
+  displayPath: string;
+  updatedAt: number;
+  status?: CodingFileStatus;
+  insertions?: number;
+  deletions?: number;
+  baselineId?: string;
+  baselineKind?: CodingBaselineKind;
+  diffPreview?: string;
+};
+
+function readSessionFileChanges(sessionId: string, workspaceRoot: string, targetPath = ''): SessionFileChange[] {
   if (!sessionId || !sessionExists(sessionId)) return [];
   const session = getSession(sessionId);
-  const rows: Array<{ path: string; displayPath: string; updatedAt: number; status?: CodingFileStatus; insertions?: number; deletions?: number; baselineId?: string; baselineKind?: CodingBaselineKind; diffPreview?: string }> = [];
+  const rows: SessionFileChange[] = [];
   for (const message of Array.isArray(session.history) ? session.history : []) {
     const payload = message?.fileChanges;
     for (const file of Array.isArray(payload?.files) ? payload.files : []) {
@@ -330,29 +342,42 @@ function readSessionFileChanges(sessionId: string, workspaceRoot: string): Array
       });
     }
   }
-  try {
-    for (const run of getProcessSupervisor().list(500)) {
-      if (String(run.sessionId || '').trim() !== sessionId) continue;
-      const changes = Array.isArray(run.workspaceChanges) ? run.workspaceChanges : [];
-      for (const file of changes) {
-        const raw = String(file?.path || file?.absPath || file?.displayPath || '').trim();
-        if (!raw) continue;
-        const absolute = path.resolve(path.isAbsolute(raw) ? raw : path.join(run.workspacePath || workspaceRoot, raw));
-        if (!isInside(workspaceRoot, absolute)) continue;
-        rows.push({
-          path: absolute,
-          displayPath: String(file?.displayPath || displayPath(workspaceRoot, absolute)).replace(/\\/g, '/'),
-          updatedAt: Number(run.completedAt ? Date.parse(run.completedAt) : Date.parse(run.updatedAt || run.startedAt || '')) || Date.now(),
-          status: String(file?.status || '').trim() as CodingFileStatus || undefined,
-          insertions: Number(file?.insertions || 0),
-          deletions: Number(file?.deletions || 0),
-          baselineKind: String(file?.baselineKind || '').trim() as CodingBaselineKind || undefined,
-          baselineId: String(file?.baselineId || '').trim() || undefined,
-          diffPreview: String(file?.diffPreview || '').trim() || undefined,
-        });
+  // End-of-turn diffs are persisted on the assistant message. Avoid walking
+  // every historical process record when the requested file is already
+  // represented there: on long-lived installs this store can contain many
+  // thousands of JSON records, making a tiny Canvas diff take several seconds.
+  // Keep the process fallback for live/incomplete turns and older records that
+  // do not have message-level fileChanges yet.
+  const targetValue = String(targetPath || '').trim();
+  const normalizedTarget = targetValue
+    ? comparePath(path.resolve(path.isAbsolute(targetValue) ? targetValue : path.join(workspaceRoot, targetValue)))
+    : '';
+  const historyHasTarget = Boolean(normalizedTarget && rows.some((row) => comparePath(row.path) === normalizedTarget));
+  if (!historyHasTarget) {
+    try {
+      for (const run of getProcessSupervisor().list(500)) {
+        if (String(run.sessionId || '').trim() !== sessionId) continue;
+        const changes = Array.isArray(run.workspaceChanges) ? run.workspaceChanges : [];
+        for (const file of changes) {
+          const raw = String(file?.path || file?.absPath || file?.displayPath || '').trim();
+          if (!raw) continue;
+          const absolute = path.resolve(path.isAbsolute(raw) ? raw : path.join(run.workspacePath || workspaceRoot, raw));
+          if (!isInside(workspaceRoot, absolute)) continue;
+          rows.push({
+            path: absolute,
+            displayPath: String(file?.displayPath || displayPath(workspaceRoot, absolute)).replace(/\\/g, '/'),
+            updatedAt: Number(run.completedAt ? Date.parse(run.completedAt) : Date.parse(run.updatedAt || run.startedAt || '')) || Date.now(),
+            status: String(file?.status || '').trim() as CodingFileStatus || undefined,
+            insertions: Number(file?.insertions || 0),
+            deletions: Number(file?.deletions || 0),
+            baselineKind: String(file?.baselineKind || '').trim() as CodingBaselineKind || undefined,
+            baselineId: String(file?.baselineId || '').trim() || undefined,
+            diffPreview: String(file?.diffPreview || '').trim() || undefined,
+          });
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
   return Array.from(new Map(rows.map((row) => [comparePath(row.path), row])).values());
 }
 
@@ -397,6 +422,10 @@ function findLatestSnapshot(workspaceRoot: string, targetPath: string, preferred
     const direct = readSnapshotManifest(workspaceRoot, preferredId, targetPath);
     const preferred = forTarget(direct);
     if (preferred) return preferred;
+    // A caller-provided baseline ID is turn-scoped. If it cannot be resolved,
+    // there is no trustworthy comparison baseline; never substitute an
+    // unrelated snapshot discovered by scanning the whole archive.
+    return null;
   }
   const snapshotRoot = path.join(workspaceRoot, '.prometheus', 'history', 'snapshots');
   let entries: fs.Dirent[] = [];
@@ -658,7 +687,7 @@ export function getCodingWorkspaceDiff(input: { root?: string; file: string; ses
 
   if (repoRoot) {
     const sessionFile = input.sessionId
-      ? readSessionFileChanges(input.sessionId, root).find((item) => comparePath(item.path) === comparePath(filePath))
+      ? readSessionFileChanges(input.sessionId, root, filePath).find((item) => comparePath(item.path) === comparePath(filePath))
       : undefined;
     if (view === 'turn' && sessionFile) {
       baselineKind = sessionFile.baselineKind || (sessionFile.baselineId ? 'turn-snapshot' : 'git-head');
@@ -695,9 +724,15 @@ export function getCodingWorkspaceDiff(input: { root?: string; file: string; ses
     }
   } else {
     const sessionFile = input.sessionId
-      ? readSessionFileChanges(input.sessionId, root).find((item) => comparePath(item.path) === comparePath(filePath))
+      ? readSessionFileChanges(input.sessionId, root, filePath).find((item) => comparePath(item.path) === comparePath(filePath))
       : undefined;
-    const manifest = findLatestSnapshot(root, filePath, sessionFile?.baselineId);
+    // A turn-scoped request without a session file has no trustworthy turn
+    // baseline. Do not scan the entire snapshot archive and accidentally pick
+    // an unrelated historical snapshot; the caller can still use diffPreview
+    // when the session record provides one.
+    const manifest = view === 'turn' && !sessionFile
+      ? null
+      : findLatestSnapshot(root, filePath, sessionFile?.baselineId);
     const before = snapshotBeforeContent(manifest);
     if (manifest) {
       baselineKind = sessionFile?.baselineId ? 'turn-snapshot' : 'session-snapshot';

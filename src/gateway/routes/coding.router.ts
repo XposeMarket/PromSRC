@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import {
   getCodingWorkspaceSession,
   gitCommit,
@@ -18,6 +19,7 @@ import {
   getCodingWorkspaceContext,
   getCodingWorkspaceDiff,
   getCodingWorkspaceTree,
+  findCodingGitRoot,
   type CodingScope,
 } from '../coding/workspace-context';
 import { findProjectBySessionId } from '../projects/project-store';
@@ -37,6 +39,28 @@ function resolveRequestCodingRoot(rawRoot: string | undefined, rawSessionId: str
     if (sessionWorkspace) return resolveCodingRoot(sessionWorkspace);
   }
   return resolveCodingRoot(rawRoot);
+}
+
+function fileIsInsideRoot(root: string, file: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveDiffRoot(rawRoot: string | undefined, sessionId: string | undefined, file: string): string {
+  const resolved = resolveRequestCodingRoot(rawRoot, sessionId);
+  // Canvas can open a native/dev-root file whose absolute path is outside the
+  // session's default workspace. The mobile canvas resolves that file from its
+  // own workspace endpoint; give desktop Coding Diff the same behavior by
+  // deriving a Git root (or the file's directory) when the selected root cannot
+  // contain the requested absolute file.
+  if (path.isAbsolute(file) && !fileIsInsideRoot(resolved, file)) {
+    try {
+      const gitRoot = findCodingGitRoot(file);
+      if (gitRoot) return resolveCodingRoot(gitRoot);
+    } catch {}
+    return resolveCodingRoot(path.dirname(file));
+  }
+  return resolved;
 }
 
 router.get('/api/coding/session', (req, res) => {
@@ -79,15 +103,13 @@ router.get('/api/coding/repository', (req, res) => {
 router.get('/api/coding/diff', (req, res) => {
   try {
     const sessionId = req.query.sessionId ? String(req.query.sessionId) : undefined;
-    const root = resolveRequestCodingRoot(
-      req.query.root ? String(req.query.root) : undefined,
-      sessionId,
-    );
     const file = String(req.query.file || '').trim();
     if (!file) {
       res.status(400).json({ error: 'file is required' });
       return;
     }
+    const rawRoot = req.query.root ? String(req.query.root) : undefined;
+    const root = resolveDiffRoot(rawRoot, sessionId, file);
     res.json(getCodingWorkspaceDiff({
       root,
       file,
