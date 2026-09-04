@@ -16,6 +16,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
@@ -84,7 +85,7 @@ import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMess
 import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../chat/turn-route-snapshot';
 import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import { deriveContextWindowUsage } from '../context/context-window-usage';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
@@ -976,40 +977,10 @@ type MainChatStreamState = {
 const mainChatStreams = new Map<string, MainChatStreamState>();
 const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
-// Token deltas and provider-internal stream events are already delivered live
-// through SSE. Retaining every one for reconnect replay makes a long tool turn
-// grow the gateway heap for no user-visible benefit. Keep structural lifecycle
-// events in the replay buffer; a reconnect can still recover tool boundaries,
-// progress, and the terminal result.
-const MAIN_CHAT_STREAM_EPHEMERAL_EVENTS = new Set([
-  'heartbeat',
-  'token',
-  'thinking_delta',
-  'reasoning_summary_delta',
-  'model_stream_event',
-]);
 // A stream/lease without a running runtime can exist briefly while a caller is
 // wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
-const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
-  'user_message',
-  'session_title',
-  'agent_mode',
-  'ui_preflight',
-  'info',
-  'tool_call',
-  'tool_result',
-  'tool_progress',
-  'progress_state',
-  'thinking',
-  'agent_thought',
-  'final',
-  'done',
-  'error',
-  'warn',
-  'runtime_registered',
-]);
 const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 function getMainChatStream(sessionId: string): MainChatStreamState | null {
@@ -1110,13 +1081,6 @@ function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStrea
   finishMainChatStream(sessionId, stream.streamId);
 }
 
-function shouldRetainMainChatStreamEvent(type: string, data: any): boolean {
-  const normalized = String(type || '').trim().toLowerCase();
-  if (normalized !== 'model_stream_event') return !MAIN_CHAT_STREAM_EPHEMERAL_EVENTS.has(normalized);
-  const modelType = String(data?.event?.type || '').trim().toLowerCase();
-  return modelType === 'tool_call_start' || modelType === 'tool_call_done';
-}
-
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return null;
@@ -1127,7 +1091,8 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     at: Date.now(),
     data: cleanData,
   };
-  const retain = shouldRetainMainChatStreamEvent(frame.type, frame.data);
+  const delivery = classifyMainChatStreamEvent(frame.type, frame.data);
+  const retain = delivery.retain;
   if (retain) {
     stream.events.push(frame);
     if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
@@ -1139,7 +1104,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     stream.lastSemanticProgressAt = frame.at;
     stream.lastSemanticEvent = frame.type;
   }
-  if (retain && MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
+  if (delivery.live) {
     try {
       broadcastWS({
         type: 'main_chat_stream_event',
@@ -2756,7 +2721,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2815,6 +2780,7 @@ async function handleChat(
     : undefined;
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isBrainThoughtRuntime = runtimeOptions?.brainThoughtRuntime === true;
+  const allowNativeWorkspaceTools = runtimeOptions?.allowNativeWorkspaceTools === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
   const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
@@ -3188,11 +3154,13 @@ async function handleChat(
     const activeCategories = categoryOverride
       ? [...categoryOverride].map(String).sort()
       : [...getActivatedToolCategories(sessionId)].map(String).sort();
-    const cacheKey = `${categoryOverride ? 'override' : 'session'}:${activeCategories.join(',')}`;
+    const cacheKey = `${categoryOverride ? 'override' : 'session'}:${activeCategories.join(',')}:nativeWorkspace:${allowNativeWorkspaceTools ? '1' : '0'}`;
     const cacheHit = builtToolSurfaceCache.has(cacheKey);
     const surfaceStartedAt = Date.now();
     const allBuiltTools = builtToolSurfaceCache.get(cacheKey)
-      || (categoryOverride ? _buildTools({ getMCPManager }, categoryOverride) : buildTools(sessionId));
+      || (categoryOverride
+        ? _buildTools({ getMCPManager }, categoryOverride, { allowNativeWorkspaceTools })
+        : buildTools(sessionId, { allowNativeWorkspaceTools }));
     if (!cacheHit) {
       builtToolSurfaceCache.set(cacheKey, allBuiltTools);
       toolSurfaceGeneration += 1;
@@ -17264,7 +17232,12 @@ function estimateToolObservationRawTokens(sessionId: string, profile: { tokenize
   return { tokens, bytes, files };
 }
 
-function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }) {
+function estimateStoredThreadFootprint(
+  sessionId: string,
+  session: any,
+  profile: { tokenizer: any },
+  observationSnapshot: ToolObservationSnapshot = readToolObservationSnapshot(sessionId, 512, profile.tokenizer),
+) {
   const history = Array.isArray(session?.history) ? session.history : [];
   let visibleChatTokens = 0;
   let processEntryTokens = 0;
@@ -17287,8 +17260,7 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
     attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
   }
   const sessionJsonTokens = estimateJsonTokensForModel(session, profile);
-  const observations = readToolObservations(sessionId, 100000);
-  const toolObservationStoredTokens = estimateJsonTokensForModel(observations, profile);
+  const toolObservationStoredTokens = observationSnapshot.storedObservationTokens;
   const raw = estimateToolObservationRawTokens(sessionId, profile);
   return {
     visibleChatTokens,
@@ -17407,21 +17379,6 @@ function summarizeTurnToolResultBudget(observations: ToolObservation[]) {
     tools: tools.sort((a, b) => b.resultTokens - a.resultTokens || b.durationMsMax - a.durationMsMax || b.calls - a.calls).slice(0, 20),
     slowestTools: [...tools].filter((row) => Number(row.durationMsMax || 0) > 0).sort((a, b) => b.durationMsMax - a.durationMsMax || b.durationMsTotal - a.durationMsTotal).slice(0, 20),
   };
-}
-
-function getLastTurnUsageTelemetry(session: any): { providerUsage?: any; toolResultBudget?: any } {
-  const history = Array.isArray(session?.history) ? session.history : [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i] as any;
-    if (!msg || msg.role !== 'assistant') continue;
-    if (msg.turnProviderUsage || msg.toolResultBudget) {
-      return {
-        providerUsage: msg.turnProviderUsage,
-        toolResultBudget: msg.toolResultBudget,
-      };
-    }
-  }
-  return {};
 }
 
 function buildActiveSkillsContextEstimate(sessionId: string, profile: { tokenizer: any }) {
@@ -17887,77 +17844,23 @@ function buildProviderUsageGroup(id: string, label: string, usage: any, percentL
   return { id, label, tokens: totalTokens, active: true, includedInContext: false, outOfBand: true, percentLabel, children };
 }
 
-function buildProviderUsageChildren(modelUsage: any): ContextWindowRow[] {
-  const rows: ContextWindowRow[] = [];
-  const last = buildProviderUsageGroup('provider_last_call', 'Last provider call', modelUsage?.lastContextCall || modelUsage?.lastCall, 'last');
-  const session = buildProviderUsageGroup('provider_session_total', 'Session provider total', modelUsage, 'total');
-  if (last) rows.push(last);
-  if (session) rows.push(session);
-  return rows;
-}
-
-function formatDurationMsForContextLabel(value: any): string {
-  const durationMs = Number(value);
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
-  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(2)}s`;
-  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(durationMs / 60_000);
-  const seconds = Math.round((durationMs % 60_000) / 1000);
-  return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
-}
-
-function formatToolBudgetDurationSuffix(tool: any): string {
-  const max = Number(tool?.durationMsMax || 0);
-  const avg = Number(tool?.durationMsAvg || 0);
-  const total = Number(tool?.durationMsTotal || 0);
-  const value = max || avg || total;
-  const label = formatDurationMsForContextLabel(value);
-  if (!label) return '';
-  return ` · ${label}${max > 0 && Number(tool?.calls || 0) > 1 ? ' max' : ''}`;
-}
-
-function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
-  const providerUsage = turnTelemetry?.providerUsage || {};
-  const toolBudget = turnTelemetry?.toolResultBudget || {};
-  const providerTokens = Math.max(0, Number(providerUsage.totalTokens || 0));
-  const toolResultTokens = Math.max(0, Number(toolBudget.resultTokens || 0));
-  const tokens = providerTokens || toolResultTokens;
-  if (tokens <= 0) return null;
-  const children: ContextWindowRow[] = [];
-  const provider = buildProviderUsageGroup('last_turn_provider', 'Provider usage', providerUsage, 'last');
-  if (provider) children.push(provider);
-  if (toolResultTokens > 0) {
-    const toolChildren: ContextWindowRow[] = Array.isArray(toolBudget.tools)
-      ? toolBudget.tools.slice(0, 12).map((tool: any, index: number) => ({
-        id: `last_turn_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
-        label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatToolBudgetDurationSuffix(tool)}`,
-        tokens: Math.max(0, Number(tool.resultTokens || 0)),
-        active: Number(tool.resultTokens || 0) > 0,
-        includedInContext: false,
-        outOfBand: true,
-        percentLabel: 'tool',
-      }))
-      : [];
-    children.push({
-      id: 'last_turn_tool_outputs',
-      label: `Tool result output${toolBudget.durationMsTotal ? ` · ${formatDurationMsForContextLabel(toolBudget.durationMsTotal)} total` : ''}`,
-      tokens: toolResultTokens,
-      active: true,
-      includedInContext: false,
-      outOfBand: true,
-      percentLabel: 'tool',
-      children: toolChildren,
-    });
-  }
+function buildToolUsageGroup(toolUsage: any): ContextWindowRow | null {
+  const argsTokens = Math.max(0, Number(toolUsage?.argsTokens || 0));
+  const resultTokens = Math.max(0, Number(toolUsage?.resultTokens || 0));
+  const totalTokens = Math.max(0, Number(toolUsage?.totalTokens || argsTokens + resultTokens));
+  if (totalTokens <= 0) return null;
+  const children: ContextWindowRow[] = [
+    { id: 'thread_tool_input', label: 'Tool input', tokens: argsTokens, active: argsTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+    { id: 'thread_tool_output', label: 'Tool output', tokens: resultTokens, active: resultTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+  ].filter((row) => row.active);
   return {
-    id: 'last_turn_usage',
-    label: 'Last turn usage',
-    tokens,
+    id: 'tool_usage_thread_total',
+    label: 'Tool I/O · thread total',
+    tokens: totalTokens,
     active: true,
     includedInContext: false,
     outOfBand: true,
-    percentLabel: 'last',
+    percentLabel: 'total',
     children,
   };
 }
@@ -17973,7 +17876,7 @@ export function buildContextWindowCurrentState(input: {
   compactionTriggerTokens: number;
   storedThread: any;
   modelUsage: any;
-  turnTelemetry?: any;
+  toolUsage?: any;
 }) {
   const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
   // A newly-created web/mobile draft can have no current history but still
@@ -18038,6 +17941,8 @@ export function buildContextWindowCurrentState(input: {
   const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
   const contextUsage = deriveContextWindowUsage(currentStateTokens, contextLimitTokens);
   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
+  const providerUsageRow = buildProviderUsageGroup('provider_session_total', 'Model usage · thread total', input.modelUsage, 'total');
+  const toolUsageRow = buildToolUsageGroup(input.toolUsage);
   return {
     currentStateTokens,
     contextUsage,
@@ -18053,8 +17958,8 @@ export function buildContextWindowCurrentState(input: {
       ...inContextRows,
       ...runtimeOverheadRow,
       { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },
-      { id: 'cached', label: 'Cached', tokens: cachedTokens, active: cachedTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'cached' },
-      { id: 'total_thread_tokens', label: 'Total thread tokens', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
+      ...(providerUsageRow ? [providerUsageRow] : []),
+      ...(toolUsageRow ? [toolUsageRow] : []),
     ],
   };
 }
@@ -22809,9 +22714,10 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
-    const storedThread = estimateStoredThreadFootprint(id, session, profile);
+    const observationSnapshot = readToolObservationSnapshot(id, 512, profile.tokenizer);
+    const storedThread = estimateStoredThreadFootprint(id, session, profile, observationSnapshot);
     const modelUsage = aggregateSessionModelUsage(id);
-    const turnTelemetry = getLastTurnUsageTelemetry(session);
+    const toolUsage = observationSnapshot.usage;
     const currentState = buildContextWindowCurrentState({
       sessionId: id,
       profile,
@@ -22823,7 +22729,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       compactionTriggerTokens: budget.compactionTriggerTokens,
       storedThread,
       modelUsage,
-      turnTelemetry,
+      toolUsage,
     });
     const contextUsage = currentState.contextUsage;
     res.json({
@@ -22841,7 +22747,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       toolObservationTokens: toolTokens,
       storedThread,
       modelUsage,
-      turnTelemetry,
+      toolUsage,
       calibration,
       contextWindowTokens: profile.contextWindowTokens,
       contextLimitTokens: currentState.contextLimitTokens,
