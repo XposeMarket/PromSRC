@@ -640,6 +640,15 @@ export function createMobileChatRendererRuntime(context = {}) {
         return;
       }
       if (_isMobileTraceThoughtEntry(entry)) {
+        // Mutable model summaries continue the current tool phase. They
+        // update the existing expandable header until a durable/full thought,
+        // compaction, or vision event explicitly starts a new segment.
+        const isMutableProgress = _isMobileMutableProgressTraceEntry(entry)
+          && _mobileTraceThoughtKind(entry) === 'summary';
+        if (isMutableProgress && activeToolGroup) {
+          activeToolGroup.entries.push(entry);
+          return;
+        }
         activeToolGroup = null;
         const thoughtKind = _mobileTraceThoughtKind(entry);
         const groupKind = thoughtKind === 'summary' ? 'thought-summary' : 'thought';

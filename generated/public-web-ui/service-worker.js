@@ -20,7 +20,7 @@
 const RELEASE_VERSION = 'pm-v308-2026-08-24-chat-voice-trace';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '816e06d037d7bf0b';
+const ASSET_BUILD_ID = 'b45ba9a8f5a84766';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -55,8 +55,8 @@ const BUILD_PRECACHE = [
   "/build/chunks/chunk-RN77Y735.js",
   "/build/chunks/chunk-YMT6MSCC.js",
   "/build/chunks/chunk-Z5F7FVLI.js",
-  "/build/chunks/mobile-router-PT57FEYU.js",
-  "/build/entries/mobile-ZV6GQVKR.js",
+  "/build/chunks/mobile-router-PJCGAFZE.js",
+  "/build/entries/mobile-TIJKLTRE.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
   "/build/styles/mobile-OYG4YN2H.css",

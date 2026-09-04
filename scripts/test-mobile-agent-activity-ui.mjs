@@ -28,6 +28,7 @@ assert.doesNotMatch(renderer, /`Thought\$\{duration/, 'generic Thought duration 
 assert.doesNotMatch(renderer, /: 'Thought';/, 'generic Thought labels must stay removed');
 assert.match(renderer, /Prefer it over the[\s\S]{0,180}durable reasoning-summary journal/, 'live progress must own the active summary label');
 assert.match(renderer, /latestToolGroupIndex === groups\.length - 1/, 'only the current trailing tool group may own live summary presentation');
+assert.match(renderer, /const isMutableProgress = _isMobileMutableProgressTraceEntry\(entry\)[\s\S]{0,180}if \(isMutableProgress && activeToolGroup\) \{[\s\S]{0,100}activeToolGroup\.entries\.push\(entry\)/, 'successive mobile summaries must update the current tool group');
 assert.match(renderer, /const pendingSummary = previous\?\.kind === 'thought-summary'[\s\S]{0,280}activeToolGroup = \{ kind: 'tools', entries: \[entry, \.\.\.previous\.entries\] \}/, 'mobile must attach a leading model summary to the following tool group');
 assert.match(renderer, /const progressSummary = _mobileTraceProgressSummary\(group\.entries\)/, 'tool groups must use the model summary attached to that group');
 assert.match(renderer, /const toolBodyEntries = visibleEntries\.filter\(\(entry\) => !_isMobileMutableProgressTraceEntry\(entry\)\)/, 'mutable model summaries must not render a second time inside the tool body');
