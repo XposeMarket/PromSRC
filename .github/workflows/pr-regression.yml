@@ -71,6 +71,8 @@ jobs:
         run: |
           node scripts/test-desktop-chat-layout-contract.mjs
           node scripts/test-desktop-subagent-chat-ui.mjs
+      - name: Verify main chat live stream delivery
+        run: npm run test:main-chat-stream
       - name: Verify context window contract
         run: npm run test:context-window
       - name: Verify token-window-native model context
