@@ -48,12 +48,12 @@ export function inferToolPerformanceFamily(toolName: unknown): ToolPerformanceFa
   if (name.startsWith('mcp__')) return 'mcp_connector';
   if (name.startsWith('connector_') || name.startsWith('x_') || name.startsWith('vercel_')) return 'mcp_connector';
   if (name.includes('subagent') || name.includes('team_') || name.includes('agent_') || name.includes('background_') || name.includes('dispatch')) return 'subagent_task';
-  if (name.startsWith('web_') || name.includes('search') || name.includes('fetch')) return 'web_search_fetch';
   if (name.startsWith('terminal') || name.startsWith('run_command') || name.startsWith('start_process') || name.startsWith('process_') || name === 'shell' || name === 'workspace_run') return 'terminal';
   if (name.startsWith('workspace_') || name.startsWith('dev_source_') || name.includes('file') || name.includes('source_') || name === 'grep_file' || name === 'list_directory') return 'workspace';
   if (name.startsWith('creative_') || name.startsWith('media_') || name.startsWith('generate_') || name.includes('video') || name.includes('image')) return 'creative_media';
   if (name.startsWith('skill') || name.startsWith('memory') || name.includes('context')) return 'skills_memory';
   if (name.startsWith('schedule') || name.startsWith('automation') || name.startsWith('cron_')) return 'automation';
+  if (name.startsWith('web_') || name.includes('search') || name.includes('fetch')) return 'web_search_fetch';
   if (name === 'request_tool_category' || name === 'declare_plan' || name === 'complete_plan_step' || name === 'tool_loop_continue' || name === 'timer') return 'core';
   return 'other';
 }

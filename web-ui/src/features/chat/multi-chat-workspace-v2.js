@@ -174,7 +174,7 @@ function ensureMainTab(sessionId, title = '') {
     return false;
   }
   state.tabs.unshift({ sessionId: sid, title: clean(title) || titleForSession(sid) });
-  if (state.tabs.length > MAX_TABS) state.tabs.splice(0, state.tabs.length - MAX_TABS);
+  if (state.tabs.length > MAX_TABS) state.tabs.splice(MAX_TABS);
   persistState();
   return true;
 }

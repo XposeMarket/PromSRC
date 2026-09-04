@@ -96,6 +96,21 @@ assert.equal(
   'native workspace mode must still require the full read/edit/run surface',
 );
 
+// Brain Thought/Dream runs can explicitly restore the native surface without
+// changing the terminal-first default used by ordinary Prometheus/subagent
+// turns.
+const brainNativeWorkspaceSurface = buildTools(
+  deps,
+  new Set(['workspace_write']),
+  { allowNativeWorkspaceTools: true },
+);
+const brainNativeWorkspace = verifyToolCategorySurface('workspace_write', brainNativeWorkspaceSurface, {
+  unboundedTools: brainNativeWorkspaceSurface,
+  workspaceMode: 'prometheus',
+});
+assert.equal(brainNativeWorkspace.ok, true, 'scoped Brain workspace mode should expose native tools');
+assert.deepEqual(brainNativeWorkspace.representativeTools, ['workspace_edit', 'workspace_run', 'workspace_read']);
+
 // A request-scoped allowlist is also an intentional surface profile. The
 // terminal benchmark activates workspace_write but only asks the provider for
 // request_tool_category + workspace_run; verification must validate that
@@ -125,6 +140,10 @@ console.log(JSON.stringify({
   terminalFirstWorkspaceMode: {
     representativeTools: terminalFirstWorkspace.representativeTools,
     provisioned: terminalFirstWorkspace.ok,
+  },
+  brainNativeWorkspaceMode: {
+    representativeTools: brainNativeWorkspace.representativeTools,
+    provisioned: brainNativeWorkspace.ok,
   },
   requestFilteredTerminal: {
     representativeTools: requestFilteredTerminal.representativeTools,
