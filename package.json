@@ -79,6 +79,7 @@
     "test:skill-structure": "npm run build:backend && node scripts/test-skill-catalog-structure.mjs",
     "test:skill-revamp": "npm run build:backend && node scripts/test-skill-revamp-closeout.mjs",
     "test:desktop": "npm run build:backend && node scripts/test-desktop-registry-parity.mjs && node scripts/test-desktop-state-contract.mjs",
+    "test:desktop-chat-bubble-layout": "node scripts/test-desktop-chat-bubble-layout.mjs",
     "test:desktop-source-panel": "node scripts/test-desktop-source-panel-contract.mjs",
     "test:desktop-model-selector": "node scripts/test-desktop-model-selector-contract.mjs",
     "test:browser": "npm run build:backend && node --check extensions/prometheus-personal-chrome/service-worker.js && node --check extensions/prometheus-personal-chrome/options.js && node scripts/test-browser-contract.mjs && node scripts/test-personal-chrome-extension-auth.mjs && node scripts/test-user-chrome-relay.mjs && node scripts/test-user-chrome-transport.mjs && node scripts/test-tool-benchmark-aggregate.mjs",

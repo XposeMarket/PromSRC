@@ -1589,8 +1589,8 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 }
 
 .msg:not(.user) .msg-bubble-stack {
-  flex: 0 1 auto;
-  width: fit-content;
+  flex: 1 1 auto;
+  width: 100%;
   max-width: 100%;
 }
 
@@ -1722,8 +1722,8 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
 }
 
 .msg:not(.user) .msg-body {
-  flex: 0 1 auto;
-  width: fit-content;
+  flex: 1 1 auto;
+  width: 100%;
   max-width: 100%;
   background: transparent;
   border: none;
