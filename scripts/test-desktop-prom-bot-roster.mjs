@@ -22,7 +22,7 @@ assert.match(source, /textContent = 'Active now'/);
 assert.match(source, /classList\.add\('chat-session-item', 'job-item'\)/);
 assert.match(source, /classList\.toggle\('unread', meta\.unread\)/);
 assert.match(source, /classList\.toggle\('is-working', meta\.active\)/);
-assert.match(source, /className = 'priority-chat-working'/);
+assert.match(source, /(?:className = 'priority-chat-working'|classList\.add\('priority-chat-working'\))/);
 assert.match(source, /classList\.add\('priority-chat-unread'\)/);
 assert.doesNotMatch(source, /prom-bot-unread-dot/);
 assert.doesNotMatch(source, /#36c986/);
