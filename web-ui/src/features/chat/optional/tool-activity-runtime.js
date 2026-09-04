@@ -94,6 +94,13 @@ function pendingToolActivityEntry(entry) {
   const normalized = normalizeLegacyToolActivityEntry(entry);
   const type = String(normalized.type || '').toLowerCase();
   const event = String(normalized.eventType || normalized.event || normalized.extra?.event || '').toLowerCase();
+  // A mixed trace can contain model narration beside structured tool events.
+  // The cold rich-renderer fallback must compact only tool-shaped records;
+  // turning a thought or progress summary into "Preparing tool" erases the
+  // model-owned text before the optional renderer can repaint it.
+  const isToolRecord = ['tool', 'skill', 'result', 'error', 'progress'].includes(type)
+    || /^tool_(?:call|result|progress)$/i.test(event);
+  if (!isToolRecord) return entry;
   const resultLike = type === 'result' || type === 'error' || event === 'tool_result';
   const action = String(
     normalized.extra?.action
