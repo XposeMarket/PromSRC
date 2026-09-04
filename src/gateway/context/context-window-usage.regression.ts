@@ -57,4 +57,22 @@ assert.ok(
 assert.equal(pressure.contextWindowTokens, 272_000);
 assert.equal(pressure.atOrPastCompactionTrigger, true);
 
+// Once compaction has installed a rolling summary and checkpoint, the same
+// meter must collapse to the summary plus the retained tail. Historical
+// provider input is not active context and must not keep the gauge inflated.
+const compactedPressure = buildContextWindowPressure({
+  history: longHistory,
+  latestContextSummary: 'compact summary '.repeat(80),
+  contextStartIndex: longHistory.length,
+  calibrationFactor: 1,
+  contextWindowTokens: 272_000,
+  compactionThreshold: 0.7,
+});
+assert.equal(compactedPressure.summaryActive, true);
+assert.equal(compactedPressure.activeHistoryMessages, 1);
+assert.ok(
+  compactedPressure.pressureTokens < visibleTwentyMessageSlice.pressureTokens,
+  'a completed compaction must collapse active pressure instead of retaining historical thread usage',
+);
+
 console.log('context-window-usage regression: ok');

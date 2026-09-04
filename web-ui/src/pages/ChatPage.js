@@ -1104,6 +1104,8 @@ const chatContextWindowState = {
   lastFetchAt: 0,
   refreshTimer: 0,
   data: null,
+  pressureData: null,
+  pressureSessionId: '',
   planFetchAt: 0,
   planData: null,
   planProviderId: '',
@@ -1167,6 +1169,8 @@ function getChatContextWindowStateForSession(sessionId = '') {
       lastSessionId: '',
       lastFetchAt: 0,
       data: null,
+      pressureData: null,
+      pressureSessionId: '',
       planFetchAt: 0,
       planData: null,
       planProviderId: '',
@@ -1416,13 +1420,19 @@ function renderChatContextWindow(data, target = null) {
   const state = getChatContextWindowStateForSession(sessionId);
   if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
+  const pressure = state.pressureSessionId === sessionId && state.pressureData?.success !== false
+    ? state.pressureData
+    : null;
+  const hasActivePressure = !!pressure
+    && Number.isFinite(Number(pressure.pressureTokens))
+    && Number(pressure.contextWindowTokens) > 0;
   const elements = getChatContextWindowElements(target);
   const btn = elements.button;
   const fill = elements.fill;
   const total = elements.total;
   if (!btn) return;
 
-  if (!data || data.success === false) {
+  if ((!data || data.success === false) && !hasActivePressure) {
     btn.style.setProperty('--chat-context-window-deg', '0deg');
     btn.classList.remove('is-over-capacity');
     if (fill) fill.style.width = '0%';
@@ -1433,10 +1443,18 @@ function renderChatContextWindow(data, target = null) {
     return;
   }
 
-  const currentState = data.currentState || {};
-  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
-  const usage = getChatContextWindowUsage(current, windowTokens, data.contextUsage || currentState.contextUsage);
+  const currentState = data?.currentState || {};
+  const current = hasActivePressure
+    ? Math.max(0, Number(pressure.pressureTokens))
+    : Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
+  const windowTokens = hasActivePressure
+    ? Math.max(0, Number(pressure.contextWindowTokens))
+    : getChatContextWindowDisplayLimit(data, currentState);
+  const usage = getChatContextWindowUsage(
+    current,
+    windowTokens,
+    hasActivePressure ? pressure.usage : data.contextUsage || currentState.contextUsage,
+  );
   const usageLabel = formatChatContextWindowUsage(usage);
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);
   btn.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
@@ -1447,7 +1465,11 @@ function renderChatContextWindow(data, target = null) {
   if (total) {
     total.textContent = usageLabel;
   }
-  renderChatContextRows(currentState.rows, windowTokens, target);
+  // The rows describe the current model-call composition. Keep their own
+  // hard-window denominator while the gauge above uses the full active-thread
+  // pressure, so a bounded recent-message slice cannot replace the retained
+  // context total.
+  renderChatContextRows(currentState.rows, getChatContextWindowDisplayLimit(data, currentState) || windowTokens, target);
 }
 
 async function refreshChatContextWindow(options = {}) {
@@ -1470,11 +1492,21 @@ async function refreshChatContextWindow(options = {}) {
 
   state.loading = true;
   state.lastSessionId = sid;
+  if (state.pressureSessionId !== sid) {
+    state.pressureData = null;
+    state.pressureSessionId = sid;
+  }
   if (!state.data) setChatContextWindowLoading('Loading...', target);
   try {
-    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
+    const [data, pressure] = await Promise.all([
+      fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000),
+      fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-pressure`, 5000),
+    ]);
     state.lastFetchAt = Date.now();
     state.data = data && data.success !== false ? data : null;
+    if (pressure && pressure.success !== false && state.pressureSessionId === sid) {
+      state.pressureData = pressure;
+    }
     renderChatContextWindow(state.data, target);
     return state.data;
   } finally {
