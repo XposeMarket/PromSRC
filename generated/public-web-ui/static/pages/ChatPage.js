@@ -20175,6 +20175,7 @@ const sourcePanelState = {
   codingContext: null,
   gitSessionId: '',
   gitRoot: '',
+  sessionWorkspaceRoot: '',
   gitScopeKey: '',
   gitLoaded: false,
   gitLoading: false,
@@ -20264,6 +20265,7 @@ function resetSourcePanelContextState() {
   sourcePanelState.codingContext = null;
   sourcePanelState.gitSessionId = '';
   sourcePanelState.gitRoot = '';
+  sourcePanelState.sessionWorkspaceRoot = '';
   sourcePanelState.gitScopeKey = '';
   sourcePanelState.gitLoaded = false;
   sourcePanelState.gitRemoteData = null;
@@ -21376,6 +21378,9 @@ function sourcePanelWorkspaceRoot(sessionId = sourcePanelState.activeSessionId |
     || sourcePanelState.project?.root
     || sourcePanelState.project?.rootPath
     || session?.canvasProjectRoot
+    || (String(sessionId || '').trim() === String(sourcePanelState.activeSessionId || '').trim()
+      ? sourcePanelState.sessionWorkspaceRoot
+      : '')
     || '',
   ).trim();
 }
@@ -21443,8 +21448,19 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== sourcePanelState.activeSessionId) return;
   const token = ++sourcePanelState.gitRequestToken;
+  // The session endpoint is the authoritative fallback for ordinary chats.
+  // Project/canvas roots are already available locally; only resolve the
+  // session root when those scoped roots are absent.  This keeps the source
+  // panel aligned with the gateway's session-aware coding context instead of
+  // silently rendering the empty/no-workspace state.
+  let workspaceRoot = sourcePanelWorkspaceRoot(sid);
+  if (!workspaceRoot) {
+    workspaceRoot = await sourcePanelSessionWorkspaceRoot(sid);
+    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.sessionWorkspaceRoot = workspaceRoot;
+  }
   const filePaths = sourcePanelGitFilePaths(sid);
-  const scopeKey = [sourcePanelState.scope, sourcePanelWorkspaceRoot(sid), ...filePaths].join('|');
+  const scopeKey = [sourcePanelState.scope, workspaceRoot, ...filePaths].join('|');
   sourcePanelState.gitSessionId = sid;
   sourcePanelState.gitRoot = '';
   sourcePanelState.gitScopeKey = scopeKey;
@@ -21460,6 +21476,7 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   renderSourcePanel();
   try {
     const params = new URLSearchParams({ sessionId: sid, scope: sourcePanelState.scope === 'project' ? 'project' : 'thread' });
+    if (workspaceRoot) params.set('root', workspaceRoot);
     if (filePaths.length) params.set('paths', filePaths.map((value) => encodeURIComponent(value)).join('|'));
     const data = await api(`/api/coding/context?${params.toString()}`, { timeoutMs: 10000, dedupe: false });
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
@@ -21545,6 +21562,7 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.codingContext = null;
     sourcePanelState.gitSessionId = '';
     sourcePanelState.gitRoot = '';
+    sourcePanelState.sessionWorkspaceRoot = '';
     sourcePanelState.gitScopeKey = '';
     sourcePanelState.gitLoaded = false;
     sourcePanelState.gitLoading = false;

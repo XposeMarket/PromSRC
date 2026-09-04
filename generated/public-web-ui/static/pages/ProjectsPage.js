@@ -144,6 +144,7 @@ function renderProjectChatRow(project) {
   const importedLogo = projectImportedLogo(project);
   const importedClass = importedLogo ? ' imported-project' : '';
   const projectTimestamp = projectLastActivity(project);
+  window.ensureSidebarBranchMetadata?.(project.sessions || []);
   const children = (project.sessions || []).slice().sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a)).map((session) => {
     const cached = Array.isArray(window.chatSessions) ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || '')) : null;
     // The project API is a snapshot. Prefer the live local session object so
@@ -189,6 +190,7 @@ window.renderPriorityProjectGroups = function() {
       return pinnedDelta || projectLastActivity(b) - projectLastActivity(a);
     })
     .map((project) => {
+      window.ensureSidebarBranchMetadata?.(project.sessions || []);
       const projectId = escHtmlLocal(project.id);
       const projectName = escHtmlLocal(project.name || 'Untitled project');
       const importedLogo = projectImportedLogo(project);
