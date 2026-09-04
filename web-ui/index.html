@@ -262,20 +262,25 @@
     ];
     window.PROM_RESOLVE_THEME = (id) =>
       window.PROM_THEMES.find((t) => t.id === id) || window.PROM_THEMES[0];
+    window.PROM_READ_SAVED_THEME = () => {
+      try {
+        const saved = localStorage.getItem('prometheus_theme');
+        if (saved === 'custom' || window.PROM_THEMES.some((theme) => theme.id === saved)) return saved;
+      } catch {}
+      return '';
+    };
+    const savedTheme = window.PROM_READ_SAVED_THEME();
+    const initialTheme = savedTheme === 'custom'
+      ? { id: 'custom', label: 'Custom theme', base: 'dark' }
+      : window.PROM_RESOLVE_THEME(savedTheme || 'light');
+    document.documentElement.setAttribute('data-theme', initialTheme.base);
+    document.documentElement.setAttribute('data-skin', initialTheme.id);
     try {
-      const saved = localStorage.getItem('prometheus_theme');
-      const theme = saved === 'custom'
-        ? { id: 'custom', label: 'Custom theme', base: 'dark' }
-        : window.PROM_RESOLVE_THEME(saved);
-      document.documentElement.setAttribute('data-theme', theme.base);
-      document.documentElement.setAttribute('data-skin', theme.id);
       const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
       const opacity = Number(appearance.backgroundOpacity);
       document.documentElement.setAttribute('data-background-visuals', appearance.backgroundEffects === true ? 'on' : 'off');
       document.documentElement.style.setProperty('--pm-background-opacity', Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : '0.82');
     } catch {
-      document.documentElement.setAttribute('data-theme', 'dark');
-      document.documentElement.setAttribute('data-skin', 'light');
       document.documentElement.setAttribute('data-background-visuals', 'off');
       document.documentElement.style.setProperty('--pm-background-opacity', '0.82');
     }
@@ -9354,7 +9359,9 @@ function nextThemeId(currentId) {
 
 function getInitialTheme() {
   try {
-    const saved = localStorage.getItem(THEME_KEY);
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(THEME_KEY);
     if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}

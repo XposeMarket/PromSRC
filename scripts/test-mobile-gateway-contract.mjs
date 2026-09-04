@@ -47,6 +47,37 @@ function loadCatalogForTest() {
   return context;
 }
 
+function runInitialThemeScript({ savedTheme = '', savedAppearance = '{}' } = {}) {
+  const index = read('web-ui/index.html');
+  const marker = 'Theme registry — single source of truth (runs before any other script).';
+  const markerIndex = index.indexOf(marker);
+  const start = index.lastIndexOf('<script>', markerIndex);
+  assert.notEqual(start, -1, 'early theme bootstrap script must remain discoverable');
+  const scriptStart = start + '<script>'.length;
+  const scriptEnd = index.indexOf('</script>', scriptStart);
+  assert.notEqual(scriptEnd, -1, 'early theme bootstrap script must be closed');
+
+  const values = new Map([
+    ['prometheus_theme', savedTheme],
+    ['prometheus_appearance_v1', savedAppearance],
+  ]);
+  const attributes = new Map();
+  const style = { setProperty(name, value) { attributes.set(name, value); } };
+  const documentElement = {
+    style,
+    setAttribute(name, value) { attributes.set(name, value); },
+  };
+  const context = {
+    window: {},
+    localStorage: {
+      getItem(key) { return values.has(key) ? values.get(key) : null; },
+    },
+    document: { documentElement },
+  };
+  vm.runInNewContext(index.slice(scriptStart, scriptEnd), context, { filename: 'theme-bootstrap.js' });
+  return attributes;
+}
+
 function assertContractFiles() {
   const catalog = read('web-ui/src/mobile/mobile-gateway-catalog.js');
   const identity = read('src/gateway/gateway-identity.ts');
@@ -151,6 +182,13 @@ function assertContractFiles() {
   assert.match(css, /\.pm-drawer\s*\{[\s\S]*?padding: max\(env\(safe-area-inset-top\), 12px\)/, 'drawer header must clear the mobile safe area without reserving excess height');
   assert.match(css, /\.pm-drawer-brand\s*\{[\s\S]*?min-height: 44px;[\s\S]*?margin: 0 94px 8px 0;/, 'drawer brand header must leave the gateway pills visible');
   assert.match(css, /body\.pm-mobile-active \.pm-drawer-gateway-pill\.is-active[\s\S]*?color: #111 !important;/, 'active gateway pill text must stay readable on its white background');
+  assert.match(index, /PROM_READ_SAVED_THEME/);
+  assert.match(index, /const savedTheme = window\.PROM_READ_SAVED_THEME\(\)/);
+  assert.match(index, /document\.documentElement\.setAttribute\('data-skin', initialTheme\.id\)/);
+  assert.doesNotMatch(index, /catch \{[\s\S]*?data-skin', 'light'[\s\S]*?data-background-visuals/,
+    'appearance bootstrap failures must not reset a persisted theme');
+  assert.ok(shell.indexOf('localStorage.getItem(PM_THEME_KEY)') < shell.indexOf("const currentSkin = document.documentElement.getAttribute('data-skin')"),
+    'mobile startup must read persisted theme before trusting first-paint skin attributes');
   assert.match(index, /Gateway Connections · Pair a phone/);
   assert.match(index, /vendor\/jsqr\/jsQR\.js/);
   assert.doesNotMatch(index, /class="status-pill gateway-status-pill"/);
@@ -163,6 +201,10 @@ function assertContractFiles() {
 
 async function run() {
   assertContractFiles();
+  const blueWithBrokenAppearance = runInitialThemeScript({ savedTheme: 'blue', savedAppearance: '{broken' });
+  assert.equal(blueWithBrokenAppearance.get('data-skin'), 'blue', 'a broken appearance record must not discard the saved blue skin');
+  assert.equal(blueWithBrokenAppearance.get('data-theme'), 'dark', 'blue must keep the dark base theme');
+
   const ctx = loadCatalogForTest();
   const c = ctx.__catalog;
 

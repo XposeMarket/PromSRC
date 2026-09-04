@@ -792,8 +792,21 @@ function _resolveTheme(themeId) {
 }
 
 function _getTheme() {
-  const currentSkin = document.documentElement.getAttribute('data-skin');
   const list = _getThemeList();
+  // The document attributes are only first-paint hints. The persisted choice
+  // is authoritative on a fresh load; otherwise an early fallback attribute
+  // can overwrite a valid blue/purple choice before the mobile shell starts.
+  try {
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(PM_THEME_KEY);
+    if (saved) {
+      const resolved = _resolveTheme(saved);
+      if (list.some((t) => t.id === resolved.id)) return resolved.id;
+    }
+  } catch {}
+
+  const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
   const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -801,14 +814,6 @@ function _getTheme() {
     const byBase = _resolveTheme(currentTheme);
     if (byBase) return byBase.id;
   }
-
-  try {
-    const saved = localStorage.getItem(PM_THEME_KEY);
-    if (saved) {
-      const resolved = _resolveTheme(saved);
-      if (list.some((t) => t.id === resolved.id)) return resolved.id;
-    }
-  } catch {}
 
   return list[0]?.id || 'dark';
 }
