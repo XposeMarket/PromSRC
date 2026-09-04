@@ -60,10 +60,22 @@ assert.deepEqual(terminalFirstNames, [
   'dev_source_read',
 ]);
 
+const brainNativeNames = filterToolDefinitionsForWorkspaceMode(
+  definitions,
+  'terminal-first',
+  { allowNativeFileTools: true },
+).map((item) => item.function.name);
+assert.deepEqual(
+  brainNativeNames,
+  definitions.map((item) => item.function.name),
+  'an explicitly scoped Brain runtime must retain native workspace tools',
+);
+
 console.log(JSON.stringify({
   ok: true,
   defaultToolCount: defaultNames.length,
   terminalFirstToolCount: terminalFirstNames.length,
   terminalToolsRemainAvailable: terminalFirstNames.includes('run_command'),
   sourceToolsRemainSeparate: terminalFirstNames.includes('dev_source_read'),
+  brainNativeToolsRestored: brainNativeNames.includes('workspace_edit') && brainNativeNames.includes('write_file'),
 }, null, 2));

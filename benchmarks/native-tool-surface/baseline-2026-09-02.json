@@ -1,0 +1,4750 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "prometheus-native-tool-surface",
+  "capturedAt": "2026-09-03T02:37:41.039Z",
+  "environment": {
+    "node": "v20.20.2",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "measurementContract": {
+    "scope": "Every tool currently returned by ToolRegistry.list().",
+    "execution": "Surface-only. No tool execute() function is called.",
+    "tokenMethod": "estimateTextTokensForModel(..., openai) over serialized provider definitions; estimates, not billing usage.",
+    "privacy": "Only names, categories, capability flags, sizes, timings, and counts are emitted; argument/result contents are excluded.",
+    "comparisonKey": "tool name + profile + source + schemaVersion"
+  },
+  "registry": {
+    "registeredToolCount": 195,
+    "nativeToolCount": 131,
+    "extensionToolCount": 64,
+    "extensionRuntimeToolCount": 64,
+    "registryAccessMs": 131.7,
+    "samplesPerProfile": 20
+  },
+  "counts": {
+    "bySource": {
+      "extension": 64,
+      "native": 131
+    },
+    "byFamily": {
+      "automation": 1,
+      "creative_media": 7,
+      "desktop": 51,
+      "mcp_connector": 66,
+      "other": 26,
+      "skills_memory": 12,
+      "subagent_task": 5,
+      "terminal": 8,
+      "web_search_fetch": 6,
+      "workspace": 13
+    },
+    "byPolicyTier": {
+      "commit": 49,
+      "propose": 40,
+      "read": 106
+    },
+    "byVisibility": {
+      "visibleInFull": 150,
+      "hiddenFromAllProfiles": 45
+    }
+  },
+  "providerSurfaces": {
+    "minimal": {
+      "toolCount": 4,
+      "definitionBytes": 3397,
+      "estimatedDefinitionTokens": 1092,
+      "firstBuildMs": 1.033,
+      "repeatedBuildMs": {
+        "samples": 20,
+        "minMs": 0.023,
+        "p50Ms": 0.029,
+        "p95Ms": 0.071,
+        "maxMs": 0.183
+      },
+      "toolNames": [
+        "manage_team_context_ref",
+        "manage_team_goal",
+        "time_now",
+        "write_note"
+      ]
+    },
+    "coding": {
+      "toolCount": 15,
+      "definitionBytes": 7645,
+      "estimatedDefinitionTokens": 2463,
+      "firstBuildMs": 0.114,
+      "repeatedBuildMs": {
+        "samples": 20,
+        "minMs": 0.041,
+        "p50Ms": 0.043,
+        "p95Ms": 0.053,
+        "maxMs": 0.053
+      },
+      "toolNames": [
+        "append",
+        "apply_patch",
+        "copy",
+        "delete",
+        "edit",
+        "list",
+        "manage_team_context_ref",
+        "manage_team_goal",
+        "mkdir",
+        "read",
+        "rename",
+        "shell",
+        "stat",
+        "write",
+        "write_note"
+      ]
+    },
+    "web": {
+      "toolCount": 8,
+      "definitionBytes": 9389,
+      "estimatedDefinitionTokens": 3026,
+      "firstBuildMs": 0.136,
+      "repeatedBuildMs": {
+        "samples": 20,
+        "minMs": 0.041,
+        "p50Ms": 0.043,
+        "p95Ms": 0.079,
+        "maxMs": 0.093
+      },
+      "toolNames": [
+        "manage_team_context_ref",
+        "manage_team_goal",
+        "shopping_search_products",
+        "web_fetch",
+        "web_search",
+        "web_search_multi",
+        "web_search_single",
+        "write_note"
+      ]
+    },
+    "full": {
+      "toolCount": 150,
+      "definitionBytes": 96639,
+      "estimatedDefinitionTokens": 31165,
+      "firstBuildMs": 1.163,
+      "repeatedBuildMs": {
+        "samples": 20,
+        "minMs": 0.418,
+        "p50Ms": 0.608,
+        "p95Ms": 1.099,
+        "maxMs": 3.257
+      },
+      "toolNames": [
+        "agent_info",
+        "agent_list",
+        "analyze_image",
+        "analyze_video",
+        "append",
+        "apply_patch",
+        "apply_workspace_patchset",
+        "clone_repo",
+        "connector_ga4_list_properties",
+        "connector_ga4_realtime_users",
+        "connector_ga4_run_report",
+        "connector_gdrive_api_request",
+        "connector_gdrive_get_file",
+        "connector_gdrive_list_files",
+        "connector_gdrive_read_file",
+        "connector_gdrive_search",
+        "connector_github_create_issue",
+        "connector_github_create_pr",
+        "connector_github_create_repo",
+        "connector_github_get_file",
+        "connector_github_get_pr",
+        "connector_github_list_check_runs",
+        "connector_github_list_commits",
+        "connector_github_list_issues",
+        "connector_github_list_prs",
+        "connector_github_list_repos",
+        "connector_github_merge_pr",
+        "connector_github_search",
+        "connector_gmail_get_email",
+        "connector_gmail_get_profile",
+        "connector_gmail_get_thread",
+        "connector_gmail_list_emails",
+        "connector_gmail_list_labels",
+        "connector_gmail_prepare_email",
+        "connector_gmail_send_email",
+        "connector_hubspot_create_contact",
+        "connector_hubspot_get_contact",
+        "connector_hubspot_list_contacts",
+        "connector_hubspot_list_deals",
+        "connector_hubspot_search",
+        "connector_notion_create_page",
+        "connector_notion_get_page",
+        "connector_notion_query_database",
+        "connector_notion_search",
+        "connector_obsidian_connect_vault",
+        "connector_obsidian_status",
+        "connector_obsidian_sync",
+        "connector_obsidian_writeback",
+        "connector_reddit_get_comments",
+        "connector_reddit_get_posts",
+        "connector_reddit_search",
+        "connector_reddit_submit_post",
+        "connector_salesforce_create_record",
+        "connector_salesforce_get_record",
+        "connector_salesforce_query",
+        "connector_salesforce_search",
+        "connector_slack_get_history",
+        "connector_slack_list_channels",
+        "connector_slack_search",
+        "connector_slack_send_message",
+        "connector_stripe_get_balance",
+        "connector_stripe_list_charges",
+        "connector_stripe_list_customers",
+        "connector_stripe_list_products",
+        "connector_vercel_domains",
+        "connector_vercel_env",
+        "connector_vercel_get_deployment",
+        "connector_vercel_list_deployments",
+        "connector_vercel_list_projects",
+        "connector_vercel_list_teams",
+        "connector_vercel_redeploy",
+        "connector_vercel_status",
+        "copy",
+        "delete",
+        "deploy_analysis_team",
+        "desktop_apps",
+        "desktop_background",
+        "desktop_input",
+        "desktop_macro",
+        "desktop_screen",
+        "desktop_window",
+        "download_media",
+        "download_url",
+        "edit",
+        "fetch_image",
+        "file_stats",
+        "file_tree",
+        "generate_image",
+        "generate_video",
+        "get_team_logs",
+        "grep_file",
+        "grep_files",
+        "list",
+        "list_source",
+        "manage_team_context_ref",
+        "manage_team_goal",
+        "mkdir",
+        "persona_read",
+        "persona_update",
+        "process_kill",
+        "process_log",
+        "process_status",
+        "process_submit",
+        "process_wait",
+        "read",
+        "read_files_batch",
+        "read_source",
+        "rename",
+        "run_command_supervised",
+        "schedule_job",
+        "search_files",
+        "self_update",
+        "shell",
+        "shopping_search_products",
+        "skill_create",
+        "skill_create_bundle",
+        "skill_curator",
+        "skill_export_bundle",
+        "skill_import_bundle",
+        "skill_inspect",
+        "skill_list",
+        "skill_manifest_write",
+        "skill_read",
+        "skill_resource_delete",
+        "skill_resource_list",
+        "skill_resource_read",
+        "skill_resource_write",
+        "skill_scan",
+        "skill_update_from_source",
+        "skill_update_metadata",
+        "source_stats",
+        "start_process",
+        "stat",
+        "talk_to_manager",
+        "time_now",
+        "update_schedule_memory",
+        "upload_image",
+        "validate_file",
+        "vercel_deploy",
+        "vercel_env",
+        "video_social_cut",
+        "view_connections",
+        "web_fetch",
+        "web_fetch_batch",
+        "web_search",
+        "web_search_multi",
+        "web_search_single",
+        "webui_source_stats",
+        "write",
+        "write_note"
+      ]
+    },
+    "desktop": {
+      "toolCount": 10,
+      "definitionBytes": 14153,
+      "estimatedDefinitionTokens": 4562,
+      "firstBuildMs": 0.118,
+      "repeatedBuildMs": {
+        "samples": 20,
+        "minMs": 0.076,
+        "p50Ms": 0.077,
+        "p95Ms": 0.096,
+        "maxMs": 0.104
+      },
+      "toolNames": [
+        "desktop_apps",
+        "desktop_background",
+        "desktop_input",
+        "desktop_macro",
+        "desktop_screen",
+        "desktop_window",
+        "manage_team_context_ref",
+        "manage_team_goal",
+        "time_now",
+        "write_note"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "name": "agent_info",
+      "source": "native",
+      "family": "subagent_task",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 119,
+      "schemaFields": 1,
+      "schemaBytes": 173,
+      "providerDefinitionBytes": 375,
+      "estimatedProviderDefinitionTokens": 121,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "agent_list",
+      "source": "native",
+      "family": "subagent_task",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 210,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": 355,
+      "estimatedProviderDefinitionTokens": 115,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "analyze_image",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 94,
+      "schemaFields": 2,
+      "schemaBytes": 275,
+      "providerDefinitionBytes": 455,
+      "estimatedProviderDefinitionTokens": 147,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "analyze_video",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 140,
+      "schemaFields": 11,
+      "schemaBytes": 1420,
+      "providerDefinitionBytes": 1646,
+      "estimatedProviderDefinitionTokens": 531,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "append",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 47,
+      "schemaFields": 2,
+      "schemaBytes": 90,
+      "providerDefinitionBytes": 339,
+      "estimatedProviderDefinitionTokens": 110,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "apply_patch",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 45,
+      "schemaFields": 2,
+      "schemaBytes": 126,
+      "providerDefinitionBytes": 379,
+      "estimatedProviderDefinitionTokens": 123,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "apply_workspace_patchset",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 154,
+      "schemaFields": 1,
+      "schemaBytes": 76,
+      "providerDefinitionBytes": 418,
+      "estimatedProviderDefinitionTokens": 135,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "clone_repo",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 92,
+      "schemaFields": 6,
+      "schemaBytes": 597,
+      "providerDefinitionBytes": 772,
+      "estimatedProviderDefinitionTokens": 250,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_ga4_list_properties",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 86,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 263,
+      "estimatedProviderDefinitionTokens": 85,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_ga4_realtime_users",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 98,
+      "schemaFields": 1,
+      "schemaBytes": 146,
+      "providerDefinitionBytes": 373,
+      "estimatedProviderDefinitionTokens": 121,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_ga4_run_report",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 111,
+      "schemaFields": 6,
+      "schemaBytes": 869,
+      "providerDefinitionBytes": 1105,
+      "estimatedProviderDefinitionTokens": 357,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gdrive_api_request",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 120,
+      "schemaFields": 2,
+      "schemaBytes": 271,
+      "providerDefinitionBytes": 520,
+      "estimatedProviderDefinitionTokens": 168,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gdrive_get_file",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 80,
+      "schemaFields": 1,
+      "schemaBytes": 120,
+      "providerDefinitionBytes": 326,
+      "estimatedProviderDefinitionTokens": 106,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gdrive_list_files",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 56,
+      "schemaFields": 2,
+      "schemaBytes": 283,
+      "providerDefinitionBytes": 467,
+      "estimatedProviderDefinitionTokens": 151,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gdrive_read_file",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 125,
+      "schemaFields": 1,
+      "schemaBytes": 120,
+      "providerDefinitionBytes": 372,
+      "estimatedProviderDefinitionTokens": 120,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gdrive_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 67,
+      "schemaFields": 2,
+      "schemaBytes": 222,
+      "providerDefinitionBytes": 413,
+      "estimatedProviderDefinitionTokens": 133,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_create_issue",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 44,
+      "schemaFields": 5,
+      "schemaBytes": 407,
+      "providerDefinitionBytes": 581,
+      "estimatedProviderDefinitionTokens": 188,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_create_pr",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 67,
+      "schemaFields": 7,
+      "schemaBytes": 606,
+      "providerDefinitionBytes": 800,
+      "estimatedProviderDefinitionTokens": 259,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_create_repo",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 102,
+      "schemaFields": 5,
+      "schemaBytes": 452,
+      "providerDefinitionBytes": 683,
+      "estimatedProviderDefinitionTokens": 221,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_get_file",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 44,
+      "schemaFields": 3,
+      "schemaBytes": 252,
+      "providerDefinitionBytes": 422,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_get_pr",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 45,
+      "schemaFields": 3,
+      "schemaBytes": 254,
+      "providerDefinitionBytes": 423,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_list_check_runs",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 56,
+      "schemaFields": 4,
+      "schemaBytes": 328,
+      "providerDefinitionBytes": 517,
+      "estimatedProviderDefinitionTokens": 167,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_list_commits",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 46,
+      "schemaFields": 3,
+      "schemaBytes": 253,
+      "providerDefinitionBytes": 429,
+      "estimatedProviderDefinitionTokens": 139,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_list_issues",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 38,
+      "schemaFields": 4,
+      "schemaBytes": 375,
+      "providerDefinitionBytes": 542,
+      "estimatedProviderDefinitionTokens": 175,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_list_prs",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 45,
+      "schemaFields": 4,
+      "schemaBytes": 354,
+      "providerDefinitionBytes": 525,
+      "estimatedProviderDefinitionTokens": 170,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_list_repos",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 84,
+      "schemaFields": 1,
+      "schemaBytes": 131,
+      "providerDefinitionBytes": 343,
+      "estimatedProviderDefinitionTokens": 111,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_merge_pr",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 111,
+      "schemaFields": 6,
+      "schemaBytes": 528,
+      "providerDefinitionBytes": 765,
+      "estimatedProviderDefinitionTokens": 247,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_github_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 109,
+      "schemaFields": 3,
+      "schemaBytes": 364,
+      "providerDefinitionBytes": 603,
+      "estimatedProviderDefinitionTokens": 195,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_get_email",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 92,
+      "schemaFields": 1,
+      "schemaBytes": 157,
+      "providerDefinitionBytes": 375,
+      "estimatedProviderDefinitionTokens": 121,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_get_profile",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 85,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 260,
+      "estimatedProviderDefinitionTokens": 84,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_get_thread",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 47,
+      "schemaFields": 1,
+      "schemaBytes": 119,
+      "providerDefinitionBytes": 293,
+      "estimatedProviderDefinitionTokens": 95,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_list_emails",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 148,
+      "schemaFields": 2,
+      "schemaBytes": 306,
+      "providerDefinitionBytes": 590,
+      "estimatedProviderDefinitionTokens": 191,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_list_labels",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 63,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 238,
+      "estimatedProviderDefinitionTokens": 77,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_prepare_email",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 183,
+      "schemaFields": 6,
+      "schemaBytes": 597,
+      "providerDefinitionBytes": 910,
+      "estimatedProviderDefinitionTokens": 294,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_gmail_send_email",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 150,
+      "schemaFields": 5,
+      "schemaBytes": 434,
+      "providerDefinitionBytes": 711,
+      "estimatedProviderDefinitionTokens": 230,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_hubspot_create_contact",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 46,
+      "schemaFields": 6,
+      "schemaBytes": 396,
+      "providerDefinitionBytes": 575,
+      "estimatedProviderDefinitionTokens": 186,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_hubspot_get_contact",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 68,
+      "schemaFields": 1,
+      "schemaBytes": 124,
+      "providerDefinitionBytes": 322,
+      "estimatedProviderDefinitionTokens": 104,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_hubspot_list_contacts",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 43,
+      "schemaFields": 2,
+      "schemaBytes": 205,
+      "providerDefinitionBytes": 380,
+      "estimatedProviderDefinitionTokens": 123,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_hubspot_list_deals",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 49,
+      "schemaFields": 1,
+      "schemaBytes": 118,
+      "providerDefinitionBytes": 296,
+      "estimatedProviderDefinitionTokens": 96,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_hubspot_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 58,
+      "schemaFields": 2,
+      "schemaBytes": 221,
+      "providerDefinitionBytes": 404,
+      "estimatedProviderDefinitionTokens": 131,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_notion_create_page",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 58,
+      "schemaFields": 3,
+      "schemaBytes": 302,
+      "providerDefinitionBytes": 489,
+      "estimatedProviderDefinitionTokens": 158,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_notion_get_page",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 65,
+      "schemaFields": 1,
+      "schemaBytes": 141,
+      "providerDefinitionBytes": 332,
+      "estimatedProviderDefinitionTokens": 108,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_notion_query_database",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 67,
+      "schemaFields": 3,
+      "schemaBytes": 308,
+      "providerDefinitionBytes": 507,
+      "estimatedProviderDefinitionTokens": 164,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_notion_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 70,
+      "schemaFields": 2,
+      "schemaBytes": 205,
+      "providerDefinitionBytes": 399,
+      "estimatedProviderDefinitionTokens": 129,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_obsidian_connect_vault",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 95,
+      "schemaFields": 7,
+      "schemaBytes": 851,
+      "providerDefinitionBytes": 1079,
+      "estimatedProviderDefinitionTokens": 349,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_obsidian_status",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 75,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 248,
+      "estimatedProviderDefinitionTokens": 80,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_obsidian_sync",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 100,
+      "schemaFields": 2,
+      "schemaBytes": 240,
+      "providerDefinitionBytes": 464,
+      "estimatedProviderDefinitionTokens": 150,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_obsidian_writeback",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 99,
+      "schemaFields": 6,
+      "schemaBytes": 602,
+      "providerDefinitionBytes": 830,
+      "estimatedProviderDefinitionTokens": 268,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_reddit_get_comments",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 49,
+      "schemaFields": 3,
+      "schemaBytes": 308,
+      "providerDefinitionBytes": 487,
+      "estimatedProviderDefinitionTokens": 158,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_reddit_get_posts",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 36,
+      "schemaFields": 3,
+      "schemaBytes": 329,
+      "providerDefinitionBytes": 492,
+      "estimatedProviderDefinitionTokens": 159,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_reddit_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 76,
+      "schemaFields": 4,
+      "schemaBytes": 376,
+      "providerDefinitionBytes": 576,
+      "estimatedProviderDefinitionTokens": 186,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_reddit_submit_post",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 43,
+      "schemaFields": 3,
+      "schemaBytes": 261,
+      "providerDefinitionBytes": 433,
+      "estimatedProviderDefinitionTokens": 140,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_salesforce_create_record",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 91,
+      "schemaFields": 2,
+      "schemaBytes": 355,
+      "providerDefinitionBytes": 581,
+      "estimatedProviderDefinitionTokens": 188,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_salesforce_get_record",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 52,
+      "schemaFields": 2,
+      "schemaBytes": 240,
+      "providerDefinitionBytes": 424,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_salesforce_query",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 86,
+      "schemaFields": 1,
+      "schemaBytes": 195,
+      "providerDefinitionBytes": 408,
+      "estimatedProviderDefinitionTokens": 132,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_salesforce_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 67,
+      "schemaFields": 1,
+      "schemaBytes": 209,
+      "providerDefinitionBytes": 404,
+      "estimatedProviderDefinitionTokens": 130,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_slack_get_history",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 56,
+      "schemaFields": 2,
+      "schemaBytes": 238,
+      "providerDefinitionBytes": 422,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_slack_list_channels",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 74,
+      "schemaFields": 1,
+      "schemaBytes": 132,
+      "providerDefinitionBytes": 336,
+      "estimatedProviderDefinitionTokens": 109,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_slack_search",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 51,
+      "schemaFields": 2,
+      "schemaBytes": 245,
+      "providerDefinitionBytes": 419,
+      "estimatedProviderDefinitionTokens": 136,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_slack_send_message",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 111,
+      "schemaFields": 2,
+      "schemaBytes": 252,
+      "providerDefinitionBytes": 496,
+      "estimatedProviderDefinitionTokens": 160,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_stripe_get_balance",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 89,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 265,
+      "estimatedProviderDefinitionTokens": 86,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_stripe_list_charges",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 60,
+      "schemaFields": 1,
+      "schemaBytes": 140,
+      "providerDefinitionBytes": 330,
+      "estimatedProviderDefinitionTokens": 107,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_stripe_list_customers",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 53,
+      "schemaFields": 1,
+      "schemaBytes": 142,
+      "providerDefinitionBytes": 327,
+      "estimatedProviderDefinitionTokens": 106,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_stripe_list_products",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 69,
+      "schemaFields": 1,
+      "schemaBytes": 131,
+      "providerDefinitionBytes": 331,
+      "estimatedProviderDefinitionTokens": 107,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_domains",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 84,
+      "schemaFields": 3,
+      "schemaBytes": 288,
+      "providerDefinitionBytes": 497,
+      "estimatedProviderDefinitionTokens": 161,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_env",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 84,
+      "schemaFields": 6,
+      "schemaBytes": 565,
+      "providerDefinitionBytes": 770,
+      "estimatedProviderDefinitionTokens": 249,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_get_deployment",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 39,
+      "schemaFields": 2,
+      "schemaBytes": 194,
+      "providerDefinitionBytes": 365,
+      "estimatedProviderDefinitionTokens": 118,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_list_deployments",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 88,
+      "schemaFields": 6,
+      "schemaBytes": 682,
+      "providerDefinitionBytes": 904,
+      "estimatedProviderDefinitionTokens": 292,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_list_projects",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 75,
+      "schemaFields": 3,
+      "schemaBytes": 301,
+      "providerDefinitionBytes": 507,
+      "estimatedProviderDefinitionTokens": 164,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_list_teams",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 60,
+      "schemaFields": 1,
+      "schemaBytes": 121,
+      "providerDefinitionBytes": 309,
+      "estimatedProviderDefinitionTokens": 100,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_redeploy",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 92,
+      "schemaFields": 4,
+      "schemaBytes": 488,
+      "providerDefinitionBytes": 706,
+      "estimatedProviderDefinitionTokens": 228,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "connector_vercel_status",
+      "source": "extension",
+      "family": "mcp_connector",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 91,
+      "schemaFields": 0,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 262,
+      "estimatedProviderDefinitionTokens": 85,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "copy",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 11,
+      "schemaFields": 2,
+      "schemaBytes": 88,
+      "providerDefinitionBytes": 299,
+      "estimatedProviderDefinitionTokens": 97,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "delete",
+      "source": "native",
+      "family": "other",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 26,
+      "schemaFields": 2,
+      "schemaBytes": 127,
+      "providerDefinitionBytes": 356,
+      "estimatedProviderDefinitionTokens": 115,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "deploy_analysis_team",
+      "source": "native",
+      "family": "other",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 654,
+      "schemaFields": 2,
+      "schemaBytes": 278,
+      "providerDefinitionBytes": 1025,
+      "estimatedProviderDefinitionTokens": 331,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_accessibility_action",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 85,
+      "schemaFields": 14,
+      "schemaBytes": 607,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_apps",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 124,
+      "schemaFields": 18,
+      "schemaBytes": 916,
+      "providerDefinitionBytes": 1125,
+      "estimatedProviderDefinitionTokens": 363,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_background",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 111,
+      "schemaFields": 19,
+      "schemaBytes": 901,
+      "providerDefinitionBytes": 1103,
+      "estimatedProviderDefinitionTokens": 356,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_background_command",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 216,
+      "schemaFields": 15,
+      "schemaBytes": 726,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_background_prepare_sandbox",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 261,
+      "schemaFields": 4,
+      "schemaBytes": 371,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_background_status",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 184,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_click",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 277,
+      "schemaFields": 13,
+      "schemaBytes": 1394,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_click_text",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 120,
+      "schemaFields": 5,
+      "schemaBytes": 331,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_close_app",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 58,
+      "schemaFields": 5,
+      "schemaBytes": 281,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_diff_screenshot",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 172,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_doctor",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 104,
+      "schemaFields": 1,
+      "schemaBytes": 87,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_drag",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 176,
+      "schemaFields": 12,
+      "schemaBytes": 922,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_find_installed_app",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 137,
+      "schemaFields": 3,
+      "schemaBytes": 298,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_find_window",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 43,
+      "schemaFields": 4,
+      "schemaBytes": 215,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_focus_window",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 216,
+      "schemaFields": 7,
+      "schemaBytes": 672,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_accessibility_state",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 98,
+      "schemaFields": 7,
+      "schemaBytes": 273,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_accessibility_tree",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 151,
+      "schemaFields": 8,
+      "schemaBytes": 642,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_clipboard",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 82,
+      "schemaFields": 6,
+      "schemaBytes": 241,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_monitors",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 159,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_process_list",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 118,
+      "schemaFields": 1,
+      "schemaBytes": 139,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_window_state",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 193,
+      "schemaFields": 8,
+      "schemaBytes": 318,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_get_window_text",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 145,
+      "schemaFields": 6,
+      "schemaBytes": 509,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_input",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 134,
+      "schemaFields": 36,
+      "schemaBytes": 2010,
+      "providerDefinitionBytes": 2230,
+      "estimatedProviderDefinitionTokens": 720,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_launch_app",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 207,
+      "schemaFields": 4,
+      "schemaBytes": 324,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_list_apps",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 219,
+      "schemaFields": 2,
+      "schemaBytes": 125,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_list_installed_apps",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 166,
+      "schemaFields": 3,
+      "schemaBytes": 280,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_list_macros",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 54,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_list_windows",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 132,
+      "schemaFields": 4,
+      "schemaBytes": 174,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_locate_text",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 116,
+      "schemaFields": 3,
+      "schemaBytes": 222,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_macro",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 104,
+      "schemaFields": 3,
+      "schemaBytes": 213,
+      "providerDefinitionBytes": 403,
+      "estimatedProviderDefinitionTokens": 130,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_pixel_watch",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 125,
+      "schemaFields": 5,
+      "schemaBytes": 284,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_press_key",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 112,
+      "schemaFields": 1,
+      "schemaBytes": 140,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_record_macro",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 124,
+      "schemaFields": 1,
+      "schemaBytes": 106,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_replay_macro",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 83,
+      "schemaFields": 2,
+      "schemaBytes": 143,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_screen",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 251,
+      "schemaFields": 17,
+      "schemaBytes": 1102,
+      "providerDefinitionBytes": 1440,
+      "estimatedProviderDefinitionTokens": 465,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_screenshot",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 240,
+      "schemaFields": 5,
+      "schemaBytes": 638,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_scroll",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 125,
+      "schemaFields": 12,
+      "schemaBytes": 1048,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_set_clipboard",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 59,
+      "schemaFields": 4,
+      "schemaBytes": 385,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_stop_macro",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 44,
+      "schemaFields": 1,
+      "schemaBytes": 126,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_type",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 129,
+      "schemaFields": 1,
+      "schemaBytes": 135,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_type_raw",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 115,
+      "schemaFields": 1,
+      "schemaBytes": 152,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_wait",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 51,
+      "schemaFields": 1,
+      "schemaBytes": 121,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_wait_for_change",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 161,
+      "schemaFields": 2,
+      "schemaBytes": 216,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 257,
+      "schemaFields": 54,
+      "schemaBytes": 4105,
+      "providerDefinitionBytes": 4449,
+      "estimatedProviderDefinitionTokens": 1436,
+      "visibleProfiles": [
+        "desktop",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_click",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 116,
+      "schemaFields": 13,
+      "schemaBytes": 863,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_control",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 117,
+      "schemaFields": 9,
+      "schemaBytes": 824,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_drag",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 121,
+      "schemaFields": 12,
+      "schemaBytes": 771,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_press_key",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 110,
+      "schemaFields": 6,
+      "schemaBytes": 520,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_screenshot",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 217,
+      "schemaFields": 13,
+      "schemaBytes": 881,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_scroll",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 119,
+      "schemaFields": 11,
+      "schemaBytes": 758,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "desktop_window_type",
+      "source": "native",
+      "family": "desktop",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 128,
+      "schemaFields": 7,
+      "schemaBytes": 547,
+      "providerDefinitionBytes": null,
+      "estimatedProviderDefinitionTokens": null,
+      "visibleProfiles": [],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "download_media",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 73,
+      "schemaFields": 3,
+      "schemaBytes": 298,
+      "providerDefinitionBytes": 458,
+      "estimatedProviderDefinitionTokens": 148,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "download_url",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 60,
+      "schemaFields": 3,
+      "schemaBytes": 296,
+      "providerDefinitionBytes": 441,
+      "estimatedProviderDefinitionTokens": 143,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "edit",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 63,
+      "schemaFields": 3,
+      "schemaBytes": 168,
+      "providerDefinitionBytes": 463,
+      "estimatedProviderDefinitionTokens": 150,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "fetch_image",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 182,
+      "schemaFields": 3,
+      "schemaBytes": 230,
+      "providerDefinitionBytes": 496,
+      "estimatedProviderDefinitionTokens": 160,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "file_stats",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 162,
+      "schemaFields": 1,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 383,
+      "estimatedProviderDefinitionTokens": 124,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "file_tree",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 97,
+      "schemaFields": 5,
+      "schemaBytes": 425,
+      "providerDefinitionBytes": 823,
+      "estimatedProviderDefinitionTokens": 266,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "generate_image",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 267,
+      "schemaFields": 18,
+      "schemaBytes": 2583,
+      "providerDefinitionBytes": 2941,
+      "estimatedProviderDefinitionTokens": 949,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "generate_video",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 86,
+      "schemaFields": 14,
+      "schemaBytes": 1503,
+      "providerDefinitionBytes": 1676,
+      "estimatedProviderDefinitionTokens": 541,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "get_team_logs",
+      "source": "native",
+      "family": "subagent_task",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 188,
+      "schemaFields": 3,
+      "schemaBytes": 277,
+      "providerDefinitionBytes": 553,
+      "estimatedProviderDefinitionTokens": 178,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "grep_file",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 137,
+      "schemaFields": 6,
+      "schemaBytes": 468,
+      "providerDefinitionBytes": 939,
+      "estimatedProviderDefinitionTokens": 303,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "grep_files",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 91,
+      "schemaFields": 6,
+      "schemaBytes": 303,
+      "providerDefinitionBytes": 729,
+      "estimatedProviderDefinitionTokens": 236,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "list",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 26,
+      "schemaFields": 1,
+      "schemaBytes": 48,
+      "providerDefinitionBytes": 242,
+      "estimatedProviderDefinitionTokens": 79,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "list_source",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 345,
+      "schemaFields": 1,
+      "schemaBytes": 156,
+      "providerDefinitionBytes": 587,
+      "estimatedProviderDefinitionTokens": 190,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "manage_team_context_ref",
+      "source": "native",
+      "family": "subagent_task",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 181,
+      "schemaFields": 5,
+      "schemaBytes": 259,
+      "providerDefinitionBytes": 536,
+      "estimatedProviderDefinitionTokens": 173,
+      "visibleProfiles": [
+        "coding",
+        "desktop",
+        "full",
+        "minimal",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "manage_team_goal",
+      "source": "native",
+      "family": "subagent_task",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 309,
+      "schemaFields": 4,
+      "schemaBytes": 384,
+      "providerDefinitionBytes": 784,
+      "estimatedProviderDefinitionTokens": 253,
+      "visibleProfiles": [
+        "coding",
+        "desktop",
+        "full",
+        "minimal",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "mkdir",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 18,
+      "schemaFields": 2,
+      "schemaBytes": 95,
+      "providerDefinitionBytes": 315,
+      "estimatedProviderDefinitionTokens": 102,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "persona_read",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 134,
+      "schemaFields": 1,
+      "schemaBytes": 182,
+      "providerDefinitionBytes": 401,
+      "estimatedProviderDefinitionTokens": 130,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "persona_update",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 330,
+      "schemaFields": 6,
+      "schemaBytes": 336,
+      "providerDefinitionBytes": 753,
+      "estimatedProviderDefinitionTokens": 243,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "process_kill",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 33,
+      "schemaFields": 1,
+      "schemaBytes": 46,
+      "providerDefinitionBytes": 255,
+      "estimatedProviderDefinitionTokens": 83,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "process_log",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 52,
+      "schemaFields": 2,
+      "schemaBytes": 104,
+      "providerDefinitionBytes": 363,
+      "estimatedProviderDefinitionTokens": 118,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "process_status",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 57,
+      "schemaFields": 2,
+      "schemaBytes": 94,
+      "providerDefinitionBytes": 361,
+      "estimatedProviderDefinitionTokens": 117,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "process_submit",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 52,
+      "schemaFields": 2,
+      "schemaBytes": 101,
+      "providerDefinitionBytes": 363,
+      "estimatedProviderDefinitionTokens": 118,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "process_wait",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 45,
+      "schemaFields": 1,
+      "schemaBytes": 46,
+      "providerDefinitionBytes": 267,
+      "estimatedProviderDefinitionTokens": 87,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "read",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 60,
+      "schemaFields": 3,
+      "schemaBytes": 211,
+      "providerDefinitionBytes": 503,
+      "estimatedProviderDefinitionTokens": 163,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "read_files_batch",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 187,
+      "schemaFields": 6,
+      "schemaBytes": 477,
+      "providerDefinitionBytes": 1006,
+      "estimatedProviderDefinitionTokens": 325,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "read_source",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 452,
+      "schemaFields": 3,
+      "schemaBytes": 338,
+      "providerDefinitionBytes": 878,
+      "estimatedProviderDefinitionTokens": 284,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "rename",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 31,
+      "schemaFields": 2,
+      "schemaBytes": 86,
+      "providerDefinitionBytes": 319,
+      "estimatedProviderDefinitionTokens": 103,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "run_command_supervised",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 100,
+      "schemaFields": 4,
+      "schemaBytes": 228,
+      "providerDefinitionBytes": 610,
+      "estimatedProviderDefinitionTokens": 197,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "schedule_job",
+      "source": "native",
+      "family": "automation",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 395,
+      "schemaFields": 9,
+      "schemaBytes": 382,
+      "providerDefinitionBytes": 870,
+      "estimatedProviderDefinitionTokens": 280,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "search_files",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 150,
+      "schemaFields": 7,
+      "schemaBytes": 601,
+      "providerDefinitionBytes": 1120,
+      "estimatedProviderDefinitionTokens": 362,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "self_update",
+      "source": "native",
+      "family": "other",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 260,
+      "schemaFields": 0,
+      "schemaBytes": 62,
+      "providerDefinitionBytes": 406,
+      "estimatedProviderDefinitionTokens": 131,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "shell",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 85,
+      "schemaFields": 5,
+      "schemaBytes": 388,
+      "providerDefinitionBytes": 771,
+      "estimatedProviderDefinitionTokens": 249,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "shopping_search_products",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 395,
+      "schemaFields": 8,
+      "schemaBytes": 1192,
+      "providerDefinitionBytes": 1686,
+      "estimatedProviderDefinitionTokens": 544,
+      "visibleProfiles": [
+        "full",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_create",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 164,
+      "schemaFields": 10,
+      "schemaBytes": 478,
+      "providerDefinitionBytes": 727,
+      "estimatedProviderDefinitionTokens": 235,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_create_bundle",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 96,
+      "schemaFields": 19,
+      "schemaBytes": 755,
+      "providerDefinitionBytes": 943,
+      "estimatedProviderDefinitionTokens": 305,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_curator",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 86,
+      "schemaFields": 8,
+      "schemaBytes": 285,
+      "providerDefinitionBytes": 457,
+      "estimatedProviderDefinitionTokens": 148,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_export_bundle",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 42,
+      "schemaFields": 2,
+      "schemaBytes": 132,
+      "providerDefinitionBytes": 266,
+      "estimatedProviderDefinitionTokens": 86,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_import_bundle",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 87,
+      "schemaFields": 3,
+      "schemaBytes": 163,
+      "providerDefinitionBytes": 342,
+      "estimatedProviderDefinitionTokens": 111,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_inspect",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 102,
+      "schemaFields": 1,
+      "schemaBytes": 101,
+      "providerDefinitionBytes": 289,
+      "estimatedProviderDefinitionTokens": 94,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_list",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 103,
+      "schemaFields": 3,
+      "schemaBytes": 154,
+      "providerDefinitionBytes": 340,
+      "estimatedProviderDefinitionTokens": 110,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_manifest_write",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 65,
+      "schemaFields": 6,
+      "schemaBytes": 543,
+      "providerDefinitionBytes": 701,
+      "estimatedProviderDefinitionTokens": 227,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_read",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 197,
+      "schemaFields": 1,
+      "schemaBytes": 143,
+      "providerDefinitionBytes": 425,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_resource_delete",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 51,
+      "schemaFields": 7,
+      "schemaBytes": 315,
+      "providerDefinitionBytes": 460,
+      "estimatedProviderDefinitionTokens": 149,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_resource_list",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 87,
+      "schemaFields": 1,
+      "schemaBytes": 101,
+      "providerDefinitionBytes": 280,
+      "estimatedProviderDefinitionTokens": 91,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_resource_read",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 85,
+      "schemaFields": 3,
+      "schemaBytes": 163,
+      "providerDefinitionBytes": 340,
+      "estimatedProviderDefinitionTokens": 110,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_resource_write",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 66,
+      "schemaFields": 6,
+      "schemaBytes": 263,
+      "providerDefinitionBytes": 422,
+      "estimatedProviderDefinitionTokens": 137,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_scan",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 67,
+      "schemaFields": 1,
+      "schemaBytes": 101,
+      "providerDefinitionBytes": 251,
+      "estimatedProviderDefinitionTokens": 81,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_update_from_source",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 60,
+      "schemaFields": 2,
+      "schemaBytes": 132,
+      "providerDefinitionBytes": 289,
+      "estimatedProviderDefinitionTokens": 94,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "skill_update_metadata",
+      "source": "native",
+      "family": "skills_memory",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 145,
+      "schemaFields": 20,
+      "schemaBytes": 1439,
+      "providerDefinitionBytes": 1678,
+      "estimatedProviderDefinitionTokens": 542,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "source_stats",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 122,
+      "schemaFields": 1,
+      "schemaBytes": 175,
+      "providerDefinitionBytes": 382,
+      "estimatedProviderDefinitionTokens": 124,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "start_process",
+      "source": "native",
+      "family": "terminal",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": true,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 82,
+      "schemaFields": 4,
+      "schemaBytes": 253,
+      "providerDefinitionBytes": 608,
+      "estimatedProviderDefinitionTokens": 197,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "stat",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 13,
+      "schemaFields": 1,
+      "schemaBytes": 56,
+      "providerDefinitionBytes": 237,
+      "estimatedProviderDefinitionTokens": 77,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "talk_to_manager",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 230,
+      "schemaFields": 2,
+      "schemaBytes": 248,
+      "providerDefinitionBytes": 566,
+      "estimatedProviderDefinitionTokens": 183,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "time_now",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 162,
+      "schemaFields": 0,
+      "schemaBytes": 2,
+      "providerDefinitionBytes": 306,
+      "estimatedProviderDefinitionTokens": 99,
+      "visibleProfiles": [
+        "desktop",
+        "full",
+        "minimal"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "update_schedule_memory",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 317,
+      "schemaFields": 2,
+      "schemaBytes": 885,
+      "providerDefinitionBytes": 1297,
+      "estimatedProviderDefinitionTokens": 419,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "upload_image",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 265,
+      "schemaFields": 6,
+      "schemaBytes": 302,
+      "providerDefinitionBytes": 652,
+      "estimatedProviderDefinitionTokens": 211,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "validate_file",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 153,
+      "schemaFields": 1,
+      "schemaBytes": 47,
+      "providerDefinitionBytes": 377,
+      "estimatedProviderDefinitionTokens": 122,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "vercel_deploy",
+      "source": "native",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 240,
+      "schemaFields": 3,
+      "schemaBytes": 206,
+      "providerDefinitionBytes": 532,
+      "estimatedProviderDefinitionTokens": 172,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "vercel_env",
+      "source": "native",
+      "family": "mcp_connector",
+      "policyTier": "commit",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": false,
+        "externalWrite": true,
+        "destructive": false,
+        "credentialUse": true,
+        "known": true
+      },
+      "descriptionChars": 194,
+      "schemaFields": 4,
+      "schemaBytes": 264,
+      "providerDefinitionBytes": 541,
+      "estimatedProviderDefinitionTokens": 175,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "video_social_cut",
+      "source": "native",
+      "family": "creative_media",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 186,
+      "schemaFields": 11,
+      "schemaBytes": 2005,
+      "providerDefinitionBytes": 2280,
+      "estimatedProviderDefinitionTokens": 735,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "view_connections",
+      "source": "native",
+      "family": "other",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 397,
+      "schemaFields": 2,
+      "schemaBytes": 267,
+      "providerDefinitionBytes": 759,
+      "estimatedProviderDefinitionTokens": 245,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "web_fetch",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 334,
+      "schemaFields": 6,
+      "schemaBytes": 772,
+      "providerDefinitionBytes": 1188,
+      "estimatedProviderDefinitionTokens": 384,
+      "visibleProfiles": [
+        "full",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "web_fetch_batch",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 182,
+      "schemaFields": 5,
+      "schemaBytes": 690,
+      "providerDefinitionBytes": 960,
+      "estimatedProviderDefinitionTokens": 310,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "web_search",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 415,
+      "schemaFields": 7,
+      "schemaBytes": 979,
+      "providerDefinitionBytes": 1479,
+      "estimatedProviderDefinitionTokens": 478,
+      "visibleProfiles": [
+        "full",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "web_search_multi",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 180,
+      "schemaFields": 5,
+      "schemaBytes": 630,
+      "providerDefinitionBytes": 899,
+      "estimatedProviderDefinitionTokens": 290,
+      "visibleProfiles": [
+        "full",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "web_search_single",
+      "source": "native",
+      "family": "web_search_fetch",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 163,
+      "schemaFields": 6,
+      "schemaBytes": 789,
+      "providerDefinitionBytes": 1042,
+      "estimatedProviderDefinitionTokens": 337,
+      "visibleProfiles": [
+        "full",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "webui_source_stats",
+      "source": "native",
+      "family": "workspace",
+      "policyTier": "read",
+      "capabilities": {
+        "readOnly": true,
+        "localWrite": false,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 125,
+      "schemaFields": 1,
+      "schemaBytes": 179,
+      "providerDefinitionBytes": 395,
+      "estimatedProviderDefinitionTokens": 128,
+      "visibleProfiles": [
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "write",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 26,
+      "schemaFields": 2,
+      "schemaBytes": 93,
+      "providerDefinitionBytes": 320,
+      "estimatedProviderDefinitionTokens": 104,
+      "visibleProfiles": [
+        "coding",
+        "full"
+      ],
+      "liveExecutionCovered": false
+    },
+    {
+      "name": "write_note",
+      "source": "native",
+      "family": "other",
+      "policyTier": "propose",
+      "capabilities": {
+        "readOnly": false,
+        "localWrite": true,
+        "externalWrite": false,
+        "destructive": false,
+        "credentialUse": false,
+        "known": true
+      },
+      "descriptionChars": 1353,
+      "schemaFields": 2,
+      "schemaBytes": 322,
+      "providerDefinitionBytes": 1766,
+      "estimatedProviderDefinitionTokens": 568,
+      "visibleProfiles": [
+        "coding",
+        "desktop",
+        "full",
+        "minimal",
+        "web"
+      ],
+      "liveExecutionCovered": false
+    }
+  ]
+}

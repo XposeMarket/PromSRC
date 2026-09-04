@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const pressureModel = read('src/gateway/context/context-window-pressure.ts');
 const pressureRouter = read('src/gateway/routes/context-window-pressure.router.ts');
+const chatRouter = read('src/gateway/routes/chat.router.ts');
 const processesRouter = read('src/gateway/routes/processes.router.ts');
 const performance = read('web-ui/src/performance.js');
 const generatedPerformance = read('generated/public-web-ui/static/performance.js');
@@ -26,6 +27,16 @@ assert.match(pressureRouter, /contextStartIndex: session\.contextStartIndex/, 't
 assert.match(pressureRouter, /calibrationFactor: calibration\.factor/, 'thread pressure must use provider/model calibration');
 assert.match(pressureRouter, /effectiveCompactionTriggerTokens/, 'the API must expose the effective compaction trigger');
 assert.match(processesRouter, /router\.use\(contextWindowPressureRouter\)/, 'the authenticated gateway must mount the pressure endpoint');
+
+// Thread usage must come from the bounded/lifetime observation snapshot. Keep
+// this contract separate from the pressure meter so a future context-window
+// refactor cannot accidentally reintroduce an unbounded JSONL read or a
+// misleading last-turn-only usage row.
+assert.match(chatRouter, /readToolObservationSnapshot/, 'context-window route must use the bounded observation snapshot');
+assert.match(chatRouter, /const observationSnapshot = readToolObservationSnapshot\(id, 512, profile\.tokenizer\)/, 'context-window route must share one bounded snapshot for stored footprint and totals');
+assert.match(chatRouter, /const toolUsage = observationSnapshot\.usage/, 'context-window route must expose lifetime tool usage totals');
+assert.doesNotMatch(chatRouter, /readToolObservations\(sessionId,\s*100(?:_?0){3,}\)/, 'context-window footprint must not read an unbounded observation corpus');
+assert.doesNotMatch(chatRouter, /getLastTurnUsageTelemetry|turnTelemetry/, 'context-window usage must not regress to last-turn telemetry');
 
 // If an older session lacks the persisted estimate, reconstruction must still
 // use the entire active transcript (or summary + everything since checkpoint).

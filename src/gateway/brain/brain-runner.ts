@@ -400,8 +400,22 @@ const DREAM_CATCHUP_LOOKBACK_DAYS = 7;              // max backlog window to aut
 
 type BrainChatRuntimeOptions = {
   brainThoughtRuntime?: boolean;
+  allowNativeWorkspaceTools?: boolean;
   runtimeId?: string;
 };
+
+export type BrainScheduledChatKind = 'thought' | 'dream' | 'dream_cleanup';
+
+export function brainScheduledChatRuntimeOptions(
+  kind: BrainScheduledChatKind,
+  runtimeId: string,
+): BrainChatRuntimeOptions {
+  return {
+    ...(kind === 'thought' ? { brainThoughtRuntime: true } : {}),
+    allowNativeWorkspaceTools: true,
+    runtimeId,
+  };
+}
 
 type HandleChatFn = (
   message: string,
@@ -1311,7 +1325,7 @@ export class BrainRunner {
         undefined,
         thoughtReasoning ? { enabled: true, level: thoughtReasoning } : undefined,
         undefined,
-        { brainThoughtRuntime: true, runtimeId },
+        brainScheduledChatRuntimeOptions('thought', runtimeId),
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain thought run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
@@ -1653,7 +1667,7 @@ export class BrainRunner {
         undefined,
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
         undefined,
-        { runtimeId },
+        brainScheduledChatRuntimeOptions('dream', runtimeId),
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
@@ -2016,7 +2030,7 @@ export class BrainRunner {
         undefined,
         dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
         undefined,
-        { runtimeId },
+        brainScheduledChatRuntimeOptions('dream_cleanup', runtimeId),
       );
       resultText = abortSignal.aborted
         ? `ABORTED: Brain dream cleanup run aborted${abortSignal.reason ? ` (${abortSignal.reason})` : ' by operator'}.`
