@@ -981,6 +981,25 @@ const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 // wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
+const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
+  'user_message',
+  'session_title',
+  'agent_mode',
+  'ui_preflight',
+  'info',
+  'tool_call',
+  'tool_result',
+  'tool_progress',
+  'progress_state',
+  'thinking',
+  'agent_thought',
+  'vision_injected',
+  'final',
+  'done',
+  'error',
+  'warn',
+  'runtime_registered',
+]);
 const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 function getMainChatStream(sessionId: string): MainChatStreamState | null {

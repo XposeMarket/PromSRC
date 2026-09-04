@@ -224,10 +224,9 @@ function renderActiveNow() {
     const name = document.createElement('span');
     name.className = 'prom-bot-active-row-name';
     name.textContent = agent.name || agent.id;
-    const state = document.createElement('span');
-    state.className = 'priority-chat-working';
-    state.textContent = 'working';
-    row.append(name, state);
+    // The active section already communicates state through its treatment;
+    // avoid repeating a noisy text badge on every active bot row.
+    row.append(name);
     row.addEventListener('click', () => document.querySelector(`#${LIST_ID} .prom-bot-agent-row[data-agent-id="${CSS.escape(agent.id)}"]`)?.click());
     list.appendChild(row);
   }

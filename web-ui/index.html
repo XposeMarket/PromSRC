@@ -5710,6 +5710,9 @@ let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
 let _channelsEditMode = false;
 let _pinnedChats = JSON.parse(localStorage.getItem('prometheus_pinned_chats') || '[]');
+const _sidebarBranchMetadata = new Map();
+let _sidebarBranchMetadataRequest = null;
+let _sidebarBranchMetadataInFlightIds = new Set();
 
 function _isPrioritySession(session) {
   if (!session || typeof session !== 'object') return false;
@@ -6040,6 +6043,7 @@ function _renderChannelDrill(channelKey) {
       ts => !sessions.some(s => s.id === ts.id)
     );
   }
+  ensureSidebarBranchMetadata([...sessions, ...serverOnly]);
 
   const backBtn = `
 <div class="channel-drill-header">
@@ -6132,6 +6136,132 @@ function _backToChannelHub() {
 }
 
 let _sessionHoverPreviewCloseTimer = null;
+let _sidebarBranchPopoverCloseTimer = null;
+
+function _sidebarInlineBranchMetadata(session) {
+  const github = session?.canvasProjectLink?.github;
+  // Persisted Canvas branch labels are useful as a name hint, but the branch
+  // itself must come from the current workspace lookup so checkout changes do
+  // not leave a stale sidebar indicator behind.
+  const branch = String(session?.branch || session?.workspaceBranch || '').trim();
+  if (!branch) return null;
+  return {
+    branch,
+    projectName: String(session?.projectName || session?.canvasProjectLabel || '').trim(),
+    repositoryName: String(github?.repoFullName || '').trim(),
+  };
+}
+
+function _sidebarBranchMetadataForSession(session) {
+  const inline = _sidebarInlineBranchMetadata(session);
+  if (inline) return inline;
+  const id = String(session?.id || '').trim();
+  return id && _sidebarBranchMetadata.has(id) ? _sidebarBranchMetadata.get(id) : null;
+}
+
+function ensureSidebarBranchMetadata(sessions = []) {
+  const candidates = Array.from(new Map(
+    (Array.isArray(sessions) ? sessions : [])
+      .filter((session) => session && String(session.id || '').trim())
+      .map((session) => [String(session.id).trim(), session]),
+  ).values());
+  const missing = candidates
+    .map((session) => String(session.id).trim())
+    .filter((id) => !_sidebarBranchMetadata.has(id) && !_sidebarBranchMetadataInFlightIds.has(id))
+    .slice(0, 80);
+  if (!missing.length || _sidebarBranchMetadataRequest) return;
+  _sidebarBranchMetadataInFlightIds = new Set(missing);
+  const params = new URLSearchParams({ sessionIds: missing.join(',') });
+  _sidebarBranchMetadataRequest = fetch(`/api/coding/session-metadata?${params.toString()}`)
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((data) => {
+      const returned = new Set();
+      (Array.isArray(data?.sessions) ? data.sessions : []).forEach((item) => {
+        const id = String(item?.sessionId || '').trim();
+        if (!id) return;
+        returned.add(id);
+        _sidebarBranchMetadata.set(id, item?.connected === true && String(item?.branch || '').trim()
+          ? item
+          : null);
+      });
+      missing.forEach((id) => {
+        if (!returned.has(id)) _sidebarBranchMetadata.set(id, null);
+      });
+      scheduleSessionListRefresh();
+      window.renderProjectsList?.();
+    })
+    .catch(() => {})
+    .finally(() => {
+      _sidebarBranchMetadataRequest = null;
+      _sidebarBranchMetadataInFlightIds.clear();
+    });
+}
+
+function renderSidebarBranchIndicator(session, placement = 'default') {
+  const metadata = _sidebarBranchMetadataForSession(session);
+  const branch = String(metadata?.branch || '').trim();
+  if (!branch) return '';
+  const projectName = String(metadata?.projectName || metadata?.repositoryName || session?.projectName || session?.canvasProjectLabel || 'Workspace').trim();
+  const label = `Working on ${projectName}, branch ${branch}`;
+  return `<span class="sidebar-branch-indicator sidebar-branch-indicator--${placement}" tabindex="0" role="img" aria-label="${escHtml(label)}" title="${escHtml(label)}" data-branch-name="${escHtml(branch)}" data-branch-project="${escHtml(projectName)}" onpointerenter="showSidebarBranchPopover(this)" onpointerleave="scheduleSidebarBranchPopoverClose()" onfocus="showSidebarBranchPopover(this)" onblur="scheduleSidebarBranchPopoverClose()" onclick="event.preventDefault();event.stopPropagation()"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.25"></circle><circle cx="18" cy="19" r="2.25"></circle><circle cx="18" cy="5" r="2.25"></circle><path d="M6 7.25v5.25a4.5 4.5 0 0 0 4.5 4.5H18M6 7.25v1.5A4.5 4.5 0 0 0 10.5 13H18V7.25"></path></svg></span>`;
+}
+window.ensureSidebarBranchMetadata = ensureSidebarBranchMetadata;
+
+function _getSidebarBranchPopover() {
+  let popover = document.getElementById('sidebar-branch-popover');
+  if (popover) return popover;
+  popover = document.createElement('div');
+  popover.id = 'sidebar-branch-popover';
+  popover.className = 'sidebar-branch-popover';
+  popover.setAttribute('role', 'tooltip');
+  popover.addEventListener('pointerenter', () => {
+    if (_sidebarBranchPopoverCloseTimer) clearTimeout(_sidebarBranchPopoverCloseTimer);
+    _sidebarBranchPopoverCloseTimer = null;
+  });
+  popover.addEventListener('pointerleave', scheduleSidebarBranchPopoverClose);
+  document.body.appendChild(popover);
+  return popover;
+}
+
+function scheduleSidebarBranchPopoverClose() {
+  if (_sidebarBranchPopoverCloseTimer) clearTimeout(_sidebarBranchPopoverCloseTimer);
+  _sidebarBranchPopoverCloseTimer = setTimeout(hideSidebarBranchPopover, 280);
+}
+
+function hideSidebarBranchPopover() {
+  if (_sidebarBranchPopoverCloseTimer) clearTimeout(_sidebarBranchPopoverCloseTimer);
+  _sidebarBranchPopoverCloseTimer = null;
+  const popover = document.getElementById('sidebar-branch-popover');
+  if (popover) {
+    popover.classList.remove('is-visible');
+    popover.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function showSidebarBranchPopover(source) {
+  if (!source?.isConnected) return;
+  if (_sidebarBranchPopoverCloseTimer) clearTimeout(_sidebarBranchPopoverCloseTimer);
+  _sidebarBranchPopoverCloseTimer = null;
+  hideSessionHoverPreview();
+  const branch = String(source.dataset.branchName || '').trim();
+  const project = String(source.dataset.branchProject || 'Workspace').trim() || 'Workspace';
+  if (!branch) return;
+  const popover = _getSidebarBranchPopover();
+  popover.innerHTML = `<span class="sidebar-branch-popover-title">${escHtml(project)}</span><span class="sidebar-branch-popover-branch">${escHtml(branch)}</span>`;
+  popover.setAttribute('aria-hidden', 'false');
+  popover.classList.add('is-visible');
+  const rect = source.getBoundingClientRect();
+  const preferredWidth = 220;
+  const left = Math.min(rect.right + 8, Math.max(8, window.innerWidth - preferredWidth - 12));
+  const width = Math.min(preferredWidth, Math.max(160, window.innerWidth - left - 12));
+  const top = Math.max(8, Math.min(rect.top - 6, window.innerHeight - 72));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.width = `${width}px`;
+}
 let _sessionHoverPreviewSource = null;
 let _sessionHoverPreviewEditing = false;
 
@@ -6429,6 +6559,8 @@ function beginSessionHoverRename(popover) {
 
 window.addEventListener('resize', hideSessionHoverPreview);
 window.addEventListener('scroll', hideSessionHoverPreview, true);
+window.addEventListener('resize', hideSidebarBranchPopover);
+window.addEventListener('scroll', hideSidebarBranchPopover, true);
 
 async function toggleChatPin(id, ev) {
   if (ev) ev.stopPropagation();
@@ -6601,7 +6733,8 @@ function renderImportedSourceLogo(session) {
 }
 
 function renderImportedSourceMeta(session, normalTimestamp) {
-  return `<span class="chat-session-top-time" title="Last activity">${timeAgo(normalTimestamp ?? (getSessionLastMessageAt(session) || session?.createdAt))}</span>`;
+  const branch = renderSidebarBranchIndicator(session, 'default');
+  return `<span class="chat-session-top-meta">${branch}<span class="chat-session-top-time" title="Last activity">${timeAgo(normalTimestamp ?? (getSessionLastMessageAt(session) || session?.createdAt))}</span></span>`;
 }
 
 function escapeRegExp(text) {
@@ -6825,6 +6958,7 @@ function _renderSettledSessionsList(el) {
   const sessions = _sessionSearchQuery
     ? (_sessionSearchResults || []).map(sessionFromSearchResult).filter(Boolean)
     : (_settledSessions || []);
+  ensureSidebarBranchMetadata(sessions);
   const cards = sessions
     .filter(isTopLevelWebChatSession)
     .map(session => renderChatSessionCard(session, { settled: true }))
@@ -6915,6 +7049,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
   const preview = _prioritySessionPreview(s);
   const model = _prioritySessionModel(s);
   const messageCount = _prioritySessionMessageCount(s);
+  const branch = renderSidebarBranchIndicator(s, 'priority');
   const isWorking = _isSessionWorking(s);
   const priorityStatus = isWorking
     ? '<span class="priority-chat-status priority-chat-working">Working</span>'
@@ -6947,6 +7082,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
         <span>${messageCount} message${messageCount === 1 ? '' : 's'}</span>
         ${priorityStatus ? `<span aria-hidden="true">·</span>${priorityStatus}` : ''}
         ${projectLabel ? `<span aria-hidden="true">·</span><span class="priority-chat-project">${folderIcon}<span>${escHtml(projectLabel)}</span></span>` : ''}
+        ${branch}
       </div>
     </div>`;
 }
@@ -7109,6 +7245,7 @@ function _renderPriorityPanel(el) {
   const activeSessions = (window.chatSessions || [])
     .filter(_isPrioritySession)
     .sort((a, b) => _prioritySessionActivityTime(b) - _prioritySessionActivityTime(a));
+  ensureSidebarBranchMetadata(activeSessions.slice(0, 80));
   // Priority attention is not paginated behind newer ordinary chats. Every
   // working or unread session must remain visible in the Priority section.
   const prioritySessions = activeSessions.filter(_isPriorityAttentionSession);
@@ -7289,6 +7426,7 @@ function renderSessionsList() {
   const unpinned = sorted.filter(s => !_pinnedChats.includes(s.id));
   const displayedUnpinned = unpinned.slice(0, _sessionShowCount);
   const hasMore = unpinned.length > _sessionShowCount;
+  ensureSidebarBranchMetadata([...pinned, ...displayedUnpinned]);
 
   // Render pinned chats into the dedicated section above Sessions
   const pinnedSection = document.getElementById('sidebar-pinned-section');

@@ -1,0 +1,1 @@
+function u(n){let i=Number(n);return Number.isFinite(i)?Math.max(0,i):0}function m({currentStateTokens:n,pressureTokens:i,fallbackTokens:e}={}){return n!=null&&Number.isFinite(Number(n))?u(n):i!=null&&Number.isFinite(Number(i))?u(i):u(e)}export{m as a};

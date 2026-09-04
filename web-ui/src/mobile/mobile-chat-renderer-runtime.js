@@ -551,7 +551,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     for (let index = source.length - 1; index >= 0; index -= 1) {
       const entry = source[index];
       const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
-      if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
+      if (String(extra.source || entry?.source || '').toLowerCase() !== 'agent_progress') continue;
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -640,6 +640,15 @@ export function createMobileChatRendererRuntime(context = {}) {
         return;
       }
       if (_isMobileTraceThoughtEntry(entry)) {
+        // Mutable model summaries continue the current tool phase. They
+        // update the existing expandable header until a durable/full thought,
+        // compaction, or vision event explicitly starts a new segment.
+        const isMutableProgress = _isMobileMutableProgressTraceEntry(entry)
+          && _mobileTraceThoughtKind(entry) === 'summary';
+        if (isMutableProgress && activeToolGroup) {
+          activeToolGroup.entries.push(entry);
+          return;
+        }
         activeToolGroup = null;
         const thoughtKind = _mobileTraceThoughtKind(entry);
         const groupKind = thoughtKind === 'summary' ? 'thought-summary' : 'thought';
@@ -649,6 +658,19 @@ export function createMobileChatRendererRuntime(context = {}) {
         return;
       }
       if (!activeToolGroup) {
+        // A model summary can arrive one event before the tool call it
+        // narrates. Carry that mutable-only group into the tool disclosure so
+        // the real summary owns its header instead of leaving an empty thought
+        // block above a synthetic action label.
+        const previous = groups[groups.length - 1];
+        const pendingSummary = previous?.kind === 'thought-summary'
+          && previous.entries.length > 0
+          && previous.entries.every((candidate) => _isMobileMutableProgressTraceEntry(candidate));
+        if (pendingSummary) {
+          activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
+          groups[groups.length - 1] = activeToolGroup;
+          return;
+        }
         activeToolGroup = { kind: 'tools', entries: [] };
         groups.push(activeToolGroup);
       }
@@ -986,13 +1008,20 @@ export function createMobileChatRendererRuntime(context = {}) {
         return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
       }
       const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-      const progressSummary = isLiveCurrent ? activeProgressSummary : '';
+      // The model summary belongs to the tool group it narrates. Looking only
+      // at the newest raw event made a tool_call replace that summary with the
+      // synthetic action label (for example, "Request Tool Category").
+      const progressSummary = _mobileTraceProgressSummary(group.entries);
       const summary = progressSummary || (isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries));
       const summaryKey = _mobileTraceSummaryKey(summary);
       const visibleEntries = _mobileVisibleTraceEntries(group.entries);
-      const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-      const nonReasoningEntries = visibleEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
-      const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
+      // The mutable summary is rendered once in the expandable header. It
+      // must not also remain in the body, where the next tool event can make
+      // the summary look overwritten or duplicated.
+      const toolBodyEntries = visibleEntries.filter((entry) => !_isMobileMutableProgressTraceEntry(entry));
+      const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+      const nonReasoningEntries = toolBodyEntries.filter((entry) => !_isMobileTraceReasoningSummaryType(entry?.type));
+      const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
       const itemLabel = callCount ? 'call' : 'item';
       const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
       return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
@@ -1002,7 +1031,7 @@ export function createMobileChatRendererRuntime(context = {}) {
           <span class="pm-trace-tool-chevron" aria-hidden="true">›</span>
           <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
         </summary>
-        <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
+        <div class="pm-trace-tool-body">${_renderMobileLiveTrace(toolBodyEntries)}</div>
       </details>`;
     }).join('')}</div>`;
   }
@@ -2246,8 +2275,23 @@ export function createMobileChatRendererRuntime(context = {}) {
         _restoreMobileTraceDetailsState(currentBody, detailsState);
       }
     } else if (currentGroup.innerHTML !== nextGroup.innerHTML) {
+      // Vision groups contain decoded screenshots. A normal innerHTML
+      // replacement throws those image nodes away on every following tool
+      // event, so mobile can show a blank/loading card until the turn or a
+      // reconnect causes a later paint. Keep each preview button by its
+      // stable preview key while updating the surrounding trace markup.
+      const stablePreviews = new Map();
+      currentGroup.querySelectorAll?.('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        if (key) stablePreviews.set(key, node);
+      });
       const detailsState = _captureMobileTraceDetailsState(currentGroup);
       currentGroup.innerHTML = nextGroup.innerHTML;
+      currentGroup.querySelectorAll?.('[data-pm-live-vision-preview]').forEach((node) => {
+        const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
+        const stable = key ? stablePreviews.get(key) : null;
+        if (stable && stable !== node) node.replaceWith(stable);
+      });
       _restoreMobileTraceDetailsState(currentGroup, detailsState);
     }
     if ('open' in currentGroup) currentGroup.open = wasOpen;

@@ -92,6 +92,8 @@ assert.equal(empty.changesValue, 'No workspace');
 
 assert.match(chatPage, /sourcePanelState\.gitLoading = true/);
 assert.match(chatPage, /sourcePanelState\.gitError = error\?\.message/);
+assert.match(chatPage, /workspaceRoot = await sourcePanelSessionWorkspaceRoot\(sid\)/);
+assert.match(chatPage, /if \(workspaceRoot\) params\.set\('root', workspaceRoot\)/);
 assert.match(chatPage, /loadSourcePanelRemoteData\(sid\)\.catch\(\(\) => \{\}\);/);
 assert.match(chatPage, /refreshSourcePanel\(\);/);
 assert.equal(generatedChatPage, chatPage, 'generated desktop ChatPage must match source');

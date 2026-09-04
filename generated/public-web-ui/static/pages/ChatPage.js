@@ -28,6 +28,7 @@ import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '..
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
+import { resolveActiveContextTokens } from '../context-window-value.js';
 import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
@@ -261,6 +262,12 @@ const desktopQuestionTransport = createDesktopQuestionTransport({
   warn: (error) => console.warn('[ChatPage] could not fetch question details:', error),
 });
 
+// Pending question answers live in the composer popover, which is rebuilt as
+// the stream updates. Keep the step and partial answers outside that DOM so a
+// stream repaint cannot move the user back to the first question or discard
+// answers from earlier steps.
+const desktopQuestionDrafts = new Map();
+
 const desktopQuestionController = createQuestionController({
   runtimeFor: desktopChatRuntime,
   getActiveSessionId: () => window.activeChatSessionId,
@@ -306,7 +313,7 @@ const desktopQuestionController = createQuestionController({
   focusComposer: focusPrometheusQuestionComposer,
   onValidationMissing: (missing) => {
     const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
-    showToast('Answer required', `Use the composer to answer: ${labels}`, 'warning');
+    showToast('Answer required', `Answer the current question: ${labels}`, 'warning');
   },
   onSubmitSuccess: () => loadSessionApprovals(),
   onCancelSuccess: () => loadSessionApprovals(),
@@ -1104,6 +1111,8 @@ const chatContextWindowState = {
   lastFetchAt: 0,
   refreshTimer: 0,
   data: null,
+  pressureData: null,
+  pressureSessionId: '',
   planFetchAt: 0,
   planData: null,
   planProviderId: '',
@@ -1167,6 +1176,8 @@ function getChatContextWindowStateForSession(sessionId = '') {
       lastSessionId: '',
       lastFetchAt: 0,
       data: null,
+      pressureData: null,
+      pressureSessionId: '',
       planFetchAt: 0,
       planData: null,
       planProviderId: '',
@@ -1416,13 +1427,26 @@ function renderChatContextWindow(data, target = null) {
   const state = getChatContextWindowStateForSession(sessionId);
   if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
+  const currentState = data?.currentState || {};
+  const rawCurrentStateTokens = data?.currentStateTokens ?? currentState.currentStateTokens;
+  const hasCurrentState = !!data
+    && data.success !== false
+    && rawCurrentStateTokens !== null
+    && rawCurrentStateTokens !== undefined
+    && Number.isFinite(Number(rawCurrentStateTokens));
+  const pressure = state.pressureSessionId === sessionId && state.pressureData?.success !== false
+    ? state.pressureData
+    : null;
+  const hasActivePressure = !!pressure
+    && Number.isFinite(Number(pressure.pressureTokens))
+    && Number(pressure.contextWindowTokens) > 0;
   const elements = getChatContextWindowElements(target);
   const btn = elements.button;
   const fill = elements.fill;
   const total = elements.total;
   if (!btn) return;
 
-  if (!data || data.success === false) {
+  if ((!data || data.success === false) && !hasActivePressure) {
     btn.style.setProperty('--chat-context-window-deg', '0deg');
     btn.classList.remove('is-over-capacity');
     if (fill) fill.style.width = '0%';
@@ -1433,10 +1457,21 @@ function renderChatContextWindow(data, target = null) {
     return;
   }
 
-  const currentState = data.currentState || {};
-  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
-  const usage = getChatContextWindowUsage(current, windowTokens, data.contextUsage || currentState.contextUsage);
+  const current = resolveActiveContextTokens({
+    currentStateTokens: hasCurrentState ? rawCurrentStateTokens : undefined,
+    pressureTokens: hasActivePressure ? pressure.pressureTokens : undefined,
+    fallbackTokens: data?.currentInputTokens,
+  });
+  const windowTokens = hasCurrentState
+    ? getChatContextWindowDisplayLimit(data, currentState)
+    : hasActivePressure
+      ? Math.max(0, Number(pressure.contextWindowTokens))
+      : getChatContextWindowDisplayLimit(data, currentState);
+  const usage = getChatContextWindowUsage(
+    current,
+    windowTokens,
+    hasCurrentState ? data.contextUsage || currentState.contextUsage : pressure?.usage || data.contextUsage || currentState.contextUsage,
+  );
   const usageLabel = formatChatContextWindowUsage(usage);
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);
   btn.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
@@ -1447,7 +1482,11 @@ function renderChatContextWindow(data, target = null) {
   if (total) {
     total.textContent = usageLabel;
   }
-  renderChatContextRows(currentState.rows, windowTokens, target);
+  // The rows describe the current model-call composition. Keep their own
+  // hard-window denominator while the gauge above uses the full active-thread
+  // pressure, so a bounded recent-message slice cannot replace the retained
+  // context total.
+  renderChatContextRows(currentState.rows, getChatContextWindowDisplayLimit(data, currentState) || windowTokens, target);
 }
 
 async function refreshChatContextWindow(options = {}) {
@@ -1470,11 +1509,21 @@ async function refreshChatContextWindow(options = {}) {
 
   state.loading = true;
   state.lastSessionId = sid;
+  if (state.pressureSessionId !== sid) {
+    state.pressureData = null;
+    state.pressureSessionId = sid;
+  }
   if (!state.data) setChatContextWindowLoading('Loading...', target);
   try {
-    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000);
+    const [data, pressure] = await Promise.all([
+      fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-window`, 5000),
+      fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-pressure`, 5000),
+    ]);
     state.lastFetchAt = Date.now();
     state.data = data && data.success !== false ? data : null;
+    if (pressure && pressure.success !== false && state.pressureSessionId === sid) {
+      state.pressureData = pressure;
+    }
     renderChatContextWindow(state.data, target);
     return state.data;
   } finally {
@@ -12778,6 +12827,16 @@ function liveTraceGroups(entries) {
       return;
     }
     if (isLiveTraceThoughtEntry(entry)) {
+      // A live agent_progress packet is the mutable summary for the tool
+      // group that is currently running. Keep it owned by that group so the
+      // real model narration updates the expandable header instead of
+      // becoming a second thought group that displaces the tool stream.
+      const isMutableProgress = isDesktopMutableProgressTraceEntry(entry)
+        && desktopTraceThoughtKind(entry) === 'summary';
+      if (isMutableProgress && activeToolGroup) {
+        activeToolGroup.entries.push(entry);
+        return;
+      }
       activeToolGroup = null;
       const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
       const previous = groups[groups.length - 1];
@@ -12786,8 +12845,22 @@ function liveTraceGroups(entries) {
       return;
     }
     if (!activeToolGroup) {
-      activeToolGroup = { kind: 'tools', entries: [] };
+      // A summary can arrive just before the tool call it narrates. Carry
+      // forward that mutable-only group so the real summary becomes the
+      // expandable tool label instead of an empty thought row followed by a
+      // synthetic tool label. Full thoughts are never eligible for this move.
+      const previous = groups[groups.length - 1];
+      const pendingSummary = previous?.kind === 'thought-summary'
+        && previous.entries.length > 0
+        && previous.entries.every((candidate) => isDesktopMutableProgressTraceEntry(candidate));
+      if (pendingSummary) {
+        activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
+        groups[groups.length - 1] = activeToolGroup;
+        return;
+      }
+      activeToolGroup = { kind: 'tools', entries: [entry] };
       groups.push(activeToolGroup);
+      return;
     }
     activeToolGroup.entries.push(entry);
   });
@@ -13053,15 +13126,9 @@ function desktopTraceProgressSummary(entries) {
   const source = Array.isArray(entries) ? entries : [];
   const text = desktopTraceProgressText(source);
   if (!text) return '';
-  const normalized = desktopTraceComparableText(text);
-  const duplicatesVisibleReasoning = source.some((candidate) => {
-    if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
-    const candidateText = desktopTraceComparableText(dedupeDesktopTraceProseText(candidate?.text || candidate?.content || ''));
-    return candidateText === normalized
-      || (Math.min(candidateText.length, normalized.length) >= 36
-        && (candidateText.includes(normalized) || normalized.includes(candidateText)));
-  });
-  if (duplicatesVisibleReasoning) return 'Reasoning';
+  // The provider's curated summary is the source of truth for the live
+  // expandable label. Do not replace it with a synthetic "Reasoning" label
+  // when the same prose also exists as a durable thought entry.
   return text;
 }
 
@@ -13078,16 +13145,6 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  // Only the last raw trace entry can still be receiving mutable progress.
-  // Reverse-searching the whole stream here promotes an old thought summary
-  // after the next tool event arrives, then removes that thought group and
-  // rewrites the tool header. Apart from losing the thought visually, that
-  // changes the keyed timeline shape and forces the streaming patcher to
-  // replace a previously painted group instead of updating it in place.
-  const latestTraceEntry = Array.isArray(entries) ? entries.at(-1) : null;
-  const activeProgressSummary = streaming && isDesktopMutableProgressTraceEntry(latestTraceEntry)
-    ? desktopTraceProgressSummary(entries)
-    : '';
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
@@ -13118,13 +13175,20 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-    const progressSummary = isLiveCurrent ? activeProgressSummary : '';
+    // Resolve progress only inside this tool group. This preserves earlier
+    // groups and lets a summary that preceded the tool call remain attached
+    // to the tool without resurrecting stale narration from another phase.
+    const progressSummary = desktopTraceProgressSummary(group.entries);
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
-    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const nonReasoningEntries = visibleEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
-    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
+    // The mutable progress packet is rendered in the header only. Leaving it
+    // in the body creates a duplicate summary and makes the next event appear
+    // to overwrite the stream instead of extending it.
+    const toolBodyEntries = visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+    const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+    const nonReasoningEntries = toolBodyEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
+    const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
     const itemLabel = callCount ? 'call' : 'item';
     const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
     return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
@@ -13134,7 +13198,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
-      <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
+      <div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>
     </details>`;
   }).join('')}</div>`;
 }
@@ -14445,7 +14509,21 @@ function captureQuestionDraftState() {
       // Only the card root carries data-question-id with a child input structure.
       const qid = card.getAttribute('data-question-id');
       if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
-      const state = { checked: [], texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-question-compose-target') || '', focus: null };
+      const previous = desktopQuestionDrafts.get(qid) || {};
+      const visibleQuestionIds = Array.from(card.querySelectorAll('[data-question-compose-id]'))
+        .map((el) => String(el.getAttribute('data-question-compose-id') || '').trim())
+        .filter(Boolean);
+      const visibleQuestionPrefixes = visibleQuestionIds.map((id) => `${id}::`);
+      const state = {
+        checked: (Array.isArray(previous.checked) ? previous.checked : [])
+          .filter((value) => !visibleQuestionPrefixes.some((prefix) => String(value || '').startsWith(prefix))),
+        texts: { ...(previous.texts || {}) },
+        others: { ...(previous.others || {}) },
+        general: String(previous.general || ''),
+        index: Number(card.getAttribute('data-question-current-index')) || 0,
+        composeTarget: card.getAttribute('data-question-compose-target') || '',
+        focus: null,
+      };
       card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
         state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
       });
@@ -14473,6 +14551,7 @@ function captureQuestionDraftState() {
         }
       } catch {}
       out[qid] = state;
+      desktopQuestionDrafts.set(qid, state);
     });
   } catch {}
   return out;
@@ -14482,9 +14561,11 @@ function restoreQuestionDraftState(map) {
   try {
     Object.keys(map).forEach((qid) => {
       const sel = (window.CSS && CSS.escape) ? CSS.escape(qid) : qid;
-      const card = document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
+      const card = document.querySelector(`.chat-question-popover .chat-question-card[data-question-id="${sel}"]`)
+        || document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
       if (!card) return;
       const state = map[qid];
+      if (Number.isFinite(Number(state.index))) card.setAttribute('data-question-current-index', String(state.index));
       if (state.composeTarget) card.setAttribute('data-question-compose-target', state.composeTarget);
       const want = new Set(state.checked || []);
       card.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((el) => {
@@ -14496,7 +14577,17 @@ function restoreQuestionDraftState(map) {
       });
       Object.entries(state.others || {}).forEach(([id, info]) => {
         const el = card.querySelector(`[data-question-other="${(window.CSS && CSS.escape) ? CSS.escape(id) : id}"]`);
-        if (el) { el.value = info.value || ''; if (!info.hidden) el.removeAttribute('hidden'); }
+        if (el) {
+          el.value = info.value || '';
+          if (!info.hidden) el.removeAttribute('hidden');
+          else el.setAttribute('hidden', '');
+          const toggle = el.closest('.pq-other-row')?.querySelector('.pq-other-toggle');
+          if (toggle) {
+            toggle.classList.toggle('selected', !info.hidden);
+            toggle.setAttribute('aria-expanded', String(!info.hidden));
+            toggle.setAttribute('aria-pressed', String(!info.hidden));
+          }
+        }
       });
       const gen = card.querySelector('[data-question-general-other="1"]');
       if (gen) gen.value = state.general || '';
@@ -16267,6 +16358,60 @@ function renderStreamingPrometheusQuestionHtml(sessionId) {
   return '';
 }
 
+function desktopQuestionStepIndex(question, state = null) {
+  const total = Array.isArray(question?.questions) ? question.questions.length : 0;
+  if (!total) return 0;
+  const draft = state || desktopQuestionDrafts.get(String(question?.id || '').trim());
+  const raw = draft?.index ?? question?.currentIndex;
+  return Number.isFinite(Number(raw))
+    ? Math.max(0, Math.min(total - 1, Math.floor(Number(raw))))
+    : 0;
+}
+
+function rememberDesktopQuestionPayload(question, payload, index) {
+  const qid = String(question?.id || '').trim();
+  if (!qid || !payload) return null;
+  const previous = desktopQuestionDrafts.get(qid) || {};
+  const state = {
+    ...previous,
+    index: desktopQuestionStepIndex(question, { index }),
+    checked: Array.isArray(previous.checked) ? previous.checked.slice() : [],
+    texts: { ...(previous.texts || {}) },
+    others: { ...(previous.others || {}) },
+    general: String(payload.generalOther || '').trim(),
+    composeTarget: previous.composeTarget || '',
+    focus: previous.focus || null,
+  };
+  (payload.answers || []).forEach((answer) => {
+    const aid = String(answer?.id || '').trim();
+    if (!aid) return;
+    const prefix = `${aid}::`;
+    state.checked = state.checked.filter((value) => !String(value || '').startsWith(prefix));
+    (Array.isArray(answer.selected) ? answer.selected : []).forEach((value) => {
+      const clean = String(value || '').trim();
+      if (clean) state.checked.push(`${prefix}${clean}`);
+    });
+    state.texts[aid] = String(answer.text || '');
+    state.others[aid] = {
+      ...(state.others[aid] || {}),
+      value: String(answer.other || ''),
+    };
+  });
+  desktopQuestionDrafts.set(qid, state);
+  return state;
+}
+
+function saveDesktopQuestionDraftFromCard(question) {
+  const captured = captureQuestionDraftState();
+  return captured[String(question?.id || '').trim()] || desktopQuestionDrafts.get(String(question?.id || '').trim()) || null;
+}
+
+function syncDesktopQuestionCardAfterStep(question, payload, nextIndex, sessionId) {
+  const state = rememberDesktopQuestionPayload(question, payload, nextIndex);
+  syncDesktopQuestionComposerPopover(sessionId || question?.sessionId || window.activeChatSessionId);
+  restoreQuestionDraftState(state ? { [question.id]: state } : {});
+}
+
 function syncDesktopQuestionComposerPopover(sessionId = window.activeChatSessionId) {
   const host = document.getElementById('chat-question-popover');
   if (!host) return;
@@ -16278,9 +16423,13 @@ function syncDesktopQuestionComposerPopover(sessionId = window.activeChatSession
     if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
     return;
   }
-  host.innerHTML = renderInlinePrometheusQuestion(question);
+  const qid = String(question.id || '').trim();
+  const draft = desktopQuestionDrafts.get(qid) || null;
+  const currentIndex = desktopQuestionStepIndex(question, draft);
+  host.innerHTML = renderInlinePrometheusQuestion({ ...question, currentIndex });
   host.style.display = 'block';
-  host.setAttribute('data-question-id', String(question.id || ''));
+  host.setAttribute('data-question-id', qid);
+  if (draft) restoreQuestionDraftState({ [qid]: { ...draft, index: currentIndex } });
   if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
 }
 
@@ -20037,6 +20186,7 @@ const sourcePanelState = {
   codingContext: null,
   gitSessionId: '',
   gitRoot: '',
+  sessionWorkspaceRoot: '',
   gitScopeKey: '',
   gitLoaded: false,
   gitLoading: false,
@@ -20126,6 +20276,7 @@ function resetSourcePanelContextState() {
   sourcePanelState.codingContext = null;
   sourcePanelState.gitSessionId = '';
   sourcePanelState.gitRoot = '';
+  sourcePanelState.sessionWorkspaceRoot = '';
   sourcePanelState.gitScopeKey = '';
   sourcePanelState.gitLoaded = false;
   sourcePanelState.gitRemoteData = null;
@@ -21238,6 +21389,9 @@ function sourcePanelWorkspaceRoot(sessionId = sourcePanelState.activeSessionId |
     || sourcePanelState.project?.root
     || sourcePanelState.project?.rootPath
     || session?.canvasProjectRoot
+    || (String(sessionId || '').trim() === String(sourcePanelState.activeSessionId || '').trim()
+      ? sourcePanelState.sessionWorkspaceRoot
+      : '')
     || '',
   ).trim();
 }
@@ -21305,8 +21459,19 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== sourcePanelState.activeSessionId) return;
   const token = ++sourcePanelState.gitRequestToken;
+  // The session endpoint is the authoritative fallback for ordinary chats.
+  // Project/canvas roots are already available locally; only resolve the
+  // session root when those scoped roots are absent.  This keeps the source
+  // panel aligned with the gateway's session-aware coding context instead of
+  // silently rendering the empty/no-workspace state.
+  let workspaceRoot = sourcePanelWorkspaceRoot(sid);
+  if (!workspaceRoot) {
+    workspaceRoot = await sourcePanelSessionWorkspaceRoot(sid);
+    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.sessionWorkspaceRoot = workspaceRoot;
+  }
   const filePaths = sourcePanelGitFilePaths(sid);
-  const scopeKey = [sourcePanelState.scope, sourcePanelWorkspaceRoot(sid), ...filePaths].join('|');
+  const scopeKey = [sourcePanelState.scope, workspaceRoot, ...filePaths].join('|');
   sourcePanelState.gitSessionId = sid;
   sourcePanelState.gitRoot = '';
   sourcePanelState.gitScopeKey = scopeKey;
@@ -21322,6 +21487,7 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   renderSourcePanel();
   try {
     const params = new URLSearchParams({ sessionId: sid, scope: sourcePanelState.scope === 'project' ? 'project' : 'thread' });
+    if (workspaceRoot) params.set('root', workspaceRoot);
     if (filePaths.length) params.set('paths', filePaths.map((value) => encodeURIComponent(value)).join('|'));
     const data = await api(`/api/coding/context?${params.toString()}`, { timeoutMs: 10000, dedupe: false });
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
@@ -21407,6 +21573,7 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.codingContext = null;
     sourcePanelState.gitSessionId = '';
     sourcePanelState.gitRoot = '';
+    sourcePanelState.sessionWorkspaceRoot = '';
     sourcePanelState.gitScopeKey = '';
     sourcePanelState.gitLoaded = false;
     sourcePanelState.gitLoading = false;
@@ -43053,7 +43220,11 @@ function canvasDiffRoot(tab) {
 }
 
 function canvasDiffFilePath(tab) {
-  return String(tab?.diskPath || tab?.workspacePath || tab?.originalPath || '').trim();
+  // Keep the workspace-relative/native workspace path in the request when it
+  // is available. This matches the mobile Canvas contract and lets the
+  // gateway associate the file with the turn's workspace baseline before
+  // falling back to an external/original disk path.
+  return String(tab?.workspacePath || tab?.diskPath || tab?.originalPath || '').trim();
 }
 
 async function renderCanvasDiffInto(host, tab) {
@@ -45525,7 +45696,7 @@ function cssEscapeValue(value) {
   return raw.replace(/["\\\]\[]/g, '\\$&');
 }
 
-function renderInlinePrometheusQuestion(item) {
+function renderInlinePrometheusQuestion(item, options = {}) {
   if (!item || !item.id) return '';
   const question = normalizeQuestionRecord(item);
   if (!question.id) return '';
@@ -45534,7 +45705,11 @@ function renderInlinePrometheusQuestion(item) {
   const idArg = encodeInlineJsString(question.id);
   const statusLabel = question.status === 'answered' ? 'answered' : question.status;
   const answerMap = new Map((question.answers || []).map((answer) => [String(answer?.id || ''), answer || {}]));
-  const questionBlocks = question.questions.map((q, index) => {
+  const requestedIndex = options.currentIndex ?? item.currentIndex ?? desktopQuestionDrafts.get(question.id)?.index;
+  const currentIndex = desktopQuestionStepIndex(question, { index: requestedIndex });
+  const visibleQuestions = pending ? [question.questions[currentIndex]] : question.questions;
+  const questionBlocks = visibleQuestions.map((q, visibleIndex) => {
+    if (!q) return '';
     const answer = answerMap.get(q.id) || {};
     const qName = `${question.id}__${q.id}`;
     const qIdArg = encodeInlineJsString(q.id);
@@ -45552,25 +45727,34 @@ function renderInlinePrometheusQuestion(item) {
       // For single_select radios, allow re-clicking a checked option to deselect it.
       const deselect = type === 'radio' ? ` onmousedown="toggleQuestionRadio(${encodeInlineJsString(inputId)})"` : '';
       return `<label for="${escHtml(inputId)}" class="pq-option">
-        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}"${deselect} />
+        <input id="${escHtml(inputId)}" type="${type}" name="${escHtml(qName)}" value="${escHtml(option)}" data-question-id="${escHtml(q.id)}" onchange="handleDesktopQuestionOptionChange(${idArg}, ${qIdArg}, ${encodeInlineJsString(q.mode)})"${deselect} />
         <span class="pq-option-check" aria-hidden="true"></span>
         <span class="pq-option-label">${escHtml(option)}</span>
       </label>`;
     }).join('');
     const otherInput = q.allowOther && q.mode !== 'text'
-      ? `<div class="pq-other-row"><button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})"><span class="pq-option-check" aria-hidden="true"></span><span>Other…</span></button></div>`
+      ? `<div class="pq-other-row">
+          <button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})" aria-expanded="false" aria-pressed="false"><span class="pq-option-check" aria-hidden="true"></span><span>Other…</span></button>
+          <textarea class="pq-input" data-question-other="${escHtml(q.id)}" rows="2" placeholder="Type another answer" aria-label="Other answer for ${escHtml(q.label)}" hidden></textarea>
+        </div>`
       : '';
-    return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${index ? 10 : 0}px">
+    const textInput = q.mode === 'text'
+      ? `<textarea class="pq-input" data-question-text="${escHtml(q.id)}" rows="3" placeholder="Type your answer" aria-label="${escHtml(q.label)}"></textarea>`
+      : '';
+    return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${visibleIndex ? 10 : 0}px">
       <div class="pq-q-label">${escHtml(q.label)}</div>
       ${options ? `<div class="pq-options">${options}</div>` : ''}
+      ${textInput}
       ${otherInput}
     </div>`;
   }).join('');
-  return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}">
+  return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}" data-question-current-index="${currentIndex}">
+    ${pending && question.questions.length > 1 ? `<div class="pq-head"><span class="pq-progress" aria-label="Question ${currentIndex + 1} of ${question.questions.length}"><span class="pq-progress-current">${currentIndex + 1}</span><span class="pq-progress-total">/${question.questions.length}</span></span></div>` : ''}
     ${questionBlocks}
     ${pending
-      ? `<div class="chat-approval-actions">
-          <button class="chat-approval-btn chat-approval-deny" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
+      ? `<div class="pq-actions">
+          <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
+          <button class="pq-cancel" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
         </div>`
       : ''}
   </div>`;
@@ -45580,8 +45764,24 @@ function toggleQuestionOther(questionId, itemId) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
   const block = card?.querySelector?.(`[data-question-compose-id="${cssEscapeValue(itemId)}"]`);
   if (!card || !block) return;
-  card.setAttribute('data-question-compose-target', `${String(itemId)}::other`);
-  document.getElementById('chat-input')?.focus?.();
+  const input = block.querySelector('[data-question-other]');
+  const toggle = block.querySelector('.pq-other-toggle');
+  if (!input || !toggle) return;
+  const isOpen = !input.hasAttribute('hidden');
+  if (isOpen) {
+    input.setAttribute('hidden', '');
+    card.removeAttribute('data-question-compose-target');
+  } else {
+    input.removeAttribute('hidden');
+    card.setAttribute('data-question-compose-target', `${String(itemId)}::other`);
+  }
+  toggle.classList.toggle('selected', !isOpen);
+  toggle.setAttribute('aria-expanded', String(!isOpen));
+  toggle.setAttribute('aria-pressed', String(!isOpen));
+  if (!isOpen) {
+    try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+  }
+  captureQuestionDraftState();
 }
 
 // Single_select radios can't be deselected natively. On mousedown, if the radio
@@ -45597,19 +45797,63 @@ function toggleQuestionRadio(inputId) {
   } catch {}
 }
 
+function desktopQuestionAnswerFromDraft(state, questionId) {
+  const prefix = `${String(questionId || '').trim()}::`;
+  const selected = (state?.checked || [])
+    .map((value) => String(value || ''))
+    .filter((value) => value.startsWith(prefix))
+    .map((value) => value.slice(prefix.length).trim())
+    .filter(Boolean);
+  return {
+    selected,
+    text: String(state?.texts?.[questionId] || '').trim(),
+    other: String(state?.others?.[questionId]?.value || '').trim(),
+  };
+}
+
 function collectPrometheusQuestionAnswers(question) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
   if (!card) return { answers: [], generalOther: '' };
+  // The card intentionally contains only the active step. Start with the
+  // external draft for earlier steps, then overlay the active DOM controls.
+  const state = saveDesktopQuestionDraftFromCard(question) || {};
   const answers = question.questions.map((q) => {
-    const checked = Array.from(card.querySelectorAll(`[data-question-id="${cssEscapeValue(q.id)}"]:checked`))
-      .map((input) => String(input.value || '').trim())
-      .filter(Boolean);
-    const text = String(card.querySelector(`[data-question-text="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
-    const other = String(card.querySelector(`[data-question-other="${cssEscapeValue(q.id)}"]`)?.value || '').trim();
+    const block = card.querySelector(`[data-question-compose-id="${cssEscapeValue(q.id)}"]`);
+    const draft = desktopQuestionAnswerFromDraft(state, q.id);
+    const checked = block
+      ? Array.from(block.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked'))
+        .map((input) => String(input.value || '').trim())
+        .filter(Boolean)
+      : draft.selected;
+    const textEl = block?.querySelector(`[data-question-text="${cssEscapeValue(q.id)}"]`);
+    const otherEl = block?.querySelector(`[data-question-other="${cssEscapeValue(q.id)}"]`);
+    const text = textEl ? String(textEl.value || '').trim() : draft.text;
+    const other = otherEl ? String(otherEl.value || '').trim() : draft.other;
     return { id: q.id, label: q.label, mode: q.mode, selected: q.mode === 'single_select' ? checked.slice(0, 1) : checked, text, other };
   });
-  const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || '').trim();
+  const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || state.general || '').trim();
   return { answers, generalOther };
+}
+
+async function handleDesktopQuestionOptionChange(questionId, itemId, mode) {
+  if (String(mode || '').trim().toLowerCase() !== 'single_select') return;
+  // Let the native radio state settle before reading the card. This also
+  // allows the radio deselection helper to finish its deferred update.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const question = findPendingPrometheusQuestionForSession(window.activeChatSessionId);
+  if (!question || String(question.id || '') !== String(questionId || '')) return;
+  const normalized = normalizeQuestionRecord(question);
+  const currentIndex = desktopQuestionStepIndex(normalized);
+  const currentQuestion = normalized.questions[currentIndex];
+  if (!currentQuestion || String(currentQuestion.id || '') !== String(itemId || '')) return;
+  const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
+  const selected = card?.querySelector(`input[data-question-id="${cssEscapeValue(itemId)}"]:checked`);
+  if (!selected) return;
+  await submitInlinePrometheusQuestion(questionId, {
+    stepIndex: currentIndex,
+    advanceStep: true,
+    autoAdvance: true,
+  });
 }
 
 function focusPrometheusQuestionComposer() {
@@ -45627,8 +45871,21 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
 }
 
 async function submitInlinePrometheusQuestion(id, options = {}) {
-  const result = await desktopQuestionController.submit(id, {
+  const local = desktopQuestionController.findQuestion(id, options.sessionId);
+  const localQuestion = local?.record ? normalizeQuestionRecord(local.record) : null;
+  const currentIndex = localQuestion ? desktopQuestionStepIndex(localQuestion) : 0;
+  const submitOptions = {
     ...options,
+    stepIndex: options.stepIndex === undefined ? currentIndex : options.stepIndex,
+    // The desktop card only renders the active question. Intermediate steps
+    // therefore advance locally; only the final step calls the backend.
+    advanceStep: options.advanceStep !== false,
+    onStepAdvance: options.onStepAdvance || ((details) => {
+      syncDesktopQuestionCardAfterStep(details.question, details.payload, details.nextIndex, details.sessionId);
+    }),
+  };
+  const result = await desktopQuestionController.submit(id, {
+    ...submitOptions,
     readAnswers: (question) => collectPrometheusQuestionAnswers(question),
     getComposerTarget: (question) => {
       const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
@@ -45982,6 +46239,7 @@ if (typeof window.submitInlinePrometheusQuestion !== 'function') window.submitIn
 if (typeof window.cancelInlinePrometheusQuestion !== 'function') window.cancelInlinePrometheusQuestion = cancelInlinePrometheusQuestion;
 if (typeof window.toggleQuestionOther !== 'function') window.toggleQuestionOther = toggleQuestionOther;
 if (typeof window.toggleQuestionRadio !== 'function') window.toggleQuestionRadio = toggleQuestionRadio;
+if (typeof window.handleDesktopQuestionOptionChange !== 'function') window.handleDesktopQuestionOptionChange = handleDesktopQuestionOptionChange;
 if (typeof window.loadApprovalProcessRun !== 'function') window.loadApprovalProcessRun = loadApprovalProcessRun;
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.generateSessionId = generateSessionId;

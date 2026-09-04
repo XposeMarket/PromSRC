@@ -71,12 +71,34 @@ assert.equal(testState.liveTraceEntries[2].text, 'Reading the next result furthe
 const renderContext = {
   liveTraceGroups(entries) {
     const groups = [];
+    let activeToolGroup = null;
     for (const entry of Array.isArray(entries) ? entries : []) {
-      const kind = entry?.activity
-        ? 'tools'
-        : String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-          ? 'thought-summary'
-          : 'thought';
+      if (entry?.activity) {
+        if (!activeToolGroup) {
+          const previous = groups.at(-1);
+          const pendingSummary = previous?.kind === 'thought-summary'
+            && previous.entries.length > 0
+            && previous.entries.every((candidate) => String(candidate?.extra?.source || '').toLowerCase() === 'agent_progress');
+          if (pendingSummary) {
+            activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
+            groups[groups.length - 1] = activeToolGroup;
+          } else {
+            activeToolGroup = { kind: 'tools', entries: [entry] };
+            groups.push(activeToolGroup);
+          }
+        } else {
+          activeToolGroup.entries.push(entry);
+        }
+        continue;
+      }
+      const isProgress = String(entry?.extra?.source || '').toLowerCase() === 'agent_progress';
+      const isSummary = String(entry?.extra?.reasoningKind || '').toLowerCase() === 'summary';
+      if (isProgress && isSummary && activeToolGroup) {
+        activeToolGroup.entries.push(entry);
+        continue;
+      }
+      activeToolGroup = null;
+      const kind = isProgress ? 'thought-summary' : 'thought';
       const previous = groups.at(-1);
       if (previous?.kind === kind) previous.entries.push(entry);
       else groups.push({ kind, entries: [entry] });
@@ -114,7 +136,33 @@ const renderedThoughtBeforeTool = renderContext.renderLiveTurnTrace([
 ], { streaming: true });
 assert.match(renderedThoughtBeforeTool, /Planning the next step/, 'a tool event must not erase the preceding thought group');
 assert.match(renderedThoughtBeforeTool, /Session in browser/, 'the tool group must remain rendered after a thought');
-assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 2, 'thought and tool must remain separate keyed groups');
+assert.equal((renderedThoughtBeforeTool.match(/data-live-trace-group=/g) || []).length, 1, 'a pre-tool mutable summary must move into the tool group');
+
+const renderedDurableThoughtAndLiveSummary = renderContext.renderLiveTurnTrace([
+  {
+    id: 'durable-thought',
+    type: 'think',
+    text: 'I am checking the browser session before choosing the next tool.',
+    extra: { source: 'agent_thought', visibility: 'user', reasoningKind: 'full_thought' },
+  },
+  {
+    id: 'tool-call-with-fake-label',
+    type: 'tool',
+    text: 'Loading run skill for execution',
+    activity: { kind: 'operation', action: 'browser_open' },
+  },
+  {
+    id: 'live-model-summary',
+    type: 'think',
+    text: 'The browser session is ready; I am reading the requested page now.',
+    extra: { source: 'agent_progress', visibility: 'user', reasoningKind: 'summary' },
+  },
+], { streaming: true });
+assert.match(renderedDurableThoughtAndLiveSummary, /I am checking the browser session/, 'durable model thought must stay visible after the tool event');
+assert.match(renderedDurableThoughtAndLiveSummary, /The browser session is ready; I am reading the requested page now\./, 'the live model summary must render in the active tool header');
+assert.equal((renderedDurableThoughtAndLiveSummary.match(/data-live-trace-group=/g) || []).length, 2, 'a live summary must update the tool group instead of creating a third group');
+const toolBodyHtml = renderedDurableThoughtAndLiveSummary.match(/<div class="live-turn-tool-body">([\s\S]*?)<\/div>/)?.[1] || '';
+assert.doesNotMatch(toolBodyHtml, /The browser session is ready; I am reading the requested page now\./, 'the mutable summary must have one visual owner');
 
 const visibleContext = {
   desktopTracePresentationEntries: (entries) => Array.isArray(entries) ? entries : [],
@@ -148,8 +196,11 @@ assert.equal(similarSummaryAndThought.length, 2,
 
 assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,100}event\.thinking \|\| event\.text/);
 assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
-assert.match(desktop, /const latestTraceEntry = Array\.isArray\(entries\) \? entries\.at\(-1\) : null/);
-assert.match(desktop, /const activeProgressSummary = streaming && isDesktopMutableProgressTraceEntry\(latestTraceEntry\)/);
+assert.match(desktop, /const isMutableProgress = isDesktopMutableProgressTraceEntry\(entry\)/);
+assert.match(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/);
+assert.match(desktop, /const progressSummary = desktopTraceProgressSummary\(group\.entries\)/);
+assert.match(desktop, /const toolBodyEntries = visibleEntries\.filter\(\(entry\) => !isDesktopMutableProgressTraceEntry\(entry\)\)/);
+assert.doesNotMatch(desktop, /if \(duplicatesVisibleReasoning\) return 'Reasoning';/);
 assert.doesNotMatch(desktop, /groups = groups\.filter\(\(group\) => !\([\s\S]{0,220}activeProgressSummary/,
   'an old progress summary must not remove a completed thought group when a tool follows it');
 assert.match(teams, /function teamEventSource\(event\)/);

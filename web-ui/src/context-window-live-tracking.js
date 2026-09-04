@@ -1,6 +1,7 @@
 const PERF_EVENT = 'prometheus:client-performance-mark';
+import { resolveActiveContextTokens } from './context-window-value.js';
+
 const SEMANTIC_LABEL = 'Context window';
-const SEMANTIC_HELP = 'Effective context pressure · compaction starts before the hard limit';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
 const MAINTENANCE_INTERVAL_MS = 500;
 const PRESSURE_REFRESH_MS = 2000;
@@ -117,45 +118,15 @@ function replaceHeadText(head) {
   if (!String(head.textContent || '').startsWith(SEMANTIC_LABEL)) head.prepend(document.createTextNode(SEMANTIC_LABEL));
 }
 
-function semanticCopyForState(state) {
-  const trigger = numeric(state?.pressureTriggerTokens);
-  const windowTokens = numeric(state?.windowTokens || state?.pressureWindowTokens);
-  if (trigger > 0 && windowTokens > 0) {
-    const percent = Math.round((trigger / windowTokens) * 100);
-    return `Effective context pressure · compaction at ${formatTokens(trigger)} (${percent}%)`;
-  }
-  return SEMANTIC_HELP;
+function removeSemanticNote(elements) {
+  elements.root?.querySelector('[data-context-window-semantic-note]')?.remove();
 }
 
-function ensureSemanticNote(surface, elements, state = null) {
+function setSurfaceAccessibilityLabel(elements) {
   if (!elements.root) return;
-  let note = elements.root.querySelector('[data-context-window-semantic-note]');
-  if (!note) {
-    note = document.createElement('div');
-    note.dataset.contextWindowSemanticNote = 'true';
-    note.className = 'context-window-semantic-note';
-    note.innerHTML = '<span data-context-window-semantic-copy></span><span data-context-window-live-copy hidden></span>';
-    if (elements.metrics?.parentNode === elements.root) elements.root.insertBefore(note, elements.metrics);
-    else elements.root.appendChild(note);
-  }
-  const copy = note.querySelector('[data-context-window-semantic-copy]');
-  const semanticCopy = semanticCopyForState(state);
-  if (copy && copy.textContent !== semanticCopy) copy.textContent = semanticCopy;
   elements.root.setAttribute('aria-label', SEMANTIC_LABEL);
   elements.button?.setAttribute('aria-label', SEMANTIC_LABEL);
-  if (surface === 'mobile' && !String(elements.button?.title || '')) elements.button?.setAttribute('title', SEMANTIC_LABEL);
-}
-
-function installSemanticStyles() {
-  if (document.getElementById('context-window-live-tracking-style')) return;
-  const style = document.createElement('style');
-  style.id = 'context-window-live-tracking-style';
-  style.textContent = `
-    .context-window-semantic-note { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:5px 0 8px; color:var(--muted, rgba(255,255,255,.52)); font-size:11px; line-height:1.25; }
-    .context-window-semantic-note [data-context-window-live-copy] { flex:0 0 auto; color:var(--pm-gold, var(--brand, currentColor)); font-variant-numeric:tabular-nums; white-space:nowrap; }
-    body.pm-mobile-active .context-window-semantic-note { padding:4px 0 9px; font-size:10.5px; }
-  `;
-  document.head.appendChild(style);
+  if (!String(elements.button?.title || '')) elements.button?.setAttribute('title', SEMANTIC_LABEL);
 }
 
 function makeState(sessionId, surface, clientRequestId = '') {
@@ -166,6 +137,8 @@ function makeState(sessionId, surface, clientRequestId = '') {
     active: false,
     baselineTokens: 0,
     authoritativeTokens: 0,
+    currentStateKnown: false,
+    currentStateTokens: 0,
     windowTokens: 0,
     liveToolTokens: 0,
     pressureTokens: 0,
@@ -201,6 +174,8 @@ function captureAuthoritative(state, elements = surfaceElements(state.surface)) 
   if (!text || text === state.lastRenderedText) return;
   const usage = parseUsageLabel(text);
   if (!usage) return;
+  state.currentStateKnown = true;
+  state.currentStateTokens = usage.current;
   state.authoritativeTokens = usage.current;
   state.windowTokens = usage.limit;
   if (state.baselineTokens <= 0) state.baselineTokens = usage.current;
@@ -243,6 +218,10 @@ function refreshPressure(state, force = false) {
 
 function copyPressureState(target, source) {
   if (!source) return;
+  target.authoritativeTokens = source.authoritativeTokens;
+  target.currentStateKnown = source.currentStateKnown;
+  target.currentStateTokens = source.currentStateTokens;
+  target.windowTokens = source.windowTokens;
   target.pressureTokens = source.pressureTokens;
   target.pressureWindowTokens = source.pressureWindowTokens;
   target.pressureTriggerTokens = source.pressureTriggerTokens;
@@ -321,7 +300,17 @@ function recordCompactionEvent(sessionId, surface, evt = {}) {
   const after = numeric(evt?.extra?.projected_tokens_after);
   const trigger = numeric(evt?.args?.trigger_tokens || evt?.extra?.trigger_tokens || evt?.extra?.input_budget_tokens);
   if (before > 0) state.pressureTokens = Math.max(state.pressureTokens, before);
-  if (after > 0) state.pressureTokens = after;
+  if (after > 0) {
+    state.pressureTokens = after;
+    // The compaction result is a real reset of the active context baseline.
+    // Clear the pre-compaction model slice and live projection at the same
+    // time so a late desktop refresh cannot repaint the old peak.
+    state.authoritativeTokens = after;
+    state.currentStateKnown = true;
+    state.currentStateTokens = after;
+    state.baselineTokens = after;
+    state.liveToolTokens = 0;
+  }
   if (trigger > 0) state.pressureTriggerTokens = trigger;
   state.pendingCompaction = phase === 'start' || (!after && evt?.type === 'tool_call');
   renderLiveEstimate(state);
@@ -339,12 +328,20 @@ function renderLiveEstimate(state) {
   if (!elements.root || !elements.total) return;
   captureAuthoritative(state, elements);
 
-  const windowTokens = numeric(state.windowTokens || state.pressureWindowTokens);
+  const hasPressureSnapshot = state.pressureFetchedAt > 0 && state.pressureWindowTokens > 0;
+  const windowTokens = numeric(hasPressureSnapshot ? state.pressureWindowTokens : state.windowTokens);
   if (windowTokens <= 0) return;
   const liveProjection = state.active && state.baselineTokens > 0
     ? state.baselineTokens + state.liveToolTokens
     : 0;
-  const authoritativePressure = Math.max(state.authoritativeTokens, state.pressureTokens);
+  // The visible current-state snapshot is authoritative. Pressure is only a
+  // fallback while that snapshot is unavailable, and the live projection can
+  // add unpersisted tool observations on top during an active turn.
+  const authoritativePressure = resolveActiveContextTokens({
+    currentStateTokens: state.currentStateKnown ? state.currentStateTokens : undefined,
+    pressureTokens: hasPressureSnapshot ? state.pressureTokens : undefined,
+    fallbackTokens: state.authoritativeTokens,
+  });
   const estimatedTokens = Math.max(authoritativePressure, liveProjection);
   if (estimatedTokens <= 0) return;
 
@@ -359,40 +356,22 @@ function renderLiveEstimate(state) {
   else elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
 
   const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
-  if (state.authoritativeTokens > 0 && state.pressureTokens > state.authoritativeTokens) {
-    titleParts.push(`current model slice ${formatTokens(state.authoritativeTokens)}`);
-  }
   if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
   if (isLiveEstimate) titleParts.push('live estimate');
   if (elements.button) elements.button.title = titleParts.join(' · ');
 
-  ensureSemanticNote(state.surface, elements, state);
-  const liveCopy = elements.root.querySelector('[data-context-window-live-copy]');
-  if (liveCopy) {
-    if (isLiveEstimate) {
-      liveCopy.hidden = false;
-      liveCopy.textContent = `+${formatTokens(unreflectedTokens)} live est`;
-    } else if (state.pressureTokens > state.authoritativeTokens && state.authoritativeTokens > 0) {
-      liveCopy.hidden = false;
-      liveCopy.textContent = `model slice ${formatTokens(state.authoritativeTokens)}`;
-    } else if (state.pendingCompaction) {
-      liveCopy.hidden = false;
-      liveCopy.textContent = 'compacting';
-    } else {
-      liveCopy.hidden = true;
-      liveCopy.textContent = '';
-    }
-  }
+  removeSemanticNote(elements);
+  setSurfaceAccessibilityLabel(elements);
 }
 
 function semanticPass() {
-  installSemanticStyles();
   for (const surface of ['desktop', 'mobile']) {
     const elements = surfaceElements(surface);
     if (!elements.root) continue;
     const state = ensureSurfaceState(surface);
     replaceHeadText(elements.head);
-    ensureSemanticNote(surface, elements, state);
+    removeSemanticNote(elements);
+    setSurfaceAccessibilityLabel(elements);
     if (state) {
       captureAuthoritative(state, elements);
       void refreshPressure(state);

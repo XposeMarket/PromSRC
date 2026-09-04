@@ -156,6 +156,7 @@ assert.match(pages, /return `event:\$\{eventKey\}`/, 'recovery activity merge mu
 assert.match(pages, /return `\$\{type\}\|\$\{callId\}\|\$\{action\}\|\$\{text\}\|\$\{preview\}`/, 'recovery activity merge must fall back to normalized content');
 assert.match(toolActivityRuntime, /entry\?\.extra\?\.action \|\| entry\?\.extra\?\.toolName/, 'cold recovery rows must load the existing tool activity renderer');
 assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy tool event-shaped rows must be normalized before rich coalescing');
+assert.match(toolActivityRuntime, /const isToolRecord = \['tool', 'skill', 'result', 'error', 'progress'\]/, 'cold recovery must preserve model prose beside structured tools');
 assert.match(pages, /rawType = String\(entry\.type \|\| entry\.kind \|\| ''\)\.toLowerCase\(\)/, 'mobile recovery must inspect legacy event-shaped trace types');
 assert.match(pages, /rawType === 'tool_result'/, 'mobile recovery must convert legacy tool_result rows into result rows');
 assert.match(pages, /__pmMobileBackgroundAgentDetailRender/, 'background detail recovery must repaint after the rich renderer loads');
@@ -183,6 +184,12 @@ const coldTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTra
 assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'operation'), 'cold recovery must not paint a raw tool_call block');
 assert.ok(coldTrace.some((entry) => entry.activity?.kind === 'result'), 'cold recovery must not paint a raw tool_result block');
 assert.ok(coldTrace.every((entry) => String(entry.text || '').length < 180), 'cold recovery placeholders must stay compact');
+const coldMixedTrace = recoveryRuntime.coalesceToolActivityEntries([
+  { type: 'think', text: 'Activating required tool categories', extra: { source: 'agent_progress', reasoningKind: 'summary' } },
+  ...recoveredLegacyTrace,
+]);
+assert.equal(coldMixedTrace[0]?.type, 'think', 'cold recovery must leave model summaries as prose');
+assert.equal(coldMixedTrace[0]?.text, 'Activating required tool categories', 'cold recovery must preserve the model summary text');
 await recoveryRuntime.loadToolActivityFeature();
 const readyTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
 assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'ready recovery must use the live operation renderer');

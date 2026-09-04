@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import {
   getCodingWorkspaceSession,
   gitCommit,
@@ -18,10 +19,12 @@ import {
   getCodingWorkspaceContext,
   getCodingWorkspaceDiff,
   getCodingWorkspaceTree,
+  findCodingGitRoot,
   type CodingScope,
 } from '../coding/workspace-context';
 import { findProjectBySessionId } from '../projects/project-store';
-import { getWorkspace, sessionExists } from '../session';
+import { getConfig } from '../../config/config.js';
+import { getSession, getWorkspace, sessionExists } from '../session';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry';
 
 export const router = express.Router();
@@ -39,6 +42,28 @@ function resolveRequestCodingRoot(rawRoot: string | undefined, rawSessionId: str
   return resolveCodingRoot(rawRoot);
 }
 
+function fileIsInsideRoot(root: string, file: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(file));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveDiffRoot(rawRoot: string | undefined, sessionId: string | undefined, file: string): string {
+  const resolved = resolveRequestCodingRoot(rawRoot, sessionId);
+  // Canvas can open a native/dev-root file whose absolute path is outside the
+  // session's default workspace. The mobile canvas resolves that file from its
+  // own workspace endpoint; give desktop Coding Diff the same behavior by
+  // deriving a Git root (or the file's directory) when the selected root cannot
+  // contain the requested absolute file.
+  if (path.isAbsolute(file) && !fileIsInsideRoot(resolved, file)) {
+    try {
+      const gitRoot = findCodingGitRoot(file);
+      if (gitRoot) return resolveCodingRoot(gitRoot);
+    } catch {}
+    return resolveCodingRoot(path.dirname(file));
+  }
+  return resolved;
+}
+
 router.get('/api/coding/session', (req, res) => {
   try {
     res.json({
@@ -47,6 +72,69 @@ router.get('/api/coding/session', (req, res) => {
         req.query.sessionId ? String(req.query.sessionId) : undefined,
       )),
     });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+/**
+ * Return lightweight branch identity for the sidebar's visible chat rows.
+ *
+ * This deliberately does not make `/api/sessions` run Git for every chat on
+ * every refresh.  The desktop sidebar asks for the small batch it currently
+ * needs, while the source panel remains the detailed coding-context owner.
+ * A branch is considered chat-scoped when the session belongs to a project,
+ * has a Canvas root, or uses a workspace other than the configured default.
+ */
+router.get('/api/coding/session-metadata', (req, res) => {
+  try {
+    const rawSessionIds = Array.isArray(req.query.sessionIds)
+      ? req.query.sessionIds.join(',')
+      : String(req.query.sessionIds || '');
+    const sessionIds = Array.from(new Set(
+      rawSessionIds
+        .split(/[|,]/)
+        .map((value) => value.trim())
+        .filter((value) => value && sessionExists(value)),
+    )).slice(0, 80);
+    const configuredRoot = resolveCodingRoot(getConfig().getWorkspacePath());
+    const codingByRoot = new Map<string, ReturnType<typeof getCodingWorkspaceSession>>();
+    const sessions = sessionIds.map((sessionId) => {
+      const session = getSession(sessionId);
+      const project = findProjectBySessionId(sessionId);
+      const projectRoot = String(project?.workspacePath || '').trim();
+      const canvasRoot = String(session.canvasProjectRoot || '').trim();
+      const sessionRoot = String(session.workspace || '').trim();
+      const rawRoot = projectRoot || canvasRoot || sessionRoot;
+      const root = resolveCodingRoot(rawRoot);
+      const scoped = Boolean(
+        projectRoot
+        || canvasRoot
+        || path.resolve(root).toLowerCase() !== path.resolve(configuredRoot).toLowerCase(),
+      );
+      if (!scoped) return { sessionId, connected: false };
+      const rootKey = path.resolve(root).toLowerCase();
+      let coding = codingByRoot.get(rootKey);
+      if (!coding) {
+        try {
+          coding = getCodingWorkspaceSession(root);
+          codingByRoot.set(rootKey, coding);
+        } catch {
+          return { sessionId, connected: false };
+        }
+      }
+      const branch = String(coding.branch || '').trim();
+      if (!branch) return { sessionId, connected: false };
+      return {
+        sessionId,
+        connected: true,
+        root,
+        branch,
+        projectName: String(project?.name || session.canvasProjectLabel || '').trim() || undefined,
+        repositoryName: String(session.canvasProjectLink?.github?.repoFullName || coding.name || '').trim() || undefined,
+      };
+    });
+    res.json({ sessions });
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });
   }
@@ -79,15 +167,13 @@ router.get('/api/coding/repository', (req, res) => {
 router.get('/api/coding/diff', (req, res) => {
   try {
     const sessionId = req.query.sessionId ? String(req.query.sessionId) : undefined;
-    const root = resolveRequestCodingRoot(
-      req.query.root ? String(req.query.root) : undefined,
-      sessionId,
-    );
     const file = String(req.query.file || '').trim();
     if (!file) {
       res.status(400).json({ error: 'file is required' });
       return;
     }
+    const rawRoot = req.query.root ? String(req.query.root) : undefined;
+    const root = resolveDiffRoot(rawRoot, sessionId, file);
     res.json(getCodingWorkspaceDiff({
       root,
       file,

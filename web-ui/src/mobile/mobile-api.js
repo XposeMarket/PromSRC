@@ -2145,6 +2145,46 @@ function appendPairingQuery(url) {
   return `${url}${sep}pt=${encodeURIComponent(token)}`;
 }
 
+function isMobileVisionPreviewPath(pathname, searchParams) {
+  const path = String(pathname || '').trim();
+  if (path.startsWith('/api/chat/desktop-screenshot-preview/')) return true;
+  if (path === '/api/canvas/inline') return searchParams?.has('path') === true;
+  if (path === '/api/canvas/generated-image-preview') return searchParams?.has('cache') === true;
+  return false;
+}
+
+// Streamed vision events carry either a data URL (browser captures) or a
+// gateway-relative route (desktop/canvas captures). Mobile can be pointed at
+// a paired remote gateway, so a raw relative route would incorrectly resolve
+// against the page origin and silently leave the live image blank. Rebuild
+// supported routes against the active gateway and attach the media token.
+export function buildMobileVisionPreviewUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^data:image\//i.test(raw)) return raw;
+
+  const pageOrigin = typeof window !== 'undefined'
+    ? String(window.location?.origin || '').trim()
+    : '';
+  const activeGatewayOrigin = typeof window !== 'undefined'
+    ? String(window.__pmMobileActiveGatewayOrigin || '').trim()
+    : '';
+  const gatewayOrigin = String(activeGatewayOrigin || API || pageOrigin)
+    .trim()
+    .replace(/\/+$/, '');
+  if (!gatewayOrigin) return '';
+
+  try {
+    const parsed = new URL(raw, gatewayOrigin || pageOrigin);
+    if (!isMobileVisionPreviewPath(parsed.pathname, parsed.searchParams)) return '';
+    const target = new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, gatewayOrigin);
+    if (target.searchParams.has('pt')) return target.toString();
+    return appendPairingQuery(target.toString());
+  } catch {
+    return '';
+  }
+}
+
 // Live HTML/JS/CSS assets under a workspace project (correct base URL for relative paths).
 export function buildWorkspaceCanvasUrl(relPath) {
   const path = String(relPath || '').trim().replace(/^\/+/, '');

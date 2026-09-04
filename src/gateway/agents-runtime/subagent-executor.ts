@@ -2619,7 +2619,7 @@ function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: st
   return { name: target, args };
 }
 
-function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
   const actionMaps: Record<string, Record<string, string>> = {
     agent_ops: {
       spawn: 'spawn_subagent',
@@ -2650,7 +2650,11 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
       reply: 'reply_to_team',
       post_chat: 'post_to_team_chat',
       message_main: 'message_main_agent',
-      dispatch: 'dispatch_to_agent',
+      // Generic team dispatch must stay on the team-aware execution path.
+      // Routing this alias through dispatch_to_agent creates a standalone task
+      // with no team/session binding, so talk_to_manager cannot identify the
+      // team and the result never reaches the team room.
+      dispatch: 'dispatch_team_agent',
       dispatch_team_agent: 'dispatch_team_agent',
       request_member_turn: 'request_team_member_turn',
       get_agent_result: 'get_agent_result',
