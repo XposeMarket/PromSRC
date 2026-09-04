@@ -24,6 +24,11 @@ export interface ToolObservation {
   durationMs?: number;
   startedAt?: number;
   finishedAt?: number;
+  /**
+   * Retry status is only present when the caller has an explicit retry
+   * signal. Do not infer it from the previous observation for a tool.
+   */
+  retry?: boolean;
   tokenEstimate?: {
     argsTokens: number;
     resultTokens: number;
@@ -226,6 +231,7 @@ export function createToolObservation(input: {
   extra?: any;
   data?: any;
   artifacts?: any[];
+  retry?: boolean;
 }): ToolObservation {
   const id = `toolobs_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const resultText = String(input.result || '');
@@ -276,6 +282,15 @@ export function createToolObservation(input: {
     durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
     startedAt: Number.isFinite(startedAt) ? startedAt : undefined,
     finishedAt: Number.isFinite(finishedAt) ? finishedAt : undefined,
+    retry: typeof input.retry === 'boolean'
+      ? input.retry
+      : typeof input.extra?.retry === 'boolean'
+        ? input.extra.retry
+        : typeof input.data?.retry === 'boolean'
+          ? input.data.retry
+          : typeof telemetry.retry === 'boolean'
+            ? telemetry.retry
+            : undefined,
     tokenEstimate: {
       argsTokens,
       resultTokens,
@@ -305,6 +320,7 @@ export function createToolObservationsFromResults(sessionId: string, turnId: str
     extra: r?.extra,
     data: r?.data,
     artifacts: r?.artifacts,
+    retry: typeof r?.retry === 'boolean' ? r.retry : undefined,
   }));
 }
 
@@ -352,10 +368,16 @@ export function buildToolBenchmarkAggregate(sessionId: string, maxObservations =
     const args = (() => { try { return JSON.parse(obs.argsPreview || '{}'); } catch { return {}; } })();
     const action = String(args?.action || '').trim() || '(none)';
     for (const [key, map] of [[obs.toolName, buckets], [`${obs.toolName}:${action}`, actionBuckets]] as const) {
-      const bucket = map.get(key) || { calls: 0, successes: 0, failures: 0, toolExecutionMs: 0, argumentTokens: 0, resultTokens: 0, contextTokens: 0, estimatedCostMicros: 0, durations: [] as number[] };
+      const bucket = map.get(key) || { calls: 0, successes: 0, failures: 0, retries: 0 as number | null, retryObservability: 'explicit' as 'explicit' | 'unavailable', toolExecutionMs: 0, argumentTokens: 0, resultTokens: 0, contextTokens: 0, estimatedCostMicros: 0, durations: [] as number[] };
       bucket.calls++;
       bucket.successes += obs.status === 'ok' ? 1 : 0;
       bucket.failures += obs.status === 'error' ? 1 : 0;
+      if (typeof obs.retry === 'boolean') {
+        if (bucket.retries !== null && obs.retry) bucket.retries++;
+      } else {
+        bucket.retries = null;
+        bucket.retryObservability = 'unavailable';
+      }
       const duration = Number(obs.durationMs || 0);
       bucket.toolExecutionMs += duration;
       if (duration > 0) bucket.durations.push(duration);
@@ -368,14 +390,15 @@ export function buildToolBenchmarkAggregate(sessionId: string, maxObservations =
   }
   const finishBuckets = (map: Map<string, any>) => Object.fromEntries([...map.entries()].map(([key, value]) => [key, { ...value, p50Ms: percentile(value.durations, 0.5), p95Ms: percentile(value.durations, 0.95), durations: undefined }]));
   const durations = observations.map((obs) => Number(obs.durationMs || 0)).filter((value) => value > 0);
-  let retries = 0;
-  const lastStatusBySignature = new Map<string, ToolObservationStatus>();
+  let retries: number | null = 0;
+  let retryObservability: 'explicit' | 'unavailable' = 'explicit';
   for (const obs of observations) {
-    let action = '(none)';
-    try { action = String(JSON.parse(obs.argsPreview || '{}')?.action || '(none)'); } catch {}
-    const signature = `${obs.toolName}:${action}`;
-    if (lastStatusBySignature.get(signature) === 'error') retries++;
-    lastStatusBySignature.set(signature, obs.status);
+    if (typeof obs.retry === 'boolean') {
+      if (retries !== null && obs.retry) retries++;
+    } else {
+      retries = null;
+      retryObservability = 'unavailable';
+    }
   }
   const startedAtMs = observations.length ? Math.min(...observations.map((obs) => Number(obs.startedAt || obs.createdAt))) : 0;
   const completedAtMs = observations.length ? Math.max(...observations.map((obs) => Number(obs.finishedAt || obs.createdAt))) : 0;
@@ -389,6 +412,7 @@ export function buildToolBenchmarkAggregate(sessionId: string, maxObservations =
     successes: observations.filter((obs) => obs.status === 'ok').length,
     failures: observations.filter((obs) => obs.status === 'error').length,
     retries,
+    retryObservability,
     argumentTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.argsTokens || 0), 0),
     resultTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.resultTokens || 0), 0),
     contextTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.totalTokens || 0), 0),

@@ -10,7 +10,8 @@ type Accumulator = {
   calls: number;
   successes: number;
   failures: number;
-  retries: number;
+  retries: number | null;
+  retryObservability: 'explicit' | 'unavailable';
   durationMs: number;
   durations: number[];
   argsTokens: number;
@@ -38,6 +39,7 @@ function newAccumulator(): Accumulator {
     successes: 0,
     failures: 0,
     retries: 0,
+    retryObservability: 'explicit',
     durationMs: 0,
     durations: [],
     argsTokens: 0,
@@ -49,13 +51,18 @@ function newAccumulator(): Accumulator {
   };
 }
 
-function addObservation(accumulator: Accumulator, observation: ToolObservation, retry: boolean): void {
+function addObservation(accumulator: Accumulator, observation: ToolObservation): void {
   const duration = numberValue(observation.durationMs);
   const estimate = observation.tokenEstimate || {};
   accumulator.calls += 1;
   accumulator.successes += observation.status === 'ok' ? 1 : 0;
   accumulator.failures += observation.status === 'error' ? 1 : 0;
-  accumulator.retries += retry ? 1 : 0;
+  if (typeof observation.retry === 'boolean') {
+    if (accumulator.retries !== null && observation.retry) accumulator.retries += 1;
+  } else {
+    accumulator.retries = null;
+    accumulator.retryObservability = 'unavailable';
+  }
   accumulator.durationMs += duration;
   if (duration > 0) accumulator.durations.push(duration);
   accumulator.argsTokens += numberValue(estimate.argsTokens);
@@ -73,6 +80,7 @@ function serializeAccumulator(accumulator: Accumulator): Record<string, unknown>
     failures: accumulator.failures,
     errorRate: accumulator.calls ? Number((accumulator.failures / accumulator.calls).toFixed(4)) : 0,
     retries: accumulator.retries,
+    retryObservability: accumulator.retryObservability,
     turns: accumulator.turnIds.size,
     totalDurationMs: Math.round(accumulator.durationMs),
     avgDurationMs: accumulator.calls ? Number((accumulator.durationMs / accumulator.calls).toFixed(2)) : 0,
@@ -90,19 +98,15 @@ function serializeAccumulator(accumulator: Accumulator): Record<string, unknown>
 function aggregate(observations: ToolObservation[], currentToolNames: Set<string>, extensionNames: Set<string>): Record<string, unknown> {
   const byTool = new Map<string, Accumulator>();
   const byFamily = new Map<string, Accumulator>();
-  const previousStatus = new Map<string, ToolObservation['status']>();
-  const add = (map: Map<string, Accumulator>, key: string, observation: ToolObservation, retry: boolean) => {
+  const add = (map: Map<string, Accumulator>, key: string, observation: ToolObservation) => {
     const accumulator = map.get(key) || newAccumulator();
-    addObservation(accumulator, observation, retry);
+    addObservation(accumulator, observation);
     map.set(key, accumulator);
   };
 
   for (const observation of observations) {
-    const signature = `${observation.sessionId}:${observation.toolName}`;
-    const retry = previousStatus.get(signature) === 'error';
-    previousStatus.set(signature, observation.status);
-    add(byTool, observation.toolName, observation, retry);
-    add(byFamily, inferToolPerformanceFamily(observation.toolName), observation, retry);
+    add(byTool, observation.toolName, observation);
+    add(byFamily, inferToolPerformanceFamily(observation.toolName), observation);
   }
 
   const serializedTools = [...byTool.entries()].map(([tool, accumulator]) => ({
@@ -117,8 +121,7 @@ function aggregate(observations: ToolObservation[], currentToolNames: Set<string
     ...serializeAccumulator(accumulator),
   }));
   const totals = serializeAccumulator(observations.reduce((accumulator, observation) => {
-    const retry = false;
-    addObservation(accumulator, observation, retry);
+    addObservation(accumulator, observation);
     return accumulator;
   }, newAccumulator()));
   const top = (field: string, limit = 20) => [...serializedTools]
@@ -182,6 +185,7 @@ const report = {
     cost: 'estimatedCostMicros from recorded telemetry; not a provider invoice.',
     window: 'The report exposes the oldest and newest retained observation timestamps; persisted history is not a controlled current baseline.',
     privacy: 'Only tool names, families, counts, sizes, timings, and costs are emitted; previews and payload contents are excluded.',
+    retries: 'Retry counts use only an explicit observation.retry marker. If any observation lacks that marker, the retry count is null and retryObservability is unavailable; prior status is never treated as a retry signal.',
   },
   aggregate: aggregate(observations, currentToolNames, extensionNames),
 };
