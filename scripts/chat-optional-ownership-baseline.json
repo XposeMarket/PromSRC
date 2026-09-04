@@ -21,7 +21,7 @@
   "budgets": {
     "desktopPlainChatRawBytesMax": 1420000,
     "desktopPlainChatGzipBytesMax": 400000,
-    "desktopPlainChatModuleCountMax": 12,
+    "desktopPlainChatModuleCountMax": 13,
     "desktopMinimumGzipReductionRatio": 0.18,
     "mobilePlainChatRawBytesMax": 1190000,
     "mobilePlainChatGzipBytesMax": 350000,

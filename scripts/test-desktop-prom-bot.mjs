@@ -6,10 +6,16 @@ const source = read('web-ui/src/prom-bot.js');
 const generated = read('generated/public-web-ui/static/prom-bot.js');
 const performanceSource = read('web-ui/src/performance.js');
 const performanceGenerated = read('generated/public-web-ui/static/performance.js');
+const multiChatSource = read('web-ui/src/features/chat/multi-chat-workspace-v2.js');
+const multiChatGenerated = read('generated/public-web-ui/static/features/chat/multi-chat-workspace-v2.js');
+const chatPageSource = read('web-ui/src/pages/ChatPage.js');
+const chatPageGenerated = read('generated/public-web-ui/static/pages/ChatPage.js');
 const index = read('web-ui/index.html');
 
 assert.equal(source, generated, 'Prom Bot generated runtime must mirror canonical source');
 assert.equal(performanceSource, performanceGenerated, 'desktop bootstrap mirror must stay in sync');
+assert.equal(multiChatSource, multiChatGenerated, 'multi-chat generated runtime must mirror canonical source');
+assert.equal(chatPageSource, chatPageGenerated, 'ChatPage generated runtime must mirror canonical source');
 // The mobile exclusion is request-observed in
 // test-web-ui-performance-foundation.mjs rather than inferred from source text.
 assert.match(performanceSource, /import\('\.\/prom-bot\.js'\)/, 'Prom Bot must boot with the desktop app shell');
@@ -45,11 +51,27 @@ assert.match(source, /import\('\.\/pages\/SubagentsPage\.js'\)/);
 assert.match(source, /__PROM_UNIFIED_DESKTOP_CHAT/);
 assert.match(source, /openSubagentDetail\(id\)/);
 assert.match(source, /switchSubagentTab\('chat', id\)/);
+assert.match(source, /await window\.refreshSubagents\?\.\(\);[\s\S]*?await window\.openSubagentDetail\(id\)/,
+  'direct Prom Bot must hydrate the shared SubagentsPage catalog before opening the board');
 assert.match(source, /PROM_BOT_SURFACE_ID = 'prom-bot-main-surface'/);
 assert.match(source, /function displaceMainChatSurface\(/);
 assert.match(source, /entry\.node\.hidden = true/);
+assert.match(source, /#chat-view\.prom-bot-chat-active > \[hidden\][\s\S]*?display: none !important/,
+  'Prom Bot must suppress authored display rules on displaced main-chat children');
 assert.match(source, /function restoreMainChatSurface\(/);
 assert.match(source, /mountSubagentBoardAsMainChatSurface\(\)/);
+assert.match(source, /function setPromChatTitleOverride\(/,
+  'Prom Bot should expose a shared title override instead of renaming the underlying chat session');
+assert.match(source, /setPromChatTitleOverride\(agent\?\.name \|\| id, 'Prom Bot · Subagent chat', 'prom-bot'\)/,
+  'direct Prom Bot tabs must identify the selected subagent');
+assert.match(source, /clearPromChatTitleOverride\('prom-bot'\)/,
+  'direct Prom Bot title overrides must be cleared when leaving the subagent');
+assert.match(multiChatSource, /titleOverrideForSession\(/,
+  'multi-chat tabs must consume the Prom Bot title projection');
+assert.match(multiChatSource, /window\.refreshPromMultiChatTabs = renderTabStrip/,
+  'Prom Bot title changes must be able to refresh the existing tab strip');
+assert.match(chatPageSource, /__PROM_CHAT_TITLE_OVERRIDE/,
+  'the regular chat topbar must consume the same Prom Bot title projection');
 assert.doesNotMatch(source, /PROM_BOT_HOST_ID|prom-bot-chat-host/, 'the retired absolute overlay host must not return');
 assert.doesNotMatch(source, /#\$\{PROM_BOT_SURFACE_ID\}\s*\{[\s\S]*?position:\s*absolute/, 'Prom Bot surface must participate in the main chat layout instead of overlaying it');
 assert.doesNotMatch(source, /api\(`\/api\/agents\/\$\{[^}]+\}\/chat/, 'Prom Bot shell must not fork the direct-chat transport');

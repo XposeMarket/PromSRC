@@ -3483,6 +3483,9 @@ function _isMobileTransientReasoningTraceEntry(entry) {
   const source = String(entry.source || extra.source || '').trim().toLowerCase();
   const visibility = String(entry.visibility || extra.visibility || '').trim().toLowerCase();
   const reasoningKind = String(entry.reasoningKind || extra.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  // Full thoughts are durable journal entries even if a provider echoes a
+  // summary field alongside them. Summary cleanup must never remove one.
+  if (reasoningKind === 'full_thought') return false;
   return source === 'agent_progress'
     || source === 'reasoning_summary'
     || type === 'reasoning_summary'
@@ -3501,9 +3504,13 @@ function _setMobileLiveProgressNarration(message, text, { replace = false, visib
   const incoming = String(text || '');
   if (!incoming) return false;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
-  const existing = [...message.liveTraceEntries].reverse().find((entry) =>
-    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
-  );
+  // Only the current tail can still be mutable. Reusing an older progress
+  // row after a thought/tool boundary makes the next summary rewrite history.
+  const activeProgressEntry = message.liveTraceEntries.at(-1);
+  const existing = activeProgressEntry
+    && String(activeProgressEntry?.extra?.source || activeProgressEntry?.source || '').toLowerCase() === 'agent_progress'
+    ? activeProgressEntry
+    : null;
   if (!existing) {
     message.liveTraceEntries.push({
       id: `mtrace_progress_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -3579,7 +3586,8 @@ function _handleMobileCleanThought(message, evt) {
   if (!text) return false;
   const reasoningKind = String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase();
   const source = String(evt?.source || evt?.extra?.source || '').trim().toLowerCase();
-  const isSummary = visibility === 'summary' || reasoningKind === 'summary' || source === 'reasoning_summary';
+  const isSummary = reasoningKind !== 'full_thought'
+    && (visibility === 'summary' || reasoningKind === 'summary' || source === 'reasoning_summary');
   if (isSummary) {
     // Some gateways replay a safe summary through the legacy thought event.
     // Treat it exactly like the explicit summary channel: update one mutable
@@ -3591,10 +3599,10 @@ function _handleMobileCleanThought(message, evt) {
   const eventKey = String(evt?.eventKey || '').trim()
     || (streamId && Number.isFinite(seq) && seq >= 0 ? `${streamId}:${Math.floor(seq)}` : '');
   const thoughtExtra = {
-    source: String(evt?.source || '').trim() || 'agent_thought',
+    source: String(evt?.source || evt?.extra?.source || '').trim() || 'agent_thought',
     visibility,
     event: String(evt?.type || '').trim() || 'agent_thought',
-    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || '').trim().toLowerCase() || 'full_thought',
+    reasoningKind: String(evt?.reasoningKind || evt?.extra?.reasoningKind || evt?.extra?.presentationKind || '').trim().toLowerCase() || 'full_thought',
     ...(streamId ? { streamId } : {}),
     ...(eventKey ? { eventKey } : {}),
     ...(Number.isFinite(seq) && seq >= 0 ? { seq: Math.floor(seq) } : {}),
@@ -3654,14 +3662,26 @@ function _isInternalMobileRestartProcessEntry(entry) {
     || packetType === 'runtime_recovery_context';
 }
 
+function _isMobileInternalToolProtocolText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return /^(?:latency:\s*provider_[a-z0-9_]+(?:\s+at\b.*)?|processing\.{0,3})$/i.test(text)
+    || /^prepared\s+(?:skill|request|tool|provider)\b/i.test(text);
+}
+
 function _isMobileHiddenRuntimeProcessEntry(entry) {
   if (_isInternalMobileRestartProcessEntry(entry)) return true;
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   // Plan progress is rendered by the dedicated plan UI. Older runtime
   // checkpoints wrote it as generic `step` process rows, which made recovered
   // tool drawers show fake "Plan: Run …" tools.
-  return String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
-    && String(extra.event || '').toLowerCase() === 'progress_state';
+  if (String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
+    && String(extra.event || '').toLowerCase() === 'progress_state') return true;
+  // Background runtimes may persist provider lifecycle diagnostics as plain
+  // process rows. They are implementation details, not user-facing tools;
+  // real tool calls/results remain visible through the activity coalescer.
+  return !entry?.activity && _isMobileInternalToolProtocolText(
+    entry?.text || entry?.content || entry?.message,
+  );
 }
 
 function _normalizeMobileProcessEntry(entry) {
@@ -3723,6 +3743,8 @@ function _isMobileReasoningSummaryTraceEntry(entry) {
   const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
   const event = String(extra.event || entry?.event || '').trim().toLowerCase();
   const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  const reasoningKind = String(extra.reasoningKind || entry?.reasoningKind || extra.presentationKind || '').trim().toLowerCase();
+  if (reasoningKind === 'full_thought') return false;
   return ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
     || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
     || source === 'reasoning_summary';
@@ -3781,7 +3803,7 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
   }
   if ((normalizedType === 'think' || normalizedType === 'reasoning_summary') && text) {
     const source = String(normalizedExtra.source || entry.source || '').trim().toLowerCase();
-    const kind = String(normalizedExtra.reasoningKind || '').trim().toLowerCase()
+    const kind = String(normalizedExtra.reasoningKind || normalizedExtra.presentationKind || entry.reasoningKind || entry.presentationKind || '').trim().toLowerCase()
       || (source === 'reasoning_summary' || source === 'agent_progress' || normalizedType === 'reasoning_summary'
         ? 'summary'
         : 'full_thought');
@@ -4071,7 +4093,7 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
-  const isUserVisibleThought = isThoughtLike && _isMobileUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
+  const thoughtKind = isThoughtLike ? _mobileTraceThoughtKind({ type: normalizedType, extra }) : '';
   if (!isThoughtLike) {
     _closeMobileTraceThoughts(message);
     _flushMobileTraceThoughtProbe(message, { force: true });
@@ -4099,12 +4121,12 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   const existingThoughtText = isThoughtLike ? message.liveTraceEntries.some((entry) => {
     const entryType = String(entry?.type || '').toLowerCase();
     if (!_isMobileTraceThoughtType(entryType)) return false;
-    if (_isMobileUserVisibleReasoningTraceEntry(entry) !== isUserVisibleThought) return false;
+    if (_mobileTraceThoughtKind(entry) !== thoughtKind) return false;
     return _mobileTraceThoughtTextsSimilar(entry?.text || '', content);
   }) : false;
   if (existingThoughtText) return;
   if (append && last && last.type === normalizedType
-    && (!isThoughtLike || _isMobileUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
+    && (!isThoughtLike || _mobileTraceThoughtKind(last) === thoughtKind)) {
     last.text = _appendMobileStreamingText(last.text || '', content);
     if (isThoughtLike) {
       if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
@@ -4407,7 +4429,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
   if (!traces.length) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const existing = new Set(message.processEntries.map((entry) =>
-    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+    `${String(entry?.type || '').toLowerCase()}|${_mobileTraceThoughtKind(entry)}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
   ));
   for (const trace of traces) {
     if (_isMobileTransientReasoningTraceEntry(trace)) continue;
@@ -4417,7 +4439,7 @@ function _mergeMobileLiveTraceIntoProcess(message) {
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
     if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
-    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    const key = `${type}|${_mobileTraceThoughtKind({ ...trace, type })}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
     message.processEntries.unshift({
@@ -4435,7 +4457,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
   const traces = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!traces.length) return out;
   const existing = new Set(out.map((entry) =>
-    `${String(entry?.type || '').toLowerCase()}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
+    `${String(entry?.type || '').toLowerCase()}|${_mobileTraceThoughtKind(entry)}|${String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim()}`
   ));
   const liveEntries = [];
   for (const trace of traces) {
@@ -4446,7 +4468,7 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
       ? _dedupeMobileTraceProseText(rawText)
       : rawText;
     if (!text || (type !== 'preamble' && type !== 'think' && !_isMobileTraceReasoningSummaryType(type))) continue;
-    const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
+    const key = `${type}|${_mobileTraceThoughtKind({ ...trace, type })}|${text.replace(/\s+/g, ' ').trim()}`;
     if (existing.has(key)) continue;
     existing.add(key);
     liveEntries.push({
@@ -4530,7 +4552,8 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     if (type === 'process' || type === 'info') {
       if (!previewData) return;
     }
-    const key = `${type}|${normalizedText}|${previewData.slice(0, 120)}`;
+    const thoughtKind = _mobileTraceThoughtKind({ ...entry, type, extra });
+    const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
@@ -4560,7 +4583,8 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
     const preview = String(entry?.preview?.dataUrl || entry?.dataUrl || '').slice(0, 120);
     const thoughtType = type === 'preamble' || type === 'think' || type === 'assistant';
-    return `${thoughtType ? 'thought' : type}|${text}|${preview}`;
+    const thoughtKind = thoughtType ? _mobileTraceThoughtKind(entry) : '';
+    return `${thoughtType ? 'thought' : type}|${thoughtKind}|${text}|${preview}`;
   };
   const isThoughtTraceEntry = (entry) => {
     const type = String(entry?.type || '').toLowerCase();
@@ -4575,8 +4599,11 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
   ));
   const existingThoughts = message.liveTraceEntries
     .filter(isThoughtTraceEntry)
-    .map((entry) => _dedupeMobileTraceProseText(entry?.text || entry?.content || ''))
-    .filter(Boolean);
+    .map((entry) => ({
+      kind: _mobileTraceThoughtKind(entry),
+      text: _dedupeMobileTraceProseText(entry?.text || entry?.content || ''),
+    }))
+    .filter((entry) => entry.text);
   let changed = false;
   for (let index = 0; index < derived.length; index += 1) {
     const entry = derived[index];
@@ -4584,8 +4611,9 @@ function _mergeMobileWorkflowTraceFromProcessEntries(message) {
     if (!key || existing.has(key)) continue;
     if (isThoughtTraceEntry(entry)) {
       const text = _dedupeMobileTraceProseText(entry?.text || entry?.content || '');
-      if (existingThoughts.some((seen) => _mobileTraceThoughtTextsSimilar(seen, text))) continue;
-      existingThoughts.push(text);
+      const thoughtKind = _mobileTraceThoughtKind(entry);
+      if (existingThoughts.some((seen) => seen.kind === thoughtKind && _mobileTraceThoughtTextsSimilar(seen.text, text))) continue;
+      existingThoughts.push({ kind: thoughtKind, text });
     }
     existing.add(key);
     message.liveTraceEntries.push({
@@ -4808,10 +4836,10 @@ function _compactMobileTraceThoughtEntries(message) {
       changed = true;
       continue;
     }
-    const visibleReasoning = _isMobileUserVisibleReasoningTraceEntry(entry);
+    const thoughtKind = _mobileTraceThoughtKind(entry);
     const existingIndex = kept.findIndex((candidate) => {
       if (!_isMobileTraceThoughtType(candidate?.type)) return false;
-      if (_isMobileUserVisibleReasoningTraceEntry(candidate) !== visibleReasoning) return false;
+      if (_mobileTraceThoughtKind(candidate) !== thoughtKind) return false;
       const existing = _mobileTraceComparableText(candidate?.text || candidate?.content || '');
       if (!existing) return false;
       return existing === comparable
@@ -4839,6 +4867,22 @@ function _isMobileTraceThoughtType(type) {
   return value === 'preamble' || value === 'think' || value === 'assistant' || value === 'reasoning_summary';
 }
 
+function _mobileTraceThoughtKind(entry) {
+  if (!_isMobileTraceThoughtType(entry?.type)) return '';
+  if (String(entry?.type || '').toLowerCase() === 'preamble') return 'full_thought';
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const explicit = String(extra.reasoningKind || extra.presentationKind || entry?.reasoningKind || '').trim().toLowerCase();
+  if (explicit === 'full_thought') return 'full_thought';
+  if (explicit === 'summary') return 'summary';
+  const source = String(extra.source || entry?.source || '').trim().toLowerCase();
+  return String(entry?.type || '').toLowerCase() === 'reasoning_summary'
+    || source === 'reasoning_summary'
+    || source === 'agent_progress'
+    || String(extra.visibility || entry?.visibility || '').trim().toLowerCase() === 'summary'
+    ? 'summary'
+    : 'full_thought';
+}
+
 function _isMobileTraceReasoningSummaryType(type) {
   return String(type || '').toLowerCase() === 'reasoning_summary';
 }
@@ -4864,12 +4908,12 @@ function _mobileTraceThoughtCoveredByEarlier(message, text, excludeEntry = null,
   const canUseContainedTail = candidate.length >= 18 && candidateWords >= 3;
   const canUseSimilarity = candidate.length >= 36;
   if (!canUseContainedTail && !canUseSimilarity) return false;
-  const visibleReasoning = _isMobileUserVisibleReasoningTraceEntry(candidateEntry || { type: excludeEntry?.type || 'think' });
+  const thoughtKind = _mobileTraceThoughtKind(candidateEntry || { type: excludeEntry?.type || 'think' });
   const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   return entries.some((entry) => {
     if (!entry || entry === excludeEntry) return false;
     if (!_isMobileTraceThoughtType(entry.type)) return false;
-    if (_isMobileUserVisibleReasoningTraceEntry(entry) !== visibleReasoning) return false;
+    if (_mobileTraceThoughtKind(entry) !== thoughtKind) return false;
     const existing = _mobileTraceComparableText(entry.text || entry.content || '');
     if (!existing || existing === candidate) return !!existing;
     if (canUseContainedTail && existing.length >= candidate.length && existing.includes(candidate)) return true;
@@ -4882,8 +4926,8 @@ function _mobileTraceShouldProbeThought(message, type, append, extra = null) {
   const entries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
   const last = entries[entries.length - 1];
   if (!last || String(last.type || '').toLowerCase() !== String(type || '').toLowerCase()) return true;
-  return _isMobileUserVisibleReasoningTraceEntry(last)
-    !== _isMobileUserVisibleReasoningTraceEntry({ type, extra });
+  return _mobileTraceThoughtKind(last)
+    !== _mobileTraceThoughtKind({ type, extra });
 }
 
 function _pushMobileTraceThoughtEntry(message, type, text, time = '', extra = null) {
@@ -5451,6 +5495,44 @@ function _mergeMobileHistoryPageWithCurrent(_sessionId, olderHistory, currentThr
   return _reconcileMobileThreadOrder(merged);
 }
 
+function _mobileHistoryHasProtectedLocalContinuity(messages = []) {
+  return (Array.isArray(messages) ? messages : []).some((message) => message
+    && (
+      message.streaming === true
+      || message._pmFinalReceived === true
+      || message._pmRecoveryReplay === true
+      || message._pmOptimistic === true
+      || message._pmAdmissionPending === true
+    ));
+}
+
+function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
+  const serverRows = Array.isArray(mapped) ? mapped : [];
+  const localRows = Array.isArray(durableLocal) ? durableLocal : [];
+  if (!localRows.length) return false;
+  const durableServerCount = serverRows.filter((message) => message
+    && (message.role === 'user' || message.role === 'ai')).length;
+  // A transient empty/short response is not permission to erase a transcript
+  // already painted from the recovery cache. The server-side history write is
+  // itself merge-preserving, so retaining the richer local copy is safe here.
+  if (!durableServerCount || localRows.length > durableServerCount) return true;
+  const latestServerUser = [...serverRows].reverse().find((message) => message?.role === 'user') || null;
+  const latestLocalUser = [...localRows].reverse().find((message) => message?.role === 'user') || null;
+  const serverUserTimestamp = Number(latestServerUser?.timestamp || 0) || 0;
+  const localUserTimestamp = Number(latestLocalUser?.timestamp || 0) || 0;
+  // Equal-sized pages can still be stale when a refresh races the durable
+  // history write for the newest prompt. The local prompt is the continuity
+  // boundary for the active turn, so do not let that older page roll it back.
+  if (localUserTimestamp > serverUserTimestamp + 500) return true;
+  const localRequestId = String(latestLocalUser?._clientRequestId || '').trim();
+  if (localRequestId && !serverRows.some((message) => message?.role === 'user'
+    && String(message?._clientRequestId || '').trim() === localRequestId)) return true;
+  // Equal-length snapshots can still replace a recovered row with a newer
+  // server row while the replay/final frame is settling. Keep the local
+  // continuity markers in that case as well.
+  return _mobileHistoryHasProtectedLocalContinuity(localRows);
+}
+
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const local = Array.isArray(localThread) ? localThread : [];
@@ -5459,8 +5541,12 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
     && !_isMobileHiddenVoiceDraftMessage(message, index));
   // `/api/sessions/:id` deliberately returns a bounded tail on mobile. Keep
   // every already-loaded local transcript row when that response advertises
-  // older history; otherwise a cold reopen can render and cache only the tail.
-  const base = options.preserveLocalHistory === true
+  // older history, or when recovery has a richer local snapshot. Otherwise a
+  // cold reopen can render and cache only the tail, and a late stale response
+  // can make recovered messages disappear while the user is typing.
+  const preserveLocalHistory = options.preserveLocalHistory === true
+    || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
+  const base = preserveLocalHistory
     ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
@@ -9484,6 +9570,13 @@ function _saveMobileLastChatContext(context = {}) {
 }
 
 export async function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
+  // A prior render can still have an in-flight history request when the route
+  // is remounted (especially after an iOS refresh/bfcache transition). The
+  // session id alone is not an ownership check: an old response for the same
+  // chat must not repaint the current page with its stale snapshot.
+  const mobilePageInstanceToken = `mobile_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobilePageDisposed = false;
+  __pmChat.mobilePageInstanceToken = mobilePageInstanceToken;
   await loadMobileChatRendererRuntime();
   receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
   await _ensureMobileQuestionController();
@@ -9550,6 +9643,9 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     }).catch(() => gatewayTarget)
     : Promise.resolve(gatewayTarget);
   const isVoiceRoomTranscript = voiceRoomTranscript === true && requestedSession.startsWith('voice_room_');
+  const isCurrentMobilePage = () => !mobilePageDisposed
+    && __pmChat.mobilePageInstanceToken === mobilePageInstanceToken
+    && __pmChat.activeSessionId === requestedSession;
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
   if (requestedSession === MOBILE_CHAT_SESSION_ID) {
@@ -11965,7 +12061,7 @@ void main() {
     }
   };
   const showChatLoadRetry = (message = 'Chat is taking too long to load.') => {
-    if (__pmChat.activeSessionId !== requestedSession) return;
+    if (!isCurrentMobilePage()) return;
     if (__pmChat.threads[requestedSession]?.length) return;
     threadEl.innerHTML = `
       <div class="pm-chat-loading error">
@@ -11983,6 +12079,16 @@ void main() {
     invalidateMobileChatSessionCache(requestedSession);
     renderChatPage(page, { navigate, sessionId: requestedSession });
   });
+
+  // Register recovery ownership before starting the initial history request.
+  // This lets a later render invalidate the old request even if both renders
+  // target the same session id.
+  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  let mobileRecoveryDisposed = false;
+  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
+  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
+    && isCurrentMobilePage()
+    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
 
   let initialSessionLoadPending = false;
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
@@ -12011,7 +12117,7 @@ void main() {
       fullProcess: false,
     }))
       .then((session) => {
-        if (__pmChat.activeSessionId !== requestedSession) return;
+        if (!isMobileRecoveryOwner()) return;
         clearChatLoadRetryTimer();
         hideReconnectingStatus();
         targetProjectId = String(session?.projectId || session?.project?.id || '').trim();
@@ -12055,7 +12161,7 @@ void main() {
         refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: false });
       })
       .catch((err) => {
-        if (__pmChat.activeSessionId !== requestedSession) return;
+        if (!isMobileRecoveryOwner()) return;
         clearChatLoadRetryTimer();
         if (!__pmChat.threads[requestedSession]?.length) {
           showChatLoadRetry(`Could not load chat: ${err.message || 'Unknown error'}`);
@@ -12073,12 +12179,6 @@ void main() {
     _restoreMobileVoiceWorkgroupsForSession(requestedSession).catch(() => {});
   }
 
-  const mobileRecoveryOwnerToken = `mobile_recovery_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  let mobileRecoveryDisposed = false;
-  __pmChat.mobileRecoveryOwners[requestedSession] = mobileRecoveryOwnerToken;
-  const isMobileRecoveryOwner = () => !mobileRecoveryDisposed
-    && __pmChat.activeSessionId === requestedSession
-    && __pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken;
   let mobileRecoveryInFlight = null;
   let mobileRecoveryInFlightOptions = null;
   let queuedMobileRecovery = null;
@@ -12455,6 +12555,11 @@ void main() {
       const localThread = Array.isArray(__pmChat.threads?.[requestedSession])
         ? __pmChat.threads[requestedSession]
         : [];
+      // `_clearMobileLiveRunForSession` removes streaming rows in place. Keep
+      // a separate array for the final merge so a transient inactive/recovered
+      // read cannot erase the only copy of the current stream before the
+      // server snapshot is reconciled.
+      const localThreadBeforeClear = localThread.slice();
       const inactiveRecoveryClientRequestId = String(
         status?.run?.clientRequestId
         || status?.activeRun?.clientRequestId
@@ -12514,7 +12619,7 @@ void main() {
       ) || 0;
       const completedDurableTurn = recoveryStartedAt > 0
         && _mobileHistoryHasCompletedTurnSince(history, recoveryStartedAt, {});
-      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn && status?.recovered !== true)) {
+      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn)) {
         if (!isCurrentRecoveryTarget()) return;
         _adoptMobileActiveRunState(requestedSession, {
           run: status?.run || status?.activeRun || null,
@@ -12546,8 +12651,14 @@ void main() {
       if (!isCurrentRecoveryTarget()) return;
       _clearMobileLiveRunForSession(requestedSession);
       if (history.length) {
-        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThread, {
-          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+        // If durable history positively contains this turn's completion, the
+        // post-clear array is intentional: it drops the old streaming row and
+        // lets the durable answer win. Otherwise merge the pre-clear snapshot
+        // so a stale/equal-sized page cannot roll back newer local messages.
+        const localThreadForMerge = completedDurableTurn ? localThread : localThreadBeforeClear;
+        __pmChat.threads[requestedSession] = _mergeMobileSessionThreadWithLocal(requestedSession, history, localThreadForMerge, {
+          preserveLocalHistory: _mobileHistoryPageIsPartial(session, history)
+            || (!completedDurableTurn && _mobileHistoryHasProtectedLocalContinuity(localThreadBeforeClear)),
         });
         _activeMobileThread();
         _flushThreadRender(threadEl, body, requestedSession);
@@ -12964,6 +13075,13 @@ void main() {
       limit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
     }).then(({ applied }) => {
       if (!applied) return;
+      // The server page is a real prepend. Expand the retained timeline range
+      // to include the new oldest block before repainting, so the existing
+      // newer block remains in place instead of being replaced by the page.
+      mobileTimelineController.retainEarlier(
+        timelineKey,
+        _mobileTimelineEntries(requestedSession),
+      );
       _renderThread(threadEl, requestedSession);
       _scheduleMobileThreadCacheSave(requestedSession, 120);
     }).catch((err) => {
@@ -16618,6 +16736,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   page._pmCleanup = () => {
     previousCleanup?.();
     releaseActiveChatRuntime();
+    mobilePageDisposed = true;
+    if (__pmChat.mobilePageInstanceToken === mobilePageInstanceToken) {
+      __pmChat.mobilePageInstanceToken = '';
+    }
     mobileRecoveryDisposed = true;
     if (__pmChat.mobileRecoveryOwners[requestedSession] === mobileRecoveryOwnerToken) {
       delete __pmChat.mobileRecoveryOwners[requestedSession];

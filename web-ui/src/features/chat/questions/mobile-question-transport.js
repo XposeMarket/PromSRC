@@ -49,13 +49,23 @@ export function createMobileQuestionTransport(options = {}) {
       || getActiveSessionId(),
     );
     if (targetSessionId) setActiveSessionId(targetSessionId);
-    schedule(() => {
-      // A successful callback may intentionally return undefined. Only an
-      // explicit false means the send was not accepted and should be queued.
-      if (sendResume(resumePrompt, { sessionId: targetSessionId }) === false) {
-        queueResume(resumePrompt, targetSessionId);
+    await new Promise((resolve, reject) => {
+      try {
+        schedule(() => {
+          Promise.resolve()
+            .then(() => sendResume(resumePrompt, { sessionId: targetSessionId }))
+            .then(async (accepted) => {
+              // A successful callback may intentionally return undefined. Only
+              // explicit false means the send was not accepted and should queue.
+              if (accepted === false) await queueResume(resumePrompt, targetSessionId);
+              resolve(true);
+            }, reject)
+            .catch(reject);
+        }, 100);
+      } catch (error) {
+        reject(error);
       }
-    }, 100);
+    });
     return true;
   }
 

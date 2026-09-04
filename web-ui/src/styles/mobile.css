@@ -227,7 +227,7 @@ body.pm-mobile-active {
   --pm-motion-layout-duration: 300ms;
   --pm-motion-layout-ease: cubic-bezier(.22, .74, .22, 1);
   --pm-motion-fade-duration: 220ms;
-  --pm-drawer-width: min(76vw, 350px);
+  --pm-drawer-width: 100vw;
 }
 
 body.pm-mobile-active :where(
@@ -476,6 +476,8 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-body {
   background-image: none !important;
 }
 body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
+  /* The chat shell leaves the viewport by the same full-screen distance as
+     the drawer enters, so the drawer owns the entire visible surface. */
   transform: translate3d(var(--pm-drawer-width), 0, 0);
   will-change: transform, border-radius;
 }
@@ -514,8 +516,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
 }
 
 body.pm-mobile-drawer-open .pm-app {
-  /* The drawer sits directly behind this edge. Avoid scaling or rounding the
-     edge: both expose the document background as a visible gap. */
+  /* Move the chat shell completely off-canvas while the full-screen drawer
+     enters from the left. Matching distances prevent a background gap. */
   transform: translate3d(var(--pm-drawer-width), 0, 0);
   border-radius: 0;
   box-shadow:
@@ -2004,7 +2006,7 @@ body.pm-model-badge-pressing * {
   position: fixed;
   top: 0; bottom: 0; left: 0;
   width: var(--pm-drawer-width);
-  max-width: 330px;
+  max-width: none;
   box-sizing: border-box;
   background: #050506;
   border-right: 0;
@@ -2016,14 +2018,25 @@ body.pm-model-badge-pressing * {
   will-change: transform, opacity;
   z-index: 1;
   display: flex; flex-direction: column;
-  padding: max(env(safe-area-inset-top), 18px) 16px calc(22px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+  padding: max(env(safe-area-inset-top), 18px) 16px 0 max(18px, env(safe-area-inset-left));
   box-shadow: none;
-  overflow-y: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   color: #f6f4f0;
   pointer-events: none;
 }
+.pm-drawer-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding-bottom: calc(82px + env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.pm-drawer-scroll::-webkit-scrollbar { width: 5px; }
+.pm-drawer-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--pm-orange) 34%, transparent); border-radius: 999px; }
 .pm-drawer::-webkit-scrollbar { width: 5px; }
 .pm-drawer::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--pm-orange) 34%, transparent); border-radius: 999px; }
 .pm-drawer [hidden] { display: none !important; }
@@ -2073,6 +2086,7 @@ body.pm-model-badge-pressing * {
 .pm-drawer-gateway-pill-dot.is-offline { background: #d8473a; }
 .pm-drawer-gateway-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pm-theme-toggle,
+.pm-drawer-close,
 .pm-drawer-search-toggle {
   appearance: none;
   position: absolute;
@@ -2089,11 +2103,19 @@ body.pm-model-badge-pressing * {
   cursor: pointer;
   box-shadow: none;
 }
-.pm-theme-toggle { right: 18px; }
-.pm-drawer-search-toggle { right: calc(18px + 48px); }
+.pm-theme-toggle,
+.pm-drawer-close,
+.pm-drawer-search-toggle {
+  top: calc(max(env(safe-area-inset-top), 18px) + 7px);
+}
+.pm-drawer-close { right: 18px; }
+.pm-theme-toggle { right: calc(18px + 48px); }
+.pm-drawer-search-toggle { right: calc(18px + 48px + 48px); }
 .pm-theme-toggle svg,
+.pm-drawer-close svg,
 .pm-drawer-search-toggle svg { width: 19px; height: 19px; }
 .pm-theme-toggle:active,
+.pm-drawer-close:active,
 .pm-drawer-search-toggle:active { transform: scale(.96); }
 .pm-drawer-search {
   display: flex;
@@ -3446,13 +3468,14 @@ html.pm-session-context-open * {
 }
 
 .pm-proposals-page { display: flex; flex-direction: column; gap: 12px; }
+.pm-proposals-page > .pm-card { border: 0; }
 .pm-proposal-review-body {
   padding-top: calc(max(env(safe-area-inset-top), 12px) + 58px);
 }
 .pm-proposal-card,
 .pm-proposal-review-card {
   padding: 14px;
-  border-left: 2px solid var(--pm-orange);
+  border: 0;
 }
 .pm-proposal-head {
   display: grid;
@@ -3706,7 +3729,7 @@ html.pm-session-context-open * {
   grid-template-columns: 38px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
-  border: 1px solid var(--pm-border);
+  border: 0;
   border-radius: 14px;
   background: rgba(255,255,255,.52);
   padding: 12px;
@@ -12396,7 +12419,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-schedule-card {
   position: relative;
   background: color-mix(in srgb, var(--pm-surface) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--pm-border) 88%, transparent);
+  border: 0;
   border-radius: 24px;
   padding: 16px 16px 14px;
   margin: 12px 0;
@@ -16487,11 +16510,13 @@ body.pm-mobile-active .pm-drawer-item {
    navigation should remain easy to tap, but it should not dominate the chat
    list beneath it. */
 body.pm-mobile-active .pm-drawer-list {
-  gap: 5px;
+  gap: 0 !important;
 }
 body.pm-mobile-active .pm-drawer-item {
-  min-height: 50px !important;
-  padding: 8px 13px !important;
+  box-sizing: border-box;
+  height: 52px !important;
+  min-height: 52px !important;
+  padding: 6px 13px !important;
   gap: 11px !important;
 }
 body.pm-mobile-active .pm-drawer-item .pm-icon {
@@ -16519,20 +16544,32 @@ body.pm-mobile-active .pm-drawer-item:active {
   box-shadow: none !important;
 }
 
+/* The drawer rows are the page tabs, not cards. Keep their tap targets
+   accessible while removing the large vertical gaps from the old card rhythm. */
+body.pm-mobile-active .pm-drawer-list .pm-drawer-item {
+  box-sizing: border-box;
+  height: 52px !important;
+  min-height: 52px !important;
+}
+
 /* Keep the hamburger drawer flat across every mobile skin. The drawer is a
    theme surface, so directional lighting here only makes its edges look
    darker than the active theme color. */
 body.pm-mobile-active .pm-drawer {
-  /* Match the desktop left rail while leaving .pm-app on its own mobile
-     surface. The app moves over this panel instead of revealing a gap. */
-  background: var(--sidebar-bg, #050506) !important;
-  background-image: none !important;
-  box-shadow: none !important;
-}
-body.pm-mobile-active .pm-theme-toggle,
-body.pm-mobile-active .pm-drawer-search-toggle {
+  /* The drawer is a full-screen mobile surface. It must follow the active
+     mobile skin rather than falling back to the desktop sidebar token, which
+     made the hamburger menu stay black in blue, purple, and gray themes. */
   background: var(--pm-bg) !important;
   background-image: none !important;
+  box-shadow: none !important;
+  color: var(--pm-text) !important;
+}
+body.pm-mobile-active .pm-theme-toggle,
+body.pm-mobile-active .pm-drawer-close,
+body.pm-mobile-active .pm-drawer-search-toggle {
+  background: color-mix(in srgb, var(--pm-text) 8%, transparent) !important;
+  background-image: none !important;
+  color: var(--pm-text) !important;
 }
 body.pm-mobile-active .pm-drawer-search,
 body.pm-mobile-active .pm-drawer-new-chat,
@@ -16561,6 +16598,151 @@ body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
   background: var(--p1-gold, var(--pm-accent)) !important;
   background-image: none !important;
+}
+
+/* Persistent drawer actions: keep search at the bottom, like the mobile chat
+   composer, while the session list scrolls behind it. The bottom bar is
+   anchored to the full-screen drawer rather than participating in its scroll
+   height, so it never jumps when the user browses older chats. */
+body.pm-mobile-active .pm-drawer-bottom-bar {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search,
+body.pm-mobile-active .pm-drawer-bottom-actions,
+body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host {
+  pointer-events: auto;
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 46px;
+  height: 46px;
+  margin: 0 !important;
+  padding: 0 13px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  position: relative;
+  isolation: isolate;
+  border-color: transparent !important;
+  background: rgba(255,255,255,.035) !important;
+  background-image: none !important;
+  backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.16),
+    inset 0 -1px 1px rgba(255,255,255,.07),
+    0 6px 16px rgba(0,0,0,.24),
+    0 1px 4px rgba(0,0,0,.14);
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search:focus-within {
+  border-color: color-mix(in srgb, var(--pm-accent) 48%, rgba(255,255,255,.18));
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search input {
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+  color: var(--pm-text) !important;
+  font-size: 14px;
+  font-weight: 600;
+}
+body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search input::placeholder {
+  color: color-mix(in srgb, var(--pm-text) 54%, transparent) !important;
+}
+body.pm-mobile-active .pm-drawer-bottom-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host {
+  display: inline-flex;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+}
+body.pm-mobile-active .pm-drawer-bottom-action {
+  appearance: none;
+  position: relative !important;
+  inset: auto !important;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  padding: 0;
+  border-radius: 50%;
+  isolation: isolate;
+  border-color: transparent !important;
+  background: rgba(255,255,255,.035) !important;
+  background-image: none !important;
+  backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  color: var(--pm-text) !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.16),
+    inset 0 -1px 1px rgba(255,255,255,.07),
+    0 6px 16px rgba(0,0,0,.24),
+    0 1px 4px rgba(0,0,0,.14);
+}
+body.pm-mobile-active .pm-drawer-bottom-action svg {
+  position: relative;
+  z-index: 1;
+  width: 23px;
+  height: 23px;
+  color: currentColor;
+}
+body.pm-mobile-active .pm-drawer-bottom-action:active {
+  transform: scale(.96);
+  background: color-mix(in srgb, var(--pm-text) 10%, transparent) !important;
+}
+body.pm-mobile-active .pm-drawer-new-chat-icon svg {
+  width: 24px;
+  height: 24px;
+}
+body.pm-mobile-active .pm-drawer-bottom-actions > .pm-haptic-host > .pm-haptic-switch-overlay {
+  inset: 0;
+}
+
+/* One restrained rim for all three drawer controls: the top and bottom catch
+   a soft highlight while the middle of each side fades almost completely. */
+@supports ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  body.pm-mobile-active .pm-drawer-bottom-bar > .pm-drawer-search::after,
+  body.pm-mobile-active .pm-drawer-bottom-action::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    box-sizing: border-box;
+    border-radius: inherit;
+    padding: var(--pm-lg-border-width, 1px);
+    background:
+      linear-gradient(to bottom,
+        rgba(255,255,255,.16) 0%,
+        rgba(255,255,255,.065) 20%,
+        rgba(255,255,255,.004) 46%,
+        rgba(255,255,255,.004) 54%,
+        rgba(255,255,255,.065) 80%,
+        rgba(255,255,255,.14) 100%) border-box;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: .74;
+  }
 }
 
 /* Imported source artwork is a title-line affordance on mobile. It must not
@@ -17869,9 +18051,8 @@ body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
 }
 
 
-/* The drawer search is an icon-only control until the user asks for it. */
-body.pm-mobile-active .pm-drawer-search-toggle,
-body.pm-mobile-active .pm-theme-toggle {
+/* The drawer search toggle was replaced by the persistent bottom search field. */
+body.pm-mobile-active .pm-drawer-search-toggle {
   border: 0 !important;
   border-color: transparent !important;
   box-shadow: none !important;
@@ -18451,4 +18632,24 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage
 body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage::after {
   content: none !important;
   display: none !important;
+}
+
+/* Mobile chat scrolling stays native and fully usable, but the browser rail
+   itself is visual noise over the liquid-glass UI. Hide it for the drawer,
+   the chat thread, and document-scroll mode without disabling overflow. */
+html:has(body.pm-mobile-active),
+body.pm-mobile-active,
+body.pm-mobile-active .pm-drawer-scroll,
+body.pm-mobile-active .pm-body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html:has(body.pm-mobile-active)::-webkit-scrollbar,
+body.pm-mobile-active::-webkit-scrollbar,
+body.pm-mobile-active .pm-drawer-scroll::-webkit-scrollbar,
+body.pm-mobile-active .pm-body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
 }

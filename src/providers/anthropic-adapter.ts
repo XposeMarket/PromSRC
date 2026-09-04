@@ -625,7 +625,7 @@ export class AnthropicAdapter implements LLMProvider {
       && options?.think !== 'none'
       && (anthropicCfg.extended_thinking === true || !!options?.think);
 
-    const fastSpeed = normalizeSpeed('anthropic', model, anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
+    const fastSpeed = normalizeSpeed('anthropic', model, options?.speed || anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
     const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed);
     const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
 

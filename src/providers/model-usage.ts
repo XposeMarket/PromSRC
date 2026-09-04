@@ -54,6 +54,11 @@ export interface ModelUsageEvent {
   activeToolCategories?: string[];
 }
 
+export interface ModelUsageLogCursor {
+  filePath: string;
+  byteOffset: number;
+}
+
 function usageLogPath(): string {
   try {
     return path.join(getConfig().getConfigDir(), 'model-usage.jsonl');
@@ -282,6 +287,7 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       try { return fs.statSync(filePath).size; } catch { return 0; }
     })();
     fs.appendFileSync(filePath, line, 'utf-8');
+    clearHistoricalUsageCache();
     if (
       filePath === _usageReadCachePath
       && _usageReadCacheInitialized
@@ -304,10 +310,25 @@ let _usageReadCacheSize = 0;
 let _usageReadCacheEventCount = 0;
 let _usageReadCacheRemainder = '';
 let _usageReadCacheInitialized = false;
+const HISTORICAL_USAGE_CACHE_TTL_MS = 15_000;
+let _historicalUsageCache: {
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  loadedAt: number;
+  events: ModelUsageEvent[];
+} | null = null;
+let _historicalUsageCacheTimer: NodeJS.Timeout | null = null;
 // The resident index exists only for bounded calibration state. Historical
 // usage remains authoritative in model-usage.jsonl and is materialized only
 // for explicit history queries instead of being mirrored in gateway heap.
 const _usageCalibrationEvents = new Map<string, ModelUsageEvent[]>();
+
+function clearHistoricalUsageCache(): void {
+  if (_historicalUsageCacheTimer) clearTimeout(_historicalUsageCacheTimer);
+  _historicalUsageCacheTimer = null;
+  _historicalUsageCache = null;
+}
 
 function usageCalibrationKey(provider: string, model: string): string {
   return `${String(provider || '').trim()}\u0000${String(model || '').trim()}`;
@@ -329,6 +350,7 @@ function indexUsageEvent(event: ModelUsageEvent): void {
 }
 
 function resetUsageReadCache(filePath = ''): void {
+  clearHistoricalUsageCache();
   _usageReadCachePath = filePath;
   _usageReadCacheMtimeMs = 0;
   _usageReadCacheSize = 0;
@@ -411,8 +433,34 @@ function ensureUsageReadCache(): void {
 function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
   const wantedSessionId = String(sessionId || '').trim();
   const filePath = usageLogPath();
+  let stat: fs.Stats;
+  try { stat = fs.statSync(filePath); } catch { return []; }
+  const now = Date.now();
+  const cache = _historicalUsageCache;
+  if (
+    cache
+    && cache.filePath === filePath
+    && cache.size === stat.size
+    && cache.mtimeMs === stat.mtimeMs
+    && now - cache.loadedAt < HISTORICAL_USAGE_CACHE_TTL_MS
+  ) {
+    return wantedSessionId
+      ? cache.events.filter((event) => String(event.sessionId || '').trim() === wantedSessionId)
+      : cache.events.slice();
+  }
   let raw = '';
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  const events = parseUsageEvents(raw, wantedSessionId);
+  if (!wantedSessionId) {
+    _historicalUsageCache = { filePath, size: stat.size, mtimeMs: stat.mtimeMs, loadedAt: now, events };
+    _historicalUsageCacheTimer = setTimeout(clearHistoricalUsageCache, HISTORICAL_USAGE_CACHE_TTL_MS);
+    _historicalUsageCacheTimer.unref?.();
+  }
+  return events;
+}
+
+function parseUsageEvents(raw: string, sessionId = ''): ModelUsageEvent[] {
+  const wantedSessionId = String(sessionId || '').trim();
   const out: ModelUsageEvent[] = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -426,6 +474,57 @@ function readHistoricalUsageEvents(sessionId?: string): ModelUsageEvent[] {
     }
   }
   return out;
+}
+
+/**
+ * Capture the current end of the append-only usage log without parsing its
+ * history. This is used around a single model turn so post-turn accounting
+ * can inspect only rows written by that turn.
+ */
+export function captureModelUsageLogCursor(): ModelUsageLogCursor {
+  const filePath = usageLogPath();
+  try {
+    return { filePath, byteOffset: fs.statSync(filePath).size };
+  } catch {
+    return { filePath, byteOffset: 0 };
+  }
+}
+
+/**
+ * Read model-usage rows appended after a cursor. Normal operation is an
+ * O(new-bytes) tail read. If the log was rotated or replaced while the turn
+ * was running, fall back to a trace-scoped historical read so accounting does
+ * not silently include unrelated old turns.
+ */
+export function readModelUsageEventsSince(
+  cursor: ModelUsageLogCursor,
+  sessionId?: string,
+  traceId?: string,
+): ModelUsageEvent[] {
+  const filePath = usageLogPath();
+  let currentSize = 0;
+  try {
+    currentSize = fs.statSync(filePath).size;
+  } catch {
+    return [];
+  }
+
+  const fallback = (): ModelUsageEvent[] => {
+    const historical = readHistoricalUsageEvents(sessionId);
+    const wantedTraceId = String(traceId || '').trim();
+    return wantedTraceId
+      ? historical.filter((event) => String(event.traceId || '').trim() === wantedTraceId)
+      : historical;
+  };
+
+  if (cursor.filePath !== filePath || currentSize < cursor.byteOffset) return fallback();
+  if (currentSize === cursor.byteOffset) return [];
+
+  try {
+    return parseUsageEvents(readUsageTail(filePath, cursor.byteOffset, currentSize), sessionId);
+  } catch {
+    return fallback();
+  }
 }
 
 export function readModelUsageEvents(): ModelUsageEvent[] {

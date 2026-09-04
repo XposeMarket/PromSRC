@@ -1329,6 +1329,7 @@ export class CronScheduler {
     let activeCronTaskId: string | undefined;
     let activeRunId: string | undefined;
     let activeScheduledAt: number | undefined;
+    let scheduledTeamRunResult: any = null;
 
     try {
       if (job.payloadKind === 'systemEvent') {
@@ -1483,6 +1484,7 @@ export class CronScheduler {
               teamId,
               'cron'
             );
+            scheduledTeamRunResult = teamResult;
             scheduledSubagentTaskId = teamResult.taskId;
             if (scheduledSubagentTaskId) {
               runId = startRunLogEntry({ scheduleId: job.id, taskId: scheduledSubagentTaskId, scheduledAt });
@@ -2143,13 +2145,18 @@ export class CronScheduler {
           metadata: {
             agentId: teamSubagentId,
             runSuccess: success,
+            taskId: scheduledSubagentTaskId,
+            stepCount: scheduledTeamRunResult?.stepCount,
+            durationMs: scheduledTeamRunResult?.durationMs,
+            processEntries: scheduledTeamRunResult?.processEntries,
+            liveTraceEntries: scheduledTeamRunResult?.liveTraceEntries,
           },
         });
         broadcastTeamEvent({
           type: 'team_chat_message',
           teamId,
           teamName: team?.name || teamId,
-          message: chatMessage,
+          chatMessage,
         });
         broadcastTeamEvent({
           type: 'team_subagent_completed',

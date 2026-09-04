@@ -15,6 +15,16 @@ assert.ok([...desktopGenerated.matchAll(directPattern)].length >= 4);
 for (const text of [desktop, desktopGenerated]) {
   assert.match(text, /class="t-think" data-live-trace-summary-key=/);
   assert.match(text, /animateThinkingTextSwap\(node, previousLabel\)/);
+  assert.match(text, /function isDesktopSummaryThoughtEvent\(/);
+  assert.match(text, /function appendDesktopDurableThought\(/);
+  assert.match(text, /reasoningKind === 'summary'[\s\S]{0,180}source === 'reasoning_summary'/);
+  assert.match(text, /if \(isDesktopSummaryThoughtEvent\(event\)\)[\s\S]{0,260}setDesktopLiveProgressNarration\([\s\S]{0,220}appendDesktopDurableThought/);
+  assert.match(text, /if \(isDesktopSummaryThoughtEvent\(evt\)\)[\s\S]{0,260}setDesktopLiveProgressNarration\([\s\S]{0,220}appendDesktopDurableThought/);
+  assert.doesNotMatch(text, /case 'agent_thought':[\s\S]{0,260}setDesktopLiveProgressNarration\(streamState, thoughtText, appendLiveTrace, \{ replace: true, visibility \}\)/);
+}
+for (const text of [desktop, desktopGenerated]) {
+  assert.match(text, /const isSummary = chatProgressVisibility\(event\) === 'summary';[\s\S]*?setDesktopLiveProgressNarration/);
+  assert.match(text, /const isSummary = chatProgressVisibility\(evt\) === 'summary';[\s\S]{0,180}if \(!isSummary\) streamState\.streamingThinkingText/);
 }
 for (const css of [desktopCss, desktopGeneratedCss]) {
   assert.match(css, /\.live-turn-tool-group\[data-live-trace-current="1"\] \.t-think-text::before/);

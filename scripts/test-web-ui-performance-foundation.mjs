@@ -94,6 +94,10 @@ try {
   assert.equal(event.name, 'fixture_ready');
   assert.equal(event.surface, 'mobile');
   assert.equal(Object.hasOwn(event, 'unsafe'), false, 'performance marks must keep their privacy allowlist');
+  const mobileRendererSample = await page.evaluate(() => window.__bootEvents.find((entry) => entry.name === 'renderer_sample'));
+  assert.ok(mobileRendererSample, 'renderer telemetry must emit an initial sample');
+  assert.equal(mobileRendererSample.surface, 'mobile');
+  assert.equal(typeof mobileRendererSample.domNodes, 'number');
 
   requestedPaths.length = 0;
   await page.goto(`${origin}/desktop-fixture`, { waitUntil: 'domcontentloaded' });
@@ -101,6 +105,7 @@ try {
   for (const expected of [
     '/src/prom-bot.js',
     '/src/bot-create.js',
+    '/src/features/chat/canonical-desktop-composer.js',
   ]) {
     assert.equal(requestedPaths.includes(expected), true, `desktop initial boot did not request ${expected}`);
   }
@@ -117,7 +122,6 @@ try {
   }
   for (const forbidden of [
     '/src/features/chat/multi-chat-workspace-v2.js',
-    '/src/features/chat/canonical-desktop-composer.js',
     '/src/features/chat/desktop-turn-file-diff.js',
   ]) {
     assert.equal(desktopRequests.includes(forbidden), false, `desktop Chat activation eagerly requested ${forbidden}`);
@@ -129,8 +133,8 @@ try {
   await page.waitForTimeout(100);
   assert.equal(
     requestedPaths.includes('/src/features/chat/canonical-desktop-composer.js'),
-    true,
-    'desktop Subagents activation did not request the canonical composer owner',
+    false,
+    'desktop Subagents activation unexpectedly re-requested the already booted canonical composer owner',
   );
   await context.close();
 } finally {

@@ -34,6 +34,7 @@ export interface ModelCallChatRequest {
     numCtx?: number;
     tools?: any[];
     think?: ModelCallThinkMode;
+    speed?: 'standard' | 'fast';
     omitIntradayNotes?: boolean;
   };
 }

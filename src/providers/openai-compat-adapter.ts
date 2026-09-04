@@ -317,7 +317,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      stream: !!options?.onToken,
     };
     const speedCfg = (getConfig().getConfig() as any)?.llm?.providers?.[this.id] || {};
-    const configuredSpeed = speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
+    const configuredSpeed = options?.speed || speedCfg.speed || (speedCfg.fast_mode === true ? 'fast' : 'standard');
     if (normalizeSpeed(this.id, model, configuredSpeed) === 'fast') body.service_tier = 'priority';
 	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.
@@ -440,15 +440,24 @@ export class OpenAICompatAdapter implements LLMProvider {
 	            }
 
 	            const thinkingDelta =
-	              delta.reasoning_content
+	              delta.reasoning_summary
+	              || delta.reasoning_content
 	              || delta.reasoning
 	              || delta.reasoning_text
-	              || delta.reasoning_summary
 	              || '';
+	            const reasoningIsSummary = Boolean(delta.reasoning_summary)
+	              || (this.id === 'xai' && Boolean(
+	                delta.reasoning_content || delta.reasoning || delta.reasoning_text,
+	              ));
+	            // xAI exposes Grok's user-visible reasoning on the compatible
+	            // chat-completions path as reasoning_content. Keep it on the
+	            // same summary lane as OpenAI Responses so the UI can retain
+	            // the active summary instead of dropping it as private thinking.
 	            if (thinkingDelta) {
 	              thinking += thinkingDelta;
-	              options?.onThinking?.(thinkingDelta);
-	              options?.onModelEvent?.({ type: 'reasoning_delta', text: thinkingDelta, nativeType: 'chat.completion.chunk', provider: this.id, model: body.model });
+	              if (reasoningIsSummary) options?.onReasoningSummary?.(thinkingDelta);
+	              else options?.onThinking?.(thinkingDelta);
+	              options?.onModelEvent?.({ type: 'reasoning_delta', text: thinkingDelta, summary: reasoningIsSummary, nativeType: 'chat.completion.chunk', provider: this.id, model: body.model });
 	            }
 
 	            if (Array.isArray(delta.tool_calls)) {

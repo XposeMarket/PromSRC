@@ -118,7 +118,7 @@ function eventText(entry) {
   );
 }
 
-function normalizeThought(entry, type, event, text, extra, source = 'agent_progress', visibility = 'user') {
+function normalizeThought(entry, type, event, text, extra, source = 'agent_progress', visibility = 'user', reasoningKind = '') {
   if (!text) return null;
   return {
     ...entry,
@@ -129,6 +129,7 @@ function normalizeThought(entry, type, event, text, extra, source = 'agent_progr
       source,
       visibility,
       event: event || type,
+      ...(reasoningKind ? { reasoningKind } : {}),
     },
   };
 }
@@ -147,18 +148,25 @@ export function normalizeRecoveredTraceEntry(entry) {
   const text = eventText(entry);
   const source = sourceFor(entry, extra);
   const visibility = visibilityFor(entry, extra);
+  const reasoningKind = String(
+    entry?.reasoningKind
+      || extra.reasoningKind
+      || extra.presentationKind
+      || '',
+  ).trim().toLowerCase();
+  const explicitFullThought = reasoningKind === 'full_thought';
   const reasoningEvent = REASONING_SUMMARY_TYPES.has(event)
     || REASONING_SUMMARY_TYPES.has(rawType)
     || source === 'reasoning_summary'
     || (event === 'thinking_delta' && source === 'reasoning_summary');
 
-  if (reasoningEvent) {
+  if (reasoningEvent && !explicitFullThought) {
     if (isPrivateReasoning(entry, extra)) return null;
-    return normalizeThought(entry, 'think', event || rawType, text, extra, 'reasoning_summary', 'user');
+    return normalizeThought(entry, 'think', event || rawType, text, extra, 'reasoning_summary', 'user', 'summary');
   }
 
   if (event === 'token_narration_boundary' || rawType === 'token_narration_boundary') {
-    return normalizeThought(entry, 'preamble', event || rawType, text, extra, 'agent_progress', 'user');
+    return normalizeThought(entry, 'preamble', event || rawType, text, extra, 'agent_progress', 'user', 'summary');
   }
 
   if (event === 'thinking' || event === 'agent_thought' || event === 'thinking_delta'
@@ -172,6 +180,9 @@ export function normalizeRecoveredTraceEntry(entry) {
       extra,
       source || 'agent_progress',
       visibility || 'user',
+      explicitFullThought
+        ? 'full_thought'
+        : reasoningKind || (source === 'reasoning_summary' || source === 'agent_progress' ? 'summary' : 'full_thought'),
     );
   }
 

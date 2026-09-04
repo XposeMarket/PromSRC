@@ -20,6 +20,7 @@ import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -244,6 +245,7 @@ export interface RunAgentResult {
     actor?: string;
     [key: string]: any;
   }>;
+  liveTraceEntries?: Array<Record<string, any>>;
   thinking?: string;
   durationMs: number;
   stepCount?: number;
@@ -509,6 +511,8 @@ export async function runTeamAgentViaChat(
     actor?: string;
     [key: string]: any;
   }> = [];
+  const liveTraceEntries: Array<Record<string, any>> = [];
+  let liveTraceSeq = 0;
   let thinkingText = '';
   let liveReplyText = '';
 
@@ -534,6 +538,13 @@ export async function runTeamAgentViaChat(
     if (processEntries.length > 250) processEntries.splice(0, processEntries.length - 250);
   };
   const captureTaskStreamEvent = (event: string, data: any) => {
+    appendBackgroundSseTrace([], liveTraceEntries, event, data, {
+      seq: ++liveTraceSeq,
+      type: event,
+      at: Date.now(),
+      streamId: cronTask.id,
+      data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
+    });
     if (event === 'token') {
       const chunk = String(data?.text || '');
       if (chunk) liveReplyText = `${liveReplyText}${chunk}`;
@@ -740,6 +751,8 @@ export async function runTeamAgentViaChat(
         durationMs: finishedAt - startedAt,
         stepCount,
         zeroToolCalls,
+        processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+        liveTraceEntries: liveTraceEntries.length > 0 ? [...liveTraceEntries] : undefined,
         error: success ? (resultWarning || undefined) : (waitingForManager ? `Waiting: ${resultText.slice(0, 260)}` : resultText.slice(0, 300)),
         resultPreview: success ? resultText : undefined,
         quality: {
@@ -781,6 +794,7 @@ export async function runTeamAgentViaChat(
         : resultWarning ? `${resultWarning}\n\n${resultText}` : resultText,
       processLog: processLogLines.length > 0 ? processLogLines.join('\n') : undefined,
       processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+      liveTraceEntries: liveTraceEntries.length > 0 ? [...liveTraceEntries] : undefined,
       thinking: thinkingText.trim() || undefined,
       durationMs: finishedAt - startedAt,
       stepCount,
@@ -804,6 +818,8 @@ export async function runTeamAgentViaChat(
         durationMs: finishedAt - startedAt,
         stepCount,
         zeroToolCalls: stepCount === 0,
+        processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+        liveTraceEntries: liveTraceEntries.length > 0 ? [...liveTraceEntries] : undefined,
         error: String(err?.message ?? err).slice(0, 300),
         quality: {
           zeroToolCalls: stepCount === 0,
@@ -845,6 +861,7 @@ export async function runTeamAgentViaChat(
       error: String(err?.message ?? err),
       processLog: processLogLines.length > 0 ? processLogLines.join('\n') : undefined,
       processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
+      liveTraceEntries: liveTraceEntries.length > 0 ? [...liveTraceEntries] : undefined,
       thinking: thinkingText.trim() || undefined,
       durationMs: finishedAt - startedAt,
       stepCount,

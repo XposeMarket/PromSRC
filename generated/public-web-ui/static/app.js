@@ -1,4 +1,4 @@
-import './performance.js';
+import { markClientPerformance } from './performance.js';
 
 /**
  * app.js — F1 Scaffold
@@ -23,6 +23,15 @@ import { initGlobalShortcuts } from './shortcuts.js';
 import { escHtml } from './utils.js';
 import { formatMainChatDefaultLabel, formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
 import './link-router.js';
+
+const shouldBootMobile = window.__PROM_SHOULD_BOOT_MOBILE?.() === true;
+void import('./renderer-performance-telemetry.js')
+  .then(({ installRendererPerformanceTelemetry }) => installRendererPerformanceTelemetry({
+    windowRef: window,
+    markClientPerformance,
+    shouldBootMobile,
+  }))
+  .catch(() => {});
 
 initGlobalShortcuts();
 
