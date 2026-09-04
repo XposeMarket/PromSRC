@@ -330,8 +330,11 @@ let _drawerPinnedCollapsed = false;
 let _drawerProjectsCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
 let _drawerGatewayFilterCleanup = null;
+let _drawerSwipeCleanup = null;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 const PM_DRAWER_GATEWAY_HEARTBEAT_MS = 15_000;
+const PM_DRAWER_SWIPE_EDGE_PX = 28;
+const PM_DRAWER_SWIPE_TRIGGER_PX = 72;
 const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
   'button',
   '[role="button"]',
@@ -375,6 +378,113 @@ function _installMobileNoSelectGuard() {
   };
   document.addEventListener('selectstart', suppress, true);
   document.addEventListener('contextmenu', suppress, true);
+}
+
+// Open the full-screen drawer with an edge swipe, and close it with a left
+// swipe anywhere on the open drawer. Only a predominantly horizontal gesture
+// is claimed so the drawer's normal vertical scrolling remains native.
+function _wireDrawerSwipeGesture() {
+  _drawerSwipeCleanup?.();
+  _drawerSwipeCleanup = null;
+
+  let tracking = false;
+  let startX = 0;
+  let startY = 0;
+  let direction = '';
+  let triggered = false;
+  let suppressClickUntil = 0;
+
+  const reset = () => {
+    tracking = false;
+    startX = 0;
+    startY = 0;
+    direction = '';
+    triggered = false;
+  };
+
+  const onTouchStart = (event) => {
+    if (event.touches?.length !== 1) {
+      reset();
+      return;
+    }
+    const touch = event.touches[0];
+    const drawerOpen = document.body.classList.contains('pm-mobile-drawer-open');
+    const target = event.target;
+    if (_isEditableTarget(target)) {
+      reset();
+      return;
+    }
+    if (!drawerOpen) {
+      // Keep the activation strip narrow so ordinary horizontal content
+      // gestures never unexpectedly open the navigation drawer.
+      if (touch.clientX > PM_DRAWER_SWIPE_EDGE_PX) {
+        reset();
+        return;
+      }
+    } else if (!_drawerEl?.contains(target)) {
+      reset();
+      return;
+    }
+    tracking = true;
+    startX = touch.clientX;
+    startY = touch.clientY;
+    direction = drawerOpen ? 'close' : 'open';
+    triggered = false;
+  };
+
+  const onTouchMove = (event) => {
+    if (!tracking || event.touches?.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const horizontalDistance = Math.abs(dx);
+    const verticalDistance = Math.abs(dy);
+    if (verticalDistance > horizontalDistance + 8) {
+      reset();
+      return;
+    }
+    if ((direction === 'open' && dx <= 0) || (direction === 'close' && dx >= 0)) {
+      reset();
+      return;
+    }
+    if (horizontalDistance < 12 || verticalDistance > horizontalDistance * 0.85) return;
+    // Once direction is established, prevent browser back/forward navigation
+    // and let the shell own the horizontal gesture.
+    event.preventDefault();
+    if (horizontalDistance >= PM_DRAWER_SWIPE_TRIGGER_PX) triggered = true;
+  };
+
+  const onTouchEnd = () => {
+    if (!tracking) return;
+    if (triggered) {
+      suppressClickUntil = Date.now() + 450;
+      if (direction === 'open') openDrawer();
+      else closeDrawer();
+    }
+    reset();
+  };
+
+  const onClick = (event) => {
+    if (Date.now() >= suppressClickUntil) return;
+    suppressClickUntil = 0;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  document.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+  document.addEventListener('touchmove', onTouchMove, { capture: true, passive: false });
+  document.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
+  document.addEventListener('touchcancel', reset, { capture: true, passive: true });
+  document.addEventListener('click', onClick, true);
+
+  _drawerSwipeCleanup = () => {
+    document.removeEventListener('touchstart', onTouchStart, true);
+    document.removeEventListener('touchmove', onTouchMove, true);
+    document.removeEventListener('touchend', onTouchEnd, true);
+    document.removeEventListener('touchcancel', reset, true);
+    document.removeEventListener('click', onClick, true);
+    reset();
+  };
 }
 export async function refreshMobileDrawerSessions({ force = false } = {}) {
   if (!_drawerEl || !_drawerCallbacks) return;
@@ -1196,6 +1306,8 @@ function _mountDrawerGatewayFilterPanel() {
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
   _stopDrawerGatewayHeartbeat();
+  _drawerSwipeCleanup?.();
+  _drawerSwipeCleanup = null;
   disposeMobileHapticGestureSurfaces();
   root.innerHTML = '';
   root.hidden = false;
@@ -1328,6 +1440,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   _drawerCallbacks = { onOpenSession, loadSessions, searchSessions, onNewChat };
   _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
   _wireDrawerPullToRefresh();
+  _wireDrawerSwipeGesture();
 
   document.addEventListener('keydown', _escHandler, { passive: true });
   _renderInstallSlot();

@@ -492,6 +492,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
 }
 
 /* ---------- app shell ---------- */
+/* Keep vertical scrolling native while the shell's touch listener owns only
+   the deliberate horizontal drawer gesture. */
+body.pm-mobile-active #mobile-root,
+body.pm-mobile-active .pm-drawer {
+  touch-action: pan-y;
+}
 .pm-app {
   position: fixed;
   inset: 0;
