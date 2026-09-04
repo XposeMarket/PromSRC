@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildRecommendations, rankRecommendations, type Recommendation } from './recommendation-service';
+import { buildRecommendations, rankRecommendations, recommendationFromBrainPulseCard, type Recommendation } from './recommendation-service';
 
 const now = new Date('2026-09-02T16:00:00.000Z');
 
@@ -32,9 +32,20 @@ assert.equal(recs[0].sourceType, 'brain');
 assert.ok(recs[0].id.startsWith('rec_'));
 
 const dupes: Recommendation[] = [
-  { id: 'a', label: 'Review PR 300', prompt: 'Review it.', sourceType: 'github', sourceRef: 'repo#300', confidence: 0.9, freshnessAt: now.toISOString() },
-  { id: 'b', label: 'Review PR 300', prompt: 'Review it again.', sourceType: 'github', sourceRef: 'repo#300', confidence: 0.8, freshnessAt: now.toISOString() },
+  { id: 'weak', label: 'Review PR 300', prompt: 'Review it.', sourceType: 'github', sourceRef: 'repo#300', confidence: 0.8, freshnessAt: now.toISOString() },
+  { id: 'strong', label: 'Review PR 300', prompt: 'Review it with the latest findings.', sourceType: 'github', sourceRef: 'repo#300', confidence: 0.95, freshnessAt: now.toISOString() },
 ];
-assert.equal(rankRecommendations(dupes, 3, now).length, 1);
+assert.equal(rankRecommendations(dupes, 3, now)[0]?.id, 'strong');
+
+const oldBrain = recommendationFromBrainPulseCard({
+  title: 'Revisit an old Brain card', body: 'Old context.', prompt: 'Review the old Brain context.', source: '2026-08-20/12-00',
+}, now);
+const freshBrain = recommendationFromBrainPulseCard({
+  title: 'Continue a fresh Brain card', body: 'Fresh context.', prompt: 'Review the fresh Brain context.', source: '2026-09-02/15-30',
+}, now);
+assert.ok(oldBrain && freshBrain);
+assert.ok(Date.parse(oldBrain.freshnessAt) < Date.parse(freshBrain.freshnessAt));
+assert.equal(rankRecommendations([oldBrain, freshBrain], 2, now)[0]?.id, freshBrain.id);
+assert.equal((oldBrain.metadata as any)?.freshnessSource, 'source');
 
 console.log('recommendation-service regression: ok');
