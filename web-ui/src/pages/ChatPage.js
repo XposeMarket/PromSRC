@@ -12778,6 +12778,16 @@ function liveTraceGroups(entries) {
       return;
     }
     if (isLiveTraceThoughtEntry(entry)) {
+      // A live agent_progress packet is the mutable summary for the tool
+      // group that is currently running. Keep it owned by that group so the
+      // real model narration updates the expandable header instead of
+      // becoming a second thought group that displaces the tool stream.
+      const isMutableProgress = isDesktopMutableProgressTraceEntry(entry)
+        && desktopTraceThoughtKind(entry) === 'summary';
+      if (isMutableProgress && activeToolGroup) {
+        activeToolGroup.entries.push(entry);
+        return;
+      }
       activeToolGroup = null;
       const groupKind = desktopTraceThoughtKind(entry) === 'summary' ? 'thought-summary' : 'thought';
       const previous = groups[groups.length - 1];
@@ -12786,8 +12796,22 @@ function liveTraceGroups(entries) {
       return;
     }
     if (!activeToolGroup) {
-      activeToolGroup = { kind: 'tools', entries: [] };
+      // A summary can arrive just before the tool call it narrates. Carry
+      // forward that mutable-only group so the real summary becomes the
+      // expandable tool label instead of an empty thought row followed by a
+      // synthetic tool label. Full thoughts are never eligible for this move.
+      const previous = groups[groups.length - 1];
+      const pendingSummary = previous?.kind === 'thought-summary'
+        && previous.entries.length > 0
+        && previous.entries.every((candidate) => isDesktopMutableProgressTraceEntry(candidate));
+      if (pendingSummary) {
+        activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
+        groups[groups.length - 1] = activeToolGroup;
+        return;
+      }
+      activeToolGroup = { kind: 'tools', entries: [entry] };
       groups.push(activeToolGroup);
+      return;
     }
     activeToolGroup.entries.push(entry);
   });
@@ -13053,15 +13077,9 @@ function desktopTraceProgressSummary(entries) {
   const source = Array.isArray(entries) ? entries : [];
   const text = desktopTraceProgressText(source);
   if (!text) return '';
-  const normalized = desktopTraceComparableText(text);
-  const duplicatesVisibleReasoning = source.some((candidate) => {
-    if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
-    const candidateText = desktopTraceComparableText(dedupeDesktopTraceProseText(candidate?.text || candidate?.content || ''));
-    return candidateText === normalized
-      || (Math.min(candidateText.length, normalized.length) >= 36
-        && (candidateText.includes(normalized) || normalized.includes(candidateText)));
-  });
-  if (duplicatesVisibleReasoning) return 'Reasoning';
+  // The provider's curated summary is the source of truth for the live
+  // expandable label. Do not replace it with a synthetic "Reasoning" label
+  // when the same prose also exists as a durable thought entry.
   return text;
 }
 
@@ -13078,16 +13096,6 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
   let latestToolGroupIndex = groups.reduce((latest, group, index) => (
     group.kind === 'tools' ? index : latest
   ), -1);
-  // Only the last raw trace entry can still be receiving mutable progress.
-  // Reverse-searching the whole stream here promotes an old thought summary
-  // after the next tool event arrives, then removes that thought group and
-  // rewrites the tool header. Apart from losing the thought visually, that
-  // changes the keyed timeline shape and forces the streaming patcher to
-  // replace a previously painted group instead of updating it in place.
-  const latestTraceEntry = Array.isArray(entries) ? entries.at(-1) : null;
-  const activeProgressSummary = streaming && isDesktopMutableProgressTraceEntry(latestTraceEntry)
-    ? desktopTraceProgressSummary(entries)
-    : '';
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought' || group.kind === 'thought-summary') {
       const isSummaryThought = group.kind === 'thought-summary';
@@ -13118,13 +13126,20 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
-    const progressSummary = isLiveCurrent ? activeProgressSummary : '';
+    // Resolve progress only inside this tool group. This preserves earlier
+    // groups and lets a summary that preceded the tool call remain attached
+    // to the tool without resurrecting stale narration from another phase.
+    const progressSummary = desktopTraceProgressSummary(group.entries);
     const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
-    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
-    const nonReasoningEntries = visibleEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
-    const itemCount = callCount || nonReasoningEntries.length || (visibleEntries.length ? 1 : 0);
+    // The mutable progress packet is rendered in the header only. Leaving it
+    // in the body creates a duplicate summary and makes the next event appear
+    // to overwrite the stream instead of extending it.
+    const toolBodyEntries = visibleEntries.filter((entry) => !isDesktopMutableProgressTraceEntry(entry));
+    const callCount = toolBodyEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+    const nonReasoningEntries = toolBodyEntries.filter((entry) => !isDesktopTraceReasoningSummaryType(entry?.type));
+    const itemCount = callCount || nonReasoningEntries.length || (toolBodyEntries.length ? 1 : 0);
     const itemLabel = callCount ? 'call' : 'item';
     const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
     return `<details class="live-turn-tool-group"${openAttr}${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
@@ -13134,7 +13149,7 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
-      <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
+      <div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>
     </details>`;
   }).join('')}</div>`;
 }
