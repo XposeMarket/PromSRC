@@ -17,6 +17,8 @@ const timing = {
 assert.equal(inferToolPerformanceFamily('browser_observe'), 'browser');
 assert.equal(inferToolPerformanceFamily('workspace_read'), 'workspace');
 assert.equal(inferToolPerformanceFamily('workspace_run'), 'terminal');
+assert.equal(inferToolPerformanceFamily('search_files'), 'workspace');
+assert.equal(inferToolPerformanceFamily('fetch_image'), 'creative_media');
 assert.equal(inferToolPerformanceFamily('timer'), 'core');
 assert.equal(inferToolPerformanceFamily('mcp__filesystem__read_file'), 'mcp_connector');
 assert.equal(inferToolPerformanceFamily('subagent_spawn'), 'subagent_task');
