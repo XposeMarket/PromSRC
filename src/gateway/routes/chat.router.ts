@@ -16,6 +16,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
@@ -976,40 +977,10 @@ type MainChatStreamState = {
 const mainChatStreams = new Map<string, MainChatStreamState>();
 const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
-// Token deltas and provider-internal stream events are already delivered live
-// through SSE. Retaining every one for reconnect replay makes a long tool turn
-// grow the gateway heap for no user-visible benefit. Keep structural lifecycle
-// events in the replay buffer; a reconnect can still recover tool boundaries,
-// progress, and the terminal result.
-const MAIN_CHAT_STREAM_EPHEMERAL_EVENTS = new Set([
-  'heartbeat',
-  'token',
-  'thinking_delta',
-  'reasoning_summary_delta',
-  'model_stream_event',
-]);
 // A stream/lease without a running runtime can exist briefly while a caller is
 // wiring up SSE.  It must never become a permanent admission lock, though.
 const MAIN_CHAT_OWNER_WATCHDOG_INTERVAL_MS = 15_000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
-const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
-  'user_message',
-  'session_title',
-  'agent_mode',
-  'ui_preflight',
-  'info',
-  'tool_call',
-  'tool_result',
-  'tool_progress',
-  'progress_state',
-  'thinking',
-  'agent_thought',
-  'final',
-  'done',
-  'error',
-  'warn',
-  'runtime_registered',
-]);
 const mainChatStreamUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 function getMainChatStream(sessionId: string): MainChatStreamState | null {
@@ -1110,13 +1081,6 @@ function finishMainChatStreamAsOrphaned(sessionId: string, stream: MainChatStrea
   finishMainChatStream(sessionId, stream.streamId);
 }
 
-function shouldRetainMainChatStreamEvent(type: string, data: any): boolean {
-  const normalized = String(type || '').trim().toLowerCase();
-  if (normalized !== 'model_stream_event') return !MAIN_CHAT_STREAM_EPHEMERAL_EVENTS.has(normalized);
-  const modelType = String(data?.event?.type || '').trim().toLowerCase();
-  return modelType === 'tool_call_start' || modelType === 'tool_call_done';
-}
-
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return null;
@@ -1127,7 +1091,8 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     at: Date.now(),
     data: cleanData,
   };
-  const retain = shouldRetainMainChatStreamEvent(frame.type, frame.data);
+  const delivery = classifyMainChatStreamEvent(frame.type, frame.data);
+  const retain = delivery.retain;
   if (retain) {
     stream.events.push(frame);
     if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
@@ -1139,7 +1104,7 @@ function appendMainChatStreamEvent(sessionId: string, streamId: string, type: st
     stream.lastSemanticProgressAt = frame.at;
     stream.lastSemanticEvent = frame.type;
   }
-  if (retain && MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
+  if (delivery.live) {
     try {
       broadcastWS({
         type: 'main_chat_stream_event',
