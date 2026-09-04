@@ -1,4 +1,6 @@
 const PERF_EVENT = 'prometheus:client-performance-mark';
+import { resolveActiveContextTokens } from './context-window-value.js';
+
 const SEMANTIC_LABEL = 'Context window';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
 const MAINTENANCE_INTERVAL_MS = 500;
@@ -135,6 +137,8 @@ function makeState(sessionId, surface, clientRequestId = '') {
     active: false,
     baselineTokens: 0,
     authoritativeTokens: 0,
+    currentStateKnown: false,
+    currentStateTokens: 0,
     windowTokens: 0,
     liveToolTokens: 0,
     pressureTokens: 0,
@@ -170,6 +174,8 @@ function captureAuthoritative(state, elements = surfaceElements(state.surface)) 
   if (!text || text === state.lastRenderedText) return;
   const usage = parseUsageLabel(text);
   if (!usage) return;
+  state.currentStateKnown = true;
+  state.currentStateTokens = usage.current;
   state.authoritativeTokens = usage.current;
   state.windowTokens = usage.limit;
   if (state.baselineTokens <= 0) state.baselineTokens = usage.current;
@@ -212,6 +218,10 @@ function refreshPressure(state, force = false) {
 
 function copyPressureState(target, source) {
   if (!source) return;
+  target.authoritativeTokens = source.authoritativeTokens;
+  target.currentStateKnown = source.currentStateKnown;
+  target.currentStateTokens = source.currentStateTokens;
+  target.windowTokens = source.windowTokens;
   target.pressureTokens = source.pressureTokens;
   target.pressureWindowTokens = source.pressureWindowTokens;
   target.pressureTriggerTokens = source.pressureTriggerTokens;
@@ -296,6 +306,8 @@ function recordCompactionEvent(sessionId, surface, evt = {}) {
     // Clear the pre-compaction model slice and live projection at the same
     // time so a late desktop refresh cannot repaint the old peak.
     state.authoritativeTokens = after;
+    state.currentStateKnown = true;
+    state.currentStateTokens = after;
     state.baselineTokens = after;
     state.liveToolTokens = 0;
   }
@@ -322,12 +334,14 @@ function renderLiveEstimate(state) {
   const liveProjection = state.active && state.baselineTokens > 0
     ? state.baselineTokens + state.liveToolTokens
     : 0;
-  // Once the full-thread pressure snapshot is available, it is the only
-  // authoritative baseline. The old bounded model slice must not pin the
-  // gauge high after compaction or pull it back down during refresh races.
-  const authoritativePressure = hasPressureSnapshot
-    ? state.pressureTokens
-    : state.authoritativeTokens;
+  // The visible current-state snapshot is authoritative. Pressure is only a
+  // fallback while that snapshot is unavailable, and the live projection can
+  // add unpersisted tool observations on top during an active turn.
+  const authoritativePressure = resolveActiveContextTokens({
+    currentStateTokens: state.currentStateKnown ? state.currentStateTokens : undefined,
+    pressureTokens: hasPressureSnapshot ? state.pressureTokens : undefined,
+    fallbackTokens: state.authoritativeTokens,
+  });
   const estimatedTokens = Math.max(authoritativePressure, liveProjection);
   if (estimatedTokens <= 0) return;
 
@@ -342,9 +356,6 @@ function renderLiveEstimate(state) {
   else elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
 
   const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
-  if (!hasPressureSnapshot && state.authoritativeTokens > 0 && state.pressureTokens > state.authoritativeTokens) {
-    titleParts.push(`current model slice ${formatTokens(state.authoritativeTokens)}`);
-  }
   if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
   if (isLiveEstimate) titleParts.push('live estimate');
   if (elements.button) elements.button.title = titleParts.join(' · ');

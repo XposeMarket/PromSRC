@@ -28,6 +28,7 @@ import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '..
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
+import { resolveActiveContextTokens } from '../context-window-value.js';
 import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
@@ -1426,6 +1427,13 @@ function renderChatContextWindow(data, target = null) {
   const state = getChatContextWindowStateForSession(sessionId);
   if (data === undefined) data = state.data;
   data = applyChatContextWindowLiveOverlay(data);
+  const currentState = data?.currentState || {};
+  const rawCurrentStateTokens = data?.currentStateTokens ?? currentState.currentStateTokens;
+  const hasCurrentState = !!data
+    && data.success !== false
+    && rawCurrentStateTokens !== null
+    && rawCurrentStateTokens !== undefined
+    && Number.isFinite(Number(rawCurrentStateTokens));
   const pressure = state.pressureSessionId === sessionId && state.pressureData?.success !== false
     ? state.pressureData
     : null;
@@ -1449,17 +1457,20 @@ function renderChatContextWindow(data, target = null) {
     return;
   }
 
-  const currentState = data?.currentState || {};
-  const current = hasActivePressure
-    ? Math.max(0, Number(pressure.pressureTokens))
-    : Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = hasActivePressure
-    ? Math.max(0, Number(pressure.contextWindowTokens))
-    : getChatContextWindowDisplayLimit(data, currentState);
+  const current = resolveActiveContextTokens({
+    currentStateTokens: hasCurrentState ? rawCurrentStateTokens : undefined,
+    pressureTokens: hasActivePressure ? pressure.pressureTokens : undefined,
+    fallbackTokens: data?.currentInputTokens,
+  });
+  const windowTokens = hasCurrentState
+    ? getChatContextWindowDisplayLimit(data, currentState)
+    : hasActivePressure
+      ? Math.max(0, Number(pressure.contextWindowTokens))
+      : getChatContextWindowDisplayLimit(data, currentState);
   const usage = getChatContextWindowUsage(
     current,
     windowTokens,
-    hasActivePressure ? pressure.usage : data.contextUsage || currentState.contextUsage,
+    hasCurrentState ? data.contextUsage || currentState.contextUsage : pressure?.usage || data.contextUsage || currentState.contextUsage,
   );
   const usageLabel = formatChatContextWindowUsage(usage);
   btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);

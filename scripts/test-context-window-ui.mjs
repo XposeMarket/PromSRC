@@ -13,6 +13,8 @@ const generatedPerformance = read('generated/public-web-ui/static/performance.js
 const desktopChat = read('web-ui/src/pages/ChatPage.js');
 const live = read('web-ui/src/context-window-live-tracking.js');
 const generatedLive = read('generated/public-web-ui/static/context-window-live-tracking.js');
+const contextWindowValue = read('web-ui/src/context-window-value.js');
+const generatedContextWindowValue = read('generated/public-web-ui/static/context-window-value.js');
 
 // The visible meter is thread-level active context pressure. It is deliberately
 // sourced from the same persisted estimate / rolling-summary boundary used by
@@ -32,13 +34,35 @@ assert.match(pressureModel, /const activeHistory = history\.slice\(start\)/, 'co
 assert.match(pressureModel, /if \(Number\.isFinite\(persistedEstimate\) && persistedEstimate >= 0\)/, 'persisted session pressure should remain authoritative when available');
 
 // The desktop gauge and server pressure snapshot must share the same active
-// thread contract. The bounded current-call rows remain a separate detail
-// view, but they can never overwrite the headline total.
+// thread contract. The bounded current-call rows and pressure fallback remain
+// separate detail views, but neither can overwrite the active state total.
 assert.match(desktopChat, /context-pressure`/, 'desktop must read full active-thread pressure');
 assert.match(desktopChat, /pressureData/, 'desktop must retain the pressure snapshot per session');
-assert.match(desktopChat, /hasActivePressure/, 'desktop must prefer a valid active pressure snapshot');
-assert.match(desktopChat, /pressure\.pressureTokens/, 'desktop gauge must use pressure tokens for its headline');
+assert.match(desktopChat, /hasCurrentState/, 'desktop must detect the active context-state snapshot');
+assert.match(desktopChat, /resolveActiveContextTokens/, 'desktop gauge must use the shared active-state precedence');
 assert.match(desktopChat, /current model-call composition/, 'current-call detail rows must be identified separately from active pressure');
+assert.match(live, /resolveActiveContextTokens/, 'live tracker must use the shared active-state precedence');
+assert.match(live, /currentStateKnown/, 'live tracker must retain whether the active state snapshot is known');
+
+// Exact regression from the broken meter: the pressure endpoint reported 471
+// while the current context-window snapshot reported 26,430. The visible
+// total must remain the active context state, not the smaller pressure value.
+assert.equal(generatedContextWindowValue, contextWindowValue, 'context-value source/generated mirrors must stay byte-identical');
+const contextWindowValueModule = await import(`data:text/javascript,${encodeURIComponent(contextWindowValue)}`);
+const regressionSnapshot = {
+  currentStateTokens: 26_430,
+  pressureTokens: 471,
+};
+assert.equal(
+  contextWindowValueModule.resolveActiveContextTokens(regressionSnapshot),
+  26_430,
+  'currentStateTokens must win over pressureTokens for the 471 versus 26,430 regression',
+);
+assert.equal(
+  contextWindowValueModule.resolveActiveContextTokens({ pressureTokens: 471 }),
+  471,
+  'pressureTokens remains a fallback while the active state snapshot is unavailable',
+);
 
 // performance.js is shared by desktop and mobile. The browser-level
 // performance-foundation test exercises both effects: mobile never requests
@@ -56,9 +80,8 @@ assert.doesNotMatch(live, /Effective context pressure/, 'the obsolete effective-
 assert.doesNotMatch(live, /className = 'context-window-semantic-note'/, 'the live tracker must not inject a second visible annotation row');
 assert.match(live, /\/context-pressure`/, 'desktop and mobile must refresh persisted thread pressure');
 assert.match(live, /hasPressureSnapshot/, 'the live tracker must distinguish a pressure snapshot from the bounded model slice');
-assert.match(live, /const authoritativePressure = hasPressureSnapshot[\s\S]*?state\.pressureTokens[\s\S]*?state\.authoritativeTokens/, 'a pressure snapshot must replace the bounded model slice as the active baseline');
+assert.match(live, /currentStateTokens: state\.currentStateKnown \? state\.currentStateTokens : undefined/, 'the live tracker must pass current state before pressure to the selector');
 assert.match(live, /Math\.max\(authoritativePressure, liveProjection\)/, 'unpersisted current-turn tool pressure must layer on top of the thread baseline');
-assert.match(live, /model slice \$\{formatTokens\(state\.authoritativeTokens\)\}/, 'the smaller next-call/model slice must be secondary information when it differs');
 assert.match(live, /compaction at \$\{formatTokens\(state\.pressureTriggerTokens\)\}/, 'the tooltip must expose the compaction trigger');
 
 // Starting or settling a new turn may reset only per-turn telemetry. The thread
