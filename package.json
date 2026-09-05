@@ -52,6 +52,7 @@
     "test:instruction-intent-benchmark": "tsx src/runtime/instruction-intent-benchmark.regression.ts",
     "test:stage4-menu-pilot": "tsx src/runtime/stage4-menu-pilot.regression.ts",
     "test:deterministic-systems": "node scripts/test-deterministic-systems.mjs",
+    "test:deterministic-baseline": "node scripts/test-deterministic-baseline.mjs",
     "test:deterministic-systems:workers": "node scripts/test-deterministic-systems.mjs --workers",
     "test:skill-routing-benchmark": "tsx src/runtime/skill-routing-benchmark.regression.ts",
     "test:skill-catalog-routing": "tsx src/runtime/skill-catalog-routing.regression.ts",
