@@ -1,7 +1,7 @@
 {
   "name": "prometheus",
   "version": "1.0.17",
-  "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
+  "description": "Prometheus â€” Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "engines": {
     "node": ">=20.20.0 <23"
   },
@@ -17,6 +17,8 @@
     "build:web": "npm run check:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js",
     "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
+    "test:self-doc-drift": "node scripts/test-self-doc-drift.mjs",
+    "test:self-doc-drift-regression": "node scripts/test-self-doc-drift.regression.mjs",
     "test:chat-question-controller": "node scripts/test-chat-question-controller.mjs",
     "test:desktop-question-composer": "node scripts/test-desktop-question-composer-contract.mjs",
     "test:desktop-reasoning-trace": "node scripts/test-desktop-reasoning-trace-segments.mjs",
