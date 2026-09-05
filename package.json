@@ -30,6 +30,7 @@
     "test:workspace-tool-mode": "tsx src/runtime/workspace-tool-mode.regression.ts",
     "test:path-permissions": "tsx src/gateway/path-permissions.regression.ts",
     "test:prompt-cache": "tsx src/gateway/prompt-cache.regression.ts",
+    "test:system-diagnostics": "tsx src/gateway/diagnostics/system-diagnostics.regression.ts",
     "test:resource-store": "tsx src/gateway/resources/resource-store.regression.ts && tsx src/gateway/resources/resources-router.regression.ts",
     "test:external-import": "tsx src/gateway/imports/import.regression.ts",
     "test:external-import-discovery": "tsx src/gateway/imports/import-discovery.regression.ts",
