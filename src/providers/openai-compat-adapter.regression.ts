@@ -47,6 +47,78 @@ async function collect(adapter: OpenAICompatAdapter, chunks: string[]) {
 }
 
 async function main(): Promise<void> {
+  const astra = new OpenAICompatAdapter({
+    providerId: 'openai',
+    endpoint: 'https://api.openai.com',
+    apiKey: 'test',
+  });
+  const originalFetch = globalThis.fetch;
+  try {
+    // Both callback-based chat and background callers must use Responses for
+    // Astra tools, preserve reasoning/speed, and omit unsupported sampling.
+    for (const stream of [false, true]) {
+      const tokens: string[] = [];
+      let requestBody: any;
+      globalThis.fetch = async (url, init) => {
+        assert.equal(String(url), 'https://api.openai.com/v1/responses');
+        requestBody = JSON.parse(String(init?.body));
+        return sseResponse([
+          'data: {"type":"response.output_text.delta","delta":"Checking"}\n\n',
+          `data: ${JSON.stringify({ type: 'response.completed', response: {
+            output: [{ type: 'function_call', call_id: 'call_astra', name: 'lookup', arguments: '{"key":"status"}' }],
+            usage: { input_tokens: 20, output_tokens: 8, input_tokens_details: { cached_tokens: 5 } },
+          } })}\n\n`,
+        ]);
+      };
+      const result = await astra.chat([{ role: 'user', content: 'Check status' }], 'gpt-6-astra', {
+        think: 'max',
+        speed: 'fast',
+        temperature: 0.2,
+        max_tokens: 2048,
+        ...(stream ? { onToken: (token: string) => tokens.push(token) } : {}),
+        tools: [{ type: 'function', function: { name: 'lookup', description: 'Look up status', parameters: { type: 'object', properties: { key: { type: 'string' } } } } }],
+      });
+      assert.equal(requestBody.model, 'gpt-6-astra');
+      assert.equal(requestBody.reasoning.effort, 'max');
+      assert.equal(requestBody.service_tier, 'priority');
+      assert.equal(requestBody.max_output_tokens, 2048);
+      assert.ok(!('temperature' in requestBody));
+      assert.equal(requestBody.tools[0].name, 'lookup');
+      assert.equal(result.message.tool_calls?.[0].id, 'call_astra');
+      assert.equal(result.message.tool_calls?.[0].function.arguments, '{"key":"status"}');
+      assert.equal(result.usage?.inputTokens, 20);
+      assert.equal(result.usage?.outputTokens, 8);
+      assert.deepEqual(tokens, stream ? ['Checking'] : []);
+
+      globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.ok(body.input.some((item: any) => item.type === 'function_call_output' && item.call_id === 'call_astra' && item.output === 'Ready'));
+        return sseResponse(['data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Ready to go."}]}]}}\n\n']);
+      };
+      const final = await astra.chat([
+        { role: 'user', content: 'Check status' },
+        result.message,
+        { role: 'tool', tool_call_id: 'call_astra', content: 'Ready' },
+      ], 'gpt-6-astra');
+      assert.equal(final.message.content, 'Ready to go.');
+    }
+
+    globalThis.fetch = async (url, init) => {
+      assert.equal(String(url), 'https://api.openai.com/v1/chat/completions');
+      const body = JSON.parse(String(init?.body));
+      assert.ok(!('temperature' in body));
+      assert.ok(!('max_tokens' in body));
+      assert.equal(body.max_completion_tokens, 2048);
+      assert.equal(body.reasoning_effort, 'high');
+      assert.deepEqual(body.response_format, { type: 'json_object' });
+      return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] });
+    };
+    const generated = await astra.generate('Return JSON', 'gpt-6-astra', { format: 'json', think: 'high', max_tokens: 2048 });
+    assert.equal(generated.response, '{"ok":true}');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
   const grok = await collect(
     new OpenAICompatAdapter({
       providerId: 'xai',
@@ -80,7 +152,7 @@ async function main(): Promise<void> {
     [false, false],
   );
 
-  console.log('OpenAI-compatible Grok reasoning summary regressions passed');
+  console.log('OpenAI-compatible Astra request routing and Grok reasoning summary regressions passed');
 }
 
 main().catch((error) => {

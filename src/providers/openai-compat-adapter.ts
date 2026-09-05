@@ -144,7 +144,7 @@ function isOfficialOpenAIEndpoint(endpoint: string): boolean {
 
 function supportsOpenAIResponsesReasoning(model: string): boolean {
   const m = String(model || '').trim().toLowerCase();
-  return /^(o\d|gpt-5|codex)/.test(m);
+  return /^(o\d|gpt-5|gpt-6-astra(?:-|$)|codex)/.test(m);
 }
 
 function parseUsage(data: any): ModelUsage | undefined {
@@ -356,6 +356,11 @@ export class OpenAICompatAdapter implements LLMProvider {
       }
     }
 
+    // Astra tool calls require Responses. The SSE reader also collects a
+    // complete result for callers that do not subscribe to token callbacks.
+    if (this.id === 'openai' && /^gpt-6-astra(?:-|$)/i.test(model)) {
+      return this.streamOpenAIResponses(finalMessages, model, body, options);
+    }
 	    if (body.stream) {
 	      if (
 	        this.id === 'openai'
@@ -580,7 +585,8 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      reasoning: { effort, summary: 'auto' },
 	    };
 	    if (instructions) body.instructions = instructions;
-	    if (!/^(o\d|gpt-5)/i.test(model) && typeof chatBody.temperature === 'number') {
+    if (chatBody.service_tier) body.service_tier = chatBody.service_tier;
+	    if (!supportsOpenAIResponsesReasoning(model) && typeof chatBody.temperature === 'number') {
 	      body.temperature = chatBody.temperature;
 	    }
     const cappedTools = capProviderTools(this.id, options?.tools);
@@ -722,7 +728,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 	              }
 	            }
 	            if (type === 'response.completed') {
-	              usage = parseUsage(event.response?.usage);
+	              usage = parseUsage(event.response);
 	              const outputs = event.response?.output || [];
 	              for (const item of outputs) {
 	                if (item.type === 'message') {
@@ -788,6 +794,13 @@ export class OpenAICompatAdapter implements LLMProvider {
     };
     if (options?.format === 'json') {
       body.response_format = { type: 'json_object' };
+    }
+    if (this.id === 'openai' && /^gpt-6-astra(?:-|$)/i.test(model)) {
+      delete body.temperature;
+      body.max_completion_tokens = body.max_tokens;
+      delete body.max_tokens;
+      const effort = normalizeReasoningEffort('openai', model, options?.think);
+      if (effort) body.reasoning_effort = effort;
     }
 
 	    const data = await this.post(this.config.chatCompletionsPath || '/v1/chat/completions', body);
