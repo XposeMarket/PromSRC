@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from '../dist/providers/reasoning-capabilities.js';
+import { reasoningCapability, supportsFastSpeed as browserSupportsFastSpeed } from '../web-ui/src/reasoning-capabilities.js';
 
 const efforts = (provider, model) => getReasoningCapability(provider, model).efforts;
 
 for (const provider of ['openai', 'openai_codex']) {
+  const astra = getReasoningCapability(provider, 'gpt-6-astra');
+  assert.deepEqual(astra.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(astra.defaultEffort, 'low');
+  assert.deepEqual(reasoningCapability(provider, 'gpt-6-astra'), astra);
+  assert.equal(normalizeReasoningEffort(provider, 'gpt-6-astra', 'none'), 'low');
+  assert.equal(normalizeReasoningEffort(provider, 'gpt-6-astra', 'ultra'), undefined);
+  assert.equal(supportsFastSpeed(provider, 'gpt-6-astra'), true);
+  assert.equal(browserSupportsFastSpeed(provider, 'gpt-6-astra'), true);
   for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
     const expected = provider === 'openai_codex' && ['gpt-5.6-sol', 'gpt-5.6-terra'].includes(model)
       ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']

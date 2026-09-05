@@ -29,6 +29,9 @@ export interface ContextBudget {
 type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model' | 'source'>>;
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
+  // Codex's catalog uses a smaller working context than the direct API.
+  { provider: /^openai_codex$/i, model: /^gpt-6-astra(?:-|$)/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
+  { provider: /^openai$/i, model: /^gpt-6-astra(?:-|$)/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },
   { provider: /^openai_codex$/i, model: /^gpt-5\.3-codex-spark$/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai_codex$/i, model: /^gpt-5/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },

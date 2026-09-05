@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { formatModelDisplayName, formatModelWithReasoning } from '../web-ui/src/model-display.js';
-import { effortOptions, reasoningSelectorOptions } from '../web-ui/src/reasoning-capabilities.js';
+import { effortOptions, reasoningSelectorOptions, supportsFastSpeed } from '../web-ui/src/reasoning-capabilities.js';
+
+assert.equal(formatModelDisplayName('gpt-6-astra', 'openai'), 'Astra 6');
+assert.equal(formatModelDisplayName('openai_codex/gpt-6-astra'), 'Astra 6');
+assert.equal(formatModelWithReasoning('gpt-6-astra', 'openai_codex', 'medium'), 'Astra 6 Medium');
+assert.equal(formatModelWithReasoning('gpt-6-astra', 'openai_codex', 'ultra'), 'Astra 6');
+assert.equal(formatModelWithReasoning('gpt-6-astra', 'openai', 'ultra'), 'Astra 6');
+assert.deepEqual(reasoningSelectorOptions('openai_codex', 'gpt-6-astra'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(reasoningSelectorOptions('openai', 'gpt-6-astra'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.equal(supportsFastSpeed('openai_codex', 'gpt-6-astra'), true);
 
 assert.equal(formatModelDisplayName('gpt-5.5', 'openai'), 'GPT 5.5');
 assert.equal(formatModelDisplayName('gpt-4.1-mini', 'openai'), 'GPT 4.1 mini');

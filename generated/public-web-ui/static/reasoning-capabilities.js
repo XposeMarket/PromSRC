@@ -1,7 +1,7 @@
 // Browser mirror of src/providers/reasoning-capabilities.ts.
 const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
 const OPENAI_56 = ['low','medium','high','xhigh','max'];
-const CODEX_56_ULTRA = [...OPENAI_56, 'ultra'];
+const CODEX_ULTRA = [...OPENAI_56, 'ultra'];
 
 export function hasReasoningCapabilityPolicy(provider) {
   return MODEL_CAPABILITY_PROVIDERS.has(String(provider || '').trim().toLowerCase());
@@ -12,7 +12,8 @@ export function reasoningCapability(provider, model) {
   const raw = String(model || '').trim().toLowerCase();
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
   if (id === 'openai_codex') {
-    if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_56_ULTRA], defaultEffort: 'medium' };
+    if (/^gpt-6-astra(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'low' };
+    if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_ULTRA], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
@@ -21,6 +22,7 @@ export function reasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (id === 'openai') {
+    if (/^gpt-6-astra(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'low' };
     if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
     if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'medium' };
     if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['low','medium','high','xhigh'], defaultEffort: 'low' };
@@ -76,6 +78,6 @@ export function supportsFastSpeed(provider, model) {
   const raw = String(model || '').trim().toLowerCase();
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
   if (id === 'anthropic') return /^claude-opus-4-(?:7|8)(?:-|$)/.test(name);
-  if (id === 'openai' || id === 'openai_codex') return /^(?:gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
+  if (id === 'openai' || id === 'openai_codex') return /^(?:gpt-6-astra|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   return false;
 }
