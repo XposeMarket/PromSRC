@@ -1,3 +1,4 @@
+import { managedPrompt } from './thread-handoff';
 import crypto from 'crypto';
 import {
   flushSession,
@@ -231,12 +232,6 @@ function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit
   };
 }
 
-function managedPrompt(prompt: string, objective: string, follow: boolean): string {
-  const work = String(objective || prompt || '').trim();
-  if (!work) return '';
-  if (!follow || /^\/goal(?:\s|$)/i.test(work)) return work;
-  return `/goal ${work}`;
-}
 
 function followUpFingerprint(targetSessionId: string, message: string): string {
   return crypto.createHash('sha256')
@@ -397,7 +392,7 @@ function createManagedThread(
         maxConsecutiveNoProgress: input?.max_consecutive_no_progress ?? defaults?.max_consecutive_no_progress,
       })
     : null;
-  const turnPrompt = managedPrompt(prompt, objective, follow);
+  const turnPrompt = managedPrompt(prompt, objective, follow, acceptanceCriteria, ownerSessionId);
   if (turnPrompt) {
     runDetached(deps, ownerSessionId, targetSessionId, turnPrompt, {
       supervisionId: supervision?.id,

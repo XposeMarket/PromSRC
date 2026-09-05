@@ -40,6 +40,7 @@
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",
+    "test:thread-handoff": "tsx src/gateway/threads/thread-handoff.regression.ts",
     "test:thread-ops-model-route": "tsx src/gateway/threads/thread-ops-model-route.regression.ts",
     "test:tool-category-manifest": "tsx src/runtime/tool-category-manifest.regression.ts",
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
