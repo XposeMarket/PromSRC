@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import { createDeterministicBaselineReport, formatDeterministicBaselineReport } from './deterministic-baseline.mjs';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const tsx = process.platform === 'win32'
@@ -53,7 +54,7 @@ const workerCases = [
 ];
 
 const cases = includeWorkers ? [...pureCases, ...workerCases] : pureCases;
-const failures = [];
+const caseResults = [];
 const startedAt = Date.now();
 
 for (const [label, kind, relativePath] of cases) {
@@ -65,23 +66,22 @@ for (const [label, kind, relativePath] of cases) {
     shell: process.platform === 'win32',
     stdio: 'inherit',
   });
-  if (result.status !== 0) {
-    failures.push({
-      label,
-      status: result.status,
-      signal: result.signal,
-      error: result.error ? String(result.error.message || result.error) : undefined,
-    });
-  }
+  caseResults.push(result);
 }
 
-const summary = {
+const baseline = createDeterministicBaselineReport({
   mode: includeWorkers ? 'full_no_llm_with_workers' : 'deterministic_no_llm',
-  cases: cases.length,
-  passed: cases.length - failures.length,
-  failed: failures.length,
+  cases,
+  caseResults,
+});
+console.log(formatDeterministicBaselineReport(baseline));
+const summary = {
+  mode: baseline.mode,
+  cases: baseline.total,
+  passed: baseline.passed,
+  failed: baseline.failed,
   elapsedMs: Date.now() - startedAt,
-  failures,
+  failures: baseline.cases.filter((testCase) => testCase.status === 'failed'),
 };
-console.log(`\n${JSON.stringify(summary, null, 2)}`);
-if (failures.length) process.exitCode = 1;
+console.log(JSON.stringify(summary, null, 2));
+if (baseline.failed) process.exitCode = 1;
