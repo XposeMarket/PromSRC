@@ -40,6 +40,7 @@ import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 import { createUserChromePage, UserChromePage } from './user-chrome-transport.js';
 import { getUserChromeExtensionOnboarding, getUserChromeRelay } from './user-chrome-relay.js';
 import { getResourceStore, redactResourceText } from './resources/resource-store';
+import { normalizeBrowserSessionId } from './browser-session-identity';
 
 type PwBrowser = any;
 type PwContext = any;
@@ -4458,8 +4459,7 @@ async function buildAdvisorPacketForSession(
 // the selected main target, while task/background/team sessions intentionally
 // stay isolated so each worker gets its own profile and CDP port.
 export function resolveSessionId(sessionId: string): string {
-  const sid = String(sessionId || 'default');
-  return sid;
+  return normalizeBrowserSessionId(sessionId);
 }
 
 async function broadcastBrowserViewportUpdate(
