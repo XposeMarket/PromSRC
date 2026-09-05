@@ -31,6 +31,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
         run: npx tsc --noEmit
+      - name: Verify thread handoff regression
+        run: npm run test:thread-handoff
       - name: Verify Brain provider diagnostics and bounded failures
         run: npm run test:brain-provider-diagnostics
       - name: Verify scheduled Brain chat runtime contract
