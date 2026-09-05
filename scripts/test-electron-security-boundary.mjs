@@ -62,7 +62,10 @@ const settingsHtml = fs.readFileSync(path.join(root, 'web-ui', 'index.html'), 'u
 const chatSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'pages', 'ChatPage.js'), 'utf8');
 const slashCommandsSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'features', 'chat', 'core', 'slash-commands.js'), 'utf8');
 const mobileApiSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'mobile', 'mobile-api.js'), 'utf8');
-const mobilePagesSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'mobile', 'mobile-pages.js'), 'utf8');
+const mobilePagesSource = [
+  fs.readFileSync(path.join(root, 'web-ui', 'src', 'mobile', 'mobile-pages.js'), 'utf8'),
+  fs.readFileSync(path.join(root, 'web-ui', 'src', 'mobile', 'mobile-chat-page-runtime.js'), 'utf8'),
+].join('\n');
 const cliSource = fs.readFileSync(path.join(root, 'src', 'cli', 'index.ts'), 'utf8');
 const telegramSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'comms', 'telegram-channel.ts'), 'utf8');
 const settingsRouterSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'settings.router.ts'), 'utf8');

@@ -5,14 +5,17 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
-const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
+const mobilePageFacade = read('web-ui/src/mobile/mobile-pages.js');
+const mobilePageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+const mobilePages = `${mobilePageFacade}\n${mobilePageRuntime}`;
 const mobileRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const mobileMessageRenderer = read('web-ui/src/mobile/mobile-chat-message-renderer.js');
 const mobileCss = read('web-ui/src/styles/mobile.css');
 const questionModel = read('web-ui/src/features/chat/questions/question-model.js');
 const questionController = read('web-ui/src/features/chat/questions/question-controller.js');
 
 const cardStart = mobileRenderer.indexOf('function _renderMobileQuestionCard(');
-const cardEnd = mobileRenderer.indexOf('function _renderChatMessageHtml(', cardStart);
+const cardEnd = mobileRenderer.indexOf('function _renderMobileGoalCompletionReport(', cardStart);
 assert(cardStart >= 0 && cardEnd > cardStart, 'mobile question card renderer must remain discoverable');
 const cardSource = mobileRenderer.slice(cardStart, cardEnd);
 

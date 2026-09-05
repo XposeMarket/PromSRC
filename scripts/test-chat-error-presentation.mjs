@@ -38,7 +38,10 @@ assert.equal(stoppedGoal.severity, 'info');
 assert.equal(stoppedGoal.summary, 'No work was run.');
 
 const mobileApi = read('web-ui/src/mobile/mobile-api.js');
-const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
+const mobilePages = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+].join('\n');
 const goals = read('src/gateway/main-chat-goals.ts');
 assert.match(mobileApi, /presentChatError\(\{ rawBody: body, httpStatus: res\.status/, 'HTTP errors must be typed before the UI sees them');
 assert.match(mobilePages, /function _coalesceMobileChatError/, 'duplicate retry errors must be coalesced');
