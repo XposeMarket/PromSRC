@@ -49,6 +49,7 @@
     "test:extension-activation": "tsx src/extensions/activation-planner.regression.ts",
     "test:tool-category-phase4": "tsx src/runtime/tool-category-phase4.validation.ts",
     "test:instruction-segment-resolver": "tsx src/runtime/instruction-segment-registry.regression.ts",
+    "test:instruction-registry-provenance": "tsx src/runtime/instruction-registry-provenance.regression.ts",
     "test:instruction-intent-benchmark": "tsx src/runtime/instruction-intent-benchmark.regression.ts",
     "test:stage4-menu-pilot": "tsx src/runtime/stage4-menu-pilot.regression.ts",
     "test:deterministic-systems": "node scripts/test-deterministic-systems.mjs",
