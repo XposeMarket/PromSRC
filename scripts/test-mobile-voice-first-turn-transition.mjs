@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const pages = fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8');
+const pages = [
+  fs.readFileSync('web-ui/src/mobile/mobile-pages.js', 'utf8'),
+  fs.readFileSync('web-ui/src/mobile/mobile-chat-page-runtime.js', 'utf8'),
+].join('\n');
 const voicePage = fs.readFileSync('web-ui/src/mobile/mobile-voice-page.js', 'utf8');
 
 assert.match(
@@ -11,7 +14,10 @@ assert.match(
 );
 assert.match(pages, /requestedSession = sid;[\s\S]{0,1200}_setChatVoiceActive\(true\)/, 'the mounted chat must recompute draft Voice chrome when the first spoken turn materializes a session');
 assert.match(voicePage, /context\._ensureDurableMobileVoiceSession\(/, 'Voice first turn must materialize a durable chat session');
-const mobileCss = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+const mobileCss = [
+  fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8'),
+  fs.readFileSync('web-ui/src/styles/mobile-shell.css', 'utf8'),
+].join('\n');
 assert.match(mobileCss, /pm-chat-voice-docked \.pm-composer\.is-voice-active \{ clip-path: none !important; outline: 0 !important; \}/, 'docked inline Voice must not clip a horizontal top-edge seam');
 assert.match(
   mobileCss,

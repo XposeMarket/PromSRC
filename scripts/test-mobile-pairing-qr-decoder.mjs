@@ -8,7 +8,8 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
 const mobileDocument = read('web-ui/mobile.html');
 const generatedMobileDocument = read('generated/public-web-ui/mobile.html');
-const scannerOwner = read('web-ui/src/mobile/mobile-pages.js');
+// The route renderer owns the camera scanner after the page-runtime extraction.
+const scannerOwner = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 
 assert.match(
   mobileDocument,

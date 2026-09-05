@@ -13,7 +13,10 @@ const performanceGenerated = read('generated/public-web-ui/static/performance.js
 const canonical = read('web-ui/src/features/chat/canonical-desktop-composer.js');
 const canonicalGenerated = read('generated/public-web-ui/static/features/chat/canonical-desktop-composer.js');
 const themes = read('web-ui/src/styles/themes.css');
-const components = read('web-ui/src/styles/components.css');
+const components = [
+  read('web-ui/src/styles/components.css'),
+  read('web-ui/src/styles/components-sidebar.css'),
+].join('\n');
 const promBotCollab = read('web-ui/src/prom-bot-collab.js');
 const workspaceTree = read('web-ui/src/components/workspace-file-tree.js');
 const workspaceTreeGenerated = read('generated/public-web-ui/static/components/workspace-file-tree.js');

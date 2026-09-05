@@ -52,14 +52,20 @@ function assertContractFiles() {
   const identity = read('src/gateway/gateway-identity.ts');
   const pairing = read('src/gateway/routes/pairing.router.ts');
   const auth = read('src/gateway/gateway-auth.ts');
-  const pages = read('web-ui/src/mobile/mobile-pages.js');
+  const pages = [
+    read('web-ui/src/mobile/mobile-pages.js'),
+    read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+  ].join('\n');
   const voicePage = read('web-ui/src/mobile/mobile-voice-page.js');
   const pairingPage = read('web-ui/src/mobile/mobile-pairing-page.js');
   const gatewaysPage = read('web-ui/src/mobile/mobile-gateways-page.js');
   const mobileApi = read('web-ui/src/mobile/mobile-api.js');
   const router = read('web-ui/src/mobile/mobile-router.js');
   const shell = read('web-ui/src/mobile/mobile-shell.js');
-  const css = read('web-ui/src/styles/mobile.css');
+  const css = [
+    read('web-ui/src/styles/mobile.css'),
+    read('web-ui/src/styles/mobile-shell.css'),
+  ].join('\n');
   const index = read('web-ui/index.html');
 
   assert.match(catalog, /targetNamespacedId/);

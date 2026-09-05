@@ -8,7 +8,11 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const sourcePath = (name) => `web-ui/src/mobile/${name}`;
 const generatedPath = (name) => `generated/public-web-ui/static/mobile/${name}`;
 
-const telemetry = read('web-ui/src/mobile/mobile-pages.js');
+const telemetry = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+].join('\n');
+const pageRuntimeTelemetry = read(sourcePath('mobile-chat-page-runtime.js'));
 const lifecycleNames = [
   'mobile_navigation',
   'mobile_shell_paint',
@@ -26,7 +30,7 @@ assert.match(read(sourcePath('mobile-router.js')), /markClientPerformance\('mobi
 assert.match(read(sourcePath('mobile-shell.js')), /__PROM_PERF_MARK\?\.\('mobile_shell_paint'/);
 assert.match(read(sourcePath('mobile-api.js')), /__PROM_PERF_MARK\?\.\('mobile_gateway_ready'/);
 assert.match(read(sourcePath('mobile-pages.js')), /markMobileLifecycle\('chatRuntimeHydrated'\)/);
-assert.match(read(sourcePath('mobile-pages.js')), /markMobileLifecycle\('composerInteractive'\)/);
+assert.match(pageRuntimeTelemetry, /markMobileLifecycle\('composerInteractive'\)/);
 const rendererTelemetry = read(sourcePath('mobile-chat-renderer-runtime.js'));
 assert.match(rendererTelemetry, /const hasTranscriptTurn = runtimeRows\.some\(/,
   'first transcript paint must be tied to an actual runtime transcript turn');
@@ -38,6 +42,7 @@ assert.match(read(sourcePath('mobile-pages.js')), /"markMobileLifecycle": \{ enu
 for (const name of [
   'mobile-api.js',
   'mobile-chat-renderer-runtime.js',
+  'mobile-chat-page-runtime.js',
   'mobile-pages.js',
   'mobile-router.js',
   'mobile-shell.js',

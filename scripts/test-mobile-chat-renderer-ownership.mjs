@@ -6,18 +6,24 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const sourcePages = read('web-ui/src/mobile/mobile-pages.js');
+const sourcePageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 const sourceRuntime = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const sourceMessageRenderer = read('web-ui/src/mobile/mobile-chat-message-renderer.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedPageRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js');
 const generatedRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-renderer-runtime.js');
+const generatedMessageRenderer = read('generated/public-web-ui/static/mobile/mobile-chat-message-renderer.js');
 const manifest = JSON.parse(read('generated/public-web-ui/asset-manifest.json'));
 const assets = new Map(manifest.assets.map((asset) => [asset.path, asset]));
 
 assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedPageRuntime, sourcePageRuntime, 'generated mobile-chat-page-runtime.js must mirror source');
 assert.equal(generatedRuntime, sourceRuntime, 'generated mobile-chat-renderer-runtime.js must mirror source');
+assert.equal(generatedMessageRenderer, sourceMessageRenderer, 'generated mobile-chat-message-renderer.js must mirror source');
 assert.match(sourcePages, /import\('\.\/mobile-chat-renderer-runtime\.js'\)/, 'Chat must lazy-load its renderer runtime');
 assert.doesNotMatch(sourcePages, /from ['"]\.\/mobile-chat-renderer-runtime\.js['"]/, 'Chat must not statically import its renderer runtime');
-assert.match(sourcePages, /export async function renderChatPage/, 'Chat route must await renderer hydration');
-assert.match(sourcePages, /await loadMobileChatRendererRuntime\(\)/, 'Chat route must hydrate before the first render');
+assert.match(sourcePageRuntime, /return async function renderChatPage/, 'Chat route must await renderer hydration');
+assert.match(sourcePageRuntime, /await loadMobileChatRendererRuntime\(\)/, 'Chat route must hydrate before the first render');
 assert.match(sourcePages, /function _renderChatMessageHtml\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_renderChatMessageHtml', args\); \}/, 'rich-message construction must be a renderer facade');
 assert.match(sourcePages, /function _renderThread\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_renderThread', args\); \}/, 'transcript rendering must be a renderer facade');
 assert.match(sourcePages, /function _applyMobileAgentStreamEvent\(\.\.\.args\) \{ return _mobileChatRendererInvoke\('_applyMobileAgentStreamEvent', args\); \}/, 'stream reduction must be a renderer facade');
@@ -25,11 +31,11 @@ assert.match(sourcePages, /function _renderMobileBackgroundSpawnDock\(\.\.\.args
 assert.doesNotMatch(sourcePages, /function _renderChatMessageHtml\(m,\s*index\s*=\s*-1/, 'rich-message construction must not remain in mobile-pages');
 assert.doesNotMatch(sourcePages, /function _renderThread\(threadEl,\s*sessionKey\s*=\s*''\)/, 'transcript rendering must not remain in mobile-pages');
 assert.doesNotMatch(sourcePages, /const PM_VOICE_SETTINGS_KEY\s*=/, 'Voice configuration must not remain in mobile-pages');
-assert.match(sourceRuntime, /function _renderChatMessageHtml\s*\(/, 'renderer runtime must own rich-message construction');
+assert.match(sourceMessageRenderer, /function _renderChatMessageHtml\s*\(/, 'renderer message module must own rich-message construction');
 assert.match(sourceRuntime, /function _renderThread\s*\(/, 'renderer runtime must own transcript rendering');
 assert.match(sourceRuntime, /function _applyMobileAgentStreamEvent\s*\(/, 'renderer runtime must own stream reduction');
 assert.match(sourceRuntime, /function _renderMobileBackgroundSpawnDock\s*\(/, 'renderer runtime must own background-agent dock rendering');
-assert.match(sourceRuntime, /if \(m\.streaming !== true\) inner \+= _renderMobileFileChanges\(m\.fileChanges\);/, 'main file-change cards must wait for the terminal turn state');
+assert.match(sourceMessageRenderer, /if \(m\.streaming !== true\) inner \+= _renderMobileFileChanges\(m\.fileChanges\);/, 'main file-change cards must wait for the terminal turn state');
 assert.match(sourceRuntime, /if \(!streaming\) inner \+= _renderMobileFileChanges\(_mobileAgentMessageFileChanges\(turnPresentation\)\);/, 'background file-change cards must wait for the terminal turn state');
 
 function outputFor(source) {

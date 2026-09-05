@@ -6,7 +6,10 @@ const sourcePath = 'web-ui/src/styles/mobile-liquid-glass-demo.css';
 const generatedPath = 'generated/public-web-ui/static/styles/mobile-liquid-glass-demo.css';
 const source = fs.readFileSync(sourcePath, 'utf8');
 const generated = fs.readFileSync(generatedPath, 'utf8');
-const mobileBase = fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8');
+const mobileBase = [
+  fs.readFileSync('web-ui/src/styles/mobile.css', 'utf8'),
+  fs.readFileSync('web-ui/src/styles/mobile-shell.css', 'utf8'),
+].join('\n');
 const sourceCode = source.replace(/\/\*[\s\S]*?\*\//g, '');
 
 assert.equal(generated, source, 'generated mobile glass restore CSS must mirror source exactly');

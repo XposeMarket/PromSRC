@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-const desktop = fs.readFileSync(new URL('../web-ui/src/pages/ChatPage.js', import.meta.url), 'utf8');
-const desktopGenerated = fs.readFileSync(new URL('../generated/public-web-ui/static/pages/ChatPage.js', import.meta.url), 'utf8');
+const desktop = [
+  fs.readFileSync(new URL('../web-ui/src/pages/ChatPage.js', import.meta.url), 'utf8'),
+  fs.readFileSync(new URL('../web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js', import.meta.url), 'utf8'),
+].join('\n');
+const desktopGenerated = [
+  fs.readFileSync(new URL('../generated/public-web-ui/static/pages/ChatPage.js', import.meta.url), 'utf8'),
+  fs.readFileSync(new URL('../generated/public-web-ui/static/features/chat/runtime/desktop-send-chat-runtime.js', import.meta.url), 'utf8'),
+].join('\n');
 const desktopCss = fs.readFileSync(new URL('../web-ui/src/styles/components.css', import.meta.url), 'utf8');
 const desktopGeneratedCss = fs.readFileSync(new URL('../generated/public-web-ui/static/styles/components.css', import.meta.url), 'utf8');
 const mobile = fs.readFileSync(new URL('../web-ui/src/mobile/mobile-pages.js', import.meta.url), 'utf8');
