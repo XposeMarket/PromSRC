@@ -1,16 +1,19 @@
 # SELF — Prometheus Self-Reference (Split Index)
 
-Last verified against `src/`, `web-ui/`, route/tool definitions, batch read/patchset file tools, web search/fetch/batch-fetch tool definitions, dev-source verification profiles/auto-narrow `prom_apply_dev_changes verify_only`, config defaults, command policy/approval surfaces, current package metadata, provider-aware context budgeting, rolling/mid-workflow compaction, tool observation injection, Brain runner skill-curator behavior, Hub/chat context UI, voice-agent/mobile dictation routing/direct voice tool wrappers, OpenAI/xAI realtime voice integration, mobile Realtime camera snapshot/video-frame capture and visual input handling, mobile camera-roll video attachments, the desktop web UI source/generated route/component surface, the Prometheus Mobile PWA/gateway route surface, channel completion notification bridge wiring, memory-maintenance/model-call process isolation, the durable turn journal, bounded child-process journal/blob retention, and bounded blob-backed final delivery on: 2026-07-15
-Workspace: `D:\Prometheus\workspace`
-Project root: `D:\Prometheus`
+Last verified against current `src/`, `web-ui/`, gateway route/tool definitions, config defaults, command policy/approval surfaces, provider-aware context budgeting, memory-maintenance/search workers, context-build workers, model-call workers, Brain activity workers, thread/session recovery, current `/api/health` and `/api/status` diagnostics, mobile/desktop UI surfaces, and the public release/runtime layout on: 2026-09-05
+Workspace: `workspace/` (repository-relative; the runtime resolves the actual workspace root from config)
+Project root: repository root (resolved at runtime; do not hard-code a workstation drive path)
 
-This directory is a split copy of root `SELF.md` — the same source-verified architecture reference, broken into per-area files so Prometheus can read and edit individual sections without churning the full document. In the current tool/runtime view the split directory is `self/` and the monolithic file is `SELF.md`; older wording that says `workspace/self/` or `workspace/SELF.md` refers to the same workspace-root material, not a separate second copy.
+This directory is the split Prometheus self-reference under `workspace/self/`: source-verified architecture documentation broken into per-area files so Prometheus can read and edit individual sections without churning the monolithic historical `workspace/SELF.md` sync copy.
+
+**Path rule:** source and documentation paths in this self-reference are repository-relative unless a section explicitly labels a path as runtime data (`<configDir>`, `<workspaceRoot>`, etc.) or historical evidence. Machine-specific roots such as `D:\Prometheus` must not be used as current architecture locations.
 
 ## How to read
 
 - Start here, then jump to the file that matches the area you're working on.
 - Anchors/section numbers from the original `SELF.md` are preserved at the top of every file.
 - Creative-mode coverage is large enough to live in its own subfolder under `creative/`.
+- Treat a named implementation path as current only when that path still exists in source. When source moves or a subsystem is retired, update the owning self-reference file and its cross-references together.
 
 ## Section → file map
 
@@ -56,7 +59,7 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 41 | Stage 4 Tool-Menu Trigger Benchmark (deterministic triggers, rollback, savings, test corpus) | [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md) |
 | 42 | Stage 5 Deterministic Skill Routing (inventory, relevance decisions, discovery, rollback, benchmark) | [28-deterministic-skill-routing.md](28-deterministic-skill-routing.md) |
 | 43 | Canonical Agent Identity and Memory Runtime (main, manager, standalone/team agents, compatibility) | [29-agent-identity-and-memory-runtime.md](29-agent-identity-and-memory-runtime.md) |
-| 44 | Gateway and Runtime Process Isolation (maintenance/model/retention workers, durable journal, bounded delivery, exact remaining full-turn gap) | [30-runtime-process-isolation.md](30-runtime-process-isolation.md) |
+| 44 | Gateway and Runtime Process Isolation (current memory/context/model/Brain worker boundaries and retired architecture names) | [30-runtime-process-isolation.md](30-runtime-process-isolation.md) |
 | 45 | Brain Thought Six-Hour Activity Package (canonical stores, direct prompt contract, provenance, redaction, continuations, measurements) | [31-thought-activity-package.md](31-thought-activity-package.md) |
 | 46 | Persistent Chat Sources / Context (registry, immutable versions, Browser history/save, retrieval budget, UI, security, migration) | [32-persistent-chat-sources.md](32-persistent-chat-sources.md) |
 | 47 | P0-4 Process Hygiene Observer and Dry-Run Boundary (ownership/lease-aware report-only classification, protection, redaction, and Thought handoff) | [37-process-hygiene.md](37-process-hygiene.md) |
@@ -81,7 +84,7 @@ Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realti
 
 ## Maintenance
 
-When editing, change only the file that owns the affected section. Keep root `SELF.md` in sync as the monolithic historical source-of-truth and sync target, unless this split copy is formally promoted to primary later. Follow §31 Maintenance Rule: verify against actual source files before updating.
+When editing, change the file that owns the affected section and keep `workspace/SELF.md` synchronized when the monolithic copy still contains that material. Before naming an implementation directory, route, environment variable, or persistent data path as current, verify it against the current source tree. A moved/removed path is a documentation bug even when the architectural concept survived elsewhere.
 
 ## Workspace persona files (USER / SOUL / MEMORY)
 

@@ -54,9 +54,9 @@ export class CodexIncompleteStreamError extends Error {
 }
 
 // Models available via Codex OAuth (latest first; official OpenAI IDs only).
-// GPT-5.6 preview models are limited-access IDs published by OpenAI for API and Codex.
-// Keep GPT-5.5 as the stable default/fallback until the account/workspace is provisioned for GPT-5.6.
+// Model access depends on the connected account's provisioning.
 export const CODEX_MODELS = [
+  'gpt-6-astra',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',

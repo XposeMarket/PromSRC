@@ -4267,6 +4267,7 @@
             <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
             <select id="settings-openai-model" class="settings-input" style="font-size:13px" onchange="syncProviderReasoningControls('openai')">
+              <option value="gpt-6-astra">Astra 6</option>
               <option value="gpt-5.6-sol">gpt-5.6-sol</option>
               <option value="gpt-5.6-terra">gpt-5.6-terra</option>
               <option value="gpt-5.6-luna">gpt-5.6-luna</option>
@@ -4327,6 +4328,7 @@
               </div>
               <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
               <select id="settings-codex-model" class="settings-input" style="font-size:13px" onchange="syncProviderReasoningControls('openai_codex')">
+                <option value="gpt-6-astra">Astra 6</option>
                 <option value="gpt-5.6-sol">gpt-5.6-sol</option>
                 <option value="gpt-5.6-terra">gpt-5.6-terra</option>
                 <option value="gpt-5.6-luna">gpt-5.6-luna</option>

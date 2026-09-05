@@ -1,7 +1,7 @@
 # Public Runtime Release Hardening
 
-Last verified: 2026-05-21
-Project root: `D:\Prometheus`
+Last verified: 2026-09-05
+Project root: repository root (resolve from the current checkout/runtime; do not hard-code a workstation drive path)
 
 This directory records the public-download runtime dependency work that makes Prometheus installable without asking users to manually install Node, npm, ffmpeg, ffprobe, Chromium, Mermaid/Chart/Fabric browser libraries, or other creative-mode dependencies.
 
@@ -38,6 +38,8 @@ On 2026-05-21, a fresh public unpacked app and installer were built. `npm run ve
 
 The installer was about 586 MB after bundling Chromium and public runtime assets. This size is expected unless Chromium packaging is split into a downloadable optional component.
 
+The artifact proof above is historical evidence from that release, not a statement that a particular local absolute checkout path is still current.
+
 ## Maintenance Rule
 
 When adding a new creative/video/image/frontend dependency, update all of these together:
@@ -49,3 +51,4 @@ When adding a new creative/video/image/frontend dependency, update all of these 
 5. Add a release verifier assertion in `scripts/verify-public-release.js`.
 6. Run `npm run prepare:public-web`, `npm run check:web-ui`, `npm run build:backend`, and `npm run verify:public-release` after building public artifacts.
 
+Use repository-relative source paths in this runbook. When a command needs a checkout root, run it from the active repository root instead of documenting a machine-specific location such as `D:\Prometheus`.

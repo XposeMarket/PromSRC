@@ -114,14 +114,37 @@ Process supervisor facts:
 
 The managed command supervisor above and gateway runtime workers are different layers. Managed processes are user/tool commands with persisted logs and control routes. Runtime workers are internal child Node processes owned by the gateway.
 
-- `src/gateway/process/runtime-worker-protocol.ts` plus `runtime-worker-broker.ts` own the bounded one-job child boundary: readiness, admission, timeouts, crash detection, bounded output tails, respawn, optional child old-space ceilings, and graceful/forced shutdown. Production consumers include memory refresh, stored-thread footprint calculation, tool-observation persistence, and journal retention.
-- `src/gateway/turn-workers/protocol.ts`, `turn-worker-process.ts`, and `turn-worker-pool.ts` own the turn-oriented start/event/checkpoint/heartbeat/RPC/steer/cancel/final protocol and bounded process pool. IPC messages default to 256 KiB with 192 KiB payloads; histories/results move through content-addressed blob references.
-- `model-call-turn-worker.ts` is the current production turn-worker workload. Provider/model calls through `OllamaClient` execute there, stream bounded events to the gateway, and store the final result by reference. This is model-call isolation, not yet full `handleChat(...)` / `BackgroundTaskRunner` ownership.
-- Model children default to a 1,024 MiB V8 old-space ceiling (`PROMETHEUS_MODEL_WORKER_MAX_OLD_SPACE_MB`, clamped 128–8,192 MiB) and recycle after 20 calls or 1 GiB RSS; an inherited explicit Node heap flag wins. This limits V8 old space, not native/external RSS.
-- Model requests preserve both provider ID and selected account ID across the process boundary; the child rebuilds that exact account through the provider factory rather than selecting whatever account is globally active there. Raw credentials are not part of the model request.
-- The current model-call pool defaults to three configured slots with a 12-job queue, expands slots lazily with demand, fails after 30 seconds without heartbeat, and gets five seconds to honor cancellation. It has no fixed long-turn timeout.
-- The parent sends the injected vault key once through child stdin and wipes its local handoff buffer. Do not put it into command arguments or environment diagnostics.
-- `/api/health.memoryMaintenance` reports the memory child. `/api/health.turnRuntime` reports model/file-change capacity plus context-footprint, observation-persistence, session-persistence, journal-retention, durable-journal, lease, and bounded final-state recovery status.
-- Journal recovery at boot and every 15 seconds performs a bounded stale job/delivery/resource reconciliation and closes the crash window for a final that was already persisted and has zero delivery rows. It keeps exact-client replay available and never claims queued/checkpointed work or acknowledges an outbox/channel delivery.
-- Gateway restart lifecycle and `SIGINT`/`SIGTERM` shutdown await model/file-change/context/observation/memory/retention worker drains and cooperative session-persistence shutdown before closing the SQLite-WAL turn journal. The signal path has a bounded force-exit deadline and preserves child-before-journal ordering so late terminal/error callbacks remain fenced safely. Workers do not appear in the managed-process store or UI.
-- `npm run test:runtime-workers` is the maintenance-worker suite; `npm run test:gateway-smoothness` covers cooperative session writes plus context/observation isolation. Turn job/delivery/model-worker regressions and the transport fault test are listed in [30-runtime-process-isolation.md](30-runtime-process-isolation.md).
+Current worker map:
+
+- `src/gateway/process/runtime-worker-protocol.ts`, `runtime-worker-broker.ts`, and `runtime-worker-resources.ts` provide the generic bounded child-process lifecycle and resource telemetry used by internal workers.
+- Memory-index refresh uses `src/gateway/process/memory-index-worker.ts` through `src/gateway/memory-index/refresh-worker-client.ts`.
+- Memory search uses `src/gateway/process/memory-search-worker.ts` through `src/gateway/memory-index/search-worker-client.ts`.
+- Context construction uses `src/gateway/process/context-build-worker.ts` through `src/gateway/chat/context-build-worker-client.ts`.
+- Provider/model calls use `src/gateway/process/model-call-worker-protocol.ts`, `model-call-worker-pool.ts`, and `model-call-worker.ts`. `src/agents/ollama-client.ts` dispatches model work through that pool when enabled.
+- Brain activity packaging has a separate worker client at `src/gateway/brain/activity-package-worker-client.ts`.
+- Thread/session search has current child-process regression coverage at `src/gateway/threads/session-search-worker.regression.ts`.
+
+Model-worker facts verified against current `model-call-worker-pool.ts`:
+
+- three configured slots by default, clamped to 1–4;
+- one warm slot by default, with a 60-second idle TTL for non-warm slots;
+- queue limit 12;
+- heartbeat timeout 30 seconds and cancel grace 5 seconds;
+- default call timeout 15 minutes;
+- recycle after 20 jobs or 1 GiB RSS;
+- default V8 old-space ceiling 1,024 MiB, clamped to 128–8,192 MiB unless an inherited explicit Node heap flag wins.
+
+Current diagnostics:
+
+- `/api/health` reports `memoryMaintenance` plus basic gateway/live-runtime health. It does not expose the retired `turnRuntime` object.
+- `/api/status.gatewayQueues` is the current status surface for `contextBuild`, `contextBuildWorkers`, `modelCallWorkers`, `brainActivityWorker`, and the other current queue/session status producers wired by `server-v2.ts`.
+
+Current ownership boundary:
+
+- complete chat/tool orchestration remains gateway-owned;
+- session/history persistence remains in `src/gateway/session.ts`;
+- active-runtime recovery uses `src/gateway/live-runtime-registry.ts`, `runtime-recovery.ts`, and history reconciliation;
+- file-change summaries are built by `src/gateway/file-change-summary.ts` rather than a dedicated file-change worker;
+- compact tool observations are owned by `src/gateway/tool-observations.ts` rather than the retired observation-persistence worker pool.
+
+Retired names that must not be used as current source locations include `src/gateway/turn-workers/`, `src/gateway/turn-jobs/`, `src/gateway/turn-delivery/`, `model-call-turn-worker.ts`, `turn-file-change-worker.ts`, `context-footprint-worker.ts`, and `/api/health.turnRuntime`. See [30-runtime-process-isolation.md](30-runtime-process-isolation.md) for the current map and verification checklist.
