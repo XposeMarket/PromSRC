@@ -6,17 +6,26 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const sourcePages = read('web-ui/src/mobile/mobile-pages.js');
+const sourcePagesFile = read('web-ui/src/mobile/mobile-pages.js');
+const sourcePageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+// The chat route spans the thin page facade and its extracted route runtime.
+const sourcePages = `${sourcePagesFile}\n${sourcePageRuntime}`;
 const sourceShell = read('web-ui/src/mobile/mobile-shell.js');
-const sourceCss = read('web-ui/src/styles/mobile.css');
+const sourceCssFile = read('web-ui/src/styles/mobile.css');
+const sourceShellCss = read('web-ui/src/styles/mobile-shell.css');
+const sourceCss = `${sourceCssFile}\n${sourceShellCss}`;
 const sourceRouter = read('web-ui/src/mobile/mobile-router.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedPageRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js');
 const generatedShell = read('generated/public-web-ui/static/mobile/mobile-shell.js');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
+const generatedShellCss = read('generated/public-web-ui/static/styles/mobile-shell.css');
 
-assert.equal(generatedPages, sourcePages, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedPages, sourcePagesFile, 'generated mobile-pages.js must mirror source');
+assert.equal(generatedPageRuntime, sourcePageRuntime, 'generated mobile-chat-page-runtime.js must mirror source');
 assert.equal(generatedShell, sourceShell, 'generated mobile-shell.js must mirror source');
-assert.equal(generatedCss, sourceCss, 'generated mobile.css must mirror source');
+assert.equal(generatedCss, sourceCssFile, 'generated mobile.css must mirror source');
+assert.equal(generatedShellCss, sourceShellCss, 'generated mobile-shell.css must mirror source');
 
 for (const id of ['pm-chat-mode-launcher', 'pm-chat-mode-voice', 'pm-chat-mode-keyboard']) {
   assert.match(sourcePages, new RegExp(`id="${id}"`), `chat markup must include ${id}`);
