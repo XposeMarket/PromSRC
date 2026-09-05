@@ -5,12 +5,21 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
-const pages = read('web-ui/src/mobile/mobile-pages.js');
-const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const pages = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+].join('\n');
+const renderer = [
+  read('web-ui/src/mobile/mobile-chat-renderer-runtime.js'),
+  read('web-ui/src/mobile/mobile-chat-message-renderer.js'),
+].join('\n');
 const activity = read('web-ui/src/tool-activity.js');
 const connectorLogo = read('web-ui/src/features/connectors/connector-logo-runtime.js');
 const chatCss = read('web-ui/src/styles/mobile-composer-stack.css');
-const mobileCss = read('web-ui/src/styles/mobile.css');
+const mobileCss = [
+  read('web-ui/src/styles/mobile.css'),
+  read('web-ui/src/styles/mobile-shell.css'),
+].join('\n');
 
 assert.match(renderer, /function _mobileTracePresentationEntries\(/, 'legacy progress prose must be normalized into activity thoughts');
 assert.doesNotMatch(pages, /function _mobileTracePresentationEntries\(/, 'chat activity presentation must stay out of the static page chunk');

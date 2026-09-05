@@ -15,6 +15,7 @@ const ownerModules = [
   'mobile/mobile-style-owners.js',
   'mobile/mobile-shell.js',
   'mobile/mobile-pages.js',
+  'mobile/mobile-chat-page-runtime.js',
   'mobile/mobile-voice-page.js',
   'mobile/mobile-settings.js',
   'mobile/mobile-status-bar-theme.js',
@@ -64,7 +65,6 @@ for (const [owner, file, layer] of [
 
 for (const [module, owner] of [
   ['mobile/mobile-shell.js', 'ensureMobileShellStyles'],
-  ['mobile/mobile-pages.js', 'ensureMobileChatStyles'],
   ['mobile/mobile-voice-page.js', 'ensureMobileVoiceStyles'],
   ['mobile/mobile-settings.js', 'ensureMobileSettingsStyles'],
 ]) {
@@ -72,6 +72,10 @@ for (const [module, owner] of [
   assert.match(code, /mobile-style-owners\.js/, `${module} must import its style-owner module`);
   assert.match(code, new RegExp(`${owner}\\(\\)`), `${module} must activate ${owner}`);
 }
+assert.match(read(source('mobile/mobile-pages.js')), /mobile-style-owners\.js/,
+  'mobile-pages must import the style-owner module for its route runtime');
+assert.match(read(source('mobile/mobile-chat-page-runtime.js')), /ensureMobileChatStyles\(\)/,
+  'the extracted mobile chat route must activate its style owner');
 for (const module of ['mobile/mobile-status-bar-theme.js', 'mobile/mobile-hamburger-liquid-glass.js']) {
   assert.match(read(source(module)), /pathname\.includes\('\/build\/'\)/,
     `${module} must resolve its shell stylesheet from the production static directory`);

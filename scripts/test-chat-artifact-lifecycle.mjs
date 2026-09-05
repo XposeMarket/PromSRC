@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const read = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
-const desktop = read('web-ui/src/pages/ChatPage.js');
+const desktop = [
+  read('web-ui/src/pages/ChatPage.js'),
+  read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js'),
+].join('\n');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const css = read('web-ui/src/styles/components.css');

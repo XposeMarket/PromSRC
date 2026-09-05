@@ -10,18 +10,30 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
-const pages = read('web-ui/src/mobile/mobile-pages.js');
-const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const pages = [
+  read('web-ui/src/mobile/mobile-pages.js'),
+  read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+].join('\n');
+const renderer = [
+  read('web-ui/src/mobile/mobile-chat-renderer-runtime.js'),
+  read('web-ui/src/mobile/mobile-chat-message-renderer.js'),
+].join('\n');
 const voiceRuntime = read('web-ui/src/mobile/mobile-voice-runtime.js');
 const toolActivityRuntime = read('web-ui/src/features/chat/optional/tool-activity-runtime.js');
-const desktop = read('web-ui/src/pages/ChatPage.js');
+const desktop = [
+  read('web-ui/src/pages/ChatPage.js'),
+  read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js'),
+].join('\n');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
 const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
 const desktopEntry = read('web-ui/src/desktop-entry.js');
 const settingsReturn = read('web-ui/src/settings-return.js');
 const mobileFeedback = read('web-ui/src/mobile/mobile-feedback.js');
-const mobileCss = read('web-ui/src/styles/mobile.css');
+const mobileCss = [
+  read('web-ui/src/styles/mobile.css'),
+  read('web-ui/src/styles/mobile-shell.css'),
+].join('\n');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
 const router = read('src/gateway/routes/chat.router.ts');

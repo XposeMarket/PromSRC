@@ -6,20 +6,25 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 
-const pages = read('web-ui/src/mobile/mobile-pages.js');
+const pageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+const pages = [read('web-ui/src/mobile/mobile-pages.js'), pageRuntime].join('\n');
 const voiceRuntime = read('web-ui/src/mobile/mobile-voice-runtime.js');
 const realtimeRuntime = read('web-ui/src/mobile/mobile-voice-realtime-runtime.js');
 const voiceMedia = [pages, voiceRuntime, realtimeRuntime].join('\n');
-const css = read('web-ui/src/styles/mobile.css');
+const css = [read('web-ui/src/styles/mobile.css'), read('web-ui/src/styles/mobile-shell.css')].join('\n');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
-const desktop = read('web-ui/index.html');
+const desktop = [read('web-ui/index.html'), read('web-ui/src/legacy-desktop-bootstrap.js')].join('\n');
 const baseCss = read('web-ui/src/styles/base.css');
 const slashCommands = read('web-ui/src/features/chat/core/slash-commands.js');
 const generatedPages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const generatedPageRuntime = read('generated/public-web-ui/static/mobile/mobile-chat-page-runtime.js');
 const generatedVoicePage = read('generated/public-web-ui/static/mobile/mobile-voice-page.js');
 const generatedRealtimeRuntime = read('generated/public-web-ui/static/mobile/mobile-voice-realtime-runtime.js');
-const generatedVoiceMedia = [generatedPages, generatedVoicePage, generatedRealtimeRuntime].join('\n');
-const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
+const generatedVoiceMedia = [generatedPages, generatedPageRuntime, generatedVoicePage, generatedRealtimeRuntime].join('\n');
+const generatedCss = [
+  read('generated/public-web-ui/static/styles/mobile.css'),
+  read('generated/public-web-ui/static/styles/mobile-shell.css'),
+].join('\n');
 const generatedDesktop = read('generated/public-web-ui/index.html');
 
 // Mobile popover contract: every gesture is isolated in capture phase, and a
