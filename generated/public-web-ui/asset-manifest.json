@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "f72916fffef4cc61",
-  "sourceDigest": "f72916fffef4cc61361aedfb0f069f39af5ebef3bd3aa0f30c3ce1afb3679419",
+  "buildId": "e171ae3c970c67a2",
+  "sourceDigest": "e171ae3c970c67a20dff04da67b4761bc59106415471a646685152d3c912492b",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
