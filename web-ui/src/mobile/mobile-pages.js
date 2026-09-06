@@ -10033,6 +10033,11 @@ export async function renderChatPage(page, { navigate, sessionId = null, voiceRo
     }
   });
   wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
+  try {
+    window.dispatchEvent(new CustomEvent('pm-mobile-session-changed', {
+      detail: { sessionId: requestedSession, source: 'mobile-chat-route' },
+    }));
+  } catch {}
   setTimeout(() => { _prefetchBrowseRoot().catch(() => {}); }, 300);
 
   const body     = page.querySelector('#pm-chat-body');

@@ -6908,19 +6908,19 @@ function _priorityTimestampMillis(value) {
 }
 
 function _prioritySessionActivityTime(session) {
-  const candidates = [
-    session?.lastMessageAt,
-    session?.lastActiveAt,
-    session?.updatedAt,
-    session?.createdAt,
-  ].map(_priorityTimestampMillis).filter(Boolean);
+  // Priority is a message inbox, not a tool/process activity feed. The
+  // session's updatedAt/lastActiveAt fields move whenever a tool emits a
+  // progress event, which made working chats jump around while the user was
+  // trying to open them. Only message timestamps may advance this ordering.
+  const candidates = [_priorityTimestampMillis(session?.lastMessageAt)].filter(Boolean);
   (Array.isArray(session?.history) ? session.history : []).forEach((message) => {
     const role = String(message?.role || '').toLowerCase();
     if (!['user', 'assistant', 'ai'].includes(role)) return;
+    if (isInternalChatMessage(message) || !String(message?.content || '').trim()) return;
     const timestamp = _priorityTimestampMillis(message?.timestamp);
     if (timestamp) candidates.push(timestamp);
   });
-  return candidates.length ? Math.max(...candidates) : Date.now();
+  return candidates.length ? Math.max(...candidates) : _priorityTimestampMillis(session?.createdAt);
 }
 
 let _sessionListRefreshFrame = 0;

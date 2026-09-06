@@ -373,7 +373,12 @@ const desktopNewChatContext = {
   projectName: '',
 };
 let desktopNewChatContextProjectsRequest = null;
+let desktopNewChatContextProjectsCache = [];
+let desktopNewChatContextProjectsCacheReady = false;
+let desktopNewChatContextProjectsLoad = null;
 let desktopNewChatContextDismissBound = false;
+let desktopSessionOpenGeneration = 0;
+const desktopSessionOpenRequests = new Map();
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -8532,7 +8537,7 @@ async function deleteChatSession(id, ev) {
   if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
 
-async function openSession(id) {
+async function _openSession(id, generation) {
   if (window.currentMode !== 'chat') {
     if (typeof window.setMode === 'function') window.setMode('chat');
     else setMode('chat');
@@ -8541,21 +8546,28 @@ async function openSession(id) {
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
+  // Paint the locally cached session immediately. The server refresh below is
+  // still authoritative, but opening a thread should never make the user wait
+  // for history before the composer and selected model respond to the click.
+  if (typeof window._maybeClearProjectState === 'function') {
+    window._maybeClearProjectState(id);
+  }
+  syncActiveChat();
   if (sess) {
     await _loadSessionFromServer(id, {
       force: true,
       recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
     });
   }
+  // A newer click owns the page. An older history response may still finish
+  // and update its own cached session, but it must not repaint the active view.
+  if (generation !== desktopSessionOpenGeneration || window.activeChatSessionId !== id) return sess || null;
   // A session is read when its conversation is actually opened. Clear this
   // after the server refresh so stale local/server merge state cannot put it
   // straight back into Unread (or keep it in the Priority attention group).
   markSessionRead(id);
   // Establish project/non-project chrome before rendering the active chat so
   // the empty composer dock reflects the session's real context immediately.
-  if (typeof window._maybeClearProjectState === 'function') {
-    window._maybeClearProjectState(id);
-  }
   syncActiveChat();
   if (chatResourcesState.open) loadChatResources({ sessionId: id });
   if (isDesktopVoiceRoomSession(id)) {
@@ -8566,6 +8578,22 @@ async function openSession(id) {
   }
   recoverDesktopMainChatSession(id, { recovery: true, fullRefresh: false }).catch(() => {});
   refreshVisibleChannelsList();
+  return getChatSessionById(id) || sess || null;
+}
+
+async function openSession(id) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const pending = desktopSessionOpenRequests.get(sessionId);
+  if (pending) return pending;
+  const generation = ++desktopSessionOpenGeneration;
+  const request = _openSession(sessionId, generation);
+  desktopSessionOpenRequests.set(sessionId, request);
+  try {
+    return await request;
+  } finally {
+    if (desktopSessionOpenRequests.get(sessionId) === request) desktopSessionOpenRequests.delete(sessionId);
+  }
 }
 
 function markSessionUnread(sessionId) {
@@ -13723,6 +13751,9 @@ function renderDesktopNewChatContextDock() {
     ? `Directed chat: ${desktopNewChatContext.projectName}`
     : 'Directed chat: Chat');
   trigger.setAttribute('aria-expanded', String(!document.getElementById('chat-new-context-popover')?.hidden));
+  if (!desktopNewChatContextProjectsCacheReady && !desktopNewChatContextProjectsLoad) {
+    void loadDesktopNewChatProjects({ preload: true });
+  }
 }
 
 function renderDesktopNewChatContextProjects(projects = []) {
@@ -13766,27 +13797,44 @@ function renderDesktopNewChatContextProjects(projects = []) {
   });
 }
 
-async function loadDesktopNewChatProjects() {
+function normalizeDesktopNewChatProjects(data) {
+  const rows = Array.isArray(data) ? data : (Array.isArray(data?.projects) ? data.projects : []);
+  return Array.from(new Map(rows
+    .filter((project) => project?.id)
+    .map((project) => [String(project.id), { id: String(project.id), name: String(project.name || project.id) }])).values());
+}
+
+async function loadDesktopNewChatProjects({ preload = false } = {}) {
   const popover = document.getElementById('chat-new-context-popover');
-  if (!popover || popover.hidden) return;
-  popover.dataset.mode = 'projects';
-  popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Loading projects…</div>';
+  if (!preload && (!popover || popover.hidden)) return desktopNewChatContextProjectsCache;
+  if (!preload && desktopNewChatContextProjectsCacheReady) {
+    renderDesktopNewChatContextProjects(desktopNewChatContextProjectsCache);
+  } else if (!preload && popover) {
+    popover.dataset.mode = 'projects';
+    popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Loading projects…</div>';
+  }
+  if (desktopNewChatContextProjectsLoad) return desktopNewChatContextProjectsLoad;
   const request = api('/api/projects');
   desktopNewChatContextProjectsRequest = request;
-  try {
-    const data = await request;
-    if (desktopNewChatContextProjectsRequest !== request || popover.hidden) return;
-    const projects = (Array.isArray(data) ? data : data?.projects || [])
-      .filter((project) => project?.id)
-      .map((project) => ({ id: String(project.id), name: String(project.name || project.id) }));
-    renderDesktopNewChatContextProjects(projects);
-  } catch (error) {
-    if (desktopNewChatContextProjectsRequest !== request || popover.hidden) return;
-    popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Projects are unavailable right now.</div>';
-    console.warn('[desktop project picker] project load failed:', error);
-  } finally {
+  const loadPromise = request.then((data) => {
+    desktopNewChatContextProjectsCache = normalizeDesktopNewChatProjects(data);
+    desktopNewChatContextProjectsCacheReady = true;
+    if (popover && !popover.hidden && popover.dataset.mode === 'projects') {
+      renderDesktopNewChatContextProjects(desktopNewChatContextProjectsCache);
+    }
+    return desktopNewChatContextProjectsCache;
+  }).catch((error) => {
+    if (desktopNewChatContextProjectsRequest === request && popover && !popover.hidden && popover.dataset.mode === 'projects') {
+      popover.innerHTML = '<div class="chat-new-context-popover-title">Directed chat</div><div class="chat-new-context-loading">Projects are unavailable right now.</div>';
+      console.warn('[desktop project picker] project load failed:', error);
+    }
+    return desktopNewChatContextProjectsCache;
+  }).finally(() => {
     if (desktopNewChatContextProjectsRequest === request) desktopNewChatContextProjectsRequest = null;
-  }
+    if (desktopNewChatContextProjectsLoad === loadPromise) desktopNewChatContextProjectsLoad = null;
+  });
+  desktopNewChatContextProjectsLoad = loadPromise;
+  return loadPromise;
 }
 
 function renderDesktopNewProjectForm() {
@@ -13840,6 +13888,11 @@ function renderDesktopNewProjectForm() {
       if (!projectId) throw new Error('Prometheus did not return the new project.');
       desktopNewChatContext.projectId = projectId;
       desktopNewChatContext.projectName = String(project?.name || name).trim() || name;
+      desktopNewChatContextProjectsCache = [
+        ...desktopNewChatContextProjectsCache.filter((item) => item.id !== projectId),
+        { id: projectId, name: desktopNewChatContext.projectName },
+      ];
+      desktopNewChatContextProjectsCacheReady = true;
       closeDesktopNewChatContextPopover();
       renderDesktopNewChatContextDock();
       await window.loadProjects?.();

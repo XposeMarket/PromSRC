@@ -55,6 +55,42 @@ let _catalogCache = null;        // [{ id, name, runtime, ... }]
 let _credentialedIds = null;     // [providerId, ...]
 let _mobileDraftModelRoute = null; // Unsaved new-chat override; never writes Settings.
 let _subagentReasoningContext = null;
+const MOBILE_CHAT_MODEL_ROUTE_STORAGE_KEY = 'pm_mobile_chat_model_route_v1';
+
+function _normalizeSavedChatModelRoute(route) {
+  const candidate = route?.override && typeof route.override === 'object' ? route.override : route;
+  const providerId = String(candidate?.providerId || candidate?.provider || '').trim();
+  const model = String(candidate?.model || '').trim();
+  if (!providerId || !model) return null;
+  const override = {
+    providerId,
+    model,
+    reasoningEffort: String(candidate?.reasoningEffort || candidate?.reasoning_effort || '').trim() || undefined,
+    accountId: String(candidate?.accountId || candidate?.account_id || '').trim() || undefined,
+  };
+  return {
+    mode: 'explicit',
+    availability: 'ready',
+    override,
+    effective: { ...override },
+  };
+}
+
+function _readSavedChatModelRoute() {
+  try {
+    return _normalizeSavedChatModelRoute(JSON.parse(localStorage.getItem(MOBILE_CHAT_MODEL_ROUTE_STORAGE_KEY) || 'null'));
+  } catch {
+    return null;
+  }
+}
+
+function _writeSavedChatModelRoute(route) {
+  const normalized = _normalizeSavedChatModelRoute(route);
+  if (!normalized) return;
+  try {
+    localStorage.setItem(MOBILE_CHAT_MODEL_ROUTE_STORAGE_KEY, JSON.stringify(normalized.override));
+  } catch {}
+}
 
 function _esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -407,7 +443,10 @@ function _activeChatSessionId() {
 async function _loadChatModelRoute() {
   const sessionId = _activeChatSessionId();
   if (!sessionId) return null;
-  if (sessionId === 'mobile_default') return _mobileDraftModelRoute;
+  if (sessionId === 'mobile_default') {
+    if (!_mobileDraftModelRoute) _mobileDraftModelRoute = _readSavedChatModelRoute();
+    return _mobileDraftModelRoute;
+  }
   try {
     const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
     return data?.chatModelRoute || null;
@@ -431,6 +470,7 @@ async function _saveChatModelRoute(route) {
       override,
       effective: { ...override },
     };
+    _writeSavedChatModelRoute(_mobileDraftModelRoute);
     window.__pmChatModelRoute = _mobileDraftModelRoute;
     return _mobileDraftModelRoute;
   }
@@ -438,6 +478,7 @@ async function _saveChatModelRoute(route) {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
+  _writeSavedChatModelRoute(data?.chatModelRoute || route);
   return data?.chatModelRoute || null;
 }
 
@@ -452,13 +493,14 @@ export function resetMobileDraftModelRoute() {
 
 export async function applyMobileDraftModelRouteToSession(sessionId) {
   const sid = String(sessionId || '').trim();
-  const route = _mobileDraftModelRoute?.override;
+  const route = (_mobileDraftModelRoute || _readSavedChatModelRoute())?.override;
   if (!sid || sid === 'mobile_default' || !route?.providerId || !route?.model) return null;
   const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/model-route`, {
     method: 'PUT',
     body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not apply the selected model to this chat');
+  _writeSavedChatModelRoute(data?.chatModelRoute || route);
   _mobileDraftModelRoute = null;
   window.__pmChatModelRoute = data?.chatModelRoute || null;
   return window.__pmChatModelRoute;
@@ -523,7 +565,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     const label = _setBadgeLabel(formatModelWithReasoning(eventModel.model, eventModel.provider, eventEffort));
     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
     // keep the streamed active-model label instead of overwriting it from config.
-    if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched') {
+    if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched' && modelChangeDetail?.fromSelector !== true) {
       _llmCache = null;
       return label;
     }
@@ -1066,7 +1108,11 @@ async function _switchModel(provider, model, { keepOpen = false, returnToAdvance
     const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
     _toast(`Model -> ${prettifyModelName(model, provider)}`, 'success');
     await refreshMobileModelBadge(false, { provider, model });
-    try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}
+    try {
+      window.dispatchEvent(new CustomEvent('pm-model-changed', {
+        detail: { provider, model, sessionId: _activeChatSessionId(), sourceEventType: 'model_switched', fromSelector: true },
+      }));
+    } catch {}
     if (keepOpen && returnToAdvanced) _renderAdvancedSheet();
     else if (keepOpen) _renderReasoningBody(provider, nextCfg, true);
     else _closeSheet();
@@ -1106,6 +1152,10 @@ export function initMobileModelBadge() {
   window.addEventListener('pm-model-changed', (event) => {
     const detail = event?.detail || {};
     refreshMobileModelBadge(true, detail).catch(() => {});
+  });
+  window.addEventListener('pm-mobile-session-changed', (event) => {
+    const detail = event?.detail || {};
+    refreshMobileModelBadge(true, { ...detail, sourceEventType: 'session_changed' }).catch(() => {});
   });
 
   refreshMobileModelBadge(true).catch(() => {});
