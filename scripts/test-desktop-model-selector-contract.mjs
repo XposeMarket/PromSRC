@@ -4,6 +4,7 @@ const read = (path) => fs.readFileSync(path, 'utf8');
 const desktop = read('web-ui/index.html');
 const themes = read('web-ui/src/styles/themes.css');
 const generatedThemes = read('generated/public-web-ui/static/styles/themes.css');
+const sessionSource = read('src/gateway/session.ts');
 
 if (themes !== generatedThemes) throw new Error('desktop theme source/generated copies are out of sync');
 
@@ -18,6 +19,7 @@ const main = extractFunction(desktop, 'function _renderDesktopSwitcherMain(', 'f
 const models = extractFunction(desktop, 'async function _renderDesktopSwitcherModels(', 'function _renderDesktopSwitcherEffort(');
 const effort = extractFunction(desktop, 'function _renderDesktopSwitcherEffort(', 'function _renderDesktopSwitcherSpeed(');
 const speed = extractFunction(desktop, 'function _renderDesktopSwitcherSpeed(', 'async function toggleModelSwitcher(');
+const open = extractFunction(desktop, 'function _openDesktopSwitcher(', 'async function toggleModelSwitcher(');
 
 if (!/data-switcher-view="speed"/.test(main) || !/speedCapable/.test(main)) {
   throw new Error('desktop model settings must expose Speed only for fast-capable models');
@@ -36,6 +38,18 @@ if (/data-switcher-speed|_renderDesktopSwitcherSpeed/.test(effort)) {
 }
 if (!/setActiveChatModelRoute\([^)]*speed: provider === state\.provider \? state\.speed : undefined/.test(models)) {
   throw new Error('model changes must preserve speed only within the same provider');
+}
+if (!/function _desktopSwitcherStateFromCache\(sessionId = ''\)/.test(desktop)
+  || !/_renderDesktopSwitcherQuick\(_desktopSwitcherStateFromCache\(controller\.sessionId\), controller\)/.test(open)
+  || /Loading controls/.test(open)) {
+  throw new Error('desktop model selector must render cached controls before background hydration');
+}
+if (!/function _desktopSwitcherCachedRouteForSession\(sessionId = ''\)/.test(desktop)
+  || !/const cachedState = _desktopSwitcherCachedRouteForSession\(sessionId\)/.test(desktop)) {
+  throw new Error('desktop model selector must prime per-chat route and reasoning state from cache');
+}
+if (!/chatModelRoute: normalizeChatModelRoute\(data\?\.chatModelRoute\)/.test(sessionSource)) {
+  throw new Error('session summaries rebuilt from disk must retain the chat model route');
 }
 if (!/background:\s*transparent !important/.test(themes)
   || !/\.nav-group > \.nav-item, \.nav-more-wrap > \.nav-item, \.more-popover-item\)\.active:not\(:hover\):not\(:focus-visible\)/.test(themes)) {
