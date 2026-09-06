@@ -202,10 +202,9 @@ assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
   extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
 }), false, 'moved pre-tool prose must survive transient-summary cleanup');
 
-assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,100}event\.thinking \|\| event\.text/);
-assert.match(desktop, /appendLiveTrace\(sawToolActivityThisTurn \? 'think' : 'preamble', text, \{\s*extra: \{ visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' \}/);
-assert.match(desktop, /appendTrace\(streamState\.toolActivityStarted \? 'think' : 'preamble', text, \{\s*extra: \{ visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' \}/);
-assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
+assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,180}msg\.thinking \|\| msg\.text/);
+assert.match(desktop, /source: visibility === 'summary' \? 'reasoning_summary' : 'agent_thought'/);
+assert.match(desktop, /function setDesktopLiveProgressNarration\([\s\S]*source: 'agent_progress'/);assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
 assert.match(desktop, /const isMutableProgress = isDesktopMutableProgressTraceEntry\(entry\)/);
 assert.doesNotMatch(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/,
   'the first tool event must not absorb and erase a preceding thought group');
