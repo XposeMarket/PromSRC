@@ -167,6 +167,32 @@ export const INSTRUCTION_SEGMENT_BY_ID: Readonly<Record<string, InstructionSegme
   Object.fromEntries(INSTRUCTION_SEGMENT_REGISTRY.map((segment) => [segment.id, segment])),
 );
 
+
+export type InstructionRegistryValidationIssue = {
+  code: 'duplicate_id' | 'duplicate_order' | 'missing_source' | 'unsafe_segment_unmarked';
+  segmentId: string;
+  detail: string;
+};
+
+/** Validate the registry metadata before it is used to assemble a prompt. */
+export function validateInstructionSegmentRegistry(
+  registry: readonly InstructionSegmentDefinition[] = INSTRUCTION_SEGMENT_REGISTRY,
+): InstructionRegistryValidationIssue[] {
+  const issues: InstructionRegistryValidationIssue[] = [];
+  const ids = new Set<string>();
+  const orders = new Set<number>();
+  for (const segment of registry) {
+    if (ids.has(segment.id)) issues.push({ code: 'duplicate_id', segmentId: segment.id, detail: 'segment ids must be unique' });
+    ids.add(segment.id);
+    if (orders.has(segment.order)) issues.push({ code: 'duplicate_order', segmentId: segment.id, detail: 'segment orders must be unique' });
+    orders.add(segment.order);
+    if (!String(segment.source || '').trim()) issues.push({ code: 'missing_source', segmentId: segment.id, detail: 'every segment needs a source label' });
+    if (segment.safetyCritical && !['core_runtime', 'provider_adapter', 'voice_runtime', 'compactor'].includes(segment.owner)) {
+      issues.push({ code: 'unsafe_segment_unmarked', segmentId: segment.id, detail: `safety-critical segment has unexpected owner ${segment.owner}` });
+    }
+  }
+  return issues;
+}
 export interface InstructionResolverFacts {
   runtimeRole: RuntimePromptRole | string;
   executionMode?: string;
