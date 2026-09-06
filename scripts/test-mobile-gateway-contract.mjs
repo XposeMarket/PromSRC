@@ -149,6 +149,11 @@ function assertContractFiles() {
   assert.match(css, /pm-drawer-gateway-filter/);
   assert.match(css, /pm-drawer-gateway-pills[\s\S]*overflow-x: auto/);
   assert.doesNotMatch(css, /pm-drawer-gateway-filter-inner|pm-drawer-gateway-filter-label/);
+  assert.match(css, /\.pm-drawer\s*\{[\s\S]*?padding: max\(env\(safe-area-inset-top\), 12px\)/, 'drawer header must clear the mobile safe area without reserving excess height');
+  assert.match(css, /\.pm-drawer-brand\s*\{[\s\S]*?min-height: 44px;[\s\S]*?margin: 0 94px 8px 0;/, 'drawer brand header must leave the gateway pills visible');
+  assert.match(css, /\.pm-drawer-gateway-filter\s*\{[\s\S]*?margin: 0 0 8px;/, 'gateway filter spacing must stay compact');
+  assert.match(css, /:root\[data-theme="dark"\] body\.pm-mobile-active \.pm-drawer-brand\s*\{[\s\S]*?min-height: 46px;[\s\S]*?margin: 0 94px 8px 0;/, 'dark drawer brand spacing must stay compact');
+  assert.match(css, /body\.pm-mobile-active \.pm-drawer-gateway-pill\.is-active[\s\S]*?color: #111 !important;/, 'active gateway pill text must stay readable on its white background');
   assert.match(index, /Gateway Connections · Pair a phone/);
   assert.match(index, /vendor\/jsqr\/jsQR\.js/);
   assert.doesNotMatch(index, /class="status-pill gateway-status-pill"/);
