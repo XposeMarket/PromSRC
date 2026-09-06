@@ -12873,19 +12873,9 @@ function liveTraceGroups(entries) {
       return;
     }
     if (!activeToolGroup) {
-      // A summary can arrive just before the tool call it narrates. Carry
-      // forward that mutable-only group so the real summary becomes the
-      // expandable tool label instead of an empty thought row followed by a
-      // synthetic tool label. Full thoughts are never eligible for this move.
-      const previous = groups[groups.length - 1];
-      const pendingSummary = previous?.kind === 'thought-summary'
-        && previous.entries.length > 0
-        && previous.entries.every((candidate) => isDesktopMutableProgressTraceEntry(candidate));
-      if (pendingSummary) {
-        activeToolGroup = { kind: 'tools', entries: [entry, ...previous.entries] };
-        groups[groups.length - 1] = activeToolGroup;
-        return;
-      }
+      // A thought that precedes a tool is a completed timeline segment. Keep
+      // it in place and start a new tool group; moving a mutable summary into
+      // the next tool group makes the first tool event erase that thought.
       activeToolGroup = { kind: 'tools', entries: [entry] };
       groups.push(activeToolGroup);
       return;
@@ -17782,10 +17772,11 @@ async function sendChat(queuedMessage = null, options = {}) {
       setDesktopLiveProgressNarration(streamState, text, appendLiveTrace);
     } else {
       // A tool may start after an assistant paragraph has already streamed.
-      // Keep that paragraph as visible, immutable reasoning instead of
-      // recategorising it as an internal raw-thought entry.
+      // This is the durable thought itself, not a provider reasoning summary.
+      // Mark it explicitly so the transient-summary cleanup cannot delete it
+      // on the next tool-event render.
       appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text, {
-        extra: { visibility: 'user', source: 'reasoning_summary' },
+        extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
       });
     }
     streamState.streamingAIText = '';
@@ -47793,7 +47784,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       setDesktopLiveProgressNarration(streamState, text, appendTrace);
     } else {
       appendTrace(streamState.toolActivityStarted ? 'think' : 'preamble', text, {
-        extra: { visibility: 'user', source: 'reasoning_summary' },
+        extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
       });
     }
     streamState.streamingAIText = '';
