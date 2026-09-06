@@ -19,6 +19,25 @@ function age(now: number, value: any): number | null {
   return Number.isFinite(n) && n > 0 ? Math.max(0, now - n) : null;
 }
 
+const INTERRUPTED_RUNTIME_STATUSES = new Set(['interrupted', 'stalled', 'failed', 'recoverable']);
+
+export function summarizeRuntimeDiagnostics(runtimeRows: any[], now: number, limit: number, depth: 'summary' | 'full') {
+  const rows = runtimeRows.map((row: any) => ({
+    id: row.id, kind: row.kind || row.type, label: row.label || row.title,
+    status: row.status, taskId: row.taskId, agentId: row.agentId, scheduleId: row.scheduleId,
+    lastUpdatedAt: row.updatedAt || row.lastUpdatedAt, ageMs: age(now, row.updatedAt || row.lastUpdatedAt || row.startedAt),
+  }));
+  // Detect faults before applying the display limit so a truncated snapshot cannot
+  // report a false clean runtime state. The returned items remain bounded.
+  const interrupted = rows.filter((row: any) => INTERRUPTED_RUNTIME_STATUSES.has(String(row.status || '')));
+  return {
+    count: rows.length,
+    interruptedCount: interrupted.length,
+    items: depth === 'full' ? rows.slice(0, limit) : interrupted.slice(0, limit),
+    interrupted,
+  };
+}
+
 export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { success: true; message: string; data: any } {
   const now = deps.now?.() ?? Date.now();
   const limit = Math.max(1, Math.min(50, Math.floor(Number(args.limit) || 10)));
@@ -48,13 +67,8 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
   if (troubledTasks.length) issues.push({ code: 'task_needs_attention', severity: 'warning', subsystem: 'tasks', summary: `${troubledTasks.length} task(s) need attention.`, nextInspectionTool: 'task_control' });
 
   const runtimeRows = [...listLiveRuntimes(), ...listDurableRuntimes()];
-  const runtimes = runtimeRows.slice(0, limit).map((row: any) => ({
-    id: row.id, kind: row.kind || row.type, label: row.label || row.title,
-    status: row.status, taskId: row.taskId, agentId: row.agentId, scheduleId: row.scheduleId,
-    lastUpdatedAt: row.updatedAt || row.lastUpdatedAt, ageMs: age(now, row.updatedAt || row.lastUpdatedAt || row.startedAt),
-  }));
-  const interrupted = runtimes.filter((row: any) => ['interrupted', 'stalled', 'failed', 'recoverable'].includes(String(row.status || '')));
-  if (interrupted.length) issues.push({ code: 'runtime_interrupted', severity: 'warning', subsystem: 'runtime', summary: `${interrupted.length} runtime(s) are interrupted or recoverable.`, nextInspectionTool: 'agent_run_ops' });
+  const runtimeDiagnostics = summarizeRuntimeDiagnostics(runtimeRows, now, limit, depth);
+  if (runtimeDiagnostics.interruptedCount) issues.push({ code: 'runtime_interrupted', severity: 'warning', subsystem: 'runtime', summary: `${runtimeDiagnostics.interruptedCount} runtime(s) are interrupted or recoverable.`, nextInspectionTool: 'agent_run_ops' });
 
   const watchdog = getErrorWatchdogSummary();
   const watchdogState: any = loadWatchdogState();
@@ -109,7 +123,7 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
       overall: { state: overall, issueCount: issues.length },
       gateway,
       automation: { counts: automationData?.counts || {}, unhealthyJobs: unhealthyJobs.slice(0, limit), troubledTasks: troubledTasks.slice(0, limit) },
-      runtimes: { count: runtimeRows.length, interruptedCount: interrupted.length, items: depth === 'full' ? runtimes : interrupted },
+      runtimes: { count: runtimeDiagnostics.count, interruptedCount: runtimeDiagnostics.interruptedCount, items: runtimeDiagnostics.items },
       errors, provider, build: getBuildStatus(), restart, audit, issues: issues.slice(0, limit),
     },
   };
