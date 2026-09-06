@@ -308,6 +308,21 @@ export function getSqliteMemoryDisabledState(): { disabled: boolean; reason?: st
     : { disabled: false };
 }
 
+export type SqliteMemoryMaintenanceResult = {
+  ok: boolean;
+  path: string;
+  backupDir?: string;
+  backupFiles: string[];
+  beforeBytes: { db: number; wal: number; shm: number };
+  afterBytes: { db: number; wal: number; shm: number };
+  integrityBefore?: string;
+  integrityAfter?: string;
+  checkpointBefore?: unknown;
+  checkpointAfter?: unknown;
+  vacuumed: boolean;
+  error?: string;
+};
+
 function loadBetterSqlite(): any | null {
   if (DatabaseCtor) return DatabaseCtor;
   if (sqliteDisabledReason || databaseLoadError) return null;
@@ -353,6 +368,99 @@ function sqlitePath(workspacePath: string): string {
   return path.join(workspacePath, 'audit', '_index', 'memory', 'memory.sqlite');
 }
 
+function sqliteArtifactBytes(dbPath: string): { db: number; wal: number; shm: number } {
+  const size = (filePath: string): number => {
+    try { return fs.statSync(filePath).size; } catch { return 0; }
+  };
+  return {
+    db: size(dbPath),
+    wal: size(`${dbPath}-wal`),
+    shm: size(`${dbPath}-shm`),
+  };
+}
+
+function backupSqliteArtifacts(dbPath: string, backupDir: string): string[] {
+  fs.mkdirSync(backupDir, { recursive: true });
+  const copied: string[] = [];
+  for (const source of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (!fs.existsSync(source)) continue;
+    const target = path.join(backupDir, path.basename(source));
+    fs.copyFileSync(source, target);
+    copied.push(target);
+  }
+  return copied;
+}
+
+/**
+ * Back up and compact a quiesced memory index. The explicit quiesced guard is
+ * intentional: copying SQLite sidecars or vacuuming while another process is
+ * writing can produce an unusable forensic backup. This function never
+ * deletes the canonical database; callers must provide a maintenance window.
+ */
+export function maintainSqliteMemoryIndex(workspacePath: string, options?: {
+  backupDir?: string;
+  vacuum?: boolean;
+  quiesced?: boolean;
+}): SqliteMemoryMaintenanceResult {
+  const dbPath = sqlitePath(workspacePath);
+  const beforeBytes = sqliteArtifactBytes(dbPath);
+  const baseResult: SqliteMemoryMaintenanceResult = {
+    ok: false,
+    path: dbPath,
+    backupFiles: [],
+    beforeBytes,
+    afterBytes: beforeBytes,
+    vacuumed: false,
+  };
+  if (!options?.quiesced) return { ...baseResult, error: 'maintenance requires quiesced:true' };
+  if (!fs.existsSync(dbPath)) return { ...baseResult, error: 'sqlite database not found' };
+
+  closeSqliteMemoryConnections(workspacePath);
+  const backupDir = options.backupDir || path.join(path.dirname(dbPath), `memory.sqlite-backup-${Date.now()}`);
+  let db: any = null;
+  let backupFiles: string[] = [];
+  try {
+    backupFiles = backupSqliteArtifacts(dbPath, backupDir);
+    const Database = loadBetterSqlite();
+    if (!Database) return { ...baseResult, backupDir, backupFiles, error: sqliteDisabledReason || databaseLoadError || 'better-sqlite3 unavailable' };
+
+    db = new Database(dbPath);
+    db.pragma('busy_timeout = 10000');
+    const integrityBefore = String(db.pragma('integrity_check', { simple: true }) || '');
+    if (integrityBefore !== 'ok') {
+      return { ...baseResult, backupDir, backupFiles, integrityBefore, error: `integrity check failed: ${integrityBefore}` };
+    }
+
+    const checkpointBefore = db.pragma('wal_checkpoint(TRUNCATE)');
+    let vacuumed = false;
+    if (options.vacuum !== false) {
+      db.exec('VACUUM');
+      vacuumed = true;
+    }
+    const checkpointAfter = db.pragma('wal_checkpoint(TRUNCATE)');
+    const integrityAfter = String(db.pragma('integrity_check', { simple: true }) || '');
+    try { db.close(); db = null; } catch { /* best effort */ }
+    return {
+      ok: integrityAfter === 'ok',
+      path: dbPath,
+      backupDir,
+      backupFiles,
+      beforeBytes,
+      afterBytes: sqliteArtifactBytes(dbPath),
+      integrityBefore,
+      integrityAfter,
+      checkpointBefore,
+      checkpointAfter,
+      vacuumed,
+      error: integrityAfter === 'ok' ? undefined : `integrity check failed after maintenance: ${integrityAfter}`,
+    };
+  } catch (err: any) {
+    return { ...baseResult, backupDir, backupFiles, afterBytes: sqliteArtifactBytes(dbPath), error: String(err?.message || err) };
+  } finally {
+    try { db?.close(); } catch { /* best effort */ }
+  }
+}
+
 // ── Persistent read connection cache ──────────────────────────────────────────
 // better-sqlite3 is synchronous and single-threaded; WAL mode supports
 // concurrent readers, so we keep one open connection per workspace path and
@@ -388,6 +496,7 @@ function openDb(workspacePath: string): SqliteDatabase | null {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
+    db.pragma('wal_autocheckpoint = 1000');
     db.pragma('foreign_keys = ON');
     db.pragma('cache_size = -8000'); // 8 MB page cache
     initializeSchema(db);
@@ -899,6 +1008,10 @@ export function syncSqliteMemoryIndex(workspacePath: string, store: EvidenceStor
 
   try {
     tx();
+    // Keep the WAL from accumulating indefinitely between explicit maintenance
+    // windows. PASSIVE never blocks readers; the maintenance command performs
+    // the stronger TRUNCATE/VACUUM sequence when the gateway is quiesced.
+    try { db.pragma('wal_checkpoint(PASSIVE)'); } catch { /* non-fatal */ }
     return { ok: true, path: dbPath, records: recordCount, chunks: chunkCount };
   } catch (err: any) {
     return { ok: false, path: dbPath, records: 0, chunks: 0, error: String(err?.message || err) };
