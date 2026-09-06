@@ -22,11 +22,23 @@ function age(now: number, value: any): number | null {
 const INTERRUPTED_RUNTIME_STATUSES = new Set(['interrupted', 'stalled', 'failed', 'recoverable']);
 
 export function summarizeRuntimeDiagnostics(runtimeRows: any[], now: number, limit: number, depth: 'summary' | 'full') {
-  const rows = runtimeRows.map((row: any) => ({
-    id: row.id, kind: row.kind || row.type, label: row.label || row.title,
-    status: row.status, taskId: row.taskId, agentId: row.agentId, scheduleId: row.scheduleId,
-    lastUpdatedAt: row.updatedAt || row.lastUpdatedAt, ageMs: age(now, row.updatedAt || row.lastUpdatedAt || row.startedAt),
-  }));
+  const seenRuntimeIds = new Set<string>();
+  const rows = runtimeRows
+    .filter((row: any) => {
+      const id = String(row?.id || '').trim();
+      if (!id) return true;
+      if (seenRuntimeIds.has(id)) return false;
+      seenRuntimeIds.add(id);
+      return true;
+    })
+    .map((row: any) => ({
+      id: row.id, kind: row.kind || row.type, label: row.label || row.title,
+      status: row.status, taskId: row.taskId, agentId: row.agentId, scheduleId: row.scheduleId,
+      lastUpdatedAt: row.updatedAt || row.lastUpdatedAt, ageMs: age(now, row.updatedAt || row.lastUpdatedAt || row.startedAt),
+    }));
+  // Live runtimes are persisted to the durable ledger under the same runtime ID.
+  // The caller passes live rows first, so deduplication keeps the freshest in-memory
+  // snapshot while preventing duplicate counts/items from the durable copy.
   // Detect faults before applying the display limit so a truncated snapshot cannot
   // report a false clean runtime state. The returned items remain bounded.
   const interrupted = rows.filter((row: any) => INTERRUPTED_RUNTIME_STATUSES.has(String(row.status || '')));
