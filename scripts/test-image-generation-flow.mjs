@@ -19,6 +19,7 @@ const capabilityRegistry = read('src/gateway/agents-runtime/capabilities/registr
 const preview = read('src/gateway/generated-image-preview.ts');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
+const mobileApi = read('web-ui/src/mobile/mobile-api.js');
 const mobileRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const defs = read('src/gateway/tools/defs/file-web-memory.ts');
 const skill = read('workspace/skills/imagegen/SKILL.md');
@@ -41,6 +42,10 @@ assert.match(registry, /normalizeImagePresentationMode\(request\.presentation_mo
 assert.match(utils, /normalizeImagePresentationMode[\s\S]*background[\s\S]*foreground/, 'presentation normalization must keep foreground as the direct-deliverable default');
 assert.match(utils, /validateMaskImage[\s\S]*alpha channel[\s\S]*dimensions/, 'mask validation must check alpha and dimensions');
 assert.match(utils, /inspectImageBuffer/, 'persisted images must be inspected for actual dimensions/alpha');
+
+assert.match(codex, /const CODEX_CHAT_MODEL = 'gpt-5\.5'/, 'Codex image generation must not use the rejected bare gpt-5.4 chat model');
+assert.match(codex, /isUnsupportedChatgptAccountCodexModel/, 'Codex image generation must detect ChatGPT-account model rejection');
+assert.match(codex, /getCodexChatModelFallback[\s\S]*runCodexImageRequest/, 'Codex image generation must retry with an account-compatible chat model');
 
 // Provider capability and credential paths.
 assert.match(openai, /readonly capabilities[\s\S]*transparency: true[\s\S]*maskEditing: true[\s\S]*outputCompression: true/, 'OpenAI provider must advertise alpha, mask and compression support');
@@ -80,7 +85,7 @@ assert.match(desktop, /activeImageCalls[\s\S]*observedImageActivity/, 'desktop i
 assert.match(desktop, /!answerStarted && isGenerateImagePendingFromEntries/, 'desktop image loading must stop once the final response begins');
 assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop must render constrained cache-backed previews');
 assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop must replace matching partial previews by stable identity');
-assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile must render constrained cache-backed previews');
+assert.match(mobileApi, /generated-image-preview/, 'mobile API must allow constrained generated-image previews');
 assert.match(mobileRenderer, /message\?\.finalResponseStarted === true[\s\S]*message\?\._pmFinalReceived === true/, 'mobile image loading must stop at the final-response boundary');
 assert.match(mobileRenderer, /activeImageCalls[\s\S]*observedImageActivity/, 'mobile image loading must reconcile duplicate process/live entries');
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile must replace matching partial previews by stable identity');

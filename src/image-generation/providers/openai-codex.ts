@@ -21,7 +21,23 @@ import {
 } from '../utils.js';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
-const CODEX_CHAT_MODEL = 'gpt-5.4';
+// ChatGPT/Codex OAuth accounts can reject the legacy bare `gpt-5.4` model
+// even though the image_generation tool itself is available. Use the same
+// account-compatible model family as the main Codex adapter.
+const CODEX_CHAT_MODEL = 'gpt-5.5';
+const CODEX_CHAT_MODEL_FALLBACKS: Record<string, string> = {
+  'gpt-5.5': 'gpt-5.4-codex',
+  'gpt-5.4': 'gpt-5.4-codex',
+};
+
+function getCodexChatModelFallback(model: string): string | undefined {
+  const fallback = CODEX_CHAT_MODEL_FALLBACKS[String(model || '').trim()];
+  return fallback && fallback !== model ? fallback : undefined;
+}
+
+function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string): boolean {
+  return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
+}
 const DEFAULT_MODEL = 'gpt-image-2-medium';
 const DEFAULT_API_MODEL = 'gpt-image-2';
 const TRANSPARENT_API_MODEL = 'gpt-image-1.5';
@@ -400,7 +416,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         }
       };
 
-      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean): Promise<CodexImageRequestResult> => {
+      const runCodexImageRequest = async (requestedCount: number, includeCountParam: boolean, chatModel = CODEX_CHAT_MODEL, allowModelFallback = true): Promise<CodexImageRequestResult> => {
         const content: any[] = [{ type: 'input_text', text: requestedCount > 1 ? promptForGeneration : prompt }];
         for (const reference of referenceImages) {
           content.push({ type: 'input_image', image_url: reference.imageUrl });
@@ -425,7 +441,7 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
           method: 'POST',
           headers,
           body: JSON.stringify({
-            model: CODEX_CHAT_MODEL,
+            model: chatModel,
             store: false,
             instructions: CODEX_INSTRUCTIONS,
             input: [{
@@ -445,7 +461,14 @@ export class OpenAICodexImageGenerationProvider implements ImageGenerationProvid
         });
 
         if (!response.ok) {
-          return { ok: false, response, rawText: await response.text().catch(() => '') };
+          const rawText = await response.text().catch(() => '');
+          if (allowModelFallback && isUnsupportedChatgptAccountCodexModel(response.status, rawText)) {
+            const fallbackModel = getCodexChatModelFallback(chatModel);
+            if (fallbackModel) {
+              return runCodexImageRequest(requestedCount, includeCountParam, fallbackModel, false);
+            }
+          }
+          return { ok: false, response, rawText };
         }
         return { ok: true, result: await collectImageFromStream(response, async (partial) => {
           if (!request.on_partial_image || !request.stream) return;
