@@ -1548,6 +1548,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
         : null,
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
+      chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
       voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
       externalImport: normalizeExternalImport(data?.externalImport),
     };

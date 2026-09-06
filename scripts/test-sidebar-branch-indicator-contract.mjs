@@ -12,6 +12,7 @@ const generatedInline = fs.readdirSync(path.join(root, 'generated/public-web-ui/
   .join('\n');
 const codingRouter = fs.readFileSync(path.join(root, 'src/gateway/routes/coding.router.ts'), 'utf8');
 const componentsCss = fs.readFileSync(path.join(root, 'web-ui/src/styles/components.css'), 'utf8');
+const themesCss = fs.readFileSync(path.join(root, 'web-ui/src/styles/themes.css'), 'utf8');
 
 assert.match(codingRouter, /router\.get\('\/api\/coding\/session-metadata'/);
 assert.match(codingRouter, /getCodingWorkspaceSession\(root\)/);
@@ -23,6 +24,9 @@ assert.match(indexHtml, /function renderSidebarBranchIndicator\(session, placeme
 assert.match(indexHtml, /function showSidebarBranchPopover\(source\)/);
 assert.match(indexHtml, /renderSidebarBranchIndicator\(session, 'default'\)/);
 assert.match(indexHtml, /const branch = renderSidebarBranchIndicator\(s, 'priority'\)/);
+assert.match(indexHtml, /function renderPriorityProviderLogo\(session\)/);
+assert.match(indexHtml, /\$\{renderPriorityProviderLogo\(s\)\}/);
+assert.doesNotMatch(indexHtml, /<span class="priority-chat-model">/);
 assert.match(indexHtml, /ensureSidebarBranchMetadata\(\[\.\.\.pinned, \.\.\.displayedUnpinned\]\)/);
 assert.match(indexHtml, /ensureSidebarBranchMetadata\(activeSessions\.slice\(0, 80\)\)/);
 
@@ -30,6 +34,9 @@ assert.match(componentsCss, /\.chat-session-top-meta\s*\{/);
 assert.match(componentsCss, /\.sidebar-branch-indicator\s*\{/);
 assert.match(componentsCss, /\.sidebar-branch-popover\.is-visible\s*\{/);
 assert.match(componentsCss, /\.sidebar-branch-indicator--priority\s*\{\s*margin-left: auto;/);
+assert.match(componentsCss, /\.imported-source-logo--openai\s*\{[\s\S]*background:\s*#fff;/);
+assert.match(componentsCss, /\.imported-source-logo--xai\s*\{[\s\S]*background:\s*#fff;/);
+assert.match(themesCss, /priority-chat-provider-logo--openai,[\s\S]*priority-chat-provider-logo--xai[\s\S]*background:\s*#fff;/);
 
 assert.match(generatedInline, /renderSidebarBranchIndicator/);
 assert.match(generatedInline, /\/api\/coding\/session-metadata\?/);
