@@ -1,6 +1,6 @@
 // Chat and inline Voice route owner.
 import {
-  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
+  ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions, isMobileChatPinned, toggleMobileChatPin,
 } from './mobile-shell.js';
 import { pmToast } from './mobile-feedback.js';
 import {
@@ -9605,6 +9605,7 @@ function loadMobileChatPageRenderer() {
     mobileChatPageRendererPromise = import('./mobile-chat-page-runtime.js')
       .then(({ createMobileChatPageRenderer }) => createMobileChatPageRenderer(() => ({
   ICONS,
+  isMobileChatPinned,
   MOBILE_CHAT_SESSION_ID,
   MOBILE_GATEWAY_STATUS,
   PM_CHAT_VOICE_ICON_SRC,
@@ -9900,6 +9901,7 @@ function loadMobileChatPageRenderer() {
   reconcileMobileChatTurn,
   renderMobileContextChip,
   renderMobileHeader,
+  toggleMobileChatPin,
   renderVoicePage,
   requestMobileUpdate,
   resolveMobileSessionGateway,
