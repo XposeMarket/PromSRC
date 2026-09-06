@@ -590,6 +590,39 @@ function listFilesRecursive(rootDir: string): string[] {
   }
   return out;
 }
+
+function readBoundedSource(abs: string, relPath: string): string | null {
+  let stat: fs.Stats;
+  try { stat = fs.statSync(abs); } catch { return null; }
+  if (stat.size <= MAX_SOURCE_BYTES) {
+    try { return fs.readFileSync(abs, 'utf-8'); } catch { return null; }
+  }
+
+  // Never allocate the full source just to truncate it afterward. JSONL/log
+  // sources are append-only, so keep the newest bounded tail; other sources
+  // keep a bounded head that is sufficient for titles/front matter.
+  const fd = (() => { try { return fs.openSync(abs, 'r'); } catch { return null; } })();
+  if (fd === null) return null;
+  try {
+    const tail = relPath.toLowerCase().endsWith('.jsonl') || relPath.toLowerCase().endsWith('.ndjson');
+    const start = tail ? Math.max(0, stat.size - MAX_SOURCE_BYTES) : 0;
+    const length = Math.min(MAX_SOURCE_BYTES, stat.size);
+    const buffer = Buffer.allocUnsafe(length);
+    const read = fs.readSync(fd, buffer, 0, length, start);
+    let text = buffer.toString('utf-8', 0, read);
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n');
+      if (firstNewline >= 0) text = text.slice(firstNewline + 1);
+      return `...[truncated_for_index_head]\n${text}`;
+    }
+    return `${text}\n...[truncated_for_index]`;
+  } catch {
+    return null;
+  } finally {
+    try { fs.closeSync(fd); } catch { /* best effort */ }
+  }
+}
+
 function parseContent(abs: string, relPath: string): { text: string; parsed?: any } | null {
   const lower = relPath.toLowerCase();
   if (relPath.startsWith(WORKSPACE_FILE_PREFIX) && !isLikelyTextFile(relPath)) {
@@ -606,7 +639,8 @@ function parseContent(abs: string, relPath: string): { text: string; parsed?: an
       parsed: { title: path.basename(displayPath), binary: true },
     };
   }
-  let raw = ''; try { raw = fs.readFileSync(abs, 'utf-8'); } catch { return null; }
+  const raw = readBoundedSource(abs, relPath);
+  if (raw === null) return null;
   if (!raw.trim()) {
     if (relPath.startsWith(WORKSPACE_FILE_PREFIX)) {
       const displayPath = workspaceDisplayPath(relPath);
@@ -614,7 +648,6 @@ function parseContent(abs: string, relPath: string): { text: string; parsed?: an
     }
     return null;
   }
-  if (raw.length > MAX_SOURCE_BYTES) raw = `${raw.slice(0, MAX_SOURCE_BYTES)}\n...[truncated_for_index]`;
   if (lower.endsWith('.md') && relPath.startsWith('obsidian/vaults/')) {
     const match = raw.match(/^<!--\s*PROMETHEUS_OBSIDIAN_META\s*\n([\s\S]*?)\n-->\s*/);
     let meta: any = {};

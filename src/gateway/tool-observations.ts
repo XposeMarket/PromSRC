@@ -124,6 +124,8 @@ function rawRoot(sessionId: string): string {
 const TOOL_OBSERVATION_SNAPSHOT_RECENT_LIMIT = 512;
 const TOOL_OBSERVATION_CACHE_MAX_SESSIONS = 32;
 const TOOL_OBSERVATION_CACHE_TTL_MS = 10 * 60 * 1000;
+const TOOL_OBSERVATION_MAX_LINE_BYTES = 1 * 1024 * 1024;
+const TOOL_OBSERVATION_ALL_MAX_BYTES = 64 * 1024 * 1024;
 
 interface CachedToolObservationSnapshot {
   fileSize: number;
@@ -159,6 +161,60 @@ function createEmptyToolObservationSnapshot(): CachedToolObservationSnapshot {
     },
     byTool: new Map(),
   };
+}
+
+function forEachJsonlLineSync(filePath: string, onLine: (line: string) => void, maxBytes = Number.POSITIVE_INFINITY): number {
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  let bytesRead = 0;
+  let pending = '';
+  let discardingOversizedLine = false;
+  let oversizedSample = '';
+  const emit = (line: string): void => {
+    const value = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (value) onLine(value);
+  };
+  try {
+    while (bytesRead < maxBytes) {
+      const length = Math.min(buffer.length, maxBytes - bytesRead);
+      const count = fs.readSync(fd, buffer, 0, length, position);
+      if (!count) break;
+      position += count;
+      bytesRead += count;
+      let remaining = buffer.toString('utf8', 0, count);
+      while (remaining.length || pending.length || discardingOversizedLine) {
+        if (discardingOversizedLine) {
+          const newline = remaining.indexOf('\n');
+          if (newline < 0) break;
+          emit(`${oversizedSample} ...[truncated]`);
+          oversizedSample = '';
+          discardingOversizedLine = false;
+          remaining = remaining.slice(newline + 1);
+          continue;
+        }
+        pending += remaining;
+        remaining = '';
+        const newline = pending.indexOf('\n');
+        if (newline >= 0) {
+          const line = pending.slice(0, newline);
+          pending = pending.slice(newline + 1);
+          emit(line);
+          continue;
+        }
+        if (Buffer.byteLength(pending, 'utf8') > TOOL_OBSERVATION_MAX_LINE_BYTES) {
+          oversizedSample = Buffer.from(pending, 'utf8').subarray(0, TOOL_OBSERVATION_MAX_LINE_BYTES).toString('utf8');
+          pending = '';
+          discardingOversizedLine = true;
+        }
+        break;
+      }
+    }
+    if (!discardingOversizedLine && pending) emit(pending);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return bytesRead;
 }
 
 function nonNegativeObservationNumber(value: unknown): number {
@@ -271,12 +327,9 @@ function rebuildToolObservationSnapshot(filePath: string, maxObservations: numbe
     const stat = fs.statSync(filePath);
     cache.fileSize = stat.size;
     cache.mtimeMs = stat.mtimeMs;
-    const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
-    for (const line of lines) {
-      try {
-        addObservationToSnapshotCache(cache, JSON.parse(line) as ToolObservation);
-      } catch {}
-    }
+    forEachJsonlLineSync(filePath, (line) => {
+      try { addObservationToSnapshotCache(cache, JSON.parse(line) as ToolObservation); } catch {}
+    });
     touchToolObservationSnapshotCache(filePath, cache);
   } catch {
     toolObservationSnapshotCache.delete(filePath);
@@ -623,14 +676,14 @@ export function persistToolResultsAsObservations(sessionId: string, turnId: stri
 function readToolObservationsFromDisk(sessionId: string, maxObservations: number): ToolObservation[] {
   const filePath = observationJsonlPath(sessionId);
   if (!fs.existsSync(filePath)) return [];
-  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
-  const slice = lines.slice(-Math.max(1, maxObservations));
   const out: ToolObservation[] = [];
-  for (const line of slice) {
+  const limit = Math.max(1, maxObservations);
+  forEachJsonlLineSync(filePath, (line) => {
     try {
       out.push(JSON.parse(line) as ToolObservation);
+      if (out.length > limit) out.splice(0, out.length - limit);
     } catch {}
-  }
+  });
   return out;
 }
 
@@ -736,13 +789,12 @@ export function readAllToolObservations(maxObservations = 50_000): ToolObservati
       .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
       .map((entry) => path.join(root, entry.name));
     const out: ToolObservation[] = [];
+    let bytesRead = 0;
     for (const filePath of files) {
-      const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/).filter(Boolean);
-      for (const line of lines) {
-        try {
-          out.push(JSON.parse(line) as ToolObservation);
-        } catch {}
-      }
+      if (bytesRead >= TOOL_OBSERVATION_ALL_MAX_BYTES) break;
+      bytesRead += forEachJsonlLineSync(filePath, (line) => {
+        try { out.push(JSON.parse(line) as ToolObservation); } catch {}
+      }, TOOL_OBSERVATION_ALL_MAX_BYTES - bytesRead);
     }
     out.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
     const bounded = out.length > limit ? out.slice(out.length - limit) : out;
