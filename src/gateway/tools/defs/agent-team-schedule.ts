@@ -1243,7 +1243,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'prometheus_thread_ops',
         description:
-          'Find, inspect, create, rename, pin, reopen, message, steer, interrupt, and supervise other Prometheus chat sessions. Settled chats remain discoverable in list/find/search and are marked with settled state; use state="active" or state="settled" to narrow results. Use action="reopen" (open/unsettle are aliases) to manually return a settled chat to the active view without changing its history. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
+          'Find, inspect, create, rename, pin, reopen, message, steer, interrupt, and supervise other Prometheus chat sessions. CONTEXT ISOLATION: target threads do not inherit this conversation. For every work handoff, provide a self-contained assignment with the user request, agreed plan and decisions, verified findings versus hypotheses, evidence paths or exact errors, relevant files/workspace, constraints and approvals, and explicit completion checks. Never refer to an unseen plan as "the above" or "the cleanup". Do not include credentials or unrelated private history. Settled chats remain discoverable in list/find/search and are marked with settled state; use state="active" or state="settled" to narrow results. Use action="reopen" (open/unsettle are aliases) to manually return a settled chat to the active view without changing its history. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
           'Use exactly one of the three creation routes: launch_mode="ping" (create and notify this owner when the detached turn completes), launch_mode="forget" (create and do not notify this owner), or launch_mode="supervise" (create a Goal target and keep a durable hidden supervisor loop running while it works). The action aliases create_and_ping, create_and_forget, and create_and_supervise select those routes directly. Creation only accepts and queues the target turn: it is not a target reply, completion, or verification. ' +
           'Use create_many to split a request into separate first-class Prometheus threads. A real target result exists only after a later read/status, a ping completion update, or a terminal supervision update. ' +
           'For active supervision, the hidden manager loop reviews the target evidence, reasoning summary, tool/process findings, runtime checkpoint, changed files, and artifacts; it blocks internally on supervision_wait between idle target events and never turns each checkpoint into a normal owner-chat response. ' +
@@ -1265,8 +1265,8 @@ export function getAgentTeamScheduleTools(): any[] {
             evidence: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 500 }, description: 'Bounded implementation or verification evidence supporting a review decision.' },
             query: { type: 'string', description: 'Full-history search text for find.' },
             title: { type: 'string', description: 'Thread title for create or rename.' },
-            prompt: { type: 'string', description: 'Initial work prompt for create, or message text for send/steer.' },
-            message: { type: 'string', description: 'Message for send or steer.' },
+            prompt: { type: 'string', description: 'Full self-contained assignment for create, or message text for send/steer. Include plan, evidence, paths, constraints, and checks; objective is only a summary and does not replace this prompt.' },
+            message: { type: 'string', description: 'Message for send or steer. Include all newly relevant context and evidence; the target cannot see the sender conversation.' },
             objective: { type: 'string', description: 'Autonomous completion objective for create/follow. Defaults to prompt.' },
             acceptance_criteria: { type: 'string', description: 'Explicit completion checks for create/follow/revise_supervision. Defaults to objective.' },
             launch_mode: { type: 'string', enum: ['ping', 'forget', 'supervise'], description: 'For create/create_many: exactly one launch route. ping notifies on detached completion; forget does not notify; supervise starts a hidden persistent review loop and reports only terminal verified/blocker results.' },
@@ -1309,6 +1309,7 @@ export function getAgentTeamScheduleTools(): any[] {
                   title: { type: 'string' },
                   prompt: { type: 'string' },
                   objective: { type: 'string' },
+                  acceptance_criteria: { type: 'string', description: 'Explicit completion checks delivered to this worker and its supervisor.' },
                   workspace: { type: 'string' },
                   provider_id: { type: 'string' },
                   model: { type: 'string' },
