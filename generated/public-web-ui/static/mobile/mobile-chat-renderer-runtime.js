@@ -3586,12 +3586,6 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   if (!id) return null;
   const lanes = _mobileBackgroundSpawnLanes();
   const existing = lanes[id] || {};
-  const identity = resolveBackgroundAgentIdentity(id, {
-    existingName: existing.agentName,
-    existingColor: existing.agentColor,
-    usedNames: Object.values(lanes).filter((lane) => lane !== existing).map((lane) => lane.agentName || lane.label),
-    usedColors: Object.values(lanes).filter((lane) => lane !== existing).map((lane) => lane.agentColor),
-  });
   const prompt = _mobileBackgroundSpawnPromptFromMessage(msg, existing);
   const rawSessionId = String(msg.sessionId || '').trim();
   const bgSessionId = String(
@@ -3610,9 +3604,24 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
       || sessionId
       || ''
   ).trim();
+  // Status/event payloads are intentionally partial. Read durable work before
+  // resolving identity so a generic lane update cannot erase the stable name
+  // and color that were already persisted for this background run.
   const stored = findBackgroundAgentWork(id, parentSessionId)
     || findBackgroundAgentWork(id, rawSessionId)
     || findBackgroundAgentWork(id);
+  const identity = resolveBackgroundAgentIdentity(id, {
+    // Durable work is normalized before it reaches this boundary, so prefer
+    // its stable identity over partial live payloads.
+    existingName: String(stored?.agentName || existing.agentName || existing.label || '').trim(),
+    existingColor: String(stored?.agentColor || stored?.color || existing.agentColor || '').trim(),
+    usedNames: Object.values(lanes)
+      .filter((lane) => lane !== existing)
+      .map((lane) => lane.agentName || lane.label),
+    usedColors: Object.values(lanes)
+      .filter((lane) => lane !== existing)
+      .map((lane) => lane.agentColor),
+  });
   const storedProcessEntries = _mobileBackgroundStoredProcessEntries(stored);
   const storedLiveTraceEntries = Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries.slice() : [];
   const storedStatus = String(stored?.status || '').toLowerCase();
@@ -3670,12 +3679,12 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     lane.message.from = lane.agentName;
     if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
     lane.message.body.sender = lane.agentName;
-    if (!Array.isArray(lane.message.processEntries) || !lane.message.processEntries.length) {
-      lane.message.processEntries = storedProcessEntries;
-    }
-    if (!Array.isArray(lane.message.liveTraceEntries) || !lane.message.liveTraceEntries.length) {
-      lane.message.liveTraceEntries = storedLiveTraceEntries;
-    }
+    // Merge, rather than fill only when empty. Recovery can arrive after a
+    // live event and must retain both the current tool envelope and durable
+    // process/trace entries from the background session checkpoint.
+    _mergeMobileProcessEntries(lane.message, storedProcessEntries);
+    if (!Array.isArray(lane.message.liveTraceEntries)) lane.message.liveTraceEntries = [];
+    lane.message.liveTraceEntries = [...lane.message.liveTraceEntries, ...storedLiveTraceEntries].slice(-500);
   }
   return lane;
 }
@@ -3712,7 +3721,7 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
     return { ...storedRecord, message: buildMessage(storedRecord) };
   }
   const identity = resolveBackgroundAgentIdentity(lane.id, {
-    existingName: lane.agentName,
+    existingName: lane.agentName || lane.label,
     existingColor: lane.agentColor,
   });
   const processEntries = Array.isArray(lane.message?.processEntries) && lane.message.processEntries.length

@@ -13,6 +13,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
 const mobileRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
 const desktopPage = read('web-ui/src/pages/ChatPage.js');
+const sessionStore = read('src/gateway/session.ts');
 
 for (const value of ['undefined', 'null', '', 'Background agent']) {
   const identity = resolveBackgroundAgentIdentity('bg-stream-regression', { existingName: value });
@@ -28,6 +29,10 @@ const normalized = normalizeBackgroundAgentWork({
 assert.ok(normalized?.agentName && normalized.agentName !== 'undefined', 'stored undefined agent names must be normalized');
 assert.notEqual(backgroundAgentRecordToMessage(normalized).from, 'undefined', 'recovered messages must have a display name');
 
+assert.match(sessionStore, /INTERNAL_SESSION_ID_RE = \/\^\(background_\|/, 'background runtime sessions must stay out of user session discovery');
+assert.match(mobileRenderer, /Read durable work before[\s\S]{0,420}findBackgroundAgentWork\(id, parentSessionId\)/, 'mobile lane upserts must consult durable work before resolving identity');
+assert.match(mobileRenderer, /_mergeMobileProcessEntries\(lane\.message, storedProcessEntries\)/, 'mobile recovery must merge durable process entries instead of replacing the live lane');
+assert.match(mobileRenderer, /action: source\.action \|\| source\.name \|\| source\.toolName/, 'mobile events must retain structured current-tool metadata');
 assert.match(mobileRenderer, /function _mobileBackgroundSpawnTraceEntries\(/, 'mobile background lanes must have a grouped-trace source');
 assert.match(mobileRenderer, /pm-background-spawn-trace[\s\S]*?_renderMobileGroupedTrace\(/, 'mobile background lanes must render the shared grouped trace');
 assert.doesNotMatch(mobileRenderer, /_renderMobileProcess\(entries\)/, 'mobile background lanes must not render the legacy flat process list');
