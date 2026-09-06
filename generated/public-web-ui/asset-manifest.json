@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "74cf27abc2338037",
-  "sourceDigest": "74cf27abc23380375a62e93d799f9d705f584fc5e997007e51837dd0b330f8dd",
+  "buildId": "43c6db59962fb3e7",
+  "sourceDigest": "43c6db59962fb3e77223bc9cb353629aa8f519ad5f1e7ae908bf4328685d9438",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -104,16 +104,16 @@
         "/build/inline/index-inline-05-0b108e28f4b7.js",
         "/build/inline/index-inline-06-716f958618af.js",
         "/build/inline/index-inline-07-ecc8cfa8ff4d.js",
-        "/build/inline/index-inline-08-7a82db82d95f.js",
+        "/build/inline/index-inline-08-492fe8557de2.js",
         "/build/inline/index-inline-09-4550e6a395a8.js",
         "/build/inline/index-inline-10-d99079ff0017.js",
         "/build/styles/desktop-HIAWJQWR.css"
       ],
       "files": 14,
-      "bytes": 858205,
-      "gzipBytes": 153622,
-      "jsBytes": 207329,
-      "jsGzipBytes": 53686,
+      "bytes": 858245,
+      "gzipBytes": 153630,
+      "jsBytes": 207369,
+      "jsGzipBytes": 53694,
       "cssBytes": 650876,
       "cssGzipBytes": 99936
     },
@@ -3090,10 +3090,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-08-7a82db82d95f.js",
-      "bytes": 172679,
-      "gzipBytes": 40849,
-      "sha256": "7a82db82d95ff750d281bcdca01ccf9b520ec483d696709d941e418a86475710",
+      "path": "/build/inline/index-inline-08-492fe8557de2.js",
+      "bytes": 172719,
+      "gzipBytes": 40857,
+      "sha256": "492fe8557de23eeeb1cc8287facd40c7d34acce80ede08f51fb193b0d9ac3376",
       "entryPoint": null,
       "imports": []
     },

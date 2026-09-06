@@ -368,6 +368,12 @@ async function _refresh(sessionId, { force = false, provider = '', accountId = '
   // Active provider/account (for plan-usage scoping) + usage limits. Model-change
   // events force this cache so plan usage updates with the context ring.
   try {
+    if (sessionId && sessionId !== 'mobile_default' && (!providerOverride || !accountOverride)) {
+      const routeData = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`).catch(() => null);
+      const effective = routeData?.chatModelRoute?.effective || {};
+      if (!providerOverride && effective.providerId) _activeProvider = String(effective.providerId).trim().toLowerCase();
+      if (!accountOverride && effective.accountId) _activeAccountId = String(effective.accountId).trim();
+    }
     if (!_activeProvider || !_activeAccountId) {
       const scopedProvider = typeof _getProvider === 'function' ? String(_getProvider() || '').trim().toLowerCase() : '';
       const scopedAccount = typeof _getAccountId === 'function' ? String(_getAccountId() || '').trim() : '';
@@ -418,6 +424,15 @@ function _bindModelChangeListener(getSessionId) {
   };
   window.addEventListener('pm-model-changed', (event) => {
     window.__pmMobileRefreshContextWindow?.(event?.detail || {});
+  });
+  window.addEventListener('pm-mobile-session-changed', (event) => {
+    const detail = event?.detail || {};
+    const sid = String(detail?.sessionId || '').trim();
+    const currentSid = String(typeof _getSessionId === 'function' ? _getSessionId() : _lastSessionId || '').trim();
+    if (sid && currentSid && sid !== currentSid) return;
+    const provider = _providerFromModelChange(detail);
+    const accountId = String(detail?.accountId || detail?.account_id || '').trim();
+    _refresh(sid || currentSid, { force: true, provider, accountId });
   });
 }
 
