@@ -14,11 +14,35 @@ type MirrorFile = {
   domain: string;
 };
 
-type MirrorStats = {
+export type AuditMaterializerLimits = {
+  maxSingleFileBytes: number;
+  maxTotalBytes: number;
+  maxFilesPerRun: number;
+  maxLineBytes: number;
+  maxMetadataBytes: number;
+};
+
+export type AuditMaterializerStats = {
   copied: number;
   skipped: number;
   errors: number;
   redactions: number;
+  filesDiscovered: number;
+  filesConsidered: number;
+  deferred: number;
+  skippedTooLarge: number;
+  deleted: number;
+  bytesRead: number;
+  bytesWritten: number;
+  durationMs: number;
+  excludedPrefixes: string[];
+};
+
+export type AuditMaterializerRunResult = {
+  disabled: boolean;
+  auditRoot: string;
+  limits: AuditMaterializerLimits;
+  stats: AuditMaterializerStats;
 };
 
 const REDACTION_SCHEMA_VERSION = 1;
@@ -70,28 +94,217 @@ function redactAuditValue(value: any, parentKey = ''): { value: any; redactions:
   return { value: out, redactions };
 }
 
-function materializeRedactedContent(filePath: string): { content: string; redactions: number; parseStatus: string } {
-  const raw = fs.readFileSync(filePath, 'utf8');
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.json') {
-    const parsed = JSON.parse(raw);
-    const clean = redactAuditValue(parsed);
-    return { content: `${JSON.stringify(clean.value, null, 2)}\n`, redactions: clean.redactions, parseStatus: 'json' };
+function isTruthyEnv(name: string): boolean {
+  return /^(?:1|true|yes|on)$/i.test(String(process.env[name] || '').trim());
+}
+
+function normalizeMirrorPrefix(value: string): string {
+  const normalized = String(value || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  return normalized === 'tool-observations' ? 'chats/tool-observations' : normalized;
+}
+
+function getExcludedMirrorPrefixes(): string[] {
+  const configured = process.env[MATERIALIZER_EXCLUDE_DOMAINS_ENV];
+  if (configured !== undefined) {
+    return [...new Set(configured.split(',').map(normalizeMirrorPrefix).filter((value) => value && value !== 'none'))];
   }
-  if (ext === '.jsonl' || ext === '.ndjson') {
-    let redactions = 0;
-    let malformed = false;
-    const lines = raw.split(/\r?\n/).filter((line) => line.length).map((line) => {
-      try {
-        const clean = redactAuditValue(JSON.parse(line)); redactions += clean.redactions; return JSON.stringify(clean.value);
-      } catch {
-        malformed = true; const clean = scrubAuditText(line); redactions += clean.redactions; return clean.value;
+  if (isTruthyEnv(MATERIALIZER_INCLUDE_TOOL_OBSERVATIONS_ENV)) return [];
+  // The raw observation corpus is append-only and can be many gigabytes. Keep
+  // it available in the canonical store, but do not mirror it by default.
+  return ['chats/tool-observations'];
+}
+
+function isMirrorPrefixExcluded(destRel: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => destRel === prefix || destRel.startsWith(`${prefix}/`));
+}
+
+export function isAuditMaterializerDisabled(): boolean {
+  return isTruthyEnv(MATERIALIZER_DISABLED_ENV);
+}
+
+export function getAuditMaterializerLimits(): AuditMaterializerLimits {
+  return {
+    maxSingleFileBytes: boundedInt(process.env[MATERIALIZER_MAX_SINGLE_FILE_BYTES_ENV], DEFAULT_MAX_SINGLE_FILE_BYTES, 64 * 1024, 128 * 1024 * 1024),
+    maxTotalBytes: boundedInt(process.env[MATERIALIZER_MAX_TOTAL_BYTES_ENV], DEFAULT_MAX_TOTAL_BYTES, 1 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+    maxFilesPerRun: boundedInt(process.env[MATERIALIZER_MAX_FILES_ENV], DEFAULT_MAX_FILES_PER_RUN, 1, 50_000),
+    maxLineBytes: boundedInt(process.env[MATERIALIZER_MAX_LINE_BYTES_ENV], DEFAULT_MAX_LINE_BYTES, 8 * 1024, 16 * 1024 * 1024),
+    maxMetadataBytes: boundedInt(process.env[MATERIALIZER_MAX_METADATA_BYTES_ENV], DEFAULT_MAX_METADATA_BYTES, 32 * 1024, 16 * 1024 * 1024),
+  };
+}
+
+type StreamLinesResult = {
+  bytesRead: number;
+  lines: number;
+  oversizedLines: number;
+};
+
+function streamLinesSync(filePath: string, maxLineBytes: number, onLine: (line: string, truncated: boolean) => void): StreamLinesResult {
+  const fd = fs.openSync(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let position = 0;
+  let pending = '';
+  let discardingOversizedLine = false;
+  let oversizedSample = '';
+  let bytesRead = 0;
+  let lines = 0;
+  let oversizedLines = 0;
+
+  const emit = (line: string, truncated: boolean): void => {
+    const value = line.endsWith('\r') ? line.slice(0, -1) : line;
+    onLine(value, truncated);
+    lines += 1;
+  };
+
+  const feed = (text: string): void => {
+    let remaining = text;
+    while (remaining.length || pending.length || discardingOversizedLine) {
+      if (discardingOversizedLine) {
+        const newline = remaining.indexOf('\n');
+        if (newline < 0) return;
+        emit(`${oversizedSample} ...[truncated]`, true);
+        oversizedSample = '';
+        discardingOversizedLine = false;
+        remaining = remaining.slice(newline + 1);
+        continue;
       }
-    });
-    return { content: `${lines.join('\n')}${lines.length ? '\n' : ''}`, redactions, parseStatus: malformed ? 'jsonl_partial' : 'jsonl' };
+
+      pending += remaining;
+      remaining = '';
+      const newline = pending.indexOf('\n');
+      if (newline >= 0) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        emit(line, false);
+        continue;
+      }
+
+      if (Buffer.byteLength(pending, 'utf8') > maxLineBytes) {
+        oversizedLines += 1;
+        oversizedSample = Buffer.from(pending, 'utf8').subarray(0, maxLineBytes).toString('utf8');
+        pending = '';
+        discardingOversizedLine = true;
+      }
+      return;
+    }
+  };
+
+  try {
+    while (true) {
+      const count = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (!count) break;
+      position += count;
+      bytesRead += count;
+      feed(buffer.toString('utf8', 0, count));
+    }
+    if (discardingOversizedLine) {
+      emit(`${oversizedSample} ...[truncated]`, true);
+    } else if (pending.length) {
+      emit(pending, false);
+    }
+  } finally {
+    fs.closeSync(fd);
   }
-  const clean = scrubAuditText(raw);
-  return { content: clean.value, redactions: clean.redactions, parseStatus: 'text' };
+
+  return { bytesRead, lines, oversizedLines };
+}
+
+type StreamedMaterialization = {
+  outputBytes: number;
+  inputBytes: number;
+  redactions: number;
+  parseStatus: string;
+};
+
+function materializeRedactedFile(filePath: string, destAbs: string, limits: AuditMaterializerLimits): StreamedMaterialization {
+  ensureDir(path.dirname(destAbs));
+  const tempPath = `${destAbs}.tmp-${process.pid}-${Date.now()}`;
+  const outputFd = fs.openSync(tempPath, 'w');
+  let outputBytes = 0;
+  let outputBuffer = '';
+  let outputBufferBytes = 0;
+  let redactions = 0;
+  let inputBytes = 0;
+  let parseStatus = 'text';
+  let closed = false;
+
+  const writeOutput = (value: string): void => {
+    if (!value) return;
+    const valueBytes = Buffer.byteLength(value, 'utf8');
+    outputBytes += valueBytes;
+    outputBuffer += value;
+    outputBufferBytes += valueBytes;
+    if (outputBufferBytes >= 64 * 1024) {
+      fs.writeSync(outputFd, outputBuffer);
+      outputBuffer = '';
+      outputBufferBytes = 0;
+    }
+  };
+
+  const flushOutput = (): void => {
+    if (!outputBuffer) return;
+    fs.writeSync(outputFd, outputBuffer);
+    outputBuffer = '';
+    outputBufferBytes = 0;
+  };
+
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.json') {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      inputBytes = Buffer.byteLength(raw, 'utf8');
+      const parsed = JSON.parse(raw);
+      const clean = redactAuditValue(parsed);
+      redactions += clean.redactions;
+      parseStatus = 'json';
+      writeOutput(`${JSON.stringify(clean.value, null, 2)}\n`);
+    } else if (ext === '.jsonl' || ext === '.ndjson') {
+      let malformed = false;
+      const streamed = streamLinesSync(filePath, limits.maxLineBytes, (line, truncated) => {
+        if (!line.length) return;
+        try {
+          if (truncated) throw new Error('line truncated');
+          const clean = redactAuditValue(JSON.parse(line));
+          redactions += clean.redactions;
+          writeOutput(`${JSON.stringify(clean.value)}\n`);
+        } catch {
+          malformed = true;
+          const clean = scrubAuditText(line);
+          redactions += clean.redactions;
+          writeOutput(`${clean.value}\n`);
+        }
+      });
+      inputBytes = streamed.bytesRead;
+      parseStatus = malformed || streamed.oversizedLines ? 'jsonl_partial' : 'jsonl';
+    } else {
+      const streamed = streamLinesSync(filePath, limits.maxLineBytes, (line) => {
+        const clean = scrubAuditText(line);
+        redactions += clean.redactions;
+        writeOutput(`${clean.value}\n`);
+      });
+      inputBytes = streamed.bytesRead;
+      parseStatus = 'text';
+    }
+
+    flushOutput();
+    fs.closeSync(outputFd);
+    closed = true;
+    try {
+      fs.renameSync(tempPath, destAbs);
+    } catch {
+      // Replacing a derived snapshot is safe; the canonical source remains
+      // untouched. This fallback is needed on Windows when the destination
+      // already exists and rename does not replace it.
+      fs.rmSync(destAbs, { force: true });
+      fs.renameSync(tempPath, destAbs);
+    }
+    return { outputBytes, inputBytes, redactions, parseStatus };
+  } catch (error) {
+    if (!closed) {
+      try { fs.closeSync(outputFd); } catch { /* best effort */ }
+    }
+    try { fs.rmSync(tempPath, { force: true }); } catch { /* best effort */ }
+    throw error;
+  }
 }
 
 type SessionPreview = {
@@ -111,6 +324,20 @@ const MIN_INTERVAL_MS = 5 * 60_000;
 const INITIAL_DELAY_MS = 5 * 60_000;
 const COUNT_CAP = 5_000;
 const MAX_PREVIEW_ROWS = 80;
+const DEFAULT_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_FILES_PER_RUN = 2_000;
+const DEFAULT_MAX_LINE_BYTES = 1 * 1024 * 1024;
+const DEFAULT_MAX_METADATA_BYTES = 512 * 1024;
+const MAX_MATERIALIZER_BACKOFF_MS = 60 * 60_000;
+const MATERIALIZER_DISABLED_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_DISABLED';
+const MATERIALIZER_EXCLUDE_DOMAINS_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_EXCLUDE_DOMAINS';
+const MATERIALIZER_INCLUDE_TOOL_OBSERVATIONS_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_INCLUDE_TOOL_OBSERVATIONS';
+const MATERIALIZER_MAX_SINGLE_FILE_BYTES_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_MAX_SINGLE_FILE_BYTES';
+const MATERIALIZER_MAX_TOTAL_BYTES_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_MAX_TOTAL_BYTES';
+const MATERIALIZER_MAX_FILES_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_MAX_FILES_PER_RUN';
+const MATERIALIZER_MAX_LINE_BYTES_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_MAX_LINE_BYTES';
+const MATERIALIZER_MAX_METADATA_BYTES_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_MAX_METADATA_BYTES';
 const MATERIALIZER_CHILD_ENV = 'PROMETHEUS_AUDIT_MATERIALIZER_CHILD';
 const DEFAULT_CHILD_MAX_OLD_SPACE_MB = 768;
 const DEFAULT_CHILD_TIMEOUT_MS = 4 * 60_000;
@@ -119,6 +346,8 @@ let _timer: NodeJS.Timeout | null = null;
 let _running = false;
 let _lastRunAt = 0;
 let _intervalMs: number | null = null;
+let _failureStreak = 0;
+let _backoffUntil = 0;
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -133,9 +362,11 @@ function writeJson(filePath: string, data: unknown): void {
   writeText(filePath, JSON.stringify(data, null, 2));
 }
 
-function readJson<T>(filePath: string): T | null {
+function readJson<T>(filePath: string, maxBytes = DEFAULT_MAX_METADATA_BYTES): T | null {
   try {
     if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
     const raw = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(raw) as T;
   } catch {
@@ -148,9 +379,8 @@ function safeRel(absPath: string, root: string): string {
   return rel.startsWith('../') ? path.basename(absPath) : rel;
 }
 
-function listFilesRecursive(rootDir: string): string[] {
-  if (!fs.existsSync(rootDir)) return [];
-  const out: string[] = [];
+function* listFilesRecursive(rootDir: string): Generator<string> {
+  if (!fs.existsSync(rootDir)) return;
   const stack = [rootDir];
   while (stack.length > 0) {
     const current = stack.pop()!;
@@ -165,11 +395,10 @@ function listFilesRecursive(rootDir: string): string[] {
       if (entry.isDirectory()) {
         stack.push(abs);
       } else if (entry.isFile()) {
-        out.push(abs);
+        yield abs;
       }
     }
   }
-  return out;
 }
 
 function normalizePathForCompare(p: string): string {
@@ -185,8 +414,14 @@ function isExcludedSourcePath(absPath: string, workspacePath: string): boolean {
   return excluded.some((prefix) => full === prefix || full.startsWith(`${prefix}/`));
 }
 
-function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFile[] {
+type MirrorCollection = {
+  mirrors: MirrorFile[];
+  excludedPrefixes: string[];
+};
+
+function collectMirrorFiles(configDir: string, workspacePath: string): MirrorCollection {
   const mirrors: MirrorFile[] = [];
+  const excludedPrefixes = getExcludedMirrorPrefixes();
 
   const pushFile = (srcAbs: string, destRel: string, domain: string): void => {
     if (!fs.existsSync(srcAbs)) return;
@@ -195,9 +430,9 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
   };
 
   const pushDir = (srcDir: string, destPrefix: string, domain: string): void => {
+    if (isMirrorPrefixExcluded(destPrefix, excludedPrefixes)) return;
     if (!fs.existsSync(srcDir)) return;
-    const files = listFilesRecursive(srcDir);
-    for (const abs of files) {
+    for (const abs of listFilesRecursive(srcDir)) {
       if (isExcludedSourcePath(abs, workspacePath)) continue;
       const rel = safeRel(abs, srcDir);
       pushFile(abs, path.posix.join(destPrefix, rel), domain);
@@ -250,64 +485,161 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
     pushFile(path.join(configDir, file), `system/state/${file}`, 'system');
   }
 
-  return mirrors;
+  return { mirrors, excludedPrefixes };
 }
 
 function readManifest(manifestPath: string): any {
-  const parsed = readJson<any>(manifestPath);
+  const parsed = readJson<any>(manifestPath, 64 * 1024 * 1024);
   return parsed?.entries ? parsed : { entries: {} };
 }
 
-function copyMirrors(auditRoot: string, workspacePath: string, mirrors: MirrorFile[], manifestPath: string): MirrorStats {
+function createMirrorStats(excludedPrefixes: string[]): AuditMaterializerStats {
+  return {
+    copied: 0,
+    skipped: 0,
+    errors: 0,
+    redactions: 0,
+    filesDiscovered: 0,
+    filesConsidered: 0,
+    deferred: 0,
+    skippedTooLarge: 0,
+    deleted: 0,
+    bytesRead: 0,
+    bytesWritten: 0,
+    durationMs: 0,
+    excludedPrefixes,
+  };
+}
+
+function copyMirrors(
+  auditRoot: string,
+  workspacePath: string,
+  mirrors: MirrorFile[],
+  manifestPath: string,
+  excludedPrefixes: string[],
+  limits: AuditMaterializerLimits,
+): AuditMaterializerStats {
+  const startedAt = Date.now();
   const prev = readManifest(manifestPath);
-  const next: Record<string, any> = {};
-  const stats: MirrorStats = { copied: 0, skipped: 0, errors: 0, redactions: 0 };
+  const previousEntries: Record<string, any> = prev.entries && typeof prev.entries === 'object' ? prev.entries : {};
+  // Start from the last good manifest. A budgeted/deferred run must not make
+  // the derived mirror appear empty or delete snapshots that are still useful.
+  const next: Record<string, any> = { ...previousEntries };
+  const stats = createMirrorStats(excludedPrefixes);
+  stats.filesDiscovered = mirrors.length;
+  const seenKeys = new Set<string>();
+  const candidates: Array<{ item: MirrorFile; key: string; previous: any; base: any; size: number; mtimeMs: number }> = [];
 
   for (const item of mirrors) {
     try {
       const srcStat = fs.statSync(item.srcAbs);
       if (!srcStat.isFile()) continue;
       const key = item.destRel;
-      const previous = prev.entries?.[key];
-      next[key] = { ...previous,
+      seenKeys.add(key);
+      const previous = previousEntries[key];
+      const sourceModifiedAt = new Date(srcStat.mtimeMs).toISOString();
+      const base = {
+        ...previous,
         domain: item.domain,
         canonicalStore: item.srcAbs.startsWith(workspacePath) ? 'workspace' : 'config',
         canonicalRel: item.srcAbs.startsWith(workspacePath) ? safeRel(item.srcAbs, workspacePath) : path.basename(item.srcAbs),
-        sourceModifiedAt: new Date(srcStat.mtimeMs).toISOString(), sourceSize: srcStat.size,
-        materializedAt: previous?.materializedAt || null, redactionSchemaVersion: REDACTION_SCHEMA_VERSION,
+        sourceModifiedAt,
+        sourceSize: srcStat.size,
+        materializedAt: previous?.materializedAt || null,
+        redactionSchemaVersion: REDACTION_SCHEMA_VERSION,
       };
+      next[key] = base;
 
-      const prevEntry = previous;
       const unchanged =
-        prevEntry &&
-        prevEntry.sourceModifiedAt === next[key].sourceModifiedAt &&
-        prevEntry.sourceSize === srcStat.size &&
-        prevEntry.redactionSchemaVersion === REDACTION_SCHEMA_VERSION;
-
+        previous &&
+        previous.deferred !== true &&
+        previous.sourceModifiedAt === sourceModifiedAt &&
+        previous.sourceSize === srcStat.size &&
+        previous.redactionSchemaVersion === REDACTION_SCHEMA_VERSION;
       const destAbs = path.join(auditRoot, item.destRel);
       if (unchanged && fs.existsSync(destAbs)) {
         stats.skipped += 1;
         continue;
       }
 
-      const materialized = materializeRedactedContent(item.srcAbs);
-      ensureDir(path.dirname(destAbs));
-      fs.writeFileSync(destAbs, materialized.content, 'utf8');
-      next[key] = { ...next[key], materializedAt: new Date().toISOString(), outputSize: Buffer.byteLength(materialized.content), redactions: materialized.redactions, parseStatus: materialized.parseStatus, artifactRole: 'redacted_snapshot', sourceOfTruth: false };
-      stats.redactions += materialized.redactions;
-      stats.copied += 1;
+      stats.filesConsidered += 1;
+      candidates.push({ item, key, previous, base, size: srcStat.size, mtimeMs: srcStat.mtimeMs });
     } catch {
       stats.errors += 1;
     }
   }
 
-  for (const oldRel of Object.keys(prev.entries || {})) {
-    if (next[oldRel]) continue;
-    const target = path.resolve(auditRoot, oldRel);
-    const root = path.resolve(auditRoot) + path.sep;
-    if (target.startsWith(root)) { try { fs.rmSync(target, { force: true }); } catch {} }
+  // Re-try deferred work first, then process the newest changed files. This
+  // makes a bounded run useful even when old content is still backlogged.
+  candidates.sort((a, b) => {
+    const deferredDelta = Number(b.previous?.deferred === true) - Number(a.previous?.deferred === true);
+    return deferredDelta || b.mtimeMs - a.mtimeMs;
+  });
+
+  for (const candidate of candidates) {
+    const { item, key, base, size } = candidate;
+    const destAbs = path.join(auditRoot, item.destRel);
+    if (size > limits.maxSingleFileBytes) {
+      stats.skippedTooLarge += 1;
+      next[key] = {
+        ...base,
+        deferred: false,
+        parseStatus: 'skipped_too_large',
+        skipReason: 'single_file_limit',
+      };
+      continue;
+    }
+    if (stats.copied >= limits.maxFilesPerRun || stats.bytesRead + size > limits.maxTotalBytes) {
+      stats.deferred += 1;
+      next[key] = {
+        ...base,
+        deferred: true,
+        skipReason: stats.copied >= limits.maxFilesPerRun ? 'file_budget' : 'byte_budget',
+      };
+      continue;
+    }
+
+    stats.bytesRead += size;
+    try {
+      const materialized = materializeRedactedFile(item.srcAbs, destAbs, limits);
+      next[key] = {
+        ...base,
+        deferred: false,
+        materializedAt: new Date().toISOString(),
+        outputSize: materialized.outputBytes,
+        redactions: materialized.redactions,
+        parseStatus: materialized.parseStatus,
+        artifactRole: 'redacted_snapshot',
+        sourceOfTruth: false,
+      };
+      stats.redactions += materialized.redactions;
+      stats.bytesWritten += materialized.outputBytes;
+      stats.copied += 1;
+    } catch {
+      stats.errors += 1;
+      stats.deferred += 1;
+      next[key] = { ...base, deferred: true, skipReason: 'materialization_error' };
+    }
   }
-  writeJson(manifestPath, { schemaVersion: 2, redactionSchemaVersion: REDACTION_SCHEMA_VERSION, generatedAt: new Date().toISOString(), entries: next });
+
+  const auditRootResolved = path.resolve(auditRoot);
+  const auditRootPrefix = `${auditRootResolved}${path.sep}`;
+  for (const oldRel of Object.keys(previousEntries)) {
+    if (seenKeys.has(oldRel) || isMirrorPrefixExcluded(oldRel, excludedPrefixes)) continue;
+    delete next[oldRel];
+    const target = path.resolve(auditRoot, oldRel);
+    if (target.startsWith(auditRootPrefix)) {
+      try { fs.rmSync(target, { force: true }); stats.deleted += 1; } catch { /* best effort */ }
+    }
+  }
+
+  writeJson(manifestPath, {
+    schemaVersion: 2,
+    redactionSchemaVersion: REDACTION_SCHEMA_VERSION,
+    generatedAt: new Date().toISOString(),
+    entries: next,
+  });
+  stats.durationMs = Math.max(0, Date.now() - startedAt);
   return stats;
 }
 
@@ -474,7 +806,14 @@ function countFiles(rootDir: string, cap = COUNT_CAP): number {
   return count;
 }
 
-function writeIndexes(auditRoot: string, configDir: string, workspacePath: string, mirrors: MirrorFile[], mirrorStats: MirrorStats): void {
+function writeIndexes(
+  auditRoot: string,
+  configDir: string,
+  workspacePath: string,
+  mirrors: MirrorFile[],
+  mirrorStats: AuditMaterializerStats,
+  limits: AuditMaterializerLimits,
+): void {
   const nowIso = new Date().toISOString();
   const sessionPreview = buildSessionPreview(configDir);
   const tasksSummary = buildTasksSummary(configDir);
@@ -492,7 +831,7 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
     sourceOfTruth: false,
     provenance: 'materialized_mirror',
     freshness: {
-      status: mirrorStats.errors ? 'error' : 'fresh',
+      status: mirrorStats.errors ? 'error' : (mirrorStats.deferred || mirrorStats.skippedTooLarge || mirrorStats.excludedPrefixes.length ? 'partial' : 'fresh'),
       lastAttemptAt: nowIso,
       lastSuccessfulRunAt: mirrorStats.errors ? null : nowIso,
       expectedIntervalMs: _intervalMs,
@@ -506,6 +845,16 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
       skipped: mirrorStats.skipped,
       errors: mirrorStats.errors,
       redactions: mirrorStats.redactions,
+      filesDiscovered: mirrorStats.filesDiscovered,
+      filesConsidered: mirrorStats.filesConsidered,
+      deferred: mirrorStats.deferred,
+      skippedTooLarge: mirrorStats.skippedTooLarge,
+      deleted: mirrorStats.deleted,
+      bytesRead: mirrorStats.bytesRead,
+      bytesWritten: mirrorStats.bytesWritten,
+      durationMs: mirrorStats.durationMs,
+      excludedPrefixes: mirrorStats.excludedPrefixes,
+      limits,
     },
     counts: {
       sessionsPreviewed: sessionPreview.length,
@@ -552,6 +901,10 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
     `- copied this run: ${mirrorStats.copied}`,
     `- skipped unchanged: ${mirrorStats.skipped}`,
     `- errors: ${mirrorStats.errors}`,
+    `- deferred by budget: ${mirrorStats.deferred}`,
+    `- skipped too large: ${mirrorStats.skippedTooLarge}`,
+    `- bytes read: ${mirrorStats.bytesRead}`,
+    `- bytes written: ${mirrorStats.bytesWritten}`,
     `- tasks: ${tasksSummary.total}`,
     `- proposals: ${proposalsSummary.total}`,
     `- teams: ${teamsSummary.teamCount}`,
@@ -611,16 +964,26 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
   writeText(path.join(auditRoot, 'teams', 'INDEX.md'), `${teamsMd.join('\n')}\n`);
 }
 
-export function materializeAuditSnapshot(configDir: string, workspacePath: string): void {
+export function materializeAuditSnapshot(configDir: string, workspacePath: string): AuditMaterializerRunResult {
   const auditRoot = path.join(workspacePath, 'audit');
+  const limits = getAuditMaterializerLimits();
+  if (isAuditMaterializerDisabled()) {
+    return {
+      disabled: true,
+      auditRoot,
+      limits,
+      stats: createMirrorStats(getExcludedMirrorPrefixes()),
+    };
+  }
   buildDirectoryScaffold(auditRoot);
   buildAuditReadme(auditRoot);
 
-  const mirrors = collectMirrorFiles(configDir, workspacePath);
+  const collection = collectMirrorFiles(configDir, workspacePath);
   const manifestPath = path.join(auditRoot, '_index', 'materializer-manifest.json');
-  const mirrorStats = copyMirrors(auditRoot, workspacePath, mirrors, manifestPath);
+  const mirrorStats = copyMirrors(auditRoot, workspacePath, collection.mirrors, manifestPath, collection.excludedPrefixes, limits);
   _lastRunAt = Date.now();
-  writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
+  writeIndexes(auditRoot, configDir, workspacePath, collection.mirrors, mirrorStats, limits);
+  return { disabled: false, auditRoot, limits, stats: mirrorStats };
 }
 
 function boundedInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -656,23 +1019,50 @@ export function createAuditMaterializerProcess(opts: StartAuditMaterializerOpts,
     },
     execArgv: materializerChildExecArgv(),
     serialization: 'json',
-    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
+}
+
+function materializerBackoffMs(intervalMs: number, failureStreak: number): number {
+  const exponent = Math.max(0, Math.min(8, failureStreak - 1));
+  return Math.min(MAX_MATERIALIZER_BACKOFF_MS, Math.max(intervalMs, intervalMs * (2 ** exponent)));
 }
 
 export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
   const intervalMs = Math.max(MIN_INTERVAL_MS, Number(opts.intervalMs || DEFAULT_INTERVAL_MS));
   if (_timer) return;
+  if (isAuditMaterializerDisabled()) {
+    console.warn(`[AuditMaterializer] Disabled by ${MATERIALIZER_DISABLED_ENV}.`);
+    return;
+  }
   _intervalMs = intervalMs;
 
   const runSafe = (): void => {
-    if (_running) return;
+    if (_running || isAuditMaterializerDisabled() || Date.now() < _backoffUntil) return;
     _running = true;
     let settled = false;
+    let childFailed = false;
+    let stderrTail = '';
+    let timeout: NodeJS.Timeout | null = null;
     const finish = () => {
       if (settled) return;
       settled = true;
       _running = false;
+    };
+    const finishChild = (success: boolean, reason = '') => {
+      if (settled) return;
+      if (timeout) clearTimeout(timeout);
+      if (success) {
+        _failureStreak = 0;
+        _backoffUntil = 0;
+      } else {
+        _failureStreak += 1;
+        const backoffMs = materializerBackoffMs(intervalMs, _failureStreak);
+        _backoffUntil = Date.now() + backoffMs;
+        const detail = [reason, stderrTail.trim()].filter(Boolean).join(' | ').slice(0, 2_000);
+        console.warn(`[AuditMaterializer] Run failed; backing off for ${backoffMs}ms${detail ? `: ${detail}` : '.'}`);
+      }
+      finish();
     };
     try {
       // The audit mirror can parse and redact tens of megabytes of append-only
@@ -687,33 +1077,41 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
         30_000,
         Math.max(30_000, intervalMs - 5_000),
       );
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
+        childFailed = true;
         console.warn(`[AuditMaterializer] Child exceeded ${timeoutMs}ms and was terminated.`);
         try { child.kill(); } catch {}
-        finish();
+        finishChild(false, 'timeout');
       }, timeoutMs);
       timeout.unref?.();
-      const finishChild = () => {
-        clearTimeout(timeout);
-        finish();
-      };
       child.unref();
       child.channel?.unref?.();
+      child.stderr?.on('data', (chunk) => {
+        if (stderrTail.length >= 8_192) return;
+        stderrTail += String(chunk).slice(0, 8_192 - stderrTail.length);
+      });
       child.on('message', (message: any) => {
         if (message?.ok === false) {
+          childFailed = true;
           console.warn('[AuditMaterializer] Child sync failed:', String(message?.error || 'unknown error'));
+        } else if (message?.telemetry) {
+          console.log(`[AuditMaterializer] telemetry=${JSON.stringify(message.telemetry)}`);
         }
       });
       child.on('error', (err) => {
+        childFailed = true;
         console.warn('[AuditMaterializer] Child failed:', String(err?.message || err));
-        finishChild();
+        finishChild(false, String(err?.message || err));
       });
       child.on('exit', (code) => {
-        if (code !== 0) console.warn(`[AuditMaterializer] Child exited with code ${code}`);
-        finishChild();
+        const success = code === 0 && !childFailed;
+        if (!success) console.warn(`[AuditMaterializer] Child exited with code ${code}`);
+        finishChild(success, `exit_code_${String(code)}`);
       });
     } catch (err: any) {
       console.warn('[AuditMaterializer] Could not start worker:', String(err?.message || err));
+      _failureStreak += 1;
+      _backoffUntil = Date.now() + materializerBackoffMs(intervalMs, _failureStreak);
       finish();
     }
   };
@@ -732,6 +1130,9 @@ export function stopAuditMaterializer(): void {
     _timer = null;
   }
   _intervalMs = null;
+  _running = false;
+  _failureStreak = 0;
+  _backoffUntil = 0;
 }
 
 function readMaterializerChildData(): any | null {
@@ -750,7 +1151,12 @@ if (materializerChildData?.type === 'prometheus_audit_materializer') {
   let message: Record<string, unknown> = { ok: true };
   try {
     _intervalMs = Number(materializerChildData.intervalMs) || DEFAULT_INTERVAL_MS;
-    materializeAuditSnapshot(String(materializerChildData.configDir || ''), String(materializerChildData.workspacePath || ''));
+    const result = materializeAuditSnapshot(String(materializerChildData.configDir || ''), String(materializerChildData.workspacePath || ''));
+    message = {
+      ok: true,
+      disabled: result.disabled,
+      telemetry: { ...result.stats, limits: result.limits },
+    };
   } catch (err: any) {
     exitCode = 1;
     message = { ok: false, error: String(err?.message || err) };
