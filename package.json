@@ -195,7 +195,8 @@
     "build:public:mac:x64": "npm run prepare:public:desktop && npm run build:desktop-helper:mac && electron-builder --mac --x64 --config electron-builder-public.yml && npm run verify:public-release:mac -- --arch=x64",
     "build:public:mac:arm64": "npm run prepare:public:desktop && npm run build:desktop-helper:mac && electron-builder --mac --arm64 --config electron-builder-public.yml && npm run verify:public-release:mac -- --arch=arm64",
     "release": "npm run build:public && electron-builder --win --config electron-builder-public.yml --prepackaged release-public/win-unpacked --publish=always",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "test:chat-selection-refresh": "node scripts/test-chat-selection-refresh-contract.mjs"
   },
   "keywords": [
     "ai",

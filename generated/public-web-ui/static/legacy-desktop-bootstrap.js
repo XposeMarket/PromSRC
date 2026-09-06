@@ -1177,6 +1177,7 @@ const IMPORTED_SOURCE_BRANDS = Object.freeze({
   openai_codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
   codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
   'codex-local': { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  xai: { key: 'xai', label: 'xAI', asset: '/static/assets/import-sources/xai.svg' },
   claude: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
   anthropic: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
   'claude-code': { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
@@ -1218,6 +1219,47 @@ function renderImportedSourceLogo(session) {
     return `<span class="imported-source-logo imported-source-logo--fallback" title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
   }
   return `<img class="imported-source-logo imported-source-logo--${brand.key}" data-imported-source="${brand.key}" src="${brand.asset}" alt="${escHtml(ariaLabel)}" width="26" height="26" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="imported-source-logo-fallback" hidden title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
+}
+
+const PRIORITY_PROVIDER_BRANDS = Object.freeze({
+  prometheus: { key: 'prometheus', label: 'Prometheus', asset: '/assets/Prometheus.png' },
+  openai: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  openai_codex: { key: 'openai', label: 'ChatGPT', asset: '/static/assets/import-sources/openai.svg' },
+  xai: { key: 'xai', label: 'xAI', asset: '/static/assets/import-sources/xai.svg' },
+  anthropic: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  claude: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  cursor: { key: 'cursor', label: 'Cursor', asset: '/static/assets/import-sources/cursor.svg' },
+  hermes: { key: 'hermes', label: 'Hermes', asset: '/static/assets/import-sources/nous-research.png' },
+  openclaw: { key: 'openclaw', label: 'OpenClaw', asset: '/static/assets/import-sources/openclaw.svg' },
+});
+
+function _prioritySessionProvider(session) {
+  const route = session?.chatModelRoute && typeof session.chatModelRoute === 'object' ? session.chatModelRoute : null;
+  const provider = route?.effective?.providerId || route?.providerId || session?.providerId || session?.provider;
+  if (provider) return String(provider).trim().toLowerCase();
+  const imported = _getImportedSourceBrand(session);
+  if (imported?.key === 'openai') return 'openai';
+  if (imported?.key === 'claude') return 'anthropic';
+  if (imported?.key === 'cursor') return 'cursor';
+  if (imported?.key === 'hermes') return 'hermes';
+  if (imported?.key === 'openclaw') return 'openclaw';
+  if (String(session?.id || '') === String(window.activeChatSessionId || '')) {
+    const activeProvider = String(window._activeProvider || '').trim().toLowerCase();
+    if (activeProvider) return activeProvider;
+  }
+  const configuredProvider = String(window._llmSettingsCache?.provider || '').trim().toLowerCase();
+  return configuredProvider || 'prometheus';
+}
+
+function renderPriorityProviderLogo(session) {
+  const provider = _prioritySessionProvider(session);
+  const brand = PRIORITY_PROVIDER_BRANDS[provider] || null;
+  const label = brand?.label || PROVIDER_LABELS?.[provider] || provider || 'Provider';
+  const ariaLabel = `${label} provider`;
+  if (!brand?.asset) {
+    return `<span class="priority-chat-provider-logo priority-chat-provider-logo--fallback" title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
+  }
+  return `<img class="priority-chat-provider-logo priority-chat-provider-logo--${brand.key}" data-provider="${escHtml(provider)}" src="${brand.asset}" alt="${escHtml(ariaLabel)}" width="16" height="16" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="priority-chat-provider-logo priority-chat-provider-logo--fallback" hidden title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
 }
 
 function renderImportedSourceMeta(session, normalTimestamp) {
@@ -1349,19 +1391,19 @@ function _priorityTimestampMillis(value) {
 }
 
 function _prioritySessionActivityTime(session) {
-  const candidates = [
-    session?.lastMessageAt,
-    session?.lastActiveAt,
-    session?.updatedAt,
-    session?.createdAt,
-  ].map(_priorityTimestampMillis).filter(Boolean);
+  // Priority is a message inbox, not a tool/process activity feed. The
+  // session's updatedAt/lastActiveAt fields move whenever a tool emits a
+  // progress event, which made working chats jump around while the user was
+  // trying to open them. Only message timestamps may advance this ordering.
+  const candidates = [_priorityTimestampMillis(session?.lastMessageAt)].filter(Boolean);
   (Array.isArray(session?.history) ? session.history : []).forEach((message) => {
     const role = String(message?.role || '').toLowerCase();
     if (!['user', 'assistant', 'ai'].includes(role)) return;
+    if (isInternalChatMessage(message) || !String(message?.content || '').trim()) return;
     const timestamp = _priorityTimestampMillis(message?.timestamp);
     if (timestamp) candidates.push(timestamp);
   });
-  return candidates.length ? Math.max(...candidates) : Date.now();
+  return candidates.length ? Math.max(...candidates) : _priorityTimestampMillis(session?.createdAt);
 }
 
 let _sessionListRefreshFrame = 0;
@@ -1565,6 +1607,7 @@ function renderPriorityChatSessionCard(s, options = {}) {
       </div>
       <div class="priority-chat-preview">${escHtml(preview)}</div>
       <div class="priority-chat-meta">
+        ${renderPriorityProviderLogo(s)}
         <span class="priority-chat-model">${escHtml(model)}</span>
         <span aria-hidden="true">·</span>
         <span>${messageCount} message${messageCount === 1 ? '' : 's'}</span>
@@ -2326,38 +2369,76 @@ function getActiveChatModelRouteSessionId(sessionId = '') {
   return String(sessionId || window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
+const _desktopSwitcherRouteCache = new Map();
+
+function _desktopSwitcherCachedRouteForSession(sessionId = '') {
+  const id = getActiveChatModelRouteSessionId(sessionId);
+  if (!id) return null;
+  const activeId = String(window.activeChatSessionId || '').trim();
+  if (id === activeId && String(window._activeChatModelRouteSessionId || '') === id && window._activeChatModelRoute) {
+    return window._activeChatModelRoute;
+  }
+  const bySession = window._activeChatModelRoutesBySession?.[id];
+  if (bySession) return bySession;
+  const session = Array.isArray(window.chatSessions)
+    ? window.chatSessions.find((item) => String(item?.id || '') === id)
+    : null;
+  if (session?.chatModelRoute) return session.chatModelRoute;
+  return _desktopSwitcherRouteCache.get(id) || null;
+}
+
+function _cacheDesktopSwitcherRoute(sessionId, state) {
+  const id = getActiveChatModelRouteSessionId(sessionId);
+  if (!id || !state || typeof state !== 'object') return;
+  _desktopSwitcherRouteCache.set(id, state);
+  const session = Array.isArray(window.chatSessions)
+    ? window.chatSessions.find((item) => String(item?.id || '') === id)
+    : null;
+  if (session) session.chatModelRoute = state;
+  if (id === String(window.activeChatSessionId || '').trim()) {
+    window._activeChatModelRoute = state;
+    window._activeChatModelRouteSessionId = id;
+  } else {
+    if (!window._activeChatModelRoutesBySession) window._activeChatModelRoutesBySession = {};
+    window._activeChatModelRoutesBySession[id] = state;
+  }
+}
+
+function _applyDesktopSwitcherRouteState(sessionId, state) {
+  const route = state?.effective;
+  if (!route?.providerId || !route?.model) return state || null;
+  const id = getActiveChatModelRouteSessionId(sessionId);
+  const reasoningEffort = _normalizeActiveReasoningEffort(route.providerId, route.model, route.reasoningEffort);
+  const isSecondary = id !== String(window.activeChatSessionId || '').trim();
+  if (!isSecondary) {
+    window._activeProvider = route.providerId;
+    window._activeModel = route.model;
+    window.reasoningLevel = reasoningEffort;
+  }
+  _renderActiveModelLabels(route.model, route.providerId, reasoningEffort, isSecondary ? id : '', route.speed || 'standard');
+  const follow = isSecondary
+    ? Array.from(document.querySelectorAll('[data-model-switcher-follow-default]'))
+      .find((node) => String(node.closest('[data-model-switcher-popover]')?.dataset.modelSwitcherSessionId || '') === id)
+    : document.getElementById('model-switcher-follow-default');
+  if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
+  _cacheDesktopSwitcherRoute(id, state);
+  return state;
+}
+
 async function refreshActiveChatModelRoute(sessionIdOverride = '') {
   const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
   if (!sessionId) return null;
+  const cachedState = _desktopSwitcherCachedRouteForSession(sessionId);
+  if (cachedState?.effective?.providerId && cachedState?.effective?.model) {
+    _applyDesktopSwitcherRouteState(sessionId, cachedState);
+  }
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
     const state = data?.chatModelRoute;
-    const route = state?.effective;
-    if (!route?.providerId || !route?.model) return state || null;
-    const reasoningEffort = _normalizeActiveReasoningEffort(route.providerId, route.model, route.reasoningEffort);
-    const isSecondary = sessionId !== String(window.activeChatSessionId || '').trim();
-    if (!isSecondary) {
-      window._activeProvider = route.providerId;
-      window._activeModel = route.model;
-      window.reasoningLevel = reasoningEffort;
-    }
-    _renderActiveModelLabels(route.model, route.providerId, reasoningEffort, isSecondary ? sessionId : '', route.speed || 'standard');
-    const follow = isSecondary
-      ? Array.from(document.querySelectorAll('[data-model-switcher-follow-default]'))
-        .find((node) => String(node.closest('[data-model-switcher-popover]')?.dataset.modelSwitcherSessionId || '') === sessionId)
-      : document.getElementById('model-switcher-follow-default');
-    if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
-    if (!isSecondary) {
-      window._activeChatModelRoute = state;
-      window._activeChatModelRouteSessionId = sessionId;
-    } else {
-      if (!window._activeChatModelRoutesBySession) window._activeChatModelRoutesBySession = {};
-      window._activeChatModelRoutesBySession[sessionId] = state;
-    }
-    return state;
+    return _applyDesktopSwitcherRouteState(sessionId, state) || cachedState || null;
   } catch (err) {
     console.warn('refreshActiveChatModelRoute:', err);
-    return null;
+    return cachedState || null;
   }
 }
 
@@ -2390,6 +2471,14 @@ const DESKTOP_SWITCHER_EXTRA_MODELS = {
   xai: ['grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-build-0.1'],
 };
 
+let _desktopSwitcherSettingsPromise = null;
+let _desktopSwitcherCatalogPromise = null;
+let _desktopSwitcherCredentialedPromise = null;
+let _desktopSwitcherSettingsCache = null;
+let _desktopSwitcherCatalogCache = [];
+let _desktopSwitcherCredentialedCache = [];
+let _desktopSwitcherOpenToken = 0;
+
 function _desktopSwitcherProviderLabel(id, catalog = []) {
   return catalog.find((item) => item?.id === id)?.name || PROVIDER_LABELS[id] || id;
 }
@@ -2411,25 +2500,30 @@ async function _desktopSwitcherModelsFor(provider, state) {
   return models;
 }
 
-async function _loadDesktopSwitcherState(sessionId = '') {
-  const [route, settings, catalogData, credentialData] = await Promise.all([
-    refreshActiveChatModelRoute(sessionId),
-    api('/api/settings/provider').catch(() => null),
-    api('/api/extensions/catalog?kind=provider').catch(() => null),
-    api('/api/settings/credentialed-model-providers').catch(() => null),
-  ]);
-  const llm = settings?.llm || window._llmSettingsCache || { provider: window._activeProvider || 'ollama', providers: {} };
-  const effective = route?.effective || {};
-  const provider = String(effective.providerId || window._activeProvider || llm.provider || 'ollama');
-  const model = String(effective.model || llm.providers?.[provider]?.model || window._activeModel || '');
-  const providerConfig = { ...(llm.providers?.[provider] || {}), model };
-  const credentialed = Array.isArray(credentialData?.providers) ? credentialData.providers.map(String) : [];
-  if (provider && !credentialed.includes(provider)) credentialed.unshift(provider);
+function _desktopSwitcherSortProviders(providers) {
   const order = Object.keys({ ...AMD_STATIC_MODELS, ...DESKTOP_SWITCHER_EXTRA_MODELS, ollama: [], llama_cpp: [], lm_studio: [] });
-  credentialed.sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)));
+  return [...new Set((Array.isArray(providers) ? providers : []).map(String).filter(Boolean))]
+    .sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)));
+}
+
+function _desktopSwitcherBuildState(route, llm, catalog = [], credentialed = []) {
+  const settings = llm && typeof llm === 'object'
+    ? llm
+    : { provider: window._activeProvider || 'ollama', providers: {} };
+  const effective = route?.effective || {};
+  const provider = String(effective.providerId || window._activeProvider || settings.provider || 'ollama');
+  const model = String(effective.model || settings.providers?.[provider]?.model || window._activeModel || '');
+  const providerConfig = { ...(settings.providers?.[provider] || {}), model };
+  const providers = Array.isArray(credentialed) ? credentialed.map(String) : [];
+  if (provider && !providers.includes(provider)) providers.unshift(provider);
   return {
-    route, llm, catalog: Array.isArray(catalogData?.items) ? catalogData.items : [], credentialed,
-    provider, model, providerConfig,
+    route: route || null,
+    llm: settings,
+    catalog: Array.isArray(catalog) ? catalog : [],
+    credentialed: _desktopSwitcherSortProviders(providers),
+    provider,
+    model,
+    providerConfig,
     reasoningEffort: _normalizeActiveReasoningEffort(
       provider,
       model,
@@ -2437,6 +2531,72 @@ async function _loadDesktopSwitcherState(sessionId = '') {
     ),
     speed: String(effective.speed || providerConfig.speed || (providerConfig.fast_mode === true ? 'fast' : 'standard')).toLowerCase() === 'fast' && _supportsFastSpeed(provider, model) ? 'fast' : 'standard',
   };
+}
+
+function _desktopSwitcherStateFromCache(sessionId = '') {
+  return _desktopSwitcherBuildState(
+    _desktopSwitcherCachedRouteForSession(sessionId),
+    window._llmSettingsCache || _desktopSwitcherSettingsCache,
+    _desktopSwitcherCatalogCache,
+    _desktopSwitcherCredentialedCache,
+  );
+}
+
+function _desktopSwitcherLoadSettings() {
+  if (window._llmSettingsCache && typeof window._llmSettingsCache === 'object') {
+    return Promise.resolve({ llm: window._llmSettingsCache });
+  }
+  if (!_desktopSwitcherSettingsPromise) {
+    _desktopSwitcherSettingsPromise = api('/api/settings/provider')
+      .then((data) => {
+        if (data?.llm && typeof data.llm === 'object') {
+          _desktopSwitcherSettingsCache = data.llm;
+          window._llmSettingsCache = data.llm;
+        }
+        return data || null;
+      })
+      .catch(() => null);
+  }
+  return _desktopSwitcherSettingsPromise;
+}
+
+function _desktopSwitcherLoadCatalog() {
+  if (_desktopSwitcherCatalogCache.length) return Promise.resolve({ items: _desktopSwitcherCatalogCache });
+  if (!_desktopSwitcherCatalogPromise) {
+    _desktopSwitcherCatalogPromise = api('/api/extensions/catalog?kind=provider')
+      .then((data) => {
+        if (Array.isArray(data?.items)) _desktopSwitcherCatalogCache = data.items;
+        return data || null;
+      })
+      .catch(() => null);
+  }
+  return _desktopSwitcherCatalogPromise;
+}
+
+function _desktopSwitcherLoadCredentialedProviders() {
+  if (_desktopSwitcherCredentialedCache.length) return Promise.resolve({ providers: _desktopSwitcherCredentialedCache });
+  if (!_desktopSwitcherCredentialedPromise) {
+    _desktopSwitcherCredentialedPromise = api('/api/settings/credentialed-model-providers')
+      .then((data) => {
+        if (Array.isArray(data?.providers)) _desktopSwitcherCredentialedCache = data.providers.map(String);
+        return data || null;
+      })
+      .catch(() => null);
+  }
+  return _desktopSwitcherCredentialedPromise;
+}
+
+async function _loadDesktopSwitcherState(sessionId = '') {
+  const [route, settings, catalogData, credentialData] = await Promise.all([
+    refreshActiveChatModelRoute(sessionId),
+    _desktopSwitcherLoadSettings(),
+    _desktopSwitcherLoadCatalog(),
+    _desktopSwitcherLoadCredentialedProviders(),
+  ]);
+  const llm = settings?.llm || window._llmSettingsCache || _desktopSwitcherSettingsCache;
+  const catalog = Array.isArray(catalogData?.items) ? catalogData.items : _desktopSwitcherCatalogCache;
+  const credentialed = Array.isArray(credentialData?.providers) ? credentialData.providers : _desktopSwitcherCredentialedCache;
+  return _desktopSwitcherBuildState(route, llm, catalog, credentialed);
 }
 
 function _desktopSwitcherController(root = null) {
@@ -2458,6 +2618,7 @@ function _desktopSwitcherController(root = null) {
 function _desktopSwitcherShowDetail(title, body, controller = _desktopSwitcherController()) {
   const detail = controller.detail;
   if (!detail) return;
+  if (controller.popover) controller.popover.dataset.modelSwitcherView = 'detail';
   detail.hidden = false;
   detail.innerHTML = `<div class="model-switcher-detail-title">${escHtml(title)}</div><div class="model-switcher-options">${body}</div>`;
 }
@@ -2489,6 +2650,7 @@ window.mainModelLabel = mainModelLabel;
 function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherController()) {
   const main = controller.main;
   if (!main) return;
+  if (controller.popover) controller.popover.dataset.modelSwitcherView = 'main';
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
   const speedCapable = _supportsFastSpeed(state.provider, state.model);
@@ -2512,11 +2674,12 @@ function _renderDesktopSwitcherMain(state, controller = _desktopSwitcherControll
 function _renderDesktopSwitcherQuick(state, controller = _desktopSwitcherController()) {
   const main = controller.main;
   if (!main) return;
+  if (controller.popover) controller.popover.dataset.modelSwitcherView = 'quick';
   const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
   const activeIndex = Math.max(0, levels.findIndex((item) => item.v === state.reasoningEffort));
   const effortProgress = levels.length ? (((activeIndex + 0.5) / levels.length) * 100).toFixed(3) : 0;
   const modelLabel = typeof window.formatModelDisplayName === 'function'
-    ? window.formatModelDisplayName(state.model, state.provider)
+    ? window.formatModelDisplayName(state.model, state.provider) || state.model || 'Model'
     : state.model || 'Model';
   main.innerHTML = `
     <button type="button" class="model-switcher-advanced" data-switcher-advanced>Advanced <span>›</span></button>
@@ -2688,18 +2851,34 @@ function _renderDesktopSwitcherSpeed(state, controller = _desktopSwitcherControl
   }));
 }
 
+function _openDesktopSwitcher(controller) {
+  const popover = controller?.popover;
+  if (!popover) return;
+  const openToken = ++_desktopSwitcherOpenToken;
+  popover.style.display = 'flex';
+  _desktopSwitcherClearDetail(controller);
+  _renderDesktopSwitcherQuick(_desktopSwitcherStateFromCache(controller.sessionId), controller);
+  _loadDesktopSwitcherState(controller.sessionId).then((state) => {
+    if (openToken !== _desktopSwitcherOpenToken) return;
+    if (controller.popover?.style.display === 'none') return;
+    if (controller.popover?.dataset.modelSwitcherView !== 'quick') return;
+    _renderDesktopSwitcherQuick(state, controller);
+  }).catch((err) => {
+    if (openToken !== _desktopSwitcherOpenToken) return;
+    if (controller.popover?.style.display === 'none') return;
+    if (controller.main && !controller.main.textContent.trim()) {
+      controller.main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`;
+    }
+  });
+}
+
 async function toggleModelSwitcher() {
   const controller = _desktopSwitcherController();
   const popover = controller.popover;
   if (!popover) return;
   _modelSwitcherOpen = !_modelSwitcherOpen;
   if (!_modelSwitcherOpen) { _closeModelSwitcher(controller); return; }
-  popover.style.display = 'flex';
-  _desktopSwitcherClearDetail(controller);
-  const main = controller.main;
-  if (main) main.innerHTML = '<div class="model-switcher-loading">Loading controls…</div>';
-  try { _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller); }
-  catch (err) { if (main) main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`; }
+  _openDesktopSwitcher(controller);
 }
 
 function _closeModelSwitcher(sessionIdOrController = '') {
@@ -2726,14 +2905,7 @@ async function toggleDesktopComposerModelSwitcher(event, button) {
     popover.style.display = 'none';
   });
   if (isOpen) return;
-  controller.popover.style.display = 'flex';
-  _desktopSwitcherClearDetail(controller);
-  if (controller.main) controller.main.innerHTML = '<div class="model-switcher-loading">Loading controls…</div>';
-  try {
-    _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState(controller.sessionId), controller);
-  } catch (err) {
-    if (controller.main) controller.main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`;
-  }
+  _openDesktopSwitcher(controller);
 }
 
 async function switchModel(modelName) {
