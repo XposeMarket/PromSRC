@@ -580,6 +580,11 @@ body:not(.pm-mobile-active) :is(
   border-radius: 4px;
   padding: 2px;
 }
+.imported-source-logo--xai {
+  background: #fff;
+  border-radius: 4px;
+  padding: 2px;
+}
 
 /* Imported conversations get a little more breathing room on desktop so the
    source artwork sits beside the title without changing the mobile sidebar. */

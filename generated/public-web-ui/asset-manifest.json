@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "buildId": "9f22661f25d53b2f",
-  "sourceDigest": "9f22661f25d53b2fd4cc0c3b067bb592c5d6b6bb59e46445720e08f64c38a6a8",
+  "buildId": "74cf27abc2338037",
+  "sourceDigest": "74cf27abc23380375a62e93d799f9d705f584fc5e997007e51837dd0b330f8dd",
   "builder": {
     "name": "esbuild",
     "version": "0.27.3",
@@ -11,7 +11,7 @@
     "desktop": {
       "html": "/index.html",
       "js": "/build/entries/desktop-4WJ7OTRW.js",
-      "css": "/build/styles/desktop-CREHVPM7.css",
+      "css": "/build/styles/desktop-HIAWJQWR.css",
       "modulePreloads": [
         "/build/chunks/chunk-36KIJFV6.js",
         "/build/chunks/chunk-M5JONE3D.js"
@@ -104,18 +104,18 @@
         "/build/inline/index-inline-05-0b108e28f4b7.js",
         "/build/inline/index-inline-06-716f958618af.js",
         "/build/inline/index-inline-07-ecc8cfa8ff4d.js",
-        "/build/inline/index-inline-08-881f76605cb0.js",
+        "/build/inline/index-inline-08-7a82db82d95f.js",
         "/build/inline/index-inline-09-4550e6a395a8.js",
         "/build/inline/index-inline-10-d99079ff0017.js",
-        "/build/styles/desktop-CREHVPM7.css"
+        "/build/styles/desktop-HIAWJQWR.css"
       ],
       "files": 14,
-      "bytes": 857857,
-      "gzipBytes": 153563,
-      "jsBytes": 207181,
-      "jsGzipBytes": 53667,
-      "cssBytes": 650676,
-      "cssGzipBytes": 99896
+      "bytes": 858205,
+      "gzipBytes": 153622,
+      "jsBytes": 207329,
+      "jsGzipBytes": 53686,
+      "cssBytes": 650876,
+      "cssGzipBytes": 99936
     },
     "mobile": {
       "paths": [
@@ -3090,10 +3090,10 @@
       "imports": []
     },
     {
-      "path": "/build/inline/index-inline-08-881f76605cb0.js",
-      "bytes": 172531,
-      "gzipBytes": 40830,
-      "sha256": "881f76605cb091bf8bc6d4c58da1889236a8b23a92bded8c1a72217df958ef0c",
+      "path": "/build/inline/index-inline-08-7a82db82d95f.js",
+      "bytes": 172679,
+      "gzipBytes": 40849,
+      "sha256": "7a82db82d95ff750d281bcdca01ccf9b520ec483d696709d941e418a86475710",
       "entryPoint": null,
       "imports": []
     },
@@ -3146,10 +3146,10 @@
       "imports": []
     },
     {
-      "path": "/build/styles/desktop-CREHVPM7.css",
-      "bytes": 650676,
-      "gzipBytes": 99896,
-      "sha256": "6282b295074bd415cb743ba6da7f6ac46b89793e7933a83242d83c4eb5ef1f09",
+      "path": "/build/styles/desktop-HIAWJQWR.css",
+      "bytes": 650876,
+      "gzipBytes": 99936,
+      "sha256": "63a786c9d4557698032b0fc21f3f4d9a265ddfb0b308d00dab12e830f39c7311",
       "entryPoint": "web-ui/src/styles/desktop-entry.css",
       "imports": [
         {

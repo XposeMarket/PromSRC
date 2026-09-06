@@ -4213,6 +4213,13 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area {
     border-radius: 50%;
   }
 
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--openai,
+  body:not(.pm-mobile-active) .priority-chat-provider-logo--xai {
+    background: #fff;
+    border-radius: 4px;
+    padding: 2px;
+  }
+
   body:not(.pm-mobile-active) .priority-chat-provider-logo[hidden] {
     display: none;
   }
