@@ -39,7 +39,6 @@ export interface ReactStep {
 }
 
 export interface ReactOptions {
-  maxSteps?: number;
   role?: AgentRole;
   temperature?: number;
   onStep?: (step: ReactStep) => void;
@@ -676,19 +675,16 @@ function hashText(input: string): string {
 export class Reactor {
   private ollama: OllamaClient;
   private registry = getToolRegistry();
-  private maxSteps: number;
   /** True when the client is a cloud provider (openai, openai_codex, etc.) that supports native tool calls */
   private isCloudProvider: boolean;
 
-  constructor(ollama: OllamaClient, maxSteps = 8) {
+  constructor(ollama: OllamaClient) {
     this.ollama = ollama;
-    this.maxSteps = maxSteps;
     // ProviderReactorClient has isCloudProvider=true; OllamaClient does not
     this.isCloudProvider = (ollama as any).isCloudProvider === true;
   }
 
   async run(userMessage: string, options: ReactOptions = {}): Promise<string> {
-    const maxSteps = options.maxSteps ?? this.maxSteps;
     const role: AgentRole = options.role ?? 'executor';
     const temperature = options.temperature ?? 0.25;
     const label = options.label ? `[${options.label}]` : '[reactor]';
@@ -771,7 +767,7 @@ export class Reactor {
         let nativeToolExecutions = 0;
         let nativeRescueAttempted = false;
 
-        while (nativeSteps < Math.min(maxSteps, 4)) {
+        while (true) {
           nativeSteps++;
           const chatOut = await this.ollama.chatWithThinking(nativeMessages, role, {
             temperature,
@@ -791,6 +787,13 @@ export class Reactor {
           const assistantContent = String(msg?.content || '').trim();
 
           if (!toolCalls.length) {
+            if (assistantContent) {
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+              console.log(`${label} FINAL  [native] ${assistantContent.slice(0, 200)}`);
+              console.log(`${label} Done in ${elapsed}s [native]\n`);
+              options.onStep?.({ finalAnswer: assistantContent, stepNum: nativeSteps });
+              return assistantContent;
+            }
             if (!nativeRescueAttempted) {
               nativeRescueAttempted = true;
               nativeMessages.push({
@@ -864,7 +867,7 @@ export class Reactor {
     const genericRepeatWindow: Array<{ action: string; resultHash: string }> = [];
     const nodeCallHistory: string[] = [...historyLines];
 
-    while (stepCount < maxSteps) {
+    while (true) {
       stepCount++;
       console.log(`${label} STEP ${stepCount} [node_call]`);
 
@@ -1003,7 +1006,7 @@ export class Reactor {
 
         // Generic repeat detector for ping-pong/no-progress loops:
         // if the same (action, result_hash) pair appears >=3 times within the last 6,
-        // stop early with a warning instead of burning all maxSteps.
+        // stop early with a warning instead of looping without progress.
         if (!hasErrors && successfulPairsThisStep.length > 0) {
           for (const pair of successfulPairsThisStep) {
             genericRepeatWindow.push(pair);
@@ -1091,11 +1094,6 @@ export class Reactor {
       nextStepIsFinalOnly = false; // not a FINAL step, but we'll override think below
       nextStepDisableThink = true; // force think=false on the retry
       stepCount--; // don't count the violation as a real step
-    }
-
-    if (stepCount >= maxSteps && !lastAnswer) {
-      lastAnswer = 'Max steps reached without a final answer.';
-      console.warn(`${label} WARN   Max steps (${maxSteps}) reached.`);
     }
 
     return lastAnswer;

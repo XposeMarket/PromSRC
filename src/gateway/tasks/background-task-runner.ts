@@ -2382,13 +2382,6 @@ export class BackgroundTaskRunner {
         return;
       }
 
-      // Check if handleChat hit its internal step cap
-      const hitMaxSteps = /^hit max steps/i.test(lastResultSummary);
-      if (hitMaxSteps) {
-        appendJournal(taskId, { type: 'status_push', content: 'Round hit max tool steps — continuing.' });
-        continue;
-      }
-
       // Check if step_complete was called during this round (currentStepIndex advanced)
       const reloadedTask = loadTask(taskId);
       if (!reloadedTask) return;

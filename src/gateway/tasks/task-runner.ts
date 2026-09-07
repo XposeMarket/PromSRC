@@ -59,7 +59,6 @@ export interface TaskState {
   goal: string;
   status: 'running' | 'complete' | 'failed' | 'paused';
   currentStep: number;
-  maxSteps: number;
   journal: JournalEntry[];
   currentState: string;  // current page/environment snapshot
   error?: string;
@@ -109,7 +108,6 @@ export type ProgressCallback = (event: string, data: any) => void;
 
 // ─── Configuration ─────────────────────────────────────────────────────────────
 
-const DEFAULT_MAX_STEPS = 25;
 const JOURNAL_WINDOW = 8;      // keep last N journal entries in full
 const JOURNAL_SUMMARY_MAX = 5; // summarize earlier entries into N bullet points
 
@@ -128,7 +126,6 @@ export class TaskRunner {
     executor: ToolExecutor;
     onProgress: ProgressCallback;
     systemContext?: string;  // personality, soul, etc.
-    maxSteps?: number;
     initialState?: string;
   }) {
     this.state = {
@@ -136,7 +133,6 @@ export class TaskRunner {
       goal: options.goal,
       status: 'running',
       currentStep: 0,
-      maxSteps: options.maxSteps || DEFAULT_MAX_STEPS,
       journal: [],
       currentState: options.initialState || 'No state yet. Start by taking an action.',
       startedAt: Date.now(),
@@ -152,21 +148,21 @@ export class TaskRunner {
   }
 
   /**
-   * Run the task to completion (or max steps).
+   * Run the task to completion or another explicit terminal condition.
    * Returns the final task state.
    */
   async run(): Promise<TaskState> {
     const ollama = getOllamaClient();
 
-    this.onProgress('task_start', { goal: this.state.goal, maxSteps: this.state.maxSteps });
-    console.log(`\n[Background Task] ── Starting: "${this.state.goal}" (max ${this.state.maxSteps} steps) ──`);
+    this.onProgress('task_start', { goal: this.state.goal });
+    console.log(`\n[Background Task] ── Starting: "${this.state.goal}" ──`);
 
-    while (this.state.status === 'running' && this.state.currentStep < this.state.maxSteps) {
+    while (this.state.status === 'running') {
       this.state.currentStep++;
       const step = this.state.currentStep;
 
-      this.onProgress('task_step', { step, maxSteps: this.state.maxSteps });
-      console.log(`[Background Task] Step ${step}/${this.state.maxSteps}`);
+      this.onProgress('task_step', { step });
+      console.log(`[Background Task] Step ${step}`);
 
       // Build the compact prompt
       const messages = this.buildStepMessages();
@@ -269,17 +265,6 @@ export class TaskRunner {
       }
     }
 
-    // Check if we hit max steps
-    if (this.state.status === 'running') {
-      this.state.status = 'paused';
-      this.state.error = `Reached max steps (${this.state.maxSteps})`;
-      this.onProgress('task_paused', {
-        message: `Reached ${this.state.maxSteps} steps without completing.`,
-        journal: this.state.journal.map(j => j.result),
-      });
-      console.log(`[Background Task] ⚠️ Paused at max steps (${this.state.maxSteps})`);
-    }
-
     return this.state;
   }
 
@@ -317,7 +302,7 @@ ${this.systemContext ? '\n' + this.systemContext : ''}`,
 
     // Goal
     parts.push(`TASK: ${this.state.goal}`);
-    parts.push(`PROGRESS: Step ${this.state.currentStep} of ${this.state.maxSteps}`);
+    parts.push(`PROGRESS: Step ${this.state.currentStep}`);
 
     // Journal — compressed
     if (this.state.journal.length > 0) {
@@ -1288,7 +1273,6 @@ export async function runTask(options: {
   executor: ToolExecutor;
   onProgress: ProgressCallback;
   systemContext?: string;
-  maxSteps?: number;
   initialState?: string;
 }): Promise<TaskState> {
   const runner = new TaskRunner(options);

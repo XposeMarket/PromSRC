@@ -1903,56 +1903,13 @@ import {
 } from '../agents-runtime/agent-builder-integration';
 
 
-import { activeTasks, getMaxToolRounds } from '../chat/chat-state';
+import { activeTasks } from '../chat/chat-state';
 import {
   buildTurnContextPacket,
   formatTurnContextPacketsForPrompt,
   normalizeReasoningSummary,
   shouldPersistTurnContext,
 } from '../context/turn-context-packet';
-const MAX_TOOL_ROUNDS = getMaxToolRounds();
-
-function resolveEffectiveMaxToolRounds(
-  baseMax: number,
-  opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string; sessionId: string },
-): number {
-  const readToolRoundLimit = (name: string, fallback: number): number => {
-    const parsed = Number(process.env[name]);
-    return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.floor(parsed)) : fallback;
-  };
-  if (/^brain_thought_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readToolRoundLimit('PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS', 32);
-  }
-  if (/^brain_dream_cleanup_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readToolRoundLimit('PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS', 32);
-  }
-  if (/^brain_dream_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
-    return readToolRoundLimit('PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS', 48);
-  }
-  if (opts.executionMode === 'interactive') {
-    return readToolRoundLimit('PROMETHEUS_INTERACTIVE_MAX_TOOL_ROUNDS', Number.isFinite(baseMax) ? baseMax : 48);
-  }
-  if (opts.executionMode === 'background_task' || opts.executionMode === 'background_agent') {
-    return readToolRoundLimit('PROMETHEUS_BACKGROUND_MAX_TOOL_ROUNDS', 32);
-  }
-  if (opts.executionMode === 'proposal_execution') {
-    return readToolRoundLimit('PROMETHEUS_PROPOSAL_MAX_TOOL_ROUNDS', 48);
-  }
-  if (opts.executionMode === 'team_manager' || opts.executionMode === 'team_subagent') {
-    return readToolRoundLimit('PROMETHEUS_TEAM_MAX_TOOL_ROUNDS', 32);
-  }
-  return readToolRoundLimit('PROMETHEUS_AUTONOMOUS_MAX_TOOL_ROUNDS', 24);
-}
-
-function isResumableExecutionMode(executionMode: ExecutionMode): boolean {
-  return executionMode === 'background_task'
-    || executionMode === 'background_agent'
-    || executionMode === 'proposal_execution'
-    || executionMode === 'cron'
-    || executionMode === 'team_manager'
-    || executionMode === 'team_subagent';
-}
-
 // ─── Injected singletons (set by initChatRouter in server-v2.ts) ──────────────
 let _cronScheduler: CronScheduler;
 let _telegramChannel: TelegramChannel;
@@ -2964,12 +2921,6 @@ async function handleChat(
   console.log(`[v2] SESSION: ${sessionId} | Workspace: ${workspacePath}`);
   htime('after buildExecuteToolDeps/finalizeBoundTaskRun closures');
   const creativeMode = executionMode === 'interactive' ? getCreativeMode(sessionId) : null;
-  const effectiveMaxToolRounds = resolveEffectiveMaxToolRounds(MAX_TOOL_ROUNDS, {
-    creativeMode,
-    executionMode,
-    message,
-    sessionId,
-  });
   htime('before getHistoryForApiCall');
   const rawHistory = executionMode === 'cron'
     ? []
@@ -7044,26 +6995,8 @@ RULES:
     return steers.length;
   };
 
-  const extendedFileOpRounds = (() => {
-    const configured = Number(process.env.PROMETHEUS_FILE_OP_EXTENDED_MAX_ROUNDS);
-    const extra = Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 64;
-    return effectiveMaxToolRounds + Math.max(1, extra);
-  })();
-
   for (let round = 0; ; round++) {
     currentProviderCallIteration = round;
-    if (round >= effectiveMaxToolRounds) {
-      const allowExtendedFileOpLoop =
-        fileOpV2Active
-        && (fileOpType === 'FILE_CREATE' || fileOpType === 'FILE_EDIT')
-        && (fileOpOwner === 'secondary' || !!fileOpLastFailureSignature);
-      if (!allowExtendedFileOpLoop || round >= extendedFileOpRounds) break;
-      if (round === effectiveMaxToolRounds) {
-        sendSSE('info', {
-          message: 'FILE_OP v2: extending execution beyond default step cap for secondary-owned repair convergence.',
-        });
-      }
-    }
 
     if (abortSignal?.aborted) {
       console.log(`[v2] Aborted at round ${round} — client disconnected`);
@@ -9359,7 +9292,6 @@ RULES:
 
       if (toolName === 'start_task') {
         const taskGoal = toolArgs.goal || message;
-        const maxSteps = toolArgs.max_steps || 25;
         sendSSE('info', { message: `Starting multi-step task: ${taskGoal}` });
 
         const taskTools = tools.filter((t: any) => t.function.name !== 'start_task') as any[];
@@ -9373,7 +9305,6 @@ RULES:
           },
           onProgress: sendSSE,
           systemContext: personalityCtx.slice(0, 500),
-          maxSteps,
         });
         markProgressStepResult(taskResult.status !== 'failed');
         finalizeProgressRound();
@@ -9384,7 +9315,7 @@ RULES:
           ? `Task completed in ${taskResult.currentStep} steps!`
           : taskResult.status === 'failed'
             ? `Task failed at step ${taskResult.currentStep}: ${taskResult.error}`
-            : `Task paused at step ${taskResult.currentStep}/${taskResult.maxSteps}`;
+            : `Task stopped at step ${taskResult.currentStep}.`;
 
         const journalSummary = taskResult.journal.slice(-5).map(j => j.result).join('\n');
 
@@ -9930,35 +9861,6 @@ RULES:
     sendSSE('info', { message: 'Processing...' });
   }
 
-  const stepCount = allToolResults.length;
-  console.warn(`[v2] WARN max tool rounds reached (${effectiveMaxToolRounds}) in ${executionMode} mode after ${stepCount} tool result(s).`);
-  sendSSE('info', {
-    message: `Reached the turn safety boundary after ${stepCount} tool step(s). Preserving progress and preparing continuation.`,
-  });
-
-  if (isResumableExecutionMode(executionMode)) {
-    finalizeSkillGardenerForTurn('Hit max steps - continuing next round.');
-    return {
-      type: 'execute',
-      text: 'Hit max steps - continuing next round.',
-      reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
-      toolResults: allToolResults,
-    };
-  }
-
-  const creativeSuffix = creativeMode
-    ? ' The Creative workspace remains open with the latest changes, so the next turn can continue from here.'
-    : '';
-  const text = stepCount > 0
-    ? `I reached the turn safety boundary after ${stepCount} tool step(s), but progress was preserved.${creativeSuffix} Say "continue" and I will pick up from the current state instead of starting over.`
-    : 'I reached the turn safety boundary before completing the request. Say "continue" and I will retry from the current state.';
-  const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(text);
-  return {
-    type: 'execute',
-    text: finalTextWithSkillOffer,
-    reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
-    toolResults: allToolResults,
-  };
   } finally {
     // Close any in-flight tool records at the same terminal boundary as the
     // model turn. This distinguishes an aborted/abandoned tool from a normal

@@ -2226,10 +2226,6 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
   const context = contextRefsBlock || attachedSkillsBlock
     ? [contextRefsBlock, attachedSkillsBlock, rawContext].filter(Boolean).join('\n\n')
     : rawContext;
-  const maxStepsRaw = req.body?.maxSteps;
-  const maxSteps = Number.isFinite(Number(maxStepsRaw)) && Number(maxStepsRaw) > 0
-    ? Math.floor(Number(maxStepsRaw))
-    : undefined;
   const timeoutRaw = req.body?.timeoutMs;
   const timeoutMs = Number.isFinite(Number(timeoutRaw)) && Number(timeoutRaw) > 0
     ? Math.floor(Number(timeoutRaw))
@@ -2248,7 +2244,6 @@ router.post('/api/agents/:id/spawn', async (req, res) => {
     agentId,
     task,
     context,
-    maxSteps,
     timeoutMs,
     agentType,
   });

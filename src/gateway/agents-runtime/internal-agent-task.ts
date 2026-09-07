@@ -133,16 +133,14 @@ async function runDynamicSubagent(
 ): Promise<{ success: boolean; result: string; durationMs: number; error?: string }> {
   const startMs = Date.now();
   const workspacePath = resolveSubagentDir(agentId);
-  const maxSteps = Number(def.max_steps) > 0 ? Number(def.max_steps) : 15;
   const ollama = getOllamaClient();
-  const reactor = new Reactor(ollama, maxSteps);
+  const reactor = new Reactor(ollama);
 
   const runPromise = reactor.run(fullPrompt, {
     role: 'executor',
     workspacePath,
     promptMode: 'minimal',
     subagentSystemPromptOnly: true,
-    maxSteps,
     label: `subagent:${agentId}`,
   });
 

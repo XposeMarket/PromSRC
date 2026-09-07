@@ -154,7 +154,6 @@ export function ensureScheduleOwnerAgent(options: EnsureScheduleOwnerAgentOption
     description: `Dedicated owner for scheduled job "${baseName}". Tracks run history, failures, logs, context, and chat follow-up from the Subagents page.`,
     roleType: 'operator',
     workspace,
-    maxSteps: 20,
     subagentType: 'schedule_owner',
     scheduleId: options.scheduleId,
     scheduleName: baseName,
