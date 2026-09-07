@@ -250,7 +250,11 @@ function refreshStorageLayoutState() {
 
 function runStorageLayoutV2Migration() {
   if (isStorageLayoutV2Ready()) return true;
-  if (String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() === '0') return false;
+  // Layout v2 activation is intentionally not automatic yet: no production
+  // path writes the ready-to-activate marker. Copying a large live profile at
+  // every desktop boot only delays startup and can never switch readers. Keep
+  // the verified migration available as an explicit maintenance operation.
+  if (String(process.env.PROMETHEUS_STORAGE_MIGRATION_AUTO || '').trim() !== '1') return false;
   if (isStorageLayoutV2CopyVerified()) {
     console.log('[StorageMigration] Canonical copy already verified; live activation remains deferred and legacy readers remain active.');
     return false;

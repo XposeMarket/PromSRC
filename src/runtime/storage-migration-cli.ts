@@ -49,7 +49,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         '  --workspace <path>',
         '  --migration-id <id>',
         '',
-        'Execution never deletes or renames source data and never overwrites a different destination file.',
+        'Execution never deletes or renames source data. Differing inactive canonical files are preserved in the migration backup before replacement.',
         'A successful run verifies the canonical copy only; live activation is a separate phase.',
       ].join('\n'));
       process.exit(0);
@@ -97,7 +97,31 @@ function main(): void {
     migrationId: args.migrationId,
   });
   console.log('\nMigration result:');
-  console.log(JSON.stringify(manifest, null, 2));
+  console.log(JSON.stringify({
+    migrationId: manifest.migrationId,
+    layoutVersion: manifest.layoutVersion,
+    startedAt: manifest.startedAt,
+    completedAt: manifest.completedAt,
+    sourceConfigRoot: manifest.sourceConfigRoot,
+    sourceWorkspaceRoot: manifest.sourceWorkspaceRoot,
+    targetRuntimeRoot: manifest.targetRuntimeRoot,
+    targetWorkspaceRoot: manifest.targetWorkspaceRoot,
+    backupRoot: manifest.backupRoot,
+    counts: {
+      copied: manifest.copied.length,
+      identical: manifest.identical.length,
+      replaced: manifest.replaced.length,
+      conflicts: manifest.conflicts.length,
+      skippedSymlinks: manifest.skippedSymlinks.length,
+      errors: manifest.errors.length,
+    },
+    conflictSamples: manifest.conflicts.slice(0, 20),
+    skippedSymlinkSamples: manifest.skippedSymlinks.slice(0, 20),
+    errorSamples: manifest.errors.slice(0, 20),
+    rewrittenConfig: manifest.rewrittenConfig,
+    preflightRejected: manifest.preflightRejected,
+    copyVerified: manifest.copyVerified,
+  }, null, 2));
 
   if (!manifest.copyVerified) {
     console.error('\nMigration did not produce a verified canonical copy. Resolve conflicts/errors/skipped symlinks from the manifest first.');

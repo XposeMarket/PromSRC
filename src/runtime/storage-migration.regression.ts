@@ -119,10 +119,13 @@ function run(): void {
     write(path.join(sourceConfig, 'sessions', 's2.json'), '{"source":true}\n');
     write(conflictTarget, '{"destination":true}\n');
     const conflict = executeStorageLayoutV2Migration({ layout, sourceConfigRoot: sourceConfig, sourceWorkspaceRoot: sourceWorkspace, migrationId: 'conflict-regression' });
-    assert.equal(conflict.copyVerified, false);
-    assert.ok(conflict.conflicts.some((item) => item.target === conflictTarget));
-    assert.equal(fs.readFileSync(conflictTarget, 'utf-8'), '{"destination":true}\n');
-    assert.equal(fs.existsSync(path.join(layout.runtime.migrations, 'storage-layout-v2-copy-verified.json')), false, 'a failed run must clear any stale stable copy marker');
+    assert.equal(conflict.copyVerified, true, JSON.stringify(conflict, null, 2));
+    assert.equal(conflict.conflicts.length, 0);
+    assert.equal(fs.readFileSync(conflictTarget, 'utf-8'), '{"source":true}\n');
+    const preservedConflictTarget = path.join(conflict.backupRoot, 'preexisting-canonical', 'runtime', 'sessions', 's2.json');
+    assert.equal(fs.readFileSync(preservedConflictTarget, 'utf-8'), '{"destination":true}\n');
+    assert.ok(conflict.replaced.some((item) => item.target === conflictTarget && item.preservedTarget === preservedConflictTarget));
+    assert.ok(fs.existsSync(path.join(layout.runtime.migrations, 'storage-layout-v2-copy-verified.json')));
 
     const linkRoot = path.join(root, 'destination-link');
     const linkConfig = path.join(linkRoot, 'repo', '.prometheus');
