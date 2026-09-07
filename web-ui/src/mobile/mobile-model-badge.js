@@ -66,6 +66,7 @@ function _normalizeSavedChatModelRoute(route) {
     providerId,
     model,
     reasoningEffort: String(candidate?.reasoningEffort || candidate?.reasoning_effort || '').trim() || undefined,
+    speed: String(candidate?.speed || '').trim().toLowerCase() === 'fast' ? 'fast' : 'standard',
     accountId: String(candidate?.accountId || candidate?.account_id || '').trim() || undefined,
   };
   return {
@@ -461,6 +462,7 @@ async function _saveChatModelRoute(route) {
       providerId: String(route?.providerId || '').trim(),
       model: String(route?.model || '').trim(),
       reasoningEffort: String(route?.reasoningEffort || '').trim() || undefined,
+      speed: String(route?.speed || '').trim().toLowerCase() === 'fast' ? 'fast' : 'standard',
       accountId: String(route?.accountId || '').trim() || undefined,
     };
     if (!override.providerId || !override.model) throw new Error('Choose a provider and model.');
@@ -583,6 +585,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     ...(llm?.providers?.[provider] || {}),
     model,
     reasoning_effort: _normalizedReasoningEffort(provider, model, rawReasoningEffort),
+    speed: route?.effective?.speed || (llm?.providers?.[provider] || {}).speed || 'standard',
   };
   if (route?.effective?.providerId && _llmCache) {
     _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
@@ -935,7 +938,13 @@ function _queueReasoningSave(provider, patch, immediate = false) {
     _reasoningSaveChain = _reasoningSaveChain.then(async () => {
       const route = await _loadChatModelRoute();
       const effective = route?.effective || { providerId: provider, model: merged.model || _activeModel(_llmCache).model };
-      await _saveChatModelRoute({ providerId: provider, model: merged.model || effective.model, reasoningEffort: merged.reasoning_effort || undefined, accountId: effective.accountId || undefined });
+      await _saveChatModelRoute({
+        providerId: provider,
+        model: merged.model || effective.model,
+        reasoningEffort: merged.reasoning_effort || undefined,
+        speed: supportsFastSpeed(provider, model) ? (merged.speed === 'fast' ? 'fast' : 'standard') : undefined,
+        accountId: effective.accountId || undefined,
+      });
       await refreshMobileModelBadge(true);
     }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
   };
@@ -1103,7 +1112,13 @@ async function _switchModel(provider, model, { keepOpen = false, returnToAdvance
   if (!provider || !model) return;
   try {
     const current = await _loadChatModelRoute();
-    await _saveChatModelRoute({ providerId: provider, model, reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined, accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined });
+    await _saveChatModelRoute({
+      providerId: provider,
+      model,
+      reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined,
+      speed: current?.effective?.providerId === provider ? current.effective.speed || undefined : undefined,
+      accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined,
+    });
     window.__pmChatModelRoute = await _loadChatModelRoute();
     const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
     _toast(`Model -> ${prettifyModelName(model, provider)}`, 'success');
