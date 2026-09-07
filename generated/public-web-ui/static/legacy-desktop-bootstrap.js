@@ -2919,26 +2919,6 @@ async function switchModel(modelName) {
   }
 }
 
-function setReasoningLevel(level) {
-  window.reasoningLevel = level;
-  try { localStorage.setItem('prometheus.reasoningLevel', level); } catch {}
-  _closeModelSwitcher();
-  const rawModel = document.getElementById('chat-model-name')?.dataset?.rawModel || window._activeModel || '';
-  _renderActiveModelLabels(rawModel, window._activeProvider || '', level);
-}
-
-function setAnthropicThinking(enabled) {
-  window.anthropicExtendedThinking = !!enabled;
-  try { localStorage.setItem('prometheus.anthropicExtendedThinking', enabled ? '1' : '0'); } catch {}
-  _closeModelSwitcher();
-}
-
-function setAnthropicBudget(budget) {
-  window.anthropicThinkingBudget = Number(budget) || 10000;
-  try { localStorage.setItem('prometheus.anthropicThinkingBudget', String(window.anthropicThinkingBudget)); } catch {}
-  _closeModelSwitcher();
-}
-
 // Hydrate from localStorage on load
 (function hydrateModelSwitcherPrefs() {
   try {
