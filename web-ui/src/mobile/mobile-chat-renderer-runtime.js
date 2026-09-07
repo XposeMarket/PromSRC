@@ -7,6 +7,7 @@ import {
 import { createMobileStreamReceiptLedger } from '../features/chat/runtime/mobile-stream-receipts.js';
 import { createMobileChatMessageRenderer } from './mobile-chat-message-renderer.js';
 import { animateThinkingTextSwap, renderThinkingState } from '../utils.js';
+import { mergeMobileBackgroundTraceEntries } from './mobile-background-trace-merge.js';
 
 function _compactMobileThreadCacheFileChanges(value) {
   if (!value || typeof value !== 'object') return undefined;
@@ -3683,8 +3684,11 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     // live event and must retain both the current tool envelope and durable
     // process/trace entries from the background session checkpoint.
     _mergeMobileProcessEntries(lane.message, storedProcessEntries);
-    if (!Array.isArray(lane.message.liveTraceEntries)) lane.message.liveTraceEntries = [];
-    lane.message.liveTraceEntries = [...lane.message.liveTraceEntries, ...storedLiveTraceEntries].slice(-500);
+    lane.message.liveTraceEntries = mergeMobileBackgroundTraceEntries(
+      lane.message.liveTraceEntries,
+      storedLiveTraceEntries,
+      500,
+    );
   }
   return lane;
 }
