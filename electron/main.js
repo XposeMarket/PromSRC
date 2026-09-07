@@ -425,6 +425,7 @@ let gatewayHealthCheckInFlight = false;
 let gatewayHealthFailures = 0;
 let gatewayProcessStartedAt = 0;
 const gatewayRecoveryAttempts = [];
+let gatewayRecoveryGeneration = 0;
 const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -1749,6 +1750,13 @@ function pruneGatewayRecoveryAttempts(now = Date.now()) {
   }
 }
 
+// A planned restart and a watchdog recovery can become visible to Electron at
+// nearly the same time. Invalidate delayed recovery decisions whenever a newer
+// restart owns the handoff so an old timer cannot restart the replacement too.
+function invalidateGatewayRecoverySchedule() {
+  gatewayRecoveryGeneration += 1;
+}
+
 function markGatewayRecoveryDegraded(reason) {
   gatewayRelay?.setState('failed');
   const target = gatewayProcess;
@@ -1787,6 +1795,7 @@ async function requestAutomaticGatewayRecovery(options = {}) {
     markGatewayRecoveryDegraded(options.reason || 'automatic recovery budget exhausted');
     return false;
   }
+  const recoveryGeneration = ++gatewayRecoveryGeneration;
   const attempt = gatewayRecoveryAttempts.length;
   const delayMs = Math.min(
     GATEWAY_RECOVERY_BASE_DELAY_MS * (2 ** attempt),
@@ -1805,7 +1814,7 @@ async function requestAutomaticGatewayRecovery(options = {}) {
     + '\n',
   );
   if (delayMs > 0) await sleep(delayMs);
-  if (isQuitting) return false;
+  if (isQuitting || isGatewayRestarting || recoveryGeneration !== gatewayRecoveryGeneration) return false;
   await restartGatewayFromElectron({
     ...options,
     automaticRecovery: true,
@@ -2043,11 +2052,15 @@ async function startGateway() {
     forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
     if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
-      requestAutomaticGatewayRecovery({
+      // Code 42 is an intentional handoff from the Electron-managed gateway,
+      // not a failed health probe. Start the replacement immediately and
+      // cancel any watchdog recovery that was queued for the old process.
+      invalidateGatewayRecoverySchedule();
+      restartGatewayFromElectron({
         terminateExisting: true,
         reason: 'gateway requested restart (code 42)',
       }).catch((error) => {
-        writeGatewayLog('[main] Automatic gateway recovery request failed: ' + (error?.message || error) + '\n');
+        writeGatewayLog('[main] Electron gateway restart request failed: ' + (error?.message || error) + '\n');
       });
       return;
     }
@@ -2092,6 +2105,7 @@ async function restartGatewayFromElectron(options = {}) {
     await startGateway();
     await waitForGateway();
     gatewayRelay?.setState('ready');
+    gatewayRecoveryAttempts.length = 0;
     writeGatewayLog('[main] Electron-managed gateway restart complete\n');
 
     if (mainWindow && !mainWindow.isDestroyed()) {

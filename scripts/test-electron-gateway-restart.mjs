@@ -17,6 +17,13 @@ const mainSource = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8
 assert.match(mainSource, /detached:\s*process\.platform !== 'win32'/);
 assert.match(mainSource, /killManagedGatewayProcessTree\(staleProcess\)/);
 assert.match(mainSource, /await waitForGatewayPortRelease\(\)/);
+assert.match(mainSource, /recoveryGeneration !== gatewayRecoveryGeneration/);
+const plannedRestartBranchStart = mainSource.indexOf("if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE)");
+assert.ok(plannedRestartBranchStart >= 0, 'Electron must handle the planned restart exit code');
+const plannedRestartBranch = mainSource.slice(plannedRestartBranchStart, plannedRestartBranchStart + 900);
+assert.match(plannedRestartBranch, /invalidateGatewayRecoverySchedule\(\)/);
+assert.match(plannedRestartBranch, /restartGatewayFromElectron\(/);
+assert.doesNotMatch(plannedRestartBranch, /requestAutomaticGatewayRecovery\(/);
 
 assert.deepEqual(parsePidList('101\n202\n101\nnot-a-pid\n'), [101, 202]);
 assert.deepEqual(
