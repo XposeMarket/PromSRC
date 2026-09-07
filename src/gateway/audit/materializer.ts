@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fork, type ChildProcess } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 
 type StartAuditMaterializerOpts = {
   workspacePath: string;
@@ -138,9 +139,10 @@ type StreamLinesResult = {
   oversizedLines: number;
 };
 
-function streamLinesSync(filePath: string, maxLineBytes: number, onLine: (line: string, truncated: boolean) => void): StreamLinesResult {
+export function streamLinesSync(filePath: string, maxLineBytes: number, onLine: (line: string, truncated: boolean) => void): StreamLinesResult {
   const fd = fs.openSync(filePath, 'r');
   const buffer = Buffer.allocUnsafe(64 * 1024);
+  const decoder = new StringDecoder('utf8');
   let position = 0;
   let pending = '';
   let discardingOversizedLine = false;
@@ -194,8 +196,10 @@ function streamLinesSync(filePath: string, maxLineBytes: number, onLine: (line: 
       if (!count) break;
       position += count;
       bytesRead += count;
-      feed(buffer.toString('utf8', 0, count));
+      feed(decoder.write(buffer.subarray(0, count)));
     }
+    const decodedTail = decoder.end();
+    if (decodedTail) feed(decodedTail);
     if (discardingOversizedLine) {
       emit(`${oversizedSample} ...[truncated]`, true);
     } else if (pending.length) {
