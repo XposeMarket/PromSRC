@@ -10,6 +10,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       ICONS,
       isMobileChatPinned,
       toggleMobileChatPin,
+      refreshMobileDrawerSessions,
       MOBILE_CHAT_SESSION_ID,
       MOBILE_GATEWAY_STATUS,
       PM_CHAT_VOICE_ICON_SRC,

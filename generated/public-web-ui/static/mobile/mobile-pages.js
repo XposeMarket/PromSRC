@@ -9917,6 +9917,7 @@ function loadMobileChatPageRenderer() {
   reconcileMobileChatTurn,
   renderMobileContextChip,
   renderMobileHeader,
+  refreshMobileDrawerSessions,
   toggleMobileChatPin,
   renderVoicePage,
   requestMobileUpdate,
