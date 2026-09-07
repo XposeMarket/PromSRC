@@ -181,6 +181,22 @@ function isPathInside(basePath: string, targetPath: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+function guardTimedAgentClient(client: any, isTimedOut: () => boolean, timeoutError: Error): any {
+  const guardedMethods = new Set(['chatWithThinking', 'generateWithRetryThinking']);
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof prop !== 'string' || !guardedMethods.has(prop) || typeof value !== 'function') return value;
+      return async (...args: any[]) => {
+        if (isTimedOut()) throw timeoutError;
+        const result = await value.apply(target, args);
+        if (isTimedOut()) throw timeoutError;
+        return result;
+      };
+    },
+  });
+}
+
 function resolveAgentExecutionWorkspace(agent: any, mainWorkspacePath: string): string {
   const configured = String(agent?.executionWorkspace || agent?.execution_workspace || agent?.workspaceRoot || '').trim();
   if (!configured) return mainWorkspacePath;
@@ -339,34 +355,42 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   console.log(`${label} Workspace scoped to: ${workspacePath}`);
 
   const runAgent = async (): Promise<string> => {
-    const reactor = new Reactor(resolved.client as any);
+    let timedOut = false;
+    const timeoutError = new Error(`Sub-agent timeout after ${timeoutMs}ms`);
+    const guardedClient = guardTimedAgentClient(resolved.client, () => timedOut, timeoutError);
+    const reactor = new Reactor(guardedClient as any);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
-    return Promise.race<string>([
-      reactor.run(taskMessage, {
-        role: 'executor',
-        promptMode,
-        includeAgentSystemPrompt: true,
-        subagentSystemPromptOnly: true,
-        workspacePath,
-        skillSlugs: agentSkills,
-        // When dispatched to a team, load identity from the per-team isolated dir
-        // so this agent is a completely separate entity in each team context.
-        // Falls back to agentOwnWorkspace if no team override is active.
-        systemPromptWorkspacePath: identityWorkspace,
-        toolProfile: agentToolProfile,
-        reasoningEffort: resolved.reasoningEffort as any,
-        onStep: (step) => {
-          stepCount++;
-          options.onStep?.(step);
-        },
-      }),
-      new Promise<string>((_, reject) => {
-        setTimeout(
-          () => reject(new Error(`Sub-agent timeout after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
+    try {
+      return await Promise.race<string>([
+        reactor.run(taskMessage, {
+          role: 'executor',
+          promptMode,
+          includeAgentSystemPrompt: true,
+          subagentSystemPromptOnly: true,
+          workspacePath,
+          skillSlugs: agentSkills,
+          // When dispatched to a team, load identity from the per-team isolated dir
+          // so this agent is a completely separate entity in each team context.
+          // Falls back to agentOwnWorkspace if no team override is active.
+          systemPromptWorkspacePath: identityWorkspace,
+          toolProfile: agentToolProfile,
+          reasoningEffort: resolved.reasoningEffort as any,
+          onStep: (step) => {
+            stepCount++;
+            options.onStep?.(step);
+          },
+        }),
+        new Promise<string>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            reject(timeoutError);
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   };
 
   try {
