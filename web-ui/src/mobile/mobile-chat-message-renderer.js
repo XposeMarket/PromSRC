@@ -210,4 +210,6 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       ${workflowLabel ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
       <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }
+
+  return _renderChatMessageHtml;
 }

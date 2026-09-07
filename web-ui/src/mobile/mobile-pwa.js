@@ -1,4 +1,4 @@
-const PM_PWA_VERSION = 'pm-v309-2026-08-26-question-stepper';
+const PM_PWA_VERSION = 'pm-v311-2026-09-07-mobile-runtime-hydration';
 const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
 window.addEventListener('beforeinstallprompt', (event) => {

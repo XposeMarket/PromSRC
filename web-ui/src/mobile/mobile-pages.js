@@ -8184,10 +8184,22 @@ function _renderMobileVoiceLyrics(text = '', progress = 0, options = {}) {
 let mobileChatRendererRuntime = null;
 let mobileChatRendererRuntimePromise = null;
 
+const MOBILE_CHAT_RENDERER_REQUIRED_METHODS = Object.freeze([
+  'createMobileStreamReceiptLedger',
+  '_renderChatMessageHtml',
+]);
+
+function _isCompatibleMobileChatRendererRuntime(runtime) {
+  return !!runtime && MOBILE_CHAT_RENDERER_REQUIRED_METHODS.every((name) => typeof runtime[name] === 'function');
+}
+
 function _mobileChatRendererGlobal() {
-  if (mobileChatRendererRuntime) return mobileChatRendererRuntime;
+  if (_isCompatibleMobileChatRendererRuntime(mobileChatRendererRuntime)) return mobileChatRendererRuntime;
+  mobileChatRendererRuntime = null;
   try {
-    if (window.__pmMobileChatRendererRuntime) return window.__pmMobileChatRendererRuntime;
+    if (_isCompatibleMobileChatRendererRuntime(window.__pmMobileChatRendererRuntime)) {
+      return window.__pmMobileChatRendererRuntime;
+    }
   } catch {}
   return null;
 }
@@ -8419,7 +8431,11 @@ function loadMobileChatRendererRuntime() {
   if (!mobileChatRendererRuntimePromise) {
     mobileChatRendererRuntimePromise = import('./mobile-chat-renderer-runtime.js')
       .then(({ createMobileChatRendererRuntime }) => {
-        mobileChatRendererRuntime = createMobileChatRendererRuntime(mobileChatRendererContext);
+        const runtime = createMobileChatRendererRuntime(mobileChatRendererContext);
+        if (!_isCompatibleMobileChatRendererRuntime(runtime)) {
+          throw new Error('Mobile chat renderer runtime contract mismatch.');
+        }
+        mobileChatRendererRuntime = runtime;
         markMobileLifecycle('chatRuntimeHydrated');
         return mobileChatRendererRuntime;
       })
