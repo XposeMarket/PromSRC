@@ -1,4 +1,4 @@
-const PM_PWA_VERSION = 'pm-v311-2026-09-07-mobile-runtime-hydration';
+const PM_PWA_VERSION = 'pm-v312-2026-09-07-mobile-controls';
 const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
 window.addEventListener('beforeinstallprompt', (event) => {
