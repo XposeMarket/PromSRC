@@ -332,8 +332,20 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const mobilePageInstanceToken = `mobile_page_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   let mobilePageDisposed = false;
   __pmChat.mobilePageInstanceToken = mobilePageInstanceToken;
-  await loadMobileChatRendererRuntime();
-  receipts = mobileChatRendererRuntime.createMobileStreamReceiptLedger();
+  const hydratedMobileChatRendererRuntime = await loadMobileChatRendererRuntime();
+  if (
+    !hydratedMobileChatRendererRuntime
+    || typeof hydratedMobileChatRendererRuntime.createMobileStreamReceiptLedger !== 'function'
+    || typeof hydratedMobileChatRendererRuntime._renderChatMessageHtml !== 'function'
+  ) {
+    throw new Error('Mobile chat renderer runtime contract mismatch.');
+  }
+  // The context snapshot is captured before the lazy renderer finishes loading.
+  // Always bind renderer-owned methods from the hydrated runtime itself so an
+  // iOS bfcache restore cannot leave this page using stale or null references.
+  mobileChatRendererRuntime = hydratedMobileChatRendererRuntime;
+  _renderChatMessageHtml = hydratedMobileChatRendererRuntime._renderChatMessageHtml;
+  receipts = hydratedMobileChatRendererRuntime.createMobileStreamReceiptLedger();
   setReceipts(receipts);
   await _ensureMobileQuestionController();
   ensureMobileChatStyles();
