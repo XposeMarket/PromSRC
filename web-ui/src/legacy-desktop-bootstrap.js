@@ -172,6 +172,70 @@ function connectWS() {
   }
   _waitForEventBus();
 })();
+
+// This file is an ES module, but the desktop document still contains inline
+// handlers and sibling modules call parts of the legacy surface through
+// window.*. Keep that compatibility boundary explicit instead of relying on
+// classic-script globals.
+Object.assign(window, {
+  _renderChannelsPanel,
+  allowSidebarSessionDrop,
+  beginSidebarSessionDrag,
+  checkStatus,
+  closeSettledSessionsView,
+  confirmSessionHoverDelete,
+  confirmSessionHoverSettle,
+  confirmSessionHoverUnsettle,
+  consumeSidebarClick,
+  dropSidebarSession,
+  endSidebarSessionDrag,
+  filterSessions,
+  handleSendStop,
+  hideSessionHoverPreview,
+  hideSidebarBranchPopover,
+  leaveSidebarSessionDrop,
+  loadApprovals,
+  loadInstalledSkills,
+  loadSettledSessions,
+  loadSystemStats,
+  openSearchSession,
+  openSettledSession,
+  queueSessionHoverPreview,
+  refreshJobDetail,
+  refreshAll,
+  renderImportedSourceLogo,
+  renderImportedSourceMeta,
+  renderJobDetail,
+  renderSessionsList,
+  renameChatSession,
+  saveChatSessionTitle,
+  selectJob,
+  setActiveChatModelRoute,
+  setAnthropicBudget,
+  setAnthropicThinking,
+  setButtonState,
+  setReasoningLevel,
+  showMoreSessions,
+  showSessionHoverPreview,
+  showSidebarBranchPopover,
+  scheduleSidebarBranchPopoverClose,
+  stopGeneration,
+  switchModel,
+  toggleChannelsEditMode,
+  toggleChannelsView,
+  toggleChatPin,
+  toggleDesktopComposerModelSwitcher,
+  toggleModelSwitcher,
+  togglePriorityPanel,
+  togglePriorityProject,
+  togglePrioritySection,
+  toggleSettledSessionsView,
+  toggleSidebarSearch,
+  updateSessionTitleEverywhere,
+  updateStats,
+  updateTokenCount,
+  scheduleSessionHoverPreviewClose,
+});
 // ═══ SETTINGS — EXTRACTED to src/pages/SettingsPage.js ═══
 // 98 functions (~2,153 lines) moved
 
@@ -198,6 +262,7 @@ let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
 let _channelsEditMode = false;
 let _pinnedChats = JSON.parse(localStorage.getItem('prometheus_pinned_chats') || '[]');
+window._pinnedChats = _pinnedChats;
 const _sidebarBranchMetadata = new Map();
 let _sidebarBranchMetadataRequest = null;
 let _sidebarBranchMetadataInFlightIds = new Set();
@@ -1399,7 +1464,7 @@ function _prioritySessionActivityTime(session) {
   (Array.isArray(session?.history) ? session.history : []).forEach((message) => {
     const role = String(message?.role || '').toLowerCase();
     if (!['user', 'assistant', 'ai'].includes(role)) return;
-    if (isInternalChatMessage(message) || !String(message?.content || '').trim()) return;
+    if (window.isInternalChatMessage?.(message) || !String(message?.content || '').trim()) return;
     const timestamp = _priorityTimestampMillis(message?.timestamp);
     if (timestamp) candidates.push(timestamp);
   });
