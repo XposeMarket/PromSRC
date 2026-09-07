@@ -19,8 +19,6 @@ export interface SpawnOptions {
   task: string;
   /** Timeout in ms. Default: 120000 (2 min) */
   timeoutMs?: number;
-  /** Max reactor steps. Overrides agent.maxSteps */
-  maxSteps?: number;
   /** Extra context injected into the task prompt */
   context?: string;
   /** Called on each reactor step (for streaming to UI) */
@@ -263,7 +261,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   // can declare an executionWorkspace so file tools and run_command are confined
   // to a specific project directory while identity/artifacts stay separate.
   const workspacePath = options.workspacePath || agentExecutionWorkspace;
-  const maxSteps = options.maxSteps ?? agent.maxSteps ?? 8;
   // Subagents use the shared runtime contract plus their own AGENT.md identity
   // and private MEMORY.md. They never inherit Prom's persona files.
   const promptMode = 'minimal';
@@ -342,7 +339,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   console.log(`${label} Workspace scoped to: ${workspacePath}`);
 
   const runAgent = async (): Promise<string> => {
-    const reactor = new Reactor(resolved.client as any, maxSteps);
+    const reactor = new Reactor(resolved.client as any);
 
     return Promise.race<string>([
       reactor.run(taskMessage, {
@@ -356,7 +353,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
         // so this agent is a completely separate entity in each team context.
         // Falls back to agentOwnWorkspace if no team override is active.
         systemPromptWorkspacePath: identityWorkspace,
-        maxSteps,
         toolProfile: agentToolProfile,
         reasoningEffort: resolved.reasoningEffort as any,
         onStep: (step) => {
@@ -465,7 +461,6 @@ export async function spawnAgentsPipeline(
   stages: Array<{
     agentId: string;
     taskBuilder: (previousResult: string) => string;
-    maxSteps?: number;
     agentType?: string;
   }>,
 ): Promise<SpawnResult[]> {
@@ -477,7 +472,6 @@ export async function spawnAgentsPipeline(
     const result = await spawnAgent({
       agentId: stage.agentId,
       task,
-      maxSteps: stage.maxSteps,
       agentType: stage.agentType,
       context: lastResult ? `Previous stage output:\n${lastResult}` : undefined,
     });
