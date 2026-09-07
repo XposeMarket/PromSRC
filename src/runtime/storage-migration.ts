@@ -34,6 +34,14 @@ export interface StorageMigrationManifest {
   backupRoot: string;
   copied: Array<{ source: string; target: string; hash: string; bytes: number }>;
   identical: Array<{ source: string; target: string; hash: string; bytes: number }>;
+  replaced: Array<{
+    source: string;
+    target: string;
+    preservedTarget: string;
+    sourceHash: string;
+    targetHash: string;
+    bytes: number;
+  }>;
   conflicts: StorageMigrationConflict[];
   skippedSymlinks: string[];
   errors: Array<{ source?: string; target?: string; message: string }>;
@@ -52,8 +60,14 @@ export interface ExecuteStorageMigrationOptions {
 
 type MigrationAccumulator = Pick<
   StorageMigrationManifest,
-  'copied' | 'identical' | 'conflicts' | 'skippedSymlinks' | 'errors'
+  'copied' | 'identical' | 'replaced' | 'conflicts' | 'skippedSymlinks' | 'errors'
 >;
+
+type CanonicalReplacementPolicy = {
+  backupRoot: string;
+  runtimeRoot: string;
+  workspaceRoot: string;
+};
 
 function normalizeForCompare(input: string): string {
   const resolved = path.resolve(input);
@@ -146,7 +160,55 @@ function fileHash(filePath: string): string {
   return hash.digest('hex');
 }
 
-function copyFileVerified(source: string, target: string, acc: MigrationAccumulator): void {
+function replacementBackupPath(target: string, policy: CanonicalReplacementPolicy): string | null {
+  if (pathInside(policy.runtimeRoot, target)) {
+    return path.join(policy.backupRoot, 'preexisting-canonical', 'runtime', path.relative(policy.runtimeRoot, target));
+  }
+  if (pathInside(policy.workspaceRoot, target)) {
+    return path.join(policy.backupRoot, 'preexisting-canonical', 'workspace', path.relative(policy.workspaceRoot, target));
+  }
+  return null;
+}
+
+function preserveExistingFile(
+  source: string,
+  target: string,
+  targetHash: string,
+  acc: MigrationAccumulator,
+  policy: CanonicalReplacementPolicy,
+): string | null {
+  const preservedTarget = replacementBackupPath(target, policy);
+  if (!preservedTarget) {
+    recordConflict(acc, { source, target, targetHash, reason: 'different_file' });
+    return null;
+  }
+  if (!ensureTargetDirectory(path.dirname(preservedTarget), target, acc)) return null;
+  if (fs.existsSync(preservedTarget)) {
+    const preservedStat = fs.lstatSync(preservedTarget);
+    if (preservedStat.isSymbolicLink()) {
+      recordConflict(acc, { source: target, target: preservedTarget, targetHash, reason: 'destination_symlink' });
+      return null;
+    }
+    if (!preservedStat.isFile() || fileHash(preservedTarget) !== targetHash) {
+      recordConflict(acc, { source: target, target: preservedTarget, targetHash, reason: 'different_file' });
+      return null;
+    }
+    return preservedTarget;
+  }
+  fs.copyFileSync(target, preservedTarget, fs.constants.COPYFILE_EXCL);
+  if (fileHash(preservedTarget) !== targetHash) {
+    try { fs.rmSync(preservedTarget, { force: true }); } catch {}
+    throw new Error(`preexisting canonical backup verification failed for ${target}`);
+  }
+  return preservedTarget;
+}
+
+function copyFileVerified(
+  source: string,
+  target: string,
+  acc: MigrationAccumulator,
+  replacementPolicy?: CanonicalReplacementPolicy,
+): void {
   try {
     const sourceStat = fs.lstatSync(source);
     if (sourceStat.isSymbolicLink()) {
@@ -172,12 +234,33 @@ function copyFileVerified(source: string, target: string, acc: MigrationAccumula
       if (sourceDigest === targetDigest) {
         acc.identical.push({ source, target, hash: sourceDigest, bytes: sourceStat.size });
       } else {
-        recordConflict(acc, {
+        if (!replacementPolicy) {
+          recordConflict(acc, {
+            source,
+            target,
+            sourceHash: sourceDigest,
+            targetHash: targetDigest,
+            reason: 'different_file',
+          });
+          return;
+        }
+        const preservedTarget = preserveExistingFile(source, target, targetDigest, acc, replacementPolicy);
+        if (!preservedTarget) return;
+        const temp = `${target}.${process.pid}.${Date.now()}.migration.tmp`;
+        fs.copyFileSync(source, temp, fs.constants.COPYFILE_EXCL);
+        if (fileHash(temp) !== sourceDigest) {
+          try { fs.rmSync(temp, { force: true }); } catch {}
+          throw new Error(`replacement verification hash mismatch for ${target}`);
+        }
+        fs.renameSync(temp, target);
+        if (fileHash(target) !== sourceDigest) throw new Error(`replacement activation hash mismatch for ${target}`);
+        acc.replaced.push({
           source,
           target,
+          preservedTarget,
           sourceHash: sourceDigest,
           targetHash: targetDigest,
-          reason: 'different_file',
+          bytes: sourceStat.size,
         });
       }
       return;
@@ -195,7 +278,12 @@ function copyFileVerified(source: string, target: string, acc: MigrationAccumula
   }
 }
 
-function copyTreeVerified(sourceRoot: string, targetRoot: string, acc: MigrationAccumulator): void {
+function copyTreeVerified(
+  sourceRoot: string,
+  targetRoot: string,
+  acc: MigrationAccumulator,
+  replacementPolicy?: CanonicalReplacementPolicy,
+): void {
   if (!fs.existsSync(sourceRoot)) return;
   try {
     const sourceStat = fs.lstatSync(sourceRoot);
@@ -204,7 +292,7 @@ function copyTreeVerified(sourceRoot: string, targetRoot: string, acc: Migration
       return;
     }
     if (sourceStat.isFile()) {
-      copyFileVerified(sourceRoot, targetRoot, acc);
+      copyFileVerified(sourceRoot, targetRoot, acc, replacementPolicy);
       return;
     }
     if (!sourceStat.isDirectory()) return;
@@ -217,8 +305,8 @@ function copyTreeVerified(sourceRoot: string, targetRoot: string, acc: Migration
         acc.skippedSymlinks.push(source);
         continue;
       }
-      if (entry.isDirectory()) copyTreeVerified(source, target, acc);
-      else if (entry.isFile()) copyFileVerified(source, target, acc);
+      if (entry.isDirectory()) copyTreeVerified(source, target, acc, replacementPolicy);
+      else if (entry.isFile()) copyFileVerified(source, target, acc, replacementPolicy);
     }
   } catch (error: any) {
     acc.errors.push({ source: sourceRoot, target: targetRoot, message: String(error?.message || error) });
@@ -291,6 +379,7 @@ function migrateLegacyAgentWorkspaces(
   sourceConfigRoot: string,
   layout: PrometheusLayout,
   acc: MigrationAccumulator,
+  replacementPolicy?: CanonicalReplacementPolicy,
 ): void {
   const agentsRoot = path.join(sourceConfigRoot, 'agents');
   if (!fs.existsSync(agentsRoot)) return;
@@ -313,7 +402,7 @@ function migrateLegacyAgentWorkspaces(
       const sourceAgentDir = path.join(agentsRoot, entry.name);
       const sourceWorkspace = path.join(sourceAgentDir, 'workspace');
       if (!fs.existsSync(sourceWorkspace)) continue;
-      copyTreeVerified(sourceWorkspace, standaloneSubagentWorkspace(layout, entry.name), acc);
+      copyTreeVerified(sourceWorkspace, standaloneSubagentWorkspace(layout, entry.name), acc, replacementPolicy);
     }
   } catch (error: any) {
     acc.errors.push({ source: agentsRoot, target: layout.workspace.standaloneSubagents, message: String(error?.message || error) });
@@ -403,6 +492,7 @@ function writeContentVerified(
   target: string,
   content: string,
   acc: MigrationAccumulator,
+  replacementPolicy?: CanonicalReplacementPolicy,
 ): boolean {
   try {
     if (!ensureTargetDirectory(path.dirname(target), sourceLabel, acc)) return false;
@@ -421,8 +511,29 @@ function writeContentVerified(
       }
       const targetHash = fileHash(target);
       if (targetHash !== expectedHash) {
-        recordConflict(acc, { source: sourceLabel, target, sourceHash: expectedHash, targetHash, reason: 'different_file' });
-        return false;
+        if (!replacementPolicy) {
+          recordConflict(acc, { source: sourceLabel, target, sourceHash: expectedHash, targetHash, reason: 'different_file' });
+          return false;
+        }
+        const preservedTarget = preserveExistingFile(sourceLabel, target, targetHash, acc, replacementPolicy);
+        if (!preservedTarget) return false;
+        const temp = `${target}.${process.pid}.${Date.now()}.migration.tmp`;
+        fs.writeFileSync(temp, content, 'utf-8');
+        if (fileHash(temp) !== expectedHash) {
+          try { fs.rmSync(temp, { force: true }); } catch {}
+          throw new Error(`replacement verification hash mismatch for ${target}`);
+        }
+        fs.renameSync(temp, target);
+        if (fileHash(target) !== expectedHash) throw new Error(`replacement activation hash mismatch for ${target}`);
+        acc.replaced.push({
+          source: sourceLabel,
+          target,
+          preservedTarget,
+          sourceHash: expectedHash,
+          targetHash,
+          bytes: expectedBytes,
+        });
+        return true;
       }
       acc.identical.push({ source: sourceLabel, target, hash: expectedHash, bytes: expectedBytes });
       return true;
@@ -449,6 +560,7 @@ function migrateConfigJson(
   sourceWorkspaceRoot: string,
   layout: PrometheusLayout,
   acc: MigrationAccumulator,
+  replacementPolicy: CanonicalReplacementPolicy,
 ): boolean {
   const source = path.join(sourceConfigRoot, 'config.json');
   if (!fs.existsSync(source)) return false;
@@ -464,7 +576,7 @@ function migrateConfigJson(
     }
     const raw = JSON.parse(fs.readFileSync(source, 'utf-8'));
     const rewritten = rewriteMigratedConfigPaths(raw, sourceConfigRoot, sourceWorkspaceRoot, layout);
-    return writeContentVerified(source, path.join(layout.runtime.config, 'config.json'), `${JSON.stringify(rewritten, null, 2)}\n`, acc);
+    return writeContentVerified(source, path.join(layout.runtime.config, 'config.json'), `${JSON.stringify(rewritten, null, 2)}\n`, acc, replacementPolicy);
   } catch (error: any) {
     acc.errors.push({ source, target: path.join(layout.runtime.config, 'config.json'), message: `config migration failed: ${String(error?.message || error)}` });
     return false;
@@ -476,6 +588,7 @@ function migrateConfigRoot(
   sourceWorkspaceRoot: string,
   layout: PrometheusLayout,
   acc: MigrationAccumulator,
+  replacementPolicy: CanonicalReplacementPolicy,
 ): boolean {
   if (!fs.existsSync(sourceConfigRoot) || samePath(sourceConfigRoot, layout.runtime.root) || samePath(sourceConfigRoot, layout.runtime.config)) return false;
   let rewrittenConfig = false;
@@ -497,28 +610,28 @@ function migrateConfigRoot(
       }
       if (entry.isDirectory()) {
         if (entry.name === 'skills') {
-          copyTreeVerified(source, layout.workspace.skills, acc);
+          copyTreeVerified(source, layout.workspace.skills, acc, replacementPolicy);
           continue;
         }
         if (entry.name === 'skill-state') {
-          copyTreeVerified(source, path.join(layout.runtime.config, 'skills'), acc);
+          copyTreeVerified(source, path.join(layout.runtime.config, 'skills'), acc, replacementPolicy);
           continue;
         }
         if (entry.name === 'agents') {
-          migrateLegacyAgentWorkspaces(sourceConfigRoot, layout, acc);
-          copyTreeVerified(source, path.join(layout.runtime.config, 'legacy-root', 'agents'), acc);
+          migrateLegacyAgentWorkspaces(sourceConfigRoot, layout, acc, replacementPolicy);
+          copyTreeVerified(source, path.join(layout.runtime.config, 'legacy-root', 'agents'), acc, replacementPolicy);
           continue;
         }
         const mapped = runtimeDirectoryTarget(layout, entry.name);
-        copyTreeVerified(source, mapped || path.join(layout.runtime.config, 'legacy-root', entry.name), acc);
+        copyTreeVerified(source, mapped || path.join(layout.runtime.config, 'legacy-root', entry.name), acc, replacementPolicy);
         continue;
       }
       if (!entry.isFile()) continue;
       if (entry.name === 'config.json') {
-        rewrittenConfig = migrateConfigJson(sourceConfigRoot, sourceWorkspaceRoot, layout, acc) || rewrittenConfig;
+        rewrittenConfig = migrateConfigJson(sourceConfigRoot, sourceWorkspaceRoot, layout, acc, replacementPolicy) || rewrittenConfig;
         continue;
       }
-      copyFileVerified(source, runtimeFileTarget(layout, entry.name), acc);
+      copyFileVerified(source, runtimeFileTarget(layout, entry.name), acc, replacementPolicy);
     }
   } catch (error: any) {
     acc.errors.push({ source: sourceConfigRoot, target: layout.runtime.config, message: `config-root migration failed: ${String(error?.message || error)}` });
@@ -526,7 +639,7 @@ function migrateConfigRoot(
   return rewrittenConfig;
 }
 
-function writeManifest(filePath: string, manifest: StorageMigrationManifest): void {
+function writeManifest(filePath: string, manifest: unknown): void {
   const link = existingSymlinkAncestor(filePath);
   if (link) throw new Error(`refusing to write migration metadata through symbolic link: ${link}`);
   const parent = path.dirname(filePath);
@@ -567,6 +680,16 @@ function preflightMigrationPaths(
   }
   for (const source of sources) {
     for (const target of destinations) {
+      // Electron's legacy workspace already lives at the v2 workspace path.
+      // Treat that exact identity as an in-place workspace adoption: the copy
+      // phase explicitly skips it below, while the independently migrated
+      // config/runtime state still receives normal overlap protection.
+      const adoptsWorkspaceInPlace = samePath(source, sourceWorkspaceRoot)
+        && samePath(target, layout.workspace.root)
+        && samePath(source, target);
+      if (adoptsWorkspaceInPlace) {
+        continue;
+      }
       if (pathsOverlap(source, target)) {
         errors.push({ source, target, message: 'source and migration destination roots overlap' });
       }
@@ -605,10 +728,11 @@ function removeCopyMarker(filePath: string, acc: MigrationAccumulator): void {
 /**
  * Copy and verify pre-v2 Prometheus state into layout v2.
  *
- * This phase NEVER removes or renames source data and NEVER overwrites a
- * different destination file. A successful marker certifies only copy integrity;
- * the later activation phase must separately prove that live readers resolve the
- * canonical locations before switching any running process.
+ * This phase NEVER removes or renames source data. When an inactive canonical
+ * destination differs from the active legacy source, it preserves that target
+ * under the migration backup before atomically promoting the active source.
+ * A successful marker certifies only copy integrity; the later activation phase
+ * must separately prove that live readers resolve the canonical locations.
  */
 export function executeStorageLayoutV2Migration(options: ExecuteStorageMigrationOptions = {}): StorageMigrationManifest {
   const layout = options.layout || resolvePrometheusLayout();
@@ -624,6 +748,7 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
   const acc: MigrationAccumulator = {
     copied: [],
     identical: [],
+    replaced: [],
     conflicts: [],
     skippedSymlinks: [],
     errors: [],
@@ -651,6 +776,7 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
       backupRoot,
       copied: [],
       identical: [],
+      replaced: [],
       conflicts: [],
       skippedSymlinks: [],
       errors: preflightErrors,
@@ -676,9 +802,14 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
     }
   }
 
-  const rewrittenConfig = migrateConfigRoot(sourceConfigRoot, sourceWorkspaceRoot, layout, acc);
+  const replacementPolicy: CanonicalReplacementPolicy = {
+    backupRoot,
+    runtimeRoot: layout.runtime.root,
+    workspaceRoot: layout.workspace.root,
+  };
+  const rewrittenConfig = migrateConfigRoot(sourceConfigRoot, sourceWorkspaceRoot, layout, acc, replacementPolicy);
   if (fs.existsSync(sourceWorkspaceRoot) && !samePath(sourceWorkspaceRoot, layout.workspace.root)) {
-    copyTreeVerified(sourceWorkspaceRoot, layout.workspace.root, acc);
+    copyTreeVerified(sourceWorkspaceRoot, layout.workspace.root, acc, replacementPolicy);
   }
 
   let manifest: StorageMigrationManifest = {
@@ -694,6 +825,7 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
     backupRoot,
     copied: acc.copied,
     identical: acc.identical,
+    replaced: acc.replaced,
     conflicts: acc.conflicts,
     skippedSymlinks: acc.skippedSymlinks,
     errors: acc.errors,
@@ -715,7 +847,24 @@ export function executeStorageLayoutV2Migration(options: ExecuteStorageMigration
 
   if (manifest.copyVerified) {
     try {
-      writeManifest(copyMarker, manifest);
+      writeManifest(copyMarker, {
+        version: manifest.version,
+        migrationId: manifest.migrationId,
+        layoutVersion: manifest.layoutVersion,
+        completedAt: manifest.completedAt,
+        sourceConfigRoot: manifest.sourceConfigRoot,
+        sourceWorkspaceRoot: manifest.sourceWorkspaceRoot,
+        targetRuntimeRoot: manifest.targetRuntimeRoot,
+        targetWorkspaceRoot: manifest.targetWorkspaceRoot,
+        backupRoot: manifest.backupRoot,
+        counts: {
+          copied: manifest.copied.length,
+          identical: manifest.identical.length,
+          replaced: manifest.replaced.length,
+        },
+        rewrittenConfig: manifest.rewrittenConfig,
+        copyVerified: true,
+      });
     } catch (error: any) {
       acc.errors.push({ target: copyMarker, message: `copy-verification marker write failed: ${String(error?.message || error)}` });
       manifest = { ...manifest, errors: acc.errors, copyVerified: false };
