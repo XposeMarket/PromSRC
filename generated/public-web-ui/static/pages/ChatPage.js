@@ -4657,8 +4657,8 @@ function shouldLoadBrowserSurfaceRenderer() {
     || state?.lastError
     || state?.url
     || state?.selectedElement
-    || browserCanvasStream?.active
-    || nativeBrowserSurface?.active
+    || window.browserCanvasStream?.active
+    || window.nativeBrowserSurface?.active
     || (canvasOpen && activeTab?.mode === 'browser')
   );
 }
@@ -7526,6 +7526,7 @@ function isInternalChatMessage(msg) {
     || /^\[BACKGROUND_TASK_RESULT\b/i.test(text)
     || /^Restart Context Packet\b/i.test(text);
 }
+window.isInternalChatMessage = isInternalChatMessage;
 
 let visualArtifactStateSyncTimer = null;
 
@@ -7713,14 +7714,14 @@ function mergeServerSessionSummaries(summaries) {
   for (const serverSession of summaries) {
     if (!serverSession?.id) continue;
     if (isInternalChatSession(serverSession)) continue;
-    if (Array.isArray(_pinnedChats)) {
-      const pinIndex = _pinnedChats.indexOf(String(serverSession.id));
+    if (Array.isArray(window._pinnedChats)) {
+      const pinIndex = window._pinnedChats.indexOf(String(serverSession.id));
       const serverPinned = Number(serverSession.pinnedAt || 0) > 0;
       if (serverPinned && pinIndex === -1) {
-        _pinnedChats.push(String(serverSession.id));
+        window._pinnedChats.push(String(serverSession.id));
         pinsChanged = true;
       } else if (!serverPinned && pinIndex !== -1) {
-        _pinnedChats.splice(pinIndex, 1);
+        window._pinnedChats.splice(pinIndex, 1);
         pinsChanged = true;
       }
     }
@@ -7776,7 +7777,7 @@ function mergeServerSessionSummaries(summaries) {
       byId.set(sessionId, newSession);
     }
   }
-  if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
+  if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(window._pinnedChats || []));
   window.chatSessions.sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
 }
 
