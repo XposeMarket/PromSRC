@@ -138,6 +138,8 @@ jobs:
         run: node scripts/test-electron-security-boundary.mjs
       - name: Verify Electron native browser resource policy
         run: npm run test:electron-browser-resource-policy
+      - name: Verify browser dispatch continuity and failure evidence
+        run: npx tsx src/gateway/browser-continuity.regression.ts
       - name: Verify plugins page contract
         run: node scripts/test-plugins-page-contract.mjs
       - name: Verify Hub goals contract
