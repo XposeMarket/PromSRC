@@ -128,7 +128,7 @@ export async function resolveProviderStatus(
     markProviderStatus(connected, cacheKey, { result, source: 'connection_probe' });
   } else {
     // A newer runtime observation or config invalidation wins over an older probe.
-    providerStatusChecking.delete(cacheKey);
+    if (generation === cacheGeneration) providerStatusChecking.delete(cacheKey);
     return readProviderStatusCache(cacheKey)?.connected ?? connected;
   }
   return connected;

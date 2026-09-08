@@ -62,6 +62,14 @@ async function main(): Promise<void> {
     finish(false);
     assert.equal(await obsolete, true, 'late failed probe must not replace newer successful evidence');
     assert.equal(readProviderStatusEvidence('same-provider').result, 'success');
+    const invalidated = resolveProviderStatus(() => new Promise<boolean>((resolve) => { finish = resolve; }), 'invalidate-provider');
+    await Promise.resolve();
+    invalidateProviderStatusCache();
+    markProviderStatusChecking(true, 'invalidate-provider');
+    finish(false);
+    await invalidated;
+    assert.equal(readProviderStatusCache('invalidate-provider'), null, 'late completion must not resurrect invalidated evidence');
+    assert.equal(isProviderStatusChecking('invalidate-provider'), true, 'an invalidated probe cannot clear the new generation checking flag');
   } finally {
     Date.now = realNow;
     invalidateProviderStatusCache();
