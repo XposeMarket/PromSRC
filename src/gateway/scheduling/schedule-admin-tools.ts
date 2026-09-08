@@ -724,7 +724,7 @@ export async function scheduleJobStuckControlTool(scheduler: SchedulerLike, args
   };
 }
 
-function jobHealth(job: CronJob): Record<string, any> {
+export function jobHealth(job: CronJob): Record<string, any> {
   const now = Date.now();
   const nextRunMs = job.nextRun ? new Date(job.nextRun).getTime() : 0;
   const overdue = job.enabled && job.status === 'scheduled' && nextRunMs > 0 && nextRunMs < now;

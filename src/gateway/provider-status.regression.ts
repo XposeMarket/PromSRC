@@ -6,6 +6,7 @@ import {
   markProviderStatus,
   markProviderStatusChecking,
   readProviderStatusCache,
+  readProviderStatusEvidence,
   resolveProviderStatus,
 } from './provider-status.js';
 
@@ -22,6 +23,9 @@ async function main(): Promise<void> {
     markProviderStatus(true, 'provider-a');
     now += PROVIDER_STATUS_CACHE_MS + 1;
     assert.equal(readProviderStatusCache('provider-a'), null, 'expired health results must not remain readable indefinitely');
+    assert.equal(readProviderStatusEvidence('provider-a').freshness, 'stale');
+    assert.equal(readProviderStatusEvidence('provider-a').scope, 'unverified_runtime_route');
+    assert.equal(readProviderStatusEvidence('provider-a').provider, null, 'an unscoped runtime report must not identify the executed provider');
 
     let probes = 0;
     const first = await resolveProviderStatus(async () => { probes += 1; return true; }, 'provider-b');
@@ -29,9 +33,13 @@ async function main(): Promise<void> {
     assert.equal(first, true);
     assert.equal(second, true, 'fresh same-identity result should be reused');
     assert.equal(probes, 1, 'fresh cache should suppress duplicate provider probes');
-    markProviderStatusChecking(true);
+    assert.equal(readProviderStatusEvidence('provider-b').scope, 'configured_provider_connection');
+    assert.equal(readProviderStatusEvidence('provider-b').result, 'success');
+    markProviderStatusChecking(true, 'provider-b');
+    markProviderStatusChecking(true, 'another-check');
     await resolveProviderStatus(async () => { probes += 1; return false; }, 'provider-b');
-    assert.equal(isProviderStatusChecking(), false, 'a periodic cache hit must clear the transient checking flag');
+    assert.equal(isProviderStatusChecking('provider-b'), false, 'a periodic cache hit must clear its transient checking flag');
+    assert.equal(isProviderStatusChecking('another-check'), true, 'one provider must not clear another provider check');
     assert.equal(probes, 1, 'checking-flag refresh must not force another provider probe');
 
     const oldProbe = resolveProviderStatus(async () => {
@@ -41,6 +49,19 @@ async function main(): Promise<void> {
     markProviderStatus(true, 'new-provider');
     await oldProbe;
     assert.equal(readProviderStatusCache('new-provider')?.connected, true, 'an old in-flight probe must not overwrite the new provider identity');
+
+    await resolveProviderStatus(async () => { throw new Error('secret must not leak'); }, 'exception-provider');
+    assert.equal(readProviderStatusEvidence('exception-provider').result, 'exception');
+    assert.ok(!JSON.stringify(readProviderStatusEvidence('exception-provider')).includes('secret'));
+    await resolveProviderStatus(() => new Promise(() => {}), 'timeout-provider');
+    assert.equal(readProviderStatusEvidence('timeout-provider').result, 'timeout');
+    let finish!: (value: boolean) => void;
+    const obsolete = resolveProviderStatus(() => new Promise<boolean>((resolve) => { finish = resolve; }), 'same-provider');
+    await Promise.resolve();
+    markProviderStatus(true, 'same-provider');
+    finish(false);
+    assert.equal(await obsolete, true, 'late failed probe must not replace newer successful evidence');
+    assert.equal(readProviderStatusEvidence('same-provider').result, 'success');
   } finally {
     Date.now = realNow;
     invalidateProviderStatusCache();

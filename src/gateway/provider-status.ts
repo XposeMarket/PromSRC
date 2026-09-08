@@ -5,11 +5,16 @@ interface ProviderStatusCacheEntry {
   checkedAt: number;
   connected: boolean;
   cacheKey: string;
+  result: ProviderCheckResult;
+  source: 'connection_probe' | 'runtime_report';
 }
+
+export type ProviderCheckResult = 'success' | 'failed' | 'timeout' | 'exception';
 
 const providerStatusCache = new Map<string, ProviderStatusCacheEntry>();
 const PROVIDER_STATUS_CACHE_ENTRY_LIMIT = 8;
-let providerStatusChecking = false;
+const providerStatusChecking = new Set<string>();
+let cacheGeneration = 0;
 
 export const PROVIDER_STATUS_CACHE_MS = 5 * 60_000;
 export const PROVIDER_STATUS_TIMEOUT_MS = 3_000;
@@ -37,9 +42,13 @@ export function getProviderStatusCacheKey(): string {
   return `${providerId}:${accountId}:${configFingerprint}`;
 }
 
-export function markProviderStatus(connected: boolean, cacheKey = getProviderStatusCacheKey()): void {
-  providerStatusChecking = false;
-  providerStatusCache.set(cacheKey, { checkedAt: Date.now(), connected, cacheKey });
+export function markProviderStatus(
+  connected: boolean,
+  cacheKey = getProviderStatusCacheKey(),
+  evidence: { result: ProviderCheckResult; source: 'connection_probe' | 'runtime_report' } = { result: connected ? 'success' : 'failed', source: 'runtime_report' },
+): void {
+  providerStatusChecking.delete(cacheKey);
+  providerStatusCache.set(cacheKey, { checkedAt: Date.now(), connected, cacheKey, ...evidence });
   while (providerStatusCache.size > PROVIDER_STATUS_CACHE_ENTRY_LIMIT) {
     const oldest = [...providerStatusCache.entries()].sort((a, b) => a[1].checkedAt - b[1].checkedAt)[0];
     if (!oldest) break;
@@ -47,27 +56,46 @@ export function markProviderStatus(connected: boolean, cacheKey = getProviderSta
   }
 }
 
-export function markProviderStatusChecking(checking = true): void {
-  providerStatusChecking = checking;
+export function markProviderStatusChecking(checking = true, cacheKey = getProviderStatusCacheKey()): void {
+  if (checking) providerStatusChecking.add(cacheKey);
+  else providerStatusChecking.delete(cacheKey);
 }
 
 export function invalidateProviderStatusCache(): void {
+  cacheGeneration += 1;
   providerStatusCache.clear();
-  providerStatusChecking = false;
+  providerStatusChecking.clear();
 }
 
 export function readProviderStatusCache(cacheKey = getProviderStatusCacheKey()): { checkedAt: number; connected: boolean } | null {
   const cached = providerStatusCache.get(cacheKey);
   if (!cached) return null;
   if (Date.now() - cached.checkedAt >= PROVIDER_STATUS_CACHE_MS) {
-    providerStatusCache.delete(cacheKey);
     return null;
   }
   return { checkedAt: cached.checkedAt, connected: cached.connected };
 }
 
-export function isProviderStatusChecking(): boolean {
-  return providerStatusChecking;
+export function isProviderStatusChecking(cacheKey = getProviderStatusCacheKey()): boolean {
+  return providerStatusChecking.has(cacheKey);
+}
+
+/** Evidence is retained after expiry for inspection; expired results never imply live health. */
+export function readProviderStatusEvidence(cacheKey = getProviderStatusCacheKey(), now = Date.now()) {
+  const cached = providerStatusCache.get(cacheKey);
+  const ageMs = cached ? Math.max(0, now - cached.checkedAt) : null;
+  return {
+    provider: cached?.source === 'connection_probe' ? cacheKey.split(':')[0] : null,
+    configuredProvider: cacheKey.split(':')[0],
+    model: null,
+    scope: cached?.source === 'connection_probe' ? 'configured_provider_connection' : 'unverified_runtime_route',
+    source: cached?.source || null,
+    checkedAt: cached?.checkedAt || null,
+    ageMs,
+    freshness: !cached ? 'unknown' : ageMs! >= PROVIDER_STATUS_CACHE_MS ? 'stale' : 'fresh',
+    result: cached?.result || null,
+    checking: isProviderStatusChecking(cacheKey),
+  };
 }
 
 export async function resolveProviderStatus(
@@ -75,17 +103,33 @@ export async function resolveProviderStatus(
   cacheKey = getProviderStatusCacheKey(),
 ): Promise<boolean> {
   const cached = readProviderStatusCache(cacheKey);
-  if (cached) {
-    providerStatusChecking = false;
+  if (cached && providerStatusCache.get(cacheKey)?.source === 'connection_probe') {
+    providerStatusChecking.delete(cacheKey);
     return cached.connected;
   }
 
-  const connected = await Promise.race([
-    testConnection().catch(() => false),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), PROVIDER_STATUS_TIMEOUT_MS)),
-  ]);
+  const generation = cacheGeneration;
+  providerStatusChecking.add(cacheKey);
+  const entryAtStart = providerStatusCache.get(cacheKey);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let result: ProviderCheckResult;
+  try {
+    result = await Promise.race([
+      Promise.resolve().then(testConnection).then((connected): ProviderCheckResult => connected ? 'success' : 'failed', (): ProviderCheckResult => 'exception'),
+      new Promise<ProviderCheckResult>((resolve) => { timer = setTimeout(() => resolve('timeout'), PROVIDER_STATUS_TIMEOUT_MS); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  const connected = result === 'success';
   // Capture the identity before the async probe. If settings change while the
   // probe is in flight, its result must stay attached to the old identity.
-  markProviderStatus(connected, cacheKey);
+  if (generation === cacheGeneration && providerStatusCache.get(cacheKey) === entryAtStart) {
+    markProviderStatus(connected, cacheKey, { result, source: 'connection_probe' });
+  } else {
+    // A newer runtime observation or config invalidation wins over an older probe.
+    providerStatusChecking.delete(cacheKey);
+    return readProviderStatusCache(cacheKey)?.connected ?? connected;
+  }
   return connected;
 }

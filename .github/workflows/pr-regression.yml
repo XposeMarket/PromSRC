@@ -35,6 +35,11 @@ jobs:
         run: npm run test:thread-handoff
       - name: Verify Brain provider diagnostics and bounded failures
         run: npm run test:brain-provider-diagnostics
+      - name: Verify provider evidence and system health classification
+        run: |
+          npx tsx src/gateway/provider-status.regression.ts
+          npx tsx src/gateway/diagnostics/system-diagnostics.regression.ts
+          npx tsx src/gateway/diagnostics/system-diagnostics-integration.regression.ts
       - name: Verify scheduled Brain chat runtime contract
         run: npm run test:brain-scheduled-chat
       - name: Verify proposal approval durability
