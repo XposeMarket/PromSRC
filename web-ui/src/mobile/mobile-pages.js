@@ -30,6 +30,7 @@ import {
   persistBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
 } from '../background-agent-work.js';
+import { clearMobileRecoveryPlaceholder } from './mobile-chat-recovery-state.js';
 
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule, deleteMobileSchedule,
@@ -2846,6 +2847,9 @@ function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
 
 function _mergeMobileAssistantTurnDetails(target, source) {
   if (!target || !source || target === source) return target;
+  // Old clients persisted the reconnect sentence as assistant body text. Clear
+  // it before reconciliation so the recovered durable answer can take over.
+  _clearRecoveredMobileChatError(target);
   const mergeList = (key) => {
     const existing = Array.isArray(target[key]) ? target[key] : [];
     const incoming = Array.isArray(source[key]) ? source[key] : [];
@@ -3432,14 +3436,7 @@ function _clearRecoveredMobileChatError(message) {
     delete message.errorPresentation;
     changed = true;
   }
-  const recoveryPlaceholder = "Connection dropped, but Prometheus may still be working. I'll keep checking and recover the result here.";
-  const currentText = String(message.body?.text || message.content || '').trim();
-  if (currentText === recoveryPlaceholder) {
-    if (!message.body || typeof message.body !== 'object') message.body = { sender: '', text: '' };
-    message.body.text = '';
-    message.content = '';
-    changed = true;
-  }
+  if (clearMobileRecoveryPlaceholder(message)) changed = true;
   return changed;
 }
 
