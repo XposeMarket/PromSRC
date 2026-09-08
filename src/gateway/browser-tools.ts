@@ -2650,9 +2650,15 @@ async function callInHouseBrowser<T = any>(route: string, payload: Record<string
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-  const data: any = await resp.json().catch(() => ({}));
+  let data: any;
+  try { data = await resp.json(); } catch {
+    throw new Error(`Invalid JSON from in-house browser (${route}); session=${String(payload.sessionId || '')}.`);
+  }
   if (!resp.ok || data?.ok === false || data?.error) {
     throw new Error(String(data?.error || `In-house browser RPC failed (${resp.status}).`));
+  }
+  if (data?.ok !== true || !Object.prototype.hasOwnProperty.call(data, 'result')) {
+    throw new Error(`Invalid response from in-house browser (${route}); session=${String(payload.sessionId || '')}: missing success result.`);
   }
   return data?.result as T;
 }
@@ -2796,6 +2802,26 @@ function shouldUseInHouseBrowser(sessionId: string): boolean {
   const metadata = getBrowserSessionMetadata(resolved);
   if (metadata.ownerType === 'main') return getMainBrowserTarget(resolved) === 'inhouse';
   return inHouseTargetSessions.has(resolved);
+}
+
+/** Restore only a native session confirmed by Electron; never open a tab or switch lanes here. */
+async function recoverInHouseSessionMapping(sessionId: string): Promise<{ recovered?: boolean; error?: string } | null> {
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved) || sessions.has(resolved) || !shouldUseInHouseBrowser(resolved)) return null;
+  try {
+    const state: any = await callInHouseBrowser('state', { sessionId: resolved });
+    if (String(state?.sessionId || '') !== resolved) {
+      return { error: `ERROR: [browser_target_mismatch] Native browser returned a different session; requested=${resolved}, target=inhouse.` };
+    }
+    if (state?.attached !== true || !String(state?.url || '').trim()) {
+      const hadPage = !!getPersistedBrowserSessionRecord(resolved);
+      return { error: `ERROR: [${hadPage ? 'browser_session_unavailable' : 'browser_not_opened'}] No active native browser for session=${resolved}, target=inhouse. ${hadPage ? 'Saved page metadata exists, but Electron has no attached session.' : 'Open a browser for this chat first.'}` };
+    }
+    syncInHouseBrowserState(resolved, state);
+    return { recovered: true };
+  } catch (err: any) {
+    return { error: `ERROR: [browser_connection_failed] Could not recover session=${resolved}, target=inhouse: ${err.message}` };
+  }
 }
 
 // Clear, actionable message for tools not yet ported to the in-house browser, so
@@ -5210,6 +5236,9 @@ async function browserOpenInHouse(
   if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = `https://${targetUrl}`;
   try {
     const state: any = await callInHouseBrowser('open', { sessionId: resolved, url: targetUrl, profile: resolveInHouseProfileId(resolved) });
+    if (!state || typeof state !== 'object' || !String(state.url || '').trim()) {
+      return `ERROR: In-house browser open returned no page state; session=${resolved}.`;
+    }
     const inHouse = upsertInHouseSession(resolved, state);
     broadcastInHouseBrowserStatus(resolved, 'browser_open', 'Opened in Prometheus in-house browser.', {
       active: true,
@@ -5231,6 +5260,9 @@ async function browserSnapshotInHouse(sessionId: string): Promise<string> {
   if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
   try {
     const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
+    if (typeof result?.snapshot !== 'string' || !result.snapshot.trim()) {
+      return `ERROR: In-house browser returned no snapshot evidence; session=${resolved}.`;
+    }
     const inHouse = upsertInHouseSession(resolved, result);
     inHouse.lastSnapshot = boundedBrowserSnapshot(result?.snapshot || '');
     inHouse.lastSnapshotAt = Date.now();
@@ -5269,6 +5301,7 @@ async function browserClickInHouse(
     }
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await browserSnapshotInHouse(resolved);
+      if (snapshot.startsWith('ERROR')) return `ERROR: Click action completed, but its observation failed. Do not repeat the click; retry browser_observe.\n${snapshot}`;
       return `Clicked ${requestedSelector || `@${requestedRef}`} (${clicked?.role || 'element'}: "${clicked?.name || ''}")\n\n${snapshot}`;
     }
     broadcastInHouseBrowserStatus(resolved, 'browser_click', `Clicked ${requestedSelector || `@${requestedRef}`} in Prometheus in-house browser.`, {
@@ -5301,6 +5334,7 @@ async function browserFillInHouse(
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_fill');
     if (shouldReturnSnapshot(observeMode)) {
       const snapshot = await browserSnapshotInHouse(resolved);
+      if (snapshot.startsWith('ERROR')) return `ERROR: Fill action completed, but its observation failed. Do not repeat the fill; retry browser_observe.\n${snapshot}`;
       return `Filled ${requestedSelector || `@${requestedRef}`} (${filled?.role || 'element'}: "${filled?.name || ''}") with "${String(text || '').slice(0, 50)}".\n\n${snapshot}`;
     }
     broadcastInHouseBrowserStatus(resolved, 'browser_fill', `Filled ${requestedSelector || `@${requestedRef}`} in Prometheus in-house browser.`, {
@@ -5542,7 +5576,13 @@ export async function browserSnapshot(
   options?: { onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
-  if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) {
+    const snapshot = await browserSnapshotInHouse(resolved);
+    if (snapshot.startsWith('ERROR') || !recovery?.recovered) return snapshot;
+    return `Recovered the existing in-house browser mapping for session=${resolved}.\n${snapshot}`;
+  }
   let session = sessions.get(resolved);
   const aliveStartedAt = session ? Date.now() : 0;
   if (session && !(await isSessionAlive(session))) {
@@ -5780,6 +5820,9 @@ export async function browserClick(
   target: number | { ref?: number; element?: string; selector?: string },
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
+  if (recovery?.recovered) return 'ERROR: Browser session mapping recovered. Observe the current page with browser_observe before retrying the click; no click was sent.';
   if (getInHouseSession(sessionId)) return browserClickInHouse(sessionId, target, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
