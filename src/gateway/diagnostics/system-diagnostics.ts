@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { automationDashboardTool } from '../scheduling/schedule-admin-tools';
+import { automationDashboardTool, jobHealth } from '../scheduling/schedule-admin-tools';
 import { listDurableRuntimes, listLiveRuntimes } from '../live-runtime-registry';
 import { getErrorWatchdogSummary, loadWatchdogState } from '../errors/error-watchdog';
-import { isProviderStatusChecking, readProviderStatusCache } from '../provider-status';
+import { readProviderStatusEvidence } from '../provider-status';
 import { getBuildStatus } from '../../runtime/build-status';
 import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
 import { getConfig } from '../../config/config';
@@ -20,6 +20,15 @@ function age(now: number, value: any): number | null {
 }
 
 const INTERRUPTED_RUNTIME_STATUSES = new Set(['interrupted', 'stalled', 'failed', 'recoverable']);
+
+export function classifyJobDiagnostics(jobs: any[]) {
+  const liveFailures = new Set(['error_backoff', 'overdue', 'output_alert']);
+  return {
+    unhealthyJobs: jobs.filter((job) => liveFailures.has(String(job.health?.state))),
+    intentionalJobs: jobs.filter((job) => job.health?.state === 'paused'),
+    unverifiedJobs: jobs.filter((job) => ['unknown', 'unverified'].includes(String(job.health?.state || 'unknown'))),
+  };
+}
 
 export function summarizeRuntimeDiagnostics(runtimeRows: any[], now: number, limit: number, depth: 'summary' | 'full') {
   const seenRuntimeIds = new Set<string>();
@@ -56,6 +65,7 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
   const depth = String(args.depth || 'summary') === 'full' ? 'full' : 'summary';
   const configDir = deps.configDir || getConfig().getConfigDir();
   const issues: any[] = [];
+  const historicalIssues: any[] = [];
 
   const gatewayRaw = readJson(path.join(configDir, 'gateway-runtime-status.json'));
   const heartbeatAt = gatewayRaw?.lastHeartbeatAt || gatewayRaw?.updatedAt || gatewayRaw?.timestamp;
@@ -73,7 +83,12 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
 
   const dashboard = automationDashboardTool(deps.scheduler, { limit, depth: 'summary', include: [] });
   const automationData: any = dashboard.success ? dashboard.data : {};
-  const unhealthyJobs = (automationData?.scheduledJobs || []).filter((job: any) => !['healthy', 'idle', 'unknown'].includes(String(job?.health?.state || 'unknown')));
+  // Classify before applying the display limit: a later failing job must not disappear.
+  const jobRows = deps.scheduler.getJobs().map((job: any) => ({
+    id: job.id, name: job.name, enabled: job.enabled, status: job.status, health: jobHealth(job),
+  }));
+  const jobDiagnostics = classifyJobDiagnostics(jobRows);
+  const { unhealthyJobs, intentionalJobs, unverifiedJobs } = jobDiagnostics;
   const troubledTasks = (automationData?.tasks || []).filter((task: any) => ['failed', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(String(task?.status || '')));
   if (unhealthyJobs.length) issues.push({ code: 'automation_job_unhealthy', severity: 'warning', subsystem: 'automation', summary: `${unhealthyJobs.length} scheduled job(s) need attention.`, nextInspectionTool: 'schedule_job_detail' });
   if (troubledTasks.length) issues.push({ code: 'task_needs_attention', severity: 'warning', subsystem: 'tasks', summary: `${troubledTasks.length} task(s) need attention.`, nextInspectionTool: 'task_control' });
@@ -84,7 +99,7 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
 
   const watchdog = getErrorWatchdogSummary();
   const watchdogState: any = loadWatchdogState();
-  if (watchdog.recurring) issues.push({ code: 'watchdog_recurring_error', severity: 'warning', subsystem: 'errors', summary: `${watchdog.recurring} recurring error fingerprint(s) detected.` });
+  if (watchdog.recurring) historicalIssues.push({ code: 'watchdog_recurring_error', subsystem: 'errors', summary: `${watchdog.recurring} recurring error fingerprint(s) recorded; these are historical observations, not a live health probe.` });
   const errors = {
     ...watchdog,
     topErrors: undefined,
@@ -95,14 +110,14 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
     })),
   };
 
-  const providerCache = readProviderStatusCache();
+  const evidence = readProviderStatusEvidence(undefined, now);
   const provider = {
-    state: isProviderStatusChecking() ? 'checking' : providerCache ? (providerCache.connected ? 'online' : 'offline') : 'unknown',
-    checkedAt: providerCache?.checkedAt || null,
-    ageMs: age(now, providerCache?.checkedAt),
-    source: 'cached_status',
+    ...evidence,
+    state: evidence.checking ? 'checking'
+      : evidence.freshness !== 'fresh' || evidence.scope !== 'configured_provider_connection' ? 'unknown'
+      : evidence.result === 'success' ? 'online' : 'check_failed',
   };
-  if (provider.state === 'offline') issues.push({ code: 'provider_offline', severity: 'error', subsystem: 'provider', summary: 'The last observed provider status is offline.' });
+  if (provider.state === 'check_failed') issues.push({ code: 'provider_check_failed', severity: 'warning', subsystem: 'provider', summary: `The ${provider.provider} connection probe returned ${provider.result}; this does not establish the health of an active chat model.` });
 
   const auditRaw = readJson(path.join(deps.workspacePath, 'audit', '_index', 'global.json'));
   const auditAgeMs = age(now, auditRaw?.generatedAt);
@@ -134,9 +149,17 @@ export function systemDiagnosticsTool(deps: DiagnosticDeps, args: any = {}): { s
       generatedAt: new Date(now).toISOString(), depth,
       overall: { state: overall, issueCount: issues.length },
       gateway,
-      automation: { counts: automationData?.counts || {}, unhealthyJobs: unhealthyJobs.slice(0, limit), troubledTasks: troubledTasks.slice(0, limit) },
+      automation: {
+        counts: {
+          ...(automationData?.counts || {}), jobs: jobRows.length,
+          jobsByHealth: jobRows.reduce((counts: Record<string, number>, job: any) => { const state = String(job.health.state || 'unknown'); counts[state] = (counts[state] || 0) + 1; return counts; }, {}),
+          unhealthyJobs: unhealthyJobs.length, intentionalJobs: intentionalJobs.length, unverifiedJobs: unverifiedJobs.length,
+        },
+        unhealthyJobs: unhealthyJobs.slice(0, limit), intentionalJobs: intentionalJobs.slice(0, limit),
+        unverifiedJobs: unverifiedJobs.slice(0, limit), troubledTasks: troubledTasks.slice(0, limit),
+      },
       runtimes: { count: runtimeDiagnostics.count, interruptedCount: runtimeDiagnostics.interruptedCount, items: runtimeDiagnostics.items },
-      errors, provider, build: getBuildStatus(), restart, audit, issues: issues.slice(0, limit),
+      errors, provider, build: getBuildStatus(), restart, audit, issues: issues.slice(0, limit), historicalIssues: historicalIssues.slice(0, limit),
     },
   };
 }
