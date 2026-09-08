@@ -27,6 +27,8 @@ jobs:
           cache: npm
       - name: Install dependencies without package lifecycle scripts
         run: npm ci --ignore-scripts
+      - name: Build native terminal runtime used by tool regressions
+        run: npm rebuild node-pty --ignore-scripts=false
       - name: Install Playwright Chromium for browser regressions
         run: npx playwright install --with-deps chromium
       - name: Type-check backend
@@ -62,6 +64,11 @@ jobs:
         run: npm run test:extension-activation && npm run test:tool-category-routing && npx tsx src/runtime/tool-category-prompt-signals.regression.ts
       - name: Verify provider-facing tool category provisioning
         run: npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model
+      - name: Verify operating instructions and runtime behavior
+        run: |
+          node scripts/test-model-acceptance.mjs
+          npx tsx src/runtime/prompt-manifest.regression.ts
+          npx tsx src/runtime/instruction-segment-registry.regression.ts
       - name: Verify deterministic composite workflows
         run: npx tsx src/gateway/tools/composite-tools.regression.ts
       - name: Verify provider-neutral connector policy
