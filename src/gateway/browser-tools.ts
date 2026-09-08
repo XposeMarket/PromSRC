@@ -5260,6 +5260,9 @@ async function browserSnapshotInHouse(sessionId: string): Promise<string> {
   if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
   try {
     const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
+    if (typeof result?.snapshot !== 'string' || !result.snapshot.trim()) {
+      return `ERROR: In-house browser returned no snapshot evidence; session=${resolved}.`;
+    }
     const inHouse = upsertInHouseSession(resolved, result);
     inHouse.lastSnapshot = boundedBrowserSnapshot(result?.snapshot || '');
     inHouse.lastSnapshotAt = Date.now();

@@ -32,7 +32,7 @@ async function main() {
     return Response.json({ ok: true, result: {
       sessionId: fault === 'wrong_session' ? 'another-chat' : body.sessionId, attached: true,
       url: state.url, title: body.sessionId, profile: body.profile || 'main',
-      snapshot: `Page: ${body.sessionId}\nURL: ${state.url}\nClicks: ${state.clicks}`,
+      snapshot: fault === 'missing_snapshot' ? undefined : `Page: ${body.sessionId}\nURL: ${state.url}\nClicks: ${state.clicks}`,
       role: 'button', name: 'increment',
     } });
   }) as typeof fetch;
@@ -75,6 +75,11 @@ async function main() {
     assert.match(mismatch.result, /browser_target_mismatch/);
     fault = '';
     assert.equal((await run('chat-contract-a', 'browser_observe', { action: 'snapshot' })).error, false);
+    fault = 'missing_snapshot';
+    const absentEvidence = await run('chat-contract-a', 'browser_observe', { action: 'snapshot' });
+    assert.equal(absentEvidence.error, true);
+    assert.match(absentEvidence.result, /no snapshot evidence/);
+    fault = '';
     fault = 'snapshot';
     const callsBefore = clickCalls;
     const unverified = await run('chat-contract-a', 'browser_act', { action: 'click', selector: '#increment', observe: 'snapshot' });
@@ -90,7 +95,7 @@ async function main() {
     for (const bad of ['malformed', 'missing_result']) {
       fault = bad;
       const failed = await run(`chat-${bad}`, 'browser_session', { action: 'open', target: 'inhouse', url: 'https://fixture.invalid', observe: 'none' });
-      assert.equal(failed.error, true, `${bad} RPC reply must fail open`);
+      assert.equal(failed.error, true, `${bad} RPC reply must reject browser open`);
       assert.equal(getBrowserSessionInfo(`chat-${bad}`).active, false, 'failed open must not invent a session');
     }
     console.log('browser continuity: repeated dispatch, chat isolation, disconnect recovery, and failure evidence passed');
