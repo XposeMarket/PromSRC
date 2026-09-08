@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { clearMobileRecoveryPlaceholder, MOBILE_CONNECTION_RECOVERY_PLACEHOLDER } from '../web-ui/src/mobile/mobile-chat-recovery-state.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,27 @@ const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
 const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
+
+const legacyRecoveryTurn = {
+  role: 'ai',
+  body: { sender: '', text: MOBILE_CONNECTION_RECOVERY_PLACEHOLDER },
+  content: MOBILE_CONNECTION_RECOVERY_PLACEHOLDER,
+};
+assert.equal(clearMobileRecoveryPlaceholder(legacyRecoveryTurn), true);
+assert.equal(legacyRecoveryTurn.body.text, '');
+assert.equal(legacyRecoveryTurn.content, '');
+legacyRecoveryTurn.body.text = 'The recovered durable answer';
+assert.equal(clearMobileRecoveryPlaceholder(legacyRecoveryTurn), false);
+assert.equal(
+  legacyRecoveryTurn.body.text,
+  'The recovered durable answer',
+  'recovery cleanup must never overwrite actual assistant content',
+);
+assert.doesNotMatch(
+  pages,
+  /mobileStreamDisconnected[\s\S]{0,500}body\.text\s*=.*Connection dropped/,
+  'disconnect handling must never write transport status into assistant message text',
+);
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
 assert.match(mobileRouter, /buildMobileSettingsHandoffUrl\(window\.location, tab\)/, 'the lightweight mobile document must boot canonical Settings with a safe return route');

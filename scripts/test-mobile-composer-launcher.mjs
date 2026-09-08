@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveMobileKeyboardComposerTop } from '../web-ui/src/mobile/mobile-chat-page-runtime.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -20,6 +21,26 @@ const generatedPageRuntime = read('generated/public-web-ui/static/mobile/mobile-
 const generatedShell = read('generated/public-web-ui/static/mobile/mobile-shell.js');
 const generatedCss = read('generated/public-web-ui/static/styles/mobile.css');
 const generatedShellCss = read('generated/public-web-ui/static/styles/mobile-shell.css');
+
+const keyboardGeometry = {
+  layoutHeight: 844,
+  visualHeight: 500,
+  viewportMode: 'visual',
+  visualBottomAnchor: 500,
+  bottom: 8,
+  composerHeight: 96,
+};
+assert.equal(resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 0 }), 396);
+assert.equal(
+  resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 140 }),
+  396,
+  'visual viewport page-panning must not detach the composer from its locked keyboard edge',
+);
+assert.equal(
+  resolveMobileKeyboardComposerTop({ ...keyboardGeometry, visualTop: 140, composerHeight: 156 }),
+  336,
+  'attachment and multiline growth must preserve the keyboard edge while moving the composer top',
+);
 
 assert.equal(generatedPages, sourcePagesFile, 'generated mobile-pages.js must mirror source');
 assert.equal(generatedPageRuntime, sourcePageRuntime, 'generated mobile-chat-page-runtime.js must mirror source');

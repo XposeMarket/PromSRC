@@ -1,3 +1,26 @@
+export function resolveMobileKeyboardComposerTop({
+  layoutHeight,
+  visualHeight,
+  visualTop,
+  viewportMode,
+  visualBottomAnchor,
+  bottom,
+  composerHeight,
+} = {}) {
+  const resolvedLayoutHeight = Math.max(0, Number(layoutHeight || 0));
+  const resolvedVisualHeight = Math.max(0, Number(visualHeight || resolvedLayoutHeight));
+  const liveVisualBottom = Math.max(0, Number(visualTop || 0)) + resolvedVisualHeight;
+  const lockedVisualBottom = Math.max(0, Number(visualBottomAnchor || 0));
+  const viewportBottom = viewportMode === 'visual'
+    ? (lockedVisualBottom || liveVisualBottom)
+    : resolvedLayoutHeight;
+  return Math.max(0, Math.round(
+    viewportBottom
+    - Math.max(8, Math.round(Number(bottom) || 8))
+    - Math.max(0, Number(composerHeight || 0)),
+  ));
+}
+
 /**
  * Owns the mobile chat route renderer and its route-local orchestration.
  *
@@ -4797,6 +4820,8 @@ void main() {
   let _pmKbFocusGraceUntil = 0;
   let _pmKbFocusGraceTimer = 0;
   let _pmKbViewportMode = '';
+  let _pmKbVisualBottomAnchor = 0;
+  let _pmKbVisualHeight = 0;
   const _pmKbComposerShiftProperty = '--pm-keyboard-composer-shift';
   const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'top', 'bottom', 'z-index'];
   function _pmKbComposerNodes() {
@@ -4820,18 +4845,22 @@ void main() {
       Number(document.documentElement?.clientHeight || 0),
     );
     const vv = window.visualViewport;
-    const visualBottom = Math.round(
-      Math.max(0, Number(vv?.offsetTop || 0)) + Math.max(0, Number(vv?.height || layoutHeight || 0)),
-    );
     const resolvedBottom = Math.max(8, Math.round(Number(bottomPx) || 8));
     // Safari can derive an auto `top` for a fixed element from its old flow
     // position while the document is being scrolled. Give the keyboard-owned
     // composer an explicit top and make bottom auto so that static-position
     // recalculation cannot move it to the top edge. The height observer below
     // reapplies this when the multiline composer grows.
-    const viewportBottom = _pmKbViewportMode === 'visual' ? visualBottom : layoutHeight;
     const composerHeight = Math.max(0, Number(composer.getBoundingClientRect?.().height || 0));
-    const top = Math.max(0, Math.round(viewportBottom - resolvedBottom - composerHeight));
+    const top = resolveMobileKeyboardComposerTop({
+      layoutHeight,
+      visualHeight: Math.max(0, Number(vv?.height || layoutHeight || 0)),
+      visualTop: Math.max(0, Number(vv?.offsetTop || 0)),
+      viewportMode: _pmKbViewportMode,
+      visualBottomAnchor: _pmKbVisualBottomAnchor,
+      bottom: resolvedBottom,
+      composerHeight,
+    });
     const values = {
       position: 'fixed',
       left: '10px',
@@ -4866,8 +4895,15 @@ void main() {
       const visualBottom = Math.round(Math.max(0, Number(vv?.offsetTop || 0)) + visualHeight);
       const keyboardHeightOffset = vv ? Math.max(0, Math.round(layoutHeight - visualHeight)) : 0;
       const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8;
-      const viewportBottom = _pmKbViewportMode === 'visual' ? visualBottom : layoutHeight;
-      const desiredTop = Math.max(0, Math.round(viewportBottom - bottom - rect.height));
+      const desiredTop = resolveMobileKeyboardComposerTop({
+        layoutHeight,
+        visualHeight,
+        visualTop: Math.max(0, Number(vv?.offsetTop || 0)),
+        viewportMode: _pmKbViewportMode,
+        visualBottomAnchor: _pmKbVisualBottomAnchor,
+        bottom,
+        composerHeight: rect.height,
+      });
       const drift = desiredTop - Math.round(rect.top);
       // Normal visualViewport panning should be a no-op. Only repair a large
       // displacement, which is the iOS fixed/static-position failure mode.
@@ -4915,6 +4951,7 @@ void main() {
     const composerFocused = document.activeElement === input
       || document.activeElement?.matches?.('#pm-new-project-name')
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
+    const keyboardViewportSettled = keyboardHeightOffset > 90 || baselineOffset > 90;
     // Ignore small deltas from Safari's collapsing URL bar; only treat a
     // sizeable gap as a real keyboard. Some installed iOS PWAs shrink both
     // innerHeight and visualViewport.height, so their difference stays zero;
@@ -4927,12 +4964,17 @@ void main() {
     // A stale/shrinking visual viewport can outlive the field that opened the
     // keyboard. Do not let that closing-frame measurement re-hide the tab bar;
     // only an actively focused composer or project-name field owns this state.
-    const open = composerFocused && (
+    if (_pmKbFocusActive
+      && !composerFocused
+      && !keyboardViewportSettled
+      && performance.now() >= _pmKbFocusGraceUntil) {
+      _pmKbFocusActive = false;
+    }
+    const open = _pmKbFocusActive && (
       keyboardHeightOffset > 90
       || baselineOffset > 90
-      || (_pmKbFocusActive && performance.now() < _pmKbFocusGraceUntil)
+      || performance.now() < _pmKbFocusGraceUntil
     );
-    const keyboardViewportSettled = keyboardHeightOffset > 90 || baselineOffset > 90;
     // iOS has two incompatible fixed-position behaviors: some webviews anchor
     // fixed children to the layout viewport, while others already anchor them
     // to the visual viewport. Classify that behavior once after the keyboard
@@ -4940,6 +4982,8 @@ void main() {
     // two different bottom anchors.
     if (!open) {
       _pmKbViewportMode = '';
+      _pmKbVisualBottomAnchor = 0;
+      _pmKbVisualHeight = 0;
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbClearComposerShift();
       _pmKbClearComposerViewportStyles();
@@ -4948,6 +4992,15 @@ void main() {
       if (keyboardViewportSettled && !_pmKbViewportMode) {
         const composerBottom = Number(_pmKbActiveComposer()?.getBoundingClientRect?.().bottom || 0);
         _pmKbViewportMode = composerBottom > 0 && composerBottom <= visualBottom + 44 ? 'visual' : 'layout';
+        if (_pmKbViewportMode === 'visual') {
+          _pmKbVisualBottomAnchor = visualBottom;
+          _pmKbVisualHeight = visualHeight;
+        }
+      } else if (_pmKbViewportMode === 'visual' && Math.abs(visualHeight - _pmKbVisualHeight) > 2) {
+        // A resize changes the actual keyboard edge. A visualViewport scroll
+        // changes only offsetTop and must not drag the composer with the page.
+        _pmKbVisualBottomAnchor = visualBottom;
+        _pmKbVisualHeight = visualHeight;
       }
       _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8);
     }
@@ -5042,6 +5095,8 @@ void main() {
     // Pin aggressively through the keyboard's open animation so the shell never
     // ends up stuck above the keyboard waiting for a manual scroll.
     _pmKbViewportMode = '';
+    _pmKbVisualBottomAnchor = 0;
+    _pmKbVisualHeight = 0;
     _startKbPinLoop(1200);
     _scheduleKeyboardOffset();
     // Safari can report the focused element before it settles the visual
@@ -5049,7 +5104,7 @@ void main() {
     // composer at an intermediate, off-keyboard position.
     [120, 320, 700].forEach((delay) => setTimeout(_scheduleKeyboardOffset, delay));
   };
-  const _onComposerBlurKb = () => {
+  const _releaseComposerKeyboard = () => {
     _pmKbFocusActive = false;
     _pmKbFocusGraceUntil = 0;
     if (_pmKbFocusGraceTimer) {
@@ -5058,10 +5113,15 @@ void main() {
     }
     _pmKbPinUntil = 0;
     _pmKbViewportMode = '';
+    _pmKbVisualBottomAnchor = 0;
+    _pmKbVisualHeight = 0;
     // Blur is the authoritative end of the keyboard interaction. Restore the
     // persistent chrome immediately; waiting for a final visualViewport event
     // can leave iOS PWAs with the tab bar permanently hidden/frozen.
     _pmKbApp.classList.remove('pm-keyboard-open');
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
+    _pmKbClearComposerShift();
+    _pmKbClearComposerViewportStyles();
     _pmKbTabbar?.style.removeProperty('display');
     syncNewProjectPopoverToKeyboard(false);
     // iOS restores visualViewport and the fixed containing block over several
@@ -5071,6 +5131,32 @@ void main() {
       _scheduleKeyboardOffset();
       updateChatComposerSpace();
     }, delay));
+  };
+  const _onComposerBlurKb = () => {
+    // iOS blurs the textarea while the user scrolls or taps composer controls
+    // (especially the attachment picker) even though the keyboard viewport is
+    // still contracted. Let the viewport, not that transient blur, own the
+    // release. A subsequent resize closes the state once the keyboard is gone.
+    window.setTimeout(() => {
+      const next = document.activeElement;
+      const remainsInsideComposer = !!(next && (
+        form?.contains?.(next)
+        || (sideSheet?.classList?.contains('open') && sideInput?.closest?.('.pm-composer')?.contains?.(next))
+      ));
+      const layoutHeight = Math.max(
+        Number(window.innerHeight || 0),
+        Number(document.documentElement?.clientHeight || 0),
+      );
+      const visualHeight = Math.max(0, Number(window.visualViewport?.height || layoutHeight || 0));
+      const keyboardStillVisible = Math.max(0, layoutHeight - visualHeight) > 90
+        || Math.max(0, _pmKbBaselineHeight - visualHeight) > 90;
+      if (remainsInsideComposer || keyboardStillVisible) {
+        _pmKbFocusActive = true;
+        _scheduleKeyboardOffset();
+        return;
+      }
+      _releaseComposerKeyboard();
+    }, 80);
   };
   const _isKeyboardComposerTarget = (target) => target === input
     || target === sideInput
@@ -5086,6 +5172,8 @@ void main() {
     _pmKbFocusGraceUntil = 0;
     _pmKbPinUntil = 0;
     _pmKbViewportMode = '';
+    _pmKbVisualBottomAnchor = 0;
+    _pmKbVisualHeight = 0;
     if (_pmKbFocusGraceTimer) {
       window.clearTimeout(_pmKbFocusGraceTimer);
       _pmKbFocusGraceTimer = 0;
@@ -5126,6 +5214,8 @@ void main() {
     page.removeEventListener('focusout', _onComposerFocusOutKb);
     _pmKbFocusActive = false;
     _pmKbFocusGraceUntil = 0;
+    _pmKbVisualBottomAnchor = 0;
+    _pmKbVisualHeight = 0;
     if (_pmKbFocusGraceTimer) {
       window.clearTimeout(_pmKbFocusGraceTimer);
       _pmKbFocusGraceTimer = 0;
@@ -7064,7 +7154,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           return;
         }
         if (err?.mobileStreamDisconnected) {
-          targetAiTurn.body.text = targetAiTurn.body.text || "Connection dropped, but Prometheus may still be working. I'll keep checking and recover the result here.";
+          // Connection recovery is runtime status, never assistant content.
+          // Writing a placeholder into body.text prevents the durable final
+          // answer from merging because local text wins reconciliation.
+          _clearRecoveredMobileChatError(targetAiTurn);
           targetAiTurn.streaming = true;
           _recordMobileChatError(targetAiTurn, err);
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
