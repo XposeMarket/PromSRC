@@ -3156,6 +3156,10 @@ function _mobileTraceHasToolGroup(entries) {
 function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   if (msg?.suppressWorkTimer === true) return '';
+  // delivery_send creates an intermediate durable bubble during an existing
+  // run. Its timestamp is a delivery time, not a model-work start.
+  if (String(msg?.messageKind || '').trim() === 'delivery'
+    || String(msg?.channelLabel || '').trim() === 'delivery') return '';
   const startedAt = _mobileAssistantWorkStartedAt(msg);
   if (!startedAt) return '';
   // A final frame is the UI completion boundary even if the transport's later
@@ -3381,7 +3385,13 @@ function _appendMobileProcess(message, type, text, extra = null) {
   const prev = message.processEntries[message.processEntries.length - 1];
   if (prev && prev.type === entry.type && prev.text === entry.text) return;
   message.processEntries.push(entry);
-  if (message.processEntries.length > 120) message.processEntries.splice(0, message.processEntries.length - 120);
+  // Match the gateway's retained main-chat replay window. Recovery used to
+  // fetch the whole turn and then silently discard everything before the last
+  // 120 process rows while applying those frames on mobile.
+  const maxRecoveredProcessEntries = 12_000;
+  if (message.processEntries.length > maxRecoveredProcessEntries) {
+    message.processEntries.splice(0, message.processEntries.length - maxRecoveredProcessEntries);
+  }
 }
 
 function _recordMobileChatError(message, error) {
