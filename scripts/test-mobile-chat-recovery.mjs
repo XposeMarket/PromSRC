@@ -27,6 +27,8 @@ const desktop = [
 ].join('\n');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
 const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
+const mobileContextWindow = read('web-ui/src/mobile/mobile-context-window.js');
+const mobileChatAdapter = read('web-ui/src/features/chat/runtime/mobile-chat-adapter.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
 const desktopEntry = read('web-ui/src/desktop-entry.js');
 const settingsReturn = read('web-ui/src/settings-return.js');
@@ -162,6 +164,11 @@ assert.match(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
+assert.match(mobileContextWindow, /resolveActiveContextTokens\(\{[\s\S]{0,220}pressureTokens:/, 'mobile context UI must include compaction pressure in its visible token total');
+assert.match(mobileContextWindow, /context-pressure`\)\.catch/, 'mobile context UI must fetch the agent active-context estimator instead of showing only the bounded call slice');
+assert.match(mobileContextWindow, /pressureTokens: pressure\?\.success !== false \? pressure\?\.pressureTokens/, 'mobile context UI must merge the authoritative thread pressure into its gauge payload');
+assert.match(mobileChatAdapter, /source: 'mobile-render-reconciliation'/, 'mobile paints must reconcile compatibility recovery state into the shared runtime');
+assert.match(mobileChatAdapter, /runtimeHistory\.some\(\(message, index\) => message !== compatibilityThread\[index\]\)/, 'mobile render reconciliation must detect same-length transcript replacements');
 assert.match(api, /const _mobileHistoryWriteQueues = new Map\(\)/, 'mobile history writes must be serialized per session');
 assert.match(api, /const previous = _mobileHistoryWriteQueues\.get\(queueKey\) \|\| Promise\.resolve\(\)/, 'mobile history writes must wait for the prior snapshot');
 assert.match(api, /if \(_mobileHistoryWriteQueues\.get\(queueKey\) === write\) _mobileHistoryWriteQueues\.delete\(queueKey\)/, 'mobile history write queues must release only their own settled write');

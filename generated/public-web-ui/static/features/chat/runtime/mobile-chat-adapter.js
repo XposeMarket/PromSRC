@@ -147,7 +147,26 @@ export function createMobileChatRuntimeAdapter({
   }
 
   function getTranscriptRows(sessionId) {
-    return runtimeFor(sessionId).getTurns().map((turn, index) => Object.freeze({
+    const state = getState();
+    const sid = String(sessionId || state.activeSessionId || defaultSessionId).trim() || defaultSessionId;
+    const runtime = runtimeFor(sid);
+    const compatibilityThread = Array.isArray(state.threads?.[sid]) ? state.threads[sid] : [];
+    const runtimeHistory = runtime.getSourceHistory();
+    // Recovery, foreground freshness, and notification handlers still publish
+    // through the compatibility transcript before painting. Do not let the
+    // renderer alternate between that newer snapshot and a stale shared-runtime
+    // snapshot. Reconcile only when row identity/length differs so ordinary
+    // stream paints remain cheap and retain the live source objects.
+    const transcriptChanged = runtimeHistory.length !== compatibilityThread.length
+      || runtimeHistory.some((message, index) => message !== compatibilityThread[index]);
+    if (transcriptChanged) {
+      runtime.replaceHistory(mobileRuntimeHistory(compatibilityThread), {
+        source: 'mobile-render-reconciliation',
+        pageInfo: runtime.snapshot.paging,
+        initializeQuestionsFromHistory: runtime.snapshot.history.revision === 0,
+      });
+    }
+    return runtime.getTurns().map((turn, index) => Object.freeze({
       key: turn.key,
       index,
       msg: turn.source,
