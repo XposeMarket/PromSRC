@@ -4352,7 +4352,7 @@ void main() {
       const promptHtml = promptMessage
         ? _renderChatMessageHtml(
             promptMessage,
-            -1,
+            -2,
             `background:${backgroundRecord.id}:prompt`,
             `background-prompt:${backgroundRecord.id}`,
           )
@@ -5888,13 +5888,25 @@ void main() {
     return entries;
   }
 
+function _earliestMobileWorkStart(...values) {
+  const candidates = values
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.min(...candidates) : Date.now();
+}
+
 function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   if (!aiTurn) return;
   _clearMobileVisualStreamTimer(aiTurn);
-    const startedAtRaw = Number(options.startedAt || 0);
-    const startedAt = Number.isFinite(startedAtRaw) && startedAtRaw > 0
-      ? startedAtRaw
-      : Number(aiTurn.workStartedAt || aiTurn.timestamp || Date.now()) || Date.now();
+    // A replay/runtime can have a newer attachment timestamp than the visible
+    // turn. For the same request, elapsed work always starts at the earliest
+    // known boundary and must never jump forward on reconnect.
+    const startedAt = _earliestMobileWorkStart(
+      aiTurn.workStartedAt,
+      aiTurn.startedAt,
+      aiTurn.timestamp,
+      options.startedAt,
+    );
     aiTurn.streaming = true;
     aiTurn.time = '';
     aiTurn.timestamp = startedAt;
@@ -6149,10 +6161,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         if (evt.goalCompletionReport) aiTurn.goalCompletionReport = evt.goalCompletionReport;
         aiTurn._pmFinalReceived = true;
-        aiTurn.workStartedAt = Number(evt.workStartedAt || aiTurn.workStartedAt || aiTurn.createdAt || Date.now()) || Date.now();
+        aiTurn.workStartedAt = _earliestMobileWorkStart(aiTurn.workStartedAt, aiTurn.createdAt, aiTurn.timestamp, evt.workStartedAt);
         aiTurn.workEndedAt = Number(evt.workEndedAt || aiTurn.workEndedAt || Date.now()) || Date.now();
         aiTurn.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
-          ? Math.max(0, Number(evt.workDurationMs))
+          ? Math.max(0, Number(evt.workDurationMs), aiTurn.workEndedAt - aiTurn.workStartedAt)
           : Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
@@ -6180,10 +6192,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         if (_isMobileGoalStartAcknowledgementText(evt.reply || aiTurn.body?.text || aiTurn.content)) {
           aiTurn.messageKind = 'goal_command_ack';
         }
-        aiTurn.workStartedAt = Number(evt.workStartedAt || aiTurn.workStartedAt || aiTurn.createdAt || Date.now()) || Date.now();
+        aiTurn.workStartedAt = _earliestMobileWorkStart(aiTurn.workStartedAt, aiTurn.createdAt, aiTurn.timestamp, evt.workStartedAt);
         aiTurn.workEndedAt = Number(evt.workEndedAt || aiTurn.workEndedAt || Date.now()) || Date.now();
         aiTurn.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
-          ? Math.max(0, Number(evt.workDurationMs))
+          ? Math.max(0, Number(evt.workDurationMs), aiTurn.workEndedAt - aiTurn.workStartedAt)
           : Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _settleMobileChatSteerWorkflow(__pmChat.threads?.[requestedSession], aiTurn);
         mobileChatRuntimeAdapter.completeStream(requestedSession, evt.reply || aiTurn.body?.text || aiTurn.content, aiTurn);
@@ -7400,6 +7412,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       fallback: _readMobileActiveRun(requestedSession),
     });
     _clearRecoveredMobileChatError(aiTurn);
+    if (aiTurn.streaming !== true && foundRequestOwnedTurn) {
+      // Reclaiming a row frozen during disconnect must also discard the
+      // provisional completion boundary. Otherwise the finalizer reuses that
+      // old workEndedAt and permanently under-reports the recovered run.
+      aiTurn.workEndedAt = 0;
+      aiTurn.workDurationMs = undefined;
+      aiTurn.time = '';
+    }
     aiTurn.streaming = true;
     if (activeRunKind) {
       aiTurn.activeRunKind = activeRunKind;

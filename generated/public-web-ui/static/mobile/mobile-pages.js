@@ -3156,6 +3156,10 @@ function _mobileTraceHasToolGroup(entries) {
 function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   if (msg?.suppressWorkTimer === true) return '';
+  // delivery_send creates an intermediate durable bubble during an existing
+  // run. Its timestamp is a delivery time, not a model-work start.
+  if (String(msg?.messageKind || '').trim() === 'delivery'
+    || String(msg?.channelLabel || '').trim() === 'delivery') return '';
   const startedAt = _mobileAssistantWorkStartedAt(msg);
   if (!startedAt) return '';
   // A final frame is the UI completion boundary even if the transport's later
@@ -3381,7 +3385,13 @@ function _appendMobileProcess(message, type, text, extra = null) {
   const prev = message.processEntries[message.processEntries.length - 1];
   if (prev && prev.type === entry.type && prev.text === entry.text) return;
   message.processEntries.push(entry);
-  if (message.processEntries.length > 120) message.processEntries.splice(0, message.processEntries.length - 120);
+  // Match the gateway's retained main-chat replay window. Recovery used to
+  // fetch the whole turn and then silently discard everything before the last
+  // 120 process rows while applying those frames on mobile.
+  const maxRecoveredProcessEntries = 12_000;
+  if (message.processEntries.length > maxRecoveredProcessEntries) {
+    message.processEntries.splice(0, message.processEntries.length - maxRecoveredProcessEntries);
+  }
 }
 
 function _recordMobileChatError(message, error) {
@@ -3819,9 +3829,9 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
       text,
       extra: {
         ...normalizedExtra,
-        source: 'agent_progress',
+        source: 'agent_thought',
         visibility: 'user',
-        reasoningKind: 'summary',
+        reasoningKind: 'full_thought',
         event: event || 'token_narration_boundary',
       },
     };
@@ -4659,7 +4669,7 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
     _setMobileLiveProgressNarration(message, text);
   } else {
     _appendMobileLiveTrace(message, 'preamble', text, {
-      extra: { visibility: 'user', source: 'reasoning_summary' },
+      extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
     });
   }
   if (message.body) message.body.text = '';
@@ -5571,7 +5581,14 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
   // older history, or when recovery has a richer local snapshot. Otherwise a
   // cold reopen can render and cache only the tail, and a late stale response
   // can make recovered messages disappear while the user is typing.
-  const preserveLocalHistory = options.preserveLocalHistory === true
+  // Mobile session reads are snapshots, not deletion journals. In particular,
+  // an app-resume freshness request or session_history_changed notification can
+  // race the gateway's durable write and return an older branch with a plausible
+  // total count. Never interpret that snapshot as permission to remove durable
+  // rows that are already visible. Explicit edit/rerun flows truncate the local
+  // thread before reconciliation, so merging the remaining local rows here still
+  // respects intentional branch changes while making ordinary refresh monotonic.
+  const preserveLocalHistory = durableLocal.length > 0 || options.preserveLocalHistory === true
     || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
   const base = preserveLocalHistory
     ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
@@ -10291,7 +10308,9 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       const matches = thread.filter((turn) => turn?.role === "ai" && String(turn._clientRequestId || "").trim() === cid);
       if (!matches.length) return null;
       return [...matches].reverse().find((turn) => String(turn.messageKind || "").trim() === "steer_continuation" || String(turn.workflowPart || "").trim() === "interruption_response")
-        || [...matches].reverse().find((turn) => turn.streaming === true) || null;
+        || [...matches].reverse().find((turn) => turn.streaming === true)
+        || matches[matches.length - 1]
+        || null;
     }
     case '_applyVoiceInterruptionToMobileChat':
       return false;

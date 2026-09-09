@@ -15356,12 +15356,27 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
   font-weight: 620;
 }
 
+.pm-session-working-spinner {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 2px solid color-mix(in srgb, var(--pm-accent, #d6b75e) 28%, transparent);
+  border-top-color: var(--pm-accent, #d6b75e);
+  border-right-color: color-mix(in srgb, var(--pm-accent, #d6b75e) 72%, white);
+  border-radius: 50%;
+  animation: pm-session-working-spin .8s linear infinite;
+}
+
+@keyframes pm-session-working-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Preserve the borderless list rhythm while giving active work and unread
    chats their original panel treatment. Outline shadows do not alter layout. */
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
-  background: linear-gradient(180deg, rgba(17, 17, 16, .96), rgba(9, 9, 9, .96)) !important;
-  box-shadow: 0 0 0 1px rgba(109, 90, 43, .34), inset 0 1px 0 rgba(255, 255, 255, .02), 0 7px 18px rgba(0, 0, 0, .15) !important;
+  background: color-mix(in srgb, var(--pm-bg, #101827) 88%, var(--pm-accent, #d6b75e) 12%) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-accent, #d6b75e) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, .04), 0 7px 18px rgba(0, 0, 0, .15) !important;
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry) {
   box-shadow: 0 0 0 1px rgba(214, 183, 94, .66), inset 0 1px 0 rgba(255, 255, 255, .08), 0 7px 18px rgba(0, 0, 0, .18) !important;

@@ -5,15 +5,14 @@ function nonNegativeFinite(value) {
 
 /**
  * Select the active context total for a visible meter. The context-window
- * snapshot is the authoritative current state; pressure is only a fallback
- * for the short period where that snapshot is unavailable.
+ * snapshot describes the bounded next model call, while pressure mirrors the
+ * full active transcript used by the compaction gate. Either estimate may be
+ * temporarily behind the other, so the visible gauge must retain the larger
+ * value until an explicit compaction event resets both baselines.
  */
 export function resolveActiveContextTokens({ currentStateTokens, pressureTokens, fallbackTokens } = {}) {
-  if (currentStateTokens !== null && currentStateTokens !== undefined && Number.isFinite(Number(currentStateTokens))) {
-    return nonNegativeFinite(currentStateTokens);
-  }
-  if (pressureTokens !== null && pressureTokens !== undefined && Number.isFinite(Number(pressureTokens))) {
-    return nonNegativeFinite(pressureTokens);
-  }
-  return nonNegativeFinite(fallbackTokens);
+  const candidates = [currentStateTokens, pressureTokens, fallbackTokens]
+    .filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value)))
+    .map(nonNegativeFinite);
+  return candidates.length ? Math.max(...candidates) : 0;
 }

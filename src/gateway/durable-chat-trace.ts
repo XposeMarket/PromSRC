@@ -213,11 +213,11 @@ export function buildDurableChatTraceFromFrames(
       if (entry) entries.push(entry);
       continue;
     }
-    if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
-      if (privateReasoning(data)) continue;
-      appendVisibleThought(entries, eventText(data, ['text', 'summary', 'message']), time, reasoningExtra(data, eventType), id);
-      continue;
-    }
+    // Reasoning summaries are mutable header/status packets, not the model's
+    // full user-visible commentary. Do not materialize them as recovered body
+    // rows; the durable narration boundary and agent_thought events below own
+    // the actual thought timeline.
+    if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') continue;
     if (eventType === 'agent_thought' || eventType === 'thinking') {
       if (!visibleReasoning(data, eventType)) continue;
       appendVisibleThought(entries, eventText(data, ['text', 'thinking', 'message', 'summary']), time, reasoningExtra(data, eventType), id);
@@ -226,9 +226,10 @@ export function buildDurableChatTraceFromFrames(
     if (eventType === 'token_narration_boundary') {
       appendVisibleThought(entries, eventText(data, ['text', 'message', 'narration']), time, {
         ...data,
-        source: 'agent_progress',
+        source: 'agent_thought',
         visibility: 'user',
         event: eventType,
+        reasoningKind: 'full_thought',
       }, id, 'preamble');
     }
   }
@@ -244,16 +245,7 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
   const time = entry.time || entry.ts || entry.timestamp || Date.now();
   const id = String(entry.id || `process_trace_${index + 1}`);
 
-  if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
-    if (!content || privateReasoning(extra)) return null;
-    return {
-      id,
-      type: 'think',
-      text: content,
-      time,
-      extra: reasoningExtra(extra, eventType),
-    };
-  }
+  if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') return null;
   if (eventType === 'token_narration_boundary') {
     if (!content) return null;
     return {
@@ -261,7 +253,13 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
       type: 'preamble',
       text: content,
       time,
-      extra: { ...extra, source: 'agent_progress', visibility: 'user', event: eventType },
+      extra: {
+        ...extra,
+        source: 'agent_thought',
+        visibility: 'user',
+        event: eventType,
+        reasoningKind: 'full_thought',
+      },
     };
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {

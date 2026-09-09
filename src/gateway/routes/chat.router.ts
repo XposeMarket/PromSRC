@@ -1352,9 +1352,14 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
     type: 'think',
     actor: 'Prom',
     content,
-    extra: { source: 'runtime_checkpoint', event: 'token_narration_boundary' },
+    extra: {
+      source: 'agent_thought',
+      event: 'token_narration_boundary',
+      visibility: 'user',
+      reasoningKind: 'full_thought',
+    },
   });
-  if (entries.length > 250) entries.splice(0, entries.length - 250);
+  if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
 }
 
 function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
@@ -5135,7 +5140,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       planProtocolInstruction,
       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
       executionMode === 'interactive' && !isBootStartupTurn
-        ? 'For tool-using work, keep the user oriented with brief visible work updates: state the approach before the first meaningful tool call; after important tool results, report what you found and what you will do next; and add another update when the approach changes, a blocker appears, or verification finishes. These updates are user-facing commentary, not private chain-of-thought. Make them concrete and evidence-based, avoid narrating every low-level call, and do not repeat information already obvious from the tool activity UI.'
+        ? 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, write commentary only for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. Every later update must contain new evidence plus what it changes or what you will do next; if nothing materially changed, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls, paraphrasing an earlier update, or repeating information already visible in the tool activity UI.'
         : '',
       isBootStartupTurn
         ? 'BOOT MODE: This is an internal daily startup summary. Use only the pre-fetched BOOT snapshot supplied by the caller, do not infer missing events, and do not call tools.'
@@ -10157,8 +10162,8 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                 const processEntry = runtimeProcessEntryFromSseEvent(event, data);
                 if (processEntry) {
                   runtimeProcessEntries.push(processEntry);
-                  if (runtimeProcessEntries.length > 250) {
-                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+                  if (runtimeProcessEntries.length > 12_000) {
+                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
                   }
                   checkpoint.processEntries = [...runtimeProcessEntries];
                 }
@@ -17821,6 +17826,12 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderInputTokens = hasCurrentHistory
     ? Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0))
     : 0;
+  const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
+    ? Math.max(0, Number(lastCall.inputTokens || 0))
+    : 0;
+  const liveModelInputTokens = hasCurrentHistory
+    ? Math.max(0, Number(input.modelUsage?.inputTokens || 0))
+    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = hasCurrentHistory
@@ -17855,11 +17866,17 @@ export function buildContextWindowCurrentState(input: {
   const runtimeOverheadBasis = latestSystemPromptTokens > 0
     ? latestMessageInputTokens + latestToolSchemaTokens
     : inContextRowTotal;
-  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
+  // Provider input_tokens is the actual context submitted on the latest call.
+  // Prefer it over the locally reconstructed estimate, which can omit restored
+  // tool/reasoning history after reconnect or compaction.
+  const authoritativeProviderInputTokens = liveModelInputTokens || latestProviderReportedInputTokens || latestProviderInputTokens;
+  const runtimeOverheadTokens = Math.max(0, authoritativeProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
-  const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+  const currentStateTokens = authoritativeProviderInputTokens > 0
+    ? authoritativeProviderInputTokens
+    : inContextRowTotal;
   const contextUsage = deriveContextWindowUsage(currentStateTokens, contextLimitTokens);
   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
   const providerUsageRow = buildProviderUsageGroup('provider_session_total', 'Model usage · thread total', input.modelUsage, 'total');
@@ -17873,6 +17890,8 @@ export function buildContextWindowCurrentState(input: {
     cachedTokens,
     totalThreadTokens,
     latestProviderInputTokens,
+    latestProviderReportedInputTokens,
+    liveModelInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
@@ -21681,8 +21700,8 @@ router.post('/api/chat', async (req, res) => {
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
-      if (runtimeProcessEntries.length > 250) {
-        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+      if (runtimeProcessEntries.length > 12_000) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
       }
       checkpoint.processEntries = [...runtimeProcessEntries];
     }
@@ -21858,7 +21877,11 @@ function isTerminalProviderCapacityFailure(error: unknown): boolean {
 function markActiveRunsOnSessionList<T extends any>(input: T): T {
   const activeSessionIds = new Set(
     listLiveRuntimes()
-      .filter((runtime: any) => runtime?.kind === 'main_chat' && runtime?.sessionId)
+      .filter((runtime: any) => (
+        isLiveRunningRuntime(runtime)
+        && (runtime?.kind === 'main_chat' || runtime?.kind === 'main_chat_goal')
+        && runtime?.sessionId
+      ))
       .map((runtime: any) => String(runtime.sessionId)),
   );
 

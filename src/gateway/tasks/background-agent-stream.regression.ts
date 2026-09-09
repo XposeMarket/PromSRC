@@ -88,16 +88,13 @@ function testReasoningSummaryTrace(): void {
     source: 'reasoning_summary',
     visibility: 'user',
   });
-  assert.equal(deltaEntry?.type, 'think');
-  assert.equal(deltaEntry?.extra?.source, 'reasoning_summary');
-  assert.equal(deltaEntry?.extra?.visibility, 'user');
+  assert.equal(deltaEntry, null, 'summary packets must not replace actual commentary');
 
   const alternateEntry = backgroundProcessEntryFromSseEvent('reasoning_delta', {
     summary: 'I am comparing the captured results.',
     visibility: 'user',
   });
-  assert.equal(alternateEntry?.type, 'think');
-  assert.equal(alternateEntry?.text, 'I am comparing the captured results.');
+  assert.equal(alternateEntry, null, 'alternate summary packets must not replace actual commentary');
 
   assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary', {
     text: 'private summary must stay hidden',
@@ -112,6 +109,15 @@ function testReasoningSummaryTrace(): void {
     summary: 'private alternate summary must stay hidden',
     visibility: 'private',
   }), null);
+}
+
+function testNarrationBoundaryTrace(): void {
+  const entry = backgroundProcessEntryFromSseEvent('token_narration_boundary', {
+    text: 'I found the relevant subsystem; now I am checking its recovery path.',
+  });
+  assert.equal(entry?.type, 'preamble');
+  assert.equal(entry?.text, 'I found the relevant subsystem; now I am checking its recovery path.');
+  assert.equal(entry?.extra?.reasoningKind, 'full_thought');
 }
 
 function testVisibleAgentThoughtTrace(): void {
@@ -135,5 +141,6 @@ testPersistentAccumulationAndReplay();
 testDirectSteerDelivery();
 testStructuredToolResultTrace();
 testReasoningSummaryTrace();
+testNarrationBoundaryTrace();
 testVisibleAgentThoughtTrace();
 console.log('background-agent-stream regression: ok');

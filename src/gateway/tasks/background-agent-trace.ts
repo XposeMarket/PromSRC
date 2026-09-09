@@ -22,13 +22,12 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
   const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
   const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
   const explicitlyPrivateReasoning = visibility === 'private' || visibility === 'internal';
-  const userVisibleReasoning = !explicitlyPrivateReasoning && (eventType === 'reasoning_summary_delta'
+  const isReasoningSummary = eventType === 'reasoning_summary_delta'
     || eventType === 'reasoning_summary'
     || eventType === 'reasoning_delta'
-    || source === 'reasoning_summary'
-    || visibility === 'user');
+    || source === 'reasoning_summary';
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
-    || (eventType === 'thinking_delta' && !userVisibleReasoning)) return null;
+    || eventType === 'thinking_delta') return null;
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
   const baseExtra = {
     source: source || 'background_sse',
@@ -38,21 +37,16 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
   };
-  if (explicitlyPrivateReasoning && (eventType === 'thinking_delta'
-    || eventType === 'reasoning_summary_delta'
-    || eventType === 'reasoning_summary'
-    || eventType === 'reasoning_delta'
-    || source === 'reasoning_summary')) return null;
-  if (userVisibleReasoning && (eventType === 'thinking_delta'
-    || eventType === 'reasoning_summary_delta'
-    || eventType === 'reasoning_summary'
-    || eventType === 'reasoning_delta')) {
-    const text = backgroundTraceText(data?.text || data?.thinking || data?.summary || data?.message);
+  // Match main-chat recovery: provider reasoning summaries are mutable status
+  // packets, not the actual user-visible commentary timeline.
+  if (isReasoningSummary || explicitlyPrivateReasoning) return null;
+  if (eventType === 'token_narration_boundary') {
+    const text = backgroundTraceText(data?.text || data?.message || data?.narration);
     return text ? {
-      type: 'think',
+      type: 'preamble',
       actor: 'Prom',
       text,
-      extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'user' },
+      extra: { ...baseExtra, source: 'agent_thought', visibility: 'user', reasoningKind: 'full_thought' },
     } : null;
   }
   if (eventType === 'tool_call') {
@@ -124,7 +118,7 @@ export function appendBackgroundSseTrace(
     time: new Date(at).toLocaleTimeString(),
   };
   processEntries.push(entry);
-  if (processEntries.length > 500) processEntries.splice(0, processEntries.length - 500);
+  if (processEntries.length > 12_000) processEntries.splice(0, processEntries.length - 12_000);
   const trace = {
     id,
     type: raw.type,
@@ -135,13 +129,13 @@ export function appendBackgroundSseTrace(
     extra: raw.extra,
   };
   const previous = liveTraceEntries[liveTraceEntries.length - 1];
-  if (raw.type === 'think' && String(raw.extra?.source || '').toLowerCase() === 'reasoning_summary'
-    && previous?.type === 'think'
-    && String(previous.extra?.source || '').toLowerCase() === 'reasoning_summary') {
+  if ((raw.type === 'think' || raw.type === 'preamble')
+    && previous?.type === raw.type
+    && String(previous.extra?.source || '').toLowerCase() === String(raw.extra?.source || '').toLowerCase()) {
     previous.text = `${String(previous.text || '')}${String(raw.text || '')}`.slice(-12_000);
     previous.time = at;
   } else {
     liveTraceEntries.push(trace);
-    if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
+    if (liveTraceEntries.length > 12_000) liveTraceEntries.splice(0, liveTraceEntries.length - 12_000);
   }
 }

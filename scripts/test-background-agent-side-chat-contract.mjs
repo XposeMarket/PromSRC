@@ -6,6 +6,7 @@ const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const mobileChatRenderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const mobileSubagent = read('web-ui/src/mobile/mobile-subagent-pages.js');
+const mobileChatRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 const work = read('web-ui/src/features/chat/core/background-agent-work.js');
 const desktopWork = read('web-ui/src/features/chat/core/desktop-background-agent-work.js');
 const performanceRuntime = read('web-ui/src/features/chat/runtime/chat-performance-runtime.js');
@@ -38,6 +39,11 @@ assert.match(mobile, /if \(!lane\) \{[\s\S]{0,600}_hydrateMobileBackgroundSpawnL
 assert.match(mobile, /if \(!session && refreshedLane\?\.bgSessionId\)/, 'background detail refresh must hydrate the durable session after status recovery');
 assert.match(mobileSubagent, /if \(!localSseActive\) liveMsg = null;/, 'WS history notifications must not erase an SSE-owned live subagent bubble');
 assert.match(mobileSubagent, /if \(!liveMsg\) return;/, 'late subagent stream frames must not write through a missing live bubble');
+assert.match(
+  mobileChatRuntime,
+  /promptMessage,[\s\S]*?-2,[\s\S]*?`background:\$\{backgroundRecord\.id\}:prompt`/,
+  'background spawn prompt must not reuse the -1 no-edit sentinel and render as an edited bubble',
+);
 assert.match(mobile, /sideThreadRendered/);
 assert.match(mobile, /scheduleSideRenderSoon\(\)/);
 assert.match(mobile, /syncMobileBackgroundSpawnDockToComposer/);

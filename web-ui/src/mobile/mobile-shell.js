@@ -796,8 +796,21 @@ function _resolveTheme(themeId) {
 }
 
 function _getTheme() {
-  const currentSkin = document.documentElement.getAttribute('data-skin');
   const list = _getThemeList();
+  // The document attributes are only first-paint hints. The persisted choice
+  // is authoritative on a fresh load; otherwise an early fallback attribute
+  // can overwrite a valid blue/purple choice before the mobile shell starts.
+  try {
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(PM_THEME_KEY);
+    if (saved) {
+      const resolved = _resolveTheme(saved);
+      if (list.some((t) => t.id === resolved.id)) return resolved.id;
+    }
+  } catch {}
+
+  const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
   const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -805,14 +818,6 @@ function _getTheme() {
     const byBase = _resolveTheme(currentTheme);
     if (byBase) return byBase.id;
   }
-
-  try {
-    const saved = localStorage.getItem(PM_THEME_KEY);
-    if (saved) {
-      const resolved = _resolveTheme(saved);
-      if (list.some((t) => t.id === resolved.id)) return resolved.id;
-    }
-  } catch {}
 
   return list[0]?.id || 'dark';
 }
@@ -2002,7 +2007,7 @@ function _sessionStateMeta(session) {
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
     stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
-    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
+    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
@@ -2116,7 +2121,7 @@ function _sessionButtonHtml(session, options = {}) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2147,7 +2152,7 @@ function _searchResultButtonHtml(session, query) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2602,7 +2607,9 @@ export function openDrawer() {
   _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
     _renderDrawerSessions(_drawerCallbacks).catch(() => {});
-    setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
+    // Always reconcile against the gateway when the drawer opens. A recovered
+    // run may have changed state while the mobile client was disconnected.
+    setTimeout(() => refreshMobileDrawerSessions({ force: true }).catch(() => {}), 180);
   }
 }
 

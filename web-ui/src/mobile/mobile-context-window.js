@@ -8,6 +8,7 @@
 
 import { mobileGatewayFetch } from './mobile-api.js';
 import { escapeHtml } from './mobile-shell.js';
+import { resolveActiveContextTokens } from '../context-window-value.js';
 
 let _open = false;
 let _expanded = false;
@@ -272,8 +273,12 @@ function _renderContext(data) {
     return;
   }
   const currentState = data.currentState || {};
-  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = _displayLimit(data, currentState);
+  const current = resolveActiveContextTokens({
+    currentStateTokens: data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens,
+    pressureTokens: data.pressureTokens || currentState.pressureTokens,
+    fallbackTokens: data.activeContextTokens || currentState.activeContextTokens,
+  });
+  const windowTokens = Math.max(0, Number(data.pressureContextWindowTokens || 0)) || _displayLimit(data, currentState);
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
   if (chip) chip.title = `Context window: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens`;
@@ -358,8 +363,29 @@ async function _refresh(sessionId, { force = false, provider = '', accountId = '
   // Context window for the active session.
   try {
     if (sessionId) {
-      const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`);
-      if (seq === _refreshSeq) _renderContext(data && data.success !== false ? data : null);
+      // The composition endpoint is intentionally a bounded next-call slice.
+      // The number in the gauge is the agent's full active context for this
+      // thread, so pair those rows with the estimator used by compaction.
+      const encodedSessionId = encodeURIComponent(sessionId);
+      const [data, pressure] = await Promise.all([
+        mobileGatewayFetch(`/api/sessions/${encodedSessionId}/context-window`),
+        mobileGatewayFetch(`/api/sessions/${encodedSessionId}/context-pressure`).catch(() => null),
+      ]);
+      const merged = data && data.success !== false
+        ? {
+            ...data,
+            pressureTokens: pressure?.success !== false ? pressure?.pressureTokens : undefined,
+            pressureContextWindowTokens: pressure?.success !== false ? pressure?.contextWindowTokens : undefined,
+          }
+        : (pressure && pressure.success !== false
+          ? {
+              success: true,
+              pressureTokens: pressure.pressureTokens,
+              contextWindowTokens: pressure.contextWindowTokens,
+              currentState: { rows: [] },
+            }
+          : null);
+      if (seq === _refreshSeq) _renderContext(merged);
     } else if (seq === _refreshSeq) {
       _renderContext(null);
     }
