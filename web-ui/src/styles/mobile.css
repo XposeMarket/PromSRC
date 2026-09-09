@@ -11821,6 +11821,21 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   color-scheme: light dark;
   scrollbar-color: color-mix(in srgb, var(--pm-muted) 55%, transparent) transparent;
 }
+.pm-task-journal-detail { margin-top: 5px; color: var(--pm-muted); }
+.pm-task-journal-detail summary {
+  cursor: pointer;
+  font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--pm-muted);
+}
+.pm-task-journal-detail pre {
+  max-height: 220px;
+  margin: 5px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--pm-text-soft);
+  font: inherit;
+}
 .pm-task-journal-row:last-child { border-bottom: 0 !important; }
 .pm-task-recovery-panel {
   padding: 10px;

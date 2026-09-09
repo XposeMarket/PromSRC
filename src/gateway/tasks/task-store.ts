@@ -63,6 +63,8 @@ export type TaskStatus =
   | 'failed'
   | 'waiting_subagent';   // parent is blocked waiting for child sub-agents to finish
 
+export type BrainTaskJob = 'thought' | 'dream' | 'dream_cleanup';
+
 export type PauseReason =
   | 'preempted_by_chat'
   | 'heartbeat_cycle'
@@ -330,6 +332,11 @@ export interface TaskRecord {
   // ── run_task_now fields ────────────────────────────────────────────────────
   /** 'run_once' = spawned via run_task_now tool; 'scheduled' = cron/scheduled job */
   taskKind?: 'scheduled' | 'run_once';
+  /** Set when this task mirrors an autonomous Brain run. */
+  brainJob?: BrainTaskJob;
+  brainRunId?: string;
+  brainDate?: string;
+  brainArtifact?: string;
   /** Session that called run_task_now — verification result is delivered here */
   originatingSessionId?: string;
   /** If true, keep completion/results out of originating chat and only update task UI. */
@@ -390,6 +397,10 @@ export interface TaskSummary {
   pendingClarificationQuestion?: string;
   scheduleId?: string;
   taskKind?: 'scheduled' | 'run_once';
+  brainJob?: BrainTaskJob;
+  brainRunId?: string;
+  brainDate?: string;
+  brainArtifact?: string;
   verificationStatus?: 'pending' | 'running' | 'complete' | 'skipped';
   voiceDispatch?: TaskRecord['voiceDispatch'];
   managerEnabled?: boolean;
@@ -559,6 +570,18 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
       ? input.scheduleId
       : undefined,
     taskKind: input?.taskKind === 'run_once' ? 'run_once' : input?.taskKind === 'scheduled' ? 'scheduled' : undefined,
+    brainJob: ['thought', 'dream', 'dream_cleanup'].includes(String(input?.brainJob || '').trim())
+      ? String(input.brainJob).trim() as BrainTaskJob
+      : undefined,
+    brainRunId: typeof input?.brainRunId === 'string' && input.brainRunId.trim()
+      ? input.brainRunId.trim().slice(0, 160)
+      : undefined,
+    brainDate: typeof input?.brainDate === 'string' && input.brainDate.trim()
+      ? input.brainDate.trim().slice(0, 32)
+      : undefined,
+    brainArtifact: typeof input?.brainArtifact === 'string' && input.brainArtifact.trim()
+      ? input.brainArtifact.trim().slice(0, 500)
+      : undefined,
     verificationStatus: input?.verificationStatus === 'pending'
       || input?.verificationStatus === 'running'
       || input?.verificationStatus === 'complete'
@@ -745,6 +768,16 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
       ? task.scheduleId
       : undefined,
     taskKind: task.taskKind,
+    brainJob: task.brainJob,
+    brainRunId: typeof task.brainRunId === 'string' && task.brainRunId.trim()
+      ? task.brainRunId.trim().slice(0, 160)
+      : undefined,
+    brainDate: typeof task.brainDate === 'string' && task.brainDate.trim()
+      ? task.brainDate.trim().slice(0, 32)
+      : undefined,
+    brainArtifact: typeof task.brainArtifact === 'string' && task.brainArtifact.trim()
+      ? task.brainArtifact.trim().slice(0, 500)
+      : undefined,
     verificationStatus: task.verificationStatus,
     voiceDispatch: task.voiceDispatch ? { ...task.voiceDispatch } : undefined,
     managerEnabled: task.managerEnabled === true,
@@ -1062,6 +1095,10 @@ export function createTask(params: {
   proposalExecution?: ProposalExecutionState;
   // run_task_now fields
   taskKind?: 'scheduled' | 'run_once';
+  brainJob?: BrainTaskJob;
+  brainRunId?: string;
+  brainDate?: string;
+  brainArtifact?: string;
   originatingSessionId?: string;
   suppressOriginDelivery?: boolean;
   voiceDispatch?: TaskRecord['voiceDispatch'];
@@ -1096,6 +1133,10 @@ export function createTask(params: {
     proposalExecution: params.proposalExecution,
     // run_task_now linkage
     taskKind: params.taskKind,
+    brainJob: params.brainJob,
+    brainRunId: params.brainRunId,
+    brainDate: params.brainDate,
+    brainArtifact: params.brainArtifact,
     originatingSessionId: params.originatingSessionId,
     suppressOriginDelivery: params.suppressOriginDelivery,
     voiceDispatch: params.voiceDispatch,

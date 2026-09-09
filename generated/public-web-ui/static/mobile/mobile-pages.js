@@ -11107,10 +11107,14 @@ function _pmRenderTaskJournal(journal) {
     const content = String(entry?.content || entry?.detail || '').trim();
     const color = type === 'error' ? '#d8473a' : type === 'tool_call' ? '#0d4faf' : type === 'tool_result' ? '#2f7d44' : type === 'reasoning' ? '#6d2d9e' : type === 'pause' ? '#7c4d00' : 'var(--pm-muted)';
     const typeClass = type.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const detail = String(entry?.detail || '').trim();
+    const detailHtml = detail && detail !== content
+      ? `<details class="pm-task-journal-detail"><summary>View full output</summary><pre>${escapeHtml(detail)}</pre></details>`
+      : '';
     return `<div class="pm-task-journal-row type-${escapeHtml(typeClass)}" style="display:grid;grid-template-columns:54px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--pm-border);">
       <span style="color:var(--pm-muted);">${escapeHtml(time)}</span>
       <span style="color:${color};font-weight:800;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(type)}</span>
-      <span style="white-space:pre-wrap;word-break:break-word;color:var(--pm-text-soft);">${escapeHtml(content)}</span>
+      <span style="white-space:pre-wrap;word-break:break-word;color:var(--pm-text-soft);">${escapeHtml(content)}${detailHtml}</span>
     </div>`;
   }).join('')}</div>`;
 }
