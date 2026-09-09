@@ -490,6 +490,11 @@ assert.match(pages, /preserveLocalHistory: _mobileHistoryPageIsPartial\(session,
 assert.match(pages, /function _mobileHistoryHasProtectedLocalContinuity\(messages = \[\]\)/, 'mobile recovery must identify local live/final continuity markers');
 assert.match(pages, /localRows\.length > durableServerCount/, 'mobile recovery must retain a richer local transcript over a shorter server snapshot');
 assert.match(pages, /_mobileShouldPreserveLocalHistoryContinuity\(mapped, durableLocal\)/, 'mobile history hydration must guard against stale snapshot replacement');
+assert.match(
+  pages,
+  /const preserveLocalHistory = durableLocal\.length > 0 \|\| options\.preserveLocalHistory === true/,
+  'mobile snapshot reconciliation must never remove durable rows that are already visible',
+);
 assert.match(api, /let _sessionCacheGeneration = 0/, 'mobile session cache invalidation must have a generation fence');
 assert.match(api, /cacheGeneration === _sessionCacheGenerationFor\(sid, gatewayScope\)/, 'invalidated in-flight session responses must not repopulate the cache');
 assert.match(api, /const requestPrefix = `\$\{scope\}:\$\{sid\}:`/, 'session invalidation must detach stale in-flight request coalescing');

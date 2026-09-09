@@ -5571,7 +5571,14 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
   // older history, or when recovery has a richer local snapshot. Otherwise a
   // cold reopen can render and cache only the tail, and a late stale response
   // can make recovered messages disappear while the user is typing.
-  const preserveLocalHistory = options.preserveLocalHistory === true
+  // Mobile session reads are snapshots, not deletion journals. In particular,
+  // an app-resume freshness request or session_history_changed notification can
+  // race the gateway's durable write and return an older branch with a plausible
+  // total count. Never interpret that snapshot as permission to remove durable
+  // rows that are already visible. Explicit edit/rerun flows truncate the local
+  // thread before reconciliation, so merging the remaining local rows here still
+  // respects intentional branch changes while making ordinary refresh monotonic.
+  const preserveLocalHistory = durableLocal.length > 0 || options.preserveLocalHistory === true
     || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
   const base = preserveLocalHistory
     ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
