@@ -164,6 +164,8 @@ assert.match(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
+assert.match(api, /loadMobileSessionPage[\s\S]{0,900}loadMobileChatRunStatuses\(\)\.catch/, 'the paginated mobile drawer must query the recovery-authoritative active run list');
+assert.match(api, /activeRun:\s*session\.activeRun === true \|\| activeSessionIds\.has/, 'paginated session rows must merge active run state before rendering');
 assert.match(shell, /pm-session-working-spinner[^>]*role="status"[^>]*aria-label="Working"/, 'active mobile sessions must replace the text status with an accessible spinner');
 assert.match(shell, /const timestamp = state\.activeRun \? '' : _mobileSessionTimeLabel\(session\)/, 'active mobile sessions must replace their timestamp with the working spinner');
 assert.match(shell, /refreshMobileDrawerSessions\(\{ force: true \}\)/, 'opening the mobile drawer must reconcile recovered run state with the gateway');

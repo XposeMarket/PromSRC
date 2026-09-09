@@ -1774,8 +1774,21 @@ export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, 
     includeAutomated: '1',
     state: ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active',
   });
-  const r = await mfetch(`/api/sessions?${params.toString()}`);
-  return _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
+  const [r, runStatus] = await Promise.all([
+    mfetch(`/api/sessions?${params.toString()}`),
+    loadMobileChatRunStatuses().catch(() => null),
+  ]);
+  const page = _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
+  const activeSessionIds = new Set(
+    (Array.isArray(runStatus?.activeSessionIds) ? runStatus.activeSessionIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean),
+  );
+  page.sessions = page.sessions.map((session) => ({
+    ...session,
+    activeRun: session.activeRun === true || activeSessionIds.has(String(session.id || '')),
+  }));
+  return page;
 }
 
 // Pinned chats are intentionally loaded through a server-side filtered page.

@@ -105,9 +105,10 @@ const providerContextState = buildContextWindowCurrentState({
   },
 });
 
-assert.equal(providerContextState.currentStateTokens, 188_400, 'the context header must use the latest provider-reported input, not the reconstructed estimate');
+assert.equal(providerContextState.currentStateTokens, 857_000, 'the context header must advance with the live Model usage Input total');
 assert.equal(providerContextState.latestProviderReportedInputTokens, 188_400);
-assert.ok(Math.abs(providerContextState.contextUsage.percent - 69.26470588235294) < 0.000001);
+assert.equal(providerContextState.liveModelInputTokens, 857_000);
+assert.ok(Math.abs(providerContextState.contextUsage.percent - 315.0735294117647) < 0.000001);
 assert.equal(
   (providerContextState.rows as Array<Record<string, any>>).find((row) => row.id === 'provider_session_total')?.tokens,
   875_600,

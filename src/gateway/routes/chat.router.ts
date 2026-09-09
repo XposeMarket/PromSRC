@@ -17829,6 +17829,9 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
     ? Math.max(0, Number(lastCall.inputTokens || 0))
     : 0;
+  const liveModelInputTokens = hasCurrentHistory
+    ? Math.max(0, Number(input.modelUsage?.inputTokens || 0))
+    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = hasCurrentHistory
@@ -17866,7 +17869,7 @@ export function buildContextWindowCurrentState(input: {
   // Provider input_tokens is the actual context submitted on the latest call.
   // Prefer it over the locally reconstructed estimate, which can omit restored
   // tool/reasoning history after reconnect or compaction.
-  const authoritativeProviderInputTokens = latestProviderReportedInputTokens || latestProviderInputTokens;
+  const authoritativeProviderInputTokens = liveModelInputTokens || latestProviderReportedInputTokens || latestProviderInputTokens;
   const runtimeOverheadTokens = Math.max(0, authoritativeProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
@@ -17888,6 +17891,7 @@ export function buildContextWindowCurrentState(input: {
     totalThreadTokens,
     latestProviderInputTokens,
     latestProviderReportedInputTokens,
+    liveModelInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
