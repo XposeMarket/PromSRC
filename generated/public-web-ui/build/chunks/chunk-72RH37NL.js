@@ -1,0 +1,1 @@
+function o(n){let e=Number(n);return Number.isFinite(e)?Math.max(0,e):0}function u({currentStateTokens:n,pressureTokens:e,fallbackTokens:r}={}){let i=[n,e,r].filter(t=>t!=null&&Number.isFinite(Number(t))).map(o);return i.length?Math.max(...i):0}export{u as a};

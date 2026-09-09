@@ -20,6 +20,11 @@ assert.match(desktop, /mergeTraceField\('liveTraceEntries', 500\)/, 'desktop ser
 assert.match(desktop, /const historyRef = Array\.isArray\(sess\.history\) \? sess\.history : \[\]/, 'recovery must retain the in-flight history array identity');
 assert.match(desktop, /historyRef\.splice\(0, historyRef\.length, \.\.\.mergedHistory\)/, 'recovery must commit history merges in place');
 assert.match(desktop, /const processLogRef = Array\.isArray\(sess\.processLog\) \? sess\.processLog : \[\]/, 'recovery must retain the in-flight process log identity');
+assert.doesNotMatch(
+  desktop,
+  /window\.chatSessions\s*=\s*(?:compact|minimal)\s*;/,
+  'localStorage quota fallback must never replace the live transcript with its trimmed persistence payload',
+);
 
 const recovered = [
   {

@@ -55,9 +55,10 @@ assert.match(desktopChat, /current model-call composition/, 'current-call detail
 assert.match(live, /resolveActiveContextTokens/, 'live tracker must use the shared active-state precedence');
 assert.match(live, /currentStateKnown/, 'live tracker must retain whether the active state snapshot is known');
 
-// Exact regression from the broken meter: the pressure endpoint reported 471
-// while the current context-window snapshot reported 26,430. The visible
-// total must remain the active context state, not the smaller pressure value.
+// Either estimator can briefly lag. The visible meter must retain the larger
+// active-context value: this protects both the old 471-versus-26,430 case and
+// the compaction regression where the bounded call slice reported ~35k while
+// the full active transcript was already near the ~190k trigger.
 assert.equal(generatedContextWindowValue, contextWindowValue, 'context-value source/generated mirrors must stay byte-identical');
 const contextWindowValueModule = await import(`data:text/javascript,${encodeURIComponent(contextWindowValue)}`);
 const regressionSnapshot = {
@@ -68,6 +69,11 @@ assert.equal(
   contextWindowValueModule.resolveActiveContextTokens(regressionSnapshot),
   26_430,
   'currentStateTokens must win over pressureTokens for the 471 versus 26,430 regression',
+);
+assert.equal(
+  contextWindowValueModule.resolveActiveContextTokens({ currentStateTokens: 35_400, pressureTokens: 190_400 }),
+  190_400,
+  'full active transcript pressure must win while it is larger than the bounded next-call slice',
 );
 assert.equal(
   contextWindowValueModule.resolveActiveContextTokens({ pressureTokens: 471 }),

@@ -4352,7 +4352,7 @@ void main() {
       const promptHtml = promptMessage
         ? _renderChatMessageHtml(
             promptMessage,
-            -1,
+            -2,
             `background:${backgroundRecord.id}:prompt`,
             `background-prompt:${backgroundRecord.id}`,
           )

@@ -6943,7 +6943,11 @@ function saveChatSessions() {
       }));
       try {
         localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(compact));
-        window.chatSessions = compact;
+        // The compact payload is a persistence fallback only. Replacing the
+        // live session registry here used to truncate an open conversation to
+        // 24 messages as soon as localStorage hit quota. The durable server
+        // still had the full history, which is why restarting restored it and
+        // the next save made it disappear again.
       } catch (fallbackErr) {
         console.warn('[ChatPage] compact session save also exceeded quota; saving minimal recent session index.', fallbackErr);
         const minimal = compact.slice(-8).map((session) => ({
@@ -6959,7 +6963,8 @@ function saveChatSessions() {
         }));
         try {
           localStorage.setItem(CHAT_SESSIONS_KEY, JSON.stringify(minimal));
-          window.chatSessions = minimal;
+          // Never project the four-message emergency index back into the live
+          // UI. It exists only to make the next cold start recoverable.
         } catch (minimalErr) {
           console.error('[ChatPage] unable to persist chat sessions after quota compaction; continuing without local persistence.', minimalErr);
         }
