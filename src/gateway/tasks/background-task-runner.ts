@@ -1732,13 +1732,9 @@ export class BackgroundTaskRunner {
 
     const sendSSE = (event: string, data: any) => {
       const visibility = String(data?.visibility || '').toLowerCase();
-      if (event === 'reasoning_summary_delta') {
-        // The gateway explicitly marks these summaries as user-visible. Raw
-        // thinking_delta remains private and is deliberately not journaled.
-        queueVisibleReasoning(data?.text || data?.summary || data?.thinking);
-      } else {
-        flushVisibleReasoning();
-      }
+      // Provider summaries are mutable status packets. Persist the actual
+      // narration/commentary events, matching main chat and spawned agents.
+      if (event !== 'reasoning_summary_delta' && event !== 'reasoning_summary') flushVisibleReasoning();
       if (this.runtimeId) {
         updateLiveRuntimeCheckpoint(this.runtimeId, {
           event,
@@ -1749,7 +1745,14 @@ export class BackgroundTaskRunner {
         });
       }
       this._broadcast('task_stream_event', { taskId, eventType: event, data });
-      if ((event === 'thinking' || event === 'agent_thought') && visibility !== 'private') {
+      if (event === 'token_narration_boundary') {
+        const text = String(data?.text || data?.message || data?.narration || '').trim();
+        if (text) {
+          appendJournal(taskId, { type: 'reasoning', content: text.slice(0, 1200), detail: text.length > 1200 ? text.slice(0, 4000) : undefined });
+          this._broadcast('task_reasoning', { taskId, text: text.slice(0, 1200), reasoningKind: 'full_thought' });
+          this._broadcast('task_panel_update', { taskId });
+        }
+      } else if ((event === 'thinking' || event === 'agent_thought') && visibility !== 'private') {
         const text = String(data?.thinking || data?.text || data?.message || '').trim();
         if (text) {
           appendJournal(taskId, {

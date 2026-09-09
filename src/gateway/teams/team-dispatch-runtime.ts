@@ -535,7 +535,7 @@ export async function runTeamAgentViaChat(
       content: text,
       ...extra,
     });
-    if (processEntries.length > 250) processEntries.splice(0, processEntries.length - 250);
+    if (processEntries.length > 12_000) processEntries.splice(0, processEntries.length - 12_000);
   };
   const captureTaskStreamEvent = (event: string, data: any) => {
     appendBackgroundSseTrace([], liveTraceEntries, event, data, {
@@ -553,6 +553,16 @@ export async function runTeamAgentViaChat(
     if (event === 'thinking_delta') {
       const chunk = String(data?.thinking || data?.text || '');
       if (chunk) thinkingText = `${thinkingText}${chunk}`;
+      return;
+    }
+    if (event === 'reasoning_summary_delta' || event === 'reasoning_summary') return;
+    if (event === 'token_narration_boundary') {
+      const thought = String(data?.text || data?.message || data?.narration || '').trim();
+      if (thought) {
+        thinkingText = thinkingText ? `${thinkingText}\n\n${thought}` : thought;
+        processLogLines.push(`[commentary] ${thought.slice(0, 200)}`);
+        pushProcessEntry('preamble', thought, { source: 'agent_thought', visibility: 'user' });
+      }
       return;
     }
     if (event === 'thinking' || event === 'agent_thought') {

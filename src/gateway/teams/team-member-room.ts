@@ -320,8 +320,8 @@ function pushTeamMemberProcessEntry(
     content: text,
     ...extra,
   });
-  if (tracker.processEntries.length > 250) {
-    tracker.processEntries.splice(0, tracker.processEntries.length - 250);
+  if (tracker.processEntries.length > 12_000) {
+    tracker.processEntries.splice(0, tracker.processEntries.length - 12_000);
   }
 }
 
@@ -348,6 +348,12 @@ function captureTeamMemberStreamEvent(
   if (event === 'thinking_delta') {
     const chunk = String(data?.thinking || data?.text || '');
     if (chunk) tracker.thinking = `${tracker.thinking}${chunk}`;
+    return;
+  }
+  if (event === 'reasoning_summary_delta' || event === 'reasoning_summary') return;
+  if (event === 'token_narration_boundary') {
+    const thought = String(data?.text || data?.message || data?.narration || '').trim();
+    if (thought) pushTeamMemberProcessEntry(tracker, 'preamble', thought, { source: 'agent_thought', visibility: 'user' });
     return;
   }
   if (event === 'thinking' || event === 'agent_thought') {

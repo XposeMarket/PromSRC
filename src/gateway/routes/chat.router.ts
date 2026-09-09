@@ -1359,7 +1359,7 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
       reasoningKind: 'full_thought',
     },
   });
-  if (entries.length > 250) entries.splice(0, entries.length - 250);
+  if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
 }
 
 function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
@@ -10162,8 +10162,8 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                 const processEntry = runtimeProcessEntryFromSseEvent(event, data);
                 if (processEntry) {
                   runtimeProcessEntries.push(processEntry);
-                  if (runtimeProcessEntries.length > 250) {
-                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+                  if (runtimeProcessEntries.length > 12_000) {
+                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
                   }
                   checkpoint.processEntries = [...runtimeProcessEntries];
                 }
@@ -21700,8 +21700,8 @@ router.post('/api/chat', async (req, res) => {
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
-      if (runtimeProcessEntries.length > 250) {
-        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+      if (runtimeProcessEntries.length > 12_000) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
       }
       checkpoint.processEntries = [...runtimeProcessEntries];
     }

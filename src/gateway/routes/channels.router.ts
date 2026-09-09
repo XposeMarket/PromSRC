@@ -22,6 +22,7 @@ import { installAgentProfilePack, isMarketplaceImportedAgent, previewAgentProfil
 import { deleteAgentCompletely } from '../agents-runtime/entity-delete';
 import { AGENT_PROMPT_FILENAME, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -843,7 +844,7 @@ type SubagentChatStreamState = {
 };
 
 const subagentChatStreams = new Map<string, SubagentChatStreamState>();
-const SUBAGENT_CHAT_STREAM_MAX_EVENTS = 800;
+const SUBAGENT_CHAT_STREAM_MAX_EVENTS = 12_000;
 const SUBAGENT_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 
 function getSubagentChatStream(agentId: string): SubagentChatStreamState | null {
@@ -927,6 +928,7 @@ async function runSubagentChatTurn(
     seedFromSharedChatStore?: boolean;
     callerContextExtra?: string;
     clientMessageId?: string;
+    traceFrames?: SubagentChatStreamFrame[];
   },
 ): Promise<{ result: InteractiveTurnResult; historyEntry: any; messages: any[] }> {
   const startedAt = Date.now();
@@ -1048,6 +1050,7 @@ async function runSubagentChatTurn(
         productCarousel: result?.productCarousel || undefined,
         richArtifacts: Array.isArray(result?.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
         goalCompletionReport: result?.goalCompletionReport || undefined,
+        processEntries: buildDurableChatTraceFromFrames(options?.traceFrames || [], `subagent_${agentId}`),
       },
     });
     broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
@@ -1457,15 +1460,25 @@ router.post('/api/agents/:id/chat', async (req, res) => {
   try {
     const attachmentContext = await getAttachmentContext().buildAttachmentRuntimeContext(req.body?.attachmentPreviews);
     const runtimeMessage = getAttachmentContext().appendAttachmentContextToMessage(message, attachmentContext.block);
+    const traceFrames: SubagentChatStreamFrame[] = [];
+    let traceSeq = 0;
+    const captureTrace = (event: string, data: any) => {
+      traceFrames.push({
+        seq: ++traceSeq,
+        type: String(event || 'event'),
+        at: Date.now(),
+        data: data && typeof data === 'object' ? { ...data } : {},
+      });
+    };
     const payload = await runSubagentChatTurn(
       agentId,
       agent,
       runtimeMessage,
       timeoutMs,
-      undefined,
+      captureTrace,
       undefined,
       attachmentContext.visionAttachments,
-      clientMessageId ? { clientMessageId } : undefined,
+      { ...(clientMessageId ? { clientMessageId } : {}), traceFrames },
     );
     res.json({ success: true, ...payload });
   } catch (err: any) {
@@ -1596,9 +1609,10 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
       abortSignal,
       attachmentContext.visionAttachments,
       req.body?.voiceTarget?.kind === 'subagent' || req.body?.source === 'subagent_voice'
-        ? {
+          ? {
             source: 'subagent_voice',
             clientMessageId,
+            traceFrames: retainedStream.events,
             callerContextExtra: [
               '[VOICE_AGENT_HANDOFF]',
               'This subagent voice turn was already routed by the selected subagent voice agent before durable work started.',
@@ -1612,9 +1626,10 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
               '[/SUBAGENT_VOICE_TURN]',
             ].join('\n'),
           }
-        : {
+          : {
             source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
             clientMessageId,
+            traceFrames: retainedStream.events,
           },
     );
     if (!abortSignal.aborted) {
