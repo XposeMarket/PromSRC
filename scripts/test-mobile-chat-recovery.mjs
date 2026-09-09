@@ -173,6 +173,9 @@ assert.match(pages, /const maxRecoveredProcessEntries = 12_000/, 'mobile replay 
 assert.match(pages, /String\(msg\?\.messageKind \|\| ''\)[\s\S]{0,80}=== 'delivery'[\s\S]{0,160}return ''/, 'delivery bubbles must not render fake zero-second work timers');
 assert.match(voiceRuntime, /turn\.streaming === true\)[\s\S]{0,120}\|\| matches\[matches\.length - 1\]/, 'active recovery must reclaim a request-owned row even when disconnect temporarily froze its streaming flag');
 assert.match(pages, /if \(aiTurn\.streaming !== true && foundRequestOwnedTurn\)[\s\S]{0,420}aiTurn\.workEndedAt = 0/, 'reviving a frozen request-owned row must clear its provisional completion boundary');
+assert.match(pages, /function _earliestMobileWorkStart\([\s\S]{0,260}Math\.min\(\.\.\.candidates\)/, 'mobile recovery must keep the earliest known work-start boundary');
+assert.match(pages, /_resetMobileLiveAiTurnForReplay[\s\S]{0,520}_earliestMobileWorkStart\([\s\S]{0,180}options\.startedAt/, 'full replay must not replace an earlier visible turn start with a reconnect timestamp');
+assert.match(pages, /Math\.max\(0, Number\(evt\.workDurationMs\), aiTurn\.workEndedAt - aiTurn\.workStartedAt\)/, 'terminal recovery must not let a restarted runtime report a shorter duration than the visible turn');
 assert.match(api, /const _mobileHistoryWriteQueues = new Map\(\)/, 'mobile history writes must be serialized per session');
 assert.match(api, /const previous = _mobileHistoryWriteQueues\.get\(queueKey\) \|\| Promise\.resolve\(\)/, 'mobile history writes must wait for the prior snapshot');
 assert.match(api, /if \(_mobileHistoryWriteQueues\.get\(queueKey\) === write\) _mobileHistoryWriteQueues\.delete\(queueKey\)/, 'mobile history write queues must release only their own settled write');
