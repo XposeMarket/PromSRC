@@ -488,6 +488,21 @@ assert.match(
 assert.match(pages, /function _mobileHistoryPageIsPartial\(session, history = \[\]\)/, 'mobile recovery must recognize bounded gateway history pages');
 assert.match(pages, /preserveLocalHistory: _mobileHistoryPageIsPartial\(session, history\)/, 'bounded recovery pages must preserve the existing local transcript');
 assert.match(pages, /function _mobileHistoryHasProtectedLocalContinuity\(messages = \[\]\)/, 'mobile recovery must identify local live/final continuity markers');
+assert.match(
+  pages,
+  /function _sealMobileProgressNarration[\s\S]{0,900}reasoningKind: 'full_thought'[\s\S]{0,600}_sealMobileProgressNarration\(message\);/,
+  'mobile must seal the user-visible pre-tool summary before cache compaction and recovery',
+);
+assert.match(
+  pages,
+  /function _mobileDurableReasoningEntries[\s\S]{0,900}index === latestProgressIndex/,
+  'mobile cache snapshots must retain the latest user-visible reasoning summary while it is still streaming',
+);
+assert.match(
+  pages,
+  /_appendMobileLiveTrace\(message, 'preamble', text,[\s\S]{0,180}reasoningKind: 'full_thought'/,
+  'mobile preamble text must be cached as a durable full thought',
+);
 assert.match(pages, /localRows\.length > durableServerCount/, 'mobile recovery must retain a richer local transcript over a shorter server snapshot');
 assert.match(pages, /_mobileShouldPreserveLocalHistoryContinuity\(mapped, durableLocal\)/, 'mobile history hydration must guard against stale snapshot replacement');
 assert.match(

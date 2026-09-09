@@ -3511,17 +3511,26 @@ function _isMobileTransientReasoningTraceEntry(entry) {
   // Full thoughts are durable journal entries even if a provider echoes a
   // summary field alongside them. Summary cleanup must never remove one.
   if (reasoningKind === 'full_thought') return false;
-  return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || type === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-    || reasoningKind === 'summary'
-    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+  // Only the in-flight agent_progress slot is replaceable. Explicit safe
+  // reasoning-summary rows are durable commentary and must survive the mobile
+  // cache, server history hydration, and stream replay.
+  return source === 'agent_progress';
 }
 
 function _mobileDurableReasoningEntries(entries) {
-  return (Array.isArray(entries) ? entries : []).filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
+  const list = Array.isArray(entries) ? entries : [];
+  const latestProgressIndex = list.reduce((latest, entry, index) => {
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    return String(entry?.source || extra.source || '').trim().toLowerCase() === 'agent_progress'
+      ? index
+      : latest;
+  }, -1);
+  // Cache the current safe summary as it streams. Earlier mutable snapshots
+  // remain replaceable, while the newest one can restore the exact visible
+  // narration if the connection drops before a tool/final boundary seals it.
+  return list.filter((entry, index) => (
+    !_isMobileTransientReasoningTraceEntry(entry) || index === latestProgressIndex
+  ));
 }
 
 function _setMobileLiveProgressNarration(message, text, { replace = false, visibility = 'summary' } = {}) {
@@ -4099,6 +4108,7 @@ function _renderMobileProcess(entries, options = {}) {
 }
 
 function _closeMobileTraceThoughts(message) {
+  _sealMobileProgressNarration(message);
   const entries = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
   if (!entries.length) return;
   const endedAt = Date.now();
@@ -4185,9 +4195,31 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   }
 }
 
+function _sealMobileProgressNarration(message) {
+  const latest = Array.isArray(message?.liveTraceEntries)
+    ? message.liveTraceEntries.at(-1)
+    : null;
+  const extra = latest?.extra && typeof latest.extra === 'object' ? latest.extra : {};
+  if (!latest || String(latest.type || '').toLowerCase() !== 'think'
+    || String(extra.source || latest.source || '').toLowerCase() !== 'agent_progress') return false;
+  if (!String(latest.text || '').trim()) return false;
+  latest.extra = {
+    ...extra,
+    source: 'agent_thought',
+    visibility: 'user',
+    reasoningKind: 'full_thought',
+    sealedFrom: 'agent_progress',
+  };
+  return true;
+}
+
 function _applyMobileToolActivity(message, phase, payload = {}) {
   if (!message) return null;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  // Once tool work begins, the current user-visible summary is no longer a
+  // mutable status label. Preserve it as completed commentary so mobile cache
+  // compaction and reconnect recovery cannot discard it.
+  _sealMobileProgressNarration(message);
   _closeMobileTraceThoughts(message);
   return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
 }
@@ -4659,7 +4691,7 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
     _setMobileLiveProgressNarration(message, text);
   } else {
     _appendMobileLiveTrace(message, 'preamble', text, {
-      extra: { visibility: 'user', source: 'reasoning_summary' },
+      extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
     });
   }
   if (message.body) message.body.text = '';

@@ -12536,13 +12536,10 @@ function isDesktopTransientReasoningTraceEntry(entry) {
   // curated thought packet. An explicit full_thought marker is authoritative;
   // never let the summary cleanup path delete that durable thought.
   if (reasoningKind === 'full_thought') return false;
-  return source === 'agent_progress'
-    || source === 'reasoning_summary'
-    || type === 'reasoning_summary'
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-    || reasoningKind === 'summary'
-    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+  // Only the live agent_progress slot is replaceable. Explicit user-visible
+  // reasoning-summary events are part of the durable commentary journal and
+  // must remain renderable after reconnect/replay.
+  return source === 'agent_progress';
 }
 
 function isDesktopMutableProgressTraceEntry(entry) {
@@ -45623,9 +45620,31 @@ function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
   });
 }
 
+function sealDesktopProgressNarration(streamState) {
+  const latest = Array.isArray(streamState?.liveTraceEntries)
+    ? streamState.liveTraceEntries.at(-1)
+    : null;
+  const extra = latest?.extra && typeof latest.extra === 'object' ? latest.extra : {};
+  if (!latest || String(latest.type || '').toLowerCase() !== 'think'
+    || String(extra.source || latest.source || '').toLowerCase() !== 'agent_progress') return false;
+  if (!String(latest.text || '').trim()) return false;
+  latest.extra = {
+    ...extra,
+    source: 'agent_thought',
+    visibility: 'user',
+    reasoningKind: 'full_thought',
+    sealedFrom: 'agent_progress',
+  };
+  return true;
+}
+
 function applyToolActivityToStreamState(streamState, phase, payload = {}) {
   if (!streamState) return null;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+  // The mutable reasoning-summary row becomes completed commentary when the
+  // model crosses into a tool call. Seal it before appending the tool event so
+  // cache compaction and recovery retain the pre-tool narration.
+  sealDesktopProgressNarration(streamState);
   return applyToolActivityEvent(streamState.liveTraceEntries, phase, payload);
 }
 
@@ -46181,7 +46200,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       setDesktopLiveProgressNarration(streamState, text, appendTrace);
     } else {
       appendTrace(streamState.toolActivityStarted ? 'think' : 'preamble', text, {
-        extra: { visibility: 'user', source: 'reasoning_summary' },
+        extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
       });
     }
     streamState.streamingAIText = '';
@@ -46379,6 +46398,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     sess.progressState = streamState.runtimeProgressState;
     renderIfViewing();
   } else if (evt.type === 'done') {
+    sealDesktopProgressNarration(streamState);
     _settlePendingChatSteerPresentation(sid, streamState);
     const reply = String(evt.reply || '');
     const content = reconcileFinalResponse(streamState.streamingAIText, reply);
@@ -46439,6 +46459,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
     setTimeout(() => refreshSessionFromServer(sid).catch(() => {}), 900);
     flushStreamingRenderFor(sid, renderIfViewing);
   } else if (evt.type === 'final') {
+    sealDesktopProgressNarration(streamState);
     const text = String(evt.text || evt.reply || '');
     if (text) {
       beginFinalResponse(streamState);

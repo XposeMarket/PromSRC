@@ -405,13 +405,9 @@ export function createMobileChatRendererRuntime(context = {}) {
     // An explicit full thought is durable even when a provider echoes summary
     // metadata on the same packet.
     if (reasoningKind === 'full_thought') return false;
-    return source === 'agent_progress'
-      || source === 'reasoning_summary'
-      || type === 'reasoning_summary'
-      || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
-      || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
-      || reasoningKind === 'summary'
-      || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+    // Only the live agent_progress slot is replaceable. Replayed user-visible
+    // reasoning summaries are durable timeline entries, not transport noise.
+    return source === 'agent_progress';
   }
 
   function _isMobileMutableProgressTraceEntry(entry) {

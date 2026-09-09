@@ -25,6 +25,16 @@ assert.doesNotMatch(
   /window\.chatSessions\s*=\s*(?:compact|minimal)\s*;/,
   'localStorage quota fallback must never replace the live transcript with its trimmed persistence payload',
 );
+assert.match(
+  desktop,
+  /function sealDesktopProgressNarration[\s\S]{0,900}reasoningKind: 'full_thought'[\s\S]{0,500}sealDesktopProgressNarration\(streamState\);/,
+  'desktop must seal the user-visible pre-tool summary into the durable reasoning journal',
+);
+assert.match(
+  desktop,
+  /appendTrace\(streamState\.toolActivityStarted \? 'think' : 'preamble', text,[\s\S]{0,180}reasoningKind: 'full_thought'/,
+  'desktop preamble text must be durable before any tool call exists',
+);
 
 const recovered = [
   {
