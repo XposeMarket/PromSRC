@@ -171,6 +171,8 @@ assert.match(mobileChatAdapter, /source: 'mobile-render-reconciliation'/, 'mobil
 assert.match(mobileChatAdapter, /runtimeHistory\.some\(\(message, index\) => message !== compatibilityThread\[index\]\)/, 'mobile render reconciliation must detect same-length transcript replacements');
 assert.match(pages, /const maxRecoveredProcessEntries = 12_000/, 'mobile replay must retain the complete gateway replay window instead of truncating long turns to 120 rows');
 assert.match(pages, /String\(msg\?\.messageKind \|\| ''\)[\s\S]{0,80}=== 'delivery'[\s\S]{0,160}return ''/, 'delivery bubbles must not render fake zero-second work timers');
+assert.match(voiceRuntime, /turn\.streaming === true\)[\s\S]{0,120}\|\| matches\[matches\.length - 1\]/, 'active recovery must reclaim a request-owned row even when disconnect temporarily froze its streaming flag');
+assert.match(pages, /if \(aiTurn\.streaming !== true && foundRequestOwnedTurn\)[\s\S]{0,220}aiTurn\.workEndedAt = 0/, 'reviving a frozen request-owned row must clear its provisional completion boundary');
 assert.match(api, /const _mobileHistoryWriteQueues = new Map\(\)/, 'mobile history writes must be serialized per session');
 assert.match(api, /const previous = _mobileHistoryWriteQueues\.get\(queueKey\) \|\| Promise\.resolve\(\)/, 'mobile history writes must wait for the prior snapshot');
 assert.match(api, /if \(_mobileHistoryWriteQueues\.get\(queueKey\) === write\) _mobileHistoryWriteQueues\.delete\(queueKey\)/, 'mobile history write queues must release only their own settled write');

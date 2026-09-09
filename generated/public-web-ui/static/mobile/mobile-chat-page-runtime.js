@@ -7400,6 +7400,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       fallback: _readMobileActiveRun(requestedSession),
     });
     _clearRecoveredMobileChatError(aiTurn);
+    if (aiTurn.streaming !== true && foundRequestOwnedTurn) {
+      // Reclaiming a row frozen during disconnect must also discard the
+      // provisional completion boundary. Otherwise the finalizer reuses that
+      // old workEndedAt and permanently under-reports the recovered run.
+      aiTurn.workEndedAt = 0;
+      aiTurn.workDurationMs = undefined;
+      aiTurn.time = '';
+    }
     aiTurn.streaming = true;
     if (activeRunKind) {
       aiTurn.activeRunKind = activeRunKind;

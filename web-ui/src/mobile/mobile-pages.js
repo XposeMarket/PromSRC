@@ -10308,7 +10308,9 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       const matches = thread.filter((turn) => turn?.role === "ai" && String(turn._clientRequestId || "").trim() === cid);
       if (!matches.length) return null;
       return [...matches].reverse().find((turn) => String(turn.messageKind || "").trim() === "steer_continuation" || String(turn.workflowPart || "").trim() === "interruption_response")
-        || [...matches].reverse().find((turn) => turn.streaming === true) || null;
+        || [...matches].reverse().find((turn) => turn.streaming === true)
+        || matches[matches.length - 1]
+        || null;
     }
     case '_applyVoiceInterruptionToMobileChat':
       return false;
