@@ -17826,6 +17826,9 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderInputTokens = hasCurrentHistory
     ? Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0))
     : 0;
+  const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
+    ? Math.max(0, Number(lastCall.inputTokens || 0))
+    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = hasCurrentHistory
@@ -17860,11 +17863,17 @@ export function buildContextWindowCurrentState(input: {
   const runtimeOverheadBasis = latestSystemPromptTokens > 0
     ? latestMessageInputTokens + latestToolSchemaTokens
     : inContextRowTotal;
-  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
+  // Provider input_tokens is the actual context submitted on the latest call.
+  // Prefer it over the locally reconstructed estimate, which can omit restored
+  // tool/reasoning history after reconnect or compaction.
+  const authoritativeProviderInputTokens = latestProviderReportedInputTokens || latestProviderInputTokens;
+  const runtimeOverheadTokens = Math.max(0, authoritativeProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
-  const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+  const currentStateTokens = authoritativeProviderInputTokens > 0
+    ? authoritativeProviderInputTokens
+    : inContextRowTotal;
   const contextUsage = deriveContextWindowUsage(currentStateTokens, contextLimitTokens);
   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
   const providerUsageRow = buildProviderUsageGroup('provider_session_total', 'Model usage · thread total', input.modelUsage, 'total');
@@ -17878,6 +17887,7 @@ export function buildContextWindowCurrentState(input: {
     cachedTokens,
     totalThreadTokens,
     latestProviderInputTokens,
+    latestProviderReportedInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
@@ -21863,7 +21873,11 @@ function isTerminalProviderCapacityFailure(error: unknown): boolean {
 function markActiveRunsOnSessionList<T extends any>(input: T): T {
   const activeSessionIds = new Set(
     listLiveRuntimes()
-      .filter((runtime: any) => runtime?.kind === 'main_chat' && runtime?.sessionId)
+      .filter((runtime: any) => (
+        isLiveRunningRuntime(runtime)
+        && (runtime?.kind === 'main_chat' || runtime?.kind === 'main_chat_goal')
+        && runtime?.sessionId
+      ))
       .map((runtime: any) => String(runtime.sessionId)),
   );
 

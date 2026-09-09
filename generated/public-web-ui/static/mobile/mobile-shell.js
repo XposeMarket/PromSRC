@@ -2007,7 +2007,7 @@ function _sessionStateMeta(session) {
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
     stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
-    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
+    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
@@ -2121,7 +2121,7 @@ function _sessionButtonHtml(session, options = {}) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2152,7 +2152,7 @@ function _searchResultButtonHtml(session, query) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2607,7 +2607,9 @@ export function openDrawer() {
   _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
     _renderDrawerSessions(_drawerCallbacks).catch(() => {});
-    setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
+    // Always reconcile against the gateway when the drawer opens. A recovered
+    // run may have changed state while the mobile client was disconnected.
+    setTimeout(() => refreshMobileDrawerSessions({ force: true }).catch(() => {}), 180);
   }
 }
 

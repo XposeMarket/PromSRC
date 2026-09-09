@@ -164,6 +164,12 @@ assert.match(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
+assert.match(shell, /pm-session-working-spinner[^>]*role="status"[^>]*aria-label="Working"/, 'active mobile sessions must replace the text status with an accessible spinner');
+assert.match(shell, /const timestamp = state\.activeRun \? '' : _mobileSessionTimeLabel\(session\)/, 'active mobile sessions must replace their timestamp with the working spinner');
+assert.match(shell, /refreshMobileDrawerSessions\(\{ force: true \}\)/, 'opening the mobile drawer must reconcile recovered run state with the gateway');
+assert.match(router, /isLiveRunningRuntime\(runtime\)[\s\S]{0,160}runtime\?\.kind === 'main_chat_goal'/, 'mobile session activity must include recovered goal runs and reject stale runtimes');
+assert.match(mobileCss, /\.pm-session-working-spinner\s*\{[\s\S]{0,420}animation:\s*pm-session-working-spin/, 'mobile working state must render an animated theme-aware spinner');
+assert.match(mobileCss, /\.pm-session-row\.is-working[\s\S]{0,300}background:\s*color-mix\(in srgb, var\(--pm-bg/, 'working and unread rows must use the active mobile theme instead of a hard-coded black card');
 assert.match(mobileContextWindow, /resolveActiveContextTokens\(\{[\s\S]{0,220}pressureTokens:/, 'mobile context UI must include compaction pressure in its visible token total');
 assert.match(mobileContextWindow, /context-pressure`\)\.catch/, 'mobile context UI must fetch the agent active-context estimator instead of showing only the bounded call slice');
 assert.match(mobileContextWindow, /pressureTokens: pressure\?\.success !== false \? pressure\?\.pressureTokens/, 'mobile context UI must merge the authoritative thread pressure into its gauge payload');

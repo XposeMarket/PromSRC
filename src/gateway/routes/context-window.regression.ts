@@ -74,3 +74,44 @@ assert.equal(toolUsage?.children?.find((row: any) => row.id === 'thread_tool_out
 assert.ok(!usageRows.some((row) => row.id === 'last_turn_usage'), 'per-turn usage must not be a context-window row');
 
 console.log('context-window thread usage regression: ok');
+
+const providerContextState = buildContextWindowCurrentState({
+  sessionId: 'context_window_regression_provider_authority',
+  profile: { contextWindowTokens: 272_000, tokenizer: 'heuristic' },
+  currentInputTokens: 43_800,
+  messageTokens: 14,
+  historyMessages: 20,
+  recentToolTokens: 0,
+  inputBudgetTokens: 190_000,
+  compactionTriggerTokens: 192_000,
+  storedThread: { fullStoredThreadTokens: 900_000 },
+  modelUsage: {
+    calls: 12,
+    inputTokens: 857_000,
+    outputTokens: 12_500,
+    reasoningTokens: 6_100,
+    cacheReadTokens: 585_000,
+    totalTokens: 875_600,
+    lastContextCall: {
+      source: 'provider',
+      callType: 'chat',
+      agentId: 'main',
+      inputTokens: 188_400,
+      estimatedProviderInputTokens: 43_800,
+      estimatedMessageInputTokens: 32_900,
+      estimatedSystemPromptTokens: 10_800,
+      estimatedToolSchemaTokens: 32_800,
+    },
+  },
+});
+
+assert.equal(providerContextState.currentStateTokens, 188_400, 'the context header must use the latest provider-reported input, not the reconstructed estimate');
+assert.equal(providerContextState.latestProviderReportedInputTokens, 188_400);
+assert.ok(Math.abs(providerContextState.contextUsage.percent - 69.26470588235294) < 0.000001);
+assert.equal(
+  (providerContextState.rows as Array<Record<string, any>>).find((row) => row.id === 'provider_session_total')?.tokens,
+  875_600,
+  'cumulative thread usage must remain separate from current-call context',
+);
+
+console.log('context-window provider authority regression: ok');
