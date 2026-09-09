@@ -1352,7 +1352,12 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
     type: 'think',
     actor: 'Prom',
     content,
-    extra: { source: 'runtime_checkpoint', event: 'token_narration_boundary' },
+    extra: {
+      source: 'agent_thought',
+      event: 'token_narration_boundary',
+      visibility: 'user',
+      reasoningKind: 'full_thought',
+    },
   });
   if (entries.length > 250) entries.splice(0, entries.length - 250);
 }

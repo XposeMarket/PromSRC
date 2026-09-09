@@ -166,7 +166,7 @@ export function normalizeRecoveredTraceEntry(entry) {
   }
 
   if (event === 'token_narration_boundary' || rawType === 'token_narration_boundary') {
-    return normalizeThought(entry, 'preamble', event || rawType, text, extra, 'agent_progress', 'user', 'summary');
+    return normalizeThought(entry, 'preamble', event || rawType, text, extra, 'agent_thought', 'user', 'full_thought');
   }
 
   if (event === 'thinking' || event === 'agent_thought' || event === 'thinking_delta'

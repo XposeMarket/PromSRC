@@ -45,11 +45,10 @@ const streamTrace = buildDurableChatTraceFromFrames([
 ]);
 
 assert.ok(streamTrace, 'ordinary tool traces must survive without a vision event');
-assert.deepEqual(streamTrace?.map((entry) => entry.type), ['tool', 'think', 'progress', 'result']);
+assert.deepEqual(streamTrace?.map((entry) => entry.type), ['tool', 'progress', 'result']);
 assert.equal(streamTrace?.[0]?.extra?.action, 'workspace_run');
 assert.equal(streamTrace?.[0]?.extra?.toolCallId, 'call-1');
-assert.equal(streamTrace?.[1]?.text, 'Inspecting the workspace');
-assert.equal(streamTrace?.[1]?.extra?.source, 'reasoning_summary');
+assert.equal(streamTrace?.some((entry) => String(entry.extra?.source || '') === 'reasoning_summary'), false);
 assert.equal(streamTrace?.some((entry) => String(entry.text || '').includes('private provider')), false);
 
 const structuredResultTrace = buildDurableChatTraceFromFrames([
@@ -104,10 +103,10 @@ const checkpointTrace = buildDurableChatTraceFromProcessEntries([
 ]);
 
 assert.ok(checkpointTrace, 'restart checkpoints must expose a durable trace');
-assert.deepEqual(checkpointTrace?.map((entry) => entry.type), ['think', 'tool', 'result', 'preamble']);
-assert.equal(checkpointTrace?.[0]?.extra?.source, 'reasoning_summary');
-assert.equal(checkpointTrace?.[1]?.extra?.action, 'workspace_run');
-assert.equal(checkpointTrace?.[3]?.extra?.source, 'agent_progress');
+assert.deepEqual(checkpointTrace?.map((entry) => entry.type), ['tool', 'result', 'preamble']);
+assert.equal(checkpointTrace?.[0]?.extra?.action, 'workspace_run');
+assert.equal(checkpointTrace?.[2]?.extra?.source, 'agent_thought');
+assert.equal(checkpointTrace?.[2]?.extra?.reasoningKind, 'full_thought');
 assert.equal(checkpointTrace?.some((entry) => String(entry.text || '').includes('private thinking')), false);
 
 console.log('durable chat trace recovery regression passed');

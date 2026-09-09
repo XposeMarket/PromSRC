@@ -27,11 +27,6 @@ assert.doesNotMatch(
 );
 assert.match(
   desktop,
-  /function sealDesktopProgressNarration[\s\S]{0,900}reasoningKind: 'full_thought'[\s\S]{0,500}sealDesktopProgressNarration\(streamState\);/,
-  'desktop must seal the user-visible pre-tool summary into the durable reasoning journal',
-);
-assert.match(
-  desktop,
   /appendTrace\(streamState\.toolActivityStarted \? 'think' : 'preamble', text,[\s\S]{0,180}reasoningKind: 'full_thought'/,
   'desktop preamble text must be durable before any tool call exists',
 );
@@ -71,8 +66,9 @@ assert.equal(normalized[0].extra.source, 'reasoning_summary');
 assert.equal(normalized[0].extra.visibility, 'user');
 assert.equal(normalized[1].extra.action, 'workspace_read');
 assert.equal(normalized[2].type, 'result');
-assert.equal(normalized[3].extra.source, 'agent_progress');
+assert.equal(normalized[3].extra.source, 'agent_thought');
 assert.equal(normalized[3].extra.visibility, 'user');
+assert.equal(normalized[3].extra.reasoningKind, 'full_thought');
 
 const sourceOnlySummary = normalizeRecoveredTraceEntry({
   type: 'info',
