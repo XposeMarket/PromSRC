@@ -36,6 +36,11 @@ export interface ChatMessage {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** Responses API assistant phase. Preserve this when replaying tool loops. */
+  phase?: 'commentary' | 'final_answer';
+  /** Native Responses output-item identity used to keep streamed items addressable. */
+  item_id?: string;
+  output_index?: number;
 }
 
 export interface ToolCall {
@@ -48,7 +53,9 @@ export interface ToolCall {
 }
 
 export type ModelStreamEvent =
-  | { type: 'assistant_delta'; text: string; nativeType?: string; provider?: string; model?: string }
+  | { type: 'assistant_item_start'; itemId?: string; outputIndex?: number; phase?: 'commentary' | 'final_answer'; nativeType?: string; provider?: string; model?: string }
+  | { type: 'assistant_delta'; text: string; itemId?: string; outputIndex?: number; phase?: 'commentary' | 'final_answer'; nativeType?: string; provider?: string; model?: string }
+  | { type: 'assistant_item_done'; text?: string; itemId?: string; outputIndex?: number; phase?: 'commentary' | 'final_answer'; nativeType?: string; provider?: string; model?: string }
   | { type: 'reasoning_delta'; text: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
   | { type: 'reasoning_done'; text?: string; summary?: boolean; nativeType?: string; provider?: string; model?: string }
   | { type: 'tool_call_start'; id: string; name: string; nativeType?: string; provider?: string; model?: string }

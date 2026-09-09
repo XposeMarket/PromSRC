@@ -11,7 +11,10 @@ const mobile = read('web-ui/src/mobile/mobile-pages.js');
 
 assert.match(gateway, /sendSSE\('reasoning_summary_delta'.*visibility: 'user'/s);
 assert.match(gateway, /sendSSE\('thinking_delta'.*visibility: 'private'/s);
-assert.match(gateway, /after important tool results, report what you found and what you will do next/);
+assert.match(gateway, /give exactly one preamble before the first meaningful tool call/);
+assert.match(gateway, /commentary only for a material state transition/);
+assert.match(gateway, /if nothing materially changed, call the next tool silently/);
+assert.match(gateway, /Avoid narrating low-level calls, paraphrasing an earlier update/);
 
 for (const [name, source] of [['desktop', desktop], ['mobile', mobile]]) {
   assert.match(source, /reasoning_summary_delta/, `${name} must handle safe reasoning summaries`);
