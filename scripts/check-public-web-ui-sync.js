@@ -96,7 +96,7 @@ function verifyGeneratedWebUiIsCurrent() {
   }
 
   const expectedFiles = new Set(['index.html']);
-  for (const name of ['index.html', 'mobile.html']) {
+  for (const name of ['index.html', 'mobile.html', 'mobile-v2.html']) {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;
     expectedFiles.add(name);
@@ -238,6 +238,7 @@ function verifyJavaScriptSyntax(filePath) {
 function verifySourceWebUi() {
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'index.html'), 'src');
   verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'mobile.html'), 'src');
+  verifyIndexAssets(SRC_WEB_UI, path.join(SRC_WEB_UI, 'mobile-v2.html'), 'src');
 
   for (const filePath of walkFiles(SRC_WEB_UI_SRC).filter((file) => file.endsWith('.js'))) {
     verifyJavaScriptSyntax(filePath);
@@ -248,6 +249,7 @@ function verifySourceWebUi() {
 function verifyGeneratedWebUi() {
   verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'index.html'), 'build');
   verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'mobile.html'), 'build');
+  verifyIndexAssets(OUT_ROOT, path.join(OUT_ROOT, 'mobile-v2.html'), 'static');
 }
 
 function verifyProductionManifest() {
