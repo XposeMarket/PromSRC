@@ -66,7 +66,9 @@ assert.doesNotMatch(gateway, /thinking_delta[\s\S]{0,120}assistant\.reasoning/, 
 
 assert.match(gateways, /pm_mobile_gateway_catalog_v1/);
 assert.match(gateways, /pm_mobile_gateway_token_v1/);
-assert.match(gateways, /namespaceSession/);
+assert.match(gateways, /SESSION_REF_SEPARATOR\s*=\s*['"]::['"]/);
+assert.match(gateways, /sessionRef\(/);
+assert.match(gateways, /parseSessionRef\(/);
 assert.match(gateways, /resolveSessionRef/);
 assert.match(gateways, /bindSession/);
 assert.match(features, /\/api\/bg-tasks/);
