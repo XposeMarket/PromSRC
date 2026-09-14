@@ -1,0 +1,74 @@
+@import '../styles/mobile.css';
+
+/* Mobile V2 deliberately inherits the current Prometheus mobile visual contract.
+   Everything below is V2-only structure; no legacy mobile runtime JS is loaded. */
+body.pm-mobile-v2 { overflow: hidden; }
+body.pm-mobile-v2 #mobile-v2-root { min-height: 100dvh; }
+body.pm-mobile-v2 .pm-v2-app { min-height: 100dvh; height: 100dvh; overflow: hidden; }
+body.pm-mobile-v2 .pm-v2-page { min-height: 0; }
+
+.pm-v2-header { z-index: 25; }
+.pm-v2-header-center { position:absolute; left:50%; transform:translateX(-50%); pointer-events:none; }
+.pm-v2-brand { font-weight:700; letter-spacing:-.025em; font-size:15px; }
+.pm-v2-status { min-width:76px; justify-content:center; }
+.pm-v2-status-dot { width:6px; height:6px; border-radius:999px; background:currentColor; margin-right:6px; }
+.pm-v2-status.offline { opacity:.58; }
+
+.pm-v2-body { display:flex; flex-direction:column; min-height:0; flex:1; padding:0 !important; overflow:hidden; }
+.pm-v2-chat-screen { display:flex; flex-direction:column; min-height:0; height:100%; flex:1; }
+.pm-v2-chat-thread { flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding-bottom:calc(var(--pm-composer-h, 76px) + 28px) !important; }
+.pm-v2-chat-loading,.pm-v2-chat-empty { min-height:52vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; color:var(--pm-muted); text-align:center; }
+.pm-v2-chat-empty strong { color:var(--pm-text); font-size:22px; letter-spacing:-.04em; }
+.pm-v2-chat-empty span { font-size:14px; }
+
+.pm-v2-composer { position:absolute; left:0; right:0; bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 10px); margin-inline:auto; z-index:22; }
+.pm-v2-input-wrap { flex:1; min-width:0; display:flex; }
+.pm-v2-input-wrap textarea { width:100%; resize:none; border:0; outline:0; background:transparent; color:var(--pm-text); font:inherit; line-height:1.35; padding:9px 2px; min-height:22px; max-height:42vh; }
+.pm-v2-input-wrap textarea::placeholder { color:var(--pm-muted); }
+.pm-v2-attach:disabled,.pm-v2-mic:disabled { opacity:.62; }
+
+.pm-v2-reasoning { margin-top:10px; border-top:1px solid var(--pm-border); padding-top:8px; color:var(--pm-muted); font-size:12px; }
+.pm-v2-reasoning summary { cursor:pointer; color:var(--pm-muted); font-weight:600; }
+.pm-v2-reasoning div { margin-top:6px; line-height:1.45; }
+.pm-v2-tools { display:flex; flex-direction:column; gap:5px; margin-top:8px; }
+.pm-v2-tool { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 9px; border:1px solid var(--pm-border); border-radius:10px; background:var(--pm-surface); font-size:12px; }
+.pm-v2-tool small { color:var(--pm-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pm-v2-typing { color:var(--pm-muted); }
+.pm-v2-message-error,.pm-v2-stream-error { margin-top:8px; font-size:12px; color:var(--pm-danger,#ef6b6b); }
+.pm-v2-stream-error { margin:12px 16px; text-align:center; }
+.pm-v2-load-older { align-self:center; margin:8px auto 14px; border:1px solid var(--pm-border); border-radius:999px; background:var(--pm-surface); color:var(--pm-text); padding:7px 12px; font:inherit; font-size:12px; }
+
+.pm-v2-tabbar .pm-tab svg,.pm-v2-header svg,.pm-v2-drawer svg,.pm-v2-composer svg { width:20px; height:20px; }
+.pm-v2-tabbar { z-index:30; }
+.pm-v2-tabbar .pm-tab-label { font-size:10px; }
+
+.pm-v2-drawer { position:fixed !important; inset:0 !important; width:100vw !important; max-width:none !important; transform:translateX(-102%); z-index:80; padding:max(env(safe-area-inset-top),12px) 16px calc(env(safe-area-inset-bottom) + 20px); box-sizing:border-box; background:var(--pm-bg); transition:transform .28s cubic-bezier(.2,.75,.2,1); overflow:auto; }
+.pm-v2-drawer.open { transform:translateX(0); }
+.pm-v2-drawer-top { display:flex; align-items:center; gap:12px; min-height:50px; }
+.pm-v2-drawer-brand { font-size:20px; font-weight:750; letter-spacing:-.04em; }
+.pm-v2-new-chat { width:100%; margin:16px 0 20px; display:flex; align-items:center; justify-content:center; gap:8px; }
+.pm-v2-new-chat svg { width:18px; height:18px; }
+.pm-v2-drawer-label { padding:0 4px 8px; color:var(--pm-muted); font-size:12px; font-weight:650; text-transform:uppercase; letter-spacing:.08em; }
+.pm-v2-session-list { display:flex; flex-direction:column; gap:3px; }
+.pm-v2-session-row { width:100%; display:flex; align-items:center; gap:12px; text-align:left; }
+.pm-v2-session-copy { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
+.pm-v2-session-copy strong { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.pm-v2-session-copy small { color:var(--pm-muted); font-size:11px; }
+.pm-v2-session-chevron { opacity:.45; display:grid; place-items:center; }
+.pm-v2-session-chevron svg { width:15px; height:15px; }
+.pm-v2-drawer-empty { color:var(--pm-muted); padding:18px 6px; font-size:13px; }
+
+.pm-v2-placeholder { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:32px 24px calc(var(--pm-tabbar-h) + 34px); gap:10px; }
+.pm-v2-placeholder-icon { width:48px; height:48px; border-radius:16px; display:grid; place-items:center; background:var(--pm-surface); border:1px solid var(--pm-border); }
+.pm-v2-placeholder-icon svg { width:24px; height:24px; }
+.pm-v2-placeholder h1 { margin:4px 0 0; font-size:22px; letter-spacing:-.04em; }
+.pm-v2-placeholder p { margin:0; max-width:330px; color:var(--pm-muted); line-height:1.5; }
+.pm-v2-placeholder small { max-width:330px; color:var(--pm-muted); opacity:.7; line-height:1.45; }
+
+.pm-v2-notice { position:fixed; left:16px; right:16px; top:calc(env(safe-area-inset-top) + 62px); z-index:100; padding:11px 13px; border:1px solid var(--pm-border); border-radius:14px; background:var(--pm-surface); color:var(--pm-text); box-shadow:0 12px 36px rgba(0,0,0,.28); font-size:13px; }
+
+@media (min-width:700px) {
+  body.pm-mobile-v2 #mobile-v2-root { max-width:520px; margin:0 auto; position:relative; border-inline:1px solid var(--pm-border); }
+  .pm-v2-drawer { left:50% !important; right:auto !important; width:min(520px,100vw) !important; transform:translateX(calc(-50% - 102vw)); }
+  .pm-v2-drawer.open { transform:translateX(-50%); }
+}
