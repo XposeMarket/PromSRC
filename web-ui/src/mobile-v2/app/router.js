@@ -7,6 +7,17 @@ function parseRoute() {
   return { name: name || 'chat', id: encodedId ? decodeURIComponent(encodedId) : '' };
 }
 
+const PLACEHOLDERS = {
+  voice: ['voice', 'Voice', 'Voice is next after the new chat transport and recovery path are proven.'],
+  tasks: ['tasks', 'Tasks', 'Tasks will use the existing gateway endpoints through the V2 client layer.'],
+  hub: ['hub', 'Hub', 'Hub will be rebuilt as an independent V2 feature rather than another shared page module.'],
+  schedule: ['chat', 'Schedule', 'Schedule keeps the same mobile destination and will be migrated as an independent V2 feature.'],
+  teams: ['chat', 'Teams', 'Teams keeps the same mobile destination and will be migrated as an independent V2 feature.'],
+  subagents: ['chat', 'Subagents', 'Subagents keeps the same mobile destination and will be migrated as an independent V2 feature.'],
+  proposals: ['chat', 'Proposals', 'Proposals keeps the same mobile destination and will be migrated as an independent V2 feature.'],
+  more: ['chat', 'More', 'The legacy More destination is preserved in the V2 navigation skeleton while its tools move into isolated features.'],
+};
+
 export function createMobileV2Router({ shell, gateway, chatStore }) {
   let cleanup = () => {};
 
@@ -23,16 +34,9 @@ export function createMobileV2Router({ shell, gateway, chatStore }) {
       cleanup = await mountChatPage({ shell, gateway, chatStore, sessionId });
       return;
     }
-    if (route.name === 'voice') {
-      cleanup = mountPlaceholderPage({ shell, tab: 'voice', title: 'Voice', message: 'Voice is next after the new chat transport and recovery path are proven.' });
-      return;
-    }
-    if (route.name === 'tasks') {
-      cleanup = mountPlaceholderPage({ shell, tab: 'tasks', title: 'Tasks', message: 'Tasks will use the existing gateway endpoints through the V2 client layer.' });
-      return;
-    }
-    if (route.name === 'hub') {
-      cleanup = mountPlaceholderPage({ shell, tab: 'hub', title: 'Hub', message: 'Hub will be rebuilt as an independent V2 feature rather than another shared page module.' });
+    const placeholder = PLACEHOLDERS[route.name];
+    if (placeholder) {
+      cleanup = mountPlaceholderPage({ shell, tab: placeholder[0], title: placeholder[1], message: placeholder[2] });
       return;
     }
     navigate('chat');
