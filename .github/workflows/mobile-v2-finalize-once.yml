@@ -23,8 +23,9 @@ jobs:
           cache: npm
 
       - name: Patch clean Mobile V2 gateway route
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path('src/gateway/core/server.ts')
@@ -38,27 +39,28 @@ jobs:
               raise SystemExit('Could not find mobile cache-control route guard')
 
           old_route = """  } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
-    // Mobile has a dedicated document so it never parses the desktop shell or
-    // desktop styles. Keep index.html as a source/distribution rollback path.
-    push(webUiRoot, 'mobile.html');
-    push(webUiRoot, 'index.html');
-"""
+            // Mobile has a dedicated document so it never parses the desktop shell or
+            // desktop styles. Keep index.html as a source/distribution rollback path.
+            push(webUiRoot, 'mobile.html');
+            push(webUiRoot, 'index.html');
+          """
           new_route = """  } else if (pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {
-    // Mobile V2 is a parallel client. Keep it isolated from legacy /mobile so
-    // the existing app remains the rollback path until parity is proven.
-    push(webUiRoot, 'mobile-v2.html');
-  } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
-    // Mobile has a dedicated document so it never parses the desktop shell or
-    // desktop styles. Keep index.html as a source/distribution rollback path.
-    push(webUiRoot, 'mobile.html');
-    push(webUiRoot, 'index.html');
-"""
+            // Mobile V2 is a parallel client. Keep it isolated from legacy /mobile so
+            // the existing app remains the rollback path until parity is proven.
+            push(webUiRoot, 'mobile-v2.html');
+          } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
+            // Mobile has a dedicated document so it never parses the desktop shell or
+            // desktop styles. Keep index.html as a source/distribution rollback path.
+            push(webUiRoot, 'mobile.html');
+            push(webUiRoot, 'index.html');
+          """
           if old_route in text:
               text = text.replace(old_route, new_route, 1)
           elif new_route not in text:
               raise SystemExit('Could not find legacy mobile static route block')
 
           path.write_text(text, encoding='utf-8')
+          PY
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
