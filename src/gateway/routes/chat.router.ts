@@ -1751,6 +1751,11 @@ const saveFileOpCheckpoint: any = () => {};
 const clearFileOpCheckpoint: any = () => {};
 import { webSearch, webFetch } from '../../tools/web';
 import {
+  canExecuteToolCallsInParallel,
+  executeToolCallsInParallel,
+  type ParallelToolCall,
+} from '../../tools/parallel-tool-calls.js';
+import {
 	  buildTools as _buildTools,
 	  getToolCategory,
 	  type BuildToolsDeps,
@@ -8625,6 +8630,75 @@ RULES:
 
     messages.push(response);
 
+    // Providers can return several tool calls in one assistant message. Keep
+    // the rollout intentionally conservative: only a whole batch of unique,
+    // independent read-only calls is started early. Mixed batches stay on the
+    // existing ordered path so a read can never race a write or browser action.
+    const parallelToolResults = new Map<any, ToolResult>();
+    type ParallelCallEntry = {
+      sourceCall: any;
+      toolName: string;
+      toolArgs: any;
+      toolCallId: string;
+      index: number;
+      parallelCall: ParallelToolCall;
+    };
+    const parallelCallEntries: ParallelCallEntry[] = toolCalls.map((call: any, index: number) => {
+      const toolName = String(call?.function?.name || 'unknown');
+      const toolArgs = normalizeToolArgsForTool(toolName, call?.function?.arguments);
+      const toolCallId = String(call?.id || '').trim();
+      return {
+        sourceCall: call,
+        toolName,
+        toolArgs,
+        toolCallId,
+        index,
+        parallelCall: { id: toolCallId, name: toolName, args: toolArgs } as ParallelToolCall,
+      };
+    });
+    const canRunParallelBatch =
+      parallelCallEntries.length > 1
+      && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
+      && !isBootStartupTurn
+      && !isHotRestartTurn
+      && !fileOpV2Active
+      && !isSupervisionLoop
+      && !isBrainThoughtRuntime
+      && canExecuteToolCallsInParallel(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall));
+    if (canRunParallelBatch) {
+      for (const entry of parallelCallEntries) {
+        toolPerformance.start(entry.toolName, entry.toolCallId, round);
+        console.log(`[v2] TOOL[${round + 1}] parallel dispatch: ${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 150)})`);
+        markProgressStepStart(entry.toolName);
+        sendSSE('tool_call', {
+          action: entry.toolName,
+          args: entry.toolArgs,
+          stepNum: allToolResults.length + entry.index + 1,
+          toolCallId: entry.toolCallId || undefined,
+          tool_call_id: entry.toolCallId || undefined,
+          parallel: true,
+        });
+      }
+      const parallelOutcomes = await executeToolCallsInParallel(
+        parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall),
+        async (parallelCall) => {
+          const entry = parallelCallEntries.find((candidate: ParallelCallEntry) => candidate.parallelCall === parallelCall)!;
+          return executeToolWithTelemetry(entry.toolName, entry.toolArgs, entry.toolCallId);
+        },
+        { signal: abortSignal?.signal },
+      );
+      for (const outcome of parallelOutcomes) {
+        const entry = parallelCallEntries.find((candidate: ParallelCallEntry) => candidate.parallelCall === outcome.call)!;
+        const result = outcome.result || makeInstrumentedToolResult(
+          entry.toolName,
+          entry.toolArgs,
+          `Parallel tool execution failed: ${String(outcome.error || 'unknown error')}`,
+          true,
+        );
+        parallelToolResults.set(entry.sourceCall, result);
+      }
+    }
+
     const batchCreatedFiles = new Set<string>();
     let roundHadProgress = false;
     resetProgressRoundStats();
@@ -8633,7 +8707,9 @@ RULES:
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
-      toolPerformance.start(toolName, toolCallId, round);
+      if (!parallelToolResults.has(call)) {
+        toolPerformance.start(toolName, toolCallId, round);
+      }
 
       if (toolName === 'desktop_click') {
         const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
@@ -9094,17 +9170,19 @@ RULES:
         }
       }
 
-      console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
-      if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
-        markProgressStepStart(toolName);
+      if (!parallelToolResults.has(call)) {
+        console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
+        if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
+          markProgressStepStart(toolName);
+        }
+        sendSSE('tool_call', {
+          action: toolName,
+          args: toolArgs,
+          stepNum: allToolResults.length + 1,
+          toolCallId: toolCallId || undefined,
+          tool_call_id: toolCallId || undefined,
+        });
       }
-      sendSSE('tool_call', {
-        action: toolName,
-        args: toolArgs,
-        stepNum: allToolResults.length + 1,
-        toolCallId: toolCallId || undefined,
-        tool_call_id: toolCallId || undefined,
-      });
 
       // ── Goal lifecycle: Prometheus owns completion and blocking. ───────────
       if (toolName === 'complete_goal') {
@@ -9594,7 +9672,7 @@ RULES:
 
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
-	      const toolResult = await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
+	      const toolResult = parallelToolResults.get(call) || await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.

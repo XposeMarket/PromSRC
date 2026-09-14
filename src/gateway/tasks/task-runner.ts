@@ -31,6 +31,11 @@ import {
   type BackgroundAgentStreamState,
 } from './background-agent-stream';
 import { appendBackgroundSseTrace } from './background-agent-trace';
+import {
+  canExecuteToolCallsInParallel,
+  executeToolCallsInParallel,
+  type ParallelToolCall,
+} from '../../tools/parallel-tool-calls.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -221,7 +226,59 @@ export class TaskRunner {
         continue;
       }
 
-      // Execute FIRST tool call (one action per step)
+      // Independent read-only calls may share a step. Mutations and dependent
+      // calls retain the original one-action-per-step behavior.
+      const parallelEntries: Array<{ call: any; index: number; toolName: string; toolArgs: any }> = toolCalls.map((call: any, index: number) => ({
+        call,
+        index,
+        toolName: call.function?.name || 'unknown',
+        toolArgs: call.function?.arguments || {},
+      }));
+      const parallelCalls = parallelEntries.map((entry) => ({
+        id: String(entry.call?.id || `${step}_${entry.index}`),
+        name: String(entry.toolName || 'unknown'),
+        args: entry.toolArgs,
+      } as ParallelToolCall));
+      if (canExecuteToolCallsInParallel(parallelCalls)) {
+        for (const entry of parallelEntries) {
+          const actionStr = `${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 100)})`;
+          console.log(`[Background Task] Parallel action: ${actionStr}`);
+          this.onProgress('task_action', { step, action: entry.toolName, args: entry.toolArgs, parallel: true });
+        }
+        const outcomes = await executeToolCallsInParallel(
+          parallelCalls,
+          async (parallelCall) => {
+            const entry = parallelEntries[parallelCalls.findIndex((candidate: ParallelToolCall) => candidate === parallelCall)];
+            return this.executor(entry.toolName, entry.toolArgs);
+          },
+        );
+        for (const outcome of outcomes) {
+          const entry = parallelEntries[outcome.index];
+          const actionStr = `${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 100)})`;
+          const execution = outcome.result || {
+            result: `Execution error: ${String(outcome.error || 'parallel tool execution failed')}`,
+            error: true,
+          };
+          if (execution.newState) this.state.currentState = execution.newState;
+          const summary = execution.error
+            ? `❌ ${entry.toolName}: ${execution.result.slice(0, 150)}`
+            : `✅ ${entry.toolName}: ${execution.result.slice(0, 150)}`;
+          this.addJournal(actionStr, summary);
+          this.onProgress('task_result', {
+            step,
+            action: entry.toolName,
+            result: execution.result.slice(0, 300),
+            error: execution.error,
+            parallel: true,
+          });
+          console.log(execution.error
+            ? `[Background Task] ❌ ${execution.result.slice(0, 100)}`
+            : `[Background Task] ✅ ${execution.result.slice(0, 100)}`);
+        }
+        continue;
+      }
+
+      // Execute the first tool call when the batch is not a safe read-only batch.
       const call = toolCalls[0];
       const toolName = call.function?.name || 'unknown';
       const toolArgs = call.function?.arguments || {};
@@ -255,7 +312,7 @@ export class TaskRunner {
 
         // If there were additional tool calls, log them but don't execute
         if (toolCalls.length > 1) {
-          console.log(`[Background Task] (${toolCalls.length - 1} additional tool calls ignored — one per step)`);
+          console.log(`[Background Task] (${toolCalls.length - 1} additional tool calls deferred — dependent or mutating work stays serial)`);
         }
       } catch (err: any) {
         const errMsg = `Execution error: ${err.message}`;
@@ -276,15 +333,16 @@ export class TaskRunner {
     // System prompt — compact, focused on task execution
     messages.push({
       role: 'system',
-      content: `You are completing a multi-step task. Pick ONE action per turn.
+      content: `You are completing a multi-step task. Pick one action per turn, or a small batch of independent read-only actions.
 
 RULES:
-1. Take exactly ONE action per turn using the available tools.
-2. After each action, you'll see the result and can take the next action.
-3. When the task is fully complete, respond with text starting with "TASK_COMPLETE:" followed by a summary.
-4. If the task cannot be completed, respond with "TASK_FAILED:" and explain why.
-5. Do NOT explain your reasoning. Just pick the next action.
-6. Use the CURRENT STATE to decide what to do next — don't guess from memory.
+1. Take exactly ONE action, or a small batch of independent read-only actions, using the available tools.
+2. Batch only observations that do not depend on each other: reads, lists, searches, stats, and independent web lookups are good candidates.
+3. Keep writes, commands, browser/desktop actions, approvals, external mutations, and dependent work serial.
+4. After each action or batch, you'll see the result and can take the next action.
+5. When the task is fully complete, respond with text starting with "TASK_COMPLETE:" followed by a summary.
+6. If the task cannot be completed, respond with "TASK_FAILED:" and explain why.
+7. Do NOT explain your reasoning. Use the CURRENT STATE to decide what to do next — don't guess from memory.
 ${this.systemContext ? '\n' + this.systemContext : ''}`,
     });
 
@@ -351,7 +409,7 @@ ${this.systemContext ? '\n' + this.systemContext : ''}`,
     parts.push(stateTrimmed);
 
     parts.push('');
-    parts.push('What is the next action? Pick ONE tool call.');
+    parts.push('What is the next action? Pick one tool call, or a small batch of independent read-only calls.');
 
     return parts.join('\n');
   }
@@ -614,7 +672,7 @@ function createBackgroundPrompt(prompt: string): any[] {
       content:
         'You are executing a one-time ephemeral background task in parallel with the main chat. ' +
         'You start with core tools and can request additional categories when needed. ' +
-        'Complete your task efficiently and report the outcome.',
+        'Complete your task efficiently and report the outcome. When several observations are independent, emit them together as a small read-only batch; keep mutations and dependent actions serial.',
     },
     {
       role: 'user',

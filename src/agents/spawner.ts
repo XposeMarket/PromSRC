@@ -369,6 +369,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
           includeAgentSystemPrompt: true,
           subagentSystemPromptOnly: true,
           workspacePath,
+          sessionId: agentTask.sessionId,
+          agentId: agent.id,
           skillSlugs: agentSkills,
           // When dispatched to a team, load identity from the per-team isolated dir
           // so this agent is a completely separate entity in each team context.
