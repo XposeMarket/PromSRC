@@ -1,4 +1,4 @@
-name: Mobile V2 foundation
+name: Mobile V2 complete app
 
 on:
   pull_request:
@@ -6,6 +6,10 @@ on:
       - 'web-ui/mobile-v2.html'
       - 'web-ui/src/mobile-v2/**'
       - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/prepare-public-build.js'
+      - 'scripts/check-public-web-ui-sync.js'
+      - 'generated/public-web-ui/mobile-v2.html'
+      - 'generated/public-web-ui/static/mobile-v2/**'
       - '.github/workflows/mobile-v2-foundation.yml'
   push:
     branches:
@@ -14,6 +18,10 @@ on:
       - 'web-ui/mobile-v2.html'
       - 'web-ui/src/mobile-v2/**'
       - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/prepare-public-build.js'
+      - 'scripts/check-public-web-ui-sync.js'
+      - 'generated/public-web-ui/mobile-v2.html'
+      - 'generated/public-web-ui/static/mobile-v2/**'
       - '.github/workflows/mobile-v2-foundation.yml'
 
 permissions:
@@ -27,15 +35,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Check Mobile V2 module syntax
-        run: |
-          node --check web-ui/src/mobile-v2/mobile-v2-entry.js
-          node --check web-ui/src/mobile-v2/app/router.js
-          node --check web-ui/src/mobile-v2/core/gateway-client.js
-          node --check web-ui/src/mobile-v2/core/chat-store.js
-          node --check web-ui/src/mobile-v2/ui/icons.js
-          node --check web-ui/src/mobile-v2/ui/shell.js
-          node --check web-ui/src/mobile-v2/features/chat/chat-page.js
-          node --check web-ui/src/mobile-v2/features/placeholder/placeholder-page.js
-      - name: Verify V2 isolation and visual contract
+      - name: Check all Mobile V2 module syntax
+        run: find web-ui/src/mobile-v2 -name '*.js' -print0 | sort -z | xargs -0 -n1 node --check
+      - name: Verify complete V2 isolation and feature contract
         run: node scripts/test-mobile-v2-foundation.mjs
