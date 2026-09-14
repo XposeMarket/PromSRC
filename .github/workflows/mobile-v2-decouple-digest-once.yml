@@ -1,0 +1,62 @@
+name: Mobile V2 decouple digest once
+
+on:
+  push:
+    branches:
+      - mobile-v2-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  decouple:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mobile-v2-foundation
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Exclude raw Mobile V2 from legacy production digest
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/build-web-ui-production.mjs')
+          text = path.read_text(encoding='utf-8')
+          old = "    ...walkFiles(WEB_UI_ROOT),"
+          new = """    ...walkFiles(WEB_UI_ROOT).filter((filePath) => {
+              const relative = toPosix(path.relative(WEB_UI_ROOT, filePath));
+              return relative !== 'mobile-v2.html' && !relative.startsWith('src/mobile-v2/');
+            }),"""
+          if "relative !== 'mobile-v2.html'" not in text:
+              if old not in text:
+                  raise SystemExit('Could not find production digest web-ui input list')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Regenerate public web UI
+        run: npm run sync:web-ui
+
+      - name: Commit digest boundary and generated output
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/build-web-ui-production.mjs generated/public-web-ui
+          if git diff --cached --quiet; then
+            echo "Digest boundary already applied."
+            exit 0
+          fi
+          git commit -m "build(mobile-v2): decouple raw V2 from legacy asset digest"
+          git push origin HEAD:mobile-v2-foundation
