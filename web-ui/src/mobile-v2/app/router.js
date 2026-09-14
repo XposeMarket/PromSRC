@@ -1,58 +1,16 @@
-import { mountChatPage } from '../features/chat/chat-page.js';
-import { mountPlaceholderPage } from '../features/placeholder/placeholder-page.js';
-
-function parseRoute() {
-  const raw = String(location.hash || '').replace(/^#\/?/, '');
-  const [name = 'chat', encodedId = ''] = raw.split('/');
-  return { name: name || 'chat', id: encodedId ? decodeURIComponent(encodedId) : '' };
-}
-
-const PLACEHOLDERS = {
-  voice: ['voice', 'Voice', 'Voice is next after the new chat transport and recovery path are proven.'],
-  tasks: ['tasks', 'Tasks', 'Tasks will use the existing gateway endpoints through the V2 client layer.'],
-  hub: ['hub', 'Hub', 'Hub will be rebuilt as an independent V2 feature rather than another shared page module.'],
-  schedule: ['chat', 'Schedule', 'Schedule keeps the same mobile destination and will be migrated as an independent V2 feature.'],
-  teams: ['chat', 'Teams', 'Teams keeps the same mobile destination and will be migrated as an independent V2 feature.'],
-  subagents: ['chat', 'Subagents', 'Subagents keeps the same mobile destination and will be migrated as an independent V2 feature.'],
-  proposals: ['chat', 'Proposals', 'Proposals keeps the same mobile destination and will be migrated as an independent V2 feature.'],
-  more: ['chat', 'More', 'The legacy More destination is preserved in the V2 navigation skeleton while its tools move into isolated features.'],
+function decode(value){try{return decodeURIComponent(value||'');}catch{return String(value||'');}}
+function parseRoute(){const raw=String(location.hash||'').replace(/^#\/?/,'');const parts=raw.split('/');return{name:parts[0]||'chat',id:decode(parts[1]||''),sub:decode(parts[2]||'')};}
+const LOADERS={
+  voice:()=>import('../features/voice/voice-page.js'),tasks:()=>import('../features/tasks/tasks-page.js'),hub:()=>import('../features/hub/hub-page.js'),memory:()=>import('../features/hub/hub-page.js'),audit:()=>import('../features/hub/hub-page.js'),schedule:()=>import('../features/schedule/schedule-page.js'),teams:()=>import('../features/teams/teams-page.js'),subagents:()=>import('../features/subagents/subagents-page.js'),proposals:()=>import('../features/proposals/proposals-page.js'),more:()=>import('../features/more/more-page.js'),creative:()=>import('../features/more/more-page.js'),gateways:()=>import('../features/gateways/gateways-page.js'),pair:()=>import('../features/pairing/pairing-page.js'),settings:()=>import('../features/settings/settings-page.js'),
 };
-
-export function createMobileV2Router({ shell, gateway, chatStore }) {
-  let cleanup = () => {};
-
-  async function render() {
-    cleanup?.();
-    cleanup = () => {};
-    const route = parseRoute();
-    if (route.name === 'chat') {
-      let sessionId = route.id;
-      if (!sessionId) {
-        try { sessionId = localStorage.getItem('pm_mobile_v2_active_session') || 'mobile_default'; }
-        catch { sessionId = 'mobile_default'; }
-      }
-      cleanup = await mountChatPage({ shell, gateway, chatStore, sessionId });
-      return;
-    }
-    const placeholder = PLACEHOLDERS[route.name];
-    if (placeholder) {
-      cleanup = mountPlaceholderPage({ shell, tab: placeholder[0], title: placeholder[1], message: placeholder[2] });
-      return;
-    }
-    navigate('chat');
-  }
-
-  function navigate(route) {
-    const next = String(route || 'chat').replace(/^#\/?/, '');
-    if (location.hash === `#${next}`) render();
-    else location.hash = next;
-  }
-
-  function start() {
-    window.addEventListener('hashchange', render);
-    if (!location.hash) location.hash = 'chat';
-    else render();
-  }
-
-  return { start, navigate, render };
+export function createMobileV2Router({shell,gateways,features,chatStore}){
+  let cleanup=()=>{};let generation=0;
+  async function render(){const current=++generation;try{cleanup?.();}catch{}cleanup=()=>{};const route=parseRoute();try{
+    if(route.name==='chat'){let ref=route.id;try{if(!ref)ref=localStorage.getItem('pm_mobile_v2_active_session')||'';}catch{}const resolved=gateways.resolveSessionRef(ref||'mobile_default');if(!gateways.get(resolved.gatewayId))throw new Error('This chat’s gateway is no longer paired.');gateways.bindSession(resolved.sessionId,resolved.gatewayId);const gateway=gateways.client(resolved.gatewayId);const {mountChatPage}=await import('../features/chat/chat-page.js');if(current!==generation)return;cleanup=await mountChatPage({shell,gateway,gateways,features,chatStore,sessionId:resolved.sessionId,sessionRef:resolved.ref});return;}
+    const loader=LOADERS[route.name];if(!loader){navigate('chat');return;}const module=await loader();if(current!==generation)return;const args={shell,gateways,features,chatStore,route};if(route.name==='voice')cleanup=await module.mountVoicePage(args);else if(route.name==='tasks')cleanup=await module.mountTasksPage(args);else if(['hub','memory','audit'].includes(route.name))cleanup=await module.mountHubPage(args);else if(route.name==='schedule')cleanup=await module.mountSchedulePage(args);else if(route.name==='teams')cleanup=await module.mountTeamsPage(args);else if(route.name==='subagents')cleanup=await module.mountSubagentsPage(args);else if(route.name==='proposals')cleanup=await module.mountProposalsPage(args);else if(route.name==='more')cleanup=await module.mountMorePage(args);else if(route.name==='creative')cleanup=await module.mountCreativePage(args);else if(route.name==='gateways')cleanup=await module.mountGatewaysPage(args);else if(route.name==='pair')cleanup=await module.mountPairingPage(args);else if(route.name==='settings')cleanup=await module.mountSettingsPage(args);
+  }catch(error){if(current!==generation)return;shell.page.innerHTML=`<div class="pm-v2-error-card pm-v2-route-error"><strong>Mobile V2 couldn’t open this page.</strong><span>${String(error?.message||error||'Unknown error')}</span><button class="pm-btn ghost" data-v2-home>Open Chat</button></div>`;shell.page.querySelector('[data-v2-home]')?.addEventListener('click',()=>navigate('chat'));}}
+  function navigate(route){const next=String(route||'chat').replace(/^#\/?/,'');if(location.hash===`#${next}`)render();else location.hash=next;}
+  function start(){window.addEventListener('hashchange',render);if(!location.hash)location.hash='chat';else render();}
+  function dispose(){window.removeEventListener('hashchange',render);try{cleanup?.();}catch{}}
+  return{start,navigate,render,dispose};
 }

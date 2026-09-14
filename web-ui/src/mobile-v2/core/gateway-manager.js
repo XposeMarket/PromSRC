@@ -6,6 +6,7 @@ const SESSION_TARGETS_KEY = 'pm_mobile_session_targets_v1';
 const CURRENT_TOKEN_KEY = 'pm_device_token';
 const TOKEN_PREFIX = 'pm_mobile_gateway_token_v1:';
 const DEVICE_PREFIX = 'pm_mobile_gateway_device_v1:';
+export const SESSION_REF_SEPARATOR = '::';
 
 function readJson(key, fallback) {
   try {
@@ -13,25 +14,18 @@ function readJson(key, fallback) {
     return parsed ?? fallback;
   } catch { return fallback; }
 }
-
-function writeJson(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-}
-
-function normalizeOrigin(value) {
+function writeJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+export function normalizeOrigin(value) {
   try {
     const url = new URL(String(value || ''), window.location.origin);
-    if (!['http:', 'https:'].includes(url.protocol)) return '';
-    return url.origin;
+    return ['http:', 'https:'].includes(url.protocol) ? url.origin : '';
   } catch { return ''; }
 }
-
 function normalizeEntry(entry = {}, index = 0) {
   const origin = normalizeOrigin(entry.origin || entry.url || entry.gatewayOrigin || window.location.origin);
   const id = String(entry.gatewayId || entry.id || (origin === window.location.origin ? 'current' : `gateway-${index + 1}`));
   return {
-    id,
-    gatewayId: id,
+    id, gatewayId: id,
     name: String(entry.name || entry.label || entry.gatewayName || (origin === window.location.origin ? 'This gateway' : 'Prometheus gateway')),
     origin,
     platform: String(entry.platform || ''),
@@ -44,6 +38,17 @@ function normalizeEntry(entry = {}, index = 0) {
     lastSeenAt: Number(entry.lastSeenAt || entry.updatedAt || 0),
   };
 }
+export function sessionRef(gatewayId, sessionId) {
+  return `${String(gatewayId || '').trim()}${SESSION_REF_SEPARATOR}${String(sessionId || '').trim()}`;
+}
+export function parseSessionRef(value) {
+  const text = String(value || '').trim();
+  const index = text.indexOf(SESSION_REF_SEPARATOR);
+  if (index <= 0) return null;
+  const gatewayId = text.slice(0, index).trim();
+  const sessionId = text.slice(index + SESSION_REF_SEPARATOR.length).trim();
+  return gatewayId && sessionId ? { gatewayId, sessionId } : null;
+}
 
 export class GatewayManager extends EventTarget {
   constructor() {
@@ -52,7 +57,6 @@ export class GatewayManager extends EventTarget {
     this.sessionTargets = readJson(SESSION_TARGETS_KEY, {});
     this._load();
   }
-
   _load() {
     const raw = readJson(CATALOG_KEY, []);
     const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.gateways) ? raw.gateways : [];
@@ -67,12 +71,10 @@ export class GatewayManager extends EventTarget {
     this.activeId = this.entries.has(savedActive) ? savedActive : current.id;
     this._saveCatalog();
   }
-
   _saveCatalog() {
     writeJson(CATALOG_KEY, [...this.entries.values()]);
     try { localStorage.setItem(ACTIVE_KEY, this.activeId || 'current'); } catch {}
   }
-
   _tokenFor(id) {
     try {
       const scoped = localStorage.getItem(`${TOKEN_PREFIX}${id}`) || '';
@@ -82,23 +84,15 @@ export class GatewayManager extends EventTarget {
     } catch {}
     return '';
   }
-
   list() { return [...this.entries.values()]; }
   get(id) { return this.entries.get(String(id || '')) || null; }
   get activeEntry() { return this.get(this.activeId) || this.list()[0] || null; }
   get active() { return this.client(this.activeId); }
-
   client(id = this.activeId) {
     const entry = this.get(id);
     if (!entry) throw new Error('Gateway is not available on this phone.');
-    return new GatewayClient({
-      id: entry.id,
-      name: entry.name,
-      origin: entry.origin,
-      tokenProvider: () => this._tokenFor(entry.id),
-    });
+    return new GatewayClient({ id: entry.id, name: entry.name, origin: entry.origin, tokenProvider: () => this._tokenFor(entry.id) });
   }
-
   select(id) {
     const key = String(id || '');
     if (!this.entries.has(key)) throw new Error('Unknown gateway.');
@@ -107,7 +101,6 @@ export class GatewayManager extends EventTarget {
     this.dispatchEvent(new CustomEvent('change', { detail: { activeId: key } }));
     return this.activeEntry;
   }
-
   upsert(entry, { token = '', deviceId = '' } = {}) {
     const normalized = normalizeEntry(entry, this.entries.size);
     if (!normalized.id || !normalized.origin) throw new Error('Gateway identity and origin are required.');
@@ -121,59 +114,48 @@ export class GatewayManager extends EventTarget {
     this.dispatchEvent(new CustomEvent('change', { detail: { gatewayId: normalized.id } }));
     return this.get(normalized.id);
   }
-
   forget(id) {
     const key = String(id || '');
-    const entry = this.entries.get(key);
-    if (!entry) return false;
+    if (!this.entries.has(key)) return false;
     this.entries.delete(key);
-    try {
-      localStorage.removeItem(`${TOKEN_PREFIX}${key}`);
-      localStorage.removeItem(`${DEVICE_PREFIX}${key}`);
-    } catch {}
+    try { localStorage.removeItem(`${TOKEN_PREFIX}${key}`); localStorage.removeItem(`${DEVICE_PREFIX}${key}`); } catch {}
     if (this.activeId === key) this.activeId = this.list()[0]?.id || '';
-    for (const [sessionId, gatewayId] of Object.entries(this.sessionTargets)) {
-      if (gatewayId === key) delete this.sessionTargets[sessionId];
-    }
+    for (const [target, gatewayId] of Object.entries(this.sessionTargets)) if (gatewayId === key || target.startsWith(`${key}${SESSION_REF_SEPARATOR}`)) delete this.sessionTargets[target];
     writeJson(SESSION_TARGETS_KEY, this.sessionTargets);
     this._saveCatalog();
     this.dispatchEvent(new CustomEvent('change', { detail: { forgotten: key } }));
     return true;
   }
-
   bindSession(sessionId, gatewayId = this.activeId) {
     const sid = String(sessionId || '').trim();
     const gid = String(gatewayId || '').trim();
-    if (!sid || !gid) return;
-    const existing = this.sessionTargets[sid];
-    if (existing && existing !== gid) throw new Error('This chat is already bound to another gateway.');
-    this.sessionTargets[sid] = gid;
+    if (!sid || !gid || !this.entries.has(gid)) return '';
+    const ref = sessionRef(gid, sid);
+    this.sessionTargets[ref] = gid;
+    if (!this.sessionTargets[sid]) this.sessionTargets[sid] = gid;
     writeJson(SESSION_TARGETS_KEY, this.sessionTargets);
+    return ref;
   }
-
-  gatewayIdForSession(sessionId) {
-    return String(this.sessionTargets[String(sessionId || '')] || this.activeId || '');
+  resolveSessionRef(value) {
+    const raw = String(value || '').trim();
+    const parsed = parseSessionRef(raw);
+    if (parsed && this.entries.has(parsed.gatewayId)) return { ...parsed, ref: sessionRef(parsed.gatewayId, parsed.sessionId) };
+    const gatewayId = String(this.sessionTargets[raw] || this.activeId || this.list()[0]?.id || '');
+    return { gatewayId, sessionId: raw || 'mobile_default', ref: sessionRef(gatewayId, raw || 'mobile_default') };
   }
-
-  clientForSession(sessionId) { return this.client(this.gatewayIdForSession(sessionId)); }
-
+  gatewayIdForSession(value) { return this.resolveSessionRef(value).gatewayId; }
+  clientForSession(value) { return this.client(this.gatewayIdForSession(value)); }
   async probe(id = this.activeId) {
     const entry = this.get(id);
     if (!entry) return null;
     try {
       const health = await this.client(id).health({ timeoutMs: 5000 });
-      entry.status = 'online';
-      entry.lastSeenAt = Date.now();
-      this._saveCatalog();
+      entry.status = 'online'; entry.lastSeenAt = Date.now(); this._saveCatalog();
       return { ...entry, health };
     } catch (error) {
-      entry.status = Number(error?.status) === 401 ? 'revoked' : 'offline';
-      this._saveCatalog();
+      entry.status = Number(error?.status) === 401 ? 'revoked' : 'offline'; this._saveCatalog();
       return { ...entry, error };
     }
   }
-
   async probeAll() { return Promise.all(this.list().map((entry) => this.probe(entry.id))); }
 }
-
-export { normalizeOrigin };
