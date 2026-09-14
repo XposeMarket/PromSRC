@@ -30,7 +30,10 @@ import { getPolicyEngine } from '../gateway/policy.js';
 import { appendAuditEntry, maybeRotateLog } from '../gateway/audit-log.js';
 import {
   clearSharedToolExecutionContext,
+  getSharedToolExecutionContext,
+  runWithSharedToolExecutionContext,
   setSharedToolExecutionContext,
+  type ToolExecutionContext,
 } from './execution-context.js';
 import { findCommandPermissionGrant } from '../gateway/command-permissions.js';
 import { commandMatchesAllowlist } from './shell.js';
@@ -212,6 +215,20 @@ export function clearToolExecutionContext(): void {
   _currentSessionId = 'unknown';
   _currentAgentId = undefined;
   clearSharedToolExecutionContext();
+}
+
+function resolveToolExecutionContext(explicit?: ToolExecutionContext): ToolExecutionContext {
+  if (explicit) {
+    return {
+      sessionId: explicit.sessionId || 'unknown',
+      agentId: explicit.agentId,
+    };
+  }
+  const shared = getSharedToolExecutionContext();
+  return {
+    sessionId: shared.sessionId || _currentSessionId || 'unknown',
+    agentId: shared.agentId ?? _currentAgentId,
+  };
 }
 
 class ToolRegistry {
@@ -400,7 +417,8 @@ class ToolRegistry {
    *   COMMIT  → route to the existing approval flow via getVerificationFlowManager()
    *             (returns needs_approval ToolResult, waits for WebSocket approval).
    */
-  async execute(toolName: string, args: any): Promise<ToolResult> {
+  async execute(toolName: string, args: any, executionContext?: ToolExecutionContext): Promise<ToolResult> {
+    const context = resolveToolExecutionContext(executionContext);
     const tool = this.tools.get(toolName);
 
     if (!tool) {
@@ -413,7 +431,7 @@ class ToolRegistry {
     // ── Policy evaluation ──────────────────────────────────────────────────
     let policy;
     try {
-      policy = getPolicyEngine().evaluateAction(_currentAgentId || 'main', toolName, args || {}, tool.capabilities);
+      policy = getPolicyEngine().evaluateAction(context.agentId || 'main', toolName, args || {}, tool.capabilities);
     } catch {
       policy = {
         tier: 'commit' as const,
@@ -431,8 +449,8 @@ class ToolRegistry {
 
     // ── Audit: record the intent ───────────────────────────────────────────
     appendAuditEntry({
-      sessionId: _currentSessionId,
-      agentId: _currentAgentId,
+      sessionId: context.sessionId,
+      agentId: context.agentId,
       actionType: 'tool_call',
       toolName,
       toolArgs: args,
@@ -448,12 +466,12 @@ class ToolRegistry {
     // non-elevated tool. Explicit approval-request tools also pass through so
     // their handlers can create the intended final-action/dev-edit cards.
     if (bypassGenericApproval) {
-      return this._runTool(tool, args, toolName);
+      return this._runTool(tool, args, toolName, context);
     }
 
     // ── READ tier: just execute ────────────────────────────────────────────
     if (tier === 'read') {
-      return this._runToolWithPathApproval(tool, args, toolName);
+      return this._runToolWithPathApproval(tool, args, toolName, context);
     }
 
     // ── PROPOSE tier: return a draft without executing ────────────────────
@@ -486,16 +504,16 @@ class ToolRegistry {
           title: `Tool call: ${toolName}`,
           summary: policy.proposalSummary || `"${toolName}" wants to run`,
           details: `**Tool:** \`${toolName}\`\n\n**Args:**\n\`\`\`json\n${JSON.stringify(args, null, 2)}\`\`\`\n\n**Policy reason:** ${policy.reason}`,
-          sourceAgentId: _currentAgentId || 'main',
-          sourceSessionId: _currentSessionId || undefined,
+          sourceAgentId: context.agentId || 'main',
+          sourceSessionId: context.sessionId || undefined,
           affectedFiles: [],
           requiresBuild: false,
         });
       } catch { /* proposal store optional */ }
 
       appendAuditEntry({
-        sessionId: _currentSessionId,
-        agentId: _currentAgentId,
+        sessionId: context.sessionId,
+        agentId: context.agentId,
         actionType: 'approval_requested',
         toolName,
         toolArgs: args,
@@ -515,8 +533,8 @@ class ToolRegistry {
       const allowedCmds: string[] = shellPerms?.allowed_commands ?? [];
       if (commandMatchesAllowlist(rawCmd, allowedCmds)) {
         appendAuditEntry({
-          sessionId: _currentSessionId,
-          agentId: _currentAgentId,
+          sessionId: context.sessionId,
+          agentId: context.agentId,
           actionType: 'approval_resolved',
           toolName,
           toolArgs: args,
@@ -524,13 +542,13 @@ class ToolRegistry {
           approvalStatus: 'auto_allowed',
           resultSummary: 'Allowed by config allowed_commands',
         });
-        return this._runToolWithPathApproval(tool, args, toolName);
+        return this._runToolWithPathApproval(tool, args, toolName, context);
       }
 
       // 2. Persisted session/always grant
       const workspacePath = getConfig().getWorkspacePath();
       const grant = findCommandPermissionGrant({
-        sessionId: _currentSessionId,
+        sessionId: context.sessionId,
         toolName,
         action: rawCmd,
         target: String(args?.cwd ?? workspacePath),
@@ -540,8 +558,8 @@ class ToolRegistry {
       });
       if (grant) {
         appendAuditEntry({
-          sessionId: _currentSessionId,
-          agentId: _currentAgentId,
+          sessionId: context.sessionId,
+          agentId: context.agentId,
           actionType: 'approval_resolved',
           toolName,
           toolArgs: args,
@@ -549,7 +567,7 @@ class ToolRegistry {
           approvalStatus: 'auto_allowed',
           resultSummary: `Allowed by ${grant.scope} grant ${grant.id}`,
         });
-        return this._runToolWithPathApproval(tool, args, toolName);
+        return this._runToolWithPathApproval(tool, args, toolName, context);
       }
 
     }
@@ -558,8 +576,8 @@ class ToolRegistry {
     // Return a needs_approval result; the server-v2 approval handler will
     // present this to the user via the existing approval card UI.
     appendAuditEntry({
-      sessionId: _currentSessionId,
-      agentId: _currentAgentId,
+      sessionId: context.sessionId,
+      agentId: context.agentId,
       actionType: 'approval_requested',
       toolName,
       toolArgs: args,
@@ -591,17 +609,18 @@ class ToolRegistry {
    * Execute a tool bypassing policy checks (used after approval is granted).
    * This is intentionally separate so call sites are explicit about bypassing.
    */
-  async executeBypass(toolName: string, args: any): Promise<ToolResult> {
+  async executeBypass(toolName: string, args: any, executionContext?: ToolExecutionContext): Promise<ToolResult> {
+    const context = resolveToolExecutionContext(executionContext);
     const tool = this.tools.get(toolName);
     if (!tool) {
       return { success: false, error: `Tool not found: ${toolName}` };
     }
 
-    const result = await this._runTool(tool, args, toolName);
+    const result = await this._runTool(tool, args, toolName, context);
 
     appendAuditEntry({
-      sessionId: _currentSessionId,
-      agentId: _currentAgentId,
+      sessionId: context.sessionId,
+      agentId: context.agentId,
       actionType: 'tool_call',
       toolName,
       toolArgs: args,
@@ -620,8 +639,13 @@ class ToolRegistry {
    * Run a tool and, if it signals _needsPathApproval, queue a path approval
    * and retry once the user grants access (session or always).
    */
-  private async _runToolWithPathApproval(tool: Tool, args: any, toolName: string): Promise<ToolResult> {
-    const result = await this._runTool(tool, args, toolName);
+  private async _runToolWithPathApproval(
+    tool: Tool,
+    args: any,
+    toolName: string,
+    context: ToolExecutionContext,
+  ): Promise<ToolResult> {
+    const result = await this._runTool(tool, args, toolName, context);
     if (result.success || !result.data?._needsPathApproval) return result;
 
     const requestedPath = String(result.data.requestedPath || '');
@@ -629,8 +653,8 @@ class ToolRegistry {
 
     const approvalQueue = getApprovalQueue();
     const approval = approvalQueue.create({
-      sessionId: _currentSessionId,
-      agentId: _currentAgentId,
+      sessionId: context.sessionId,
+      agentId: context.agentId,
       originType: 'main_chat',
       toolName,
       toolArgs: args,
@@ -647,7 +671,7 @@ class ToolRegistry {
       const { broadcastWS } = await import('../gateway/comms/broadcaster.js');
       broadcastWS({
         type: 'approval_created',
-        sessionId: _currentSessionId,
+        sessionId: context.sessionId,
         approvalId: approval.id,
         summary: approval.action,
         toolName,
@@ -665,44 +689,51 @@ class ToolRegistry {
 
     // Path was added to session/persistent store by the settings router before
     // firing the approval callback — retry the tool now that the path is allowed.
-    return this._runTool(tool, args, toolName);
+    return this._runTool(tool, args, toolName, context);
   }
 
   /** Internal: actually run the tool, wrap errors */
-  private async _runTool(tool: Tool, args: any, toolName: string): Promise<ToolResult> {
-    try {
-      const result = await tool.execute(args);
+  private async _runTool(
+    tool: Tool,
+    args: any,
+    toolName: string,
+    context: ToolExecutionContext,
+  ): Promise<ToolResult> {
+    return runWithSharedToolExecutionContext(context, async () => {
+      try {
+        const result = await tool.execute(args);
 
-      // Audit the result
-      appendAuditEntry({
-        sessionId: _currentSessionId,
-        agentId: _currentAgentId,
-        actionType: 'tool_call',
-        toolName,
-        policyTier: 'read',
-        approvalStatus: 'auto',
-        resultSummary: result.success
-          ? String(result.stdout || result.data || 'ok').slice(0, 200)
-          : undefined,
-        error: result.success ? undefined : String(result.error || '').slice(0, 200),
-      });
+        // Audit the result
+        appendAuditEntry({
+          sessionId: context.sessionId,
+          agentId: context.agentId,
+          actionType: 'tool_call',
+          toolName,
+          policyTier: 'read',
+          approvalStatus: 'auto',
+          resultSummary: result.success
+            ? String(result.stdout || result.data || 'ok').slice(0, 200)
+            : undefined,
+          error: result.success ? undefined : String(result.error || '').slice(0, 200),
+        });
 
-      return result;
-    } catch (error: any) {
-      const errMsg = `Tool execution failed: ${error.message}`;
+        return result;
+      } catch (error: any) {
+        const errMsg = `Tool execution failed: ${error.message}`;
 
-      appendAuditEntry({
-        sessionId: _currentSessionId,
-        agentId: _currentAgentId,
-        actionType: 'tool_call',
-        toolName,
-        policyTier: 'read',
-        approvalStatus: 'auto',
-        error: errMsg.slice(0, 200),
-      });
+        appendAuditEntry({
+          sessionId: context.sessionId,
+          agentId: context.agentId,
+          actionType: 'tool_call',
+          toolName,
+          policyTier: 'read',
+          approvalStatus: 'auto',
+          error: errMsg.slice(0, 200),
+        });
 
-      return { success: false, error: errMsg };
-    }
+        return { success: false, error: errMsg };
+      }
+    });
   }
 
   getToolSchemas(profile: ToolProfile = 'full'): string {
