@@ -58,6 +58,17 @@ export const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'get_symbols',
   'go_to_definition',
   'find_references',
+  'read_source',
+  'read_dev_sources',
+  'list_source',
+  'grep_source',
+  'source_stats',
+  'src_stats',
+  'read_webui_source',
+  'list_webui_source',
+  'grep_webui_source',
+  'webui_source_stats',
+  'webui_stats',
   'time_now',
   'web_search',
   'web_search_single',
@@ -65,8 +76,6 @@ export const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
   'web_fetch',
   'web_fetch_batch',
   'shopping_search_products',
-  'source_stats',
-  'webui_source_stats',
 ]);
 
 function normalizeConcurrency(value: unknown): number {
