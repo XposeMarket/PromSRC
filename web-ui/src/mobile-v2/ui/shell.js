@@ -7,6 +7,14 @@ const TABS = [
   { id: 'hub', label: 'Hub', icon: 'person' },
 ];
 
+const DRAWER_ITEMS = [
+  { id: 'schedule', label: 'Schedule', icon: 'calendar' },
+  { id: 'teams', label: 'Teams', icon: 'users' },
+  { id: 'subagents', label: 'Subagents', icon: 'robot' },
+  { id: 'proposals', label: 'Proposals', icon: 'doc' },
+  { id: 'more', label: 'More', icon: 'dots' },
+];
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 }
@@ -37,6 +45,10 @@ export function createMobileV2Shell({ root, gateway }) {
         <button class="pm-drawer-new-chat pm-v2-new-chat" type="button">${ICONS.plus}<span>New chat</span></button>
         <div class="pm-v2-drawer-label">Chats</div>
         <div class="pm-drawer-list pm-v2-session-list" id="pm-v2-session-list"></div>
+        <div class="pm-v2-drawer-label pm-v2-nav-label">Prometheus</div>
+        <nav class="pm-drawer-list pm-v2-drawer-nav" aria-label="Prometheus sections">
+          ${DRAWER_ITEMS.map((item) => `<button class="pm-drawer-item pm-v2-drawer-item" type="button" data-drawer-route="${item.id}"><span class="pm-flex"><span class="pm-v2-drawer-icon">${ICONS[item.icon]}</span><span>${item.label}</span></span><span class="pm-v2-session-chevron">${ICONS.chevron}</span></button>`).join('')}
+        </nav>
       </section>
       <div class="pm-page pm-v2-page" id="pm-v2-page">
         <header class="pm-header pm-v2-header">
@@ -130,6 +142,12 @@ export function createMobileV2Shell({ root, gateway }) {
     if (!row) return;
     setDrawer(false);
     navigate(`chat/${encodeURIComponent(row.dataset.sessionId)}`);
+  });
+  drawer?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-drawer-route]');
+    if (!button) return;
+    setDrawer(false);
+    navigate(button.dataset.drawerRoute);
   });
   tabbar?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-tab]');
