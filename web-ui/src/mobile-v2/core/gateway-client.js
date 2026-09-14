@@ -15,27 +15,18 @@ function buildRequestError(response, body) {
 }
 
 function parseSseBlock(block) {
-  const data = block
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart())
-    .join('\n');
+  const data = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
   if (!data || data === '[DONE]') return null;
-  try { return JSON.parse(data); }
-  catch { return null; }
+  try { return JSON.parse(data); } catch { return null; }
 }
 
 function publicReasoningFromEvent(event) {
   const type = String(event?.type || '').toLowerCase();
-  if (type === 'reasoning_summary' || type === 'reasoning_summary_delta') {
-    return String(event.text || event.summary || event.delta || '');
-  }
+  if (type === 'reasoning_summary' || type === 'reasoning_summary_delta') return String(event.text || event.summary || event.delta || '');
   if (type === 'model_stream_event') {
     const inner = event.event || {};
     const innerType = String(inner.type || '').toLowerCase();
-    if ((innerType === 'reasoning_delta' || innerType === 'reasoning_summary_delta') && inner.summary === true) {
-      return String(inner.text || inner.delta || '');
-    }
+    if ((innerType === 'reasoning_delta' || innerType === 'reasoning_summary_delta') && inner.summary === true) return String(inner.text || inner.delta || '');
   }
   return '';
 }
@@ -43,52 +34,25 @@ function publicReasoningFromEvent(event) {
 export function normalizeGatewayStreamEvent(event) {
   const type = String(event?.type || '').toLowerCase();
   if (!type) return { type: 'unknown', raw: event };
-
-  if (type === 'token') {
-    return { type: 'assistant.delta', text: String(event.text || event.delta || '') };
-  }
-  if (type === 'done') {
-    return {
-      type: 'assistant.done',
-      text: String(event.text || event.final || event.response || ''),
-      raw: event,
-    };
-  }
+  if (type === 'token' || type === 'assistant_delta') return { type: 'assistant.delta', text: String(event.text || event.delta || '') };
+  if (type === 'final') return { type: 'assistant.done', text: String(event.text || event.content || event.reply || ''), raw: event };
+  if (type === 'done') return { type: 'assistant.done', text: String(event.text || event.final || event.response || event.reply || ''), raw: event };
   if (type === 'error') {
     const detail = event.error && typeof event.error === 'object' ? event.error.message : (event.message || event.error);
     return { type: 'assistant.error', message: String(detail || 'Gateway stream failed.'), raw: event };
   }
-
   const reasoning = publicReasoningFromEvent(event);
   if (reasoning) return { type: 'reasoning.summary.delta', text: reasoning, raw: event };
-
-  if (type === 'tool_call' || type === 'tool_progress' || type === 'tool_result') {
-    return {
-      type: 'tool.activity',
-      phase: type,
-      name: String(event.name || event.tool || event.action || event.function?.name || 'Tool'),
-      message: String(event.message || event.summary || event.status || ''),
-      raw: event,
-    };
-  }
-
+  if (type === 'tool_call' || type === 'tool_progress' || type === 'tool_result') return { type: 'tool.activity', phase: type, name: String(event.name || event.tool || event.action || event.function?.name || 'Tool'), message: String(event.message || event.summary || event.status || ''), raw: event };
   if (type === 'model_stream_event') {
     const inner = event.event || {};
     const innerType = String(inner.type || '').toLowerCase();
-    if (innerType === 'assistant_delta') {
-      return { type: 'assistant.delta', text: String(inner.text || inner.delta || '') };
-    }
-    if (innerType.startsWith('tool_')) {
-      return {
-        type: 'tool.activity',
-        phase: innerType,
-        name: String(inner.name || inner.tool || inner.action || 'Tool'),
-        message: String(inner.message || inner.summary || ''),
-        raw: event,
-      };
-    }
+    if (innerType === 'assistant_delta') return { type: 'assistant.delta', text: String(inner.text || inner.delta || '') };
+    if (innerType.startsWith('tool_')) return { type: 'tool.activity', phase: innerType, name: String(inner.name || inner.tool || inner.action || 'Tool'), message: String(inner.message || inner.summary || ''), raw: event };
   }
-
+  if (type === 'info' || type === 'heartbeat' || type === 'voice_milestone') return { type: 'status', text: String(event.message || event.text || ''), raw: event };
+  if (type === 'approval_required') return { type: 'approval.required', approval: event.approval || event, raw: event };
+  if (type === 'question') return { type: 'question.required', question: event.question || event, raw: event };
   return { type: 'unknown', raw: event };
 }
 
@@ -106,88 +70,85 @@ export class GatewayClient {
     const headers = new Headers(options.headers || {});
     const token = this.token;
     if (token) headers.set('X-Pairing-Token', token);
-    if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
-      headers.set('Content-Type', 'application/json');
+    if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    const parentSignal = options.signal;
+    const controller = new AbortController();
+    const timeoutMs = Number(options.timeoutMs || 20000);
+    const abort = () => controller.abort();
+    if (parentSignal) {
+      if (parentSignal.aborted) controller.abort();
+      else parentSignal.addEventListener('abort', abort, { once: true });
     }
-    const response = await fetch(`${this.origin}${path}`, { ...options, headers });
-    const text = await response.text();
-    let body = null;
-    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-    if (response.status === 401 && token) {
-      window.dispatchEvent(new Event('pm-v2-device-revoked'));
+    const timer = Number.isFinite(timeoutMs) && timeoutMs > 0 ? setTimeout(abort, timeoutMs) : null;
+    const { timeoutMs: _timeoutMs, signal: _signal, ...fetchOptions } = options;
+    try {
+      const response = await fetch(`${this.origin}${path}`, { ...fetchOptions, headers, signal: controller.signal });
+      const text = await response.text();
+      let body = null;
+      try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+      if (response.status === 401 && token) window.dispatchEvent(new CustomEvent('pm-v2-device-revoked', { detail: { gatewayId: this.id } }));
+      if (!response.ok) throw buildRequestError(response, body);
+      return body;
+    } finally {
+      if (timer) clearTimeout(timer);
+      parentSignal?.removeEventListener?.('abort', abort);
     }
-    if (!response.ok) throw buildRequestError(response, body);
-    return body;
   }
 
-  health() { return this.request('/api/health'); }
+  health(options = {}) { return this.request('/api/health', options); }
+  pairingMe() { return this.request('/api/pairing/me'); }
+  claimPairing(payload) { return this.request('/api/pairing/claim', { method: 'POST', body: JSON.stringify(payload || {}) }); }
+  pollPairing(requestId) { return this.request(`/api/pairing/poll/${encodeURIComponent(requestId)}`); }
+  revokePairing() { return this.request('/api/pairing/me/revoke', { method: 'POST', body: '{}' }); }
+  gatewayCatalog() { return this.request('/api/mobile/gateway/catalog'); }
 
   async listSessions({ limit = 80, offset = 0, state = 'all' } = {}) {
-    const params = new URLSearchParams({
-      scope: 'all',
-      includeAutomated: '1',
-      state,
-      limit: String(limit),
-      offset: String(offset),
-    });
+    const params = new URLSearchParams({ scope: 'all', includeAutomated: '1', state, limit: String(limit), offset: String(offset) });
     const body = await this.request(`/api/sessions?${params.toString()}`);
     if (Array.isArray(body)) return { sessions: body, total: body.length };
-    return {
-      sessions: Array.isArray(body?.sessions) ? body.sessions : [],
-      total: Number(body?.total || body?.totalCount || body?.sessions?.length || 0),
-    };
+    return { sessions: Array.isArray(body?.sessions) ? body.sessions : [], total: Number(body?.total || body?.totalCount || body?.sessions?.length || 0) };
   }
-
-  getSession(sessionId) {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`);
-  }
-
+  getSession(sessionId) { return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`); }
   getHistoryPage(sessionId, { limit = 80, before = '' } = {}) {
     const params = new URLSearchParams({ limit: String(limit) });
     if (before) params.set('before', before);
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/history-page?${params.toString()}`);
   }
+  createSession({ id, title = 'New Chat' }) { return this.request('/api/sessions', { method: 'POST', body: JSON.stringify({ id, channel: 'mobile', title }) }); }
 
-  createSession({ id, title = 'New Chat' }) {
-    return this.request('/api/sessions', {
-      method: 'POST',
-      body: JSON.stringify({ id, channel: 'mobile', title }),
-    });
+  wsUrl(path, params = {}) {
+    const url = new URL(path, this.origin);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (this.token) url.searchParams.set('pt', this.token);
+    Object.entries(params || {}).forEach(([key, value]) => { if (value != null && value !== '') url.searchParams.set(key, String(value)); });
+    return url.toString();
   }
 
-  async streamChat({ sessionId, message, clientRequestId, signal, onEvent }) {
-    const headers = new Headers({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
-    const token = this.token;
-    if (token) headers.set('X-Pairing-Token', token);
-    const response = await fetch(`${this.origin}/api/chat`, {
-      method: 'POST',
-      headers,
-      signal,
-      body: JSON.stringify({
-        message,
-        sessionId,
-        clientRequestId,
-        useTools: true,
-        origin: {
-          channel: 'mobile',
-          surface: 'mobile_app',
-          device: 'phone',
-          label: 'Prometheus Mobile V2',
-          source: 'mobile_v2',
-        },
-      }),
-    });
-    if (response.status === 401 && token) window.dispatchEvent(new Event('pm-v2-device-revoked'));
-    if (!response.ok) {
-      let body = null;
-      try { body = await response.json(); } catch {}
-      throw buildRequestError(response, body);
+  async streamRequest(path, { method = 'POST', body = null, signal, onEvent, timeoutMs = 300000, headers: extraHeaders } = {}) {
+    const headers = new Headers(extraHeaders || { Accept: 'text/event-stream' });
+    if (!headers.has('Accept')) headers.set('Accept', 'text/event-stream');
+    if (body != null && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    if (this.token) headers.set('X-Pairing-Token', this.token);
+    const controller = new AbortController();
+    const parentAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener('abort', parentAbort, { once: true });
     }
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('Gateway did not return a readable chat stream.');
-    const decoder = new TextDecoder();
-    let buffer = '';
+    const timer = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
+      const response = await fetch(`${this.origin}${path}`, { method, headers, signal: controller.signal, body: body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)) });
+      if (response.status === 401 && this.token) window.dispatchEvent(new CustomEvent('pm-v2-device-revoked', { detail: { gatewayId: this.id } }));
+      if (!response.ok) {
+        let errorBody = null;
+        try { errorBody = await response.json(); } catch {}
+        throw buildRequestError(response, errorBody);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Gateway did not return a readable stream.');
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let terminal = null;
       while (true) {
         const next = await reader.read();
         if (next.done) break;
@@ -197,16 +158,31 @@ export class GatewayClient {
         for (const block of blocks) {
           const raw = parseSseBlock(block);
           if (!raw) continue;
-          const event = normalizeGatewayStreamEvent(raw);
-          onEvent?.(event);
-          if (event.type === 'assistant.done' || event.type === 'assistant.error') return event;
+          const normalized = normalizeGatewayStreamEvent(raw);
+          onEvent?.(normalized, raw);
+          if (normalized.type === 'assistant.done' || normalized.type === 'assistant.error') terminal = normalized;
         }
       }
-      const raw = parseSseBlock(buffer);
-      if (raw) onEvent?.(normalizeGatewayStreamEvent(raw));
-      return { type: 'assistant.done' };
+      const tail = parseSseBlock(buffer);
+      if (tail) {
+        const normalized = normalizeGatewayStreamEvent(tail);
+        onEvent?.(normalized, tail);
+        terminal ||= normalized;
+      }
+      return terminal || { type: 'assistant.done' };
     } finally {
-      try { reader.releaseLock(); } catch {}
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.('abort', parentAbort);
     }
+  }
+
+  streamChat({ sessionId, message, clientRequestId, signal, onEvent }) {
+    return this.streamRequest('/api/chat', {
+      method: 'POST', signal, onEvent,
+      body: {
+        message, sessionId, clientRequestId, useTools: true,
+        origin: { channel: 'mobile', surface: 'mobile_app', device: 'phone', label: 'Prometheus Mobile V2', source: 'mobile_v2' },
+      },
+    });
   }
 }
