@@ -30,6 +30,7 @@ const pageKit = read('web-ui/src/mobile-v2/ui/page-kit.js');
 const chat = read('web-ui/src/mobile-v2/features/chat/chat-page.js');
 const css = read('web-ui/src/mobile-v2/mobile-v2.css');
 const gatewayServer = read('src/gateway/core/server.ts');
+const productionBuild = read('scripts/build-web-ui-production.mjs');
 
 assert.match(html, /mobile-v2-root/);
 assert.match(html, /src\/mobile-v2\/mobile-v2-entry\.js/);
@@ -95,6 +96,12 @@ assert.match(css, /pm-v2-field/);
 assert.match(gatewayServer, /pathname === '\/mobile-v2'/);
 assert.match(gatewayServer, /pathname\.startsWith\('\/mobile-v2\/'\)/);
 assert.match(gatewayServer, /push\(webUiRoot, 'mobile-v2\.html'\)/);
+
+// Mobile V2 is copied and checked as raw parallel modules, not bundled into the
+// legacy desktop/mobile esbuild artifacts. V2 edits must therefore not churn
+// the legacy asset build id or service-worker cache namespace.
+assert.match(productionBuild, /relative !== 'mobile-v2\.html'/);
+assert.match(productionBuild, /!relative\.startsWith\('src\/mobile-v2\/'\)/);
 
 const allV2JavaScript = walk('web-ui/src/mobile-v2').filter((file) => file.endsWith('.js'));
 assert.ok(allV2JavaScript.length >= 18, 'Expected the complete Mobile V2 module graph.');
