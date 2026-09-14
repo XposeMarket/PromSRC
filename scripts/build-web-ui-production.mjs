@@ -76,7 +76,10 @@ function computeSourceDigest() {
   const hash = crypto.createHash('sha256');
   hash.update(`${BUILD_DESCRIPTOR}|esbuild-${esbuild.version}\n`);
   const buildInputs = [
-    ...walkFiles(WEB_UI_ROOT),
+    ...walkFiles(WEB_UI_ROOT).filter((filePath) => {
+    const relative = toPosix(path.relative(WEB_UI_ROOT, filePath));
+    return relative !== 'mobile-v2.html' && !relative.startsWith('src/mobile-v2/');
+  }),
     path.join(ROOT, 'package.json'),
     path.join(ROOT, 'package-lock.json'),
     fileURLToPath(import.meta.url),
