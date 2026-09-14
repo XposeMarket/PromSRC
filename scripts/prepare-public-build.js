@@ -128,7 +128,9 @@ function listFiles(root) {
 
 function expectedPublicWebUiFiles() {
   const expected = new Set(['index.html', ...PUBLIC_WEB_VENDOR_FILES]);
-  if (fs.existsSync(path.join(SRC_WEB_UI, 'mobile.html'))) expected.add('mobile.html');
+  for (const name of ['mobile.html', 'mobile-v2.html']) {
+    if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
+  }
   const sourceRoot = path.join(SRC_WEB_UI, 'src');
   for (const sourcePath of listFiles(sourceRoot)) {
     const relative = path.relative(sourceRoot, sourcePath).replace(/\\/g, '/');
@@ -383,7 +385,7 @@ function buildPublicWebUi() {
   // incremental and can leave the output tree half-deleted after EBUSY.
   mkdirp(OUT_STATIC);
 
-  for (const name of ['index.html', 'mobile.html']) {
+  for (const name of ['index.html', 'mobile.html', 'mobile-v2.html']) {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;
     let html = fs.readFileSync(sourcePath, 'utf-8');
