@@ -204,6 +204,8 @@ assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 's
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
 assert.match(router, /buildDurableChatTraceFromFrames\(stream\.events/, 'completed turns must use the shared durable trace adapter');
 assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ordinary tool traces must not depend on a vision event');
+assert.match(durableTrace, /type: 'compaction'/, 'context compaction must have a dedicated durable trace type');
+assert.match(durableTrace, /previousStatus === 'compacting'/, 'durable recovery must merge compaction start and completion into one boundary');
 assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must retain explicit user-visible reasoning summaries');
 assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
@@ -215,6 +217,9 @@ assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy to
 assert.match(toolActivityRuntime, /const isToolRecord = \['tool', 'skill', 'result', 'error', 'progress'\]/, 'cold recovery must preserve model prose beside structured tools');
 assert.match(pages, /rawType = String\(entry\.type \|\| entry\.kind \|\| ''\)\.toLowerCase\(\)/, 'mobile recovery must inspect legacy event-shaped trace types');
 assert.match(pages, /rawType === 'tool_result'/, 'mobile recovery must convert legacy tool_result rows into result rows');
+assert.match(pages, /status: String\(recovered\.status \|\| recovered\.extra\?\.status/, 'mobile cache hydration must retain compaction status');
+assert.match(pages, /summary: String\(entry\.summary \|\| entry\.extra\?\.summary/, 'mobile cache snapshots must retain the compaction summary');
+assert.doesNotMatch(pages, /_appendMobileProcess\(aiTurn, evt\.error \? 'error' : 'result', status === 'failed' \? 'Context compaction failed' : 'Context compacted'/, 'compaction results must not be duplicated as ordinary process rows');
 assert.match(pages, /__pmMobileBackgroundAgentDetailRender/, 'background detail recovery must repaint after the rich renderer loads');
 
 // The rich tool renderer is deliberately lazy. Recovered mobile history must
@@ -366,9 +371,14 @@ assert.match(
 );
 assert.match(
   pages,
-  /const seenRequests = new Map\(\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails/,
-  'assistant recovery dedupe must collapse duplicate bubbles by stable request identity across user boundaries',
+  /const seenRequests = new Map\(\)[\s\S]{0,1200}const separatedByUser = list\.slice\(requestIndex \+ 1, i\)[\s\S]{0,300}continue;/,
+  'assistant recovery dedupe must preserve later responses when a user turn separates a reused request identity',
 );
+assert.match(pages, /if \(requestIndex >= 0 && _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)/, 'request-id dedupe must also verify compatible assistant content');
+assert.match(pages, /Request ids identify a transport run[\s\S]{0,360}aText\.startsWith\(bText\)/, 'transport request identity must not collapse distinct durable rows');
+assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true \}\)/, 'painted transcript order must remain the hydration continuity spine');
+assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,180}candidateTimestamp <= primaryLatestTimestamp/, 'stale unmatched hydration rows must not be appended as fake new messages');
+assert.doesNotMatch(pages, /_mergeMobileHistoryRecords\(mapped, durableLocal, \{ sortByTimestamp: true \}\)/, 'mixed-clock hydration must never reorder the transcript by timestamp');
 assert.match(
   pages,
   /const separatedByUser = list\.slice\(prevIndex \+ 1, i\)[\s\S]{0,420}Math\.abs\(currentAt - previousAt\) < 30_000/,

@@ -279,6 +279,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
   _renderMobileUserEditComposer,
+  _renderMobileVoiceLyrics,
   _renderMobileVoiceWorkgroup,
   _renderMobileWorkTimer,
   _wireMobileApprovalActionButton,
@@ -379,7 +380,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
     const entryId = String(entry?.id || `compaction_${entry?.time || entry?.ts || ''}_${status}`).trim();
     const label = String(entry?.text || '').trim()
-      || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
+      || (status === 'compacting' ? 'Compacting context' : status === 'failed' ? 'Context compaction failed' : 'Context compacted');
     const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
     const body = summary
       ? `<div class="pm-trace-compaction-body"><div class="pm-live-md">${_renderMobileMarkdown(summary)}</div></div>`
@@ -1122,6 +1123,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     _renderMobileSkillReferencedMarkdown,
     _renderMobileThreadLinkArtifacts,
     _renderMobileUserEditComposer,
+    _renderMobileVoiceLyrics,
     _renderMobileVoiceWorkgroup,
     _renderMobileWorkTimer,
     chatTimelineRowSignature,
@@ -3132,8 +3134,11 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     inner = `${voiceMeta ? `<span class="pm-sender">${escapeHtml(voiceMeta)}</span>` : ''}<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>${attachmentHtml}`;
   } else {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
+    const senderIconHtml = typeof options.senderIconHtml === 'string' ? options.senderIconHtml : '';
+    inner += senderIconHtml
+      ? `<span class="pm-sender pm-sender-with-icon">${senderIconHtml}<span class="pm-sender-name">${escapeHtml(voiceMeta || sender)}</span></span>`
+      : `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     inner += _renderMobileWorkTimer(traceMessage, { expanded: traceExpanded });
-    inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     const answerStarted = !!String(text || '').trim();
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
     // Background-agent details are a live work surface: keep their tool
@@ -4363,7 +4368,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
       if (action === 'context_compaction') {
         _appendMobileCompactionTrace(message, 'compacting', '', evt.args || evt);
-        message._progress = 'Compacting Context';
+        message._progress = 'Compacting context';
         return true;
       }
       const stepNum = Number(evt.stepNum || 0);
@@ -4481,6 +4486,15 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return false;
   }
 }
+function mobileCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
   // Small process-trace helpers share the deferred Chat renderer boundary.
 function _pushMobileStreamProcessEntry(message, type, text, extra = null, includeLiveTrace = true) {
   const clean = String(text || '').trim();
@@ -4492,6 +4506,15 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null, includ
     || source === 'reasoning_summary'
     || reasoningKind === 'summary'
     || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)) return;
+  const action = String(extra?.action || extra?.toolName || extra?.extra?.action || extra?.extra?.toolName || '').trim().toLowerCase();
+  const compactionStatus = action === 'context_compaction'
+    ? String(extra?.status || extra?.extra?.status || '').trim().toLowerCase() || mobileCompactionStatusFromText(clean) || 'compacted'
+    : String(type || '').toLowerCase() === 'info' ? mobileCompactionStatusFromText(clean) : '';
+  if (compactionStatus) {
+    _appendMobileCompactionTrace(message, compactionStatus, extra?.summary || extra?.extra?.summary || '', extra);
+    message._progress = compactionStatus === 'compacting' ? 'Compacting context' : '';
+    return;
+  }
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const streamId = String(extra?.streamId || '').trim();
   const seq = Math.max(0, Math.floor(Number(extra?.seq || 0)) || 0);

@@ -328,11 +328,20 @@
    button so the physical tap emits a system haptic; the wrapper shrink-wraps the
    button so composer layout is unchanged. Keep the switch native (no
    appearance:none) and hide it with opacity only. */
-.pm-haptic-host { position: relative; display: inline-flex; }
+.pm-haptic-host {
+  position: relative;
+  display: inline-flex;
+  /* Some launcher rails intentionally disable pointer events on the rail and
+     re-enable them on their controls. Keep the wrapper interactive after the
+     haptic proxy is inserted, otherwise the invisible proxy inherits
+     `pointer-events: none` and the real button has no activation listener. */
+  pointer-events: auto;
+}
 .pm-haptic-host > .pm-haptic-switch-overlay {
   position: absolute; inset: 0; margin: 0;
   width: 100%; height: 100%;
   opacity: 0; cursor: pointer; z-index: 3;
+  pointer-events: auto;
   -webkit-tap-highlight-color: transparent;
 }
 /* Drawer session cards must stay full width even when wrapped for haptics. */
@@ -4259,6 +4268,27 @@ html.pm-session-context-open * {
   grid-row: auto;
 }
 .pm-trace-tool-body .tool-activity-wrap + .tool-activity-wrap { margin-top: 8px; }
+.pm-trace-tool-body .tool-activity-disclosure > summary { list-style: none; cursor: pointer; }
+.pm-trace-tool-body .tool-activity-disclosure > summary::-webkit-details-marker { display: none; }
+.pm-trace-tool-body .tool-activity-chevron { margin-left: auto; color: currentColor; font-style: normal; opacity: .68; transform: rotate(0); transition: transform .15s ease; }
+.pm-trace-tool-body .tool-activity-disclosure[open] .tool-activity-chevron { transform: rotate(90deg); }
+.pm-trace-tool-body .tool-activity-inline-detail { margin: 8px 0 0 24px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--pm-border) 86%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--pm-surface) 82%, transparent); }
+.pm-trace-tool-body .tool-activity-skill-detail { display: grid; gap: 4px; }
+.pm-trace-tool-body .tool-activity-skill-detail strong { color: var(--pm-text); font-size: 12px; }
+.pm-trace-tool-body .tool-activity-skill-detail span { color: var(--pm-muted); font-size: 12px; line-height: 1.45; }
+.pm-trace-tool-body .tool-activity-file-diff { max-height: min(42svh, 340px); overflow: auto; color: var(--pm-text-soft); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; -webkit-overflow-scrolling: touch; }
+.pm-trace-tool-body .tool-activity-diff-line.is-added { background: rgba(30, 167, 88, .14); box-shadow: none; }
+.pm-trace-tool-body .tool-activity-diff-line.is-removed { background: rgba(207, 50, 79, .135); box-shadow: none; }
+.pm-trace-tool-body .tool-activity-diff-line.is-added .tool-activity-diff-marker { color: #39ee88; }
+.pm-trace-tool-body .tool-activity-diff-line.is-removed .tool-activity-diff-marker { color: #ff6680; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-tag,
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-keyword { color: #f08fa3 !important; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-attr,
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-function { color: #c6a0f6 !important; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-string { color: #a6da95 !important; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-number { color: #eed49f !important; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-punctuation { color: #8aadf4 !important; }
+.pm-trace-tool-body .tool-activity-file-diff .tool-activity-diff-code .tok-comment { color: #7f849c !important; font-style: italic; }
 .pm-trace-tool-body .tool-activity-entry > summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 14px;
@@ -9494,6 +9524,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   box-shadow: 0 -22px 70px rgba(0,0,0,.48);
 }
 .pm-mobile-side-sheet.open .pm-mobile-side-panel { transform: translateY(0); }
+.pm-keyboard-open .pm-mobile-side-sheet.open .pm-mobile-side-panel {
+  transform: none !important;
+}
 .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel {
   height: min(84svh, 700px);
 }
@@ -9620,8 +9653,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-keyboard-open .pm-mobile-side-composer.pm-composer {
   bottom: calc(var(--pm-keyboard-offset, 0px) + 8px);
 }
-.pm-mobile-side-composer .pm-composer-row,
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row {
   width: 100%;
   display: flex;
   grid-template-columns: none;
@@ -9634,8 +9666,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   margin: 0;
   transform: translateY(-5px);
 }
-.pm-mobile-side-composer .pm-composer-input-wrap,
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input-wrap {
   flex: 1;
   grid-column: auto;
   grid-row: auto;
@@ -9645,10 +9676,8 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-self: center;
   display: flex;
 }
-.pm-mobile-side-composer .pm-composer-row > .pm-icon-btn,
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn,
-.pm-mobile-side-composer .pm-composer-row > .pm-send,
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-send {
   width: 38px;
   min-width: 38px;
   height: 38px;
@@ -9663,7 +9692,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-items: center;
   justify-content: center;
 }
-.pm-mobile-side-composer .pm-composer-input {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input {
   width: 100%;
   height: 28px !important;
   min-height: 28px;
@@ -9672,6 +9701,18 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   line-height: 24px;
   align-self: center;
   overflow: hidden;
+}
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) {
+  height: auto;
+  min-height: 112px;
+  max-height: min(46svh, 340px);
+  justify-content: flex-end;
+  padding: 10px 10px 8px;
+  border-radius: 24px;
+  opacity: 1;
+}
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
+  transform: none;
 }
 
 .pm-team-chat-card {
@@ -11821,6 +11862,25 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
   color-scheme: light dark;
   scrollbar-color: color-mix(in srgb, var(--pm-muted) 55%, transparent) transparent;
 }
+.pm-team-chat-card .pm-agent-chat-composer.pm-composer {
+  position: sticky;
+  left: auto;
+  right: auto;
+  bottom: 0;
+  margin: 8px 10px 10px;
+  border-radius: 24px;
+  box-shadow: var(--pm-lg-panel-shadow, 0 24px 58px rgba(0,0,0,.34));
+}
+body.pm-mobile-active .pm-agent-chat-composer.pm-composer:is(.is-focused, .has-attachments) {
+  opacity: 1;
+}
+body.pm-mobile-active .pm-agent-chat-composer.pm-composer:not(.is-focused):not(.has-attachments):not(.pm-composer-mode-hidden) {
+  height: 54px;
+  min-height: 54px;
+  max-height: 54px;
+  padding: 3px 7px;
+  border-radius: 999px;
+}
 .pm-task-journal-detail { margin-top: 5px; color: var(--pm-muted); }
 .pm-task-journal-detail summary {
   cursor: pointer;
@@ -13790,6 +13850,15 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-subagent-chat-locked .
   min-height: 0;
   max-height: none;
   margin: 0;
+}
+.pm-team-chat-page-body .pm-team-chat-page-shell {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+}
+.pm-team-chat-page-body .pm-team-chat-list {
+  min-height: 0;
+  max-height: none;
 }
 body.pm-mobile-active .pm-subagent-chat-body .pm-sa-chat-scrollport {
   flex: 1 1 0;
@@ -15989,6 +16058,13 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-cl
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked #pm-chat-thread {
   visibility: visible !important;
 }
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-body.pm-chat-body.pm-chat-voice-occluded {
+  /* Let transcript rows continue beneath the floating orb instead of ending
+     at the top of a legacy voice panel. The normal mobile chrome remains
+     reserved and the orb itself provides the visual occlusion. */
+  padding-bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 22px) !important;
+  scroll-padding-bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 22px) !important;
+}
 /* The docked voice layer is already transparent and full-bleed. Clipping its
    first pixel creates the visible horizontal split above the dock. */
 body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-composer.is-voice-active { clip-path: none !important; outline: 0 !important; }
@@ -16383,6 +16459,161 @@ body.pm-mobile-active .pm-attach-sheet-action strong {
   font-size: 16px;
   font-weight: 500;
   letter-spacing: -.01em;
+}
+
+/* Attachment orbit ---------------------------------------------------------
+   The panel is an invisible fixed anchor. The two independent liquid-glass
+   circles fan out from the paperclip without a shared background surface. */
+body.pm-mobile-active .pm-new-chat-context-dock.pm-attach-popover-open {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+body.pm-mobile-active #pm-attach-sheet {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 10060 !important;
+  pointer-events: none;
+}
+body.pm-mobile-active #pm-attach-sheet.open {
+  pointer-events: auto;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-scrim {
+  background: rgba(0,0,0,.08) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel {
+  position: fixed !important;
+  left: var(--pm-attach-origin-x, 72px) !important;
+  top: var(--pm-attach-origin-y, 0px) !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  overflow: visible !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel::before,
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel::after {
+  display: none !important;
+  content: none !important;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action {
+  position: absolute !important;
+  left: -24px !important;
+  top: -24px !important;
+  display: inline-flex !important;
+  width: 48px !important;
+  min-width: 48px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  align-items: center;
+  justify-content: center;
+  background: var(--pm-ios-popover-fill) !important;
+  border: 1px solid color-mix(in srgb, var(--pm-border-strong) 82%, transparent) !important;
+  color: var(--pm-text);
+  box-shadow: var(--pm-ios-popover-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(.45);
+  transition: transform .26s cubic-bezier(.18, 1.35, .42, 1), opacity .14s ease, background .15s ease;
+  z-index: 2;
+}
+/* A small blurred tail on each item gives the Gooey/Liquid movement a visible
+   melt back to the paperclip without painting a background behind the menu. */
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--pm-ios-popover-fill) 88%, var(--pm-text) 12%);
+  filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+  transform: translate(-50%, -50%) scale(.5);
+  transition: transform .26s cubic-bezier(.18, 1.35, .42, 1), opacity .16s ease;
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action {
+  opacity: 1;
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--files::before {
+  opacity: .78;
+  transform: translate(calc(-50% + 19px), calc(-50% + 29px)) scale(1.15);
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--camera::before {
+  opacity: .78;
+  transform: translate(calc(-50% - 19px), calc(-50% + 29px)) scale(1.15);
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--files {
+  transform: translate3d(-38px, -58px, 0) scale(1);
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--camera {
+  transform: translate3d(38px, -58px, 0) scale(1);
+  transition-delay: 35ms, 0ms, 0ms;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--files:active {
+  transform: translate3d(-38px, -58px, 0) scale(.9);
+}
+body.pm-mobile-active #pm-attach-sheet.open .pm-attach-sheet-panel > .pm-attach-sheet-action--camera:active {
+  transform: translate3d(38px, -58px, 0) scale(.9);
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action span {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  box-shadow: none;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action svg {
+  width: 22px;
+  height: 22px;
+}
+body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-action-label { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active #pm-attach-sheet .pm-attach-sheet-panel > .pm-attach-sheet-action {
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
+/* The composer trigger is wrapped by the same haptic bridge as Send. Preserve
+   its original grid footprint after that wrapper is inserted. */
+#pm-composer .pm-composer-row > .pm-haptic-host:has(> #pm-attach-btn) {
+  width: 36px;
+  min-width: 36px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host:has(> #pm-attach-btn) {
+  width: 44px;
+  min-width: 44px;
+  grid-column: 1;
+  grid-row: 2;
+  margin-left: 0;
+  justify-self: start;
 }
 
 /* Triple-dot/settings menu. */
@@ -17189,6 +17420,15 @@ body.pm-mobile-active .pm-chat-mode-launcher[aria-hidden="true"] {
   transform: scale(.94);
   transition: opacity 180ms ease, transform 300ms cubic-bezier(.22,.74,.22,1), visibility 0s linear 300ms;
 }
+body.pm-mobile-active .pm-agent-chat-mode-launcher {
+  position: sticky;
+  left: auto;
+  right: auto;
+  bottom: 0;
+  width: calc(100% - 20px);
+  margin: 8px 10px 10px;
+  box-sizing: border-box;
+}
 
 body.pm-mobile-active .pm-chat-mode-button {
   position: relative;
@@ -17270,6 +17510,185 @@ body.pm-mobile-active #pm-composer.pm-composer-mode-hidden {
     opacity 180ms ease,
     clip-path 300ms cubic-bezier(.22,.74,.22,1),
     visibility 0s linear 300ms;
+}
+body.pm-mobile-active .pm-agent-chat-composer.pm-composer-mode-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  max-height: 0;
+  min-height: 0;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  clip-path: inset(0 0 0 86% round 999px);
+  transition: opacity 180ms ease, clip-path 300ms cubic-bezier(.22,.74,.22,1), visibility 0s linear 300ms;
+}
+body.pm-mobile-active .pm-agent-chat-composer:not(.pm-composer-mode-hidden) {
+  opacity: 1;
+  visibility: visible;
+  clip-path: inset(0 round 24px);
+  transition: opacity 180ms ease, clip-path 300ms cubic-bezier(.22,.74,.22,1);
+}
+
+/* Dedicated team/subagent chats -------------------------------------------
+   These routes share the main Chat chrome, but own a nested transcript. Keep
+   the route shell and every bottom control in one viewport coordinate system;
+   mixing a sticky launcher with a fixed composer is what made the controls
+   drift, overlap, or survive after the composer was torn down. */
+body.pm-mobile-active .pm-page.pm-agent-chat-page {
+  position: relative !important;
+  z-index: 1 !important;
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-body.pm-subagent-chat-body {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  padding: calc(max(env(safe-area-inset-top), 12px) + var(--pm-header-h) + 8px) 0 calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 12px) !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page > .pm-header {
+  z-index: 30 !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page + .pm-tabbar {
+  position: fixed !important;
+  z-index: 40 !important;
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-sa-chat-shell {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-sa-chat-scrollport {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain !important;
+  padding-bottom: calc(var(--pm-sa-chat-composer-space, 132px) + 8px) !important;
+  touch-action: pan-y !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-mode-launcher {
+  position: fixed !important;
+  left: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left)) !important;
+  right: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right)) !important;
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 11px)) !important;
+  width: auto !important;
+  height: 54px !important;
+  margin: 0 !important;
+  z-index: 20 !important;
+  box-sizing: border-box !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-mode-launcher > .pm-haptic-host {
+  width: 54px !important;
+  height: 54px !important;
+  flex: 0 0 54px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-mode-launcher > .pm-haptic-host > .pm-chat-mode-button {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 0 0 auto !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer {
+  position: fixed !important;
+  left: 10px !important;
+  right: 10px !important;
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px) !important;
+  width: auto !important;
+  margin: 0 !important;
+  z-index: 25 !important;
+  box-sizing: border-box !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer .pm-composer-row {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer .pm-composer-input-wrap {
+  min-width: 0 !important;
+}
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer-mode-hidden {
+  pointer-events: none !important;
+}
+body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page .pm-agent-chat-mode-launcher {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+/* Dedicated agent chats keep the persistent tab bar mounted while the
+   composer is open. The main-chat keyboard rule is broader and would
+   otherwise hide this route's tab bar as a side effect of textarea focus. */
+body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page + .pm-tabbar {
+  display: grid !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active .pm-app.pm-keyboard-open .pm-page.pm-agent-chat-page .pm-agent-chat-composer.pm-composer {
+  /* The tab bar stays visible on dedicated team/subagent chats. Keep the
+     keyboard fallback anchor above it until visualViewport measurement writes
+     the precise top edge; never fall back to fixed-position static placement. */
+  bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-tabbar-h, 60px) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px)) !important;
+  z-index: 50 !important;
+}
+
+/* The native haptic proxy wraps launcher buttons in a host. Match the same
+   flex geometry as the unwrapped controls so the icon remains centered and
+   the two buttons stay pinned to the tabbar's left/right edges. */
+body.pm-mobile-active .pm-page.pm-agent-chat-page .pm-chat-mode-launcher > .pm-haptic-host > .pm-haptic-switch-overlay {
+  inset: 0 !important;
+}
+
+/* Team messages keep the robot identity visible before the sender name. */
+body.pm-mobile-active .pm-page.pm-team-agent-chat-page .pm-bubble .pm-sender-with-icon {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 22px;
+}
+body.pm-mobile-active .pm-page.pm-team-agent-chat-page .pm-team-sender-icon {
+  width: 20px;
+  height: 22px;
+  flex: 0 0 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+body.pm-mobile-active .pm-page.pm-team-agent-chat-page .pm-team-sender-icon svg {
+  display: block;
+  width: 19px;
+  height: 22px;
+}
+body.pm-mobile-active .pm-page.pm-team-agent-chat-page .pm-sender-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 body.pm-mobile-active #pm-composer:not(.pm-composer-mode-hidden) {
@@ -17572,6 +17991,95 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage
   display: none !important;
 }
 
+/* The composer flag is the durable owner of inline Voice. Body route/state
+   classes can be one render behind during reconnect and first-turn session
+   materialization, so the no-panel contract must not depend on them. */
+body.pm-mobile-active #pm-composer.is-voice-active {
+  position: fixed !important;
+  inset: auto 0 0 !important;
+  width: 100% !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  clip-path: none !important;
+  pointer-events: none !important;
+}
+body.pm-mobile-active #pm-composer.is-voice-active::before,
+body.pm-mobile-active #pm-composer.is-voice-active::after,
+body.pm-mobile-active #pm-composer.is-voice-active > .pm-glass-lens,
+body.pm-mobile-active #pm-composer.is-voice-active > .pm-glass-border {
+  content: none !important;
+  display: none !important;
+}
+body.pm-mobile-active #pm-composer.is-voice-active .pm-chat-voice-shell,
+body.pm-mobile-active #pm-composer.is-voice-active .pm-chat-voice-inline,
+body.pm-mobile-active #pm-composer.is-voice-active .pm-voice-body,
+body.pm-mobile-active #pm-composer.is-voice-active .pm-voice-stage {
+  position: static !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  pointer-events: none !important;
+}
+body.pm-mobile-active #pm-composer.is-voice-active #pm-voice-mic.pm-voice-particle-orb {
+  position: fixed !important;
+  top: auto !important;
+  left: 50% !important;
+  bottom: calc(env(safe-area-inset-bottom) + 104px) !important;
+  width: min(36vw, 148px) !important;
+  height: min(36vw, 148px) !important;
+  margin: 0 !important;
+  transform: translate(-50%, var(--pm-inline-orb-drag-y, 0px)) !important;
+  z-index: 12 !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active #pm-composer.is-voice-active .pm-chat-voice-camera,
+body.pm-mobile-active #pm-composer.is-voice-active .pm-chat-voice-close,
+body.pm-mobile-active #pm-composer.is-voice-active .pm-voice-controls {
+  position: fixed !important;
+  bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 18px) !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active #pm-composer.is-voice-active #pm-voice-mic.pm-voice-particle-orb {
+  bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 116px) !important;
+}
+
+/* Inline Voice is part of Chat, not a modal route. Keep persistent navigation
+   mounted and restore its native tap/slide sensor while Voice is active. */
+body.pm-mobile-active.pm-chat-voice-active .pm-tabbar {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  z-index: 5 !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-tabbar-haptic-gesture-surface {
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
 /* Mobile chat scrolling stays native and fully usable, but the browser rail
    itself is visual noise over the liquid-glass UI. Hide it for the drawer,
    the chat thread, and document-scroll mode without disabling overflow. */
@@ -17590,4 +18098,273 @@ body.pm-mobile-active .pm-body::-webkit-scrollbar {
   width: 0;
   height: 0;
   background: transparent;
+}
+
+/* Attachment orbit: final owner-relative geometry -------------------------
+   Keep this layer inside the composer, but make it a zero-size positioning
+   anchor. The panel itself paints nothing; only the two circular actions and
+   their short liquid stems are visible. The inline coordinates are measured
+   from the real paperclip, so keyboard translations and scrolls cannot detach
+   the orbit from its owner. */
+body.pm-mobile-active #pm-composer:has(#pm-attach-sheet.open) {
+  overflow: visible !important;
+  clip-path: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet {
+  position: absolute !important;
+  inset: auto !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  z-index: 10060 !important;
+  pointer-events: none !important;
+}
+body.pm-mobile-active #pm-composer.pm-composer-mode-hidden #pm-attach-sheet,
+body.pm-mobile-active #pm-composer[aria-hidden="true"] #pm-attach-sheet,
+body.pm-mobile-active #pm-composer #pm-attach-sheet[hidden] {
+  display: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-scrim {
+  display: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel {
+  position: absolute !important;
+  left: var(--pm-attach-origin-x, 0px) !important;
+  top: var(--pm-attach-origin-y, 0px) !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+  pointer-events: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::before,
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::after {
+  content: '' !important;
+  display: block !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: -7px !important;
+  width: var(--pm-attach-camera-length, 82px) !important;
+  height: 14px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.10), transparent 58%, rgba(255,255,255,.04)),
+    var(--pm-lg-glass-fill-strong, rgba(170,174,184,.065)) !important;
+  box-shadow: 0 6px 16px rgba(0,0,0,.16) !important;
+  filter: blur(6px) saturate(1.15) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform-origin: 0 50% !important;
+  transition:
+    transform .38s cubic-bezier(.16, 1.55, .34, 1),
+    opacity .18s ease !important;
+  z-index: 1 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::before {
+  transform: rotate(var(--pm-attach-camera-angle, -56.8deg)) scaleX(.025) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::after {
+  width: var(--pm-attach-files-length, 70px) !important;
+  transform: rotate(var(--pm-attach-files-angle, -123.2deg)) scaleX(.025) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel::before,
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel::after {
+  opacity: .72 !important;
+  transform: rotate(var(--pm-attach-camera-angle, -56.8deg)) scaleX(1) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel::after {
+  transform: rotate(var(--pm-attach-files-angle, -123.2deg)) scaleX(1) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action {
+  position: absolute !important;
+  left: -25px !important;
+  top: -25px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 50px !important;
+  min-width: 50px !important;
+  height: 50px !important;
+  min-height: 50px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  border: 1px solid color-mix(in srgb, var(--pm-text) 14%, transparent) !important;
+  border-radius: 50% !important;
+  color: var(--pm-text) !important;
+  line-height: 0 !important;
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.028), transparent 36%, rgba(255,255,255,.007)),
+    var(--pm-lg-glass-fill-strong, rgba(170,174,184,.065)) !important;
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.16),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.08),
+    0 8px 18px rgba(0,0,0,.22),
+    0 1px 4px rgba(0,0,0,.14) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 7px)) saturate(var(--pm-lg-glass-saturate, 1.02)) brightness(var(--pm-lg-glass-brightness, 1.01)) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-open-blur, 7px)) saturate(var(--pm-lg-glass-saturate, 1.02)) brightness(var(--pm-lg-glass-brightness, 1.01)) !important;
+  opacity: 0 !important;
+  transform: translate3d(0, 0, 0) scale(.38) !important;
+  pointer-events: auto !important;
+  overflow: hidden !important;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform .38s cubic-bezier(.16, 1.55, .34, 1),
+    opacity .16s ease,
+    background .16s ease !important;
+  z-index: 2 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-sheet-action {
+  opacity: 1 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-sheet-action--files {
+  transform: translate3d(var(--pm-attach-files-x, -38px), var(--pm-attach-files-y, -58px), 0) scale(1) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-sheet-action--camera {
+  transform: translate3d(var(--pm-attach-camera-x, 38px), var(--pm-attach-camera-y, -58px), 0) scale(1) !important;
+  transition-delay: 35ms, 0ms, 0ms !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action:active {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.045), transparent 36%, rgba(255,255,255,.012)),
+    var(--pm-lg-glass-fill-strong, rgba(170,174,184,.065)) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-sheet-action--files:active {
+  transform: translate3d(var(--pm-attach-files-x, -38px), var(--pm-attach-files-y, -58px), 0) scale(.90) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-sheet-action--camera:active {
+  transform: translate3d(var(--pm-attach-camera-x, 38px), var(--pm-attach-camera-y, -58px), 0) scale(.90) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action > span {
+  position: absolute !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  height: auto !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  z-index: 1 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action::before {
+  content: none !important;
+  display: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action svg {
+  display: block !important;
+  flex: 0 0 22px !important;
+  width: 22px !important;
+  height: 22px !important;
+  margin: 0 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet .pm-attach-sheet-action-label {
+  display: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::before,
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::after,
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-sheet-action {
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+  }
+}
+
+/* The liquid layer is deliberately separate from the buttons. A single
+   filtered surface makes the two stems melt together at the paperclip while
+   the icon buttons above it remain perfectly crisp. */
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::before,
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel::after {
+  display: none !important;
+  content: none !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo {
+  position: absolute !important;
+  left: -100px !important;
+  top: -100px !important;
+  display: block !important;
+  width: 200px !important;
+  height: 200px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  filter: blur(7px) contrast(18) !important;
+  opacity: 0;
+  pointer-events: none !important;
+  transition: opacity .18s ease !important;
+  z-index: 1 !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo::before,
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo::after {
+  content: '' !important;
+  position: absolute !important;
+  left: 100px !important;
+  top: 93px !important;
+  display: block !important;
+  width: var(--pm-attach-camera-length, 82px) !important;
+  height: 14px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: var(--pm-lg-glass-fill-strong, rgba(170,174,184,.065)) !important;
+  box-shadow: none !important;
+  transform-origin: 0 50% !important;
+  transform: rotate(var(--pm-attach-camera-angle, -56.8deg)) scaleX(.025) !important;
+  transition: transform .38s cubic-bezier(.16, 1.55, .34, 1) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo::after {
+  width: var(--pm-attach-files-length, 70px) !important;
+  transform: rotate(var(--pm-attach-files-angle, -123.2deg)) scaleX(.025) !important;
+}
+@keyframes pmAttachGooBurst {
+  0% { opacity: 0; }
+  28% { opacity: .86; }
+  100% { opacity: 0; }
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-goo {
+  animation: pmAttachGooBurst .52s ease-out both !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-goo::before {
+  transform: rotate(var(--pm-attach-camera-angle, -56.8deg)) scaleX(1) !important;
+}
+body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-panel > .pm-attach-goo::after {
+  transform: rotate(var(--pm-attach-files-angle, -123.2deg)) scaleX(1) !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo,
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo::before,
+  body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel > .pm-attach-goo::after {
+    transition-duration: .01ms !important;
+    animation: none !important;
+  }
 }

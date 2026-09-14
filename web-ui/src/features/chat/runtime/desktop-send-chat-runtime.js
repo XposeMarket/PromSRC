@@ -4,6 +4,15 @@
  * The page keeps the DOM/session wiring and supplies this runtime through a
  * lazy context resolver so late-initialized page state remains live.
  */
+function desktopCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
 export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
   return async function sendChat(queuedMessage = null, options = {}) {
       let {
@@ -370,15 +379,18 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
       const normalizedStatus = String(status || 'compacting').toLowerCase();
       const label = normalizedStatus === 'compacting'
-        ? 'Compacting Context'
+        ? 'Compacting context'
         : normalizedStatus === 'failed'
-          ? 'Context Compaction Failed'
+          ? 'Context compaction failed'
           : normalizedStatus === 'skipped'
-            ? 'Context Compaction Skipped'
-            : 'Context Compacted';
+            ? 'Context compaction skipped'
+            : 'Context compacted';
       const cleanSummary = String(summary || extra?.summary || '').trim();
       const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
-      const payload = extra && typeof extra === 'object' ? extra : {};
+      const payload = {
+        ...(extra && typeof extra === 'object' ? extra : {}),
+        action: 'context_compaction',
+      };
       if (last && String(last.type || '').toLowerCase() === 'compaction') {
         last.text = label;
         last.status = normalizedStatus;
@@ -407,7 +419,9 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         // Keep that paragraph as visible, immutable reasoning instead of
         // recategorising it as an internal raw-thought entry.
         appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text, {
-          extra: { visibility: 'user', source: 'reasoning_summary' },
+          // Commentary that already streamed visibly before a tool is a durable
+          // timeline beat, not the provider's replaceable summary-status slot.
+          extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
         });
       }
       streamState.streamingAIText = '';
@@ -1142,6 +1156,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             case 'info': {
               if (event.message) {
                 const msg = String(event.message);
+                const compactionStatus = desktopCompactionStatusFromText(msg);
+                if (compactionStatus) {
+                  appendCompactionTrace(compactionStatus, '', event);
+                  break;
+                }
                 addProcessEntry('info', msg, event.actor ? { actor: event.actor } : undefined);
               }
               break;
@@ -1203,7 +1222,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               break;
 
             case 'tool_call': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const stepNum = Number(event.stepNum || 0);
               const stepPrefix = nextDeclaredPlanToolPrefix(stepNum);
               const args = (event.args && typeof event.args === 'object') ? event.args : null;
@@ -1213,11 +1232,6 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               if (action === 'context_compaction') {
                 pushProgressLine('Compacting thread context...');
                 appendCompactionTrace('compacting', '', args || event);
-                addProcessEntry(
-                  'tool',
-                  `${stepPrefix}Compacting thread context...${syntheticTag}`,
-                  { action, ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) },
-                );
                 break;
               }
               sawToolActivityThisTurn = true;
@@ -1251,7 +1265,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             }
 
             case 'tool_result': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const stepNum = Number(event.stepNum || 0);
               const stepPrefix = getDeclaredPlanToolPrefix(stepNum);
               movePreToolAnswerTextIntoPreamble();
@@ -1275,23 +1289,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	              }
 	            }
 	            if (event.actor || isBackgroundAgentTool) extraData.actor = event.actor || 'Background Agent';
-	            const extraPayload = Object.keys(extraData).length ? extraData : undefined;
+              const extraPayload = Object.keys(extraData).length ? extraData : undefined;
               if (action === 'context_compaction') {
                 const status = String(event?.extra?.status || '').toLowerCase();
-                const mode = String(event?.extra?.mode || '').trim();
-                const baseResultText = ok
-                  ? (status === 'skipped'
-                    ? 'Thread compaction skipped (continuing with normal flow).'
-                    : `Thread compacted${mode ? ` (${mode})` : ''}.`)
-                  : `Thread compaction failed: ${text || '(no output)'}`;
-                const displayResultText = String(text || '').trim() || baseResultText;
                 pushProgressLine(status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
                 appendCompactionTrace(status || (ok ? 'compacted' : 'failed'), extraData.summary || '', extraData);
-                addProcessEntry(
-                  ok ? 'result' : 'error',
-                  `${stepPrefix}${displayResultText}${syntheticTag}`,
-                  { action, ...(extraPayload || {}) },
-                );
                 break;
               }
               sawToolActivityThisTurn = true;
@@ -1318,8 +1320,12 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             }
 
             case 'tool_progress': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const message = String(event.message || '').trim();
+              if (action.toLowerCase() === 'context_compaction') {
+                appendCompactionTrace(String(event?.extra?.status || event?.status || '').toLowerCase() || 'compacting', event?.extra?.summary || event?.summary || '', event.extra || event);
+                break;
+              }
               if (action && message) {
                 movePreToolAnswerTextIntoPreamble();
                 sawToolActivityThisTurn = true;

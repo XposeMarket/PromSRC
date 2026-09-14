@@ -310,6 +310,57 @@ export function getAgentById(id: string): AgentDefinition | null {
   return getAgents().find((agent) => agent.id === id) ?? null;
 }
 
+function agentDisplayIdSuffix(agent: any): string {
+  const raw = String(agent?.id || '').trim().replace(/_manager$/i, '');
+  const withoutKind = raw.replace(/^[^_]+_/, '');
+  return withoutKind || raw.slice(-6) || 'agent';
+}
+
+/**
+ * Make agent history/operator views unambiguous without changing stable IDs.
+ * Names are user-facing labels, so duplicate labels are repaired once at
+ * startup using role/team context plus a short ID suffix when necessary.
+ */
+export function ensureUniqueAgentDisplayNames(): string[] {
+  const cm = getConfig();
+  const cfg = cm.getConfig() as any;
+  const agents = Array.isArray(cfg.agents) ? [...cfg.agents] : [];
+  const groups = new Map<string, any[]>();
+  for (const agent of agents) {
+    const key = String(agent?.name || agent?.id || '').trim().toLowerCase();
+    if (!key) continue;
+    const group = groups.get(key) || [];
+    group.push(agent);
+    groups.set(key, group);
+  }
+
+  const changed: string[] = [];
+  const used = new Set<string>(agents.map((agent: any) => String(agent?.name || '').trim().toLowerCase()).filter(Boolean));
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const agent of group) {
+      const base = String(agent.name || agent.id).trim();
+      const role = String(agent.teamRole || agent.roleType || (agent.isTeamManager ? 'manager' : 'agent')).trim();
+      const suffix = `${role || 'agent'} · ${agentDisplayIdSuffix(agent)}`;
+      let candidate = `${base} (${suffix})`;
+      let n = 2;
+      while (used.has(candidate.toLowerCase()) && candidate.toLowerCase() !== base.toLowerCase()) {
+        candidate = `${base} (${suffix}-${n++})`;
+      }
+      if (candidate === agent.name) continue;
+      used.delete(base.toLowerCase());
+      used.add(candidate.toLowerCase());
+      agent.name = candidate;
+      if (agent.identity && typeof agent.identity === 'object') {
+        agent.identity = { ...agent.identity, displayName: candidate };
+      }
+      changed.push(`${agent.id}: ${base} -> ${candidate}`);
+    }
+  }
+  if (changed.length > 0) cm.updateConfig({ agents } as any);
+  return changed;
+}
+
 export function ensureAgentWorkspace(agent: AgentDefinition): string {
   if (STORAGE_LAYOUT.mode === 'legacy') return classic.ensureAgentWorkspace(agent);
 

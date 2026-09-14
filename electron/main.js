@@ -2081,7 +2081,7 @@ async function startGateway() {
 }
 
 async function restartGatewayFromElectron(options = {}) {
-  if (isGatewayRestarting) return;
+  if (isGatewayRestarting) return false;
   isGatewayRestarting = true;
   const terminateExisting = options.terminateExisting === true;
   const automaticRecovery = options.automaticRecovery !== false;
@@ -2115,6 +2115,7 @@ async function restartGatewayFromElectron(options = {}) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(GATEWAY_URL);
     }
+    return true;
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     writeGatewayLog(`[main] Electron-managed gateway restart failed: ${message}\n`);
@@ -2134,6 +2135,7 @@ async function restartGatewayFromElectron(options = {}) {
         `Prometheus could not restart the gateway:\n\n${message}\n\nLog: ${GATEWAY_LOG_PATH}`
       );
     }
+    return false;
   } finally {
     isGatewayRestarting = false;
   }
@@ -3539,6 +3541,26 @@ handleTrustedMain('get-app-version', () => CURRENT_VERSION);
 handleTrustedMain('window:titlebar-theme', (_event, payload = {}) => (
   setElectronTitlebarTheme(payload)
 ));
+
+// A failed health-recovery budget must not strand the desktop window forever.
+// The renderer exposes this only as an explicit Retry action, and the trusted
+// sender check above prevents arbitrary child frames from restarting the
+// gateway process.
+handleTrustedMain('gateway:restart', async (_event, payload = {}) => {
+  if (isQuitting) return { ok: false, error: 'Prometheus is shutting down.' };
+  if (isGatewayRestarting) return { ok: true, restarting: true };
+  const reason = String(payload?.reason || 'User requested desktop gateway recovery').trim().slice(0, 160);
+  const ok = await restartGatewayFromElectron({
+    terminateExisting: true,
+    automaticRecovery: false,
+    reason: reason || 'User requested desktop gateway recovery',
+  });
+  return {
+    ok: ok === true,
+    restarting: ok !== true,
+    state: gatewayRelay?.getState?.() || '',
+  };
+});
 
 handleTrustedMain('external-link:open', async (_event, payload = {}) => {
   return openExternalSafely(String(payload?.url || '').trim());

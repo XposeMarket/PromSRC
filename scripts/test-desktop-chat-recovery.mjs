@@ -70,6 +70,30 @@ assert.equal(normalized[3].extra.source, 'agent_thought');
 assert.equal(normalized[3].extra.visibility, 'user');
 assert.equal(normalized[3].extra.reasoningKind, 'full_thought');
 
+const recoveredCompaction = normalizeRecoveredTraceEntries([
+  {
+    id: 'compact-start',
+    type: 'tool',
+    content: 'Preparing context_compaction',
+    extra: { event: 'tool_call', action: 'context_compaction' },
+  },
+  {
+    id: 'compact-result',
+    type: 'result',
+    content: 'Thread compacted before continuing.',
+    extra: {
+      event: 'tool_result',
+      action: 'context_compaction',
+      status: 'compacted',
+      summary: 'Recovered context summary.',
+    },
+  },
+]);
+assert.deepEqual(recoveredCompaction.map((entry) => entry.type), ['compaction']);
+assert.equal(recoveredCompaction[0].status, 'compacted');
+assert.equal(recoveredCompaction[0].summary, 'Recovered context summary.');
+assert.equal(recoveredCompaction[0].id, 'compact-start');
+
 const sourceOnlySummary = normalizeRecoveredTraceEntry({
   type: 'info',
   content: 'A summary restored without an explicit event name',

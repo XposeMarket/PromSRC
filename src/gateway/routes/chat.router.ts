@@ -1409,7 +1409,36 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
     || eventType === 'token'
     || (eventType === 'thinking_delta' && !isUserVisibleReasoning)) return null;
   const ts = new Date().toLocaleTimeString();
-  const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  const compactionExtra = data?.extra && typeof data.extra === 'object' ? data.extra : {};
+  const action = String(data?.action || data?.name || data?.toolName || compactionExtra.action || compactionExtra.toolName || '').trim();
+  const isContextCompaction = action.toLowerCase() === CONTEXT_COMPACTION_TOOL_NAME;
+  const explicitCompactionStatus = String(data?.status || compactionExtra.status || '').trim().toLowerCase();
+  const compactionStatus = explicitCompactionStatus === 'skipped'
+    ? 'skipped'
+    : explicitCompactionStatus === 'failed' || explicitCompactionStatus === 'error'
+      || data?.error === true || data?.ok === false || data?.success === false
+      ? 'failed'
+      : explicitCompactionStatus === 'compacting' || explicitCompactionStatus === 'running' || explicitCompactionStatus === 'in_progress'
+        ? 'compacting'
+        : eventType === 'tool_call' || eventType === 'tool_progress' ? 'compacting' : 'compacted';
+  const compactionSummary = String(data?.summary || compactionExtra.summary || '').trim();
+  const compactionLabel = compactionStatus === 'compacting'
+    ? 'Compacting context'
+    : compactionStatus === 'failed'
+      ? 'Context compaction failed'
+      : compactionStatus === 'skipped'
+        ? 'Context compaction skipped'
+      : 'Context compacted';
+  const compactionInfoText = String(data?.message || data?.content || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const compactionInfoStatus = /^(?:context|thread) compacted\b/.test(compactionInfoText)
+    ? 'compacted'
+    : /^(?:context|thread) compaction (?:failed|error)\b/.test(compactionInfoText)
+      ? 'failed'
+      : /^(?:context|thread) compaction skipped\b/.test(compactionInfoText)
+        ? 'skipped'
+        : /^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(compactionInfoText)
+          ? 'compacting'
+          : '';
   if (isUserVisibleReasoning && (eventType === 'thinking_delta' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary')) {
     const content = truncateRuntimeProcessText(data?.text || data?.thinking || data?.summary || data?.message);
     if (!content) return null;
@@ -1442,16 +1471,65 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       extra: { source: 'runtime_checkpoint', event: eventType, activeIndex, total: items.length },
     };
   }
-  if (eventType === 'tool_call') {
+  if ((eventType === 'info' || eventType === 'ui_preflight') && compactionInfoStatus) {
     return {
       ts,
-      type: 'tool',
+      type: 'compaction',
       actor: 'Prom',
-      content: truncateRuntimeProcessText(action ? `Preparing ${action}` : data?.message || 'Preparing tool'),
+      content: compactionInfoStatus === 'compacting'
+        ? 'Compacting context'
+        : compactionInfoStatus === 'failed'
+          ? 'Context compaction failed'
+          : compactionInfoStatus === 'skipped'
+            ? 'Context compaction skipped'
+            : 'Context compacted',
+      status: compactionInfoStatus,
+      ...(data?.summary ? { summary: String(data.summary).slice(0, 4_000) } : {}),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        toolName: CONTEXT_COMPACTION_TOOL_NAME,
+        status: compactionInfoStatus,
+        ...(data?.summary ? { summary: String(data.summary).slice(0, 4_000) } : {}),
+      },
+    };
+  }
+  if (eventType === 'tool_progress' && isContextCompaction) {
+    return {
+      ts,
+      type: 'compaction',
+      actor: 'Prom',
+      content: compactionLabel,
+      status: compactionStatus,
+      ...(compactionSummary ? { summary: compactionSummary } : {}),
       extra: {
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        status: compactionStatus,
+        ...(compactionSummary ? { summary: compactionSummary } : {}),
+        message: data?.message,
+      },
+    };
+  }
+  if (eventType === 'tool_call') {
+    return {
+      ts,
+      type: isContextCompaction ? 'compaction' : 'tool',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(isContextCompaction ? compactionLabel : (action ? `Preparing ${action}` : data?.message || 'Preparing tool')),
+      ...(isContextCompaction ? { status: compactionStatus, ...(compactionSummary ? { summary: compactionSummary } : {}) } : {}),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        toolName: action,
+        ...(isContextCompaction ? {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          status: compactionStatus,
+          ...(compactionSummary ? { summary: compactionSummary } : {}),
+        } : {}),
         args: data?.args,
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
@@ -1461,13 +1539,19 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
   if (eventType === 'tool_result') {
     return {
       ts,
-      type: data?.error ? 'error' : 'result',
+      type: isContextCompaction ? 'compaction' : (data?.error ? 'error' : 'result'),
       actor: 'Prom',
-      content: truncateRuntimeProcessText(data?.result || (action ? `${action} complete` : 'Tool complete')),
+      content: truncateRuntimeProcessText(isContextCompaction ? compactionLabel : (data?.result || (action ? `${action} complete` : 'Tool complete'))),
+      ...(isContextCompaction ? { status: compactionStatus, ...(compactionSummary ? { summary: compactionSummary } : {}) } : {}),
       extra: {
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
+        ...(isContextCompaction ? {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          status: compactionStatus,
+          ...(compactionSummary ? { summary: compactionSummary } : {}),
+        } : {}),
         args: data?.args,
         error: data?.ok === false || data?.success === false || Boolean(data?.error),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
@@ -2000,6 +2084,8 @@ type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 
 function runtimeAdmissionLaneForExecutionMode(executionMode: ExecutionMode): RuntimeAdmissionLane {
   if (executionMode === 'interactive') return 'interactive';
   if (executionMode === 'background_task' || executionMode === 'background_agent') return 'background';
+  if (executionMode === 'team_manager') return 'manager';
+  if (executionMode === 'team_subagent') return 'team_member';
   return 'system';
 }
 
@@ -11301,12 +11387,21 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   });
 
   setModelBusy(true);
+  const runtimeProcessEntries: Record<string, any>[] = [];
   const sendSSE = (event: string, data: any) => {
     const checkpoint: Record<string, any> = { event, at: Date.now() };
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    const processEntry = runtimeProcessEntryFromSseEvent(event, data);
+    if (processEntry) {
+      runtimeProcessEntries.push(processEntry);
+      if (runtimeProcessEntries.length > 12_000) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
+      }
+      checkpoint.processEntries = [...runtimeProcessEntries];
+    }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };
   const checkpointSummary = [
@@ -17829,9 +17924,6 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
     ? Math.max(0, Number(lastCall.inputTokens || 0))
     : 0;
-  const liveModelInputTokens = hasCurrentHistory
-    ? Math.max(0, Number(input.modelUsage?.inputTokens || 0))
-    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = hasCurrentHistory
@@ -17869,7 +17961,7 @@ export function buildContextWindowCurrentState(input: {
   // Provider input_tokens is the actual context submitted on the latest call.
   // Prefer it over the locally reconstructed estimate, which can omit restored
   // tool/reasoning history after reconnect or compaction.
-  const authoritativeProviderInputTokens = liveModelInputTokens || latestProviderReportedInputTokens || latestProviderInputTokens;
+  const authoritativeProviderInputTokens = latestProviderReportedInputTokens || latestProviderInputTokens;
   const runtimeOverheadTokens = Math.max(0, authoritativeProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
@@ -17891,7 +17983,6 @@ export function buildContextWindowCurrentState(input: {
     totalThreadTokens,
     latestProviderInputTokens,
     latestProviderReportedInputTokens,
-    liveModelInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [

@@ -4,6 +4,7 @@ const REASONING_SUMMARY_TYPES = new Set([
   'reasoning_summary_delta',
   'reasoning_delta',
 ]);
+const CONTEXT_COMPACTION_ACTION = 'context_compaction';
 
 function asRecord(value) {
   return value && typeof value === 'object' ? value : {};
@@ -106,6 +107,52 @@ function eventAction(entry, extra, text) {
   return inferAction(text, extra.args || parseJsonPayload(text));
 }
 
+function compactionStatusForEntry(entry, event, extra) {
+  const nested = asRecord(extra.extra);
+  const explicit = String(entry?.status || extra.status || nested.status || '').trim().toLowerCase();
+  if (explicit === 'compacting' || explicit === 'running' || explicit === 'in_progress') return 'compacting';
+  if (explicit === 'skipped') return 'skipped';
+  if (explicit === 'failed' || explicit === 'error') return 'failed';
+  if (explicit === 'compacted' || explicit === 'done' || explicit === 'complete' || explicit === 'completed' || explicit === 'success') return 'compacted';
+  if (entry?.error === true || extra.error === true || nested.error === true
+    || extra.ok === false || nested.ok === false || extra.success === false || nested.success === false) return 'failed';
+  const legacyText = eventText(entry).toLowerCase();
+  if (event === 'tool_call' || event === 'tool_progress' || /\bcompacting\b|\bpreparing context compaction\b/.test(legacyText)) return 'compacting';
+  if (/\bskipped\b/.test(legacyText)) return 'skipped';
+  if (/\bfailed\b|\berror\b/.test(legacyText)) return 'failed';
+  return 'compacted';
+}
+
+function compactionLabelForStatus(status) {
+  if (status === 'compacting') return 'Compacting context';
+  if (status === 'failed') return 'Context compaction failed';
+  if (status === 'skipped') return 'Context compaction skipped';
+  return 'Context compacted';
+}
+
+function normalizeCompactionEntry(entry, event, rawType, extra, action, text) {
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  if (rawType !== 'compaction' && normalizedAction !== CONTEXT_COMPACTION_ACTION) return null;
+  const status = compactionStatusForEntry(entry, event, extra);
+  const nested = asRecord(extra.extra);
+  const summary = textValue(entry?.summary || extra.summary || nested.summary);
+  return {
+    ...entry,
+    type: 'compaction',
+    text: compactionLabelForStatus(status),
+    status,
+    ...(summary ? { summary } : {}),
+    extra: {
+      ...extra,
+      action: CONTEXT_COMPACTION_ACTION,
+      toolName: extra.toolName || CONTEXT_COMPACTION_ACTION,
+      status,
+      ...(summary ? { summary } : {}),
+      event: event || extra.event || 'tool_result',
+    },
+  };
+}
+
 function eventText(entry) {
   const extra = asRecord(entry?.extra);
   return textValue(
@@ -186,6 +233,11 @@ export function normalizeRecoveredTraceEntry(entry) {
     );
   }
 
+  const inferred = eventAction(entry, extra, text);
+  const action = String(inferred?.action || '').trim();
+  const compaction = normalizeCompactionEntry(entry, event, rawType, extra, action, text);
+  if (compaction) return compaction;
+
   const modelType = String(extra.modelType || extra.modelEvent?.type || '').trim().toLowerCase();
   const modelToolEvent = event === 'model_stream_event'
     && /^tool_call_(?:start|done)$/i.test(modelType);
@@ -199,8 +251,6 @@ export function normalizeRecoveredTraceEntry(entry) {
     || ['tool', 'skill', 'result', 'error', 'progress'].includes(canonicalType);
   if (!isToolLike) return entry;
 
-  const inferred = eventAction(entry, extra, text);
-  const action = String(inferred?.action || '').trim();
   const args = inferred?.args && typeof inferred.args === 'object'
     ? inferred.args
     : (extra.args && typeof extra.args === 'object' ? extra.args : {});
@@ -259,10 +309,38 @@ function mergeRecoveredReasoningEntries(entries) {
   return out;
 }
 
+function mergeRecoveredCompactionEntries(entries) {
+  const out = [];
+  for (const entry of entries) {
+    const previous = out[out.length - 1];
+    const previousStatus = String(previous?.status || '').trim().toLowerCase();
+    const previousAction = String(previous?.extra?.action || previous?.extra?.toolName || '').trim().toLowerCase();
+    const entryAction = String(entry?.extra?.action || entry?.extra?.toolName || '').trim().toLowerCase();
+    const entryStatus = String(entry?.status || entry?.extra?.status || '').trim().toLowerCase();
+    const duplicateTerminal = previousStatus !== 'compacting'
+      && entryStatus !== 'compacting'
+      && previousAction === CONTEXT_COMPACTION_ACTION
+      && entryAction === CONTEXT_COMPACTION_ACTION;
+    if (entry?.type === 'compaction' && previous?.type === 'compaction'
+      && (previousStatus === 'compacting' || duplicateTerminal)) {
+      out[out.length - 1] = {
+        ...previous,
+        ...entry,
+        id: previous.id || entry.id,
+        summary: entry.summary || previous.summary,
+        extra: { ...(previous.extra || {}), ...(entry.extra || {}) },
+      };
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
 export function normalizeRecoveredTraceEntries(entries) {
-  return mergeRecoveredReasoningEntries(
+  return mergeRecoveredCompactionEntries(mergeRecoveredReasoningEntries(
     (Array.isArray(entries) ? entries : [])
       .map(normalizeRecoveredTraceEntry)
       .filter(Boolean),
-  );
+  ));
 }

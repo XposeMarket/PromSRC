@@ -8,6 +8,7 @@ import {
   _approvalFromMobileEvent,
   _buildMobileFileContextNote,
   _closeMobileQueuedPromptMenus,
+  _drawAgentSVG,
   _ensureMobileQueuedPromptMenuDismiss,
   _formatTimeAgo,
   _installMobileTimestampReveal,
@@ -18,6 +19,7 @@ import {
   _renderMobileGoalPill,
   _renderMobileMarkdown,
   _renderMobileProcess,
+  _renderAgentModelPicker,
   _wireMobileApprovalActionButton,
   _restoreTemporaryMobileSubagentVoiceProfile,
   _setTemporaryMobileSubagentVoiceProfile,
@@ -32,6 +34,7 @@ import {
   loadMemoryGraph,
   loadMobileApprovals,
   loadMobileTeamDetail,
+  loadMobileSubagentDetail,
   loadMobileTeams,
   loadTeamChat,
   loadTeamChatStreamReplay,
@@ -43,6 +46,8 @@ import {
   pmToast,
   renderMobileHeader,
   renderVoicePage,
+  agentModelPickerHydrate,
+  registerAgentModelPickerOnSaved,
   resumeTeam,
   saveTeamContextReference,
   startTeamRun,
@@ -172,11 +177,8 @@ function teamDetailSkeleton() {
 export async function renderTeamDetailPage(page, { teamId, navigate, initialTab = '' }) {
   // Paint shell + skeleton first
   page.innerHTML = `
-    <header class="pm-header">
-      <button class="pm-icon-btn" data-action="back" aria-label="Back">${ICONS.back}</button>
-            <button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button>
-    </header>
-    <div class="pm-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
+    ${renderMobileHeader({ title: 'Team', online: true, leftIcon: 'back', hideTitle: true, hideBrand: true })}
+    <div class="pm-body pm-subagent-detail-body pm-team-detail-body" id="pm-detail-body">${teamDetailSkeleton()}</div>
   `;
   wireHeaderActions(page, { onBack: () => navigate('#mobile/teams') });
 
@@ -206,7 +208,7 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
     <div class="pm-action-row">
       <button class="pm-action-btn primary" data-act="start">${ICONS.play} Start Run</button>
       <button class="pm-action-btn"          data-act="pause">${t.paused ? ICONS.play + ' Resume' : ICONS.pause + ' Pause'}</button>
-      <button class="pm-action-btn"          data-act="review">${ICONS.brain} Review</button>
+      <button class="pm-action-btn"          data-act="chat">${ICONS.chat} Chat</button>
       <button class="pm-action-btn danger"   data-act="delete">${ICONS.trash} Delete</button>
     </div>
 
@@ -294,7 +296,10 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
     try {
       if (tabName === 'Subagents')  await _renderSubagentsTab(tabSlot, t);
       else if (tabName === 'Runs')   await _renderRunsTab(tabSlot, teamId);
-      else if (tabName === 'Team Chat') await _renderTeamChatTab(tabSlot, teamId);
+      else if (tabName === 'Team Chat') {
+        navigate(`#mobile/teams/${encodeURIComponent(teamId)}/chat`);
+        return;
+      }
       else if (tabName === 'Workspace') await _renderWorkspaceTab(tabSlot, teamId);
       else if (tabName === 'Memory')    await _renderMemoryTab(tabSlot, teamId, t);
     } catch (err) {
@@ -360,8 +365,8 @@ export async function renderTeamDetailPage(page, { teamId, navigate, initialTab 
           t.paused = !willResume;
           btn.innerHTML = t.paused ? `${ICONS.play} Resume` : `${ICONS.pause} Pause`;
         } catch {}
-      } else if (act === 'review') {
-        await _action(btn, () => triggerTeamReview(teamId), 'Manager review triggered').catch(() => {});
+      } else if (act === 'chat') {
+        navigate(`#mobile/teams/${encodeURIComponent(teamId)}/chat`);
       } else if (act === 'delete') {
         if (!window.confirm(`Delete team "${t.name}"? This cannot be undone.`)) return;
         try {
@@ -434,12 +439,21 @@ async function _renderSubagentsTab(slot, team) {
     if (id) activeByAgent.set(id, d);
   }
 
-  const cards = team.members.filter(m => m.id !== 'manager').map(m => {
+  const members = team.members.filter(m => m.id !== 'manager');
+  const agentDetails = new Map((await Promise.all(members.map(async (member) => {
+    const detail = await loadMobileSubagentDetail(member.id).catch(() => null);
+    return [member.id, detail];
+  }))).filter(([, detail]) => detail));
+  const pickerScopes = [];
+  const cards = members.map(m => {
     const s = states[m.id] || {};
     const pill = PRESENCE_PILL[String(s.status || 'idle').toLowerCase()] || PRESENCE_PILL.idle;
     const active = activeByAgent.get(m.id);
+    const agent = agentDetails.get(m.id);
+    const pickerScope = `pm-team-member-model-${team.id}-${m.id}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+    if (agent) pickerScopes.push({ pickerScope, agent });
     return `
-      <article class="pm-card">
+      <article class="pm-card pm-team-member-card">
         <div class="pm-schedule-head" style="margin-bottom:8px;">
           <span class="pm-emoji" style="font-size:22px;">${m.avatar}</span>
           <h3 style="margin:0;">${escapeHtml(m.name)}</h3>
@@ -452,11 +466,16 @@ async function _renderSubagentsTab(slot, team) {
           <span>${active ? `📡 dispatched` : 'Last update'}</span>
           <span>${_formatTimeAgo(s.lastUpdateAt || active?.startedAt)}</span>
         </div>
+        ${agent ? _renderAgentModelPicker(agent, pickerScope) : ''}
       </article>
     `;
   }).join('');
 
   slot.innerHTML = cards || `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.robot}</div><h2>No subagents yet</h2><p>Add members from the desktop team editor.</p></div>`;
+  pickerScopes.forEach(({ pickerScope, agent }) => {
+    registerAgentModelPickerOnSaved(pickerScope, () => _renderSubagentsTab(slot, team));
+    agentModelPickerHydrate(pickerScope, agent);
+  });
 }
 
 function _runStatusPill(run) {
@@ -574,8 +593,13 @@ const _mobileAgentComposerDrafts = {};
 
 function _renderMobileAgentComposerHtml(prefix, placeholder) {
   const id = String(prefix || 'pm-agent-chat');
+  const usesModeLauncher = id === 'pm-team-chat' || id === 'pm-sa-chat';
   return `
-    <form class="pm-composer pm-agent-chat-composer" id="${id}-form" style="position:relative;left:auto;right:auto;bottom:auto;margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;box-shadow:none;">
+    ${usesModeLauncher ? `<div class="pm-chat-mode-launcher pm-agent-chat-mode-launcher" id="${id}-mode-launcher" role="group" aria-label="Choose chat input">
+      <button type="button" class="pm-chat-mode-button pm-chat-mode-button--voice" id="${id}-mode-voice" aria-label="Start voice mode">${ICONS.micSmall}<span class="pm-chat-mode-button-label">Voice mode</span></button>
+      <button type="button" class="pm-chat-mode-button pm-chat-mode-button--keyboard" id="${id}-mode-keyboard" aria-label="Open keyboard composer">${ICONS.keyboard}<span class="pm-chat-mode-button-label">Keyboard composer</span></button>
+    </div>` : ''}
+    <form class="pm-composer pm-agent-chat-composer${usesModeLauncher ? ' pm-composer-mode-hidden' : ''}" id="${id}-form"${usesModeLauncher ? ' aria-hidden="true" inert' : ''}>
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
       <input id="${id}-file-input" type="file" multiple accept="image/*,video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv,.txt,.md,.json,.csv,.tsv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml,application/pdf" hidden />
@@ -609,6 +633,9 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   const voiceHost = slot.querySelector(`#${id}-voice-inline`);
   const fileInput = slot.querySelector(`#${id}-file-input`);
   const attachTray = slot.querySelector(`#${id}-attach-tray`);
+  const modeLauncher = slot.querySelector(`#${id}-mode-launcher`);
+  const modeVoiceButton = slot.querySelector(`#${id}-mode-voice`);
+  const modeKeyboardButton = slot.querySelector(`#${id}-mode-keyboard`);
   const draftId = String(draftKey || '').trim();
   let draft = null;
   if (draftId) {
@@ -623,6 +650,167 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   let dictationRestartTimer = null;
   let dictationGeneration = 0;
   if (input && draft?.text) input.value = draft.text;
+  const keyboardManaged = id === 'pm-team-chat' || id === 'pm-sa-chat';
+  const keyboardApp = document.querySelector('.pm-app') || document.body;
+  const keyboardTabbar = document.querySelector('.pm-tabbar');
+  const keyboardViewport = window.visualViewport;
+  const visibleTabbarBottomInset = (viewportBottom) => {
+    if (!keyboardTabbar) return 0;
+    const tabbarStyle = getComputedStyle(keyboardTabbar);
+    if (tabbarStyle.display === 'none' || tabbarStyle.visibility === 'hidden') return 0;
+    const rect = keyboardTabbar.getBoundingClientRect?.();
+    const visibleTop = Math.max(0, Number(keyboardViewport?.offsetTop || 0));
+    const visibleBottom = Math.max(0, Number(viewportBottom || 0));
+    if (!rect || rect.height <= 0 || rect.bottom <= visibleTop || rect.top >= visibleBottom) return 0;
+    // Keep the dedicated composer above the persistent tab bar, including the
+    // short gap used by its resting layout. The main chat may hide its bar
+    // during keyboard focus; dedicated chats intentionally do not.
+    return Math.max(0, Math.round(visibleBottom - Math.max(rect.top, visibleTop) + 16));
+  };
+  let keyboardRaf = 0;
+  let keyboardReleaseTimer = 0;
+  let keyboardActive = false;
+  let keyboardViewportMode = '';
+  let keyboardVisualBottom = 0;
+  let keyboardVisualHeight = 0;
+  let keyboardBaselineHeight = Math.max(
+    Number(window.innerHeight || 0),
+    Number(keyboardViewport?.height || 0),
+  );
+  let keyboardFocusGraceUntil = 0;
+  let keyboardInteractionUntil = 0;
+  const composerModeScrollTarget = slot.querySelector?.('.pm-sa-chat-scrollport')
+    || slot.closest?.('.pm-page.pm-agent-chat-page')?.querySelector?.('.pm-sa-chat-scrollport')
+    || slot;
+  let composerModeScrollIgnoreUntil = 0;
+  let composerModeScrollIntentUntil = 0;
+  let composerModeLastScrollTop = Number(composerModeScrollTarget?.scrollTop || 0);
+  const composerModeScrollIntentOptions = { passive: true };
+  const keyboardViewportProperties = ['position', 'left', 'right', 'top', 'bottom', 'z-index'];
+  const clearKeyboardPlacement = () => {
+    if (!form || !keyboardManaged) return;
+    keyboardActive = false;
+    keyboardViewportMode = '';
+    keyboardVisualBottom = 0;
+    keyboardVisualHeight = 0;
+    keyboardFocusGraceUntil = 0;
+    keyboardInteractionUntil = 0;
+    keyboardViewportProperties.forEach((property) => form.style.removeProperty(property));
+    keyboardApp?.classList.remove('pm-keyboard-open', 'pm-agent-composer-keyboard-open');
+    keyboardApp?.style.removeProperty('--pm-keyboard-offset');
+    keyboardTabbar?.style.removeProperty('display');
+    if (keyboardRaf) cancelAnimationFrame(keyboardRaf);
+    keyboardRaf = 0;
+    if (keyboardReleaseTimer) window.clearTimeout(keyboardReleaseTimer);
+    keyboardReleaseTimer = 0;
+  };
+  const placeAboveKeyboard = () => {
+    keyboardRaf = 0;
+    if (!form || !keyboardManaged || !keyboardActive) return;
+    const layoutHeight = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement?.clientHeight || 0),
+    );
+    const visualTop = Math.max(0, Number(keyboardViewport?.offsetTop || 0));
+    const visualHeight = Math.max(0, Number(keyboardViewport?.height || layoutHeight || 0));
+    const visualBottom = Math.round(visualTop + visualHeight);
+    const keyboardHeight = keyboardViewport
+      ? Math.max(0, Math.round(layoutHeight - visualHeight))
+      : 0;
+    const baselineDelta = Math.max(0, Math.round(keyboardBaselineHeight - visualHeight));
+    const viewportSettled = keyboardHeight > 90 || baselineDelta > 90;
+    if (viewportSettled && !keyboardViewportMode) {
+      const currentBottom = Number(form.getBoundingClientRect?.().bottom || 0);
+      keyboardViewportMode = currentBottom > 0 && currentBottom <= visualBottom + 44 ? 'visual' : 'layout';
+      if (keyboardViewportMode === 'visual') {
+        keyboardVisualBottom = visualBottom;
+        keyboardVisualHeight = visualHeight;
+      }
+    } else if (keyboardViewportMode === 'visual' && Math.abs(visualHeight - keyboardVisualHeight) > 2) {
+      keyboardVisualBottom = visualBottom;
+      keyboardVisualHeight = visualHeight;
+    }
+    const viewportBottom = keyboardViewportMode === 'visual'
+      ? (keyboardVisualBottom || visualBottom)
+      : layoutHeight;
+    const composerHeight = Math.max(54, Math.ceil(form.getBoundingClientRect?.().height || form.offsetHeight || 54));
+    // A layout-viewport WebView keeps fixed elements in the full-height
+    // layout viewport, so the keyboard height is part of the bottom inset.
+    // A visual-viewport WebView has already shrunk the fixed containing block,
+    // so it only needs the small breathing room above the keyboard edge.
+    // Measure the persistent tab bar even before visualViewport reports a
+    // keyboard resize. That first frame is the one users see while the
+    // keyboard is animating in, so it must not fall back to an 8px bottom
+    // inset and paint the composer underneath the tab bar.
+    const tabbarInset = visibleTabbarBottomInset(viewportBottom);
+    const keyboardInset = keyboardViewportMode === 'layout' && keyboardHeight > 0
+      ? keyboardHeight + 8
+      : 0;
+    const bottomInset = Math.max(8, tabbarInset, keyboardInset);
+    const top = Math.max(8, Math.round(viewportBottom - bottomInset - composerHeight));
+    form.style.setProperty('position', 'fixed', 'important');
+    form.style.setProperty('left', '10px', 'important');
+    form.style.setProperty('right', '10px', 'important');
+    form.style.setProperty('top', `${top}px`, 'important');
+    form.style.setProperty('bottom', 'auto', 'important');
+    form.style.setProperty('z-index', '10030', 'important');
+    keyboardApp?.classList.add('pm-keyboard-open', 'pm-agent-composer-keyboard-open');
+    keyboardApp?.style.setProperty('--pm-keyboard-offset', `${keyboardHeight}px`);
+  };
+  const scheduleKeyboardPlacement = () => {
+    if (!keyboardManaged || !keyboardActive || keyboardRaf) return;
+    keyboardRaf = requestAnimationFrame(() => {
+      keyboardRaf = 0;
+      if (!keyboardManaged || !keyboardActive) return;
+      const layoutHeight = Math.max(
+        Number(window.innerHeight || 0),
+        Number(document.documentElement?.clientHeight || 0),
+      );
+      const visualHeight = Math.max(0, Number(keyboardViewport?.height || layoutHeight || 0));
+      const keyboardStillVisible = Math.max(0, layoutHeight - visualHeight) > 90
+        || Math.max(0, keyboardBaselineHeight - visualHeight) > 90;
+      const focusHandoff = performance.now() < keyboardFocusGraceUntil
+        || performance.now() < keyboardInteractionUntil;
+      // A swipe-dismissed iOS keyboard does not reliably blur the textarea.
+      // The viewport returning to its baseline is therefore the release signal;
+      // otherwise this route keeps its keyboard-owned fixed position forever.
+      if (!keyboardStillVisible && !focusHandoff) {
+        releaseKeyboardPlacement();
+        return;
+      }
+      placeAboveKeyboard();
+    });
+  };
+  const beginKeyboardPlacement = () => {
+    if (!keyboardManaged) return;
+    keyboardActive = true;
+    keyboardFocusGraceUntil = performance.now() + 1600;
+    keyboardBaselineHeight = Math.max(
+      keyboardBaselineHeight,
+      Number(window.innerHeight || 0),
+      Number(keyboardViewport?.height || 0),
+    );
+    keyboardViewportMode = '';
+    keyboardVisualBottom = 0;
+    keyboardVisualHeight = 0;
+    keyboardApp?.classList.add('pm-keyboard-open', 'pm-agent-composer-keyboard-open');
+    keyboardApp?.style.setProperty('--pm-keyboard-offset', '0px');
+    scheduleKeyboardPlacement();
+    [80, 240, 560, 1000].forEach((delay) => window.setTimeout(scheduleKeyboardPlacement, delay));
+    if (keyboardReleaseTimer) window.clearTimeout(keyboardReleaseTimer);
+    keyboardReleaseTimer = window.setTimeout(() => {
+      keyboardReleaseTimer = 0;
+      scheduleKeyboardPlacement();
+    }, 1700);
+  };
+  const releaseKeyboardPlacement = () => {
+    if (!keyboardManaged) return;
+    clearKeyboardPlacement();
+    keyboardBaselineHeight = Math.max(
+      Number(window.innerHeight || 0),
+      Number(keyboardViewport?.height || 0),
+    );
+  };
 
   const resize = () => {
     if (!input) return;
@@ -635,6 +823,39 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   };
   const hasOutbound = () => !!(String(input?.value || '').trim() || pending.length);
   const hasVoiceTarget = () => voiceTarget && typeof onVoiceSubmit === 'function' && voiceShell && voiceHost;
+  const composerModeCanAutoHide = () => {
+    if (!keyboardManaged || !form
+      || form.classList.contains('pm-composer-mode-hidden')
+      || form.classList.contains('is-voice-active')) return false;
+    const keyboardOpen = keyboardActive
+      || keyboardApp?.classList?.contains('pm-keyboard-open');
+    const keyboardFocusHandoff = keyboardActive || document.activeElement === input;
+    // Match the main chat: a keyboard transition owns the composer until the
+    // viewport has settled and focus has moved away from its textarea.
+    if (keyboardOpen || keyboardFocusHandoff) return false;
+    return !form.classList.contains('has-text')
+      && !form.classList.contains('has-attachments')
+      && !form.classList.contains('has-pending-question');
+  };
+  const onComposerModeScrollIntent = () => {
+    // Safari's focus/keyboard hand-off can produce a small synthetic scroll.
+    // Only a recent user gesture may collapse the empty composer.
+    composerModeScrollIntentUntil = performance.now() + 900;
+  };
+  const onComposerModeScroll = () => {
+    const scrollTop = Number(composerModeScrollTarget?.scrollTop || 0);
+    const delta = scrollTop - composerModeLastScrollTop;
+    composerModeLastScrollTop = scrollTop;
+    if (delta >= -2) return;
+    const now = performance.now();
+    if (now < composerModeScrollIgnoreUntil) return;
+    if (now > composerModeScrollIntentUntil) return;
+    if (!composerModeCanAutoHide()) return;
+    // The viewport hand-off is complete at this point. Clear any residual
+    // keyboard-owned inline placement before returning to the launcher.
+    releaseKeyboardPlacement();
+    setAgentComposerMode(false, { animate: true, reason: 'scroll' });
+  };
   const updateExpandedState = () => {
     if (!form) return;
     form.classList.toggle('is-focused', document.activeElement === input);
@@ -681,6 +902,56 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
       cameraButton: voiceCamera,
     });
   };
+  const setAgentComposerMode = (open, { animate = true, reason = 'keyboard' } = {}) => {
+    if (!keyboardManaged || !form || !modeLauncher) return;
+    if (!open && keyboardActive) releaseKeyboardPlacement();
+    form.classList.toggle('pm-composer-mode-hidden', !open);
+    form.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) form.removeAttribute('inert');
+    else form.setAttribute('inert', '');
+    modeLauncher.setAttribute('aria-hidden', open ? 'true' : 'false');
+    modeLauncher.classList.toggle('is-transitioning', animate);
+    composerModeScrollIgnoreUntil = performance.now() + (reason === 'keyboard' ? 1800 : 420);
+    if (animate) setTimeout(() => modeLauncher.classList.remove('is-transitioning'), 360);
+  };
+  const openKeyboardComposer = () => {
+    setAgentComposerMode(true, { reason: 'keyboard' });
+    // Start the dedicated placement before the composer becomes paintable.
+    // Waiting for the textarea focus event leaves one frame where the fixed
+    // composer can fall behind the persistent tab bar; the focus callback
+    // still re-schedules placement after the keyboard changes the viewport.
+    beginKeyboardPlacement();
+    window.requestAnimationFrame(() => input?.focus({ preventScroll: true }));
+  };
+  const openVoiceComposer = async () => {
+    setAgentComposerMode(true, { reason: 'voice' });
+    if (hasVoiceTarget()) {
+      await openVoiceMode({ autoStart: true });
+      return;
+    }
+    // Team-manager chats do not have a dedicated realtime voice-session
+    // target. Keep the shared launcher functional by opening the identical
+    // composer and starting its continuous speech dictation control.
+    window.requestAnimationFrame(() => micBtn?.click());
+  };
+  // Keep these two first-run controls on the same native haptic path as the
+  // main composer controls. The proxy owns the physical tap, then runs the
+  // action once so a keyboard tap cannot bubble into route navigation.
+  try {
+    if (modeKeyboardButton) attachMobileButtonHaptic(modeKeyboardButton, openKeyboardComposer);
+    if (modeVoiceButton) attachMobileButtonHaptic(modeVoiceButton, () => { openVoiceComposer().catch(() => {}); });
+  } catch (err) {
+    console.warn('[mobile agent chat] mode haptic wiring failed:', err);
+    modeKeyboardButton?.addEventListener('click', openKeyboardComposer);
+    modeVoiceButton?.addEventListener('click', () => { openVoiceComposer().catch(() => {}); });
+  }
+  composerModeScrollTarget?.addEventListener('scroll', onComposerModeScroll, { passive: true });
+  for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
+    composerModeScrollTarget?.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
+    if (composerModeScrollTarget !== document) {
+      document.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
+    }
+  }
   const renderAttachments = () => {
     if (!attachTray) return;
     attachTray.hidden = pending.length === 0;
@@ -834,8 +1105,36 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
     resize();
     update();
   });
-  input?.addEventListener('focus', updateExpandedState);
-  input?.addEventListener('blur', () => setTimeout(updateExpandedState, 0));
+  input?.addEventListener('focus', () => {
+    updateExpandedState();
+    beginKeyboardPlacement();
+  });
+  input?.addEventListener('blur', () => window.setTimeout(() => {
+    updateExpandedState();
+    const next = document.activeElement;
+    const remainsInsideComposer = !!(next && form?.contains?.(next));
+    const layoutHeight = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement?.clientHeight || 0),
+    );
+    const visualHeight = Math.max(0, Number(keyboardViewport?.height || layoutHeight || 0));
+    const keyboardStillVisible = Math.max(0, layoutHeight - visualHeight) > 90
+      || Math.max(0, keyboardBaselineHeight - visualHeight) > 90;
+    if (remainsInsideComposer || performance.now() < keyboardInteractionUntil || keyboardStillVisible) {
+      if (keyboardActive) scheduleKeyboardPlacement();
+      return;
+    }
+    releaseKeyboardPlacement();
+  }, 120));
+  keyboardViewport?.addEventListener('resize', scheduleKeyboardPlacement);
+  keyboardViewport?.addEventListener('scroll', scheduleKeyboardPlacement);
+  window.addEventListener('resize', scheduleKeyboardPlacement, { passive: true });
+  window.addEventListener('orientationchange', scheduleKeyboardPlacement);
+  form?.addEventListener('pointerdown', (event) => {
+    if (event.target?.closest?.('button, .pm-haptic-host')) {
+      keyboardInteractionUntil = performance.now() + 700;
+    }
+  }, { passive: true });
   input?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -901,6 +1200,19 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 
   const previousCleanup = slot._pmCleanup;
   slot._pmCleanup = () => {
+    if (keyboardRaf) cancelAnimationFrame(keyboardRaf);
+    keyboardViewport?.removeEventListener('resize', scheduleKeyboardPlacement);
+    keyboardViewport?.removeEventListener('scroll', scheduleKeyboardPlacement);
+    window.removeEventListener('resize', scheduleKeyboardPlacement);
+    window.removeEventListener('orientationchange', scheduleKeyboardPlacement);
+    composerModeScrollTarget?.removeEventListener('scroll', onComposerModeScroll);
+    for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
+      composerModeScrollTarget?.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
+      if (composerModeScrollTarget !== document) {
+        document.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
+      }
+    }
+    clearKeyboardPlacement();
     stopDictation({ refocus: false });
     closeVoiceMode();
     previousCleanup?.();
@@ -981,10 +1293,10 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
 
 
 
-async function _renderTeamChatTab(slot, teamId) {
+async function _renderTeamChatTab(slot, teamId, { standalone = false, team = null } = {}) {
   slot.innerHTML = `
-    <div class="pm-card pm-team-chat-card" id="pm-team-chat-card">
-      <div id="pm-team-chat-list" class="pm-team-chat-list" aria-live="polite">
+    <div class="${standalone ? 'pm-sa-chat-shell pm-team-chat-page-shell' : 'pm-card'} pm-team-chat-card" id="pm-team-chat-card">
+      <div id="pm-team-chat-list" class="pm-team-chat-list${standalone ? ' pm-sa-chat-scrollport pm-sa-chat-list' : ''}" aria-live="polite">
         <div class="pm-team-chat-status">Loading team chat&hellip;</div>
       </div>
       <div id="pm-team-chat-queue" class="pm-mobile-queued-prompts" hidden></div>
@@ -1029,11 +1341,41 @@ async function _renderTeamChatTab(slot, teamId) {
     };
   }
 
+  function teamSenderIconHtml(message, normalized) {
+    if (normalized?.role === 'user') return '';
+    const body = message?.body && typeof message.body === 'object' ? message.body : {};
+    const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    const senderId = String(
+      message?.agentId
+      || message?.subagentId
+      || message?.memberId
+      || message?.fromId
+      || body.agentId
+      || body.subagentId
+      || metadata.agentId
+      || metadata.subagentId
+      || normalized?.from
+      || '',
+    ).trim().toLowerCase();
+    const senderLabel = String(normalized?.fromLabel || '').trim().toLowerCase();
+    const members = Array.isArray(team?.members) ? team.members : [];
+    const member = members.find((candidate) => {
+      const candidateId = String(candidate?.id || '').trim().toLowerCase();
+      const candidateName = String(candidate?.name || '').trim().toLowerCase();
+      return (senderId && (candidateId === senderId || candidateName === senderId))
+        || (senderLabel && (candidateId === senderLabel || candidateName === senderLabel));
+    });
+    const iconId = String(member?.id || (senderId && !['agent', 'assistant', 'manager'].includes(senderId) ? senderId : 'manager')).trim();
+    return `<span class="pm-team-sender-icon" aria-hidden="true">${_drawAgentSVG(iconId, { scale: 0.24 })}</span>`;
+  }
+
   function renderTeamChatMessage(message) {
     const normalized = normalizeTeamChatMessage(message);
+    const senderIcon = teamSenderIconHtml(message, normalized);
     try {
       return _renderMobileAgentChatBubble(normalized, {
         sender: normalized.fromLabel,
+        senderIconHtml: senderIcon,
         live: message === liveMsg,
         keepLiveTraceVisible: message === liveMsg,
       });
@@ -1044,7 +1386,7 @@ async function _renderTeamChatTab(slot, teamId) {
       const fromUser = normalized.role === 'user';
       return `<div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg">
         <div class="pm-bubble">
-          ${fromUser ? '' : `<span class="pm-sender">${escapeHtml(normalized.fromLabel)}</span>`}
+          ${fromUser ? '' : `<span class="pm-sender pm-sender-with-icon">${senderIcon}<span class="pm-sender-name">${escapeHtml(normalized.fromLabel)}</span></span>`}
           <div class="markdown-body">${_renderMobileMarkdown(normalized.content)}</div>
         </div>
       </div>`;
@@ -1360,6 +1702,45 @@ async function _renderTeamChatTab(slot, teamId) {
     onSubmit: startTeamMobileSend,
   });
   renderQueue();
+}
+
+// Team chat uses the same locked, full-page mobile conversation contract as
+// subagent chat. The existing team manager stream/replay implementation remains
+// the owner of message state; this route only gives it the dedicated shell.
+export async function renderTeamChatPage(page, { teamId, navigate }) {
+  page.classList.add('pm-agent-chat-page', 'pm-team-agent-chat-page');
+  page.dataset.mobileAgentChatRoute = 'team';
+  document.body.classList.add('pm-mobile-subagent-chat-locked');
+  document.body.classList.add('pm-mobile-agent-chat-locked');
+  page.innerHTML = `
+    ${renderMobileHeader({ title: 'Team Chat', online: true, leftIcon: 'back', hideTitle: true, hideBrand: true })}
+    <div class="pm-body pm-subagent-chat-body pm-team-chat-page-body" id="pm-team-chat-page-body">
+      <div class="pm-card" style="text-align:center;padding:24px;color:var(--pm-muted);">Loading team chat&hellip;</div>
+    </div>
+  `;
+  wireHeaderActions(page, { onBack: () => navigate?.(`#mobile/teams/${encodeURIComponent(teamId)}`) });
+
+  const body = page.querySelector('#pm-team-chat-page-body');
+  const badgeLabel = page.querySelector('.pm-model-badge .pm-model-badge-label');
+  let cleanupDone = false;
+  // Own the locked-chat cleanup immediately. A fast back/navigation during the
+  // team fetch must not leave the document in the dedicated-chat mode.
+  page._pmCleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    try { body?._pmCleanup?.(); } catch {}
+    document.body.classList.remove('pm-mobile-agent-chat-locked', 'pm-mobile-subagent-chat-locked');
+  };
+  try {
+    const team = await loadMobileTeamDetail(teamId);
+    if (!team) throw new Error('Team not found');
+    if (cleanupDone || page.isConnected === false) return;
+    if (badgeLabel) badgeLabel.textContent = `${team.emoji || '🏠'} ${team.name}`;
+    await _renderTeamChatTab(body, teamId, { standalone: true, team });
+  } catch (err) {
+    body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.users}</div><h2>Couldn’t load team chat</h2><p>${escapeHtml(err?.message || 'Network error')}</p></div>`;
+  }
+
 }
 
 /* ---------------- WORKSPACE TAB ---------------- */

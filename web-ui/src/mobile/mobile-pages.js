@@ -1066,10 +1066,11 @@ function _compactMobileThreadCacheExtra(value) {
   const keys = [
     'event', 'source', 'visibility', 'action', 'toolName', 'toolCallId', 'tool_call_id',
     'callId', 'eventKey', 'streamId', 'seq', 'stepNum', 'status', 'ok', 'durationMs',
-    'message', 'progress', 'error', 'args', 'result', 'output',
+    'message', 'progress', 'error', 'args', 'result', 'output', 'summary', 'phase',
+    'mode', 'reason', 'synthetic', 'actor',
   ];
   for (const key of keys) {
-    const next = _compactMobileThreadCacheValue(value[key], key === 'result' || key === 'output' ? 2800 : 1200);
+    const next = _compactMobileThreadCacheValue(value[key], key === 'result' || key === 'output' || key === 'summary' ? 4200 : 1200);
     if (next !== undefined) compact[key] = next;
   }
   return Object.keys(compact).length ? compact : undefined;
@@ -1081,10 +1082,10 @@ function _compactMobileThreadCacheActivity(activity) {
   const keys = [
     'kind', 'callId', 'action', 'key', 'family', 'countNoun', 'target', 'status', 'ok',
     'progress', 'result', 'durationMs', 'startedAt', 'updatedAt', 'technicalName',
-    'activityId', 'resultAttached', 'eventKey', 'streamId', 'seq', 'stepNum',
+    'activityId', 'resultAttached', 'eventKey', 'streamId', 'seq', 'stepNum', 'diffPreview',
   ];
   for (const key of keys) {
-    const next = _compactMobileThreadCacheValue(activity[key], key === 'result' ? 4200 : 1200);
+    const next = _compactMobileThreadCacheValue(activity[key], key === 'result' || key === 'diffPreview' ? 4200 : 1200);
     if (next !== undefined) compact[key] = next;
   }
   const args = _compactMobileThreadCacheValue(activity.args, 2200);
@@ -1143,6 +1144,8 @@ function _compactMobileThreadCacheTrace(entries, limit = 180) {
       id: String(entry.id || '').trim() || undefined,
       type: String(entry.type || entry.kind || 'event').trim() || 'event',
       text,
+      status: String(entry.status || entry.extra?.status || '').trim() || undefined,
+      summary: String(entry.summary || entry.extra?.summary || '').slice(0, 4200).trim() || undefined,
       ts: Number(entry.ts || entry.timestamp || 0) || undefined,
       time: String(entry.time || '').trim() || undefined,
       endTs: Number(entry.endTs || 0) || undefined,
@@ -1165,6 +1168,7 @@ function _compactMobileThreadCacheProcess(entries, limit = 10) {
     text: String(entry?.text || entry?.content || entry?.message || '').slice(0, 900),
     content: String(entry?.content || entry?.text || entry?.message || '').slice(0, 900),
     toolName: String(entry?.toolName || entry?.action || entry?.name || '').trim() || undefined,
+    summary: String(entry?.summary || entry?.extra?.summary || '').slice(0, 4200).trim() || undefined,
     timestamp: Number(entry?.timestamp || entry?.t || entry?.ts || 0) || undefined,
     time: String(entry?.time || '').trim() || undefined,
     status: String(entry?.status || '').trim() || undefined,
@@ -1195,7 +1199,7 @@ function _compactMobileThreadCacheMessage(m) {
     role: m?.role,
     messageId: String(m?.messageId || '').trim() || undefined,
     messageKind: String(m?.messageKind || '').trim() || undefined,
-    timestamp: Number(m?.timestamp || Date.now()) || Date.now(),
+    timestamp: Number(m?.timestamp || 0) || 0,
     time: String(m?.time || '').trim() || undefined,
     streaming: m?.streaming === true,
     _pmFinalReceived: m?._pmFinalReceived === true || undefined,
@@ -3068,8 +3072,19 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     const requestId = _isMobileAssistantMessage(msg) ? String(msg._clientRequestId || '').trim() : '';
     const previousRequestTurn = requestId ? seenRequests.get(requestId) : null;
     const requestIndex = previousRequestTurn ? list.indexOf(previousRequestTurn) : -1;
-    if (requestIndex >= 0) {
+    if (requestIndex >= 0 && _mobileMessagesRepresentSameTurn(previousRequestTurn, msg)) {
       const previous = previousRequestTurn;
+      // A continuation can legitimately reuse the transport request id after
+      // the user steers or resumes a turn. A user row is a hard conversation
+      // boundary: never fold the later assistant response back into the older
+      // one merely because their transport identity matches.
+      const separatedByUser = list.slice(requestIndex + 1, i).some((turn) => turn?.role === 'user');
+      if (separatedByUser) {
+        seenRequests.set(requestId, msg);
+        const contentKey = _mobileAssistantContentKey(msg);
+        if (contentKey) seen.set(contentKey, i);
+        continue;
+      }
       const keepCurrent = _mobileAssistantRichnessScore(msg) > _mobileAssistantRichnessScore(previous);
       const keepIndex = keepCurrent ? i : requestIndex;
       const dropIndex = keepCurrent ? requestIndex : i;
@@ -3374,8 +3389,31 @@ function _makeProcessEntry(type, text, extra = null) {
   };
 }
 
+function _mobileCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
 function _appendMobileProcess(message, type, text, extra = null) {
   if (!message) return;
+  const payload = extra && typeof extra === 'object' ? extra : {};
+  const nested = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
+  const action = String(payload.action || payload.toolName || nested.action || nested.toolName || '').trim().toLowerCase();
+  const textStatus = _mobileCompactionStatusFromText(text || payload.message || payload.content);
+  if (action === 'context_compaction' || textStatus) {
+    const explicitStatus = String(payload.status || nested.status || '').trim().toLowerCase();
+    const status = explicitStatus || textStatus || (String(type || '').toLowerCase() === 'tool'
+      ? 'compacting'
+      : type === 'error' || payload.error === true || payload.ok === false || payload.success === false
+        ? 'failed'
+        : 'compacted');
+    _appendMobileCompactionTrace(message, status, payload.summary || nested.summary || '', payload);
+    return;
+  }
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const entry = _makeProcessEntry(type, text, extra);
   if (!entry) return;
@@ -3729,6 +3767,8 @@ function _normalizeMobileProcessEntry(entry) {
     id: recovered.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: String(recovered.type || 'info').toLowerCase(),
     text,
+    status: String(recovered.status || recovered.extra?.status || '').trim() || undefined,
+    summary: String(recovered.summary || recovered.extra?.summary || '').trim() || undefined,
     extra: recovered.extra || null,
     time: recovered.time || (recovered.ts ? _formatChatTime(recovered.ts) : ''),
   };
@@ -3788,9 +3828,52 @@ function _isMobileReasoningSummaryTraceEntry(entry) {
 function _normalizeMobileRecoveredTraceEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const nestedExtra = extra.extra && typeof extra.extra === 'object' ? extra.extra : {};
   const rawType = String(entry.type || entry.kind || '').toLowerCase();
   const event = String(extra.event || entry.event || rawType || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
+  const action = String(extra.action || extra.toolName || entry.action || entry.toolName || nestedExtra.action || nestedExtra.toolName || '').trim().toLowerCase();
+  if (rawType === 'compaction' || action === 'context_compaction') {
+    const explicitStatus = String(entry.status || extra.status || nestedExtra.status || '').trim().toLowerCase();
+    const status = explicitStatus === 'skipped'
+      ? 'skipped'
+      : explicitStatus === 'failed' || explicitStatus === 'error'
+        || entry.error === true || extra.error === true || nestedExtra.error === true
+        || extra.ok === false || nestedExtra.ok === false || extra.success === false || nestedExtra.success === false
+        ? 'failed'
+        : explicitStatus === 'compacting' || explicitStatus === 'running' || explicitStatus === 'in_progress'
+          ? 'compacting'
+          : event === 'tool_call' || event === 'tool_progress' || /\bcompacting\b|\bpreparing context compaction\b/.test(text.toLowerCase())
+            ? 'compacting'
+            : /\bskipped\b/.test(text.toLowerCase())
+              ? 'skipped'
+              : /\bfailed\b|\berror\b/.test(text.toLowerCase())
+                ? 'failed'
+                : 'compacted';
+    const summary = String(entry.summary || extra.summary || nestedExtra.summary || '').trim();
+    const label = status === 'compacting'
+      ? 'Compacting context'
+      : status === 'failed'
+        ? 'Context compaction failed'
+        : status === 'skipped'
+          ? 'Context compaction skipped'
+          : 'Context compacted';
+    return {
+      ...entry,
+      type: 'compaction',
+      text: label,
+      status,
+      ...(summary ? { summary } : {}),
+      extra: {
+        ...extra,
+        action: 'context_compaction',
+        toolName: extra.toolName || 'context_compaction',
+        status,
+        ...(summary ? { summary } : {}),
+        event: event || 'tool_result',
+      },
+    };
+  }
   const normalizedType = event === 'tool_call' || rawType === 'tool_call'
     ? 'tool'
     : event === 'tool_result' || rawType === 'tool_result'
@@ -4127,6 +4210,15 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   if (_isMobileBareThinkingTraceText(content)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
+  const traceExtra = extra && typeof extra === 'object' ? extra : {};
+  const traceAction = String(traceExtra.action || traceExtra.toolName || traceExtra.extra?.action || traceExtra.extra?.toolName || '').trim().toLowerCase();
+  const compactionStatus = traceAction === 'context_compaction'
+    ? String(traceExtra.status || traceExtra.extra?.status || '').trim().toLowerCase() || _mobileCompactionStatusFromText(content) || 'compacted'
+    : (normalizedType === 'info' ? _mobileCompactionStatusFromText(content) : '');
+  if (compactionStatus) {
+    _appendMobileCompactionTrace(message, compactionStatus, traceExtra.summary || traceExtra.extra?.summary || '', traceExtra);
+    return;
+  }
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
   const thoughtKind = isThoughtLike ? _mobileTraceThoughtKind({ type: normalizedType, extra }) : '';
   if (!isThoughtLike) {
@@ -4272,15 +4364,18 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
   _flushMobileTraceThoughtProbe(message, { force: true });
   const normalizedStatus = String(status || 'compacting').toLowerCase();
   const label = normalizedStatus === 'compacting'
-    ? 'Compacting Context'
+    ? 'Compacting context'
     : normalizedStatus === 'failed'
-      ? 'Context Compaction Failed'
+      ? 'Context compaction failed'
       : normalizedStatus === 'skipped'
-        ? 'Context Compaction Skipped'
-        : 'Context Compacted';
+        ? 'Context compaction skipped'
+        : 'Context compacted';
   const cleanSummary = String(summary || extra?.summary || '').trim();
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
-  const payload = extra && typeof extra === 'object' ? extra : {};
+  const payload = {
+    ...(extra && typeof extra === 'object' ? extra : {}),
+    action: 'context_compaction',
+  };
   if (last && String(last.type || '').toLowerCase() === 'compaction') {
     last.text = label;
     last.status = normalizedStatus;
@@ -4551,18 +4646,23 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     const action = String(extra?.action || extra?.toolName || entry.action || entry.toolName || '').trim();
     const callId = String(extra?.toolCallId || extra?.tool_call_id || entry.toolCallId || '').trim();
     if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
-      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)) return;
+      && (['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)
+        || (type === 'compaction' && out.some((candidate) => (
+          String(candidate?.type || '').toLowerCase() === 'compaction'
+          && String(candidate?.status || candidate?.extra?.status || '').toLowerCase() !== 'compacting'
+        ))))) return;
     if (action === 'context_compaction') {
+      const event = String(extra?.event || entry.event || '').toLowerCase();
       const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
-        || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
+        || (type === 'error' ? 'failed' : event === 'tool_call' || event === 'tool_progress' || (type === 'tool' && !event) ? 'compacting' : 'compacted');
       type = 'compaction';
       text = status === 'compacting'
-        ? 'Compacting Context'
+        ? 'Compacting context'
         : status === 'failed'
-          ? 'Context Compaction Failed'
+          ? 'Context compaction failed'
           : status === 'skipped'
-            ? 'Context Compaction Skipped'
-            : 'Context Compacted';
+            ? 'Context compaction skipped'
+            : 'Context compacted';
       entry = {
         ...entry,
         type,
@@ -4591,6 +4691,20 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
+    if (type === 'compaction') {
+      const previous = out[out.length - 1];
+      const previousStatus = String(previous?.status || previous?.extra?.status || '').toLowerCase();
+      if (previous?.type === 'compaction' && previousStatus === 'compacting') {
+        out[out.length - 1] = {
+          ...previous,
+          ...entry,
+          id: previous.id || entry.id,
+          summary: entry.summary || previous.summary,
+          extra: { ...(previous.extra || {}), ...(entry.extra || {}) },
+        };
+        return;
+      }
+    }
     out.push({
       ...entry,
       type,
@@ -5246,9 +5360,18 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   if (aKind || bKind) {
     if (!aKind || aKind !== bKind) return false;
   }
-  if (aRequest || bRequest) return !!aRequest && aRequest === bRequest;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
+  if (aRequest || bRequest) {
+    if (!requestIdentityMatches) return false;
+    // Request ids identify a transport run, not necessarily one durable row.
+    // Continuations can reuse them. Only coalesce populated rows when their
+    // content is equal or one is the streamed prefix of the other.
+    if (aText && bText) {
+      return aText === bText || aText.startsWith(bText) || bText.startsWith(aText);
+    }
+    return true;
+  }
   if (aText && bText && aText === bText) return true;
   const aSource = Number(a.sourceIndex);
   const bSource = Number(b.sourceIndex);
@@ -5311,9 +5434,9 @@ function _mobileUserTurnsRepresentSameSend(a, b) {
   if (!a || !b || a.role !== 'user' || b.role !== 'user') return false;
   const aRequest = String(a._clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || '').trim();
-  if (aRequest && bRequest) return aRequest === bRequest;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim().toLowerCase();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (aRequest && bRequest && aRequest !== bRequest) return false;
   if (!aText || aText !== bText) return false;
   if (_mobileUserAttachmentSignature(a) !== _mobileUserAttachmentSignature(b)) return false;
   return Math.abs(Number(a.timestamp || 0) - Number(b.timestamp || 0)) < 15_000;
@@ -5472,7 +5595,10 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
   if (_mobileMessagesRepresentSameTurn(a, b)) return true;
   const aRequest = String(a._clientRequestId || a.clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || b.clientRequestId || '').trim();
-  if (aRequest && bRequest && aRequest === bRequest) return true;
+  // A request id alone is insufficient: steer/continue paths can reuse it for
+  // multiple durable rows. _mobileMessagesRepresentSameTurn already accepts
+  // the safe empty-vs-streaming and equal/prefix cases above.
+  if (aRequest && bRequest && aRequest !== bRequest) return false;
   const aId = String(a.messageId || a.turnId || a.id || '').trim();
   const bId = String(b.messageId || b.turnId || b.id || '').trim();
   if (aId && bId && aId !== bId) return false;
@@ -5481,12 +5607,20 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
   return !!aText && aText === bText;
 }
 
-function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false } = {}) {
+function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false } = {}) {
   const next = [];
+  const primaryLatestTimestamp = Math.max(0, ...(Array.isArray(primary) ? primary : []).map((message) => Number(message?.timestamp || 0) || 0));
   const append = (candidate, preferIncoming = false) => {
     if (!candidate || typeof candidate !== 'object') return;
     const existingIndex = next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, candidate));
     if (existingIndex < 0) {
+      // A late hydration response may represent an older durable branch. Once
+      // the local continuity spine is populated, unmatched historical rows
+      // must not be appended after the current conversation and masquerade as
+      // new assistant/user messages.
+      const candidateTimestamp = Number(candidate?.timestamp || 0) || 0;
+      if (preferIncoming && appendOnlyNewer && next.length
+        && primaryLatestTimestamp > 0 && candidateTimestamp <= primaryLatestTimestamp) return;
       next.push(candidate);
       return;
     }
@@ -5590,8 +5724,13 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
   // respects intentional branch changes while making ordinary refresh monotonic.
   const preserveLocalHistory = durableLocal.length > 0 || options.preserveLocalHistory === true
     || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
+  // Once a transcript has painted, its row order is the continuity spine.
+  // Server timestamps and optimistic/mobile timestamps are not a shared clock;
+  // sorting their union caused user/assistant rows to jump, disappear, or look
+  // like consecutive assistant messages after hydration. Enrich the painted
+  // rows from the server and append genuinely new durable rows monotonically.
   const base = preserveLocalHistory
-    ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
+    ? _mergeMobileHistoryRecords(durableLocal, mapped, { appendOnlyNewer: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
   _dedupeMobileUserTurns(merged);
@@ -8369,6 +8508,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
   "_renderMobileUserEditComposer": { enumerable: true, get: () => _renderMobileUserEditComposer },
+  "_renderMobileVoiceLyrics": { enumerable: true, get: () => _renderMobileVoiceLyrics },
   "_renderMobileVoiceWorkgroup": { enumerable: true, get: () => _renderMobileVoiceWorkgroup },
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },
   "_resolveMobileApprovalButton": { enumerable: true, get: () => _resolveMobileApprovalButton },

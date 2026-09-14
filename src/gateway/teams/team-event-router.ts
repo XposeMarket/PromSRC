@@ -30,6 +30,7 @@ export interface TeamEventRouterInput {
   dispatchId?: string;
   stepCount?: number;
   durationMs?: number;
+  admissionCode?: string;
   source?: string;
 }
 
@@ -58,8 +59,11 @@ function buildRoomContent(event: TeamEventRouterInput): string {
   }
   if (event.type === 'member_failed_task') {
     return [
-      `Task failed${task ? `: ${task}` : ''}.`,
+      event.admissionCode
+        ? `Task queued for retry${task ? `: ${task}` : ''}.`
+        : `Task failed${task ? `: ${task}` : ''}.`,
       summary ? `Issue: ${summary}` : '',
+      event.admissionCode ? `Admission: ${compact(event.admissionCode, 120)}` : '',
     ].filter(Boolean).join('\n');
   }
   if (event.type === 'member_shared_artifact') {
@@ -82,7 +86,7 @@ function buildManagerNotice(event: TeamEventRouterInput): string {
   const prefix = event.type === 'member_completed_task'
     ? `${agent} completed a task`
     : event.type === 'member_failed_task'
-      ? `${agent} failed a task`
+      ? event.admissionCode ? `${agent} was capacity-limited` : `${agent} failed a task`
       : event.type === 'member_shared_artifact'
         ? `${agent} shared an artifact`
         : `${agent} is blocked`;
@@ -91,6 +95,7 @@ function buildManagerNotice(event: TeamEventRouterInput): string {
     task ? `Task: ${task}` : '',
     summary ? `Summary: ${summary}` : '',
     event.taskId ? `Task ID: ${event.taskId}` : '',
+    event.admissionCode ? `Admission: ${compact(event.admissionCode, 120)}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -139,7 +144,7 @@ function hasActivePlanWorkForTeam(teamId: string): boolean {
 function shouldWakeManager(event: TeamEventRouterInput, membersWoken: string[]): boolean {
   if (event.type === 'member_failed_task' || event.type === 'member_blocked') return true;
   if (event.type === 'member_shared_artifact') return true;
-  if (event.warning || event.error) return true;
+  if (event.warning || event.error || event.admissionCode) return true;
   if (membersWoken.length > 0) return true;
   if (event.type === 'member_completed_task' && hasActivePlanWorkForTeam(event.teamId)) return true;
   return false;
@@ -152,7 +157,7 @@ function buildAutoWakeReason(event: TeamEventRouterInput, membersWoken: string[]
   const action = event.type === 'member_completed_task'
     ? 'completed work'
     : event.type === 'member_failed_task'
-      ? 'failed or returned an incomplete result'
+      ? event.admissionCode ? 'was capacity-limited and needs a retry' : 'failed or returned an incomplete result'
       : event.type === 'member_shared_artifact'
         ? 'shared a team artifact'
         : 'reported a blocker/context need';
@@ -187,6 +192,7 @@ export function routeTeamEvent(event: TeamEventRouterInput): TeamEventRouterResu
       runId: event.taskId,
       dispatchId: event.dispatchId,
       runSuccess: event.type === 'member_completed_task' || event.type === 'member_shared_artifact',
+      admissionCode: event.admissionCode,
       source: event.source || 'team_event_router',
     },
   }, { mirrorToChat: false });

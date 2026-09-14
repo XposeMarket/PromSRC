@@ -55,6 +55,16 @@ contextBridge.exposeInMainWorld('prometheusApp', {
   }),
 });
 
+// Explicit recovery for a desktop gateway that exhausted automatic retries.
+// The main process validates the renderer sender before it can restart the
+// managed backend, so this bridge never exposes process control to a child
+// frame or to an external page.
+contextBridge.exposeInMainWorld('prometheusGateway', {
+  restart: (reason = '') => ipcRenderer.invoke('gateway:restart', {
+    reason: String(reason || '').slice(0, 160),
+  }),
+});
+
 // External links are an explicit escape hatch. Ordinary HTTP/HTTPS links are
 // routed by the renderer into the Prometheus Browser; this bridge is only for
 // a user-selected "Open externally" action or an intentional external flow.

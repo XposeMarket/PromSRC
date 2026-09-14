@@ -26,6 +26,9 @@ import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
+import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
+import { RuntimeAdmissionError } from '../runtime-admission';
+import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
 
 type HandleChatFn = (
   message: string,
@@ -480,9 +483,9 @@ function resolveTeamMemberAllowedWorkPaths(agentId: string, teamId: string): str
     ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
     ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
   ];
-  const roots = [mainWorkspace, teamWorkspace];
+  const roots = [teamWorkspace];
   for (const raw of rawValues) {
-    const value = String(raw || '').trim();
+    const value = String(raw || '').trim().replace(/[\\/]\*\*?$/, '');
     if (!value) continue;
     roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspace, value));
   }
@@ -715,7 +718,7 @@ function broadcastTeamMemberStreamDone(
   });
 }
 
-export async function runTeamMemberRoomTurn(
+async function runTeamMemberRoomTurnInternal(
   teamId: string,
   agentId: string,
   prompt: string,
@@ -898,15 +901,19 @@ export async function runTeamMemberRoomTurn(
     };
   } catch (err: any) {
     const errorText = String(err?.message || err || 'Unknown room turn error').trim();
+    const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,
       fromAgentId: agentId,
-      content: `Room turn failed: ${errorText}`,
+      content: admissionCode
+        ? `Room turn queued for retry: ${errorText}`
+        : `Room turn failed: ${errorText}`,
       metadata: {
         ...buildTeamMemberTurnMetadata(tracker, agentId, `Room turn failed: ${errorText}`),
         runSuccess: false,
+        admissionCode,
       },
     });
     deps.broadcastTeamEvent({
@@ -917,9 +924,11 @@ export async function runTeamMemberRoomTurn(
       text: String(chatMsg?.content || ''),
     });
 	    updateTeamMemberState(teamId, agentId, {
-	      status: 'blocked',
+	      status: admissionCode ? 'waiting_for_context' : 'blocked',
 	      currentTask: currentTaskLabel || undefined,
-	      blockedReason: errorText.slice(0, 500),
+	      blockedReason: admissionCode
+	        ? `Capacity limited; retryable admission result (${admissionCode}). ${errorText}`.slice(0, 500)
+	        : errorText.slice(0, 500),
 	      lastResult: errorText.slice(0, 1000),
 	    });
     broadcastTeamMemberStreamDone(deps, team, tracker, agentId, agentName, false);
@@ -927,6 +936,7 @@ export async function runTeamMemberRoomTurn(
       success: false,
       result: '',
       error: errorText,
+      admissionCode,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
       liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
@@ -958,7 +968,77 @@ export async function runTeamMemberRoomTurn(
   }
 }
 
-export async function runTeamMemberDirectTurn(
+/** Serialize room turns with dispatches so shared team state is not mutated concurrently. */
+function finalizeTeamMemberReceipt(
+  receipt: TeamRunReceiptWriter,
+  result: RunAgentResult,
+  workspacePath: string,
+  executionStartedAt?: number,
+): RunAgentResult {
+  const finishedAt = Date.now();
+  const capacityLimited = Boolean(result.admissionCode);
+  receipt.update({
+    status: result.success ? 'complete' : capacityLimited ? 'capacity_limited' : 'failed',
+    finishedAt,
+    durationMs: Math.max(0, finishedAt - receipt.queuedAt),
+    executionStartedAt,
+    queueWaitMs: executionStartedAt === undefined ? undefined : Math.max(0, executionStartedAt - receipt.queuedAt),
+    taskId: result.taskId,
+    workspacePath,
+    stepCount: result.stepCount,
+    errorCategory: result.admissionCode || (result.error ? 'TEAM_MEMBER_TURN_FAILED' : undefined),
+    error: result.error,
+    resultPreview: String(result.result || '').slice(0, 1200) || undefined,
+    acceptanceState: result.success ? 'pending' : capacityLimited ? 'retryable' : 'rejected',
+  });
+  return result;
+}
+
+function queuedTeamMemberResult(agentId: string, error: unknown, admissionCode?: string): RunAgentResult {
+  return {
+    success: false,
+    result: '',
+    error: String((error as any)?.message || error || 'Team member execution could not be admitted.'),
+    durationMs: 0,
+    agentName: String(getAgentById(agentId)?.name || agentId),
+    admissionCode,
+  };
+}
+
+export async function runTeamMemberRoomTurn(
+  teamId: string,
+  agentId: string,
+  prompt: string,
+  options: TeamMemberRoomTurnOptions = {},
+): Promise<RunAgentResult> {
+  const agentName = String(getAgentById(agentId)?.name || agentId);
+  const workspacePath = getTeamWorkspacePath(teamId);
+  const receipt = createTeamRunReceipt({ teamId, agentId, agentName, trigger: 'manual' });
+  let executionStartedAt: number | undefined;
+  const onStarted = () => receipt.update({
+    status: 'running',
+    executionStartedAt: executionStartedAt = Date.now(),
+    queueWaitMs: Math.max(0, (executionStartedAt || Date.now()) - receipt.queuedAt),
+    workspacePath,
+  });
+  try {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      await teamExecutionQueue.run(teamId, () => runTeamMemberRoomTurnInternal(teamId, agentId, prompt, options), { onStarted }),
+      workspacePath,
+      executionStartedAt,
+    );
+  } catch (error: any) {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      queuedTeamMemberResult(agentId, error, error instanceof TeamExecutionQueueError ? error.code : undefined),
+      workspacePath,
+      executionStartedAt,
+    );
+  }
+}
+
+async function runTeamMemberDirectTurnInternal(
   teamId: string,
   agentId: string,
   threadId: string,
@@ -1148,16 +1228,20 @@ export async function runTeamMemberDirectTurn(
     };
   } catch (err: any) {
     const errorText = String(err?.message || err || 'Unknown direct chat error').trim();
+    const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,
       fromAgentId: agentId,
-      content: `Direct reply failed: ${errorText}`,
+      content: admissionCode
+        ? `Direct reply queued for retry: ${errorText}`
+        : `Direct reply failed: ${errorText}`,
       threadId,
       metadata: {
         ...buildTeamMemberTurnMetadata(tracker, agentId, `Direct reply failed: ${errorText}`),
         runSuccess: false,
+        admissionCode,
         targetType: 'user',
         targetId: 'user',
         targetLabel: 'You',
@@ -1171,9 +1255,11 @@ export async function runTeamMemberDirectTurn(
       text: String(chatMsg?.content || ''),
     });
     updateTeamMemberState(teamId, agentId, {
-      status: 'blocked',
+      status: admissionCode ? 'waiting_for_context' : 'blocked',
       currentTask: currentTaskLabel,
-      blockedReason: errorText.slice(0, 500),
+      blockedReason: admissionCode
+        ? `Capacity limited; retryable admission result (${admissionCode}). ${errorText}`.slice(0, 500)
+        : errorText.slice(0, 500),
       lastResult: errorText.slice(0, 1000),
     });
     broadcastTeamMemberStreamDone(deps, team, tracker, agentId, agentName, false);
@@ -1181,6 +1267,7 @@ export async function runTeamMemberDirectTurn(
       success: false,
       result: '',
       error: errorText,
+      admissionCode,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
       liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
@@ -1208,5 +1295,39 @@ export async function runTeamMemberDirectTurn(
       });
     }
     finishLiveRuntime(runtimeId);
+  }
+}
+
+/** Serialize direct member follow-ups with the same team queue as other work. */
+export async function runTeamMemberDirectTurn(
+  teamId: string,
+  agentId: string,
+  threadId: string,
+  options: TeamMemberRoomTurnOptions = {},
+): Promise<RunAgentResult> {
+  const agentName = String(getAgentById(agentId)?.name || agentId);
+  const workspacePath = getTeamWorkspacePath(teamId);
+  const receipt = createTeamRunReceipt({ teamId, agentId, agentName, trigger: 'manual' });
+  let executionStartedAt: number | undefined;
+  const onStarted = () => receipt.update({
+    status: 'running',
+    executionStartedAt: executionStartedAt = Date.now(),
+    queueWaitMs: Math.max(0, (executionStartedAt || Date.now()) - receipt.queuedAt),
+    workspacePath,
+  });
+  try {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      await teamExecutionQueue.run(teamId, () => runTeamMemberDirectTurnInternal(teamId, agentId, threadId, options), { onStarted }),
+      workspacePath,
+      executionStartedAt,
+    );
+  } catch (error: any) {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      queuedTeamMemberResult(agentId, error, error instanceof TeamExecutionQueueError ? error.code : undefined),
+      workspacePath,
+      executionStartedAt,
+    );
   }
 }

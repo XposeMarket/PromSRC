@@ -54,6 +54,104 @@ const {
 
 {
   const entries = [];
+  applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'skill_read_1',
+    action: 'skill_read',
+    args: { id: 'checkout-workflow' },
+  });
+  applyToolActivityEvent(entries, 'result', {
+    toolCallId: 'skill_read_1',
+    action: 'skill_read',
+    args: { id: 'checkout-workflow' },
+    result: '---\nname: Checkout workflow\ndescription: Guides a safe checkout.\n---\n# Checkout',
+    error: false,
+  });
+  const html = renderToolActivityEntry(entries[1], (value) => String(value));
+  assert.match(html, /tool-activity-disclosure/);
+  assert.match(html, /tool-activity-chevron/);
+  assert.match(html, /checkout-workflow/);
+  assert.match(html, /Guides a safe checkout/);
+}
+
+{
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'file_edit_1',
+    action: 'apply_patch',
+    args: { path: 'app.js', patch: '*** Begin Patch\n@@\n-old\n+new\n*** End Patch' },
+  });
+  applyToolActivityEvent(entries, 'result', {
+    toolCallId: 'file_edit_1',
+    action: 'apply_patch',
+    args: { path: 'app.js', patch: '*** Begin Patch\n@@\n-old\n+new\n*** End Patch' },
+    result: 'Done',
+    error: false,
+  });
+  const html = renderToolActivityEntry(entries[1], (value) => String(value));
+  assert.match(html, /tool-activity-disclosure/);
+  assert.match(html, /tool-activity-file-diff/);
+  assert.match(html, /tool-activity-diff-line is-removed/);
+  assert.match(html, /tool-activity-diff-marker[^>]*>−</);
+  assert.match(html, /tool-activity-diff-code">old</);
+  assert.match(html, /tool-activity-diff-line is-added/);
+  assert.match(html, /tool-activity-diff-marker[^>]*>\+</);
+  assert.match(html, />new<\/span>/);
+  assert.doesNotMatch(html, /unchanged-four/);
+}
+
+{
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'file_replace_1',
+    action: 'workspace_edit',
+    args: { action: 'find_replace', path: 'app.js', find: 'const oldValue = 1;', replace: 'const newValue = 2;' },
+  });
+  applyToolActivityEvent(entries, 'result', {
+    toolCallId: 'file_replace_1',
+    action: 'workspace_edit',
+    args: { action: 'find_replace', path: 'app.js', find: 'const oldValue = 1;', replace: 'const newValue = 2;' },
+    result: 'Updated app.js (1 occurrence replaced).',
+    error: false,
+  });
+  const html = renderToolActivityEntry(entries[1], (value) => String(value));
+  assert.match(html, /tool-activity-disclosure/);
+  assert.match(html, /tok-keyword">const<\/span> oldValue = <span class="tok-number">1<\/span>;/);
+  assert.match(html, /tok-keyword">const<\/span> newValue = <span class="tok-number">2<\/span>;/);
+}
+
+{
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'html_replace_1',
+    action: 'workspace_edit',
+    args: {
+      action: 'find_replace',
+      path: 'dashboard.html',
+      find: '<div class="cards"><div class="card"><strong>48</strong></div></div>',
+      replace: '<div class="cards"><div class="card"><strong>49</strong></div></div>',
+    },
+  });
+  applyToolActivityEvent(entries, 'result', {
+    toolCallId: 'html_replace_1',
+    action: 'workspace_edit',
+    args: {
+      action: 'find_replace',
+      path: 'dashboard.html',
+      find: '<div class="cards"><div class="card"><strong>48</strong></div></div>',
+      replace: '<div class="cards"><div class="card"><strong>49</strong></div></div>',
+    },
+    result: 'Updated dashboard.html.',
+    error: false,
+  });
+  const html = renderToolActivityEntry(entries[1], (value) => String(value).replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+  assert.match(html, /tool-activity-diff-line is-removed/);
+  assert.match(html, /tool-activity-diff-line is-added/);
+  assert.match(html, /tok-tag">div<\/span> <span class="tok-attr">class<\/span>=<span class="tok-string">"cards"<\/span>/);
+  assert.doesNotMatch(html, /cards"&gt;&lt;div/);
+}
+
+{
+  const entries = [];
   applyToolActivityEvent(entries, 'call', { toolCallId: 'persist_open_1', action: 'workspace_read', args: { action: 'read', path: 'main.cpp' } });
   const html = renderToolActivityEntry(entries[0], (value) => String(value));
   assert.match(html, /tool-activity-entry-summary/);

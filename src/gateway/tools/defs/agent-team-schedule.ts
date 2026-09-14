@@ -1102,6 +1102,7 @@ export function getAgentTeamScheduleTools(): any[] {
             delivery: { type: 'object', description: 'Delivery patch. Currently supports channel:web. session_target is legacy; use subagent_id/team_id to change ownership, or clear subagent_id to return ownership to Prometheus itself.' },
             model_override: { type: 'string', description: 'Optional model override; empty string clears.' },
             enabled: { type: 'boolean', description: 'Enable or pause the job.' },
+            preview_only: { type: 'boolean', description: 'Run this schedule as a fail-closed read-only dry run. Mutations and external actions are not exposed.' },
             skillIds: {
               type: 'array',
               items: { type: 'string' },

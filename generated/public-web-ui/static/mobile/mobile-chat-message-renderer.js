@@ -35,6 +35,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _renderMobileSkillReferencedMarkdown,
       _renderMobileThreadLinkArtifacts,
       _renderMobileUserEditComposer,
+      _renderMobileVoiceLyrics,
       _renderMobileVoiceWorkgroup,
       _renderMobileWorkTimer,
       chatTimelineRowSignature,
@@ -144,10 +145,13 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // trace-prose normalizer: that collapses intentional newlines and turns
       // headings/lists into strings such as `text### Heading` while streaming.
       const answerStreaming = m.streaming === true && m._pmFinalReceived !== true;
-      // Chat history must stay visually stable while a realtime response is
-      // spoken. Karaoke/rolling lyrics belong only to the dedicated voice stage,
-      // never to an assistant bubble in the normal chat page.
-      inner += `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}"${answerStreaming ? ' aria-busy="true"' : ''}>${_renderMobileMarkdown(b.text, m)}</div>`;
+      const realtimeVoiceSpeaking = m.source === 'voice_agent_realtime' && m.voiceRealtimeActive === true;
+      // Realtime Voice deliberately owns a synchronized lyric presentation
+      // while audio is playing. Once playback settles, the same turn falls
+      // through to normal Markdown without creating a second message.
+      inner += realtimeVoiceSpeaking
+        ? _renderMobileVoiceLyrics(b.text, m.voiceRealtimeProgress, { compact: true })
+        : `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}"${answerStreaming ? ' aria-busy="true"' : ''}>${_renderMobileMarkdown(b.text, m)}</div>`;
       // rendered above with the shared desktop Markdown renderer
     }
     if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');

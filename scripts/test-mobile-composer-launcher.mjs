@@ -85,6 +85,8 @@ assert.match(sourceCss, /\.pm-keyboard-open #pm-composer:not\(\.pm-composer-mode
 assert.doesNotMatch(sourceCss, /pm-chat-mode-launcher-active[\s\S]*pm-new-chat-context-dock/, 'launcher mode must not hide the new-chat selectors');
 assert.match(sourceCss, /\.pm-chat-mode-button\s*\{[\s\S]*inset 0 1px \.7px rgba\(255,255,255,\.10\)/, 'launcher rims must use the subdued highlight');
 assert.match(sourceCss, /\.pm-chat-mode-button svg\s*\{[\s\S]*width: 23px;[\s\S]*color: #fff;[\s\S]*stroke-width: 2\.25/, 'launcher icons must be larger and bold white');
+assert.match(sourceCss, /\.pm-haptic-host\s*\{[\s\S]*pointer-events:\s*auto;/, 'haptic wrappers must remain interactive inside pointer-events-none rails');
+assert.match(sourceCss, /\.pm-haptic-host > \.pm-haptic-switch-overlay\s*\{[\s\S]*pointer-events:\s*auto;/, 'haptic proxy must receive the launcher tap');
 assert.match(sourceCss, /--pm-lg-glass-fill:\s*rgba\(156, 162, 173, \.035\)/, 'mobile glass surfaces must define a light neutral translucent gray tint');
 assert.match(sourceCss, /--pm-lg-glass-blur:\s*2px/, 'resting mobile glass surfaces must keep the background legible through a shallow blur');
 assert.match(sourceCss, /--pm-lg-glass-open-blur:\s*7px/, 'the opened composer must use a stronger blur than resting glass');

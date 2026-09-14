@@ -379,7 +379,40 @@ let desktopNewChatContextProjectsCacheReady = false;
 let desktopNewChatContextProjectsLoad = null;
 let desktopNewChatContextDismissBound = false;
 let desktopSessionOpenGeneration = 0;
-const desktopSessionOpenRequests = new Map();
+const desktopSessionLoadStates = new Map();
+
+function getDesktopSessionLoadState(sessionId) {
+  const sid = String(sessionId || '').trim();
+  return sid ? (desktopSessionLoadStates.get(sid) || null) : null;
+}
+
+function setDesktopSessionLoadState(sessionId, status, details = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (!normalizedStatus || normalizedStatus === 'idle' || normalizedStatus === 'ready') {
+    desktopSessionLoadStates.delete(sid);
+    return null;
+  }
+  const next = {
+    status: normalizedStatus,
+    message: String(details.message || '').trim(),
+    code: String(details.code || '').trim(),
+    statusCode: Number(details.statusCode || 0) || 0,
+    gatewayUnavailable: details.gatewayUnavailable === true,
+  };
+  desktopSessionLoadStates.set(sid, next);
+  return next;
+}
+
+function isDesktopGatewayLoadError(error) {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const statusCode = Number(error?.status || error?.statusCode || 0) || 0;
+  return statusCode === 503
+    || code === 'GATEWAY_UNAVAILABLE'
+    || code === 'GATEWAY_RESTARTING'
+    || code === 'GATEWAY_UPSTREAM_TIMEOUT';
+}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -1093,14 +1126,26 @@ function isDesktopChatTransportDisconnect(error) {
   return /failed to fetch|load failed|network(?:error| error| request failed)|fetch failed|err_network_changed|connection reset|socket hang up|stream ended before completion|terminated/i.test(text);
 }
 
-async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
+async function fetchJsonWithTimeout(url, timeoutMs = 2500, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (options.throwOnHttpError === true) {
+        const body = await res.json().catch(() => ({}));
+        const error = new Error(String(body?.error || `HTTP ${res.status}`));
+        error.status = res.status;
+        error.statusCode = res.status;
+        error.code = String(body?.code || res.headers.get('X-Prometheus-Gateway-State') || '').trim();
+        error.retryable = body?.retryable === true;
+        throw error;
+      }
+      return null;
+    }
     return await res.json();
-  } catch {
+  } catch (error) {
+    if (options.throwOnError === true) throw error;
     return null;
   } finally {
     clearTimeout(timeout);
@@ -7644,12 +7689,46 @@ function normalizeStoredSession(session) {
 
 function normalizeStoredSessionStub(session) {
   const normalized = normalizeStoredSession(session);
-  return {
+  const stub = {
     ...normalized,
     history: [],
     processLog: [],
     _needsServerLoad: true,
   };
+  // Keep the small durable snapshot available for a later click without
+  // serializing it back into the lightweight startup index.
+  Object.defineProperty(stub, '_startupCachedSession', {
+    value: normalized,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  return stub;
+}
+
+function hydrateStoredSessionStubForOpen(session) {
+  if (!session || !session._needsServerLoad || (Array.isArray(session.history) && session.history.length > 0)) return session;
+  try {
+    const cached = session._startupCachedSession;
+    let hydrated = cached && typeof cached === 'object' ? cached : null;
+    if (!hydrated) {
+      const parsed = JSON.parse(localStorage.getItem(CHAT_SESSIONS_KEY) || '[]');
+      if (!Array.isArray(parsed)) return session;
+      const stored = parsed.find((entry) => String(entry?.id || '') === String(session.id || ''));
+      if (!stored) return session;
+      hydrated = normalizeStoredSession(stored);
+    }
+    if (Array.isArray(hydrated.history) && hydrated.history.length > 0) {
+      session.history = hydrated.history;
+      session.processLog = hydrated.processLog;
+      session.historyPage = hydrated.historyPage;
+      session.messageCount = Math.max(Number(session.messageCount || 0), hydrated.history.length);
+    }
+    delete session._startupCachedSession;
+  } catch (error) {
+    console.warn('[ChatPage] Could not hydrate selected session from local cache.', error);
+  }
+  return session;
 }
 
 function loadStoredSessionStubsForStartup() {
@@ -7788,10 +7867,13 @@ function mergeServerSessionSummaries(summaries) {
 
 // Fetch a single session's full history from the server and populate the stub.
 async function _loadSessionFromServer(id, options = {}) {
-  if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(String(id || ''))) return;
+  if (/^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(String(id || ''))) {
+    return { ok: true, skipped: true };
+  }
   const sess = window.chatSessions.find(s => s.id === id);
   const force = options.force === true;
-  if (!sess || (!force && !sess._needsServerLoad)) return;
+  if (!sess) return { ok: false, reason: 'missing_session' };
+  if (!force && !sess._needsServerLoad) return { ok: true, cached: true, session: sess };
   // An active SSE turn keeps a reference to these arrays while it appends the
   // final assistant message. Keep the references stable across an async
   // recovery fetch; assigning a new array here detaches that turn and makes it
@@ -7811,9 +7893,13 @@ async function _loadSessionFromServer(id, options = {}) {
       if (options.fullProcess === true || options.recovery === true) params.set('fullProcess', '1');
     }
     const query = params.toString();
-    const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`, 3000);
-    const s = data.session;
-    if (!s) return;
+    const data = await fetchJsonWithTimeout(
+      `/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`,
+      10000,
+      { throwOnHttpError: true, throwOnError: true },
+    );
+    const s = data?.session;
+    if (!s) throw new Error('The desktop gateway returned no session data.');
     const localHistory = historyRef.slice();
     const localProcessLog = processLogRef.slice();
     const serverHistory = (s.history || [])
@@ -7889,17 +7975,61 @@ async function _loadSessionFromServer(id, options = {}) {
       sess.lastMessagePreview = sess.preview;
     }
     delete sess._needsServerLoad;
+    setDesktopSessionLoadState(id, 'ready');
     syncDesktopChatRuntime(sess, { source: 'desktop-initial-page', pageInfo: sess.historyPage });
     saveChatSessions();
     if (window.activeChatSessionId === id) {
       scheduleChatContextWindowRefresh(250);
       window.refreshActiveChatModelRoute?.();
     }
-  } catch {}
+    return { ok: true, session: sess };
+  } catch (error) {
+    // Keep the stub eligible for a later refresh and keep the selected chat
+    // visibly distinct from a real new-chat draft. A failed read must never
+    // erase the cached transcript or silently fall through to the welcome UI.
+    sess._needsServerLoad = true;
+    const gatewayUnavailable = isDesktopGatewayLoadError(error) || !error?.status;
+    setDesktopSessionLoadState(id, 'error', {
+      message: gatewayUnavailable
+        ? 'Prometheus could not reach the desktop gateway. Your local copy is still safe.'
+        : 'Prometheus could not load this chat right now. Your local copy is still safe.',
+      code: error?.code,
+      statusCode: error?.status,
+      gatewayUnavailable,
+    });
+    console.warn(`[ChatPage] Could not load session ${id} from the server.`, error);
+    return { ok: false, error, gatewayUnavailable };
+  }
 }
 
 async function loadChatSessions() {
   setChatSessions(loadStoredSessionStubsForStartup());
+  // Claim startup navigation before doing any network work. The cached target
+  // is painted immediately; if the user opens another chat while summaries or
+  // history are loading, that click increments the generation and permanently
+  // owns the visible page.
+  const startupGeneration = ++desktopSessionOpenGeneration;
+  const rememberedSessionId = recallActiveChatSessionId();
+  let startupSession = rememberedSessionId ? getChatSessionById(rememberedSessionId) : null;
+  let rememberedRun = rememberedSessionId ? readDesktopActiveChatRun(rememberedSessionId) : null;
+  let shouldRestoreRememberedSession = !!rememberedSessionId && !!startupSession && (
+    !!rememberedRun
+    || startupSession.activeRun === true
+    || (String(startupSession.title || '').trim() && String(startupSession.title || '').trim() !== 'New chat')
+  );
+  let startupSessionId = shouldRestoreRememberedSession ? rememberedSessionId : generateSessionId();
+  if (shouldRestoreRememberedSession) {
+    hydrateStoredSessionStubForOpen(startupSession);
+    setDesktopSessionLoadState(startupSessionId, 'loading', {
+      message: 'Loading your last chat…',
+    });
+    window.activeChatSessionId = startupSessionId;
+    setAgentSessionId(startupSessionId);
+  } else {
+    setDraftChatSession(startupSessionId);
+  }
+  syncActiveChat();
+
   let serverSessions = [];
   try {
     const data = await fetchChatSessionSummariesWithRetry();
@@ -7913,27 +8043,34 @@ async function loadChatSessions() {
     if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   }
 
-  const rememberedSessionId = recallActiveChatSessionId();
-  const rememberedSession = rememberedSessionId ? getChatSessionById(rememberedSessionId) : null;
-  const rememberedRun = rememberedSessionId ? readDesktopActiveChatRun(rememberedSessionId) : null;
-  const shouldRestoreRememberedSession = !!rememberedSessionId && !!rememberedSession && (
-    !!rememberedRun
-    || rememberedSession.activeRun === true
-    || (String(rememberedSession.title || '').trim() && String(rememberedSession.title || '').trim() !== 'New chat')
-  );
-  const startupSessionId = shouldRestoreRememberedSession ? rememberedSessionId : generateSessionId();
+  // A remembered session may exist only in the server summary. Adopt it only
+  // while startup still owns navigation; never replace a user-selected chat.
+  if (!shouldRestoreRememberedSession && rememberedSessionId && startupGeneration === desktopSessionOpenGeneration) {
+    const serverRememberedSession = getChatSessionById(rememberedSessionId);
+    if (serverRememberedSession) {
+      startupSession = serverRememberedSession;
+      rememberedRun = readDesktopActiveChatRun(rememberedSessionId);
+      shouldRestoreRememberedSession = !!rememberedRun
+        || serverRememberedSession.activeRun === true
+        || (String(serverRememberedSession.title || '').trim() && String(serverRememberedSession.title || '').trim() !== 'New chat');
+      if (shouldRestoreRememberedSession) {
+        startupSessionId = rememberedSessionId;
+        window.activeChatSessionId = startupSessionId;
+        setAgentSessionId(startupSessionId);
+        syncActiveChat();
+      }
+    }
+  }
+  if (startupGeneration !== desktopSessionOpenGeneration) return;
   if (shouldRestoreRememberedSession) {
-    window.activeChatSessionId = startupSessionId;
-    setAgentSessionId(startupSessionId);
     await _loadSessionFromServer(startupSessionId, {
       force: true,
       historyLimit: 80,
       processLimit: 240,
-      recovery: !!rememberedRun || rememberedSession.activeRun === true,
+      recovery: !!rememberedRun || startupSession?.activeRun === true,
     });
-  } else {
-    setDraftChatSession(startupSessionId);
   }
+  if (startupGeneration !== desktopSessionOpenGeneration || window.activeChatSessionId !== startupSessionId) return;
   if (!window.agentSessionId || window.agentSessionId !== window.activeChatSessionId) setAgentSessionId(window.activeChatSessionId);
   saveChatSessions();
   syncActiveChat();
@@ -8553,6 +8690,13 @@ async function _openSession(id, generation) {
   window.activeChatSessionId = id;
   setAgentSessionId(id);
   const sess = window.chatSessions.find(s => s.id === id);
+  setDesktopSessionLoadState(id, 'loading', {
+    message: 'Loading this chat…',
+  });
+  // Startup keeps lightweight stubs for boot performance. Hydrate only the
+  // selected session before its first paint so it cannot masquerade as a new
+  // chat while the authoritative server refresh is in flight.
+  hydrateStoredSessionStubForOpen(sess);
   // Paint the locally cached session immediately. The server refresh below is
   // still authoritative, but opening a thread should never make the user wait
   // for history before the composer and selected model respond to the click.
@@ -8560,15 +8704,30 @@ async function _openSession(id, generation) {
     window._maybeClearProjectState(id);
   }
   syncActiveChat();
-  if (sess) {
-    await _loadSessionFromServer(id, {
-      force: true,
-      recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
-    });
-  }
+  const loadResult = sess
+    ? await _loadSessionFromServer(id, {
+        force: true,
+        recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
+      })
+    : { ok: false, reason: 'missing_session' };
   // A newer click owns the page. An older history response may still finish
   // and update its own cached session, but it must not repaint the active view.
   if (generation !== desktopSessionOpenGeneration || window.activeChatSessionId !== id) return sess || null;
+  if (!sess) {
+    setDesktopSessionLoadState(id, 'error', {
+      message: 'This chat is no longer available in the current session list.',
+    });
+    syncActiveChat();
+    return null;
+  }
+  if (!loadResult?.ok) {
+    // `_loadSessionFromServer` preserves the cached history and records the
+    // failure state. Repaint here so a failed gateway request cannot look like
+    // a successful empty-chat navigation.
+    syncActiveChat();
+    refreshVisibleChannelsList();
+    return sess;
+  }
   // A session is read when its conversation is actually opened. Clear this
   // after the server refresh so stale local/server merge state cannot put it
   // straight back into Unread (or keep it in the Priority attention group).
@@ -8588,19 +8747,44 @@ async function _openSession(id, generation) {
   return getChatSessionById(id) || sess || null;
 }
 
+async function retryOpenSession(id = window.activeChatSessionId) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const loadState = getDesktopSessionLoadState(sessionId);
+  if (loadState?.gatewayUnavailable && typeof window.prometheusGateway?.restart === 'function') {
+    setDesktopSessionLoadState(sessionId, 'loading', {
+      message: 'Restarting the desktop gateway…',
+    });
+    if (sessionId === window.activeChatSessionId) syncActiveChat();
+    let result;
+    try {
+      result = await window.prometheusGateway.restart('Retry chat loading');
+    } catch (error) {
+      result = { ok: false, error: String(error?.message || error || 'The desktop gateway could not be restarted.') };
+    }
+    if (result?.ok !== true && result?.restarting !== true) {
+      setDesktopSessionLoadState(sessionId, 'error', {
+        message: String(result?.error || 'The desktop gateway could not be restarted. Your local copy is still safe.'),
+        gatewayUnavailable: true,
+        code: String(result?.code || 'GATEWAY_UNAVAILABLE'),
+      });
+      if (sessionId === window.activeChatSessionId) syncActiveChat();
+    }
+    // A successful Electron restart reloads the main window after the new
+    // backend is ready. Startup then restores this same selected session.
+    return result;
+  }
+  return openSession(sessionId);
+}
+
 async function openSession(id) {
   const sessionId = String(id || '').trim();
   if (!sessionId) return null;
-  const pending = desktopSessionOpenRequests.get(sessionId);
-  if (pending) return pending;
+  // Navigation ownership belongs to the click, not to a reused network
+  // promise. In particular A -> B -> A must reactivate A immediately even if
+  // the first A history request is still pending.
   const generation = ++desktopSessionOpenGeneration;
-  const request = _openSession(sessionId, generation);
-  desktopSessionOpenRequests.set(sessionId, request);
-  try {
-    return await request;
-  } finally {
-    if (desktopSessionOpenRequests.get(sessionId) === request) desktopSessionOpenRequests.delete(sessionId);
-  }
+  return _openSession(sessionId, generation);
 }
 
 function markSessionUnread(sessionId) {
@@ -12787,7 +12971,7 @@ function renderLiveTraceCompactionBreak(entry) {
   const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
   const entryId = String(entry?.id || `compaction_${entry?.time || entry?.ts || entry?.timestamp || ''}_${status}`).trim();
   const label = String(entry?.text || '').trim()
-    || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
+    || (status === 'compacting' ? 'Compacting context' : status === 'failed' ? 'Context compaction failed' : 'Context compacted');
   const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
   const body = summary
     ? `<div class="live-turn-compaction-body"><div class="live-turn-md">${renderMd(summary)}</div></div>`
@@ -13259,20 +13443,25 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     const action = String(extra?.action || extra?.toolName || normalizedEntry.action || normalizedEntry.toolName || '').trim();
     const callId = String(extra?.toolCallId || extra?.tool_call_id || normalizedEntry.toolCallId || '').trim();
     if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
-      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)) return;
+      && (['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)
+        || (type === 'compaction' && out.some((candidate) => (
+          String(candidate?.type || '').toLowerCase() === 'compaction'
+          && String(candidate?.status || candidate?.extra?.status || '').toLowerCase() !== 'compacting'
+        ))))) return;
     let text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || '').trim();
     let traceEntry = normalizedEntry;
     if (action === 'context_compaction') {
+      const event = String(extra?.event || normalizedEntry.event || '').toLowerCase();
       const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
-        || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
+        || (type === 'error' ? 'failed' : event === 'tool_call' || event === 'tool_progress' || (type === 'tool' && !event) ? 'compacting' : 'compacted');
       type = 'compaction';
       text = status === 'compacting'
-        ? 'Compacting Context'
+        ? 'Compacting context'
         : status === 'failed'
-          ? 'Context Compaction Failed'
+          ? 'Context compaction failed'
           : status === 'skipped'
-            ? 'Context Compaction Skipped'
-            : 'Context Compacted';
+            ? 'Context compaction skipped'
+            : 'Context compacted';
       traceEntry = {
         ...normalizedEntry,
         type,
@@ -13302,6 +13491,20 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
+    if (type === 'compaction') {
+      const previous = out[out.length - 1];
+      const previousStatus = String(previous?.status || previous?.extra?.status || '').toLowerCase();
+      if (previous?.type === 'compaction' && previousStatus === 'compacting') {
+        out[out.length - 1] = {
+          ...previous,
+          ...traceEntry,
+          id: previous.id || traceEntry.id,
+          summary: traceEntry.summary || previous.summary,
+          extra: { ...(previous.extra || {}), ...(traceEntry.extra || {}) },
+        };
+        return;
+      }
+    }
     out.push({
       ...traceEntry,
       type,
@@ -13564,6 +13767,28 @@ function renderGeneratedImageLoadingCard() {
         </div>
       </div>
     </div>`;
+}
+
+function renderDesktopSessionLoadNotice(session, loadState = getDesktopSessionLoadState(window.activeChatSessionId)) {
+  if (!loadState || !['loading', 'error'].includes(loadState.status)) return '';
+  const sessionId = String(session?.id || window.activeChatSessionId || '').trim();
+  if (!sessionId) return '';
+  const title = String(session?.title || 'this chat').trim() || 'this chat';
+  const loading = loadState.status === 'loading';
+  const message = loadState.message || (loading
+    ? 'Retrieving the conversation from Prometheus.'
+    : 'Prometheus could not load this chat. Your local copy is still safe.');
+  const retry = loading
+    ? ''
+    : `<button type="button" class="chat-session-load-retry" onclick="retryOpenSession(${encodeInlineJsString(sessionId)})">Retry loading</button>`;
+  return `<section class="chat-session-load-notice chat-session-load-notice--${loading ? 'loading' : 'error'}" role="${loading ? 'status' : 'alert'}" aria-live="polite">
+    <div class="chat-session-load-icon" aria-hidden="true">${loading ? '↻' : '!'}</div>
+    <div class="chat-session-load-copy">
+      <strong>${loading ? `Loading “${escHtml(title)}”…` : `Couldn’t load “${escHtml(title)}”`}</strong>
+      <span>${escHtml(message)}</span>
+    </div>
+    ${retry}
+  </section>`;
 }
 
 
@@ -14757,32 +14982,44 @@ function renderChatMessages() {
     pinnedKeys: _timelineScroll.pinnedKeys,
     hidden: document.hidden === true,
   });
+  const activeSession = getChatSessionById(window.activeChatSessionId);
+  const sessionLoadNotice = renderDesktopSessionLoadNotice(activeSession);
   const projectWelcome = getEmptyProjectChatWelcome();
 
   if (!splitActive && visibleHistory.length === 0 && !voicePendingHtml) {
     if (chatView) chatView.classList.add('chat-empty');
-    setInnerHTMLPreservingVisuals(container, `
-      <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
-        <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
-        <h2>Prometheus One</h2>
-        ${projectWelcome
-          ? `<p>${escHtml(projectWelcome.prompt)}</p>`
-          : `
-            <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
-            <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
-            ${renderEmptyChatStarterCards()}`
-        }
-      </div>`);
-    if (!projectWelcome) loadEmptyChatBrainCards();
+    if (sessionLoadNotice) {
+      setInnerHTMLPreservingVisuals(container, sessionLoadNotice);
+    } else {
+      setInnerHTMLPreservingVisuals(container, `
+        <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
+          <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
+          <h2>Prometheus One</h2>
+          ${projectWelcome
+            ? `<p>${escHtml(projectWelcome.prompt)}</p>`
+            : `
+              <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
+              <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
+              ${renderEmptyChatStarterCards()}`
+          }
+        </div>`);
+      if (!projectWelcome) loadEmptyChatBrainCards();
+    }
     syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     renderDesktopNewChatContextDock();
     renderChatMessageNavigator();
-    dispatchDesktopChatLifecycle('chat-rendered', { sessionId: window.activeChatSessionId, split: false, empty: true });
+    dispatchDesktopChatLifecycle('chat-rendered', {
+      sessionId: window.activeChatSessionId,
+      split: false,
+      empty: !sessionLoadNotice,
+      sessionLoadState: getDesktopSessionLoadState(window.activeChatSessionId)?.status || '',
+    });
     return;
   }
 
   if (chatView) chatView.classList.remove('chat-empty');
-  const mainHtml = renderDesktopTimelinePager(mainTimeline, window.activeChatSessionId)
+  const mainHtml = sessionLoadNotice
+    + renderDesktopTimelinePager(mainTimeline, window.activeChatSessionId)
     + renderVisibleChatHistoryHtml(window.chatHistory || [], { entries: mainTimeline.paintEntries, sessionId: window.activeChatSessionId })
     + voicePendingHtml + renderSessionThinkingHtml(window.activeChatSessionId)
     + renderDesktopTimelineTailControl(mainTimeline, window.activeChatSessionId);
@@ -44727,6 +44964,7 @@ window.openTerminalSession = openTerminalSession;
 window.toggleSessionsEditMode = toggleSessionsEditMode;
 window.deleteChatSession = deleteChatSession;
 window.openSession = openSession;
+window.retryOpenSession = retryOpenSession;
 window.openPrometheusThreadLink = openPrometheusThreadLink;
 window.markSessionUnread = markSessionUnread;
 window.upsertAutomatedSession = upsertAutomatedSession;
@@ -45548,6 +45786,59 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false,
   });
 }
 
+function desktopCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
+function appendCompactionTraceToStreamState(streamState, status = 'compacting', summary = '', extra = null) {
+  if (!streamState) return;
+  if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+  const rawStatus = String(status || 'compacting').trim().toLowerCase();
+  const normalizedStatus = rawStatus === 'failed' || rawStatus === 'error'
+    ? 'failed'
+    : rawStatus === 'skipped'
+      ? 'skipped'
+      : rawStatus === 'compacting' || rawStatus === 'running' || rawStatus === 'in_progress'
+        ? 'compacting'
+        : 'compacted';
+  const label = normalizedStatus === 'compacting'
+    ? 'Compacting context'
+    : normalizedStatus === 'failed'
+      ? 'Context compaction failed'
+      : normalizedStatus === 'skipped'
+        ? 'Context compaction skipped'
+        : 'Context compacted';
+  const cleanSummary = String(summary || extra?.summary || '').trim();
+  const payload = {
+    ...(extra && typeof extra === 'object' ? extra : {}),
+    action: 'context_compaction',
+    status: normalizedStatus,
+    ...(cleanSummary ? { summary: cleanSummary } : {}),
+  };
+  const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
+  if (last && String(last.type || '').toLowerCase() === 'compaction') {
+    last.text = label;
+    last.status = normalizedStatus;
+    if (cleanSummary) last.summary = cleanSummary;
+    last.extra = { ...(last.extra || {}), ...payload };
+    return;
+  }
+  streamState.liveTraceEntries.push({
+    id: `trace_compact_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: 'compaction',
+    text: label,
+    status: normalizedStatus,
+    ...(cleanSummary ? { summary: cleanSummary } : {}),
+    ts: new Date().toLocaleTimeString(),
+    extra: payload,
+  });
+}
+
 function isDesktopProgressNarration(value) {
   const text = normalizeLiveTraceProseText(value).replace(/\s+/g, ' ').trim();
   return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
@@ -46321,6 +46612,12 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   } else if (evt.type === 'ui_preflight' || evt.type === 'info') {
     const text = String(evt.message || '').trim();
     if (text) {
+      const compactionStatus = desktopCompactionStatusFromText(text);
+      if (compactionStatus) {
+        appendCompactionTraceToStreamState(streamState, compactionStatus, evt.summary || '', evt);
+        renderIfViewing();
+        return;
+      }
       streamState.currentPreflightStatus = text;
       streamState.currentProgressLines = Array.isArray(streamState.currentProgressLines) ? streamState.currentProgressLines : [];
       const last = streamState.currentProgressLines[streamState.currentProgressLines.length - 1];
@@ -46330,10 +46627,15 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       renderIfViewing();
     }
   } else if (evt.type === 'tool_call') {
-    const action = String(evt.action || '').trim();
+    const action = String(evt.action || evt.name || evt.toolName || evt.extra?.action || evt.extra?.toolName || '').trim();
     if (action) {
       movePreToolAnswerTextIntoPreamble();
       streamState.toolActivityStarted = true;
+      if (action.toLowerCase() === 'context_compaction') {
+        appendCompactionTraceToStreamState(streamState, 'compacting', evt.summary || '', evt);
+        renderIfViewing();
+        return;
+      }
       const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
       const text = formatToolCallForLog(action, args, streamState);
       addSessionProcessEntry(sid, action.startsWith('skill_') ? 'skill' : 'tool', text, { action, args, ...args, ...(evt.actor ? { actor: evt.actor } : {}) });
@@ -46343,7 +46645,15 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   } else if (evt.type === 'tool_result') {
     movePreToolAnswerTextIntoPreamble();
     streamState.toolActivityStarted = true;
-    const action = String(evt.action || '').trim();
+    const action = String(evt.action || evt.name || evt.toolName || evt.extra?.action || evt.extra?.toolName || '').trim();
+    if (action.toLowerCase() === 'context_compaction') {
+      const ok = evt.ok !== false && evt.success !== false && !evt.error;
+      const status = String(evt?.extra?.status || evt?.status || '').toLowerCase()
+        || (ok ? 'compacted' : 'failed');
+      appendCompactionTraceToStreamState(streamState, status, evt?.extra?.summary || evt?.summary || '', evt.extra || evt);
+      renderIfViewing();
+      return;
+    }
     const resultText = String(evt.result || '');
     const isBackgroundSession = sid !== window.activeChatSessionId;
     const safeResultText = isBackgroundSession
@@ -46357,7 +46667,12 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
   } else if (evt.type === 'tool_progress') {
     movePreToolAnswerTextIntoPreamble();
     streamState.toolActivityStarted = true;
-    const action = String(evt.action || evt.name || '').trim();
+    const action = String(evt.action || evt.name || evt.toolName || evt.extra?.action || evt.extra?.toolName || '').trim();
+    if (action.toLowerCase() === 'context_compaction') {
+      appendCompactionTraceToStreamState(streamState, String(evt?.extra?.status || evt?.status || '').toLowerCase() || 'compacting', evt?.extra?.summary || evt?.summary || '', evt.extra || evt);
+      renderIfViewing();
+      return;
+    }
     const message = String(evt.message || evt.progress || evt.status || '').trim();
     const ratio = Number.isFinite(Number(evt.ratio)) ? ` ${Math.round(Number(evt.ratio) * 100)}%` : '';
     const text = [action ? formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '') : 'Tool progress', message || ratio.trim()]

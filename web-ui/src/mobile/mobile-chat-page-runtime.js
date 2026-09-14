@@ -21,6 +21,19 @@ export function resolveMobileKeyboardComposerTop({
   ));
 }
 
+function mobileCompactionEventAction(evt) {
+  return String(evt?.action || evt?.name || evt?.toolName || evt?.extra?.action || evt?.extra?.toolName || '').trim().toLowerCase();
+}
+
+function mobileCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
 /**
  * Owns the mobile chat route renderer and its route-local orchestration.
  *
@@ -699,20 +712,21 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
         <button type="button" class="pm-chat-voice-close" id="pm-chat-voice-close" aria-label="Exit voice mode">&times;</button>
         <div class="pm-chat-voice-inline" id="pm-chat-voice-inline" hidden></div>
       </div>
+      <div class="pm-attach-sheet" id="pm-attach-sheet" hidden>
+        <div class="pm-attach-sheet-scrim" id="pm-attach-sheet-scrim"></div>
+        <section class="pm-attach-sheet-panel" aria-label="Attach">
+          <span class="pm-attach-goo" aria-hidden="true"></span>
+          <button type="button" class="pm-attach-sheet-action pm-attach-sheet-action--files" data-pm-attach-action="files-photos" aria-label="Files and photos">
+            <span>${ICONS.image}</span>
+            <strong class="pm-attach-sheet-action-label">Files and photos</strong>
+          </button>
+          <button type="button" class="pm-attach-sheet-action pm-attach-sheet-action--camera" data-pm-attach-action="camera" aria-label="Camera">
+            <span>${ICONS.camera || ICONS.image}</span>
+            <strong class="pm-attach-sheet-action-label">Camera</strong>
+          </button>
+        </section>
+      </div>
     </form>
-    <div class="pm-attach-sheet" id="pm-attach-sheet" hidden>
-      <div class="pm-attach-sheet-scrim" id="pm-attach-sheet-scrim"></div>
-      <section class="pm-attach-sheet-panel" aria-label="Attach">
-        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="files-photos">
-          <span>${ICONS.paperclip}</span>
-          <strong>Files / Photos</strong>
-        </button>
-        <button type="button" class="pm-attach-sheet-action" data-pm-attach-action="camera">
-          <span>${ICONS.image}</span>
-          <strong>Camera</strong>
-        </button>
-      </section>
-    </div>
     <div class="pm-camera-capture" id="pm-camera-capture" hidden>
       <video class="pm-camera-video" id="pm-camera-video" autoplay muted playsinline></video>
       <div class="pm-camera-status" id="pm-camera-status">Opening camera...</div>
@@ -1615,6 +1629,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let composerModeScrollIgnoreUntil = 0;
   let composerModeScrollIntentUntil = 0;
   let composerModeLastScrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);
+  let attachSheetTarget = 'chat';
+  let pendingFileInputTarget = 'chat';
+  let attachSheetPositionCleanup = null;
+  let attachSheetOpenToken = 0;
 
   function setChatComposerMode(open, {
     animate = true,
@@ -1624,6 +1642,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   } = {}) {
     if (!form || !modeLauncher) return;
     const nextOpen = !!open;
+    if (!nextOpen) closeAttachSheet();
     const scrollTarget = _mobileChatScrollTarget(body);
     if (preserveScroll && scrollTarget) {
       composerModeScrollLockTop = Number(scrollTarget.scrollTop || 0);
@@ -1729,8 +1748,6 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     requestAnimationFrame(() => updateChatComposerSpace());
   }
 
-  let attachSheetTarget = 'chat';
-  let pendingFileInputTarget = 'chat';
   const VOICE_PHOTO_FILE_MAX_BYTES = 15 * 1024 * 1024;
 
   function _isVoicePhotoFile(file) {
@@ -1747,19 +1764,137 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       fileInput?.click();
       return;
     }
+    // The new-chat direction controls should not compete with the radial
+    // attachment control while it is open. Close any selector popover first,
+    // then hide the two selector rows until the attachment layer is dismissed.
+    closeTargetPopover?.();
+    contextDock?.classList.add('pm-attach-popover-open');
     attachSheet.dataset.pmAttachTarget = attachSheetTarget;
     attachSheet.classList.toggle('voice', attachSheetTarget === 'voice');
     attachSheet.hidden = false;
-    requestAnimationFrame(() => attachSheet.classList.add('open'));
+    attachBtn?.setAttribute('aria-expanded', 'true');
+    const openToken = ++attachSheetOpenToken;
+    const anchorElement = attachSheetTarget === 'voice'
+      ? (chatVoiceCamera || attachBtn)
+      : attachBtn;
+    const anchorHitTarget = anchorElement?.closest?.('.pm-haptic-host') || anchorElement;
+    const position = () => {
+      const anchor = anchorElement?.getBoundingClientRect?.();
+      const owner = form?.getBoundingClientRect?.();
+      if (!anchor || !owner) return;
+      const anchorPageX = anchor.left + anchor.width / 2;
+      const anchorPageY = anchor.top + anchor.height / 2;
+      // The sheet lives inside the composer, so use composer-local coordinates.
+      // This keeps the fan attached even while the keyboard translates the
+      // composer or the page is scrolled.
+      attachSheet.style.setProperty('--pm-attach-origin-x', `${Math.round(anchorPageX - owner.left)}px`);
+      attachSheet.style.setProperty('--pm-attach-origin-y', `${Math.round(anchorPageY - owner.top)}px`);
+
+      const viewportWidth = Math.max(160, Math.round(window.visualViewport?.width || window.innerWidth || 390));
+      // Keep the settled buttons entirely above the composer's top edge. The
+      // keyboard changes the composer position, so derive the vertical orbit
+      // from the measured owner instead of using a fixed screen coordinate.
+      const aboveComposer = Math.max(0, Math.round(anchorPageY - owner.top));
+      const lowerOrbitY = -Math.max(74, aboveComposer + 40);
+      const upperOrbitY = lowerOrbitY - 46;
+      // The main composer trigger is close to the left edge. A symmetric fan
+      // would put the left item outside the phone, so open into the available
+      // space. Mirror the same fan on the right edge and use a balanced fan in
+      // the middle of the viewport.
+      const nearLeft = anchorPageX < 118;
+      const nearRight = anchorPageX > viewportWidth - 118;
+      const orbit = nearLeft
+        ? { files: [38, upperOrbitY], camera: [82, lowerOrbitY] }
+        : nearRight
+          ? { files: [-82, lowerOrbitY], camera: [-38, upperOrbitY] }
+          : { files: [-48, upperOrbitY], camera: [48, lowerOrbitY] };
+      const setOrbit = (name, [x, y]) => {
+        const angle = Math.atan2(y, x) * 180 / Math.PI;
+        const length = Math.hypot(x, y);
+        attachSheet.style.setProperty(`--pm-attach-${name}-x`, `${x}px`);
+        attachSheet.style.setProperty(`--pm-attach-${name}-y`, `${y}px`);
+        attachSheet.style.setProperty(`--pm-attach-${name}-angle`, `${angle.toFixed(2)}deg`);
+        attachSheet.style.setProperty(`--pm-attach-${name}-length`, `${length.toFixed(2)}px`);
+      };
+      setOrbit('files', orbit.files);
+      setOrbit('camera', orbit.camera);
+    };
+
+    attachSheetPositionCleanup?.();
+    const reanchor = () => {
+      if (!attachSheet.hidden) position();
+    };
+    const visualViewport = window.visualViewport || null;
+    window.addEventListener('resize', reanchor, { passive: true });
+    document.addEventListener('scroll', reanchor, { capture: true, passive: true });
+    visualViewport?.addEventListener('resize', reanchor, { passive: true });
+    visualViewport?.addEventListener('scroll', reanchor, { passive: true });
+    const anchorResizeObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(reanchor)
+      : null;
+    anchorResizeObserver?.observe(form);
+    if (anchorElement) anchorResizeObserver?.observe(anchorElement);
+    const onOutsidePointerDown = (event) => {
+      const node = event.target;
+      if (attachSheet?.contains?.(node) || anchorHitTarget?.contains?.(node)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeAttachSheet();
+    };
+    document.addEventListener('pointerdown', onOutsidePointerDown, true);
+    attachSheetPositionCleanup = () => {
+      window.removeEventListener('resize', reanchor);
+      document.removeEventListener('scroll', reanchor, true);
+      visualViewport?.removeEventListener('resize', reanchor);
+      visualViewport?.removeEventListener('scroll', reanchor);
+      anchorResizeObserver?.disconnect?.();
+      document.removeEventListener('pointerdown', onOutsidePointerDown, true);
+      attachSheetPositionCleanup = null;
+    };
+    requestAnimationFrame(() => {
+      if (openToken !== attachSheetOpenToken || attachSheet.hidden) return;
+      position();
+      attachSheet.classList.add('open');
+      requestAnimationFrame(() => {
+        if (openToken === attachSheetOpenToken && !attachSheet.hidden) position();
+      });
+    });
   }
 
   function closeAttachSheet() {
     if (!attachSheet) return;
+    ++attachSheetOpenToken;
+    attachSheetPositionCleanup?.();
     attachSheet.classList.remove('open');
+    attachBtn?.setAttribute('aria-expanded', 'false');
     setTimeout(() => {
-      if (!attachSheet.classList.contains('open')) attachSheet.hidden = true;
-    }, 180);
+      if (!attachSheet.classList.contains('open')) {
+        attachSheet.hidden = true;
+        contextDock?.classList.remove('pm-attach-popover-open');
+      }
+    }, 360);
   }
+
+  // The composer can also be collapsed by scroll/state code that is outside
+  // this attachment handler. Treat the composer as the sheet's owner so an
+  // animation or route transition can never leave the two orbiting buttons
+  // behind on the page.
+  const attachSheetComposerObserver = form && typeof MutationObserver === 'function'
+    ? new MutationObserver(() => {
+      const composerHidden = form.classList.contains('pm-composer-mode-hidden')
+        || form.getAttribute('aria-hidden') === 'true'
+        || form.hasAttribute('hidden')
+        || form.style.display === 'none'
+        || form.style.visibility === 'hidden';
+      if (composerHidden && (attachSheet?.classList.contains('open') || !attachSheet?.hidden)) {
+        closeAttachSheet();
+      }
+    })
+    : null;
+  attachSheetComposerObserver?.observe(form, {
+    attributes: true,
+    attributeFilter: ['class', 'aria-hidden', 'hidden', 'style'],
+  });
 
   let cameraStream = null;
   let cameraFacingMode = 'environment';
@@ -4072,13 +4207,32 @@ void main() {
     const agentName = String(record?.agentName || 'Background agent');
     const promptText = _mobileBackgroundAgentDetailPrompt(record);
     const source = record?.message && typeof record.message === 'object' ? record.message : {};
-    const processEntries = (Array.isArray(source.processEntries) && source.processEntries.length
-      ? source.processEntries
-      : _mobileBackgroundAgentDetailEvents(record))
-      .filter((entry) => !_isMobileTransientReasoningTraceEntry(entry));
-    const liveTraceEntries = Array.isArray(source.liveTraceEntries) && source.liveTraceEntries.length
-      ? source.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean)
-      : (Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.map(_normalizeMobileRecoveredTraceEntry).filter(Boolean) : []);
+    const processEntries = [];
+    const processKeys = new Set();
+    [
+      ...(Array.isArray(source.processEntries) ? source.processEntries : []),
+      ..._mobileBackgroundAgentDetailEvents(record),
+    ].forEach((entry) => {
+      if (!entry || _isMobileTransientReasoningTraceEntry(entry)) return;
+      const key = String(entry.id || entry.eventKey || entry.extra?.eventKey || `${entry.type || ''}|${entry.text || entry.content || entry.message || ''}`);
+      if (processKeys.has(key)) return;
+      processKeys.add(key);
+      processEntries.push(entry);
+    });
+    const liveTraceEntries = [];
+    const traceKeys = new Set();
+    [
+      ...(Array.isArray(source.liveTraceEntries) ? source.liveTraceEntries : []),
+      ...(Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries : []),
+    ].forEach((entry) => {
+      const normalized = _normalizeMobileRecoveredTraceEntry(entry);
+      if (!normalized) return;
+      const key = String(normalized.id || normalized.eventKey || normalized.extra?.eventKey || `${normalized.type || ''}|${normalized.text || normalized.content || ''}`);
+      if (traceKeys.has(key)) return;
+      traceKeys.add(key);
+      liveTraceEntries.push(normalized);
+    });
+    if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
     const sourceText = String(source?.body?.text || source?.content || source?.text || '').trim();
     const normalizedPrompt = promptText.replace(/\s+/g, ' ').trim();
     const normalizedSourceText = sourceText.replace(/\s+/g, ' ').trim();
@@ -4112,6 +4266,7 @@ void main() {
       body: { ...(source?.body || {}), sender: agentName, text: displayText },
       processEntries,
       liveTraceEntries: traceMessage.liveTraceEntries,
+      fileChanges: record?.fileChanges || source?.fileChanges || null,
       traceExpanded: typeof sideState.backgroundTraceExpanded === 'boolean'
         ? sideState.backgroundTraceExpanded
         : running,
@@ -4586,7 +4741,7 @@ void main() {
       case 'heartbeat':
         return 'streaming';
       case 'tool_call':
-        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+        if (mobileCompactionEventAction(evt) === 'context_compaction') {
           _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
           renderMobileSideSheet();
           return 'streaming';
@@ -4598,10 +4753,9 @@ void main() {
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_result':
-        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+        if (mobileCompactionEventAction(evt) === 'context_compaction') {
           const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
           _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
-          _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
           renderMobileSideSheet();
           return 'streaming';
         }
@@ -5853,19 +6007,36 @@ void main() {
         }
         case 'info':
         case 'ui_preflight':
-          if (evt.message) entries.push({ type: 'info', text: String(evt.message), extra: evt });
+          if (evt.message) {
+            const compactionStatus = mobileCompactionStatusFromText(evt.message);
+            if (compactionStatus) _appendMobileCompactionTrace(replayState, compactionStatus, evt.summary || '', evt);
+            else entries.push({ type: 'info', text: String(evt.message), extra: evt });
+          }
           break;
         case 'heartbeat':
           break;
         case 'tool_call': {
+          if (mobileCompactionEventAction(evt) === 'context_compaction') {
+            _appendMobileCompactionTrace(replayState, 'compacting', '', evt.args || evt);
+            break;
+          }
           applyToolActivityEvent(entries, 'call', evt);
           break;
         }
         case 'tool_result': {
+          if (mobileCompactionEventAction(evt) === 'context_compaction') {
+            const status = String(evt?.extra?.status || evt?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
+            _appendMobileCompactionTrace(replayState, status, evt?.extra?.summary || evt?.summary || '', evt.extra || evt);
+            break;
+          }
           applyToolActivityEvent(entries, 'result', evt);
           break;
         }
         case 'tool_progress': {
+          if (mobileCompactionEventAction(evt) === 'context_compaction') {
+            _appendMobileCompactionTrace(replayState, 'compacting', '', evt.extra || evt);
+            break;
+          }
           applyToolActivityEvent(entries, 'progress', evt);
           break;
         }
@@ -6038,7 +6209,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         updateChatComposerSpace();
         return 'streaming';
       case 'tool_call': {
-        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+        if (mobileCompactionEventAction(evt) === 'context_compaction') {
           _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
           renderThreadSoon();
           return 'streaming';
@@ -6053,10 +6224,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'streaming';
       }
       case 'tool_result': {
-        if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
+        if (mobileCompactionEventAction(evt) === 'context_compaction') {
           const status = String(evt?.extra?.status || '').toLowerCase() || (evt.error ? 'failed' : 'compacted');
           _appendMobileCompactionTrace(aiTurn, status, evt?.extra?.summary || '', evt.extra || evt);
-          _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', status === 'failed' ? 'Context compaction failed' : 'Context compacted', evt);
           renderThreadSoon();
           return 'streaming';
         }
@@ -7779,6 +7949,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       try { body?.classList.remove('pm-chat-voice-occluded'); } catch {}
       try { form?.classList.remove('is-voice-active'); } catch {}
     }
+    attachSheetComposerObserver?.disconnect?.();
+    closeAttachSheet();
     stopCameraCapture();
     _teardownKeyboardController();
   };
@@ -8115,20 +8287,18 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     sideDragY = null;
   }, { passive: true });
 
-  attachBtn?.addEventListener('pointerdown', () => {
-    pendingFileInputTarget = 'chat';
-    closeAttachSheet();
-  });
   attachBtn?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    openAttachSheet({ target: 'chat' });
+    if (attachSheet?.classList.contains('open')) closeAttachSheet();
+    else openAttachSheet({ target: 'chat' });
   });
   attachBtn?.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     pendingFileInputTarget = 'chat';
-    openAttachSheet({ target: 'chat' });
+    if (attachSheet?.classList.contains('open')) closeAttachSheet();
+    else openAttachSheet({ target: 'chat' });
   });
   attachSheetScrim?.addEventListener('click', closeAttachSheet);
   attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
@@ -8138,12 +8308,30 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (action === 'camera') {
         if (target === 'voice') openVoiceCameraCaptureFromSheet();
         else openCameraCapture();
-      } else if (action === 'files-photos' || action === 'photos' || action === 'files') {
+      } else if (action === 'files-photos') {
         pendingFileInputTarget = target === 'voice' ? 'voice' : 'chat';
         closeAttachSheet();
         fileInput?.click();
       }
     });
+  });
+
+  // Keep the textarea focused when the attachment trigger is tapped. The
+  // button deliberately owns the haptic call directly instead of receiving a
+  // native-switch wrapper, because that wrapper would steal focus from the
+  // keyboard before opening the radial menu.
+  attachBtn?.addEventListener('pointerdown', (event) => {
+    const keepComposerFocus = document.activeElement === input;
+    event.preventDefault();
+    if (event.isTrusted) {
+      try { pmHaptic?.(10); } catch {}
+    }
+    if (keepComposerFocus && input && document.activeElement !== input) {
+      try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+    }
+  });
+  attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
+    btn.addEventListener('pointerdown', () => { try { pmHaptic?.(10); } catch {} });
   });
   cameraClose?.addEventListener('click', stopCameraCapture);
   cameraMore?.addEventListener('click', (event) => {

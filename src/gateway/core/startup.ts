@@ -12,7 +12,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { getConfig } from '../../config/config';
+import { getConfig, ensureUniqueAgentDisplayNames } from '../../config/config';
 import { getAgentById } from '../../config/config';
 import { mainChatRoutePatch, parseMainChatRoute } from '../../config/main-chat-route.js';
 import { detectGpu, logGpuStatus } from '../gpu-detector';
@@ -31,6 +31,10 @@ import {
   updateTeamContextReference,
   deleteTeamContextReference,
   getTeamRunHistory,
+  ensureManagedTeamManagerAgent,
+  reconcileOrphanedManagerAgents,
+  inspectManagedTeamRegistry,
+  quarantineOrphanedTeamWorkspaces,
 } from '../teams/managed-teams';
 import { handleManagerConversation } from '../teams/team-manager-runner';
 import { getTeamWorkspacePath, readTeamMemoryContext, initTeamWorkspaceArtifacts } from '../teams/team-workspace';
@@ -712,21 +716,47 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
 
   // Intelligence pipeline jobs are managed via cron/jobs.json — not hardcoded here.
 
-  if (process.env.PROMETHEUS_STARTUP_TEAM_WORKSPACE_VERIFY === '1') {
-    const teamWorkspaceTimer = setTimeout(() => {
+  // Team registration and its runtime artifacts must agree before scheduled
+  // work can use the team. Repair missing active artifacts immediately and
+  // report membership drift; never recreate registry entries from stale dirs.
+  try {
+    const orphanedManagers = reconcileOrphanedManagerAgents();
+    if (orphanedManagers.length > 0) {
+      console.warn(`[TeamRegistry] Detached ${orphanedManagers.length} orphaned manager record(s): ${orphanedManagers.join('; ')}`);
+    }
+    const teams = listManagedTeams();
+    for (const team of teams) {
       try {
-        for (const team of listManagedTeams()) {
-          initTeamWorkspaceArtifacts(team);
+        ensureManagedTeamManagerAgent(team);
+        initTeamWorkspaceArtifacts(team);
+        for (const memberId of team.subagentIds || []) {
+          if (!getAgentById(memberId)) {
+            console.warn(`[TeamRegistry] Team "${team.name}" references missing member ${memberId}.`);
+          }
         }
-        console.log('[TeamWorkspace] Existing team workspace artifacts verified.');
-        startupMark('team workspace artifacts verified');
       } catch (e: any) {
-        console.warn('[TeamWorkspace] Existing team artifact migration skipped:', e?.message || e);
+        console.warn(`[TeamWorkspace] Could not repair artifacts for ${team.id}:`, e?.message || e);
       }
-    }, 10 * 60_000);
-    if (typeof (teamWorkspaceTimer as any).unref === 'function') (teamWorkspaceTimer as any).unref();
+    }
+    const renamedAfterTeamRepair = ensureUniqueAgentDisplayNames();
+    if (renamedAfterTeamRepair.length > 0) {
+      console.log(`[AgentRegistry] Disambiguated ${renamedAfterTeamRepair.length} duplicate label(s) after team repair.`);
+    }
+    const quarantinedWorkspaces = quarantineOrphanedTeamWorkspaces();
+    if (quarantinedWorkspaces.length > 0) {
+      console.warn(`[TeamRegistry] Quarantined ${quarantinedWorkspaces.length} unregistered workspace(s): ${quarantinedWorkspaces.join('; ')}`);
+    }
+    const integrityIssues = inspectManagedTeamRegistry();
+    if (integrityIssues.length > 0) {
+      console.warn(`[TeamRegistry] ${integrityIssues.length} diagnostic issue(s) remain after repair:`);
+      for (const issue of integrityIssues.slice(0, 20)) console.warn(`  - ${issue.code}: ${issue.message}`);
+    }
+    console.log(`[TeamRegistry] Verified ${teams.length} registered team(s) and their manager/workspace artifacts.`);
+    startupMark('team registry/workspaces verified');
+  } catch (e: any) {
+    console.warn('[TeamRegistry] Runtime reconciliation skipped:', e?.message || e);
+    startupMark('team registry verification failed');
   }
-  startupMark('team workspace artifact verification skipped');
 
   heartbeatRunner.start();
   startupMark('heartbeat runner started');

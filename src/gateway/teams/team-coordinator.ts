@@ -74,6 +74,8 @@ export interface CoordinatorConversationOptions {
   replyTargetLabel?: string;
   attachments?: Array<{ base64: string; mimeType: string; name: string }>;
   suppressOriginatingSessionProgress?: boolean;
+  /** Optional allowlist used by preview/read-only scheduled runs. */
+  toolFilter?: string[];
 }
 
 export interface CoordinatorConversationResult {
@@ -672,7 +674,7 @@ export async function runCoordinatorConversation(
         callerContext,
         managerRouting.modelOverride,
         'team_manager',
-        TEAM_MANAGER_TOOL_FILTER,
+        options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
 	        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	        undefined,
 	        managerRouting.providerOverride,
@@ -935,7 +937,7 @@ export async function runCoordinatorConversationDetailed(
           callerContext,
           managerRouting.modelOverride,
           'team_manager',
-          TEAM_MANAGER_TOOL_FILTER,
+          options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
           turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	          undefined,
 	          managerRouting.providerOverride,

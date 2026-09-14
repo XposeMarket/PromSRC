@@ -21,6 +21,22 @@ import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
+import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
+import { RuntimeAdmissionError } from '../runtime-admission';
+import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
+
+async function withAdmissionRetry<T>(work: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await work();
+    } catch (error) {
+      if (!(error instanceof RuntimeAdmissionError) || attempt >= 2) throw error;
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+    }
+  }
+}
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -191,7 +207,7 @@ export const _activeAgentSessions = new Set<string>();
 
 /** Background agent result registry — keyed by task_id returned to callers */
 export interface BgAgentEntry {
-  status: 'running' | 'complete' | 'failed';
+  status: 'running' | 'complete' | 'failed' | 'capacity_limited';
   agentId: string;
   teamId: string;
   startedAt: number;
@@ -212,11 +228,13 @@ function resolveTeamAgentAllowedWorkPaths(team: any, teamWorkspacePath?: string 
     ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
   ];
   const roots = [
-    mainWorkspace,
-    ...(teamWorkspacePath ? [teamWorkspacePath] : []),
+    ...(teamWorkspacePath ? [teamWorkspacePath] : [mainWorkspace]),
   ];
   for (const raw of rawValues) {
-    const value = String(raw || '').trim();
+    // Treat configured globs as directory roots for the path boundary. The
+    // team workspace is always writable; the dirty parent checkout is not
+    // implicitly writable just because it is the global workspace.
+    const value = String(raw || '').trim().replace(/[\\/]\*\*?$/, '');
     if (!value) continue;
     roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspace, value));
   }
@@ -252,6 +270,7 @@ export interface RunAgentResult {
   agentName: string;
   taskId?: string;
   warning?: string;
+  admissionCode?: string;
 }
 
 /**
@@ -260,11 +279,13 @@ export interface RunAgentResult {
  * Previously lived in teams.router.ts — moved here so it can be imported
  * by team-manager-runner.ts without a circular dependency through the router.
  */
-export async function runTeamAgentViaChat(
+async function runTeamAgentViaChatInternal(
   agentId: string,
   task: string,
   teamId: string,
   trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
+  receipt?: TeamRunReceiptWriter,
+  toolFilter?: string[],
 ): Promise<RunAgentResult> {
   if (!_dispatchDeps) {
     return { success: false, result: '', error: 'Dispatch deps not initialized', durationMs: 0, agentName: agentId };
@@ -273,7 +294,22 @@ export async function runTeamAgentViaChat(
   const agent = getAgentById(agentId);
   const agentName = agent?.name ?? agentId;
   const startedAt = Date.now();
+  receipt?.update({
+    status: 'running',
+    executionStartedAt: startedAt,
+    queueWaitMs: Math.max(0, startedAt - receipt.queuedAt),
+    workspacePath: teamId ? getTeamWorkspacePath(teamId) : undefined,
+  });
   const team = teamId ? getManagedTeam(teamId) : null;
+  if (team && String(team.managerAgentId || '').trim() === String(agentId || '').trim()) {
+    return {
+      success: false,
+      result: '',
+      error: `Agent "${agentId}" is the manager for team "${team.name}". Use the manager execution route instead of member dispatch.`,
+      durationMs: 0,
+      agentName,
+    };
+  }
   const sessionId = getUnifiedTeamMemberSessionId(teamId, agentId);
   const dispatchRuntimeSessionId = `team_dispatch_${agentId}_${Date.now()}`;
   registerBrowserSessionMetadata(sessionId, {
@@ -359,6 +395,7 @@ export async function runTeamAgentViaChat(
       callerContext: '',
     },
   });
+  receipt?.update({ taskId: cronTask.id });
   deps.updateTaskStatus(cronTask.id, 'running');
   deps.setTaskStepRunning(cronTask.id, 0);
   deps.broadcastTeamEvent({
@@ -414,7 +451,9 @@ export async function runTeamAgentViaChat(
   // Detect complex multi-step tasks that should use declare_plan
   const taskLower = task.toLowerCase();
   const isComplexTask = /research|gather|analyze|investigate|compile|summarize|identify.*\d+|interview|survey|collect|evaluate/i.test(task);
-  const planRequirementBlock = isComplexTask
+  const isOperationalSmokeTask = /smoke\s*test|read[-\s]?only|runtime\s+health|filesystem\s+(?:health|check|probe)|workspace\s+(?:health|check|probe)|receipt\s+check/i.test(taskLower);
+  const isLeadResearchTask = /\b(?:lead|prospect|company|companies|business|businesses|contact(?:s|\s+info|\s+details)?|website|outreach|source\s+intake)\b/i.test(taskLower);
+  const planRequirementBlock = isComplexTask && !isOperationalSmokeTask
     ? `\n[COMPLEX TASK PLANNING]\nThis is a multi-phase task. Call declare_plan with 2-4 meaningful steps IMMEDIATELY:\n  1. First step for initial research/setup\n  2. Execution/gathering phase\n  3. Compilation/analysis phase\n  4. Formatting/output phase (if needed)\nDeclare these steps now, then execute them in order. Do NOT skip planning for a complex task like this.`
     : '';
 
@@ -653,6 +692,7 @@ export async function runTeamAgentViaChat(
         eventType: payload.eventType,
         data: payload.data,
         taskId: cronTask.id,
+        receiptId: receipt?.runId,
         source: 'team_dispatch',
       });
     }
@@ -683,7 +723,7 @@ export async function runTeamAgentViaChat(
   // tools, which trips Anthropic's OAuth subscription gate.
   try { setActivatedToolCategories(sessionId, []); } catch {}
   try {
-    const result = await deps.handleChat(
+    const result = await withAdmissionRetry(() => deps.handleChat(
       task,
       sessionId,
       (event, data) => broadcastTeamTaskEvent({
@@ -696,11 +736,11 @@ export async function runTeamAgentViaChat(
       callerContext,
       agentRouting.modelOverride,
       'team_subagent',
-      undefined,
+      toolFilter,
       undefined,
       undefined,
       agentRouting.providerOverride,
-    );
+    ));
 
     const finalTask = loadTask(cronTask.id);
     const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
@@ -719,7 +759,9 @@ export async function runTeamAgentViaChat(
 
     // ── Validate result substantiveness for complex tasks ─────────────────────
     let resultWarning = '';
-    if (isComplexTask && success) {
+    // Quality gates are task-specific. Operational smoke tests prove files,
+    // paths, and receipts; they do not promise lead/company extraction.
+    if (isComplexTask && success && !isOperationalSmokeTask) {
       // Check if result is suspiciously empty or just file listings
       const isSuspiciouslyEmpty = /^\s*\[\s*(?:DIR|FILE)\s*\]|^Done\.|^Task complete\.?$/i.test(resultText)
         || resultText.length < 100;
@@ -733,7 +775,10 @@ export async function runTeamAgentViaChat(
       const hasGenericCategories = /^(restaurants|contractors|salons|businesses|companies|services|types|categories|categories of)/im.test(resultText.slice(0, 500));
       const lacksSpecificNames = !/[A-Z][a-z]+\s+(?:[A-Z][a-z]+)?[\s,].*?(?:website|url|phone|contact|email|address)/i.test(resultText);
       const allVariesOrAssumed = (resultText.match(/varies|assumed|likely|probably|may have|could be|not specified/gi) || []).length > 5;
-      const isHollowWork = !hasAuthBlockerEvidence && (hasGenericCategories || lacksSpecificNames || allVariesOrAssumed) && resultText.length > 200;
+      const isHollowWork = isLeadResearchTask
+        && !hasAuthBlockerEvidence
+        && (hasGenericCategories || lacksSpecificNames || allVariesOrAssumed)
+        && resultText.length > 200;
 
       if (isSuspiciouslyEmpty || isMainlyFileList) {
         resultWarning = `⚠️ INCOMPLETE: Result appears to be mostly file listings or placeholder text for a complex task. The agent may not have executed the research/gathering properly.`;
@@ -755,6 +800,7 @@ export async function runTeamAgentViaChat(
         agentName,
         trigger,
         taskId: cronTask.id,
+        receiptId: receipt?.runId,
         success,
         startedAt,
         finishedAt,
@@ -814,6 +860,10 @@ export async function runTeamAgentViaChat(
     };
   } catch (err: any) {
     const finishedAt = Date.now();
+    const admissionCode = err instanceof RuntimeAdmissionError
+      ? err.code
+      : undefined;
+    const retryableAdmission = !!admissionCode;
 
     // ── Issue 9: Record failed run in team history ────────────────────────────
     if (teamId) {
@@ -822,6 +872,7 @@ export async function runTeamAgentViaChat(
         agentName,
         trigger,
         taskId: cronTask.id,
+        receiptId: receipt?.runId,
         success: false,
         startedAt,
         finishedAt,
@@ -831,6 +882,7 @@ export async function runTeamAgentViaChat(
         processEntries: processEntries.length > 0 ? [...processEntries] : undefined,
         liveTraceEntries: liveTraceEntries.length > 0 ? [...liveTraceEntries] : undefined,
         error: String(err?.message ?? err).slice(0, 300),
+        admissionCode,
         quality: {
           zeroToolCalls: stepCount === 0,
           resultLength: 0,
@@ -840,11 +892,12 @@ export async function runTeamAgentViaChat(
       });
     }
 
-    deps.updateTaskStatus(cronTask.id, 'failed', { finalSummary: String(err?.message ?? err).slice(0, 500) });
-    deps.appendJournal(cronTask.id, { type: 'status_push', content: `Failed: ${String(err?.message ?? err).slice(0, 200)}` });
+    deps.updateTaskStatus(cronTask.id, retryableAdmission ? 'queued' : 'failed', { finalSummary: String(err?.message ?? err).slice(0, 500) });
+    deps.appendJournal(cronTask.id, { type: 'status_push', content: `${retryableAdmission ? 'Capacity limited; queued for retry' : 'Failed'}: ${String(err?.message ?? err).slice(0, 200)}` });
     deps.broadcastTeamEvent({
-      type: 'task_failed',
+      type: retryableAdmission ? 'task_capacity_limited' : 'task_failed',
       taskId: cronTask.id,
+      admissionCode,
       teamId,
       agentId,
       agentName,
@@ -877,6 +930,7 @@ export async function runTeamAgentViaChat(
       stepCount,
       agentName,
       taskId: cronTask.id,
+      admissionCode,
     };
   } finally {
     finishLiveRuntime(runtimeId);
@@ -909,6 +963,57 @@ export async function runTeamAgentViaChat(
         // Best-effort handoff back into the room.
       }
     }
+  }
+}
+
+/**
+ * Public team dispatch boundary. All managed-team member executions pass
+ * through one FIFO queue per team before they can acquire model admission.
+ */
+export async function runTeamAgentViaChat(
+  agentId: string,
+  task: string,
+  teamId: string,
+  trigger: 'team_dispatch' | 'cron' = 'team_dispatch',
+  toolFilter?: string[],
+): Promise<RunAgentResult> {
+  const receipt = createTeamRunReceipt({
+    teamId,
+    agentId,
+    agentName: String(getAgentById(agentId)?.name || agentId),
+    trigger,
+  });
+  const finalizeReceipt = (result: RunAgentResult): RunAgentResult => {
+    const finishedAt = Date.now();
+    const capacityLimited = !!result.admissionCode;
+    receipt.update({
+      status: result.success ? 'complete' : capacityLimited ? 'capacity_limited' : 'failed',
+      finishedAt,
+      durationMs: Math.max(0, finishedAt - receipt.queuedAt),
+      taskId: result.taskId,
+      stepCount: result.stepCount,
+      errorCategory: result.admissionCode || (result.error ? 'TEAM_EXECUTION_FAILED' : undefined),
+      error: result.error,
+      resultPreview: String(result.result || '').slice(0, 1200) || undefined,
+      acceptanceState: result.success ? 'pending' : capacityLimited ? 'retryable' : 'rejected',
+    });
+    return result;
+  };
+  if (!teamId) return finalizeReceipt(await runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter));
+  try {
+    return finalizeReceipt(await teamExecutionQueue.run(teamId, () => runTeamAgentViaChatInternal(agentId, task, teamId, trigger, receipt, toolFilter)));
+  } catch (error: any) {
+    const message = String(error?.message || error || 'Team execution could not be admitted.');
+    const admissionCode = error instanceof TeamExecutionQueueError ? error.code : undefined;
+    return finalizeReceipt({
+      success: false,
+      result: '',
+      error: message,
+      durationMs: 0,
+      stepCount: 0,
+      agentName: String(getAgentById(agentId)?.name || agentId),
+      admissionCode,
+    });
   }
 }
 
