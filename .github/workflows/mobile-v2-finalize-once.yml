@@ -31,33 +31,27 @@ jobs:
           path = Path('src/gateway/core/server.ts')
           text = path.read_text(encoding='utf-8')
 
+          cache_section = text.split('function getRawStaticCacheControl', 1)[1].split('function isStreamingHttpRequest', 1)[0]
           old_cache = "pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/')"
-          new_cache = "pathname === '/' || pathname === '/index.html' || pathname === '/mobile' || pathname.startsWith('/mobile/') || pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')"
-          if old_cache in text:
+          new_cache = old_cache + " || pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')"
+          if "pathname === '/mobile-v2'" not in cache_section:
+              if old_cache not in text:
+                  raise SystemExit('Could not find mobile cache-control route guard')
               text = text.replace(old_cache, new_cache, 1)
-          elif new_cache not in text:
-              raise SystemExit('Could not find mobile cache-control route guard')
 
-          old_route = """  } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
-            // Mobile has a dedicated document so it never parses the desktop shell or
-            // desktop styles. Keep index.html as a source/distribution rollback path.
-            push(webUiRoot, 'mobile.html');
-            push(webUiRoot, 'index.html');
-          """
-          new_route = """  } else if (pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {
-            // Mobile V2 is a parallel client. Keep it isolated from legacy /mobile so
-            // the existing app remains the rollback path until parity is proven.
-            push(webUiRoot, 'mobile-v2.html');
-          } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {
-            // Mobile has a dedicated document so it never parses the desktop shell or
-            // desktop styles. Keep index.html as a source/distribution rollback path.
-            push(webUiRoot, 'mobile.html');
-            push(webUiRoot, 'index.html');
-          """
-          if old_route in text:
-              text = text.replace(old_route, new_route, 1)
-          elif new_route not in text:
-              raise SystemExit('Could not find legacy mobile static route block')
+          legacy_marker = "  } else if (pathname === '/mobile' || pathname.startsWith('/mobile/')) {"
+          v2_marker = "  } else if (pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {"
+          if v2_marker not in text:
+              if legacy_marker not in text:
+                  raise SystemExit('Could not find legacy mobile route marker')
+              replacement = (
+                  "  } else if (pathname === '/mobile-v2' || pathname.startsWith('/mobile-v2/')) {\n"
+                  "    // Mobile V2 is a parallel client. Keep it isolated from legacy /mobile so\n"
+                  "    // the existing app remains the rollback path until parity is proven.\n"
+                  "    push(webUiRoot, 'mobile-v2.html');\n"
+                  + legacy_marker
+              )
+              text = text.replace(legacy_marker, replacement, 1)
 
           path.write_text(text, encoding='utf-8')
           PY
