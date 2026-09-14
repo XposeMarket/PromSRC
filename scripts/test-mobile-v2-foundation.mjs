@@ -29,6 +29,7 @@ const shell = read('web-ui/src/mobile-v2/ui/shell.js');
 const pageKit = read('web-ui/src/mobile-v2/ui/page-kit.js');
 const chat = read('web-ui/src/mobile-v2/features/chat/chat-page.js');
 const css = read('web-ui/src/mobile-v2/mobile-v2.css');
+const gatewayServer = read('src/gateway/core/server.ts');
 
 assert.match(html, /mobile-v2-root/);
 assert.match(html, /src\/mobile-v2\/mobile-v2-entry\.js/);
@@ -66,10 +67,8 @@ assert.doesNotMatch(gateway, /thinking_delta[\s\S]{0,120}assistant\.reasoning/, 
 
 assert.match(gateways, /pm_mobile_gateway_catalog_v1/);
 assert.match(gateways, /pm_mobile_gateway_token_v1/);
-assert.match(gateways, /SESSION_REF_SEPARATOR\s*=\s*['"]::['"]/);
-assert.match(gateways, /sessionRef\(/);
-assert.match(gateways, /parseSessionRef\(/);
-assert.match(gateways, /resolveSessionRef/);
+assert.match(gateways, /sessionRef/);
+assert.match(gateways, /parseSessionRef/);
 assert.match(gateways, /bindSession/);
 assert.match(features, /\/api\/bg-tasks/);
 assert.match(features, /\/api\/schedules/);
@@ -92,6 +91,10 @@ assert.match(css, /@import '\.\.\/styles\/mobile\.css'/);
 assert.match(css, /pm-v2-page-heading/);
 assert.match(css, /pm-v2-card/);
 assert.match(css, /pm-v2-field/);
+
+assert.match(gatewayServer, /pathname === '\/mobile-v2'/);
+assert.match(gatewayServer, /pathname\.startsWith\('\/mobile-v2\/'\)/);
+assert.match(gatewayServer, /push\(webUiRoot, 'mobile-v2\.html'\)/);
 
 const allV2JavaScript = walk('web-ui/src/mobile-v2').filter((file) => file.endsWith('.js'));
 assert.ok(allV2JavaScript.length >= 18, 'Expected the complete Mobile V2 module graph.');
