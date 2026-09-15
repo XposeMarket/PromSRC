@@ -26,6 +26,8 @@ const gateways = read('web-ui/src/mobile-v2/core/gateway-manager.js');
 const features = read('web-ui/src/mobile-v2/core/feature-client.js');
 const store = read('web-ui/src/mobile-v2/core/chat-store.js');
 const shell = read('web-ui/src/mobile-v2/ui/shell.js');
+const drawerBootstrap = read('web-ui/src/mobile-v2/ui/drawer-bootstrap.js');
+const drawerParity = read('web-ui/src/mobile-v2/ui/drawer-parity.js');
 const pageKit = read('web-ui/src/mobile-v2/ui/page-kit.js');
 const chat = read('web-ui/src/mobile-v2/features/chat/chat-page.js');
 const css = read('web-ui/src/mobile-v2/mobile-v2.css');
@@ -35,6 +37,7 @@ const theme = read('web-ui/src/mobile-v2/core/theme.js');
 const haptics = read('web-ui/src/mobile-v2/ui/haptics.js');
 const manifestV2 = read('web-ui/manifest-v2.webmanifest');
 const serviceWorkerV2 = read('web-ui/service-worker-v2.js');
+const legacyServiceWorker = read('web-ui/service-worker.js');
 const productionBuilder = read('scripts/build-web-ui-production.mjs');
 const productionBuild = read('scripts/build-web-ui-production.mjs');
 
@@ -44,6 +47,7 @@ assert.match(entry, /GatewayManager/);
 assert.match(entry, /FeatureClient/);
 assert.match(entry, /ChatStore/);
 assert.match(entry, /createMobileV2Router/);
+assert.match(entry, /attachMobileV2DrawerBootstrap/);
 
 for (const route of ['voice', 'tasks', 'hub', 'schedule', 'teams', 'subagents', 'proposals', 'more', 'creative', 'gateways', 'pair', 'settings']) {
   assert.match(router, new RegExp(route), `Mobile V2 router must own ${route}.`);
@@ -90,6 +94,13 @@ assert.match(shell, /pm-drawer/);
 assert.match(shell, /pm-session-row/);
 assert.match(shell, /Promise\.allSettled/);
 assert.match(shell, /Gateway Connections/);
+assert.match(drawerBootstrap, /attachMobileV2DrawerParity/);
+assert.match(drawerBootstrap, /refreshBaseSessions/);
+assert.match(drawerBootstrap, /onSessionClickCapture/);
+assert.match(drawerParity, /Search chats/);
+assert.match(drawerParity, /Settled/);
+assert.match(drawerParity, /Pinned/);
+assert.match(drawerParity, /Projects/);
 assert.match(chat, /uploadBinaryFile/);
 assert.match(chat, /pm-v2-attachment/);
 assert.match(chat, /voice/);
@@ -117,8 +128,13 @@ assert.match(theme, /base:\s*['"]light['"]/);
 assert.match(haptics, /input\.setAttribute\(['"]switch['"]/);
 assert.match(manifestV2, /"id"\s*:\s*"\/mobile-v2\/"/);
 assert.match(manifestV2, /"start_url"\s*:\s*"\/mobile-v2\/chat"/);
-assert.match(serviceWorkerV2, /prometheus-v2-static/);
-assert.match(serviceWorkerV2, /prometheus-v2-runtime/);
+assert.match(manifestV2, /"scope"\s*:\s*"\/mobile-v2\/"/);
+assert.match(serviceWorkerV2, /CACHE_PREFIX = 'pm-mobile-v2-'/);
+assert.match(serviceWorkerV2, /drawer-bootstrap\.js/);
+assert.match(serviceWorkerV2, /mobile-v2-drawer\.css/);
+assert.doesNotMatch(serviceWorkerV2, /CACHE_PREFIX = 'prometheus-/, 'V2 cache prefix must not be owned by the legacy worker.');
+assert.match(legacyServiceWorker, /k\.startsWith\('prometheus-'\)/);
+assert.doesNotMatch('pm-mobile-v2-static-test', /^prometheus-/, 'V2 cache names must remain outside the legacy purge prefix.');
 assert.match(productionBuilder, /manifest-v2\.webmanifest/);
 assert.match(productionBuilder, /service-worker-v2\.js/);
 
@@ -131,4 +147,4 @@ for (const file of allV2JavaScript) {
   assert.doesNotMatch(source, /from\s+['"][^'"]*\/mobile\//, `${file} must stay runtime-isolated from legacy mobile modules.`);
 }
 
-console.log(`mobile-v2 complete-app contract passed: ${allV2JavaScript.length} isolated modules, full route surface, target-aware transport`);
+console.log(`mobile-v2 complete-app contract passed: ${allV2JavaScript.length} isolated modules, full route surface, target-aware transport, isolated PWA`);
