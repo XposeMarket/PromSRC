@@ -1,4 +1,4 @@
-const V2_PWA_VERSION = 'pm-v2-2026-09-15-installable-v1';
+const V2_PWA_VERSION = 'pm-v2-2026-09-15-installable-v2';
 const V2_SW_URL = `/service-worker-v2.js?v=${encodeURIComponent(V2_PWA_VERSION)}`;
 const listeners = new Set();
 let deferredInstallPrompt = null;
