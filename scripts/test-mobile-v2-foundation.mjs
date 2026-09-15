@@ -30,6 +30,12 @@ const pageKit = read('web-ui/src/mobile-v2/ui/page-kit.js');
 const chat = read('web-ui/src/mobile-v2/features/chat/chat-page.js');
 const css = read('web-ui/src/mobile-v2/mobile-v2.css');
 const gatewayServer = read('src/gateway/core/server.ts');
+const pwa = read('web-ui/src/mobile-v2/core/pwa.js');
+const theme = read('web-ui/src/mobile-v2/core/theme.js');
+const haptics = read('web-ui/src/mobile-v2/ui/haptics.js');
+const manifestV2 = read('web-ui/manifest-v2.webmanifest');
+const serviceWorkerV2 = read('web-ui/service-worker-v2.js');
+const productionBuilder = read('scripts/build-web-ui-production.mjs');
 const productionBuild = read('scripts/build-web-ui-production.mjs');
 
 assert.match(html, /mobile-v2-root/);
@@ -102,6 +108,19 @@ assert.match(gatewayServer, /push\(webUiRoot, 'mobile-v2\.html'\)/);
 // the legacy asset build id or service-worker cache namespace.
 assert.match(productionBuild, /relative !== 'mobile-v2\.html'/);
 assert.match(productionBuild, /!relative\.startsWith\('src\/mobile-v2\/'\)/);
+
+assert.match(html, /manifest-v2\.webmanifest/);
+assert.match(pwa, /service-worker-v2\.js/);
+assert.match(pwa, /scope:\s*['"]\/mobile-v2\//);
+assert.match(theme, /Prometheus One/);
+assert.match(theme, /base:\s*['"]light['"]/);
+assert.match(haptics, /input\.setAttribute\(['"]switch['"]/);
+assert.match(manifestV2, /"id"\s*:\s*"\/mobile-v2\/"/);
+assert.match(manifestV2, /"start_url"\s*:\s*"\/mobile-v2\/chat"/);
+assert.match(serviceWorkerV2, /prometheus-v2-static/);
+assert.match(serviceWorkerV2, /prometheus-v2-runtime/);
+assert.match(productionBuilder, /manifest-v2\.webmanifest/);
+assert.match(productionBuilder, /service-worker-v2\.js/);
 
 const allV2JavaScript = walk('web-ui/src/mobile-v2').filter((file) => file.endsWith('.js'));
 assert.ok(allV2JavaScript.length >= 18, 'Expected the complete Mobile V2 module graph.');

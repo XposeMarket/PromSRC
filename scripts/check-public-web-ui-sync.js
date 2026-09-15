@@ -119,7 +119,7 @@ function verifyGeneratedWebUiIsCurrent() {
   }
 
   // PWA assets that live at the site root, not under static/.
-  const ROOT_LEVEL_FILES = ['manifest.webmanifest'];
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'manifest-v2.webmanifest', 'service-worker-v2.js'];
   for (const name of ROOT_LEVEL_FILES) {
     const sourcePath = path.join(SRC_WEB_UI, name);
     if (!fs.existsSync(sourcePath)) continue;

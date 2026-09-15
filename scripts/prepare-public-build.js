@@ -136,7 +136,7 @@ function expectedPublicWebUiFiles() {
     const relative = path.relative(sourceRoot, sourcePath).replace(/\\/g, '/');
     expected.add(`static/${relative}`);
   }
-  for (const name of ['manifest.webmanifest', 'service-worker.js']) {
+  for (const name of ['manifest.webmanifest', 'service-worker.js', 'manifest-v2.webmanifest', 'service-worker-v2.js']) {
     if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
   }
   const assetManifestPath = path.join(OUT_ROOT, 'asset-manifest.json');
@@ -409,7 +409,7 @@ function buildPublicWebUi() {
   // Root-level web-ui files that must be served at the site root (PWA contract).
   // The service worker must be at "/" to claim scope "/"; the manifest must be
   // at a stable path that <link rel="manifest"> can resolve.
-  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js'];
+  const ROOT_LEVEL_FILES = ['manifest.webmanifest', 'service-worker.js', 'manifest-v2.webmanifest', 'service-worker-v2.js'];
   for (const name of ROOT_LEVEL_FILES) {
     const srcFile = path.join(SRC_WEB_UI, name);
     if (fs.existsSync(srcFile)) {

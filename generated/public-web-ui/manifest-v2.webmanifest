@@ -1,0 +1,41 @@
+{
+  "name": "Prometheus Mobile V2",
+  "short_name": "Prometheus V2",
+  "id": "/mobile-v2/",
+  "start_url": "/mobile-v2/chat",
+  "scope": "/mobile-v2/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "portrait",
+  "background_color": "#0b0b0d",
+  "theme_color": "#0b0b0d",
+  "description": "Prometheus Mobile V2 — isolated test build for the next Prometheus mobile client.",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/Prometheus.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Main Chat", "short_name": "Chat", "url": "/mobile-v2/chat" },
+    { "name": "Voice", "short_name": "Voice", "url": "/mobile-v2/voice" },
+    { "name": "Tasks", "short_name": "Tasks", "url": "/mobile-v2/tasks" },
+    { "name": "Schedule", "short_name": "Schedule", "url": "/mobile-v2/schedule" },
+    { "name": "Teams", "short_name": "Teams", "url": "/mobile-v2/teams" }
+  ]
+}
