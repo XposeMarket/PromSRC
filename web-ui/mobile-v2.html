@@ -1,17 +1,28 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-skin="light">
+<html lang="en" data-theme="light" data-skin="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-visual">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Prometheus">
+  <meta name="apple-mobile-web-app-title" content="Prometheus V2">
   <meta name="theme-color" content="#0b0b0d">
   <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="/manifest-v2.webmanifest">
   <link rel="apple-touch-icon" href="/assets/Prometheus.png">
+  <script>
+    (() => {
+      try {
+        const saved = localStorage.getItem('prometheus_theme') || 'dark';
+        const skin = ['dark','gray','blue','purple'].includes(saved) ? saved : 'dark';
+        document.documentElement.setAttribute('data-skin', skin);
+        document.documentElement.setAttribute('data-theme', skin === 'dark' ? 'light' : 'dark');
+      } catch {}
+    })();
+  </script>
   <link rel="stylesheet" href="/src/mobile-v2/mobile-v2.css">
-  <title>Prometheus</title>
+  <title>Prometheus V2</title>
   <style>
     html,body{margin:0;min-height:100%;background:#000;color:#f7f7f8}
     #mobile-v2-root:empty{min-height:100dvh;background:#000}
