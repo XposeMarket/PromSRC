@@ -5,6 +5,7 @@ import { bootMobileV2Theme } from './core/theme.js';
 import './core/pwa.js';
 import { createMobileV2Router } from './app/router.js';
 import { createMobileV2Shell } from './ui/shell.js';
+import { attachMobileV2DrawerBootstrap } from './ui/drawer-bootstrap.js';
 
 const root = document.getElementById('mobile-v2-root');
 if (!root) throw new Error('Prometheus Mobile V2 root was not found.');
@@ -17,6 +18,7 @@ const chatStore = new ChatStore();
 const shell = createMobileV2Shell({ root, gateways });
 const router = createMobileV2Router({ shell, gateways, features, chatStore });
 shell.setNavigate((route) => router.navigate(route));
+const disposeDrawerParity = attachMobileV2DrawerBootstrap({ root, shell, gateways, router });
 router.start();
 
 window.addEventListener('pm-v2-device-revoked', (event) => {
@@ -27,6 +29,7 @@ window.addEventListener('pm-v2-device-revoked', (event) => {
 });
 
 window.addEventListener('beforeunload', () => {
+  disposeDrawerParity?.();
   router.dispose();
   shell.dispose();
 }, { once: true });
