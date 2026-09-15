@@ -1,20 +1,28 @@
 /* Prometheus Mobile V2 service worker.
  * Scope: /mobile-v2/
- * This intentionally uses separate cache names from the legacy Prometheus PWA.
+ * Cache names intentionally do not begin with `prometheus-`, because the
+ * legacy root-scoped worker owns that prefix and purges old matching caches.
  */
-const VERSION = 'pm-v2-2026-09-15-installable-v1';
-const STATIC_CACHE = `prometheus-v2-static-${VERSION}`;
-const RUNTIME_CACHE = `prometheus-v2-runtime-${VERSION}`;
+const VERSION = 'pm-v2-2026-09-15-installable-v2';
+const CACHE_PREFIX = 'pm-mobile-v2-';
+const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
+const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${VERSION}`;
 
 const PRECACHE = [
   '/mobile-v2/chat',
   '/manifest-v2.webmanifest',
   '/assets/Prometheus.png',
   '/src/mobile-v2/mobile-v2-entry.js',
+  '/src/mobile-v2/ui/drawer-bootstrap.js',
+  '/src/mobile-v2/ui/drawer-parity.js',
   '/src/mobile-v2/mobile-v2.css',
+  '/src/mobile-v2/mobile-v2-drawer.css',
   '/src/styles/mobile.css',
   '/static/mobile-v2/mobile-v2-entry.js',
+  '/static/mobile-v2/ui/drawer-bootstrap.js',
+  '/static/mobile-v2/ui/drawer-parity.js',
   '/static/mobile-v2/mobile-v2.css',
+  '/static/mobile-v2/mobile-v2-drawer.css',
   '/static/styles/mobile.css'
 ];
 
@@ -32,7 +40,7 @@ self.addEventListener('activate', (event) => {
     const keys = await caches.keys();
     await Promise.all(
       keys
-        .filter((key) => key.startsWith('prometheus-v2-') && !key.endsWith(VERSION))
+        .filter((key) => key.startsWith(CACHE_PREFIX) && !key.endsWith(VERSION))
         .map((key) => caches.delete(key))
     );
     await self.clients.claim();
@@ -112,7 +120,7 @@ self.addEventListener('message', (event) => {
   if (event.data === 'pm-v2-purge-caches') {
     event.waitUntil((async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((key) => key.startsWith('prometheus-v2-')).map((key) => caches.delete(key)));
+      await Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX)).map((key) => caches.delete(key)));
     })());
   }
 });
