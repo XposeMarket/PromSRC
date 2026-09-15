@@ -139,3 +139,5 @@ jobs:
           fi
           git commit -m "feat(mobile-v2): wire drawer session parity"
           git push origin HEAD:mobile-v2-foundation
+
+# trigger: 2026-09-15
