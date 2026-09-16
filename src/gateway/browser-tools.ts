@@ -2147,7 +2147,13 @@ export async function browserDoctor(sessionId: string): Promise<string> {
 
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
-  const selectedTarget = getBrowserSessionMetadata(resolved).ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus';
+  // Let Electron re-establish the lane before selecting the diagnostic branch;
+  // this also makes doctor useful for subagent tabs after a gateway restart.
+  await recoverInHouseSessionMapping(resolved);
+  const metadata = getBrowserSessionMetadata(resolved);
+  const selectedTarget = shouldUseInHouseBrowser(resolved)
+    ? 'inhouse'
+    : (metadata.ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus');
   if (selectedTarget === 'user' || session?.transport === 'extension') {
     const relay = getUserChromeRelay();
     const status = relay.getStatus();
@@ -2547,6 +2553,118 @@ async function isPortOpen(port: number, timeoutMs: number = 1500): Promise<boole
   }
 }
 
+function escapePowerShellSingleQuoted(value: string): string {
+  return String(value || '').replace(/'/g, "''");
+}
+
+function escapeRegExp(value: string): string {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function readCommandLineOption(commandLine: string, option: string): string {
+  const pattern = new RegExp(
+    `(?:^|\\s)${escapeRegExp(option)}(?:=|\\s+)("[^"]*"|'[^']*'|[^\\s]+)`,
+    'i',
+  );
+  const match = String(commandLine || '').match(pattern);
+  return String(match?.[1] || '').replace(/^["']|["']$/g, '').trim();
+}
+
+function normalizeCommandLinePath(value: string): string {
+  return path.resolve(String(value || '').trim().replace(/^["']|["']$/g, ''))
+    .replace(/[\\/]+/g, '\\')
+    .replace(/[\\]+$/, '')
+    .toLowerCase();
+}
+
+function isPrometheusDebugProcess(commandLine: string, debugPort: number, profileDir: string): boolean {
+  const port = readCommandLineOption(commandLine, '--remote-debugging-port');
+  const profile = readCommandLineOption(commandLine, '--user-data-dir');
+  return port === String(debugPort)
+    && !!profile
+    && normalizeCommandLinePath(profile) === normalizeCommandLinePath(profileDir);
+}
+
+async function execFileCapture(command: string, args: string[], options: Record<string, any> = {}): Promise<{ stdout: string; stderr: string }> {
+  const { execFile } = await import('child_process');
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, windowsHide: true }, (error: any, stdout: any, stderr: any) => {
+      if (error) {
+        error.stdout = String(stdout || '');
+        error.stderr = String(stderr || '');
+        reject(error);
+        return;
+      }
+      resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+    });
+  });
+}
+
+/** Find only the browser process that owns Prometheus' exact debugger port and profile. */
+async function findPrometheusDebugProcesses(debugPort: number, profileDir: string): Promise<Array<{ pid: number; commandLine: string }>> {
+  const portToken = `--remote-debugging-port=${debugPort}`;
+  const profileToken = path.resolve(profileDir);
+  try {
+    if (process.platform === 'win32') {
+      const script = `$port='${escapePowerShellSingleQuoted(portToken)}'; $targetProfile='${escapePowerShellSingleQuoted(profileToken)}'; ` +
+        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + $port + '*') -and $_.CommandLine -like ('*' + $targetProfile + '*') } | ` +
+        `Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress`;
+      const result = await execFileCapture('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
+      if (!result.stdout.trim()) return [];
+      const parsed = JSON.parse(result.stdout.replace(/^\uFEFF/, ''));
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows
+        .map((row: any) => ({ pid: Number(row?.ProcessId || 0), commandLine: String(row?.CommandLine || '') }))
+        .filter((row) => row.pid > 0 && row.pid !== process.pid && isPrometheusDebugProcess(row.commandLine, debugPort, profileDir));
+    }
+    const result = await execFileCapture('ps', ['-eo', 'pid=,args='], { timeout: 5000, maxBuffer: 2 * 1024 * 1024 });
+    return result.stdout.split(/\r?\n/).flatMap((line) => {
+      const match = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!match || !isPrometheusDebugProcess(match[2], debugPort, profileToken)) return [];
+      const pid = Number(match[1]);
+      return pid > 0 && pid !== process.pid ? [{ pid, commandLine: match[2] }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function isPrometheusManagedChromeProfile(profileDir: string): boolean {
+  const resolved = path.resolve(profileDir);
+  const root = path.resolve(os.homedir(), '.prometheus');
+  const relative = path.relative(root, resolved);
+  // The default and background profiles live below .prometheus. An explicit
+  // opt-in is required before recovery can ever target a custom profile path.
+  return (
+    !!relative
+    && !relative.startsWith('..')
+    && !path.isAbsolute(relative)
+  ) || process.env.PROMETHEUS_ALLOW_CDP_RECOVERY === '1';
+}
+
+async function recoverStuckPrometheusChrome(debugPort: number, profileDir: string): Promise<boolean> {
+  if (!isPrometheusManagedChromeProfile(profileDir)) return false;
+  const processes = await findPrometheusDebugProcesses(debugPort, profileDir);
+  if (!processes.length) return false;
+  let terminated = false;
+  for (const processInfo of processes) {
+    try {
+      if (process.platform === 'win32') {
+        await execFileCapture('taskkill.exe', ['/PID', String(processInfo.pid), '/T', '/F'], { timeout: 8000 });
+      } else {
+        process.kill(processInfo.pid, 'SIGTERM');
+      }
+      terminated = true;
+    } catch {}
+  }
+  if (!terminated) return false;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (!(await isPortOpen(debugPort, 500))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return !(await isPortOpen(debugPort, 500));
+}
+
 async function connectOverCDPWithTimeout(pw: any, debugPort: number, timeoutMs: number = 5000): Promise<any> {
   return await pw.chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, { timeout: timeoutMs });
 }
@@ -2650,9 +2768,17 @@ async function callInHouseBrowser<T = any>(route: string, payload: Record<string
   } finally {
     if (timeout) clearTimeout(timeout);
   }
-  const data: any = await resp.json().catch(() => ({}));
+  let data: any;
+  try {
+    data = await resp.json();
+  } catch {
+    throw new Error(`Invalid JSON from in-house browser (${route}); session=${String(payload.sessionId || '')}.`);
+  }
   if (!resp.ok || data?.ok === false || data?.error) {
     throw new Error(String(data?.error || `In-house browser RPC failed (${resp.status}).`));
+  }
+  if (data?.ok !== true || !Object.prototype.hasOwnProperty.call(data, 'result')) {
+    throw new Error(`Invalid response from in-house browser (${route}); session=${String(payload.sessionId || '')}: missing success result.`);
   }
   return data?.result as T;
 }
@@ -2796,6 +2922,46 @@ function shouldUseInHouseBrowser(sessionId: string): boolean {
   const metadata = getBrowserSessionMetadata(resolved);
   if (metadata.ownerType === 'main') return getMainBrowserTarget(resolved) === 'inhouse';
   return inHouseTargetSessions.has(resolved);
+}
+
+/**
+ * Rebuild the gateway-side mapping only after Electron confirms that the
+ * requested session still owns a live native tab. This is intentionally a
+ * read-only recovery path: it never opens a tab, changes lanes, or guesses
+ * from another session's globally presented state.
+ */
+async function recoverInHouseSessionMapping(sessionId: string): Promise<{ recovered?: boolean; error?: string } | null> {
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved) || sessions.has(resolved)) return null;
+  const targetIsKnownInHouse = shouldUseInHouseBrowser(resolved);
+  // A gateway restart can lose the subagent target preference even though the
+  // Electron process still owns the exact native tab. Probing /state with the
+  // requested session id is safe and lets Electron remain authoritative.
+  if (!isInHouseBrowserAvailable()) {
+    return targetIsKnownInHouse
+      ? { error: `ERROR: [browser_connection_failed] Could not recover session=${resolved}, target=inhouse: Electron native browser RPC is unavailable.` }
+      : null;
+  }
+  try {
+    const state: any = await callInHouseBrowser('state', { sessionId: resolved });
+    const returnedSessionId = String(state?.sessionId || '').trim();
+    if (returnedSessionId && returnedSessionId !== resolved) {
+      return { error: `ERROR: [browser_target_mismatch] Native browser returned a different session; requested=${resolved}, target=inhouse.` };
+    }
+    const tabs = Array.isArray(state?.tabs) ? state.tabs : [];
+    const hasNativeTab = tabs.length > 0 || !!String(state?.activeTabId || '').trim();
+    if (state?.attached !== true || (!hasNativeTab && !String(state?.url || '').trim())) {
+      if (!targetIsKnownInHouse) return null;
+      const hadPage = !!getPersistedBrowserSessionRecord(resolved);
+      return { error: `ERROR: [${hadPage ? 'browser_session_unavailable' : 'browser_not_opened'}] No active native browser for session=${resolved}, target=inhouse. ${hadPage ? 'Saved page metadata exists, but Electron has no attached session.' : 'Open a browser for this chat first.'}` };
+    }
+    syncInHouseBrowserState(resolved, state);
+    return { recovered: true };
+  } catch (err: any) {
+    return targetIsKnownInHouse
+      ? { error: `ERROR: [browser_connection_failed] Could not recover session=${resolved}, target=inhouse: ${err.message}` }
+      : null;
+  }
 }
 
 // Clear, actionable message for tools not yet ported to the in-house browser, so
@@ -2978,12 +3144,17 @@ async function connectOrLaunchPersistentChrome(
     } catch (e: any) {
       const message = String(e?.message || e);
       console.warn(`[Browser] Port ${debugPort} responded but CDP connect failed: ${message}`);
+      const recovered = await recoverStuckPrometheusChrome(debugPort, profileDir);
+      if (recovered) {
+        console.warn(`[Browser] Reclaimed wedged Prometheus Chrome on port ${debugPort}; launching a fresh debugger target.`);
+      } else {
       throw new Error(
         `Chrome debug port ${debugPort} is responding but Playwright could not attach within 5s. ` +
         `This usually means the existing ${getBrowserProfileLabel(profileKind)} process is wedged. ` +
         `Close Chrome for profile ${profileDir} or restart the browser target, then try browser_open again. ` +
         `Details: ${message.split('\n')[0] || message}`
       );
+      }
     }
   }
 
@@ -4913,6 +5084,7 @@ export async function browserSetProfileTarget(
   const profileDirectory = normalizeChromeProfileDirectory(options?.profileDirectory);
   const inhouseProfile = normalizeInHouseProfileId(options?.inhouseProfile);
   const currentTarget = getMainBrowserTarget(resolved);
+  const wasUsingInHouse = currentTarget === 'inhouse' || !!getInHouseSession(resolved);
   mainBrowserTargetPreferences.set(resolved, nextTarget);
   if (profileDirectory) mainBrowserProfileDirectoryPreferences.set(resolved, profileDirectory);
   if (nextTarget === 'inhouse' && inhouseProfile) inHouseProfilePreferences.set(resolved, inhouseProfile);
@@ -4927,9 +5099,9 @@ export async function browserSetProfileTarget(
     try { await existing.page.close(); } catch {}
     try { await existing.browser.close(); } catch {}
   }
-  if (nextTarget !== 'inhouse' && getInHouseSession(resolved) && options?.closeExisting !== false) {
+  if (nextTarget !== 'inhouse' && wasUsingInHouse && options?.closeExisting !== false) {
     clearInHouseSession(resolved);
-    await callInHouseBrowser('hide', { sessionId: resolved }).catch(() => {});
+    await callInHouseBrowser('close', { sessionId: resolved }).catch(() => callInHouseBrowser('hide', { sessionId: resolved }).catch(() => {}));
   }
   const active = sessions.get(resolved);
   const activeInHouse = getInHouseSession(resolved);
@@ -4974,6 +5146,8 @@ function formatInHouseTabs(session: InHouseBrowserSession): string {
 
 export async function browserListTabs(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) {
     const result: any = await callInHouseBrowser('tabs', { sessionId: resolved });
     const inHouse = upsertInHouseSession(resolved, result);
@@ -4991,6 +5165,8 @@ export async function browserListTabs(sessionId: string): Promise<string> {
 
 export async function browserSelectTab(sessionId: string, index: number): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) {
     const result: any = await callInHouseBrowser('select-tab', { sessionId: resolved, index: Number(index) });
     const inHouse = upsertInHouseSession(resolved, result);
@@ -5026,10 +5202,31 @@ export async function browserSelectTab(sessionId: string, index: number): Promis
 
 export async function browserNewTab(sessionId: string, url?: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) {
-    const result: any = await callInHouseBrowser('new-tab', { sessionId: resolved, url: String(url || '').trim() });
-    const inHouse = upsertInHouseSession(resolved, result);
-    return `Opened new Prometheus in-house browser tab.\n${formatInHouseTabs(inHouse)}`;
+    const before = getInHouseSession(resolved);
+    const beforeIds = new Set((before?.tabs || []).map((tab) => tab.id));
+    const requestedUrl = String(url || '').trim();
+    try {
+      const result: any = await callInHouseBrowser('new-tab', { sessionId: resolved, url: requestedUrl });
+      const inHouse = upsertInHouseSession(resolved, result);
+      const warning = String(result?.operationWarning || '').trim();
+      return `Opened new Prometheus in-house browser tab.${warning ? `\nWARNING: ${warning}` : ''}\n${formatInHouseTabs(inHouse)}`;
+    } catch (err: any) {
+      // Electron may have created the WebContents before a late loadURL error
+      // or response race surfaced. Re-read authoritative tab state before
+      // reporting failure so callers do not retry and create a duplicate tab.
+      try {
+        const state: any = await callInHouseBrowser('tabs', { sessionId: resolved });
+        const inHouse = upsertInHouseSession(resolved, state);
+        const created = inHouse.tabs.find((tab) => !beforeIds.has(tab.id)) || inHouse.tabs.find((tab) => tab.active && tab.id !== before?.activeTabId);
+        if (created) {
+          return `Opened new Prometheus in-house browser tab with a navigation warning: ${err.message}\n${formatInHouseTabs(inHouse)}`;
+        }
+      } catch {}
+      return `ERROR: In-house browser new-tab failed. The tab may have been created; refresh with browser_list_tabs before retrying. ${err.message}`;
+    }
   }
   const session = await getOrCreateSession(resolved);
   if (session.transport === 'extension') {
@@ -5074,6 +5271,8 @@ export async function browserNewTab(sessionId: string, url?: string): Promise<st
 
 export async function browserCloseTab(sessionId: string, index?: number): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) {
     const result: any = await callInHouseBrowser('close-tab', {
       sessionId: resolved,
@@ -5210,6 +5409,9 @@ async function browserOpenInHouse(
   if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = `https://${targetUrl}`;
   try {
     const state: any = await callInHouseBrowser('open', { sessionId: resolved, url: targetUrl, profile: resolveInHouseProfileId(resolved) });
+    if (!state || typeof state !== 'object' || !String(state.url || '').trim()) {
+      return `ERROR: In-house browser open returned no page state; session=${resolved}.`;
+    }
     const inHouse = upsertInHouseSession(resolved, state);
     broadcastInHouseBrowserStatus(resolved, 'browser_open', 'Opened in Prometheus in-house browser.', {
       active: true,
@@ -5228,13 +5430,19 @@ async function browserOpenInHouse(
 
 async function browserSnapshotInHouse(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (!getInHouseSession(resolved)) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
   try {
     const result: any = await callInHouseBrowser('snapshot', { sessionId: resolved });
+    const rawSnapshot = String(result?.snapshot || '').trim();
+    if (!rawSnapshot) {
+      return `ERROR: In-house browser snapshot returned no observation evidence; session=${resolved}. Retry browser_snapshot once the page is ready.`;
+    }
     const inHouse = upsertInHouseSession(resolved, result);
-    inHouse.lastSnapshot = boundedBrowserSnapshot(result?.snapshot || '');
+    inHouse.lastSnapshot = boundedBrowserSnapshot(rawSnapshot);
     inHouse.lastSnapshotAt = Date.now();
-    const snapshot = boundedBrowserSnapshot(result?.snapshot || `Page: ${inHouse.title || inHouse.url}\nURL: ${inHouse.url}`);
+    const snapshot = boundedBrowserSnapshot(rawSnapshot);
     broadcastInHouseBrowserStatus(resolved, 'browser_snapshot', 'Snapshot captured from Prometheus in-house browser.', {
       active: true,
       url: inHouse.url,
@@ -5365,8 +5573,20 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
   normalized?: boolean;
 } | null> {
   const resolved = resolveSessionId(sessionId);
-  if (!getInHouseSession(resolved)) return null;
-  const shot: any = await callInHouseBrowser('screenshot', { sessionId: resolved });
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error || !getInHouseSession(resolved)) return null;
+  let shot: any = null;
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      shot = await callInHouseBrowser('screenshot', { sessionId: resolved });
+      break;
+    } catch (err: any) {
+      lastError = err;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+  }
+  if (!shot) throw lastError || new Error('Native browser screenshot returned no image.');
   const imgW = Number(shot?.width || 0);
   const imgH = Number(shot?.height || 0);
   const cssW = Number(shot?.viewportWidth || imgW) || imgW;
@@ -5542,7 +5762,13 @@ export async function browserSnapshot(
   options?: { onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
-  if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) {
+    const snapshot = await browserSnapshotInHouse(resolved);
+    if (snapshot.startsWith('ERROR') || !recovery?.recovered) return snapshot;
+    return `Recovered the existing in-house browser mapping for session=${resolved}.\n${snapshot}`;
+  }
   let session = sessions.get(resolved);
   const aliveStartedAt = session ? Date.now() : 0;
   if (session && !(await isSessionAlive(session))) {
@@ -5682,6 +5908,8 @@ export async function browserNavigateControl(
   timestamp: number;
 }> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) throw new Error(recovery.error);
   if (getInHouseSession(resolved)) {
     const nav: any = await callInHouseBrowser('navigate', {
       sessionId: resolved,
@@ -5780,6 +6008,8 @@ export async function browserClick(
   target: number | { ref?: number; element?: string; selector?: string },
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserClickInHouse(sessionId, target, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -5888,6 +6118,8 @@ export async function browserFill(
   text: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserFillInHouse(sessionId, target, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -6256,6 +6488,8 @@ export async function browserPressKey(
   key: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserPressKeyInHouse(sessionId, key, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -6299,6 +6533,8 @@ export async function browserType(
   text: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) return browserTypeInHouse(sessionId, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -6333,6 +6569,8 @@ export async function browserWait(
   ms: number,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) {
     const clampedNative = Math.min(Math.max(ms || 1000, 500), 8000);
     await new Promise((resolve) => setTimeout(resolve, clampedNative));
@@ -6372,6 +6610,8 @@ export async function browserWait(
  */
 export async function browserGetFocusedItem(sessionId: string): Promise<string> {
   const resolvedFocus = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolvedFocus);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolvedFocus)) {
     try {
       const info = await callInHouseBrowser<any>('run-js', {
@@ -6482,6 +6722,39 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
 
 export async function browserClose(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  // Native close is authoritative and idempotent. Call it even when the
+  // gateway map is missing so stale Electron tabs are reclaimed during test
+  // teardown instead of being mistaken for an already-closed session.
+  const targetIsKnownInHouse = shouldUseInHouseBrowser(resolved) || !!getInHouseSession(resolved);
+  const mayHaveOrphanedNativeSession = !sessions.has(resolved) && isInHouseBrowserAvailable();
+  if (targetIsKnownInHouse || mayHaveOrphanedNativeSession) {
+    try {
+      const result: any = await callInHouseBrowser('close', { sessionId: resolved });
+      const closedTabs = Number(result?.closedTabs || 0);
+      if (targetIsKnownInHouse || closedTabs > 0) {
+        clearInHouseSession(resolved);
+        browserSessionMetadata.delete(resolved);
+        removePersistedBrowserSessionRecord(resolved);
+        return closedTabs > 0
+          ? `Closed Prometheus in-house browser session (${closedTabs} tab${closedTabs === 1 ? '' : 's'}).`
+          : 'Prometheus in-house browser session was already closed.';
+      }
+    } catch (err: any) {
+      if (!targetIsKnownInHouse && !getInHouseSession(resolved)) {
+        // The fallback probe is best-effort for a session whose lane was lost;
+        // continue to the ordinary session bookkeeping below.
+      } else {
+        if (!getInHouseSession(resolved)) return `ERROR: In-house browser close failed: ${err.message}`;
+        // If Electron is already shutting down, still clear the gateway's
+        // mapping and report the transport warning instead of claiming that a
+        // regular browser session was closed.
+        clearInHouseSession(resolved);
+        browserSessionMetadata.delete(resolved);
+        removePersistedBrowserSessionRecord(resolved);
+        return `Prometheus in-house browser close requested, but the native target disconnected: ${err.message}`;
+      }
+    }
+  }
   const pendingInit = browserSessionInitInFlight.get(resolved);
   if (pendingInit) await pendingInit.catch(() => {});
   const session = sessions.get(resolved);
@@ -6517,6 +6790,8 @@ export async function browserScroll(
   multiplier?: number,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
+  const recovery = await recoverInHouseSessionMapping(sessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(sessionId)) {
     const resolved = resolveSessionId(sessionId);
     const amount = Math.min(Math.max(Number(multiplier || 1) || 1, 0.25), 5);
@@ -6716,6 +6991,267 @@ export async function browserDrag(
   }
 }
 
+function buildInHouseScrollCollectionScript(characterBudget: number): string {
+  const budget = Math.max(0, Math.min(100_000, Math.floor(Number(characterBudget) || 0)));
+  return `(() => {
+    const doc = globalThis.document;
+    const normalize = (value, maxLen = 1000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, maxLen);
+    const toAbs = (href) => { try { return new URL(href, globalThis.location.href).toString(); } catch { return String(href || '').trim(); } };
+    const tweets = Array.from(doc?.querySelectorAll?.('article[data-testid="tweet"]') || []).map((el) => {
+      const statusLink = Array.from(el.querySelectorAll('a[href*="/status/"]')).map((a) => toAbs(a.getAttribute('href') || a.href || '')).find((href) => /\\/status\\/\\d+/i.test(href)) || '';
+      const idMatch = statusLink.match(/\\/status\\/(\\d+)/i);
+      const nameBlock = normalize(el.querySelector('[data-testid="User-Name"]')?.innerText, 240);
+      const handle = (nameBlock.match(/@[a-z0-9_]{1,30}/i) || [''])[0];
+      const text = normalize(el.querySelector('[data-testid="tweetText"]')?.innerText, 1800);
+      const time = String(el.querySelector('time')?.dateTime || normalize(el.querySelector('time')?.textContent, 80));
+      const replies = normalize(el.querySelector('[data-testid="reply"]')?.textContent, 40);
+      const reposts = normalize(el.querySelector('[data-testid="retweet"]')?.textContent, 40);
+      const likes = normalize(el.querySelector('[data-testid="like"]')?.textContent, 40);
+      const views = normalize(el.querySelector('a[href$="/analytics"], [data-testid="viewCount"]')?.textContent, 40);
+      const imageUrls = Array.from(el.querySelectorAll('[data-testid="tweetPhoto"] img, img[src*="pbs.twimg.com/media"]')).map((img) => toAbs(img.currentSrc || img.src || img.getAttribute('src') || '')).filter(Boolean);
+      const video = el.querySelector('[data-testid="videoPlayer"] video, video');
+      const videoUrl = String(video?.currentSrc || video?.src || '').trim();
+      return {
+        id: idMatch ? idMatch[1] : '', author: nameBlock, handle, time, text,
+        link: statusLink, hasImage: imageUrls.length > 0, hasVideo: !!videoUrl,
+        media: [...imageUrls.map((url) => ({ type: 'image', url })), ...(videoUrl ? [{ type: 'video', url: videoUrl }] : [])],
+        metrics: { replies, reposts, likes, views },
+      };
+    });
+    const tweetText = tweets.map((item) => [
+      item.id ? 'Tweet ID: ' + item.id : '', item.author ? 'Author: ' + item.author : '',
+      item.time ? 'Time: ' + item.time : '', item.link ? 'Link: ' + item.link : '',
+      item.text ? 'Text:\\n' + item.text : 'Text: (no visible text)',
+      'Metrics: replies ' + (item.metrics.replies || '0') + ' | reposts ' + (item.metrics.reposts || '0') + ' | likes ' + (item.metrics.likes || '0') + (item.metrics.views ? ' | views ' + item.metrics.views : ''),
+    ].filter(Boolean).join('\\n')).join('\\n---TWEET---\\n');
+    const bodyText = String(doc?.body?.innerText || '').replace(/[^\\S\\n]{3,}/g, ' ').replace(/\\n{4,}/g, '\\n\\n').trim();
+    const text = (tweetText || bodyText).slice(0, ${budget});
+    const scrollY = Number(globalThis.scrollY || 0);
+    const innerHeight = Number(globalThis.innerHeight || 0);
+    const scrollHeight = Number(doc?.documentElement?.scrollHeight || doc?.body?.scrollHeight || 0);
+    return {
+      url: String(globalThis.location?.href || ''), title: String(doc?.title || ''), text,
+      pageText: bodyText.slice(0, ${budget}), tweets, textBlocks: bodyText ? [bodyText.slice(0, 4000)] : [],
+      scrollY, innerHeight, scrollHeight, bottom: scrollHeight <= scrollY + innerHeight + 4,
+    };
+  })()`;
+}
+
+async function readInHouseScrollCollectionPage(sessionId: string, characterBudget: number): Promise<any> {
+  const state = await callInHouseBrowser('run-js', {
+    sessionId: resolveSessionId(sessionId),
+    code: buildInHouseScrollCollectionScript(characterBudget),
+  });
+  return state && typeof state === 'object' ? state : {};
+}
+
+async function browserScrollCollectInHouse(
+  sessionId: string,
+  options: {
+    scrolls?: number;
+    direction?: 'down' | 'up';
+    multiplier?: number;
+    delay_ms?: number;
+    stop_text?: string;
+    max_chars?: number;
+    include_initial?: boolean;
+    max_seconds?: number;
+    stop_after_no_new?: number;
+    include_snapshots?: boolean;
+    include_structured?: boolean;
+  } = {},
+): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const scrolls = Math.min(Math.max(Number(options.scrolls || 5) || 5, 1), 30);
+  const direction = options.direction === 'up' ? 'up' : 'down';
+  const mult = Math.min(Math.max(Number(options.multiplier || 1.5) || 1.5, 0.5), 4.0);
+  const delayMs = Math.min(Math.max(Number(options.delay_ms || 1500) || 1500, 250), 5000);
+  const stopText = String(options.stop_text || '');
+  const maxChars = Math.min(Math.max(Number(options.max_chars || 50000) || 50000, 5000), 100000);
+  const includeInitial = options.include_initial !== false;
+  const maxSeconds = Math.min(Math.max(Number(options.max_seconds || 45) || 45, 5), 180);
+  const stopAfterNoNew = Math.min(Math.max(Number(options.stop_after_no_new || 3) || 3, 1), 10);
+  const includeSnapshots = options.include_snapshots !== false;
+  const includeStructured = options.include_structured !== false;
+  const seenLines = new Set<string>();
+  const allNewText: string[] = [];
+  const scrollLog: string[] = [];
+  const structuredItems: BrowserFeedItem[] = [];
+  const structuredTextBlocks: string[] = [];
+  const snapshotDeltas: BrowserScrollSnapshotDelta[] = [];
+  const seenStructuredItems = new Set<string>();
+  const seenTextBlocks = new Set<string>();
+  let totalChars = 0;
+  let stopReason = 'completed all scrolls';
+  let consecutiveNoNew = 0;
+  const startedAt = Date.now();
+  try {
+    const totalPasses = includeInitial ? scrolls + 1 : scrolls;
+    let previousSnapshot = includeSnapshots ? await browserSnapshotInHouse(resolved).catch(() => '') : '';
+    for (let pass = 0; pass < totalPasses; pass++) {
+      const isInitialPass = includeInitial && pass === 0;
+      const previousState = pass > 0 ? await readInHouseScrollCollectionPage(resolved, 200).catch(() => ({})) : null;
+      const previousScrollY = Number(previousState?.scrollY || 0);
+      if (!isInitialPass) {
+        const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * mult);
+        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      const state = await readInHouseScrollCollectionPage(resolved, Math.max(0, maxChars - totalChars));
+      const pageText = String(state?.text || '');
+      const currentScrollY = Number(state?.scrollY || 0);
+      let structuredAdded = 0;
+      let textBlockAdded = 0;
+      if (includeStructured) {
+        structuredAdded = appendUniqueBrowserFeedItems(structuredItems, seenStructuredItems, Array.isArray(state?.tweets) ? state.tweets : [], 300);
+        textBlockAdded = appendUniqueTextBlocks(structuredTextBlocks, seenTextBlocks, Array.isArray(state?.textBlocks) ? state.textBlocks : [], 300);
+      }
+      if (includeSnapshots) {
+        const nextSnapshot = await browserSnapshotInHouse(resolved).catch(() => '');
+        if (nextSnapshot) {
+          if (previousSnapshot) snapshotDeltas.push(buildBrowserSnapshotDelta(previousSnapshot, nextSnapshot, pass + 1, currentScrollY));
+          previousSnapshot = nextSnapshot;
+        }
+      }
+      const isStructuredTweets = pageText.includes('\\n---TWEET---\\n');
+      const chunks = isStructuredTweets
+        ? pageText.split('\\n---TWEET---\\n')
+        : pageText.split('\\n').map((line) => line.trim()).filter(Boolean);
+      const newLines: string[] = [];
+      for (const chunk of chunks) {
+        const normalized = String(chunk || '').replace(/\\s+/g, ' ').trim();
+        if (!normalized) continue;
+        const link = String(chunk).match(/^Link:\\s*(.+)$/im)?.[1];
+        const id = String(chunk).match(/^Tweet ID:\\s*(\\S+)/im)?.[1];
+        const key = isStructuredTweets ? (id ? 'tweet:' + id : link ? 'link:' + link.trim() : normalized.slice(0, 400)) : normalized.slice(0, 220);
+        if (!seenLines.has(key)) { seenLines.add(key); newLines.push(chunk); }
+      }
+      const remaining = Math.max(0, maxChars - totalChars);
+      const newText = (isStructuredTweets ? newLines.join('\\n---TWEET---\\n') : newLines.join('\\n')).slice(0, remaining);
+      const newChars = newText.length;
+      const newSignals = newChars + structuredAdded + textBlockAdded;
+      consecutiveNoNew = newSignals > 0 ? 0 : consecutiveNoNew + 1;
+      scrollLog.push(isInitialPass
+        ? `  #${pass + 1}: initial viewport +${newChars.toLocaleString()} chars, +${structuredAdded} item(s), +${textBlockAdded} block(s), scrollY=${currentScrollY}`
+        : `  #${pass + 1}: scrolled ${direction} ${mult}x +${newChars.toLocaleString()} chars, +${structuredAdded} item(s), +${textBlockAdded} block(s), scrollY=${currentScrollY}`);
+      if (newChars > 0) { allNewText.push(newText); totalChars += newChars; }
+      try {
+        broadcastWS({ type: 'browser:collect:progress', sessionId: resolved, mode: isStructuredTweets ? 'x_text' : 'text', collected: seenLines.size, structuredItems: structuredItems.length, textBlocks: structuredTextBlocks.length, chars: totalChars, pass: pass + 1, maxPasses: totalPasses, stopReason, timestamp: Date.now() });
+      } catch {}
+      if (totalChars >= maxChars) { stopReason = 'max_chars reached'; break; }
+      if (Date.now() - startedAt >= maxSeconds * 1000) { stopReason = 'max_seconds reached'; break; }
+      if (!isInitialPass && direction === 'down' && (state?.bottom === true || currentScrollY === previousScrollY)) { scrollLog[scrollLog.length - 1] += ' — page bottom reached, stopping'; stopReason = 'reached bottom'; break; }
+      if (!isInitialPass && consecutiveNoNew >= stopAfterNoNew) { stopReason = `no new text after ${consecutiveNoNew} pass(es)`; break; }
+      if (stopText && pageText.includes(stopText)) { stopReason = `stop_text "${stopText}" found`; break; }
+    }
+    const collectedText = allNewText.join('\\n\\n').slice(0, maxChars);
+    const scrollActions = includeInitial ? Math.max(0, scrollLog.length - 1) : scrollLog.length;
+    const structuredPayload = { mode: 'browser_scroll_collect', url: getInHouseSession(resolved)?.url || '', quality: { uniqueTextLines: seenLines.size, textChars: totalChars, structuredItems: structuredItems.length, textBlocks: structuredTextBlocks.length, snapshotDeltas: snapshotDeltas.length }, items: structuredItems.slice(0, 120), textBlocks: structuredTextBlocks.slice(0, 80), snapshot_deltas: snapshotDeltas.slice(-12) };
+    return [
+      `browser_scroll_collect: ${scrollLog.length} collection pass(es), ${scrollActions} scroll action(s) ${direction} (stopped: ${stopReason})`,
+      `Total text collected: ${totalChars.toLocaleString()} chars | Unique lines: ${seenLines.size} | Structured items: ${structuredItems.length} | Text blocks: ${structuredTextBlocks.length}`,
+      '', '=== STRUCTURED COLLECTION (native in-house browser) ===', JSON.stringify(structuredPayload, null, 2),
+      '', '=== COLLECTED TEXT (deduplicated) ===', collectedText, '', '=== SCROLL LOG ===', ...scrollLog,
+    ].join('\\n');
+  } catch (err: any) {
+    return `ERROR: browser_scroll_collect failed: ${err.message}`;
+  }
+}
+
+async function browserScrollCollectV2InHouse(sessionId: string, options: Record<string, any> = {}): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse = getInHouseSession(resolved);
+  if (!inHouse) return 'ERROR: No in-house browser session. Use browser_open with target="inhouse" first.';
+  const maxScrolls = Math.min(Math.max(Number(options.max_scrolls ?? options.scrolls ?? 8) || 8, 0), 40);
+  const limit = Math.min(Math.max(Number(options.limit || 50) || 50, 1), 500);
+  const direction: 'down' | 'up' = String(options.direction || 'down').toLowerCase() === 'up' ? 'up' : 'down';
+  const multiplier = Math.min(Math.max(Number(options.multiplier || 1.5) || 1.5, 0.5), 4.0);
+  const delayMs = Math.min(Math.max(Number(options.delay_ms || 1200) || 1200, 250), 5000);
+  const maxSeconds = Math.min(Math.max(Number(options.max_seconds || 30) || 30, 5), 180);
+  const stopText = String(options.stop_text || '').trim();
+  try {
+    const schemaInput = options.schema && typeof options.schema === 'object' ? { ...options.schema, ...options } : { ...options };
+    const resolvedSchema = resolveBrowserExtractionSchemaForUrl(inHouse.url, schemaInput, 'browser_scroll_collect_v2');
+    if (!resolvedSchema.schema) return `ERROR: ${resolvedSchema.error || 'Could not resolve extraction schema.'}`;
+    const schema = resolvedSchema.schema;
+    const perPassLimit = Math.min(Math.max(Number(options.per_pass_limit || schema.limit || 80) || 80, 1), 500);
+    const seenKeys = new Set<string>();
+    const items: Array<Record<string, any>> = [];
+    const scrollLog: string[] = [];
+    let deduped = 0;
+    let missingRequiredFields = 0;
+    let stopReason = 'completed all passes';
+    const startedAt = Date.now();
+    for (let pass = 0; pass <= maxScrolls; pass++) {
+      const before = pass > 0 ? await readInHouseScrollCollectionPage(resolved, 200).catch(() => ({})) : {};
+      const previousScrollY = Number(before?.scrollY || 0);
+      if (pass > 0) {
+        const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * multiplier);
+        await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      const state = await readInHouseScrollCollectionPage(resolved, 200);
+      const extracted = await extractStructuredItemsFromInHousePage(resolved, schema, { limit: perPassLimit });
+      let addedThisPass = 0;
+      for (const entry of extracted) {
+        const item = entry.item || {};
+        if (!Object.values(item).some((value) => value != null && String(value).trim() !== '')) continue;
+        const dedupeValue = schema.dedupeKey ? item[schema.dedupeKey] : null;
+        const source = dedupeValue != null && String(dedupeValue).trim()
+          ? `${schema.dedupeKey}:${String(dedupeValue).trim().slice(0, 500)}`
+          : entry.meta?.dedupeSource || JSON.stringify(item);
+        const hash = stableHash(String(source).slice(0, 1200));
+        if (seenKeys.has(hash)) { deduped += 1; continue; }
+        seenKeys.add(hash);
+        items.push(item);
+        missingRequiredFields += Number(entry.meta?.requiredMissing || 0) || 0;
+        addedThisPass += 1;
+        if (items.length >= limit) { stopReason = 'limit reached'; break; }
+      }
+      const currentScrollY = Number(state?.scrollY || 0);
+      scrollLog.push(pass === 0
+        ? `#${pass + 1}: initial viewport -> +${addedThisPass} items (scrollY=${currentScrollY})`
+        : `#${pass + 1}: scrolled ${direction} ${multiplier}x -> +${addedThisPass} items (scrollY=${currentScrollY})`);
+      try { broadcastWS({ type: 'browser:collect:progress', sessionId: resolved, mode: 'structured', schemaName: schema.requestedSchemaName || schema.saveAs || schema.name || '', itemRoot: schema.itemRootName || '', collected: items.length, deduped, pass: pass + 1, maxPasses: maxScrolls + 1, stopReason, timestamp: Date.now() }); } catch {}
+      if (items.length >= limit) break;
+      if (Date.now() - startedAt >= maxSeconds * 1000) { stopReason = 'max_seconds reached'; break; }
+      if (pass > 0 && direction === 'down' && (state?.bottom === true || currentScrollY === previousScrollY)) { stopReason = 'reached bottom'; break; }
+      if (stopText && String(state?.pageText || state?.text || '').includes(stopText)) { stopReason = `stop_text "${stopText}" found`; break; }
+    }
+    const saveName = String(schema.saveAs || '').trim();
+    if (saveName) {
+      const savedResult = saveNamedBrowserExtractionSchemaForUrl(inHouse.url, {
+        name: saveName,
+        aliases: schema.aliases,
+        itemRoot: schema.itemRootName,
+        containerSelector: schema.containerSelector,
+        dedupeKey: schema.dedupeKey,
+        limit: schema.limit,
+        fields: schema.fields,
+        url: inHouse.url,
+      });
+      broadcastBrowserKnowledgeSnapshot(resolved, inHouse.url, savedResult.site, {
+        action: 'saved_schema',
+        savedKind: 'schema',
+        saved: savedResult.saved,
+      });
+    }
+    const requiredFieldCount = Object.values(schema.fields).filter((field) => field?.required === true).length;
+    const completeness = requiredFieldCount > 0 && items.length > 0 ? Math.max(0, 1 - (missingRequiredFields / Math.max(1, items.length * requiredFieldCount))) : (items.length > 0 ? 1 : 0);
+    const retrieval = Math.min(1, items.length / Math.max(1, limit));
+    const confidence = Number(((completeness * 0.7 + retrieval * 0.3) || 0).toFixed(2));
+    return JSON.stringify({
+      mode: 'browser_scroll_collect_v2',
+      site: (() => { try { return String(new URL(inHouse.url).hostname || '').replace(/^www\./i, '').toLowerCase(); } catch { return ''; } })(),
+      schema: { requested: schema.requestedSchemaName || '', source: schema.source, item_root: schema.itemRootName || '', container_selector: schema.containerSelector, dedupe_key: schema.dedupeKey || '', fields: Object.keys(schema.fields) },
+      quality: { requested: limit, found: items.length, returned: items.length, missingRequiredFields, deduped, confidence },
+      scrollsPerformed: Math.max(0, scrollLog.length - 1), passesPerformed: scrollLog.length, stopReason, durationMs: Date.now() - startedAt, scrollLog, items,
+    }, null, 2);
+  } catch (err: any) {
+    return `ERROR: browser_scroll_collect_v2 failed: ${err.message}`;
+  }
+}
+
 export async function browserScrollCollect(
   sessionId: string,
   options: {
@@ -6733,9 +7269,9 @@ export async function browserScrollCollect(
   } = {}
 ): Promise<string> {
   const resolvedSessionId = resolveSessionId(sessionId);
-  if (getInHouseSession(resolvedSessionId)) {
-    return inHouseUnsupportedToolMessage('browser_scroll_collect', 'Use browser_snapshot, then browser_scroll direction="down", and snapshot again to read more of the feed.');
-  }
+  const recovery = await recoverInHouseSessionMapping(resolvedSessionId);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolvedSessionId)) return browserScrollCollectInHouse(resolvedSessionId, options);
   const session = sessions.get(resolvedSessionId);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -6984,8 +7520,10 @@ export async function browserScrollCollectV2(
   options: Record<string, any> = {},
 ): Promise<string> {
   const resolvedSessionId = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolvedSessionId);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolvedSessionId)) {
-    return inHouseUnsupportedToolMessage('browser_scroll_collect', 'Use browser_snapshot, then browser_scroll direction="down", and snapshot again to read more of the feed.');
+    return browserScrollCollectV2InHouse(resolvedSessionId, options);
   }
   const session = sessions.get(resolvedSessionId);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -8043,6 +8581,8 @@ export async function browserGetPageText(
   options?: { element?: string; query?: string; maxChars?: number; maxLines?: number },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolved)) {
     try {
       const sel = String(options?.element || '').trim();
@@ -8371,11 +8911,51 @@ async function readInPageBrowserEventLog(page: any, action: 'read' | 'clear'): P
   return Array.isArray(result) ? result as BrowserConsoleEntry[] : [];
 }
 
+function formatInHouseConsoleResult(result: any): string {
+  if (typeof result === 'string') return result;
+  return JSON.stringify(result || { entries: [], count: 0, returned: 0 }, null, 2);
+}
+
+function formatInHouseNetworkResult(result: any, options: { includeBodies?: boolean } = {}): string {
+  if (typeof result === 'string') return result;
+  const action = String(result?.action || 'read');
+  if (action === 'start') {
+    return `Network observation started in the Prometheus in-house browser${result?.urlFilter ? ` (filter applied: "${result.urlFilter}")` : ''}. Capturing up to ${Number(result?.limit || 200)} responses. Response bodies are unavailable in the native lane.`;
+  }
+  if (action === 'stop') {
+    return `Network observation stopped. ${Number(result?.captured || 0)} entries remain in the native tab log.`;
+  }
+  if (action === 'clear') return 'Native browser network log cleared.';
+  const entries = Array.isArray(result?.returned) ? result.returned : [];
+  if (!entries.length) {
+    return result?.active
+      ? 'No matching native network responses captured yet (observation is active).'
+      : 'No native network entries — start observation first with action="start".';
+  }
+  const lines = entries.map((entry: any) => {
+    const ts = entry?.ts ? new Date(Number(entry.ts)).toISOString().slice(11, 23) : 'unknown time';
+    const status = Number(entry?.status || 0) || (entry?.error ? 'ERR' : '—');
+    const error = entry?.error ? ` (${String(entry.error).replace(/\s+/g, ' ').slice(0, 240)})` : '';
+    return `[${ts}] ${String(entry?.method || 'GET')} ${status} ${String(entry?.contentType || '')}${error}\n    ${String(entry?.url || '')}`;
+  });
+  return `Network log (${entries.length} returned of ${Number(result?.total || entries.length)} matching; bodies=${options.includeBodies === true ? 'unavailable in native lane' : 'omitted'}):\n\n${lines.join('\n\n')}\n\n${result?.note || ''}`.trim();
+}
+
 export async function browserInspectConsole(
   sessionId: string,
   options: { action?: 'read' | 'clear' | string; maxEntries?: number; sinceTs?: number; pageOnly?: boolean; urlFilter?: string; maxMessageChars?: number } = {},
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) {
+    try {
+      const result = await callInHouseBrowser('console', { sessionId: resolved, ...options });
+      return formatInHouseConsoleResult(result);
+    } catch (err: any) {
+      return `ERROR: In-house browser console inspection failed: ${err.message}`;
+    }
+  }
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   const action = String(options.action || 'read').toLowerCase() === 'clear' ? 'clear' : 'read';
@@ -8450,8 +9030,11 @@ export async function browserRunJs(
   code: string,
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
-  if (getInHouseSession(sessionId)) return browserRunJsInHouse(sessionId, code);
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) return browserRunJsInHouse(resolved, code);
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!code || !code.trim()) return 'ERROR: code parameter is required.';
   try {
@@ -8478,8 +9061,74 @@ export async function browserRunJs(
   }
 }
 
+async function browserRunSmokeStepsInHouse(sessionId: string, steps: any[] = []): Promise<string> {
+  const resolved = resolveSessionId(sessionId);
+  const results: Array<{ index: number; action: string; ok: boolean; details: any }> = [];
+  for (const [index, raw] of steps.entries()) {
+    const incoming = raw && typeof raw === 'object' ? raw : {};
+    const actionName = String(incoming.action || incoming.type || '').trim();
+    const step = actionName
+      ? { ...incoming, [actionName]: incoming[actionName] ?? incoming }
+      : incoming;
+    let action = 'unsupported';
+    let ok = false;
+    let details: any = null;
+    try {
+      if (step.click) {
+        action = 'click';
+        const value = typeof step.click === 'object' ? step.click : { selector: step.click };
+        const result = await browserClick(resolved, { selector: String(value.selector || '') }, { observe: 'none' });
+        ok = !result.startsWith('ERROR'); details = result;
+      } else if (step.fill) {
+        action = 'fill';
+        const value = typeof step.fill === 'object' ? step.fill : {};
+        const result = await browserFill(resolved, { selector: String(value.selector || '') }, String(value.text || ''), { observe: 'none' });
+        ok = !result.startsWith('ERROR'); details = result;
+      } else if (step.key) {
+        action = 'key';
+        const value = typeof step.key === 'object' ? step.key.key : step.key;
+        const result = await browserPressKey(resolved, String(value || 'Enter'), { observe: 'none' });
+        ok = !result.startsWith('ERROR'); details = result;
+      } else if (step.assertText) {
+        action = 'assertText';
+        const value = typeof step.assertText === 'object' ? step.assertText : {};
+        const selector = String(value.selector || 'body');
+        const expected = value.contains ?? value.equals ?? value.text ?? '';
+        const state: any = await callInHouseBrowser('run-js', {
+          sessionId: resolved,
+          code: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return { present: !!el, actual: String(el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim() }; })()`,
+        });
+        const actual = String(state?.actual || '');
+        ok = value.contains != null || value.text != null
+          ? actual.includes(String(expected))
+          : actual === String(expected);
+        details = { selector, expected, actual, present: state?.present === true };
+      } else if (step.assertVisible) {
+        action = 'assertVisible';
+        const value = typeof step.assertVisible === 'object' ? step.assertVisible : { selector: step.assertVisible };
+        const selector = String(value.selector || '');
+        const state: any = await callInHouseBrowser('run-js', {
+          sessionId: resolved,
+          code: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); const rect = el?.getBoundingClientRect?.(); const style = el ? getComputedStyle(el) : null; return { present: !!el, visible: !!el && !!rect && rect.width > 0 && rect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity || 1) !== 0 }; })()`,
+        });
+        ok = state?.visible === true;
+        details = { selector, present: state?.present === true, visible: state?.visible === true };
+      }
+    } catch (err: any) {
+      details = `ERROR: ${err?.message || err}`;
+    }
+    results.push({ index, action, ok, details });
+    if (!ok) break;
+  }
+  return JSON.stringify({ ok: results.every((result) => result.ok), executed: results.length, results }, null, 2);
+}
+
 export async function browserRunSmokeSteps(sessionId: string, steps: any[] = []): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) return browserRunSmokeStepsInHouse(resolved, steps);
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   const results: Array<{ index: number; action: string; ok: boolean; details: any }> = [];
   for (const [index, raw] of steps.entries()) {
@@ -8544,6 +9193,25 @@ export async function browserInterceptNetwork(
   options: { includeBodies?: boolean; bodyMaxChars?: number; statusMin?: number; statusMax?: number } = {},
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) {
+    try {
+      const result = await callInHouseBrowser('network', {
+        sessionId: resolved,
+        action,
+        urlFilter: String(urlFilter || '').trim(),
+        maxEntries,
+        includeBodies: options.includeBodies === true,
+        bodyMaxChars: options.bodyMaxChars,
+        statusMin: options.statusMin,
+        statusMax: options.statusMax,
+      });
+      return formatInHouseNetworkResult(result, options);
+    } catch (err: any) {
+      return `ERROR: In-house browser network inspection failed: ${err.message}`;
+    }
+  }
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
@@ -8642,7 +9310,54 @@ export async function browserElementWatch(
   text?: string,
   timeoutMs = 15000,
 ): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) {
+    if (!selector) return 'ERROR: selector is required.';
+    if (waitFor === 'text_contains' && !text) return 'ERROR: text_contains requires a "text" parameter.';
+    const safeTimeout = Math.min(Math.max(Number(timeoutMs) || 15000, 500), 120_000);
+    const deadline = Date.now() + safeTimeout;
+    const expectedText = String(text || '');
+    const probe = `(() => {
+      try {
+        const selector = ${JSON.stringify(String(selector))};
+        const el = document.querySelector(selector);
+        const rect = el?.getBoundingClientRect?.();
+        const style = el ? getComputedStyle(el) : null;
+        const visible = !!el && !!rect && rect.width > 0 && rect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden' && Number(style?.opacity || 1) !== 0;
+        return { present: !!el, visible, text: String(el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 4000) };
+      } catch (error) { return { error: String(error?.message || error) }; }
+    })()`;
+    try {
+      while (Date.now() < deadline) {
+        const state: any = await callInHouseBrowser('run-js', { sessionId: resolved, code: probe });
+        if (state?.error) return `ERROR: browser_element_watch failed: ${state.error}`;
+        const matched = waitFor === 'appear'
+          ? state?.visible === true
+          : waitFor === 'disappear'
+            ? state?.visible !== true
+            : state?.visible === true && String(state?.text || '').includes(expectedText);
+        if (matched) {
+          const snapshot = await browserSnapshotInHouse(resolved);
+          if (snapshot.startsWith('ERROR')) return `ERROR: Element condition matched, but observation failed.\n${snapshot}`;
+          const description = waitFor === 'appear'
+            ? `Element "${selector}" appeared.`
+            : waitFor === 'disappear'
+              ? `Element "${selector}" disappeared.`
+              : `Element "${selector}" contains text "${expectedText}".`;
+          return `${description}\n\n${snapshot}`;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return waitFor === 'text_contains'
+        ? `ERROR: Timed out after ${safeTimeout}ms waiting for "${selector}" to contain text "${expectedText}".`
+        : `ERROR: Timed out after ${safeTimeout}ms waiting for element "${selector}" to ${waitFor}.`;
+    } catch (err: any) {
+      return `ERROR: browser_element_watch failed: ${err.message}`;
+    }
+  }
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!selector) return 'ERROR: selector is required.';
   const safeTimeout = Math.min(Math.max(Number(timeoutMs) || 15000, 500), 120_000);
@@ -8693,8 +9408,11 @@ export async function browserElementWatch(
  * Falls back to full snapshot if no previous snapshot exists.
  */
 export async function browserSnapshotDelta(sessionId: string): Promise<string> {
-  if (getInHouseSession(sessionId)) return browserSnapshotInHouse(sessionId);
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
 
   const prevSnapshot = session.lastSnapshot;
@@ -8764,10 +9482,52 @@ export async function browserExtractStructured(
   sessionId: string,
   schema: Record<string, any>,
 ): Promise<string> {
-  if (getInHouseSession(sessionId)) {
-    return inHouseUnsupportedToolMessage('browser_extract_structured', 'Use browser_get_page_text or browser_run_js to read structured data from the in-house browser page.');
+  const resolvedSessionId = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolvedSessionId);
+  if (recovery?.error) return recovery.error;
+  if (getInHouseSession(resolvedSessionId)) {
+    if (!schema || typeof schema !== 'object') return 'ERROR: schema must be an object with container_selector, item_root, or schema_name plus fields.';
+    const inHouse = getInHouseSession(resolvedSessionId)!;
+    const url = String(inHouse.url || '').trim();
+    try {
+      const resolved = resolveBrowserExtractionSchemaForUrl(url, schema || {});
+      if (!resolved.schema) return `ERROR: ${resolved.error || 'Could not resolve extraction schema.'}`;
+      const resultWithMeta = await extractStructuredItemsFromInHousePage(resolvedSessionId, resolved.schema);
+      const result = resultWithMeta
+        .map((entry) => entry.item)
+        .filter((item) => Object.values(item).some((value) => value != null && String(value).trim() !== ''));
+      if (!result.length) {
+        const targetLabel = resolved.schema.itemRootName
+          ? `item_root "${resolved.schema.itemRootName}" (${resolved.schema.containerSelector})`
+          : `container_selector "${resolved.schema.containerSelector || 'body'}"`;
+        return `No items found matching ${targetLabel}.`;
+      }
+      const prefixLines: string[] = [];
+      if (resolved.schema.requestedSchemaName) prefixLines.push(`Resolved schema_name "${resolved.schema.requestedSchemaName}" (${resolved.schema.source})`);
+      if (resolved.schema.itemRootName) prefixLines.push(`Resolved item_root "${resolved.schema.itemRootName}" -> ${resolved.schema.containerSelector}`);
+      const saveName = String(resolved.schema.saveAs || '').trim();
+      if (saveName) {
+        const savedResult = saveNamedBrowserExtractionSchemaForUrl(url, {
+          name: saveName,
+          aliases: resolved.schema.aliases,
+          itemRoot: resolved.schema.itemRootName,
+          containerSelector: resolved.schema.containerSelector,
+          dedupeKey: resolved.schema.dedupeKey,
+          limit: resolved.schema.limit,
+          fields: resolved.schema.fields,
+          url,
+        });
+        broadcastBrowserKnowledgeSnapshot(resolvedSessionId, url, savedResult.site, { action: 'saved_schema', savedKind: 'schema', saved: savedResult.saved });
+        let schemaHost = 'this site';
+        try { schemaHost = new URL(url).hostname; } catch {}
+        prefixLines.push(`Saved extraction schema "${savedResult.saved.name}" for ${schemaHost} (domain-scoped).`);
+      }
+      return `${prefixLines.length ? `${prefixLines.join('\n')}\n\n` : ''}${JSON.stringify(result, null, 2)}`;
+    } catch (err: any) {
+      return `ERROR: browser_extract_structured failed: ${err.message}`;
+    }
   }
-  const session = sessions.get(resolveSessionId(sessionId));
+  const session = sessions.get(resolvedSessionId);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (!schema || typeof schema !== 'object') return 'ERROR: schema must be an object with container_selector, item_root, or schema_name plus fields.';
 
@@ -8846,8 +9606,11 @@ export async function browserVisionScreenshot(sessionId: string): Promise<{
   coordinateScale?: { x: number; y: number };
   normalized?: boolean;
 } | null> {
-  if (getInHouseSession(sessionId)) return browserVisionScreenshotInHouse(sessionId);
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return null;
+  if (getInHouseSession(resolved)) return browserVisionScreenshotInHouse(resolved);
+  const session = sessions.get(resolved);
   if (!session) return null;
   try {
     const viewport = session.page.viewportSize() || { width: 1280, height: 720 };
@@ -8949,6 +9712,8 @@ export async function browserVisionClick(
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
   const resolvedVision = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolvedVision);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolvedVision)) {
     let px = Math.round(Number(x) || 0);
     let py = Math.round(Number(y) || 0);
@@ -9021,6 +9786,8 @@ export async function browserVisionType(
   options?: { observe?: BrowserObserveMode },
 ): Promise<string> {
   const resolvedVType = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolvedVType);
+  if (recovery?.error) return recovery.error;
   if (getInHouseSession(resolvedVType)) {
     let px = Math.round(Number(x) || 0);
     let py = Math.round(Number(y) || 0);
@@ -9135,6 +9902,8 @@ export async function browserHandleUserInput(
   };
 }> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) throw new Error(recovery.error);
   if (getInHouseSession(resolved)) {
     await callInHouseBrowser('input', { sessionId: resolved, ...payload });
     const state: any = await callInHouseBrowser('state', { sessionId: resolved }).catch(() => ({}));
@@ -10042,6 +10811,63 @@ async function extractStructuredItemsFromCurrentPage(
   }, payload);
 }
 
+function buildInHouseStructuredExtractionScript(
+  schema: ResolvedBrowserExtractionSchema,
+  options: { limit?: number } = {},
+): string {
+  const payload = {
+    containerSelector: schema.containerSelector || 'body',
+    fields: schema.fields || {},
+    limit: Math.min(Math.max(Number(options.limit || schema.limit || 50) || 50, 1), 500),
+  };
+  return `(() => {
+    const s = ${JSON.stringify(payload)};
+    const doc = globalThis.document;
+    const containers = Array.from(doc.querySelectorAll(s.containerSelector || 'body')).slice(0, Math.min(Number(s.limit) || 50, 500));
+    const toAbs = (value) => { try { return value ? new URL(value, globalThis.location.href).href : null; } catch { return value || null; } };
+    return containers.map((container) => {
+      const item = {};
+      let requiredMissing = 0;
+      const dedupeParts = [];
+      for (const [fieldName, fieldDef] of Object.entries(s.fields || {})) {
+        const def = fieldDef || {};
+        const selector = String(def.selector || '').trim();
+        let value = null;
+        try {
+          const el = selector ? container.querySelector(selector) : null;
+          if (el) {
+            const type = String(def.type || 'text').toLowerCase();
+            if (type === 'href') value = el.href || el.getAttribute('href') || null;
+            else if (type === 'src') {
+              const raw = el.currentSrc || el.getAttribute('data-src') || el.getAttribute('data-lazy-src') || el.getAttribute('src') || '';
+              value = toAbs(raw);
+            } else if (type === 'attr') value = el.getAttribute(def.attribute || 'value') || null;
+            else if (type === 'html') value = String(el.innerHTML || '').trim().slice(0, 1000);
+            else value = String(el.innerText || el.textContent || '').trim().slice(0, 500);
+          }
+        } catch {}
+        if ((value == null || String(value).trim() === '') && def.required === true) requiredMissing += 1;
+        item[fieldName] = value;
+        if (value != null && String(value).trim()) dedupeParts.push(fieldName + ':' + String(value).replace(/\\s+/g, ' ').trim().slice(0, 240));
+      }
+      const containerText = String(container.innerText || container.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 1000);
+      return { item, meta: { requiredMissing, containerText, dedupeSource: dedupeParts.join('|') || containerText.slice(0, 500) } };
+    });
+  })()`;
+}
+
+async function extractStructuredItemsFromInHousePage(
+  sessionId: string,
+  schema: ResolvedBrowserExtractionSchema,
+  options: { limit?: number } = {},
+): Promise<Array<{ item: Record<string, any>; meta: { requiredMissing: number; containerText: string; dedupeSource: string } }>> {
+  const result = await callInHouseBrowser('run-js', {
+    sessionId: resolveSessionId(sessionId),
+    code: buildInHouseStructuredExtractionScript(schema, options),
+  });
+  return Array.isArray(result) ? result as any : [];
+}
+
 function broadcastBrowserKnowledgeSnapshot(
   sessionId: string,
   url: string,
@@ -10087,6 +10913,40 @@ export async function getBrowserNamedElementsForSession(sessionId: string, resto
   extractionSchemas: BrowserKnowledgeExtractionSchema[];
 }> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error && !getInHouseSession(resolved)) return null;
+  const inHouse = getInHouseSession(resolved);
+  if (inHouse) {
+    const liveStream = browserLiveStreams.get(resolved);
+    const url = String(inHouse.url || '').trim();
+    const shot = getLastBrowserScreenshot(resolved) || await browserVisionScreenshot(resolved).catch(() => null);
+    const interactionState = getOrCreateBrowserInteractionState(resolveBrowserInteractionStateId(resolved));
+    return {
+      sessionId: resolved,
+      url,
+      site: (() => {
+        try {
+          return String(new URL(url).hostname || '').replace(/^www\./i, '').toLowerCase();
+        } catch {
+          return '';
+        }
+      })(),
+      title: String(inHouse.title || ''),
+      active: true,
+      mode: interactionState.mode,
+      captured: interactionState.captured,
+      controlOwner: interactionState.controlOwner,
+      streamActive: liveStream?.active === true,
+      streamTransport: liveStream?.transport || '',
+      streamFocus: liveStream?.focus || 'passive',
+      frameBase64: String(shot?.base64 || ''),
+      frameWidth: Number(shot?.width || 0),
+      frameHeight: Number(shot?.height || 0),
+      elements: listNamedBrowserElementsForUrl(url),
+      itemRoots: listNamedBrowserItemRootsForUrl(url),
+      extractionSchemas: listNamedBrowserExtractionSchemasForUrl(url),
+    };
+  }
   const session = sessions.get(resolved) || await getOrCreateSession(resolved, restoreHint).catch(() => null);
   if (!session) return null;
   const liveStream = browserLiveStreams.get(resolved);
@@ -10183,6 +11043,8 @@ export async function browserInspectPoint(
   viewport: { width: number; height: number };
 }> {
   const resolved = resolveSessionId(sessionId);
+  const recovery = await recoverInHouseSessionMapping(resolved);
+  if (recovery?.error) return null;
   if (getInHouseSession(resolved)) {
     const inHouse = getInHouseSession(resolved)!;
     const inspected: any = await callInHouseBrowser('inspect', { sessionId: resolved, x, y });

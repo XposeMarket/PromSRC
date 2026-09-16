@@ -179,6 +179,16 @@ export interface TaskResumeContext {
   browserUrl?: string;
   round: number;
   orchestrationLog: string[];
+  /** Rolling compaction handoff for everything before the active transcript. */
+  latestContextSummary?: string;
+  contextSummaryUpdatedAt?: number;
+  /** Visible commentary/activity retained from the current or interrupted turn. */
+  commentaryContext?: string;
+  visibleReasoningSummary?: string;
+  processEntries?: Array<Record<string, any>>;
+  liveTraceEntries?: Array<Record<string, any>>;
+  /** Structured recovery contract consumed by the next task/subagent turn. */
+  lastTurnPacket?: import('../context/turn-context-packet').TurnContextPacket;
   fileOpState?: {
     type: string;
     owner: 'primary' | 'secondary';

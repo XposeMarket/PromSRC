@@ -6,11 +6,16 @@ import { broadcastWS, broadcastTeamEvent, resolveChannelsConfig, normalizeTelegr
 import { listManagedTeams, getManagedTeam } from '../teams/managed-teams';
 import { recordAgentRun, getAgentRunHistory, getAgentLastRun } from '../../scheduler';
 import { inferAgentModelDefaultType, resolveConfiguredAgentRouting } from '../../agents/model-routing.js';
-import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
-import { addMessage, getSession, setActivatedToolCategories, setWorkspace } from '../session';
+import {
+  appendSubagentChatMessage,
+  getSubagentChatContextState,
+  getSubagentChatHistory,
+  setSubagentChatContextState,
+} from '../agents-runtime/subagent-chat-store';
+import { addMessage, getActiveHistoryForPersistence, getSession, replaceHistory, restoreSessionContextState, setActivatedToolCategories, setWorkspace } from '../session';
 import { handleTaskRecoveryMessage } from '../tasks/task-router';
 import { getEvidenceBusSnapshot, listTaskSummaries, loadTask, type TaskRecord, type TaskSummary } from '../tasks/task-store';
-import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTeamMemberAgentIds } from '../teams/managed-teams';
@@ -23,6 +28,7 @@ import { deleteAgentCompletely } from '../agents-runtime/entity-delete';
 import { AGENT_PROMPT_FILENAME, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -794,24 +800,75 @@ function buildSubagentCallerContext(agentId: string, agent: any, mainWorkspace: 
   return [...intro, '[/SUBAGENT CHAT CONTEXT]'].join('\n');
 }
 
-function seedSubagentSessionFromChatStore(agentId: string, sessionId: string, workspacePath: string): void {
+function seedSubagentSessionFromChatStore(agentId: string, sessionId: string, workspacePath: string, pendingMessage?: string): void {
   setWorkspace(sessionId, workspacePath);
   const session = getSession(sessionId);
-  if (Array.isArray(session.history) && session.history.length > 0) return;
-
+  const sessionWasEmpty = !Array.isArray(session.history) || session.history.length === 0;
   const prior = getSubagentChatHistory(agentId, 80);
-  for (const msg of prior) {
-    if (msg.role !== 'user' && msg.role !== 'agent') continue;
-    addMessage(sessionId, {
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: String(msg.content || ''),
-      timestamp: Number(msg.ts || Date.now()) || Date.now(),
-      channel: 'web',
-    }, {
-      disableCompactionCheck: true,
-      disableMemoryFlushCheck: true,
+  const pending = String(pendingMessage || '').trim();
+  // The HTTP/channel adapters persist the incoming user row before entering
+  // the shared runtime. Do not seed that same row and then let
+  // runInteractiveTurn append it again on a brand-new session.
+  const seedMessages = pending && prior.length > 0
+    && prior[prior.length - 1]?.role === 'user'
+    && String(prior[prior.length - 1]?.content || '').trim() === pending
+    ? prior.slice(0, -1)
+    : prior;
+  if (sessionWasEmpty) {
+    for (const msg of seedMessages) {
+      if (msg.role !== 'user' && msg.role !== 'agent') continue;
+      addMessage(sessionId, {
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: String(msg.content || ''),
+        timestamp: Number(msg.ts || Date.now()) || Date.now(),
+        channel: 'web',
+        commentaryContext: msg.commentaryContext,
+        visibleReasoningSummary: msg.visibleReasoningSummary,
+        processEntries: msg.processEntries,
+        liveTraceEntries: msg.liveTraceEntries,
+      }, {
+        disableCompactionCheck: true,
+        disableMemoryFlushCheck: true,
+      });
+    }
+  }
+  const state = getSubagentChatContextState(agentId);
+  const stateIsNewer = Number(state.contextSummaryUpdatedAt || 0) > Number(session.contextSummaryUpdatedAt || 0);
+  if (state.latestContextSummary && (stateIsNewer || !session.latestContextSummary)) {
+    if (!sessionWasEmpty && seedMessages.length > 0) {
+      // The shared agent-chat store is the durable active tail for this
+      // subagent. If it has a newer compaction summary than this session,
+      // replace the old raw transcript before restoring the summary; otherwise
+      // pre-compaction rows would be replayed beside the new summary.
+      replaceHistory(sessionId, seedMessages
+        .filter((msg) => msg.role === 'user' || msg.role === 'agent')
+        .map((msg) => ({
+          role: msg.role === 'agent' ? 'assistant' : 'user',
+          content: String(msg.content || ''),
+          timestamp: Number(msg.ts || Date.now()) || Date.now(),
+          channel: 'web',
+          commentaryContext: msg.commentaryContext,
+          visibleReasoningSummary: msg.visibleReasoningSummary,
+          processEntries: msg.processEntries,
+          liveTraceEntries: msg.liveTraceEntries,
+        })), { resetCompaction: true });
+    }
+    restoreSessionContextState(sessionId, {
+      latestContextSummary: state.latestContextSummary,
+      contextSummaryUpdatedAt: state.contextSummaryUpdatedAt,
+      // The shared store returns the active tail, so the summary precedes the
+      // restored messages rather than indexing into the pre-compaction history.
+      contextStartIndex: 0,
     });
   }
+}
+
+function getActiveSubagentStoreMessages(sessionId: string): Array<Record<string, any>> {
+  return getActiveHistoryForPersistence(sessionId, 80).map((message: any) => ({
+    ...message,
+    role: message?.role === 'assistant' ? 'agent' : message?.role,
+    ts: Number(message?.timestamp || Date.now()) || Date.now(),
+  }));
 }
 
 function createSSESender(res: any): (event: string, data: any) => void {
@@ -924,6 +981,7 @@ async function runSubagentChatTurn(
   visionAttachments?: RuntimeVisionAttachment[],
   options?: {
     sessionIdOverride?: string;
+    runtimeIdOverride?: string;
     source?: string;
     seedFromSharedChatStore?: boolean;
     callerContextExtra?: string;
@@ -941,7 +999,7 @@ async function runSubagentChatTurn(
   const artifactWorkspace = ensureAgentWorkspace(agent);
   const sessionId = options?.sessionIdOverride || getSubagentChatSessionId(agentId);
   if (options?.seedFromSharedChatStore !== false) {
-    seedSubagentSessionFromChatStore(agentId, sessionId, mainWorkspace);
+    seedSubagentSessionFromChatStore(agentId, sessionId, mainWorkspace, message);
   } else {
     setWorkspace(sessionId, mainWorkspace);
   }
@@ -969,6 +1027,46 @@ async function runSubagentChatTurn(
   });
   const abortSignal = externalAbortSignal || { aborted: false };
   const baseEmit = sendSSE || (() => {});
+  const ownedRuntimeId = options?.runtimeIdOverride
+    ? undefined
+    : registerLiveRuntime({
+      kind: 'subagent',
+      label: `Subagent chat - ${agent.name || agentId}`,
+      sessionId,
+      agentId,
+      source: options?.source || 'subagent_chat',
+      detail: message.slice(0, 160),
+      abortSignal,
+      recoveryPolicy: 'mark_interrupted',
+      recoveryData: {
+        message,
+        source: options?.source || 'subagent_chat',
+      },
+    });
+  const runtimeId = options?.runtimeIdOverride || ownedRuntimeId;
+  const persistRuntimeTrace = (event: string, data: any): void => {
+    if (!runtimeId) return;
+    const trace = buildDurableChatTraceFromFrames(options?.traceFrames || [], `subagent_${agentId}`) || [];
+    const visibleReasoningSummary = trace
+      .filter((entry: any) => entry?.type === 'think' || entry?.type === 'preamble')
+      .map((entry: any) => String(entry?.text || '').trim())
+      .filter(Boolean)
+      .join('\n')
+      .slice(-4_000);
+    updateLiveRuntimeCheckpoint(runtimeId, {
+      event,
+      ...(data?.message ? { message: String(data.message).slice(0, 1_000) } : {}),
+      ...(data?.action || data?.name ? { toolName: String(data.action || data.name) } : {}),
+      ...(data?.result ? { result: String(data.result).slice(0, 1_200) } : {}),
+      processEntries: trace.slice(-320),
+      liveTraceEntries: trace.slice(-320),
+      commentaryContext: buildDurableCommentaryContext({
+        liveTraceEntries: trace,
+        visibleReasoningSummary,
+      }),
+      visibleReasoningSummary,
+    }, { persist: event === 'final' || event === 'error' });
+  };
 
   let timeoutHandle: NodeJS.Timeout | undefined;
   let settled = false;
@@ -995,6 +1093,7 @@ async function runSubagentChatTurn(
   const emit = (event: string, data: any) => {
     resetInactivityTimeout();
     baseEmit(event, data);
+    persistRuntimeTrace(event, data);
   };
 
   try {
@@ -1027,6 +1126,11 @@ async function runSubagentChatTurn(
 
     const finishedAt = Date.now();
     const reply = String(result?.text || '').trim() || '(No response text returned.)';
+    const sessionAfterTurn = getSession(sessionId);
+    setSubagentChatContextState(agentId, {
+      latestContextSummary: sessionAfterTurn.latestContextSummary,
+      contextSummaryUpdatedAt: sessionAfterTurn.contextSummaryUpdatedAt,
+    }, getActiveSubagentStoreMessages(sessionId));
     const agentMessage = appendSubagentChatMessage(agentId, {
       id: options?.clientMessageId ? `${options.clientMessageId}_agent` : undefined,
       role: 'agent',
@@ -1068,6 +1172,7 @@ async function runSubagentChatTurn(
       resultPreview: reply,
     });
 
+    if (ownedRuntimeId) finishLiveRuntime(ownedRuntimeId);
     return {
       result,
       historyEntry,
@@ -1075,15 +1180,59 @@ async function runSubagentChatTurn(
     };
   } catch (err: any) {
     if (abortSignal.aborted) {
+      const sessionAfterAbort = getSession(sessionId);
+      setSubagentChatContextState(agentId, {
+        latestContextSummary: sessionAfterAbort.latestContextSummary,
+        contextSummaryUpdatedAt: sessionAfterAbort.contextSummaryUpdatedAt,
+      }, getActiveSubagentStoreMessages(sessionId));
+      const interruptedTrace = buildDurableChatTraceFromFrames(options?.traceFrames || [], `subagent_${agentId}`);
+      const interruptedCommentary = buildDurableCommentaryContext({ liveTraceEntries: interruptedTrace });
+      const interruptedMessage = appendSubagentChatMessage(agentId, {
+        id: options?.clientMessageId ? `${options.clientMessageId}_agent_interrupted` : undefined,
+        role: 'agent',
+        content: '[Interrupted — the subagent checkpoint was preserved for the next turn.]',
+        commentaryContext: interruptedCommentary || undefined,
+        processEntries: interruptedTrace,
+        liveTraceEntries: interruptedTrace,
+        metadata: {
+          source: options?.source || 'subagent_chat',
+          channelSource: options?.source,
+          success: false,
+          interrupted: true,
+          processEntries: interruptedTrace,
+          liveTraceEntries: interruptedTrace,
+          commentaryContext: interruptedCommentary || undefined,
+        },
+      });
+      broadcastWS({ type: 'subagent_chat_message', agentId, message: interruptedMessage });
+      if (ownedRuntimeId) finishLiveRuntime(ownedRuntimeId);
       throw err;
     }
+    const sessionAfterFailure = getSession(sessionId);
+    setSubagentChatContextState(agentId, {
+      latestContextSummary: sessionAfterFailure.latestContextSummary,
+      contextSummaryUpdatedAt: sessionAfterFailure.contextSummaryUpdatedAt,
+    }, getActiveSubagentStoreMessages(sessionId));
+    const failedTrace = buildDurableChatTraceFromFrames(options?.traceFrames || [], `subagent_${agentId}`);
+    const failedCommentary = buildDurableCommentaryContext({ liveTraceEntries: failedTrace });
     const agentMessage = appendSubagentChatMessage(agentId, {
       id: options?.clientMessageId ? `${options.clientMessageId}_agent_error` : undefined,
       role: 'agent',
       content: `Error: ${err.message}`,
-      metadata: { source: options?.source || 'subagent_chat', channelSource: options?.source, success: false },
+      commentaryContext: failedCommentary || undefined,
+      processEntries: failedTrace,
+      liveTraceEntries: failedTrace,
+      metadata: {
+        source: options?.source || 'subagent_chat',
+        channelSource: options?.source,
+        success: false,
+        processEntries: failedTrace,
+        liveTraceEntries: failedTrace,
+        commentaryContext: failedCommentary || undefined,
+      },
     });
     broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
+    if (ownedRuntimeId) finishLiveRuntime(ownedRuntimeId);
     throw err;
   }
 }
@@ -1127,18 +1276,30 @@ export async function runSubagentChatTurnFromChannel(params: {
   });
   broadcastWS({ type: 'subagent_chat_message', agentId, message: userMessage });
 
+  const traceFrames: SubagentChatStreamFrame[] = [];
+  let traceSeq = 0;
+  const captureTrace = (event: string, data: any) => {
+    traceFrames.push({
+      seq: ++traceSeq,
+      type: String(event || 'event'),
+      at: Date.now(),
+      data: data && typeof data === 'object' ? { ...data } : {},
+    });
+  };
+
   return runSubagentChatTurn(
     agentId,
     agent,
     content,
     timeoutMs,
-    undefined,
+    captureTrace,
     undefined,
     undefined,
     {
       sessionIdOverride: sessionId,
       source,
       seedFromSharedChatStore: params.seedFromSharedChatStore,
+      traceFrames,
     },
   );
 }
@@ -1510,6 +1671,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
 
   const retainedStream = beginSubagentChatStream(agentId);
   const baseSendSSE = createSSESender(res);
+  let runtimeId: string | undefined;
   let lastNonHeartbeatSseAt = Date.now();
   let lastVisibleHeartbeatAt = 0;
   const sendSSE = (event: string, data: any) => {
@@ -1542,7 +1704,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
     abortSignal.aborted = true;
     abortController.abort();
   };
-  const runtimeId = registerLiveRuntime({
+  runtimeId = registerLiveRuntime({
     kind: 'subagent',
     label: runtimeLabel,
     sessionId: runtimeSessionId,
@@ -1612,6 +1774,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
           ? {
             source: 'subagent_voice',
             clientMessageId,
+            runtimeIdOverride: runtimeId,
             traceFrames: retainedStream.events,
             callerContextExtra: [
               '[VOICE_AGENT_HANDOFF]',
@@ -1629,6 +1792,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
           : {
             source: String(req.body?.source || 'subagent_chat').trim() || 'subagent_chat',
             clientMessageId,
+            runtimeIdOverride: runtimeId,
             traceFrames: retainedStream.events,
           },
     );

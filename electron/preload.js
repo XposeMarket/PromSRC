@@ -139,6 +139,7 @@ contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
   selectTab: (options = {}) => ipcRenderer.invoke('native-browser:select-tab', options),
   newTab: (options = {}) => ipcRenderer.invoke('native-browser:new-tab', options),
   closeTab: (options = {}) => ipcRenderer.invoke('native-browser:close-tab', options),
+  close: (options = {}) => ipcRenderer.invoke('native-browser:close', options),
   focus: () => ipcRenderer.invoke('native-browser:focus'),
   state: () => ipcRenderer.invoke('native-browser:state'),
   onState: (cb) => {

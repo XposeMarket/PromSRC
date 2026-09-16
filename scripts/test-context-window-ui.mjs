@@ -16,6 +16,8 @@ const live = read('web-ui/src/context-window-live-tracking.js');
 const generatedLive = read('generated/public-web-ui/static/context-window-live-tracking.js');
 const contextWindowValue = read('web-ui/src/context-window-value.js');
 const generatedContextWindowValue = read('generated/public-web-ui/static/context-window-value.js');
+const mobileContext = read('web-ui/src/mobile/mobile-context-window.js');
+const generatedMobileContext = read('generated/public-web-ui/static/mobile/mobile-context-window.js');
 
 // The visible meter is thread-level active context pressure. It is deliberately
 // sourced from the same persisted estimate / rolling-summary boundary used by
@@ -80,6 +82,62 @@ assert.equal(
   471,
   'pressureTokens remains a fallback while the active state snapshot is unavailable',
 );
+
+// A reconnect must not erase a healthy ring while either endpoint is down. The
+// browser cache stores only the bounded numeric/display snapshot; transcript,
+// tool-log, and reasoning text never enter this persistence path.
+assert.match(desktopChat, /readContextWindowCache/, 'desktop must hydrate the session-keyed context snapshot');
+assert.match(desktopChat, /writeContextWindowCache/, 'desktop must persist successful context snapshots');
+assert.match(desktopChat, /transient transport failure must never paint a healthy ring as zero/, 'desktop must retain the last good ring during recovery');
+assert.match(mobileContext, /_contextSnapshotsBySession/, 'mobile must retain context snapshots by session');
+assert.match(mobileContext, /_mergedContextSnapshot/, 'mobile must merge independently recovered context endpoints');
+assert.match(mobileContext, /_renderContext\(_mergedContextSnapshot\(_contextSnapshotForSession\(sid\)\)\)/, 'mobile must retain the last good ring during recovery');
+assert.equal(generatedMobileContext, mobileContext, 'mobile context source/generated mirrors must stay byte-identical');
+
+const originalWindow = globalThis.window;
+const cacheStorage = new Map();
+globalThis.window = {
+  localStorage: {
+    getItem(key) { return cacheStorage.get(key) || null; },
+    setItem(key, value) { cacheStorage.set(key, String(value)); },
+  },
+};
+try {
+  const sessionId = 'context-cache-regression';
+  assert.equal(
+    contextWindowValueModule.writeContextWindowCache(sessionId, {
+      data: {
+        success: true,
+        currentStateTokens: 42_000,
+        contextWindowTokens: 200_000,
+        currentState: {
+          rows: [{ id: 'conversation', label: 'Conversation', tokens: 42_000 }],
+        },
+      },
+    }),
+    true,
+    'data half should persist independently',
+  );
+  assert.equal(
+    contextWindowValueModule.writeContextWindowCache(sessionId, {
+      pressure: {
+        success: true,
+        pressureTokens: 58_000,
+        contextWindowTokens: 200_000,
+        usage: { usedTokens: 58_000, capacityTokens: 200_000, percent: 29 },
+      },
+    }),
+    true,
+    'pressure half should persist independently',
+  );
+  const cached = contextWindowValueModule.readContextWindowCache(sessionId);
+  assert.equal(cached?.data?.currentStateTokens, 42_000, 'cached current-state tokens should survive a pressure-only write');
+  assert.equal(cached?.pressure?.pressureTokens, 58_000, 'cached full-thread pressure should survive independently');
+  assert.match(cacheStorage.get('prometheus.context-window-cache.v1') || '', /context-cache-regression/);
+} finally {
+  if (originalWindow === undefined) delete globalThis.window;
+  else globalThis.window = originalWindow;
+}
 
 // performance.js is shared by desktop and mobile. The browser-level
 // performance-foundation test exercises both effects: mobile never requests

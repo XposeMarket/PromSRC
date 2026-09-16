@@ -18,6 +18,7 @@ import crypto from 'crypto';
 import { getAgentById, getAgents, ensureAgentWorkspace, getConfig } from '../../config/config.js';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
 import { ensureAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,9 @@ export interface TeamChatMessage {
     durationMs?: number;
     admissionCode?: string;
     thinking?: string;
+    /** Safe, bounded commentary capsule for the next manager/member turn. */
+    commentaryContext?: string;
+    visibleReasoningSummary?: string;
     attachmentPreviews?: Array<{
       kind?: string;
       name?: string;
@@ -178,6 +182,10 @@ export interface TeamRoomMessage {
     source?: string;
     stepCount?: number;
     durationMs?: number;
+    commentaryContext?: string;
+    visibleReasoningSummary?: string;
+    processEntries?: Array<Record<string, any>>;
+    liveTraceEntries?: Array<Record<string, any>>;
   };
 }
 
@@ -739,6 +747,10 @@ function mapChatMessageToRoomMessage(message: TeamChatMessage): TeamRoomMessage 
       runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
       stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
       durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
+      commentaryContext: String(message.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+      visibleReasoningSummary: String(message.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+      processEntries: Array.isArray(message.metadata.processEntries) ? message.metadata.processEntries.slice(-320) : undefined,
+      liveTraceEntries: Array.isArray(message.metadata.liveTraceEntries) ? message.metadata.liveTraceEntries.slice(-320) : undefined,
     } : undefined,
   };
 }
@@ -777,6 +789,10 @@ function mapRoomMessageToChatMessage(message: TeamRoomMessage): TeamChatMessage 
         runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
         stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
         durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
+        commentaryContext: String(message.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+        visibleReasoningSummary: String(message.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+        processEntries: Array.isArray(message.metadata.processEntries) ? message.metadata.processEntries.slice(-320) : undefined,
+        liveTraceEntries: Array.isArray(message.metadata.liveTraceEntries) ? message.metadata.liveTraceEntries.slice(-320) : undefined,
       } : {}),
       ...mapRoomTargetToChatMetadata(message.target),
     },
@@ -805,6 +821,10 @@ function normalizeTeamRoomMessage(raw: any): TeamRoomMessage | null {
       source: String(raw.metadata.source || '').trim() || undefined,
       stepCount: Number.isFinite(Number(raw.metadata.stepCount)) ? Number(raw.metadata.stepCount) : undefined,
       durationMs: Number.isFinite(Number(raw.metadata.durationMs)) ? Number(raw.metadata.durationMs) : undefined,
+      commentaryContext: String(raw.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+      visibleReasoningSummary: String(raw.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+      processEntries: Array.isArray(raw.metadata.processEntries) ? raw.metadata.processEntries.slice(-320) : undefined,
+      liveTraceEntries: Array.isArray(raw.metadata.liveTraceEntries) ? raw.metadata.liveTraceEntries.slice(-320) : undefined,
     } : undefined,
   };
 }
@@ -2811,6 +2831,13 @@ export function buildTeamRoomSummary(
       if (typeof message.metadata?.runSuccess === 'boolean') metaBits.push(message.metadata.runSuccess ? 'success' : 'failed');
       const meta = metaBits.length ? ` (${metaBits.join(', ')})` : '';
       lines.push(`  - [${actor}${target}]${meta} ${message.content.slice(0, 300)}`);
+      const commentary = buildDurableCommentaryContext(message.metadata || {}, 1_000);
+      if (commentary) {
+        lines.push(`    Durable turn continuity:`);
+        for (const commentaryLine of commentary.split('\n').slice(0, 8)) {
+          lines.push(`      ${commentaryLine.slice(0, 280)}`);
+        }
+      }
     }
   }
 

@@ -12,15 +12,16 @@ import {
   markTeamMemberRoomEventsSeen,
 } from './managed-teams';
 import { getTeamWorkspacePath, buildWorkspaceContextBlock, ensureTeamWorkspace, ensureTeamAgentIdentity } from './team-workspace';
-import { loadTask, saveTask } from '../tasks/task-store';
+import { loadTask, saveTask, updateResumeContext } from '../tasks/task-store';
 import { bindTaskRunToSession, clearTaskRunBinding, completeNextOpenTaskStep } from '../tasks/task-run-mirror';
-import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
-import { setActivatedToolCategories } from '../session';
+import { getActiveHistoryForPersistence, getSession, setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
+import { buildTaskContinuitySnapshot, serializeTaskSessionMessage } from '../tasks/task-continuity';
 import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
 import { RuntimeAdmissionError } from '../runtime-admission';
 import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
@@ -554,6 +555,9 @@ async function runTeamAgentViaChatInternal(
   let liveTraceSeq = 0;
   let thinkingText = '';
   let liveReplyText = '';
+  let visibleCommentaryText = '';
+  let runtimeId: string | undefined;
+  let continuityLastPersistAt = 0;
 
   const nowTs = () => new Date().toLocaleTimeString();
   const safePreview = (value: any, max = 400): string => {
@@ -575,6 +579,49 @@ async function runTeamAgentViaChatInternal(
       ...extra,
     });
     if (processEntries.length > 12_000) processEntries.splice(0, processEntries.length - 12_000);
+  };
+  const persistTaskContinuity = (
+    status: 'completed' | 'aborted' | 'failed' = 'completed',
+    resultText?: string,
+    abortReason?: string,
+    force = false,
+  ) => {
+    const now = Date.now();
+    if (!force && now - continuityLastPersistAt < 2_000) return;
+    const currentTask = loadTask(cronTask.id) || cronTask;
+    const continuity = buildTaskContinuitySnapshot({
+      task: currentTask,
+      sessionId,
+      status,
+      processEntries,
+      liveTraceEntries,
+      visibleReasoningSummary: visibleCommentaryText,
+      resultText,
+      abortReason,
+    });
+    const session = getSession(sessionId);
+    const activeMessages = getActiveHistoryForPersistence(sessionId, 40)
+      .map(serializeTaskSessionMessage);
+    updateResumeContext(cronTask.id, {
+      messages: activeMessages,
+      latestContextSummary: session.latestContextSummary,
+      contextSummaryUpdatedAt: session.contextSummaryUpdatedAt,
+      commentaryContext: continuity.commentaryContext || currentTask.resumeContext?.commentaryContext,
+      visibleReasoningSummary: continuity.visibleReasoningSummary,
+      processEntries: continuity.processEntries,
+      liveTraceEntries: continuity.liveTraceEntries,
+      lastTurnPacket: continuity.packet,
+    });
+    continuityLastPersistAt = now;
+    if (runtimeId) {
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event: 'continuity_checkpoint',
+        commentaryContext: continuity.commentaryContext,
+        processEntries: continuity.processEntries,
+        liveTraceEntries: continuity.liveTraceEntries,
+        currentStepIndex: currentTask.currentStepIndex,
+      }, { persist: force });
+    }
   };
   const captureTaskStreamEvent = (event: string, data: any) => {
     appendBackgroundSseTrace([], liveTraceEntries, event, data, {
@@ -599,6 +646,7 @@ async function runTeamAgentViaChatInternal(
       const thought = String(data?.text || data?.message || data?.narration || '').trim();
       if (thought) {
         thinkingText = thinkingText ? `${thinkingText}\n\n${thought}` : thought;
+        visibleCommentaryText = `${visibleCommentaryText}\n${thought}`.trim().slice(-4_000);
         processLogLines.push(`[commentary] ${thought.slice(0, 200)}`);
         pushProcessEntry('preamble', thought, { source: 'agent_thought', visibility: 'user' });
       }
@@ -607,9 +655,17 @@ async function runTeamAgentViaChatInternal(
     if (event === 'thinking' || event === 'agent_thought') {
       const thought = String(data?.thinking || data?.text || '').trim();
       if (!thought) return;
+      const visibility = String(data?.visibility || '').toLowerCase();
+      if (visibility === 'private' || visibility === 'internal') return;
       thinkingText = thinkingText ? `${thinkingText}\n\n${thought}` : thought;
+      visibleCommentaryText = `${visibleCommentaryText}\n${thought}`.trim().slice(-4_000);
       processLogLines.push(`[thinking] ${thought.slice(0, 200)}`);
-      pushProcessEntry('think', thought, data?.actor ? { actor: data.actor } : {});
+      pushProcessEntry('think', thought, {
+        source: data?.source || 'agent_thought',
+        visibility: visibility || 'user',
+        event: data?.event || event,
+        ...(data?.actor ? { actor: data.actor } : {}),
+      });
       return;
     }
     if (event === 'info') {
@@ -679,6 +735,7 @@ async function runTeamAgentViaChatInternal(
     };
     if (payload.type === 'task_stream_event') {
       captureTaskStreamEvent(String(payload.eventType || ''), payload.data);
+      persistTaskContinuity();
     }
     deps.broadcastTeamEvent(payload);
     if (payload.type === 'task_stream_event') {
@@ -705,7 +762,7 @@ async function runTeamAgentViaChatInternal(
     agentId,
   });
   const abortSignal = { aborted: false };
-  const runtimeId = registerLiveRuntime({
+  runtimeId = registerLiveRuntime({
     kind: 'team_member',
     label: `Team dispatch - ${agentName}`,
     sessionId,
@@ -756,6 +813,12 @@ async function runTeamAgentViaChatInternal(
     const waitingForManager = finalStatus === 'awaiting_user_input' || finalStatus === 'needs_assistance' || finalStatus === 'paused';
     const success = finalStatus === 'complete' && !resultText.startsWith('ERROR:');
     const zeroToolCalls = stepCount === 0;
+    persistTaskContinuity(
+      success ? 'completed' : waitingForManager ? 'aborted' : 'failed',
+      resultText,
+      waitingForManager ? 'waiting_for_manager' : undefined,
+      true,
+    );
 
     // ── Validate result substantiveness for complex tasks ─────────────────────
     let resultWarning = '';
@@ -864,6 +927,12 @@ async function runTeamAgentViaChatInternal(
       ? err.code
       : undefined;
     const retryableAdmission = !!admissionCode;
+    persistTaskContinuity(
+      retryableAdmission ? 'aborted' : 'failed',
+      String(err?.message ?? err),
+      retryableAdmission ? 'capacity_limited' : 'team_dispatch_exception',
+      true,
+    );
 
     // ── Issue 9: Record failed run in team history ────────────────────────────
     if (teamId) {

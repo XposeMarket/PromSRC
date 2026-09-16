@@ -237,12 +237,23 @@ const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runn
 
 export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot[]> {
   startupMark('runStartup entered');
-  await yieldStartup();
   const {
     HOST, PORT, config, skillsManager,
     cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
     handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
   } = deps;
+  // Install the full background executor before the first startup yield. The
+  // gateway is intentionally brought up only after this function completes,
+  // but keeping the wiring at the top also protects internal recovery work
+  // from entering the legacy one-shot fallback with no live stream.
+  try {
+    const { setBackgroundAgentDeps } = require('../tasks/task-runner') as typeof import('../tasks/task-runner');
+    setBackgroundAgentDeps({ handleChat, broadcastWS });
+  } catch (e: any) {
+    console.warn('[BackgroundAgent] Could not wire background agent deps:', e?.message || e);
+  }
+  startupMark('background deps wired');
+  await yieldStartup();
   let deferredMainChatRecoveries: LiveRuntimeSnapshot[] = [];
 
   try { retireLegacySelfRepairStore(getConfig().getConfigDir()); }
@@ -390,15 +401,6 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
   startAutoSettleScheduler();
   startupMark('auto-settle scheduler started');
   await yieldStartup();
-
-  // Wire handleChat into background agent executor so spawned bg agents run full tool loop
-  try {
-    const { setBackgroundAgentDeps } = require('../tasks/task-runner') as typeof import('../tasks/task-runner');
-    setBackgroundAgentDeps({ handleChat, broadcastWS });
-  } catch (e: any) {
-    console.warn('[BackgroundAgent] Could not wire background agent deps:', e?.message);
-  }
-  startupMark('background deps wired');
 
   // Inject full handleChat-based agent runner into team-manager-runner
   try {

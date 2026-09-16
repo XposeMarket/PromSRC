@@ -99,6 +99,10 @@ assert.match(sourceCss, /\.pm-send:not\(\.is-voice\):not\(\.is-abort\) svg[\s\S]
 assert.match(sourceCss, /#pm-composer \.pm-composer-row > #pm-chat-mic-btn[\s\S]*width: 38px !important[\s\S]*height: 38px !important/, 'resting dictation control must match the resting send diameter');
 assert.match(sourceCss, /#pm-composer:is\(\.is-focused, \.has-attachments\) \.pm-composer-row > #pm-chat-mic-btn[\s\S]*width: 40px !important[\s\S]*height: 40px !important/, 'expanded dictation control must match the expanded send diameter');
 assert.match(sourceCss, /#pm-composer #pm-chat-mic-btn svg[\s\S]*width: 23px !important[\s\S]*height: 23px !important/, 'dictation glyph must be larger without changing its button');
+assert.match(sourcePages, /const preserveComposerFocusOnPointer = \(button, kind\) => \{[\s\S]*holdComposerOpenForControl\(kind, \{ restoreFocus: keepComposerFocus \}\)[\s\S]*if \(keepComposerFocus\) event\.preventDefault\(\);[\s\S]*preserveComposerFocusOnPointer\(attachBtn, 'attach'\);[\s\S]*preserveComposerFocusOnPointer\(micBtn, 'dictation'\);/, 'attachment and dictation taps must preserve the focused composer');
+assert.match(sourcePages, /const focused = document\.activeElement === input \|\| !!composerControlHold/, 'attachment and dictation taps must preserve the expanded composer layout through transient blur');
+assert.match(sourcePages, /function clearComposerControlHold\(\)[\s\S]*composerControlHold = ''/, 'composer control focus hold must have an explicit release path');
+assert.doesNotMatch(sourcePages, /attachMobileButtonHaptic\(micBtn/, 'dictation must not use a focus-stealing native-switch wrapper');
 assert.match(sourceCss, /\.pm-composer:is\(\.is-focused, \.has-attachments\) \{[\s\S]*padding: 6px 10px 5px/, 'opened composer must use the compact two-row height');
 assert.match(sourceCss, /\.pm-composer:is\(\.is-focused, \.has-attachments\) \.pm-composer-input \{[\s\S]*min-height: 30px;[\s\S]*padding: 2px 6px 4px/, 'opened composer input must keep the compact text row');
 assert.match(sourceCss, /\.pm-file-changes-card \{[\s\S]*border-radius: 12px/, 'mobile end-of-turn file cards must use compact corners');

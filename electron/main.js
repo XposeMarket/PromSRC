@@ -836,6 +836,10 @@ const nativeBrowserViews = new Map();      // `${profileKey}::${tabId}` -> WebCo
 const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
 const nativeBrowserSessionTabs = new Map(); // `${sessionId}::${profileKey}` -> { partition, tabIds, activeTabId }
 const nativeBrowserProfileSessions = new Map(); // imported profile id -> Electron Session
+// Diagnostics are kept with the native WebContents rather than in the
+// gateway. That makes screenshots/console/network reads survive a gateway
+// restart or a lost in-memory session mapping.
+const nativeBrowserNetworkSessions = new Map(); // partition -> { session, completed, error }
 let nativeBrowserTabSequence = 0;
 let presentedNativePartition = '';         // partition currently shown in the canvas
 let presentedNativeTabId = '';             // tab currently shown in the canvas
@@ -2322,6 +2326,11 @@ function nativeViewMeta(view) {
     lastResourceMetrics: null,
     lastResourceLogAt: 0,
     lastResourcePressure: 'normal',
+    consoleEntries: [],
+    networkEntries: [],
+    networkCapture: false,
+    networkUrlFilter: '',
+    networkCaptureLimit: 200,
   };
   return view.__promMeta;
 }
@@ -2392,6 +2401,86 @@ function getNativeViewByPartition(partition, tabId = '') {
   if (view && !view.webContents?.isDestroyed()) return view;
   if (view) nativeBrowserViews.delete(key);
   return null;
+}
+
+function getNativeViewByWebContentsId(webContentsId) {
+  const id = Number(webContentsId);
+  if (!Number.isFinite(id)) return null;
+  for (const [, view] of nativeBrowserViews) {
+    const wc = view?.webContents;
+    if (wc && !wc.isDestroyed?.() && Number(wc.id) === id) return view;
+  }
+  return null;
+}
+
+function appendNativeDiagnosticEntry(meta, entry, limit = 1000) {
+  if (!meta) return;
+  const target = Array.isArray(meta.consoleEntries) ? meta.consoleEntries : (meta.consoleEntries = []);
+  target.push({
+    source: String(entry?.source || 'electron'),
+    level: String(entry?.level || 'log'),
+    message: String(entry?.message || '').slice(0, 8000),
+    ts: Number(entry?.ts || Date.now()),
+    url: String(entry?.url || meta.url || '').slice(0, 1000),
+    location: entry?.location || undefined,
+  });
+  if (target.length > limit) target.splice(0, target.length - limit);
+}
+
+function appendNativeNetworkEntry(meta, entry) {
+  if (!meta?.networkCapture) return;
+  const url = String(entry?.url || '').trim();
+  if (meta.networkUrlFilter && !url.includes(meta.networkUrlFilter)) return;
+  const target = Array.isArray(meta.networkEntries) ? meta.networkEntries : (meta.networkEntries = []);
+  target.push({
+    url: url.slice(0, 4000),
+    method: String(entry?.method || 'GET').slice(0, 32),
+    status: Number(entry?.status || 0),
+    contentType: String(entry?.contentType || '').slice(0, 200),
+    error: String(entry?.error || '').slice(0, 500) || undefined,
+    ts: Number(entry?.ts || Date.now()),
+  });
+  const limit = Math.max(1, Math.min(2000, Number(meta.networkCaptureLimit || 200)));
+  if (target.length > limit) target.splice(0, target.length - limit);
+}
+
+function ensureNativeBrowserNetworkObserver(view, partition) {
+  const key = String(partition || '').trim();
+  const wc = view?.webContents;
+  const networkSession = wc?.session;
+  if (!key || !networkSession?.webRequest || nativeBrowserNetworkSessions.has(key)) return;
+  const completed = (details = {}) => {
+    const target = getNativeViewByWebContentsId(details.webContentsId);
+    if (!target) return;
+    const meta = nativeViewMeta(target);
+    const headers = details.responseHeaders || {};
+    const contentType = Object.entries(headers).find(([name]) => String(name).toLowerCase() === 'content-type')?.[1];
+    appendNativeNetworkEntry(meta, {
+      url: details.url,
+      method: details.method,
+      status: details.statusCode,
+      contentType: Array.isArray(contentType) ? contentType[0] : contentType,
+      ts: Date.now(),
+    });
+  };
+  const error = (details = {}) => {
+    const target = getNativeViewByWebContentsId(details.webContentsId);
+    if (!target) return;
+    appendNativeNetworkEntry(nativeViewMeta(target), {
+      url: details.url,
+      method: details.method,
+      status: 0,
+      error: details.error || 'network request failed',
+      ts: Date.now(),
+    });
+  };
+  try {
+    networkSession.webRequest.onCompleted(completed);
+    networkSession.webRequest.onErrorOccurred(error);
+    nativeBrowserNetworkSessions.set(key, { session: networkSession, completed, error });
+  } catch (err) {
+    writeGatewayLog(`[main] Failed to attach native browser network observer for ${key}: ${err?.message || err}\n`);
+  }
 }
 
 function normalizeNativeBrowserBounds(bounds = {}) {
@@ -2640,7 +2729,13 @@ async function getNativeBrowserResourceMetrics({ sessionId = '', tabId = '' } = 
 function nativeTabsForSession(sessionId, partition, activeTabId = '') {
   const registry = getNativeTabRegistry(sessionId, partition, false);
   const activeId = String(activeTabId || registry?.activeTabId || '').trim();
-  return (registry?.tabIds || []).map((tabId, index) => {
+  const liveTabIds = (registry?.tabIds || []).filter((tabId) => !!getNativeViewByPartition(partition, tabId));
+  if (registry && liveTabIds.length !== registry.tabIds.length) {
+    registry.tabIds = liveTabIds;
+    if (!liveTabIds.includes(registry.activeTabId)) registry.activeTabId = liveTabIds[0] || '';
+    if (!liveTabIds.length) nativeBrowserSessionTabs.delete(nativeSessionKey(sessionId, partition));
+  }
+  return liveTabIds.map((tabId, index) => {
     const view = getNativeViewByPartition(partition, tabId);
     const meta = view ? refreshNativeViewMeta(view) : { url: 'about:blank', title: '', loading: false, lastError: '' };
     const wc = view?.webContents;
@@ -2725,8 +2820,18 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
   const onUpdate = () => {
     if (partition === presentedNativePartition && tabId === presentedNativeTabId) broadcastNativeBrowserState();
   };
-  // DEBUG: surface the in-house view's console (incl. preload) to the main log.
+  // Keep a bounded console history with the WebContents. The gateway can read
+  // this directly even after its own session map has been rebuilt.
   wc.on('console-message', (_e, level, message) => {
+    const levelNames = ['verbose', 'info', 'warning', 'error'];
+    const levelName = typeof level === 'number' ? (levelNames[level] || 'log') : String(level || 'log');
+    appendNativeDiagnosticEntry(meta, {
+      source: 'electron_console',
+      level: levelName,
+      message,
+      ts: Date.now(),
+      url: wc.getURL?.() || meta.url,
+    });
     if (String(message || '').includes('[inhouse-preload]')) writeGatewayLog(`[main][inhouse-view] ${message}\n`);
   });
   wc.on('preload-error', (_e, preloadPath, error) => {
@@ -2761,6 +2866,17 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
   wc.on('did-navigate-in-page', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
   wc.on('page-title-updated', (_event, title) => { meta.title = title || wc.getTitle() || ''; onUpdate(); });
   wc.on('did-fail-load', (_event, _code, description, validatedURL) => { meta.lastError = description || 'Native browser load failed.'; meta.url = validatedURL || wc.getURL() || meta.url; onUpdate(); });
+  wc.on('render-process-gone', (_event, details = {}) => {
+    appendNativeDiagnosticEntry(meta, {
+      source: 'render_process',
+      level: 'error',
+      message: `Renderer exited${details.reason ? ` (${details.reason})` : ''}${details.exitCode != null ? ` with code ${details.exitCode}` : ''}.`,
+      ts: Date.now(),
+      url: wc.getURL?.() || meta.url,
+    });
+    meta.lastError = `Native browser renderer exited${details.reason ? `: ${details.reason}` : '.'}`;
+    onUpdate();
+  });
 }
 
 // Ensures a view exists for the resolved profile partition and tab, and maps
@@ -2823,6 +2939,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   meta.tabId = tabId;
   wireNativeViewEvents(view, partition, sid, tabId);
   nativeBrowserViews.set(nativeTabKey(partition, tabId), view);
+  ensureNativeBrowserNetworkObserver(view, partition);
   applyNativeBrowserVisibilityPolicy(view, false);
   startNativeBrowserResourceSampler();
   return { view, partition, tabId };
@@ -2999,9 +3116,29 @@ async function newNativeBrowserTab({ sessionId = '', url = '', profile = '' } = 
   const meta = nativeViewMeta(view);
   meta.lastError = '';
   const targetUrl = normalizeBrowserUrlForLoad(url || 'about:blank');
-  if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  // Creating the view/tab is the durable operation. Navigation can fail or be
+  // interrupted by a redirect/race after Chromium has already registered the
+  // tab; do not turn that successful tab creation into an RPC 500.
+  let navigationWarning = '';
+  if (targetUrl && targetUrl !== 'about:blank') {
+    try {
+      await wc.loadURL(targetUrl);
+    } catch (err) {
+      navigationWarning = String(err?.message || err);
+      meta.lastError = navigationWarning;
+      appendNativeDiagnosticEntry(meta, {
+        source: 'navigation',
+        level: 'warning',
+        message: `New tab navigation did not complete: ${navigationWarning}`,
+        ts: Date.now(),
+        url: targetUrl,
+      });
+    }
+  }
   refreshNativeViewMeta(view);
-  return emitNativeSessionState(sid, view, partition);
+  return emitNativeSessionState(sid, view, partition, navigationWarning ? {
+    operationWarning: `Tab created, but navigation did not complete: ${navigationWarning}`,
+  } : {});
 }
 
 function destroyNativeBrowserView(partition, tabId, view) {
@@ -3061,6 +3198,59 @@ function closeNativeBrowserTab({ sessionId = '', tabId = '', index = null } = {}
   nativeBrowserState.attached = true;
   nativeBrowserState.sessionId = sid;
   return emitNativeSessionState(sid, nextView, partition);
+}
+
+// Close is deliberately stronger than hide/detach: it removes every native
+// tab owned by the chat session and clears the native registry. This makes a
+// subsequent browser_open deterministic and prevents stale tabs from
+// surviving a test-session teardown.
+function closeNativeBrowserSession({ sessionId = '' } = {}) {
+  const sid = String(sessionId || '').trim();
+  const registries = [];
+  for (const [key, registry] of nativeBrowserSessionTabs) {
+    if (registry?.sessionId === sid || (sid && key.startsWith(`${sid}::`))) {
+      registries.push(registry);
+      nativeBrowserSessionTabs.delete(key);
+    }
+  }
+  const closingTabKeys = new Set();
+  for (const registry of registries) {
+    for (const tabId of registry.tabIds || []) {
+      closingTabKeys.add(nativeTabKey(registry.partition, tabId));
+      const view = getNativeViewByPartition(registry.partition, tabId);
+      if (view) destroyNativeBrowserView(registry.partition, tabId, view);
+    }
+  }
+  // Also reclaim orphaned views if the registry was lost or partially pruned
+  // before teardown (the exact stale-state case this endpoint is meant to fix).
+  for (const [, view] of [...nativeBrowserViews]) {
+    const meta = nativeViewMeta(view);
+    if (meta.sessionId !== sid) continue;
+    const key = nativeTabKey(meta.partition, meta.tabId);
+    if (closingTabKeys.has(key)) continue;
+    closingTabKeys.add(key);
+    destroyNativeBrowserView(meta.partition, meta.tabId, view);
+  }
+  const wasPresented = closingTabKeys.has(nativeTabKey(presentedNativePartition, presentedNativeTabId));
+  nativeBrowserSessionPartitions.delete(sid);
+  if (wasPresented || nativeBrowserState.sessionId === sid) {
+    presentedNativePartition = '';
+    presentedNativeTabId = '';
+    nativeBrowserState.attached = false;
+    nativeBrowserState.visible = false;
+    nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
+    nativeBrowserState.sessionId = wasPresented || nativeBrowserState.sessionId === sid ? '' : nativeBrowserState.sessionId;
+    nativeBrowserState.activeTabId = '';
+    nativeBrowserState.tabs = [];
+    broadcastNativeBrowserState({ attached: false, visible: false, activeTabId: '', tabs: [] });
+  }
+  return {
+    sessionId: sid,
+    attached: false,
+    closedTabs: closingTabKeys.size,
+    tabs: [],
+    timestamp: Date.now(),
+  };
 }
 
 // Toggle Teach-mode click capture inside the in-house view's preload. When on,
@@ -3284,7 +3474,18 @@ async function inputNativeBrowserSurface(payload = {}) {
 
 async function screenshotNativeBrowserSurface(sessionId = '') {
   const { view, wc, partition } = requireNativeViewForSession(sessionId);
-  const image = await wc.capturePage();
+  let image = null;
+  let captureError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      image = await wc.capturePage({ stayHidden: true });
+      break;
+    } catch (err) {
+      captureError = err;
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  }
+  if (!image) throw captureError || new Error('Native browser screenshot returned no image.');
   const size = image.getSize();
   const meta = nativeViewMeta(view);
   // capturePage returns PHYSICAL pixels (size scaled by devicePixelRatio), but
@@ -3304,6 +3505,121 @@ async function screenshotNativeBrowserSurface(sessionId = '') {
     url: meta.url,
     title: meta.title,
     profile: nativeProfileFromPartition(partition),
+  };
+}
+
+function existingNativeBrowserViewForSession(sessionId = '') {
+  const sid = String(sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  const registry = getNativeTabRegistry(sid, partition, false);
+  const tabId = String(registry?.activeTabId || registry?.tabIds?.[0] || '').trim();
+  const view = tabId ? getNativeViewByPartition(partition, tabId) : null;
+  if (!view || !view.webContents || view.webContents.isDestroyed()) {
+    throw new Error('No native browser session is attached for this chat session.');
+  }
+  return { view, wc: view.webContents, partition, tabId };
+}
+
+function nativeBrowserConsole(payload = {}) {
+  const { view, wc } = existingNativeBrowserViewForSession(payload.sessionId || '');
+  const meta = nativeViewMeta(view);
+  const action = String(payload.action || 'read').trim().toLowerCase() === 'clear' ? 'clear' : 'read';
+  if (action === 'clear') {
+    meta.consoleEntries = [];
+    return {
+      cleared: true,
+      url: wc.getURL?.() || meta.url || 'about:blank',
+      title: wc.getTitle?.() || meta.title || '',
+      controller_entries: 0,
+      in_page_entries: 0,
+      entries: [],
+    };
+  }
+  const currentUrl = String(wc.getURL?.() || meta.url || '').trim();
+  const sinceTs = Math.max(0, Number(payload.sinceTs || 0));
+  const urlFilter = String(payload.urlFilter || '').trim();
+  const pageOnly = payload.pageOnly !== false;
+  const maxEntries = Math.max(1, Math.min(500, Math.floor(Number(payload.maxEntries || 100))));
+  const maxMessageChars = Math.max(80, Math.min(4000, Math.floor(Number(payload.maxMessageChars || 500))));
+  const allEntries = (Array.isArray(meta.consoleEntries) ? meta.consoleEntries : [])
+    .filter((entry) => entry && String(entry.message || '').trim())
+    .filter((entry) => !sinceTs || Number(entry.ts || 0) >= sinceTs)
+    .filter((entry) => !urlFilter || String(entry.url || '').includes(urlFilter))
+    .filter((entry) => !pageOnly || !entry.url || String(entry.url) === currentUrl)
+    .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+  const entries = allEntries.slice(-maxEntries).map((entry) => ({
+    ts: entry.ts ? new Date(Number(entry.ts)).toISOString() : undefined,
+    source: entry.source,
+    level: entry.level,
+    message: String(entry.message || '').slice(0, maxMessageChars),
+    url: String(entry.url || '').slice(0, 500),
+    location: entry.location,
+  }));
+  const counts = entries.reduce((acc, entry) => {
+    const key = String(entry.level || 'log');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    url: currentUrl,
+    title: wc.getTitle?.() || meta.title || '',
+    count: allEntries.length,
+    returned: entries.length,
+    controller_entries: allEntries.length,
+    in_page_entries: 0,
+    counts,
+    entries,
+    scope: { since_ts: sinceTs || null, page_only: pageOnly, url_filter: urlFilter || null },
+    note: 'Native console history is retained per tab. Renderer page-error events are included when Chromium emits them as console messages.',
+  };
+}
+
+function nativeBrowserNetwork(payload = {}) {
+  const { view, wc } = existingNativeBrowserViewForSession(payload.sessionId || '');
+  const meta = nativeViewMeta(view);
+  const action = String(payload.action || 'read').trim().toLowerCase();
+  if (!['start', 'stop', 'read', 'clear'].includes(action)) throw new Error('action must be "start", "stop", "read", or "clear".');
+  if (action === 'start') {
+    meta.networkCapture = true;
+    meta.networkUrlFilter = String(payload.urlFilter || '').trim();
+    meta.networkCaptureLimit = Math.max(1, Math.min(2000, Math.floor(Number(payload.maxEntries || 200))));
+    meta.networkEntries = [];
+    return {
+      action,
+      active: true,
+      captured: 0,
+      limit: meta.networkCaptureLimit,
+      urlFilter: meta.networkUrlFilter || null,
+      bodies: 'unavailable',
+      note: 'Native Electron capture records completed/error requests. Response bodies are not retained.',
+    };
+  }
+  if (action === 'stop') {
+    meta.networkCapture = false;
+    return { action, active: false, captured: Array.isArray(meta.networkEntries) ? meta.networkEntries.length : 0 };
+  }
+  if (action === 'clear') {
+    meta.networkEntries = [];
+    return { action, active: meta.networkCapture === true, captured: 0 };
+  }
+  const statusMin = Math.max(0, Number(payload.statusMin ?? 0));
+  const statusMax = Math.min(999, Number(payload.statusMax ?? 999));
+  const urlFilter = String(payload.urlFilter || '').trim();
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(payload.maxEntries || 50))));
+  const allMatching = (Array.isArray(meta.networkEntries) ? meta.networkEntries : [])
+    .filter((entry) => (!urlFilter || String(entry.url || '').includes(urlFilter))
+      && Number(entry.status || 0) >= statusMin
+      && Number(entry.status || 0) <= statusMax);
+  return {
+    action,
+    active: meta.networkCapture === true,
+    url: wc.getURL?.() || meta.url || 'about:blank',
+    returned: allMatching.slice(-safeLimit),
+    total: allMatching.length,
+    captured: Array.isArray(meta.networkEntries) ? meta.networkEntries.length : 0,
+    filter: { url: urlFilter || null, statusMin, statusMax },
+    bodies: 'unavailable',
+    note: meta.networkCapture ? 'Capture is active for this native tab.' : 'Capture is stopped; read returns retained entries only.',
   };
 }
 
@@ -3352,6 +3668,7 @@ async function startNativeBrowserRpcServer() {
         else if (pathName === '/select-tab') result = selectNativeBrowserTab(payload);
         else if (pathName === '/new-tab') result = await newNativeBrowserTab(payload);
         else if (pathName === '/close-tab') result = closeNativeBrowserTab(payload);
+        else if (pathName === '/close') result = closeNativeBrowserSession(payload);
         else if (pathName === '/attach') result = await attachNativeBrowserSurface(payload);
         else if (pathName === '/bounds') result = setNativeBrowserBounds(payload.bounds || payload, payload.sessionId, payload.tabId);
         else if (pathName === '/hide') result = hideNativeBrowserSurface('rpc hide');
@@ -3362,6 +3679,8 @@ async function startNativeBrowserRpcServer() {
         else if (pathName === '/fill') result = await fillNativeBrowserSurface(payload);
         else if (pathName === '/input') result = await inputNativeBrowserSurface(payload);
         else if (pathName === '/screenshot') result = await screenshotNativeBrowserSurface(payload.sessionId);
+        else if (pathName === '/console') result = nativeBrowserConsole(payload);
+        else if (pathName === '/network') result = nativeBrowserNetwork(payload);
         else if (pathName === '/inspect') result = await inspectNativeBrowserPoint(payload);
         else if (pathName === '/run-js') result = await executeNativeBrowserJavaScript(String(payload.code || ''), payload.sessionId);
         else return respond(404, { error: 'Unknown native browser RPC route.' });
@@ -3600,6 +3919,7 @@ handleTrustedMain('native-browser:list-tabs', async (_event, payload = {}) => li
 handleTrustedMain('native-browser:select-tab', async (_event, payload = {}) => selectNativeBrowserTab(payload));
 handleTrustedMain('native-browser:new-tab', async (_event, payload = {}) => newNativeBrowserTab(payload));
 handleTrustedMain('native-browser:close-tab', async (_event, payload = {}) => closeNativeBrowserTab(payload));
+handleTrustedMain('native-browser:close', async (_event, payload = {}) => closeNativeBrowserSession(payload));
 handleTrustedMain('native-browser:focus', async () => {
   const sid = String(nativeBrowserState.sessionId || '').trim();
   try { requireNativeViewForSession(sid).wc.focus(); } catch {}

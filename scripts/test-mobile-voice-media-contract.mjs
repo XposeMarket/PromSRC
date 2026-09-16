@@ -43,7 +43,7 @@ assert.match(pages, /setActiveGatewayId\(pendingGatewayId\)/);
 assert.match(pages, /setMobileActiveGatewayTarget\(pendingGatewayId\)/);
 assert.match(pages, /targetPopover\?\.dataset\?\.popoverType === 'target'/);
 assert.match(pages, /targetPopover\?\.dataset\?\.popoverType === 'project'/);
-assert.match(pages, /attachMobileButtonHaptic\(micBtn, \(\) => micBtn\.click\(\)\)/);
+assert.match(pages, /preserveComposerFocusOnPointer\(micBtn, 'dictation'\)/, 'chat dictation must preserve the focused composer without a focus-stealing haptic proxy');
 assert.match(pages, /const bindContextTrigger = \(button, activate\) =>/);
 assert.match(pages, /eventIsInHigherLayer/);
 assert.match(pages, /targetPopover\.dataset\?\.popoverType === 'target'/);

@@ -857,9 +857,39 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	  let turnAbortController = null;
 	  let sawTerminalStreamEvent = false;
 	  let sawFinalStreamEvent = false;
+	  let finalAssistantTurnCommitted = false;
+	  let finalFrameShouldStopReader = false;
 	  let desktopStreamRecoveryPending = false;
 	  let interruptedTurnSaved = false;
-		  const saveInterruptedAssistantTurn = () => {
+	  const commitFinalAssistantTurn = async () => {
+	    if (finalAssistantTurnCommitted || !finalReply) return false;
+	    const mergedThinking = persistTurnThinkingToProcess();
+	    await applyDesignAssistantOps(finalReply);
+	    applyCreativeAssistantOps(finalReply);
+	    const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
+	    appendAssistantTurnForUser({
+	      role: 'ai',
+	      content: finalReply,
+	      artifacts: finalArtifacts,
+	      fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
+	      productCarousel: finalProductCarousel || undefined,
+	      richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
+	      goalCompletionReport: finalGoalCompletionReport || undefined,
+	      canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
+	      generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+	      generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
+	      steps: allSteps,
+	      mode: window.useAgentMode ? 'agentic' : 'chat',
+	      thinking: mergedThinking || undefined,
+	      processEntries: turnEntries,
+	      liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
+	    });
+	    finalAssistantTurnCommitted = true;
+	    clearBackgroundSpawnDockForSession(thisSessionId);
+	    renderIfViewingThisSession();
+	    return true;
+	  };
+	  const saveInterruptedAssistantTurn = () => {
 		    if (interruptedTurnSaved) return;
 		    interruptedTurnSaved = true;
 		    const isEditRerunReset = window._editRerunAbortResetSessions?.has?.(thisSessionId);
@@ -1690,14 +1720,30 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
 	            if (Array.isArray(event.richArtifacts)) finalRichArtifacts = event.richArtifacts;
 	            if (event.goalCompletionReport) finalGoalCompletionReport = event.goalCompletionReport;
+	            if (finalReply) {
+	              // The final frame already contains the durable answer. Commit
+	              // it now so a WebView that never exposes the later `done`
+	              // frame cannot leave the response trapped in stream state.
+	              await commitFinalAssistantTurn();
+	              finalFrameShouldStopReader = true;
+	            }
 	            break;
 
             case 'turn_execution_created':
             case 'turn_execution_updated':
               break;
-          }
-        }
-      }
+	        }
+	      }
+	      if (finalFrameShouldStopReader) break;
+	    }
+
+	    // `final` is the durable completion boundary. Some mobile/webview
+	    // transports never deliver the subsequent `done` frame or leave the
+	    // reader open after the answer is already visible. Stop consuming the
+	    // transport once the terminal answer has been committed.
+	    if (finalFrameShouldStopReader) {
+	      try { await reader.cancel(); } catch {}
+	    }
 
 	    if (!streamState.abortRequested && !turnAbortController?.signal?.aborted
 	      && !finalReply && !sawTerminalStreamEvent && !sawFinalStreamEvent) {
@@ -1710,27 +1756,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	      persistTurnThinkingToProcess();
 	      saveInterruptedAssistantTurn();
 	    } else if (finalReply) {
-	      const mergedThinking = persistTurnThinkingToProcess();
-	      await applyDesignAssistantOps(finalReply);
-	      applyCreativeAssistantOps(finalReply);
-	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
-	      appendAssistantTurnForUser({
-	        role: 'ai',
-	        content: finalReply,
-	        artifacts: finalArtifacts,
-	        fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
-	        productCarousel: finalProductCarousel || undefined,
-	        richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
-	        goalCompletionReport: finalGoalCompletionReport || undefined,
-	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
-	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
-	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
-	        steps: allSteps,
-	        mode: window.useAgentMode ? 'agentic' : 'chat',
-	        processEntries: turnEntries,
-	        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
-	      });
-	      clearBackgroundSpawnDockForSession(thisSessionId);
+	      await commitFinalAssistantTurn();
 	    } else {
 	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
 	      appendAssistantTurnForUser({
@@ -1771,7 +1797,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         || turnAbortController?.signal?.aborted
         || streamState.abortRequested === true
         || /abort/i.test(String(err?.message || err || '')));
-      if (wasAborted) {
+      if (finalAssistantTurnCommitted && finalReply) {
+        // The answer was committed from the terminal `final` frame. A late
+        // reader-close/abort error is transport noise and must not downgrade
+        // the completed turn into an interruption or recovery placeholder.
+      } else if (wasAborted) {
         saveInterruptedAssistantTurn();
       } else if (pageLifecycleDisconnected || isDesktopChatTransportDisconnect(err)) {
         desktopStreamRecoveryPending = true;

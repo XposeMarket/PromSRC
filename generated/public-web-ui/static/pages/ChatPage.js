@@ -29,7 +29,7 @@ import { normalizeRecoveredTraceEntries, normalizeRecoveredTraceEntry } from '..
 import { createQueuedPromptTools } from '../features/chat/runtime/queued-prompt.js';
 import { allocateTimelinePaneBudgets } from '../features/chat/timeline/weighted-timeline.js';
 import { createDesktopTimelineView } from '../features/chat/timeline/desktop-timeline-view.js';
-import { resolveActiveContextTokens } from '../context-window-value.js';
+import { readContextWindowCache, resolveActiveContextTokens, writeContextWindowCache } from '../context-window-value.js';
 import {
   captureKeyedScrollState,
   reconcileKeyedTimelinePanes,
@@ -1164,6 +1164,7 @@ const chatContextWindowState = {
   data: null,
   pressureData: null,
   pressureSessionId: '',
+  cacheSessionId: '',
   planFetchAt: 0,
   planData: null,
   planProviderId: '',
@@ -1215,7 +1216,11 @@ function getChatContextWindowTargetForSession(sessionId = '') {
 
 function getChatContextWindowStateForSession(sessionId = '') {
   const sid = String(sessionId || '').trim();
-  if (!sid || sid === String(window.activeChatSessionId || '').trim()) return chatContextWindowState;
+  if (!sid) return chatContextWindowState;
+  if (sid === String(window.activeChatSessionId || '').trim()) {
+    hydrateChatContextWindowState(chatContextWindowState, sid);
+    return chatContextWindowState;
+  }
   let state = chatContextWindowStatesBySession.get(sid);
   if (!state) {
     state = {
@@ -1229,6 +1234,7 @@ function getChatContextWindowStateForSession(sessionId = '') {
       data: null,
       pressureData: null,
       pressureSessionId: '',
+      cacheSessionId: '',
       planFetchAt: 0,
       planData: null,
       planProviderId: '',
@@ -1236,7 +1242,19 @@ function getChatContextWindowStateForSession(sessionId = '') {
     };
     chatContextWindowStatesBySession.set(sid, state);
   }
+  hydrateChatContextWindowState(state, sid);
   return state;
+}
+
+function hydrateChatContextWindowState(state, sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!state || !sid || state.cacheSessionId === sid) return;
+  state.cacheSessionId = sid;
+  const cached = readContextWindowCache(sid);
+  if (!cached) return;
+  if (!state.data && cached.data) state.data = cached.data;
+  if (!state.pressureData && cached.pressure) state.pressureData = cached.pressure;
+  if (cached.pressure) state.pressureSessionId = sid;
 }
 
 function resetChatContextWindowLiveTurn(sessionId) {
@@ -1548,9 +1566,21 @@ async function refreshChatContextWindow(options = {}) {
   if (!btn) return null;
   if (!sid) {
     state.data = null;
+    state.pressureData = null;
+    state.pressureSessionId = '';
+    state.cacheSessionId = '';
     renderChatContextWindow(null, target);
     return null;
   }
+  if (state.lastSessionId && state.lastSessionId !== sid) {
+    // The active composer state is shared while chats change. Never let a
+    // previous session's cached ring survive the navigation boundary.
+    state.data = null;
+    state.pressureData = null;
+    state.pressureSessionId = '';
+    state.cacheSessionId = '';
+  }
+  hydrateChatContextWindowState(state, sid);
   const force = options.force === true;
   const now = Date.now();
   if (state.loading) return state.data;
@@ -1571,10 +1601,16 @@ async function refreshChatContextWindow(options = {}) {
       fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(sid)}/context-pressure`, 5000),
     ]);
     state.lastFetchAt = Date.now();
-    state.data = data && data.success !== false ? data : null;
-    if (pressure && pressure.success !== false && state.pressureSessionId === sid) {
+    const hasData = !!(data && data.success !== false);
+    const hasPressure = !!(pressure && pressure.success !== false && state.pressureSessionId === sid);
+    // A gateway restart can fail either request independently. Keep the last
+    // successful snapshot in place and merge whichever half recovered; a
+    // transient transport failure must never paint a healthy ring as zero.
+    if (hasData) state.data = data;
+    if (hasPressure) {
       state.pressureData = pressure;
     }
+    if (hasData || hasPressure) writeContextWindowCache(sid, { data: state.data, pressure: state.pressureData });
     renderChatContextWindow(state.data, target);
     return state.data;
   } finally {
@@ -1586,9 +1622,9 @@ function scheduleChatContextWindowRefresh(delayMs = 450) {
   if (chatContextWindowState.refreshTimer) clearTimeout(chatContextWindowState.refreshTimer);
   chatContextWindowState.refreshTimer = setTimeout(() => {
     chatContextWindowState.refreshTimer = 0;
-    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(null));
+    refreshChatContextWindow({ force: true }).catch(() => renderChatContextWindow(undefined));
     document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
-      refreshChatContextWindow({ force: true, target }).catch(() => renderChatContextWindow(null, target));
+      refreshChatContextWindow({ force: true, target }).catch(() => renderChatContextWindow(undefined, target));
     });
   }, Math.max(0, Number(delayMs) || 0));
 }
@@ -1607,7 +1643,7 @@ function toggleChatContextWindowPopover(event, target = null) {
   if (state.open) {
     // Always open collapsed — the detailed breakdown expands only on bar click.
     setChatContextBreakdown(false, source);
-    refreshChatContextWindow({ force: true, target: source }).catch(() => renderChatContextWindow(null, source));
+    refreshChatContextWindow({ force: true, target: source }).catch(() => renderChatContextWindow(undefined, source));
     refreshChatContextPlanUsage(false, source).catch(() => {});
   }
 }

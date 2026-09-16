@@ -6,11 +6,13 @@ import { buildProviderById } from '../providers/factory.js';
 import { parseAgentModelString, ProviderReactorClient } from './provider-reactor.js';
 import { parseProviderModelRef, resolveConfiguredAgentRouting } from './model-routing.js';
 import { Reactor } from './reactor.js';
-import { createTask, updateTaskStatus, appendJournal, mutatePlan } from '../gateway/tasks/task-store.js';
+import { createTask, loadTask, updateResumeContext, updateTaskStatus, appendJournal, mutatePlan } from '../gateway/tasks/task-store.js';
+import { buildTaskContinuitySnapshot } from '../gateway/tasks/task-continuity.js';
 import { runWithWorkspace } from '../tools/workspace-context.js';
 import { getToolRegistry } from '../tools/registry.js';
 import { buildSelfReflectionInstruction } from '../config/self-reflection.js';
 import { selectSkillSlugsForMessage } from '../config/soul-loader.js';
+import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../gateway/live-runtime-registry.js';
 
 export interface SpawnOptions {
   /** ID of the agent to run */
@@ -346,6 +348,66 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     plan: [{ index: 0, description: options.task.slice(0, 120), status: 'pending' }],
   });
   updateTaskStatus(agentTask.id, 'running');
+  const runtimeId = registerLiveRuntime({
+    kind: 'subagent',
+    label: `${agent.name}: ${options.task.slice(0, 120)}`,
+    sessionId: agentTask.sessionId,
+    taskId: agentTask.id,
+    teamId: options.teamId,
+    agentId: agent.id,
+    source: 'legacy_subagent_spawn',
+    detail: options.task.slice(0, 500),
+    recoveryPolicy: 'resume',
+    recoveryData: {
+      taskId: agentTask.id,
+      source: 'legacy_subagent_spawn',
+      message: options.task.slice(0, 2_000),
+    },
+  });
+
+  // Reactor is the legacy one-shot execution path and does not use the normal
+  // handleChat session transcript. Persist the same bounded continuity packet
+  // after every Reactor step so a timeout, gateway interruption, or failed
+  // spawn can be resumed with the actual work boundary it reached.
+  const reactorProcessEntries: Array<Record<string, any>> = [];
+  const reactorLiveTraceEntries: Array<Record<string, any>> = [];
+  let reactorVisibleCommentary = '';
+  const persistReactorContinuity = (
+    status: 'completed' | 'aborted' | 'failed',
+    resultText?: string,
+    abortReason?: string,
+  ): void => {
+    const currentTask = loadTask(agentTask.id);
+    if (!currentTask) return;
+    const continuity = buildTaskContinuitySnapshot({
+      task: currentTask,
+      sessionId: agentTask.sessionId,
+      status,
+      processEntries: reactorProcessEntries,
+      liveTraceEntries: reactorLiveTraceEntries,
+      visibleReasoningSummary: reactorVisibleCommentary,
+      resultText,
+      abortReason,
+    });
+    updateResumeContext(agentTask.id, {
+      commentaryContext: continuity.commentaryContext,
+      visibleReasoningSummary: continuity.visibleReasoningSummary,
+      processEntries: continuity.processEntries,
+      liveTraceEntries: continuity.liveTraceEntries,
+      lastTurnPacket: continuity.packet,
+    });
+    updateLiveRuntimeCheckpoint(runtimeId, {
+      event: status === 'completed' ? 'final' : status === 'failed' ? 'error' : 'continuity_checkpoint',
+      message: resultText || abortReason || 'Legacy subagent continuity checkpoint saved.',
+      processEntries: continuity.processEntries,
+      liveTraceEntries: continuity.liveTraceEntries,
+      commentaryContext: continuity.commentaryContext,
+      visibleReasoningSummary: continuity.visibleReasoningSummary,
+      ...(resultText ? { result: resultText.slice(0, 1_200) } : {}),
+    }, { persist: status !== 'aborted' });
+  };
+
+  persistReactorContinuity('aborted', undefined, 'The subagent was in progress; resume from the latest captured Reactor step.');
 
   // ── Workspace isolation ───────────────────────────────────────────────────
   // Wrap the entire reactor run in a workspace context. Team agents are scoped
@@ -380,6 +442,63 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
           reasoningEffort: resolved.reasoningEffort as any,
           onStep: (step) => {
             stepCount++;
+            const thought = String(step?.thought || '').trim();
+            const action = String(step?.action || '').trim();
+            const toolResult = String(step?.toolResult || '').trim();
+            const finalAnswer = String(step?.finalAnswer || '').trim();
+            if (thought) {
+              reactorVisibleCommentary = `${reactorVisibleCommentary}\n${thought}`.trim().slice(-4_000);
+              reactorProcessEntries.push({
+                ts: new Date().toLocaleTimeString(),
+                type: 'think',
+                content: thought,
+                source: 'agent_progress',
+                visibility: 'user',
+              });
+            }
+            if (action) {
+              reactorProcessEntries.push({
+                ts: new Date().toLocaleTimeString(),
+                type: 'tool',
+                content: action,
+                source: 'agent_progress',
+                visibility: 'user',
+                ...(step?.params && typeof step.params === 'object' ? { args: step.params } : {}),
+              });
+            }
+            if (toolResult) {
+              reactorProcessEntries.push({
+                ts: new Date().toLocaleTimeString(),
+                type: 'result',
+                content: `${action || 'tool'} => ${toolResult.slice(0, 800)}`,
+                source: 'agent_progress',
+                visibility: 'user',
+              });
+            }
+            if (step?.isFormatViolation) {
+              reactorProcessEntries.push({
+                ts: new Date().toLocaleTimeString(),
+                type: 'error',
+                content: thought || 'The subagent emitted an invalid execution boundary and was asked to retry.',
+                source: 'agent_progress',
+                visibility: 'user',
+              });
+            }
+            if (finalAnswer) {
+              reactorProcessEntries.push({
+                ts: new Date().toLocaleTimeString(),
+                type: 'final',
+                content: finalAnswer,
+                source: 'agent_progress',
+                visibility: 'user',
+              });
+            }
+            if (reactorProcessEntries.length > 320) reactorProcessEntries.splice(0, reactorProcessEntries.length - 320);
+            persistReactorContinuity(
+              'aborted',
+              finalAnswer || undefined,
+              'The subagent was interrupted before its Reactor run completed; continue from the last captured step.',
+            );
             options.onStep?.(step);
           },
         }),
@@ -406,6 +525,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     mutatePlan(agentTask.id, [{ op: 'complete', step_index: 0, notes: resultText.slice(0, 200) }]);
     updateTaskStatus(agentTask.id, 'complete', { finalSummary: resultText.slice(0, 500) });
     appendJournal(agentTask.id, { type: 'status_push', content: `Done: ${resultText.slice(0, 200)}` });
+    persistReactorContinuity('completed', resultText);
 
     return {
       agentId: agent.id,
@@ -420,6 +540,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     console.error(`${label} Failed: ${err?.message}`);
     updateTaskStatus(agentTask.id, 'failed', { finalSummary: String(err?.message ?? err).slice(0, 500) });
     appendJournal(agentTask.id, { type: 'status_push', content: `Failed: ${String(err?.message ?? err).slice(0, 200)}` });
+    persistReactorContinuity('failed', '', String(err?.message ?? err));
     return {
       agentId: agent.id,
       agentName: agent.name,
@@ -431,6 +552,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
       providerUsed: resolved.providerId,
     };
   } finally {
+    finishLiveRuntime(runtimeId);
     if (resolved.isOllama) {
       releaseOllamaMutex();
       console.log(`${label} Released Ollama mutex`);

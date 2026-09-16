@@ -1359,6 +1359,17 @@ function _loadMobileThreadCache(sessionId) {
       const next = { ...message };
       next.processEntries = _mobileDurableReasoningEntries(next.processEntries);
       next.liveTraceEntries = _mobileDurableReasoningEntries(next.liveTraceEntries);
+      // A page can be evicted between the terminal `final` frame and the
+      // transport's later `done` cleanup. The final marker plus visible answer
+      // is already a durable completion boundary; never hydrate that cached
+      // row back into a live turn on the next foreground/reconnect.
+      if (next.role === 'ai'
+        && next.streaming === true
+        && next._pmFinalReceived === true
+        && _mobileAssistantHasVisibleAnswer(next)) {
+        next.streaming = false;
+        next._pmFinalized = true;
+      }
       if (!next.processEntries.length) delete next.processEntries;
       if (!next.liveTraceEntries.length) delete next.liveTraceEntries;
       return next;
@@ -1660,6 +1671,38 @@ function _isMobileRestartContextPacketText(value) {
   return /^Restart Context Packet\b/i.test(String(value || '').trim());
 }
 
+function _isMobileGatewayRestartCheckpointMessage(msg) {
+  if (!msg || (msg.role !== 'ai' && msg.role !== 'assistant')) return false;
+  const messageKind = String(msg.messageKind || '').trim().toLowerCase();
+  if (messageKind === 'restart_checkpoint') return true;
+  return /^\[Hot restart checkpoint: planned by this chat\]/i.test(_mobileMessageCopyText(msg));
+}
+
+function _isMobileGatewayRestartTerminalMessage(msg) {
+  if (!msg || (msg.role !== 'ai' && msg.role !== 'assistant')) return false;
+  if (msg._pmGatewayRestartTerminal === true) return true;
+  const messageKind = String(msg.messageKind || '').trim().toLowerCase();
+  if (messageKind === 'restart_status') return true;
+  const text = _mobileMessageCopyText(msg);
+  return /^(?:Restarted\. Prometheus is back online\.|Gateway restart completed successfully\.)/i.test(text);
+}
+
+function _mobileHistoryHasGatewayRestartContinuity(history = [], startedAt = 0) {
+  const boundary = Number(startedAt || 0) > 0 ? Number(startedAt) - 120_000 : 0;
+  return (Array.isArray(history) ? history : []).some((message) => {
+    if (!_isMobileGatewayRestartCheckpointMessage(message)
+      && !_isMobileGatewayRestartTerminalMessage(message)) return false;
+    if (!boundary) return true;
+    const timestamp = Number(
+      message?.timestamp
+      || message?.workEndedAt
+      || message?.createdAt
+      || 0,
+    ) || 0;
+    return !timestamp || timestamp >= boundary;
+  });
+}
+
 function _stripMobileInternalUploadContext(value) {
   return String(value || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/i, '').trim();
 }
@@ -1678,8 +1721,26 @@ function _mapServerHistoryToMobile(history) {
     .filter((msg) => !_isMobileInternalServerMessage(msg))
     .map((msg, index) => _mapServerMessageToMobile(msg, index))
     .filter(Boolean);
-  for (let index = 0; index < mapped.length; index += 1) {
-    const message = mapped[index];
+  const restartCheckpoints = mapped.filter(_isMobileGatewayRestartCheckpointMessage);
+  const visible = mapped.filter((message) => !_isMobileGatewayRestartCheckpointMessage(message));
+  // Keep the lifecycle checkpoint's durable tool trace on the terminal
+  // acknowledgement, but do not expose the checkpoint's implementation text as
+  // a second assistant bubble after the gateway reconnects.
+  if (restartCheckpoints.length) {
+    const terminalTurn = [...visible].reverse().find((message) => (
+      message?.role === 'ai' && String(message?.body?.text || message?.content || '').trim()
+    ));
+    if (terminalTurn) {
+      Object.defineProperty(terminalTurn, '_pmGatewayRestartTerminal', {
+        configurable: true,
+        value: true,
+      });
+      restartCheckpoints.forEach((checkpoint) => _mergeMobileAssistantTurnDetails(terminalTurn, checkpoint));
+    }
+  }
+  for (let index = 0; index < visible.length; index += 1) {
+    const message = visible[index];
+    if (!message) continue;
     const text = String(message?.body?.text || message?.content || '').trim();
     const entries = Array.isArray(message?.processEntries) ? message.processEntries : [];
     const recoveredTraceEntries = Array.isArray(message?.liveTraceEntries) && message.liveTraceEntries.length
@@ -1694,7 +1755,7 @@ function _mapServerHistoryToMobile(history) {
     message.workStartedAt = undefined;
     message.workEndedAt = undefined;
     message.workDurationMs = undefined;
-    mapped.splice(index + 1, 0, {
+    visible.splice(index + 1, 0, {
       role: 'ai',
       messageKind: 'goal_restart_checkpoint',
       activeRunKind: 'main_chat_goal',
@@ -1709,7 +1770,7 @@ function _mapServerHistoryToMobile(history) {
     });
     index += 1;
   }
-  return mapped;
+  return visible;
 }
 
 function _mapServerMessageToMobile(m, index = -1) {
@@ -2083,6 +2144,7 @@ function _isMobileGoalStartAcknowledgement(msg) {
 
 function _isMobileHiddenTranscriptMessage(msg, index = -1) {
   return _isMobileHiddenVoiceDraftMessage(msg, index)
+    || _isMobileGatewayRestartCheckpointMessage(msg)
     || _isMobileGoalStartAcknowledgement(msg);
 }
 
@@ -2097,7 +2159,10 @@ function _isMobileMessagePersistable(msg) {
 
 function _mobileHistoryForServer(thread = _activeMobileThread()) {
   return (Array.isArray(thread) ? thread : [])
-    .filter((msg, index) => msg && (msg.role === 'user' || msg.role === 'ai') && !_isMobileHiddenVoiceDraftMessage(msg, index))
+    .filter((msg, index) => msg
+      && (msg.role === 'user' || msg.role === 'ai')
+      && !_isMobileHiddenVoiceDraftMessage(msg, index)
+      && !_isMobileGatewayRestartCheckpointMessage(msg))
     .filter(_isMobileMessagePersistable)
     .filter((msg) => msg._voiceWorkerLocalTurn !== true && msg._voiceWorkerLocalFinal !== true)
     .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
@@ -2937,9 +3002,19 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   if (!String(target.voiceInterruptionEventId || '').trim() && String(source.voiceInterruptionEventId || '').trim()) {
     target.voiceInterruptionEventId = source.voiceInterruptionEventId;
   }
-  if (!String(target.body?.text || '').trim() && String(source.body?.text || source.content || '').trim()) {
+  const targetText = _mobileMessageCopyText(target);
+  const sourceText = _mobileMessageCopyText(source);
+  const sourceExtendsTarget = !!targetText
+    && !!sourceText
+    && sourceText.length > targetText.length
+    && sourceText.startsWith(targetText);
+  if ((!targetText
+    || /^attached file\(s\)$/i.test(targetText)
+    || /^please review the attached file\(s\)\.?$/i.test(targetText)
+    || sourceExtendsTarget)
+    && sourceText) {
     if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
-    target.body.text = String(source.body?.text || source.content || '');
+    target.body.text = sourceText;
     target.content = target.body.text;
   }
   if (!target.time && source.time) target.time = source.time;
@@ -2959,6 +3034,28 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   target.timestamp = Math.min(Number(target.timestamp || Date.now()), Number(source.timestamp || Date.now()));
   const targetHasAnswer = _mobileAssistantHasVisibleAnswer(target);
   const sourceHasAnswer = _mobileAssistantHasVisibleAnswer(source);
+  // A mapped server-history row is a durable completion boundary even when
+  // older clients did not persist an explicit `streaming: false` marker. Do
+  // not let the richer local/cache row resurrect that completed answer after
+  // the recovery merge. `sourceIndex` is assigned by server-history mapping;
+  // explicit terminal metadata covers pinned/cache completions as well.
+  const sourceIsDurablyCompleted = sourceHasAnswer
+    && source.streaming !== true
+    && (source._pmFinalReceived === true
+      || source._pmFinalized === true
+      || Number(source.workEndedAt || 0) > 0
+      || Number.isFinite(Number(source.workDurationMs))
+      || (Number.isFinite(Number(source.sourceIndex)) && Number(source.sourceIndex) >= 0));
+  if (sourceIsDurablyCompleted) {
+    target.streaming = false;
+    target._pmFinalReceived = true;
+    target._pmLiveActivityCompleted = true;
+    if (!Number(target.workEndedAt || 0)) target.workEndedAt = Number(source.workEndedAt || Date.now()) || Date.now();
+    if (!Number.isFinite(Number(target.workDurationMs))) {
+      target.workDurationMs = Math.max(0, target.workEndedAt - _mobileAssistantWorkStartedAt(target));
+    }
+    return target;
+  }
   const canInheritStreaming = !(targetHasAnswer && !sourceHasAnswer);
   target.streaming = target.streaming === true || (
     source.streaming === true
@@ -2967,6 +3064,72 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     && !Number.isFinite(Number(target.workDurationMs))
   );
   return target;
+}
+
+function _isMobileGatewayRestartContinuityCandidate(message) {
+  if (!message || (message.role !== 'ai' && message.role !== 'assistant')) return false;
+  if (_isMobileGatewayRestartTerminalMessage(message)) return false;
+  const traceEntries = [
+    ...(Array.isArray(message.processEntries) ? message.processEntries : []),
+    ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
+  ];
+  const traceText = traceEntries.map((entry) => [
+    entry?.toolName,
+    entry?.action,
+    entry?.name,
+    entry?.content,
+    entry?.message,
+    entry?.extra?.toolName,
+    entry?.extra?.action,
+  ].filter(Boolean).join(' ')).join('\n');
+  return /\bgateway_restart\b|\bgateway restart\b|\brestarting the gateway\b/i.test(
+    `${_mobileMessageCopyText(message)}\n${traceText}`,
+  );
+}
+
+function _mergeMobileGatewayRestartContinuity(mapped, local) {
+  const serverRows = Array.isArray(mapped) ? mapped : [];
+  const localRows = Array.isArray(local) ? local : [];
+  if (!serverRows.length || !localRows.length) return false;
+  let terminalIndex = -1;
+  for (let i = serverRows.length - 1; i >= 0; i -= 1) {
+    if (_isMobileGatewayRestartTerminalMessage(serverRows[i])) {
+      terminalIndex = i;
+      break;
+    }
+  }
+  if (terminalIndex < 0) return false;
+
+  let latestUserIndex = -1;
+  for (let i = localRows.length - 1; i >= 0; i -= 1) {
+    if (localRows[i]?.role === 'user') {
+      latestUserIndex = i;
+      break;
+    }
+  }
+  let candidateIndex = -1;
+  for (let i = localRows.length - 1; i > latestUserIndex; i -= 1) {
+    if (_isMobileGatewayRestartContinuityCandidate(localRows[i])) {
+      candidateIndex = i;
+      break;
+    }
+  }
+  if (candidateIndex < 0) return false;
+
+  const candidate = localRows[candidateIndex];
+  const terminal = serverRows[terminalIndex];
+  const candidateText = _mobileMessageCopyText(candidate);
+  const terminalText = _mobileMessageCopyText(terminal);
+  // Merge the server row into the already-painted row so local process order
+  // stays first (the restart call), followed by the boot acknowledgement.
+  _mergeMobileAssistantTurnDetails(candidate, terminal);
+  if (candidateText && terminalText && candidateText !== terminalText && !candidateText.includes(terminalText)) {
+    if (!candidate.body || typeof candidate.body !== 'object') candidate.body = { text: '' };
+    candidate.body.text = `${candidateText}\n\n${terminalText}`;
+    candidate.content = candidate.body.text;
+  }
+  serverRows.splice(terminalIndex, 1);
+  return true;
 }
 
 function _mergeMobileRichArtifacts(target, incomingArtifacts) {
@@ -5707,6 +5870,7 @@ function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const local = Array.isArray(localThread) ? localThread : [];
+  _mergeMobileGatewayRestartContinuity(mapped, local);
   const durableLocal = local.filter((message, index) => message
     && (message.role === 'user' || message.role === 'ai')
     && !_isMobileHiddenVoiceDraftMessage(message, index));
@@ -5770,7 +5934,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   }
   const restartText = String(msg.text || '').trim();
   const isDevApply = String(msg.source || '').trim() === 'dev_apply';
-  const localBeforeRefresh = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+  const localBeforeRefresh = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid].slice() : [];
   const hasActiveTurn = localBeforeRefresh.some((item) => item?.role === 'ai' && item?.streaming === true)
     || !!__pmChat.activeRuns?.[sid]?.busy
     || !!_readMobileActiveRun(sid);
@@ -5784,9 +5948,14 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   _rememberMobileSessionGoal(session, sid);
   try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
-  const localThread = preserveActiveTurn ? localBeforeRefresh : (__pmChat.threads?.[sid] || []);
+  const preserveRestartContinuity = !isDevApply
+    && hasActiveTurn
+    && _mobileHistoryHasGatewayRestartContinuity(history);
+  const localThread = (preserveActiveTurn || preserveRestartContinuity)
+    ? localBeforeRefresh
+    : (__pmChat.threads?.[sid] || []);
   __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread, {
-    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history) || preserveRestartContinuity,
   });
   const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
   for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
@@ -5805,7 +5974,11 @@ async function _applyMobileHotRestartNotification(msg = {}) {
       });
     }
   }
-  if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === restartText) && restartText) {
+  const restartTextAlreadyVisible = restartText && __pmChat.threads[sid].some((item) => {
+    const itemText = _mobileMessageCopyText(item);
+    return itemText === restartText || itemText.includes(restartText);
+  });
+  if (!restartTextAlreadyVisible && restartText) {
     const statusMessage = {
       role: 'ai',
       timestamp: Date.now(),
@@ -6939,7 +7112,8 @@ function _renderMobileVariantNav(index) {
 }
 
 function _renderMobileMessageActions(m, index) {
-  if (m?.streaming || index < 0) return '';
+  const terminalFrameReceived = m?._pmFinalReceived === true || m?._done === true;
+  if ((m?.streaming && !terminalFrameReceived) || index < 0) return '';
   const isUser = m?.role === 'user';
   // User messages: no inline action bar — long-press the bubble opens the popover instead.
   if (isUser) {
@@ -9892,6 +10066,7 @@ function loadMobileChatPageRenderer() {
   _mobileChatScrollTarget,
   _mobileHistoryForServer,
   _mobileHistoryHasCompletedTurnSince,
+  _mobileHistoryHasGatewayRestartContinuity,
   _mobileHistoryHasProtectedLocalContinuity,
   _mobileHistoryPageIsPartial,
   _mobileMediaKind,

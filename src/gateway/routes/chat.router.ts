@@ -61,11 +61,15 @@ import {
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
+import {
+  appendDurableCommentaryContext,
+  buildDurableCommentaryContext,
+} from '../context/commentary-context';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -2212,15 +2216,20 @@ function extractLastCompactionSummary(history: Array<any>): string {
   return '';
 }
 
+function formatCompactionMessageBody(message: any, maxChars = 2_400): string {
+  const body = Array.isArray(message?.content)
+    ? message.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
+    : String(message?.content || '').trim();
+  return appendDurableCommentaryContext(body, message, maxChars);
+}
+
 function formatCompactionMessages(messages: Array<any>): string {
   const newestFirst = [...messages].reverse();
   return newestFirst.map((msg, idx) => {
     const role = String(msg.role || 'unknown');
     const ts = Number(msg.timestamp);
     const stamp = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown-time';
-    const body = Array.isArray(msg.content)
-      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
-      : String(msg.content || '').trim();
+    const body = formatCompactionMessageBody(msg);
     return [
       `--- message ${idx + 1} ---`,
       `role: ${role}`,
@@ -2427,9 +2436,7 @@ function buildFallbackCompactionSummary(
   const newestFirst = [...recentWindow].reverse().slice(0, 10);
   for (const msg of newestFirst) {
     const role = String(msg.role || 'unknown');
-    const rawContent = Array.isArray(msg.content)
-      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join(' ')
-      : String(msg.content || '');
+    const rawContent = formatCompactionMessageBody(msg, 1_800);
     const body = rawContent.replace(/\s+/g, ' ').trim().slice(0, 240);
     if (body) lines.push(`- ${role}: ${body}`);
   }
@@ -10297,6 +10304,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const runtimeProcessEntries: Record<string, any>[] = [];
         let runtimeThinkingTail = '';
         let runtimeNarrationTail = '';
+        let lastRuntimeNarrationCheckpointAt = 0;
 
         let result: HandleChatResult | null = null;
         try {
@@ -10308,6 +10316,17 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
               if (event === 'token') {
                 const token = String(data?.text || '').trim();
                 if (token) runtimeNarrationTail = `${runtimeNarrationTail}${data?.text || ''}`.slice(-12_000);
+                const now = Date.now();
+                const persistNarrationCheckpoint = !!runtimeNarrationTail
+                  && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+                if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+                updateLiveRuntimeCheckpoint(runtimeId, {
+                  event,
+                  at: now,
+                  narrationTail: runtimeNarrationTail,
+                  ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+                  ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+                }, { persist: persistNarrationCheckpoint });
                 return;
               }
               if (event === 'tool_call' && runtimeNarrationTail.trim()) {
@@ -10336,6 +10355,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                   if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
                 }
                 if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+                checkpoint.narrationTail = runtimeNarrationTail;
               }
               updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
               try {
@@ -11264,6 +11284,7 @@ async function runInteractiveTurn(
       workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
       toolLog: toolLogText || checkpointPacket,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
+      visibleReasoningSummary: result.reasoningSummary || undefined,
       turnProviderUsage,
       toolResultBudget,
       goalCompletionReport: result.goalCompletionReport,
@@ -11277,7 +11298,9 @@ async function runInteractiveTurn(
         extra: { packetType: 'restart_context_packet', interrupted: true },
       }],
     } as any, {
-      disableCompactionCheck: isSubagentChatSession,
+      // Subagent threads use the same rolling compaction boundary as main
+      // chat. Their shared agent-chat store mirrors the resulting summary.
+      disableCompactionCheck: false,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
@@ -11329,12 +11352,15 @@ async function runInteractiveTurn(
       richArtifacts: Array.isArray(result.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
       toolLog: toolLogText || undefined,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
+      visibleReasoningSummary: result.reasoningSummary || undefined,
       liveTraceEntries: durableToolStreamTrace,
       turnProviderUsage,
       toolResultBudget,
       goalCompletionReport: result.goalCompletionReport,
     } as any, {
-      disableCompactionCheck: isSubagentChatSession,
+      // Keep the direct subagent transcript on the same compaction contract
+      // as every other long-lived thread.
+      disableCompactionCheck: false,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
@@ -11466,12 +11492,53 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
 
   setModelBusy(true);
   const runtimeProcessEntries: Record<string, any>[] = [];
+  let runtimeThinkingTail = '';
+  let runtimeNarrationTail = '';
+  let lastRuntimeNarrationCheckpointAt = 0;
   const sendSSE = (event: string, data: any) => {
+    if (event === 'thinking_delta') {
+      const delta = String(data?.thinking || data?.text || '').trim();
+      if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: Date.now(),
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        ...(runtimeNarrationTail ? { narrationTail: runtimeNarrationTail } : {}),
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: false });
+      return;
+    }
+    if (event === 'thinking') {
+      const thinking = String(data?.thinking || data?.text || '').trim();
+      if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
+    }
+    if (event === 'token') {
+      const token = String(data?.text || '');
+      if (token.trim()) runtimeNarrationTail = `${runtimeNarrationTail}${token}`.slice(-12_000);
+      const now = Date.now();
+      const persistNarrationCheckpoint = !!runtimeNarrationTail
+        && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+      if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: now,
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        narrationTail: runtimeNarrationTail,
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: persistNarrationCheckpoint });
+      return;
+    }
+    if (event === 'tool_call' && runtimeNarrationTail.trim()) {
+      appendRuntimeNarrationBoundary(runtimeProcessEntries, runtimeNarrationTail);
+      runtimeNarrationTail = '';
+    }
     const checkpoint: Record<string, any> = { event, at: Date.now() };
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+    if (runtimeNarrationTail) checkpoint.narrationTail = runtimeNarrationTail;
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
@@ -11749,8 +11816,7 @@ function voiceNarrationSafeEvent(type: string, data: any): Record<string, any> {
 
 function voiceNarrationRecentMessages(sessionId: string, userMessage: string) {
   try {
-    const session = getSession(sessionId);
-    const history = Array.isArray(session?.history) ? session.history : [];
+    const history = getActiveHistoryForPersistence(sessionId, 12);
     const visible = history
       .filter((msg: any) => (msg?.role === 'user' || msg?.role === 'assistant') && String(msg?.content || '').trim())
       .slice(-5)
@@ -12541,7 +12607,7 @@ function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxC
       const sessionSummary = cleanVoiceCompactionSummaryText((session as any)?.latestContextSummary || '', 4000);
       const sessionHistory = Array.isArray(session?.history) ? session.history : [];
       const sourceHistory = sessionSummary && sessionHistory.length
-        ? sessionHistory.map((entry: any) => ({
+        ? getActiveHistoryForPersistence(sessionId, Math.max(80, maxTurns * 3)).map((entry: any) => ({
           role: String(entry?.role || '') === 'assistant' || String(entry?.role || '') === 'ai' ? 'agent' : entry?.role,
           content: entry?.content || entry?.body?.text || '',
           metadata: entry?.metadata || {},
@@ -17153,6 +17219,10 @@ function attachRuntimeProcessEntriesToLatestAssistant(
       history[i] = {
         ...msg,
         processEntries: merged.slice(-300),
+        commentaryContext: buildDurableCommentaryContext({
+          ...msg,
+          processEntries: merged.slice(-300),
+        }),
       };
       replaceHistory(sid, history);
       return;
@@ -21821,6 +21891,7 @@ router.post('/api/chat', async (req, res) => {
   let runtimeThinkingTail = '';
   let runtimeNarrationTail = '';
   let lastRuntimeThinkingCheckpointAt = 0;
+  let lastRuntimeNarrationCheckpointAt = 0;
   sendSSE = (event, data) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
     rawSendSSE(event, data);
@@ -21848,6 +21919,22 @@ router.post('/api/chat', async (req, res) => {
       const token = String(data?.text || '');
       if (token.trim()) runtimeNarrationTail = `${runtimeNarrationTail}${token}`.slice(-12_000);
       markLiveRuntimeProgress(runtimeId, { event: 'token', phase: 'model_stream' });
+      // Keep the newest visible answer/commentary tail in the in-memory
+      // runtime checkpoint without reintroducing synchronous per-token disk
+      // writes. A graceful shutdown or abort can now capture this tail even
+      // when no tool boundary has arrived yet; the debounced normal
+      // checkpoints still persist it periodically through non-token events.
+      const now = Date.now();
+      const persistNarrationCheckpoint = !!runtimeNarrationTail
+        && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+      if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: now,
+        narrationTail: runtimeNarrationTail,
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: persistNarrationCheckpoint });
       return;
     }
     if (event === 'tool_call' && runtimeNarrationTail.trim()) {
@@ -21866,6 +21953,7 @@ router.post('/api/chat', async (req, res) => {
       if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
     }
     if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+    if (runtimeNarrationTail) checkpoint.narrationTail = runtimeNarrationTail;
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
@@ -21885,19 +21973,32 @@ router.post('/api/chat', async (req, res) => {
       .slice(-10)
       .map((entry: any) => {
         const toolName = String(entry?.extra?.toolName || '').trim();
-        const content = String(entry?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+        const content = String(entry?.text || entry?.content || entry?.message || entry?.result || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 220);
         return `${toolName || 'runtime step'}: ${entry?.type === 'error' ? 'error' : 'recorded'}${content ? ` — ${content}` : ''}`;
       });
     const activeTool = String(checkpoint.toolName || '').trim();
+    const visibleCommentary = String(runtimeNarrationTail || checkpoint.narrationTail || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(-2_400);
     const packet = buildTurnContextPacket({
       turnId: runtimeId,
       sessionId: resolvedSessionId,
       status: 'aborted',
       request: String(message || ''),
-      findings: completedActions.length ? [`The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.`] : [],
+      findings: [
+        completedActions.length ? `The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.` : '',
+        visibleCommentary ? `Last visible commentary before cancellation: ${visibleCommentary}` : '',
+      ].filter(Boolean),
       completedActions,
       toolState: activeTool ? `Last runtime boundary: ${activeTool}` : '',
-      progressState: String(checkpoint.message || '').slice(0, 700),
+      progressState: [
+        String(checkpoint.message || '').slice(0, 700),
+        visibleCommentary ? `Visible commentary tail: ${visibleCommentary}` : '',
+      ].filter(Boolean).join('\n'),
       uncertainties: [
         activeTool
           ? `The boundary for ${activeTool} may have been in flight when cancellation arrived; verify its effect before retrying.`

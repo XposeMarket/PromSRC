@@ -317,6 +317,10 @@ export function buildDurableChatTraceFromFrames(
 
 function normalizedProcessEntry(entry: Record<string, any>, index: number): Record<string, any> | null {
   const extra = asRecord(entry.extra);
+  // Older task/team trackers stored source and visibility beside `type` and
+  // `content`, while newer session traces put them under `extra`. Treat both
+  // shapes identically so visible commentary survives every resume path.
+  const presentation = { ...entry, ...extra };
   const eventType = String(extra.event || entry.event || entry.type || '').trim().toLowerCase();
   const type = String(entry.type || entry.kind || 'info').trim().toLowerCase();
   const content = textValue(entry.text || entry.content || entry.message);
@@ -342,14 +346,14 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
     };
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {
-    if (!visibleReasoning(extra, eventType) || !content) return null;
+    if (!visibleReasoning(presentation, eventType) || !content) return null;
     return {
       ...entry,
       id,
       type: 'think',
       text: content,
       time,
-      extra: reasoningExtra(extra, eventType),
+      extra: reasoningExtra(presentation, eventType),
     };
   }
   if (type === 'compaction') {
@@ -404,8 +408,8 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
     };
   }
   if ((type === 'think' || type === 'preamble' || type === 'assistant')
-    && content && visibleReasoning(extra, String(extra.event || extra.source || type))) {
-    return { ...entry, id, type, text: content, time, extra };
+    && content && visibleReasoning(presentation, String(presentation.event || presentation.source || type))) {
+    return { ...entry, id, type, text: content, time, extra: presentation };
   }
   return null;
 }

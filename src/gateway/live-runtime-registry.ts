@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
+import { buildDurableChatTraceFromProcessEntries } from './durable-chat-trace';
 import {
   finishRuntimeProgressLease,
   registerRuntimeProgressLease,
@@ -382,11 +383,37 @@ async function drainRuntimePersistence(): Promise<void> {
 }
 
 const MAX_DURABLE_CHECKPOINT_TEXT = 500;
+const MAX_DURABLE_CHECKPOINT_TRACE_ENTRIES = 32;
 
-// Strip the heavy live-UI payload (process log, long messages) before writing to
-// the durable ledger. The full record stays in memory for live UI + graceful
-// shutdown capture; only a lightweight summary is persisted to disk so the ledger
-// can't grow into a multi-MB blob that's parsed/rewritten on every checkpoint.
+function compactDurableCheckpointTrace(entries: unknown): Record<string, any>[] {
+  const normalized = buildDurableChatTraceFromProcessEntries(
+    Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === 'object') as Record<string, any>[] : [],
+  ) || [];
+  const out: Record<string, any>[] = [];
+  normalized.slice(-MAX_DURABLE_CHECKPOINT_TRACE_ENTRIES).forEach((entry: any, index) => {
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const safeExtra: Record<string, any> = {};
+    for (const key of ['source', 'event', 'visibility', 'reasoningKind', 'action', 'toolName', 'status']) {
+      if (extra[key] !== undefined) safeExtra[key] = typeof extra[key] === 'string'
+        ? String(extra[key]).slice(0, 160)
+        : extra[key];
+    }
+    const text = String(entry?.text || entry?.content || '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    out.push({
+      id: String(entry?.id || `runtime_trace_${index + 1}`).slice(0, 180),
+      type: String(entry?.type || 'info').slice(0, 40),
+      text: text.slice(0, 900),
+      ...(Object.keys(safeExtra).length ? { extra: safeExtra } : {}),
+    });
+  });
+  return out;
+}
+
+// Strip the heavy live-UI payload (raw process log, long messages) before writing
+// to the durable ledger. Keep only a small sanitized trace/narration tail so an
+// unexpected process loss can still reconstruct the interrupted turn; the full
+// record stays in memory for live UI + graceful shutdown capture.
 function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
   const out: LiveRuntimeSnapshot = { ...snapshot };
   const cp = out.checkpoint;
@@ -401,6 +428,12 @@ function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
       detail: typeof cp.detail === 'string' ? cp.detail.slice(0, MAX_DURABLE_CHECKPOINT_TEXT) : cp.detail,
       pendingSteerCount: cp.pendingSteerCount,
       updatedAt: cp.updatedAt,
+      ...(typeof cp.narrationTail === 'string' && cp.narrationTail.trim()
+        ? { narrationTail: cp.narrationTail.slice(-2_400) }
+        : {}),
+      ...(Array.isArray(cp.processEntries) && cp.processEntries.length
+        ? { processEntries: compactDurableCheckpointTrace(cp.processEntries) }
+        : {}),
     };
     for (const k of Object.keys(light)) {
       if (light[k] === undefined) delete light[k];
@@ -833,7 +866,11 @@ function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): voi
   }, 200));
 }
 
-export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<string, any>): void {
+export function updateLiveRuntimeCheckpoint(
+  id: string,
+  checkpoint: Record<string, any>,
+  options: { persist?: boolean } = {},
+): void {
   const record = activeRuntimes.get(String(id || ''));
   if (!record || record.abortRequestedAt || record.status !== 'running') return;
   record.checkpoint = {
@@ -849,7 +886,7 @@ export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<strin
     checkpoint: true,
     at: record.updatedAt,
   });
-  scheduleCheckpointFlush(id, toSnapshot(record));
+  if (options.persist !== false) scheduleCheckpointFlush(id, toSnapshot(record));
 }
 
 /** Queue guidance directly into the live model loop for one persisted task. */

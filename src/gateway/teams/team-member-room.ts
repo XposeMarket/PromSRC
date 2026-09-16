@@ -19,13 +19,14 @@ import {
   updateTeamMemberState,
 } from './managed-teams';
 import { ensureTeamWorkspace, ensureTeamAgentIdentity, getTeamWorkspacePath } from './team-workspace';
-import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
 import { RuntimeAdmissionError } from '../runtime-admission';
 import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
@@ -75,6 +76,7 @@ interface TeamMemberTurnTracker {
   processEntries: TeamMemberProcessEntry[];
   liveTraceEntries: Array<Record<string, any>>;
   traceSeq: number;
+  visibleReasoningSummary: string;
 }
 
 const TEAM_MEMBER_ROOM_SESSION_PREFIX = 'team_room_member_';
@@ -306,6 +308,7 @@ function createTeamMemberTurnTracker(teamId: string, agentId: string): TeamMembe
     processEntries: [],
     liveTraceEntries: [],
     traceSeq: 0,
+    visibleReasoningSummary: '',
   };
 }
 
@@ -356,14 +359,29 @@ function captureTeamMemberStreamEvent(
   if (event === 'reasoning_summary_delta' || event === 'reasoning_summary') return;
   if (event === 'token_narration_boundary') {
     const thought = String(data?.text || data?.message || data?.narration || '').trim();
-    if (thought) pushTeamMemberProcessEntry(tracker, 'preamble', thought, { source: 'agent_thought', visibility: 'user' });
+    if (thought) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamMemberProcessEntry(tracker, 'preamble', thought, { source: 'agent_thought', visibility: 'user' });
+    }
     return;
   }
   if (event === 'thinking' || event === 'agent_thought') {
     const thought = String(data?.thinking || data?.text || '').trim();
     if (!thought) return;
     tracker.thinking = tracker.thinking ? `${tracker.thinking}\n\n${thought}` : thought;
-    pushTeamMemberProcessEntry(tracker, 'think', thought, data?.actor ? { actor: data.actor } : {});
+    const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
+    const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
+    const isVisible = visibility === 'user' || visibility === 'summary' || visibility === 'visible'
+      || source === 'agent_thought' || source === 'agent_progress';
+    if (isVisible) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamMemberProcessEntry(tracker, 'think', thought, {
+        source: data?.source || 'agent_thought',
+        visibility: visibility || 'user',
+        event: data?.event || event,
+        ...(data?.actor ? { actor: data.actor } : {}),
+      });
+    }
     return;
   }
   if (event === 'info') {
@@ -426,6 +444,8 @@ function buildTeamMemberTurnMetadata(
   thinking?: string;
   processEntries?: TeamMemberProcessEntry[];
   liveTraceEntries?: Array<Record<string, any>>;
+  commentaryContext?: string;
+  visibleReasoningSummary?: string;
 } {
   const reply = String(finalText || tracker.replyText || '').trim();
   const processEntries = Array.isArray(tracker.processEntries) ? [...tracker.processEntries] : [];
@@ -445,7 +465,38 @@ function buildTeamMemberTurnMetadata(
     thinking: String(tracker.thinking || '').trim() || undefined,
     processEntries: processEntries.length > 0 ? processEntries : undefined,
     liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries: tracker.liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }) || undefined,
+    visibleReasoningSummary: tracker.visibleReasoningSummary.trim() || undefined,
   };
+}
+
+function persistTeamMemberRuntimeCheckpoint(
+  runtimeId: string | undefined,
+  tracker: TeamMemberTurnTracker,
+  event: string,
+  data?: any,
+  force = false,
+): void {
+  if (!runtimeId) return;
+  const processEntries = tracker.processEntries.slice(-320);
+  const liveTraceEntries = tracker.liveTraceEntries.slice(-320);
+  updateLiveRuntimeCheckpoint(runtimeId, {
+    event,
+    ...(data?.action || data?.tool || data?.name ? { toolName: String(data.action || data.tool || data.name) } : {}),
+    ...(data?.result ? { result: String(data.result).slice(0, 1_200) } : {}),
+    processEntries,
+    liveTraceEntries,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }),
+    visibleReasoningSummary: tracker.visibleReasoningSummary.slice(-4_000),
+  }, { persist: force });
 }
 
 function parseProviderModel(raw: string): { providerOverride?: string; modelOverride?: string } {
@@ -819,6 +870,7 @@ async function runTeamMemberRoomTurnInternal(
         streamId: tracker.streamId,
         data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
       });
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -855,6 +907,7 @@ async function runTeamMemberRoomTurnInternal(
     if (responseText) {
       tracker.replyText = responseText;
       pushTeamMemberProcessEntry(tracker, 'final', responseText);
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'final', { text: responseText }, true);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, 'final', { text: responseText });
       const chatMsg = appendTeamChat(teamId, {
         from: 'subagent',
@@ -903,6 +956,7 @@ async function runTeamMemberRoomTurnInternal(
     const errorText = String(err?.message || err || 'Unknown room turn error').trim();
     const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'error', { result: errorText }, true);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,
@@ -1145,6 +1199,7 @@ async function runTeamMemberDirectTurnInternal(
         streamId: tracker.streamId,
         data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
       });
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -1176,6 +1231,7 @@ async function runTeamMemberDirectTurnInternal(
     }
     tracker.replyText = responseText;
     pushTeamMemberProcessEntry(tracker, 'final', responseText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'final', { text: responseText }, true);
     broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, 'final', { text: responseText });
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
@@ -1230,6 +1286,7 @@ async function runTeamMemberDirectTurnInternal(
     const errorText = String(err?.message || err || 'Unknown direct chat error').trim();
     const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'error', { result: errorText }, true);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,

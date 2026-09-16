@@ -9626,7 +9626,13 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
-.pm-mobile-side-thread .pm-msg-actions { display: none; }
+.pm-mobile-side-thread .pm-msg-actions {
+  display: flex;
+  margin-top: 4px;
+}
+.pm-mobile-side-thread .pm-background-agent-actions {
+  justify-content: flex-start;
+}
 .pm-mobile-side-empty {
   margin: auto;
   text-align: center;

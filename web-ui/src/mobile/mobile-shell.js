@@ -606,6 +606,7 @@ function _wireDrawerPullToRefresh() {
 }
 
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
+const PM_DRAWER_LAYOUT_STATE_KEY = 'pm_mobile_drawer_layout_v1';
 const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
@@ -1227,6 +1228,41 @@ function _saveDrawerState(state) {
   return { ..._drawerStateCache };
 }
 
+function _loadDrawerLayoutState() {
+  const fallback = { pinnedCollapsed: false, projectsCollapsed: false, expandedProjectIds: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PM_DRAWER_LAYOUT_STATE_KEY) || '{}');
+    const expandedProjectIds = Array.isArray(raw?.expandedProjectIds)
+      ? [...new Set(raw.expandedProjectIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : [];
+    return {
+      pinnedCollapsed: raw?.pinnedCollapsed === true,
+      projectsCollapsed: raw?.projectsCollapsed === true,
+      expandedProjectIds,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function _restoreDrawerLayoutState() {
+  const state = _loadDrawerLayoutState();
+  _drawerPinnedCollapsed = state.pinnedCollapsed;
+  _drawerProjectsCollapsed = state.projectsCollapsed;
+  _drawerExpandedProjectIds.clear();
+  state.expandedProjectIds.forEach((id) => _drawerExpandedProjectIds.add(id));
+}
+
+function _saveDrawerLayoutState() {
+  try {
+    localStorage.setItem(PM_DRAWER_LAYOUT_STATE_KEY, JSON.stringify({
+      pinnedCollapsed: _drawerPinnedCollapsed,
+      projectsCollapsed: _drawerProjectsCollapsed,
+      expandedProjectIds: Array.from(_drawerExpandedProjectIds),
+    }));
+  } catch {}
+}
+
 function _drawerGatewayStatusTone(status) {
   const value = String(status || '').toLowerCase();
   if (value === 'online') return 'online';
@@ -1315,6 +1351,7 @@ function _mountDrawerGatewayFilterPanel() {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  _restoreDrawerLayoutState();
   _stopDrawerGatewayHeartbeat();
   _drawerSwipeCleanup?.();
   _drawerSwipeCleanup = null;
@@ -1797,6 +1834,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerPinnedCollapsed = !_drawerPinnedCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-pinned-content');
     toggle.setAttribute('aria-expanded', String(!_drawerPinnedCollapsed));
@@ -1806,6 +1844,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerProjectsCollapsed = !_drawerProjectsCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-project-content');
     toggle.setAttribute('aria-expanded', String(!_drawerProjectsCollapsed));
@@ -1836,6 +1875,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       if (!id) return;
       if (_drawerExpandedProjectIds.has(id)) _drawerExpandedProjectIds.delete(id);
       else _drawerExpandedProjectIds.add(id);
+      _saveDrawerLayoutState();
       _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true }).catch(() => {});
     });
   });
