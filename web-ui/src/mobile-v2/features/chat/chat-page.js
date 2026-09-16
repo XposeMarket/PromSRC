@@ -1,6 +1,11 @@
 import { renderMd } from '../../../utils.js';
 import { ensureMobileV2Markdown } from '../../core/markdown.js';
 import { ICONS } from '../../ui/icons.js';
+import {
+  attachChatInteractionHandlers,
+  ensureChatInteractionStyles,
+  renderChatInteractions,
+} from './chat-interactions.js';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -26,9 +31,10 @@ function messageMarkup(message) {
   const tools = !user && message.tools?.length
     ? `<div class="pm-v2-tools">${message.tools.map((tool) => `<div class="pm-v2-tool"><span>${escapeHtml(tool.name || 'Tool')}</span><small>${escapeHtml(tool.message || (tool.phase === 'tool_result' ? 'Done' : 'Working…'))}</small></div>`).join('')}</div>`
     : '';
+  const interactions = renderChatInteractions(message);
   const status = message.status === 'streaming' && !message.text ? '<span class="pm-v2-typing">Thinking…</span>' : '';
   const error = message.status === 'error' ? '<div class="pm-v2-message-error">Response interrupted</div>' : '';
-  return `<div class="pm-msg ${user ? 'from-user' : 'from-ai'}" data-message-id="${escapeHtml(message.id)}"><div class="pm-bubble"><div class="markdown-body">${body || status}</div>${reasoning}${tools}${error}</div></div>`;
+  return `<div class="pm-msg ${user ? 'from-user' : 'from-ai'}" data-message-id="${escapeHtml(message.id)}"><div class="pm-bubble"><div class="markdown-body">${body || status}</div>${reasoning}${tools}${interactions}${error}</div></div>`;
 }
 
 function scrollToBottom(thread, behavior = 'auto') {
@@ -63,6 +69,7 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   shell.setTitle('Prometheus');
   try { localStorage.setItem('pm_mobile_v2_active_session', ref); } catch {}
   gateways?.bindSession?.(id, gatewayId);
+  ensureChatInteractionStyles();
 
   shell.page.innerHTML = `<section class="pm-v2-chat-screen"><div class="pm-chat-body pm-chat-thread pm-v2-chat-thread" id="pm-v2-chat-thread"><div class="pm-v2-chat-loading">Loading chat…</div></div><div class="pm-v2-attachment-strip" data-v2-attachments hidden></div><div class="pm-composer pm-v2-composer" id="pm-v2-composer"><input type="file" multiple hidden data-v2-file-input/><div class="pm-composer-row"><button class="pm-icon-btn pm-v2-attach" type="button" aria-label="Attach">${ICONS.plus}</button><div class="pm-v2-input-wrap"><textarea id="pm-v2-input" rows="1" placeholder="Message Prometheus" aria-label="Message Prometheus"></textarea></div><button class="pm-icon-btn pm-v2-mic" type="button" aria-label="Voice">${ICONS.mic}</button><button class="pm-send pm-v2-send" type="button" aria-label="Send">${ICONS.send}</button></div></div></section>`;
 
@@ -151,6 +158,62 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
     }
   }
 
+  async function runStream({ message, requestPrefix = 'mobile_v2', attachments: streamAttachments, appendUser = false }) {
+    const text = String(message || '').trim();
+    if (!text || destroyed || chatStore.get(gatewayId, id).streaming) return false;
+    const requestId = `${requestPrefix}_${crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`}`;
+    const assistantId = `${requestId}:assistant`;
+    if (appendUser) chatStore.appendUser(gatewayId, id, { id: requestId, text });
+    chatStore.beginAssistant(gatewayId, id, assistantId);
+    streamController = new AbortController();
+    try {
+      await gateway.streamChat({
+        sessionId: id,
+        message: text,
+        clientRequestId: requestId,
+        attachments: streamAttachments,
+        signal: streamController.signal,
+        onEvent: (event) => chatStore.applyStreamEvent(gatewayId, id, assistantId, event),
+      });
+      const state = chatStore.get(gatewayId, id);
+      const row = state.messages.find((item) => item.id === assistantId);
+      if (row?.status === 'streaming') chatStore.applyStreamEvent(gatewayId, id, assistantId, { type: 'assistant.done' });
+      shell.refreshSessions();
+      return true;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        chatStore.applyStreamEvent(gatewayId, id, assistantId, { type: 'assistant.error', message: 'Stopped' });
+      } else {
+        chatStore.failStream(gatewayId, id, assistantId, error);
+        await reconcile({ announce: true });
+      }
+      return false;
+    } finally {
+      streamController = null;
+    }
+  }
+
+  async function resumeInterruptedTurn(prompt) {
+    const message = String(prompt || '').trim();
+    if (!message) return false;
+    if (chatStore.get(gatewayId, id).streaming) {
+      shell.showNotice('The current turn is still running.');
+      return false;
+    }
+    shell.showNotice('Resuming interrupted work…');
+    return runStream({ message, requestPrefix: 'mobile_v2_resume', appendUser: false });
+  }
+
+  const disposeInteractions = attachChatInteractionHandlers({
+    thread,
+    gateway,
+    chatStore,
+    gatewayId,
+    sessionId: id,
+    showNotice: (message) => shell.showNotice(message),
+    onResumePrompt: resumeInterruptedTurn,
+  });
+
   async function submit() {
     const text = input.value.trim();
     const current = chatStore.get(gatewayId, id);
@@ -161,37 +224,15 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
     if (!text && !attachments.length) return;
     input.value = '';
     composer.classList.remove('has-text', 'is-focused');
-    const requestId = `mobile_v2_${crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`}`;
-    const assistantId = `${requestId}:assistant`;
     const sentAttachments = attachments.map((item) => ({ name: item.name, path: item.path, mimeType: item.mimeType, size: item.size }));
     attachments = [];
     paintAttachments();
-    chatStore.appendUser(gatewayId, id, { id: requestId, text: text || `[Attached ${sentAttachments.length} file${sentAttachments.length === 1 ? '' : 's'}]` });
-    chatStore.beginAssistant(gatewayId, id, assistantId);
-    streamController = new AbortController();
-    try {
-      await gateway.streamChat({
-        sessionId: id,
-        message: text || 'Please inspect the attached file(s).',
-        clientRequestId: requestId,
-        attachments: sentAttachments,
-        signal: streamController.signal,
-        onEvent: (event) => chatStore.applyStreamEvent(gatewayId, id, assistantId, event),
-      });
-      const state = chatStore.get(gatewayId, id);
-      const row = state.messages.find((message) => message.id === assistantId);
-      if (row?.status === 'streaming') chatStore.applyStreamEvent(gatewayId, id, assistantId, { type: 'assistant.done' });
-      shell.refreshSessions();
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        chatStore.applyStreamEvent(gatewayId, id, assistantId, { type: 'assistant.error', message: 'Stopped' });
-      } else {
-        chatStore.failStream(gatewayId, id, assistantId, error);
-        await reconcile({ announce: true });
-      }
-    } finally {
-      streamController = null;
-    }
+    await runStream({
+      message: text || 'Please inspect the attached file(s).',
+      requestPrefix: 'mobile_v2',
+      attachments: sentAttachments,
+      appendUser: true,
+    });
   }
 
   async function addFiles(files) {
@@ -250,6 +291,7 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   return () => {
     destroyed = true;
     streamController?.abort();
+    disposeInteractions();
     window.removeEventListener('online', onOnline);
     document.removeEventListener('visibilitychange', onVisibilityChange);
     unsubscribe();
