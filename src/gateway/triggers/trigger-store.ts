@@ -43,6 +43,17 @@ function cleanText(value: unknown, max: number): string {
   return String(value || '').replace(/\0/g, '').trim().slice(0, max);
 }
 
+function finiteInt(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function finiteTimestamp(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function cloneRule(rule: TriggerRule): TriggerRule {
   return JSON.parse(JSON.stringify(rule));
 }
@@ -58,8 +69,9 @@ export function validateTriggerRule(rule: TriggerRule): TriggerRule {
   if (conditions.length > 32) throw new Error('Trigger rule matcher supports at most 32 conditions.');
   const prompt = String(rule.action.prompt || '');
   if (prompt.length > 24_000) throw new Error('Trigger action prompt exceeds 24,000 characters.');
-  const cooldownMs = rule.cooldownMs === undefined ? undefined : Math.max(0, Math.floor(Number(rule.cooldownMs || 0)));
-  if (cooldownMs !== undefined && cooldownMs > 30 * 24 * 60 * 60 * 1_000) throw new Error('Trigger cooldown exceeds 30 days.');
+  const cooldownMs = rule.cooldownMs === undefined
+    ? undefined
+    : finiteInt(rule.cooldownMs, 0, 0, 30 * 24 * 60 * 60 * 1_000);
   const now = Date.now();
   return {
     ...cloneRule(rule),
@@ -67,11 +79,26 @@ export function validateTriggerRule(rule: TriggerRule): TriggerRule {
     id,
     name,
     enabled: rule.enabled !== false,
-    priority: Math.max(0, Math.min(10_000, Math.floor(Number(rule.priority ?? 100)))),
+    priority: finiteInt(rule.priority, 100, 0, 10_000),
     cooldownMs,
-    createdAt: Number(rule.createdAt || now),
-    updatedAt: Number(rule.updatedAt || now),
+    createdAt: finiteTimestamp(rule.createdAt, now),
+    updatedAt: finiteTimestamp(rule.updatedAt, now),
   };
+}
+
+function validatedPersistedRules(value: unknown): TriggerRule[] {
+  if (!Array.isArray(value)) return [];
+  const out: TriggerRule[] = [];
+  for (const candidate of value.slice(0, MAX_RULES)) {
+    try {
+      out.push(validateTriggerRule(candidate as TriggerRule));
+    } catch (error: any) {
+      // One damaged or manually edited rule must not erase unrelated healthy
+      // automations. Skip only that rule and leave an operator-visible trace.
+      console.warn(`[TriggerStore] Ignoring malformed persisted rule: ${String(error?.message || error).slice(0, 300)}`);
+    }
+  }
+  return out;
 }
 
 export class JsonTriggerStore implements TriggerReservationStore {
@@ -89,13 +116,14 @@ export class JsonTriggerStore implements TriggerReservationStore {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) as Partial<TriggerStoreFile>;
       this.cache = {
         version: 1,
-        updatedAt: Number(parsed.updatedAt || this.now()),
-        rules: Array.isArray(parsed.rules) ? parsed.rules.filter(Boolean).map((rule) => validateTriggerRule(rule)) : [],
+        updatedAt: finiteTimestamp(parsed.updatedAt, this.now()),
+        rules: validatedPersistedRules(parsed.rules),
         reservations: Array.isArray(parsed.reservations) ? parsed.reservations.filter(Boolean).slice(-MAX_RESERVATIONS) : [],
         lastRunAtByRule: parsed.lastRunAtByRule && typeof parsed.lastRunAtByRule === 'object' ? parsed.lastRunAtByRule : {},
         runs: Array.isArray(parsed.runs) ? parsed.runs.filter(Boolean).slice(-MAX_RUNS) : [],
       };
-    } catch {
+    } catch (error: any) {
+      console.warn(`[TriggerStore] Could not parse trigger store; starting from an empty in-memory store: ${String(error?.message || error).slice(0, 300)}`);
       this.cache = initialStore();
     }
     this.prune(this.cache);
@@ -104,7 +132,9 @@ export class JsonTriggerStore implements TriggerReservationStore {
 
   private prune(store: TriggerStoreFile): void {
     const cutoff = this.now() - RESERVATION_TTL_MS;
-    store.reservations = store.reservations.filter((entry) => Number(entry.reservedAt || 0) >= cutoff).slice(-MAX_RESERVATIONS);
+    store.reservations = store.reservations
+      .filter((entry) => entry && Number(entry.reservedAt || 0) >= cutoff)
+      .slice(-MAX_RESERVATIONS);
     store.runs = store.runs.slice(-MAX_RUNS);
     const validRuleIds = new Set(store.rules.map((rule) => rule.id));
     for (const ruleId of Object.keys(store.lastRunAtByRule)) {
@@ -166,7 +196,7 @@ export class JsonTriggerStore implements TriggerReservationStore {
       return { ok: false, reason: 'duplicate_event' };
     }
     const lastRunAt = Number(store.lastRunAtByRule[rule.id] || 0);
-    const cooldownMs = Math.max(0, Number(rule.cooldownMs || 0));
+    const cooldownMs = finiteInt(rule.cooldownMs, 0, 0, 30 * 24 * 60 * 60 * 1_000);
     if (cooldownMs > 0 && lastRunAt > 0 && now - lastRunAt < cooldownMs) {
       return { ok: false, reason: 'cooldown_active' };
     }
@@ -191,6 +221,10 @@ export class JsonTriggerStore implements TriggerReservationStore {
   }
 
   listRuns(limit = 100): TriggerRunRecord[] {
-    return this.read().runs.slice(-Math.max(1, Math.min(MAX_RUNS, Math.floor(limit)))).reverse().map((record) => JSON.parse(JSON.stringify(record)));
+    const safeLimit = finiteInt(limit, 100, 1, MAX_RUNS);
+    return this.read().runs
+      .slice(-safeLimit)
+      .reverse()
+      .map((record) => JSON.parse(JSON.stringify(record)));
   }
 }
