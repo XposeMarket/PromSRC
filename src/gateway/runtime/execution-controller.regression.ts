@@ -124,6 +124,44 @@ function testAttemptIdentity(): void {
   assert.equal(second.attemptStartedAt, 200);
 }
 
+function testDurableCompactionRecovery(): void {
+  const adapter = new InMemoryRuntimeAdapter();
+  const controller = new RuntimeExecutionController(adapter);
+  const handle = controller.begin({
+    kind: 'background_task',
+    label: 'mutation crash boundary',
+    recoveryPolicy: 'resume',
+    effectClass: 'mutating',
+  });
+  controller.checkpoint(handle, {
+    phase: 'committing',
+    effectClass: 'mutating',
+    sideEffectCommitted: true,
+    message: 'External write returned success.',
+  });
+
+  const live = adapter.runtimes.get(handle.runtimeId)!;
+  const checkpoint = live.checkpoint || {};
+  // Mirror live-runtime-registry's durable checkpoint allowlist: custom live
+  // keys disappear, while phase/detail survive.
+  const compacted: LiveRuntimeSnapshot = {
+    ...live,
+    checkpoint: {
+      event: checkpoint.event,
+      phase: checkpoint.phase,
+      message: checkpoint.message,
+      toolName: checkpoint.toolName,
+      detail: checkpoint.detail,
+      updatedAt: checkpoint.updatedAt,
+    },
+  };
+  assert.equal((compacted.checkpoint as any).effectClass, undefined);
+  assert.deepEqual(
+    controller.recoveryDecision(compacted),
+    { action: 'manual', reason: 'mutating_checkpoint_without_idempotency_key' },
+  );
+}
+
 async function testControllerLifecycle(): Promise<void> {
   const adapter = new InMemoryRuntimeAdapter();
   const controller = new RuntimeExecutionController(adapter);
@@ -185,6 +223,7 @@ async function testFailureFinalization(): Promise<void> {
 async function main(): Promise<void> {
   testReplaySafety();
   testAttemptIdentity();
+  testDurableCompactionRecovery();
   await testControllerLifecycle();
   await testFailureFinalization();
   console.log('execution-controller regression: ok');
