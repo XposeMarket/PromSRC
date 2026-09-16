@@ -1,4 +1,5 @@
 import { renderMd } from '../../../utils.js';
+import { ensureMobileV2Markdown } from '../../core/markdown.js';
 import { ICONS } from '../../ui/icons.js';
 
 function escapeHtml(value) {
@@ -93,6 +94,9 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   }
 
   const unsubscribe = chatStore.subscribe(gatewayId, id, render);
+  ensureMobileV2Markdown().then((ready) => {
+    if (ready && !destroyed) render(chatStore.get(gatewayId, id));
+  });
 
   async function load() {
     chatStore.setLoading(gatewayId, id, true);
