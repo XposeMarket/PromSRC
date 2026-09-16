@@ -25,6 +25,7 @@ const gateway = read('web-ui/src/mobile-v2/core/gateway-client.js');
 const gateways = read('web-ui/src/mobile-v2/core/gateway-manager.js');
 const features = read('web-ui/src/mobile-v2/core/feature-client.js');
 const store = read('web-ui/src/mobile-v2/core/chat-store.js');
+const generatedStore = read('generated/public-web-ui/static/mobile-v2/core/chat-store.js');
 const markdown = read('web-ui/src/mobile-v2/core/markdown.js');
 const generatedMarkdown = read('generated/public-web-ui/static/mobile-v2/core/markdown.js');
 const shell = read('web-ui/src/mobile-v2/ui/shell.js');
@@ -33,6 +34,10 @@ const drawerParity = read('web-ui/src/mobile-v2/ui/drawer-parity.js');
 const pageKit = read('web-ui/src/mobile-v2/ui/page-kit.js');
 const chat = read('web-ui/src/mobile-v2/features/chat/chat-page.js');
 const generatedChat = read('generated/public-web-ui/static/mobile-v2/features/chat/chat-page.js');
+const chatInteractions = read('web-ui/src/mobile-v2/features/chat/chat-interactions.js');
+const generatedChatInteractions = read('generated/public-web-ui/static/mobile-v2/features/chat/chat-interactions.js');
+const chatInteractionCss = read('web-ui/src/mobile-v2/mobile-v2-chat-interactions.css');
+const generatedChatInteractionCss = read('generated/public-web-ui/static/mobile-v2/mobile-v2-chat-interactions.css');
 const css = read('web-ui/src/mobile-v2/mobile-v2.css');
 const gatewayServer = read('src/gateway/core/server.ts');
 const pwa = read('web-ui/src/mobile-v2/core/pwa.js');
@@ -40,6 +45,7 @@ const theme = read('web-ui/src/mobile-v2/core/theme.js');
 const haptics = read('web-ui/src/mobile-v2/ui/haptics.js');
 const manifestV2 = read('web-ui/manifest-v2.webmanifest');
 const serviceWorkerV2 = read('web-ui/service-worker-v2.js');
+const generatedServiceWorkerV2 = read('generated/public-web-ui/service-worker-v2.js');
 const legacyServiceWorker = read('web-ui/service-worker.js');
 const productionBuilder = read('scripts/build-web-ui-production.mjs');
 const productionBuild = read('scripts/build-web-ui-production.mjs');
@@ -69,6 +75,7 @@ const featureFiles = [
   'web-ui/src/mobile-v2/features/pairing/pairing-page.js',
   'web-ui/src/mobile-v2/features/settings/settings-page.js',
   'web-ui/src/mobile-v2/features/shared/stream-chat-panel.js',
+  'web-ui/src/mobile-v2/features/chat/chat-interactions.js',
 ];
 for (const file of featureFiles) assert.equal(exists(file), true, `Missing Mobile V2 feature: ${file}`);
 
@@ -91,6 +98,10 @@ assert.match(features, /\/api\/agents/);
 assert.match(features, /\/api\/proposals/);
 assert.match(store, /gatewayId/);
 assert.match(store, /sessionId/);
+assert.match(store, /approval\.required/);
+assert.match(store, /question\.required/);
+assert.match(store, /updateInteraction/);
+assert.equal(generatedStore, store, 'Generated Mobile V2 chat store must exactly mirror source.');
 
 assert.match(shell, /pm-tabbar/);
 assert.match(shell, /pm-drawer/);
@@ -109,10 +120,21 @@ assert.match(chat, /pm-v2-attachment/);
 assert.match(chat, /voice/);
 assert.match(chat, /renderMd/);
 assert.match(chat, /ensureMobileV2Markdown/);
+assert.match(chat, /renderChatInteractions/);
+assert.match(chat, /attachChatInteractionHandlers/);
+assert.match(chat, /resumeInterruptedTurn/);
 assert.match(chat, /visibilitychange/);
 assert.match(chat, /addEventListener\('online'/);
 assert.match(chat, /Chat reconnected and synced/);
 assert.equal(generatedChat, chat, 'Generated Mobile V2 chat must exactly mirror source chat.');
+assert.match(chatInteractions, /\/api\/approvals\//);
+assert.match(chatInteractions, /\/api\/questions\//);
+assert.match(chatInteractions, /buildQuestionAnswerPayload/);
+assert.match(chatInteractions, /getMissingQuestionAnswers/);
+assert.match(chatInteractions, /onResumePrompt/);
+assert.equal(generatedChatInteractions, chatInteractions, 'Generated Mobile V2 chat interactions must exactly mirror source.');
+assert.match(chatInteractionCss, /pm-v2-interaction-card/);
+assert.equal(generatedChatInteractionCss, chatInteractionCss, 'Generated Mobile V2 chat interaction CSS must exactly mirror source.');
 assert.match(markdown, /\/vendor\/dompurify\/purify\.min\.js/);
 assert.match(markdown, /\/vendor\/marked\/marked\.min\.js/);
 assert.match(markdown, /ensureMobileV2Markdown/);
@@ -145,6 +167,12 @@ assert.match(manifestV2, /"scope"\s*:\s*"\/mobile-v2\/"/);
 assert.match(serviceWorkerV2, /CACHE_PREFIX = 'pm-mobile-v2-'/);
 assert.match(serviceWorkerV2, /drawer-bootstrap\.js/);
 assert.match(serviceWorkerV2, /mobile-v2-drawer\.css/);
+assert.match(serviceWorkerV2, /chat-interactions\.js/);
+assert.match(serviceWorkerV2, /mobile-v2-chat-interactions\.css/);
+assert.match(serviceWorkerV2, /core\/markdown\.js/);
+assert.match(serviceWorkerV2, /vendor\/dompurify/);
+assert.match(serviceWorkerV2, /vendor\/marked/);
+assert.equal(generatedServiceWorkerV2, serviceWorkerV2, 'Generated Mobile V2 service worker must exactly mirror source.');
 assert.doesNotMatch(serviceWorkerV2, /CACHE_PREFIX = 'prometheus-/, 'V2 cache prefix must not be owned by the legacy worker.');
 assert.match(legacyServiceWorker, /k\.startsWith\('prometheus-'\)/);
 assert.doesNotMatch('pm-mobile-v2-static-test', /^prometheus-/, 'V2 cache names must remain outside the legacy purge prefix.');
@@ -160,4 +188,4 @@ for (const file of allV2JavaScript) {
   assert.doesNotMatch(source, /from\s+['"][^'"]*\/mobile\//, `${file} must stay runtime-isolated from legacy mobile modules.`);
 }
 
-console.log(`mobile-v2 complete-app contract passed: ${allV2JavaScript.length} isolated modules, full route surface, target-aware transport, isolated PWA`);
+console.log(`mobile-v2 complete-app contract passed: ${allV2JavaScript.length} isolated modules, full route surface, target-aware transport, isolated PWA, rich chat interactions`);
