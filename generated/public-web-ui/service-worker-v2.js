@@ -3,7 +3,7 @@
  * Cache names intentionally do not begin with `prometheus-`, because the
  * legacy root-scoped worker owns that prefix and purges old matching caches.
  */
-const VERSION = 'pm-v2-2026-09-15-installable-v2';
+const VERSION = 'pm-v2-2026-09-15-chat-parity-v3';
 const CACHE_PREFIX = 'pm-mobile-v2-';
 const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${VERSION}`;
@@ -12,17 +12,29 @@ const PRECACHE = [
   '/mobile-v2/chat',
   '/manifest-v2.webmanifest',
   '/assets/Prometheus.png',
+  '/vendor/dompurify/purify.min.js',
+  '/vendor/marked/marked.min.js',
+  '/src/features/chat/questions/question-model.js',
   '/src/mobile-v2/mobile-v2-entry.js',
+  '/src/mobile-v2/core/markdown.js',
+  '/src/mobile-v2/features/chat/chat-page.js',
+  '/src/mobile-v2/features/chat/chat-interactions.js',
   '/src/mobile-v2/ui/drawer-bootstrap.js',
   '/src/mobile-v2/ui/drawer-parity.js',
   '/src/mobile-v2/mobile-v2.css',
   '/src/mobile-v2/mobile-v2-drawer.css',
+  '/src/mobile-v2/mobile-v2-chat-interactions.css',
   '/src/styles/mobile.css',
+  '/static/features/chat/questions/question-model.js',
   '/static/mobile-v2/mobile-v2-entry.js',
+  '/static/mobile-v2/core/markdown.js',
+  '/static/mobile-v2/features/chat/chat-page.js',
+  '/static/mobile-v2/features/chat/chat-interactions.js',
   '/static/mobile-v2/ui/drawer-bootstrap.js',
   '/static/mobile-v2/ui/drawer-parity.js',
   '/static/mobile-v2/mobile-v2.css',
   '/static/mobile-v2/mobile-v2-drawer.css',
+  '/static/mobile-v2/mobile-v2-chat-interactions.css',
   '/static/styles/mobile.css'
 ];
 
@@ -109,6 +121,10 @@ self.addEventListener('fetch', (event) => {
     || url.pathname.startsWith('/static/mobile-v2/')
     || url.pathname.startsWith('/src/styles/')
     || url.pathname.startsWith('/static/styles/')
+    || url.pathname.startsWith('/src/features/chat/questions/')
+    || url.pathname.startsWith('/static/features/chat/questions/')
+    || url.pathname.startsWith('/vendor/dompurify/')
+    || url.pathname.startsWith('/vendor/marked/')
     || url.pathname === '/manifest-v2.webmanifest'
   ) {
     event.respondWith(networkFirst(request, STATIC_CACHE));
