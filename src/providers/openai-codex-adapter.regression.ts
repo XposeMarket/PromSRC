@@ -60,6 +60,30 @@ async function main(): Promise<void> {
   assert.equal(toolCall.message.tool_calls?.[0]?.id, 'call_1', 'completed tool calls must remain valid output');
   assert.equal(toolCall.message.tool_calls?.[0]?.function.arguments, '{"ok":true}');
 
+  const phasedEvents: any[] = [];
+  const phasedCommentary = await parse([
+    'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_commentary","type":"message","phase":"commentary","content":[]}}\n\n',
+    'data: {"type":"response.output_text.delta","item_id":"msg_commentary","output_index":0,"delta":"I found the cause."}\n\n',
+    'data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_commentary","type":"message","phase":"commentary","content":[{"type":"output_text","text":"I found the cause."}]}}\n\n',
+    'data: {"type":"response.completed","response":{"output":[{"id":"msg_commentary","type":"message","phase":"commentary","content":[{"type":"output_text","text":"I found the cause."}]}]}}\n\n',
+  ], { onModelEvent: (event: any) => phasedEvents.push(event) });
+  assert.equal(phasedCommentary.message.phase, 'commentary', 'assistant phase must survive stream completion');
+  assert.equal(phasedCommentary.message.item_id, 'msg_commentary', 'assistant item identity must survive stream completion');
+  assert.equal(phasedEvents.find((event) => event.type === 'assistant_delta')?.phase, 'commentary');
+
+  const replayInput = (new OpenAICodexAdapter(process.cwd()) as any).buildInput([
+    { role: 'user', content: 'Investigate' },
+    {
+      role: 'assistant',
+      content: 'I found the cause.',
+      phase: 'commentary',
+      tool_calls: [{ id: 'call_replay', type: 'function', function: { name: 'inspect', arguments: '{}' } }],
+    },
+    { role: 'tool', tool_call_id: 'call_replay', content: 'evidence' },
+  ]);
+  assert.deepEqual(replayInput[1], { role: 'assistant', content: 'I found the cause.', phase: 'commentary' }, 'commentary preceding a tool call must be replayed');
+  assert.equal(replayInput[2]?.type, 'function_call');
+
   const adapterSource = fs.readFileSync('src/providers/openai-codex-adapter.ts', 'utf8');
   assert.match(adapterSource, /allowIncompleteStreamRetry\s*=\s*true/, 'incomplete streams must have a one-retry guard');
   assert.match(adapterSource, /return runRequest\(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex\)/, 'the retry must disable itself after one attempt while staying on the same account');
@@ -95,7 +119,7 @@ async function main(): Promise<void> {
   assert.match(thoughtTerminalBlock, /text: ''/, 'accepted Thought submissions must not request a prose final');
   assert.match(thoughtTerminalBlock, /toolResults: allToolResults/, 'accepted Thought submissions must return the completed tool history');
 
-  console.log('openai-codex empty-final regressions passed');
+  console.log('openai-codex stream and commentary replay regressions passed');
 }
 
 main().catch((error) => {

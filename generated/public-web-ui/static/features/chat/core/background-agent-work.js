@@ -2,6 +2,9 @@ const BACKGROUND_AGENT_WORK_KEY = 'prometheus_background_agent_work_v1';
 
 let backgroundAgentWorkCacheRaw = null;
 let backgroundAgentWorkCache = null;
+const BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS = 750;
+let backgroundAgentWorkPersistTimer = null;
+let backgroundAgentWorkPersistPending = false;
 
 export const BACKGROUND_AGENT_NAMES = [
   'Atlas', 'Athena', 'Apollo', 'Artemis', 'Ares', 'Hermes',
@@ -151,6 +154,7 @@ export function normalizeBackgroundAgentWork(record = {}) {
     completedAt,
     updatedAt,
     result: String(record.result || '').trim(),
+    streamingText: typeof record.streamingText === 'string' ? record.streamingText : '',
     error: String(record.error || '').trim(),
     fileChanges: record.fileChanges || null,
     streamId: String(record.streamId || stream.streamId || '').trim(),
@@ -278,25 +282,74 @@ export function writeBackgroundAgentWork(records = []) {
   }
 }
 
-export function persistBackgroundAgentWork(record = {}) {
+function cancelBackgroundAgentWorkPersistence() {
+  if (backgroundAgentWorkPersistTimer === null) return;
+  if (typeof clearTimeout === 'function') clearTimeout(backgroundAgentWorkPersistTimer);
+  backgroundAgentWorkPersistTimer = null;
+}
+
+function flushBackgroundAgentWorkPersistence() {
+  cancelBackgroundAgentWorkPersistence();
+  if (!backgroundAgentWorkPersistPending) return;
+  backgroundAgentWorkPersistPending = false;
+  writeBackgroundAgentWork(readBackgroundAgentWork());
+}
+
+function scheduleBackgroundAgentWorkPersistence() {
+  backgroundAgentWorkPersistPending = true;
+  cancelBackgroundAgentWorkPersistence();
+  if (typeof setTimeout !== 'function') {
+    flushBackgroundAgentWorkPersistence();
+    return;
+  }
+  backgroundAgentWorkPersistTimer = setTimeout(() => {
+    backgroundAgentWorkPersistTimer = null;
+    flushBackgroundAgentWorkPersistence();
+  }, BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS);
+  backgroundAgentWorkPersistTimer?.unref?.();
+}
+
+export function persistBackgroundAgentWork(record = {}, options = {}) {
   const normalized = normalizeBackgroundAgentWork(record);
   if (!normalized) return null;
   const records = readBackgroundAgentWork();
   const index = records.findIndex((item) => item.id === normalized.id && item.sessionId === normalized.sessionId);
   if (index >= 0) {
+    const previous = records[index];
+    const previousLastSeq = Number(previous.lastSeq || 0);
+    const normalizedLastSeq = Number(normalized.lastSeq || 0);
+    const sameStream = Boolean(normalized.streamId)
+      && normalized.streamId === String(previous.streamId || '').trim();
+    const previousEvents = Array.isArray(previous.events) ? previous.events : [];
+    const hasCompleteEventBuffer = normalized.events.length >= previousEvents.length;
     records[index] = {
-      ...records[index],
+      ...previous,
       ...normalized,
-      events: mergeBackgroundAgentEvents(records[index].events, normalized.events),
-      liveTraceEntries: mergeBackgroundAgentTraceEntries(records[index].liveTraceEntries, normalized.liveTraceEntries),
-      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : records[index].steerMessages,
-      backgroundSessionId: normalized.backgroundSessionId || records[index].backgroundSessionId,
-      streamId: normalized.streamId || records[index].streamId,
-      lastSeq: Math.max(Number(records[index].lastSeq || 0), Number(normalized.lastSeq || 0)),
+      // The live lane already owns an ordered append-only process buffer. Keep
+      // that hot path cheap and reserve the Map/sort merge for replayed or
+      // out-of-order frames.
+      events: sameStream && normalizedLastSeq > previousLastSeq && hasCompleteEventBuffer
+        ? normalized.events.slice(-1200)
+        : mergeBackgroundAgentEvents(previousEvents, normalized.events),
+      liveTraceEntries: mergeBackgroundAgentTraceEntries(previous.liveTraceEntries, normalized.liveTraceEntries),
+      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages,
+      backgroundSessionId: normalized.backgroundSessionId || previous.backgroundSessionId,
+      streamId: normalized.streamId || previous.streamId,
+      lastSeq: Math.max(previousLastSeq, normalizedLastSeq),
+      streamingText: normalized.streamingText || previous.streamingText || '',
     };
   } else records.push(normalized);
-  writeBackgroundAgentWork(records);
+  if (options.immediate === true) {
+    backgroundAgentWorkPersistPending = true;
+    flushBackgroundAgentWorkPersistence();
+  } else {
+    scheduleBackgroundAgentWorkPersistence();
+  }
   return normalized;
+}
+
+if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('pagehide', flushBackgroundAgentWorkPersistence);
 }
 
 export function backgroundAgentWorkForSession(sessionId = '') {
@@ -334,7 +387,8 @@ export function backgroundAgentRecordToMessage(record = {}) {
     existingColor: record.agentColor || record.color,
   });
   const agentName = identity.name || 'Background agent';
-  const result = String(record.result || record.error || '').trim();
+  const running = ['running', 'queued', 'in_progress'].includes(String(record.status || '').toLowerCase());
+  const result = String(record.result || record.error || (running ? record.streamingText : '') || '').trim();
   return {
     role: 'ai',
     from: agentName,
@@ -342,7 +396,7 @@ export function backgroundAgentRecordToMessage(record = {}) {
     body: { sender: agentName, text: result },
     processEntries: Array.isArray(record.events) ? record.events.slice() : [],
     liveTraceEntries: Array.isArray(record.liveTraceEntries) ? record.liveTraceEntries.slice() : [],
-    streaming: ['running', 'queued', 'in_progress'].includes(String(record.status || '').toLowerCase()),
+    streaming: running,
     createdAt: Number(record.startedAt || Date.now()) || Date.now(),
     timestamp: Number(record.startedAt || Date.now()) || Date.now(),
     workStartedAt: Number(record.startedAt || Date.now()) || Date.now(),

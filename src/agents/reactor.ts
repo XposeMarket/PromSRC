@@ -23,6 +23,11 @@ import { buildSystemPrompt, loadPrometheusRuntimeContract, selectSkillSlugsForMe
 import { buildSubagentIdentityMemoryContext } from './subagent-prompt-context.js';
 import { AgentRole } from '../types.js';
 import { runWithWorkspace, getActiveWorkspace } from '../tools/workspace-context.js';
+import {
+  executeToolCallsInParallel,
+  partitionToolCallsForParallelExecution,
+  type ParallelToolCall,
+} from '../tools/parallel-tool-calls.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,6 +69,9 @@ export interface ReactOptions {
   subagentSystemPromptOnly?: boolean;
   /** Settings-backed per-agent reasoning override or inherited effort. */
   reasoningEffort?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  /** Explicit identity for policy/audit attribution during concurrent calls. */
+  sessionId?: string;
+  agentId?: string;
 }
 
 // Detect FINAL: in model response
@@ -561,7 +569,8 @@ RULES:
 1. Unknown target? Call list or stat first, then act.
 2. Bulk/pattern ops: call list first, then act only on matched items.
 3. Destructive ops without confirmed intent: include open_confirm in your response before mutating.
-4. Never claim done without a successful tool result.
+4. Independent read-only calls may be emitted together in one response; keep writes, commands, browser/desktop actions, and dependent calls serial.
+5. Never claim done without a successful tool result.
 `.trim();
   return [soul, SKILL_RUNTIME_GUIDE, toolInstructions].filter(Boolean).join('\n\n---\n\n');
 }
@@ -766,6 +775,10 @@ export class Reactor {
         let nativeLastToolResult = '';
         let nativeToolExecutions = 0;
         let nativeRescueAttempted = false;
+        const nativeExecutionContext = {
+          sessionId: options.sessionId || `reactor:${label}`,
+          agentId: options.agentId || label,
+        };
 
         while (true) {
           nativeSteps++;
@@ -798,7 +811,9 @@ export class Reactor {
               nativeRescueAttempted = true;
               nativeMessages.push({
                 role: 'user',
-                content: 'Call a tool now using the tool definitions. Do not write prose. Make exactly one tool call, or respond FINAL: <answer> if no tool needed.',
+                content: nativeProducedToolCall
+                  ? 'Synthesize the completed tool results into the final answer now. Do not call another tool. Reply with only the concise answer.'
+                  : 'Call a tool now using the tool definitions. Do not write prose. Make exactly one tool call, or respond FINAL: <answer> if no tool needed.',
               });
               continue;
             }
@@ -810,10 +825,10 @@ export class Reactor {
           nativeProducedToolCall = true;
           nativeMessages.push({ role: 'assistant', content: assistantContent || '', tool_calls: toolCalls });
 
-          for (const tc of toolCalls) {
+          const preparedCalls = toolCalls.map((tc: any, index: number) => {
             const rawName = String(tc?.function?.name || tc?.name || '').trim();
             const mappedName = mapToolAlias(rawName);
-            const callId = String(tc?.id || `${nativeSteps}_${mappedName}_${Date.now()}`);
+            const callId = String(tc?.id || `${nativeSteps}_${index}_${mappedName}_${Date.now()}`);
             const params = parseNativeToolArgs(tc?.function?.arguments ?? tc?.arguments ?? {});
 
             options.onStep?.({
@@ -824,14 +839,27 @@ export class Reactor {
               stepNum: nativeSteps,
             });
 
+            return {
+              rawName,
+              mappedName,
+              callId,
+              params,
+              parallelCall: { id: callId, name: mappedName, args: params } as ParallelToolCall,
+            };
+          });
+
+          const preparedByCall = new Map<ParallelToolCall, (typeof preparedCalls)[number]>();
+          for (const prepared of preparedCalls) preparedByCall.set(prepared.parallelCall, prepared);
+
+          const recordNativeResult = (prepared: (typeof preparedCalls)[number], toolResult: any) => {
+            const { mappedName, rawName, callId, params } = prepared;
             if (!mappedName || !this.registry.get(mappedName)) {
               const errText = `ERROR: Tool not found: ${mappedName || rawName}`;
               nativeMessages.push({ role: 'tool', tool_call_id: callId, name: mappedName || rawName || 'unknown', content: errText });
               options.onStep?.({ thought: `Native tool-call: ${mappedName}`, action: mappedName || rawName || 'unknown', params, stepNum: nativeSteps, toolResult: errText, isFormatViolation: true });
-              continue;
+              return;
             }
 
-            const toolResult = await this.registry.execute(mappedName, params);
             const fullResultText = toolResult.success
               ? (toolResult.stdout || JSON.stringify(toolResult.data || {}))
               : `ERROR: ${toolResult.error}`;
@@ -840,10 +868,41 @@ export class Reactor {
 
             options.onStep?.({ thought: `Native tool-call: ${mappedName}`, action: mappedName, params, stepNum: nativeSteps, toolResult: fullResultText, toolData: toolResult.data });
             nativeMessages.push({ role: 'tool', tool_call_id: callId, name: mappedName, content: fullResultText });
+          };
+
+          for (const group of partitionToolCallsForParallelExecution(preparedCalls.map((item: { parallelCall: ParallelToolCall }) => item.parallelCall))) {
+            if (group.parallel) {
+              const outcomes = await executeToolCallsInParallel(
+                group.calls,
+                async (parallelCall) => {
+                  const prepared = preparedByCall.get(parallelCall)!;
+                  return this.registry.execute(prepared.mappedName, prepared.params, nativeExecutionContext);
+                },
+              );
+              for (const outcome of outcomes) {
+                const prepared = preparedByCall.get(outcome.call)!;
+                recordNativeResult(
+                  prepared,
+                  outcome.result || { success: false, error: String(outcome.error || 'Parallel tool execution failed') },
+                );
+              }
+              continue;
+            }
+
+            for (const parallelCall of group.calls) {
+              const prepared = preparedByCall.get(parallelCall)!;
+              if (!prepared.mappedName || !this.registry.get(prepared.mappedName)) {
+                recordNativeResult(prepared, { success: false, error: `Tool not found: ${prepared.mappedName || prepared.rawName}` });
+                continue;
+              }
+              const toolResult = await this.registry.execute(prepared.mappedName, prepared.params, nativeExecutionContext);
+              recordNativeResult(prepared, toolResult);
+            }
           }
         }
 
-        // If native path executed at least one tool successfully, return last result
+        // Last-resort fallback only. Normally the model gets another synthesis
+        // round after tool results are appended above.
         if (nativeProducedToolCall && nativeToolExecutions > 0 && nativeLastToolResult) {
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`${label} FINAL  [native] ${nativeLastToolResult.slice(0, 200)}`);

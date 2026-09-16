@@ -143,6 +143,7 @@ function summarizeJob(job: CronJob): Record<string, any> {
     team_id: (job as any).team_id || null,
     assignmentTarget: (job as any).assignmentTarget || null,
     deliverToMainChannel: (job as any).deliverToMainChannel === true,
+    previewOnly: (job as any).previewOnly === true,
     model: job.model || null,
     sessionTarget: job.sessionTarget || 'isolated',
     expectedOutputs: normalizeExpectedOutputs((job as any).expectedOutputs || []),
@@ -516,6 +517,11 @@ function buildSchedulePatch(args: any): { patch: Record<string, any>; errors: st
     patch.status = patch.enabled ? 'scheduled' : 'paused';
     if (!patch.enabled) patch.pausedReason = 'manual';
     if (patch.enabled) patch.pausedReason = undefined;
+  }
+  if (args?.preview_only !== undefined || args?.previewOnly !== undefined) {
+    patch.previewOnly = args.preview_only === true
+      || args.previewOnly === true
+      || String(args.preview_only ?? args.previewOnly).toLowerCase() === 'true';
   }
   if (args?.delivery !== undefined || args?.channel !== undefined || args?.session_target !== undefined) {
     const delivery = args.delivery && typeof args.delivery === 'object' ? args.delivery : {};

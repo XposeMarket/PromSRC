@@ -226,6 +226,13 @@ const TAB_FOR_PAGE = {
   schedule: null, teams: null, subagents: null, proposals: null, creative: 'hub', settings: null, more: null, gateways: null,
 };
 
+function isDedicatedAgentChatRoute(route = {}) {
+  const page = String(route?.page || '').toLowerCase();
+  return (page === 'teams' || page === 'subagents')
+    && !!route?.arg
+    && String(route?.extra?.[0] || '').toLowerCase() === 'chat';
+}
+
 function _repairNamespacedChatRoute(page, arg) {
   if (page !== 'chat' || !arg) return arg;
   try {
@@ -335,7 +342,12 @@ function render() {
 
   if (page !== 'settings') closeMobileSettings();
 
-  const activeTab = TAB_FOR_PAGE[page] || null;
+  // Team/subagent conversations are chat surfaces even though their route
+  // owners are separate. Keeping the Chat tab active also makes the shared
+  // tabbar mount with the same stacking/keyboard contract as main Chat.
+  const activeTab = isDedicatedAgentChatRoute({ page, arg, extra })
+    ? 'chat'
+    : (TAB_FOR_PAGE[page] || null);
   const shell = createMobileShell({
     activeTab,
     onNavigate: (route) => mobileNavigate(route),
@@ -389,6 +401,10 @@ function render() {
   // voice accents native in Blue/Violet while allowing the rest of the app to
   // share the Prometheus One gold component language.
   slot.dataset.mobilePage = page;
+  slot.dataset.mobileAgentChatRoute = isDedicatedAgentChatRoute({ page, arg, extra })
+    ? (page === 'teams' ? 'team' : 'subagent')
+    : '';
+  slot.classList.toggle('pm-agent-chat-page', isDedicatedAgentChatRoute({ page, arg, extra }));
   // The shell is created synchronously, but each route owner is lazy-loaded.
   // Keep that hand-off explicit so a slow chunk cannot look like a valid empty
   // page (and so resume recovery can distinguish a real route from a shell
@@ -449,6 +465,7 @@ function render() {
       }
       return owner.renderSchedulePage(slot, { navigate: mobileNavigate });
     case 'teams':
+      if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return owner.renderTeamChatPage(slot, { teamId: decodeURIComponent(arg), navigate: mobileNavigate });
       if (arg) return owner.renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return owner.renderTeamsPage(slot, { navigate: mobileNavigate });
     case 'tasks':     return owner.renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
@@ -564,7 +581,14 @@ function recoverMobileBootSurface() {
   // retry it. A completed route with a missing chat body is always repairable.
   const routeStalled = routePending && routeAge > 8000;
   const missingRouteSurface = !routePending && !routeReady;
-  if (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat || routeStalled || missingRouteSurface) {
+  // A focused dedicated composer is in the middle of an iOS keyboard handoff.
+  // A focus/pageshow recovery pass must not rebuild the shell underneath it:
+  // rebuilding removes the textarea, closes the keyboard, and falls back to
+  // the default Chat surface on the next browser focus event.
+  const focusedDedicatedComposer = isDedicatedAgentChatRoute(route)
+    && slot?.classList?.contains('pm-agent-chat-page')
+    && document.activeElement?.matches?.('.pm-agent-chat-composer textarea');
+  if (!focusedDedicatedComposer && (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat || routeStalled || missingRouteSurface)) {
     safeRender();
   }
   if (getDeviceToken()) {
@@ -587,7 +611,12 @@ window.addEventListener('popstate', safeRender);
 window.addEventListener('pm-device-revoked', safeRender);
 window.addEventListener('online', recoverMobileBootSurface);
 window.addEventListener('pageshow', recoverMobileBootSurface);
-window.addEventListener('focus', recoverMobileBootSurface);
+window.addEventListener('focus', () => {
+  const route = mobileRouteFromLocation();
+  const focusedDedicatedComposer = isDedicatedAgentChatRoute(route)
+    && document.activeElement?.matches?.('.pm-agent-chat-composer textarea');
+  if (!focusedDedicatedComposer) recoverMobileBootSurface();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') recoverMobileBootSurface();
 });

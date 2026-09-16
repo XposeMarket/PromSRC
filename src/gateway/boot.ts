@@ -195,6 +195,9 @@ function isPlainManualGatewayRestartRequest(value: string): boolean {
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\bpls\b/g, 'please')
+    .replace(/\s+please$/, '')
     .trim();
   return /^(please )?(quickly )?(just )?(restart|reboot) (the )?(gateway|server|prometheus gateway|prometheus server|prometheus)$/.test(normalized)
     || /^(please )?(quickly )?(just )?(gateway|server|prometheus gateway|prometheus server|prometheus) (restart|reboot)$/.test(normalized);
@@ -507,11 +510,20 @@ export async function runBootMd(
     quickBootMark(`restart targets built (${targets.length})`);
     const results = await Promise.all(targets.map(async (target, index) => {
       const explicitQuickRestart = restartCtx.quickRestart === true;
-      const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = explicitQuickRestart
-        ? { excerpt: '', lastUserRequest: '', lastAssistantResponse: '', recentToolLog: '' }
-        : getRecentConversationForRestart(target.sessionId);
+      // A quick restart skips the build, but it must not erase the user turn
+      // that requested the restart.  We need that turn to distinguish a plain
+      // restart from a compound request such as "restart, then run tests".
+      const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } =
+        getRecentConversationForRestart(target.sessionId);
+      const plainManualRequest = isPlainManualGatewayRestartRequest(lastUserRequest);
+      // Some menu/endpoint quick restarts do not have a recoverable chat turn
+      // at all.  Preserve their old deterministic acknowledgement behavior,
+      // while allowing a checkpointed compound turn to continue below.
+      const quickRestartWithoutRecoverableTurn = explicitQuickRestart
+        && !lastUserRequest
+        && !target.plannedRestartTool;
       const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;
-      const hotRestartContextPacket = explicitQuickRestart
+      const hotRestartContextPacket = (plainManualRequest || quickRestartWithoutRecoverableTurn)
         ? 'Explicit quick gateway restart; deterministic acknowledgement path.'
         : buildHotRestartCallerContext(
           restartCtx,
@@ -539,7 +551,7 @@ export async function runBootMd(
       const isRestartInitiatingSession = !restartCtx.previousSessionId
         || target.sessionId === String(restartCtx.previousSessionId).trim();
       const plainManualGatewayRestart = isRestartInitiatingSession
-        && (explicitQuickRestart || isPlainManualGatewayRestartRequest(lastUserRequest))
+        && (plainManualRequest || quickRestartWithoutRecoverableTurn)
         && !target.devEdit
         && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
       // A non-goal foreground turn which called gateway_restart/apply used to

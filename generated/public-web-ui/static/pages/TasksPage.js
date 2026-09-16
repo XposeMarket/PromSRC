@@ -107,7 +107,20 @@ function bgtTaskMatchesSearch(task, query) {
   const planText = Array.isArray(task?.plan)
     ? task.plan.map((step) => step?.description || '').join(' ')
     : '';
-  return bgtSearchMatches(query, task?.title, task?.description, task?.channel, planText);
+  return bgtSearchMatches(query, task?.title, task?.description, task?.channel, task?.brainJob, task?.brainDate, planText);
+}
+
+function bgtBrainTaskLabel(task) {
+  const job = String(task?.brainJob || '').trim().toLowerCase();
+  if (job === 'thought') return 'Brain Thought';
+  if (job === 'dream_cleanup') return 'Brain Dream Cleanup';
+  if (job === 'dream') return 'Brain Dream';
+  return '';
+}
+
+function bgtIsBrainTask(task) {
+  return Boolean(bgtBrainTaskLabel(task))
+    || /^brain_(?:thought|dream)(?:_|$)/i.test(String(task?.sessionId || ''));
 }
 
 function bgtManagedThreadMatchesSearch(record, query) {
@@ -234,6 +247,7 @@ function bgtGetTask(taskId) {
 
 function bgtActionForDrop(task, targetStatus) {
   if (!task || !targetStatus) return null;
+  if (bgtIsBrainTask(task)) return null;
   const rawStatus = String(task.status || '').trim().toLowerCase();
   const displayStatus = bgtNormalizeStatus(rawStatus);
   if (displayStatus === targetStatus) return { type: 'noop' };
@@ -605,6 +619,8 @@ function bgtManagedThreadCardHTML(record, col) {
 
 function bgtCardHTML(t, col) {
   const displayStatus = bgtNormalizeStatus(t.status);
+  const brainLabel = bgtBrainTaskLabel(t);
+  const isBrainTask = bgtIsBrainTask(t);
   const mins = Math.round((Date.now() - (t.lastProgressAt || t.startedAt)) / 60000);
   const timeAgo = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins/60)}h ago`;
   const progressItems = getTaskProgressItems(t);
@@ -618,7 +634,7 @@ function bgtCardHTML(t, col) {
   const channel = t.channel === 'telegram' ? 'Telegram' : 'Web UI';
 
   return `
-  <div onclick="bgtOpenCardFromClick(event,'${escHtml(t.id)}')" draggable="true" ondragstart="bgtHandleCardDragStart(event,'${escHtml(t.id)}')" ondragend="bgtHandleCardDragEnd(event)" data-bgt-id="${escHtml(t.id)}" style="
+  <div onclick="bgtOpenCardFromClick(event,'${escHtml(t.id)}')" draggable="${isBrainTask ? 'false' : 'true'}" ${isBrainTask ? '' : `ondragstart="bgtHandleCardDragStart(event,'${escHtml(t.id)}')" ondragend="bgtHandleCardDragEnd(event)"`} data-bgt-id="${escHtml(t.id)}" style="
     background:var(--panel);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;
     cursor:pointer;transition:border-color 0.15s,box-shadow 0.15s;
     ${bgtOpenTaskId === t.id ? 'border-color:var(--brand);box-shadow:0 0 0 2px rgba(90,145,255,0.15);' : ''}
@@ -634,6 +650,7 @@ function bgtCardHTML(t, col) {
         <span style="font-size:14px;flex-shrink:0">${STATUS_ICON[displayStatus] || '●'}</span>
       </div>
     </div>
+    ${brainLabel ? `<div style="font-size:10px;color:#6d2d9e;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin:-2px 0 7px">${escHtml(brainLabel)}${t.brainDate ? ` · ${escHtml(String(t.brainDate))}` : ''}</div>` : ''}
     ${currentStep ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.4">Step ${currentStepIndex + 1}/${totalSteps}: ${escHtml(String(currentStep.text || '').slice(0,60))}${String(currentStep.text || '').length>60?'…':''}</div>` : ''}
     ${totalSteps > 0 ? `
     <div style="background:var(--line);border-radius:999px;height:3px;margin-bottom:8px;overflow:hidden">
@@ -697,7 +714,9 @@ async function bgtRefreshOpenPanel() {
 
   const pauseBtn = document.getElementById('bgt-panel-pause');
   if (pauseBtn) {
-    if (task.status === 'running') {
+    if (bgtIsBrainTask(task)) {
+      pauseBtn.style.display = 'none';
+    } else if (task.status === 'running') {
       pauseBtn.textContent = 'Pause';
       pauseBtn.style.display = '';
     } else if (['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(task.status)) {
@@ -730,6 +749,7 @@ async function bgtRefreshOpenPanel() {
   const channel = task.channel === 'telegram' ? 'Telegram' : 'Web UI';
   const startedAt = task.startedAt ? new Date(task.startedAt).toLocaleString() : '—';
   const displayStatus = bgtNormalizeStatus(task.status);
+  const brainLabel = bgtBrainTaskLabel(task);
   const statusColor = { running:'#0d4faf', queued:'#7c4d00', paused:'#555', stalled:'#9c1a1a', needs_assistance:'#6d2d9e', complete:'#1a6e35', failed:'#9c1a1a' };
   const sc = statusColor[displayStatus] || '#555';
 
@@ -741,10 +761,14 @@ async function bgtRefreshOpenPanel() {
     const time = new Date(entry.t).toLocaleTimeString();
     const typeColor = { tool_call:'#0d4faf', tool_result:'#1a6e35', reasoning:'#6d2d9e', error:'#9c1a1a', plan_mutation:'#6d2d9e', status_push:'#555', pause:'#7c4d00', resume:'#7c4d00', advisor_decision:'#555', heartbeat:'var(--brand)' };
     const tc = typeColor[entry.type] || '#888';
+    const detail = String(entry.detail || '').trim();
+    const detailHTML = detail && detail !== String(entry.content || '').trim()
+      ? `<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--muted);font-size:10px">View full output</summary><pre style="margin:5px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;color:var(--muted)">${escHtml(detail)}</pre></details>`
+      : '';
     return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px">
       <span style="color:var(--muted);flex-shrink:0;min-width:52px">${time}</span>
       <span style="color:${tc};flex-shrink:0;font-weight:700;min-width:60px">${entry.type}</span>
-      <span style="color:var(--text);flex:1;min-width:0;word-break:break-word">${escHtml(entry.content)}</span>
+      <span style="color:var(--text);flex:1;min-width:0;word-break:break-word">${escHtml(entry.content)}${detailHTML}</span>
     </div>`;
   }).join('');
 
@@ -817,6 +841,10 @@ async function bgtRefreshOpenPanel() {
       <span style="font-size:11px;color:var(--muted)">${channel}</span>
       <span style="font-size:11px;color:var(--muted)">Started ${startedAt}</span>
     </div>
+
+    ${brainLabel ? `<div style="background:#f8f5ff;border:1px solid #e9d8ff;border-radius:10px;padding:9px 12px;font-size:11px;color:#6d2d9e;line-height:1.5">
+      <strong>${escHtml(brainLabel)}</strong>${task.brainDate ? ` · ${escHtml(String(task.brainDate))}` : ''}${task.brainRunId ? `<br><span style="opacity:.78">Run ${escHtml(String(task.brainRunId))}</span>` : ''}${task.brainArtifact ? `<br><span style="opacity:.78">Primary artifact: ${escHtml(String(task.brainArtifact))}</span>` : ''}
+    </div>` : ''}
 
     <!-- Summary if complete -->
     ${task.finalSummary ? `<div style="background:#efffea;border:1px solid #b2dfb2;border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.6;color:#1a6e35">
@@ -960,6 +988,7 @@ async function bgtPauseResume() {
   if (!bgtOpenTaskId) return;
   const task = bgtTasks.find(t => t.id === bgtOpenTaskId);
   if (!task) return;
+  if (bgtIsBrainTask(task)) return;
   if (task.status === 'running') {
     // Pause
     try { await api(`/api/bg-tasks/${bgtOpenTaskId}/pause`, { method: 'POST' }); } catch {}

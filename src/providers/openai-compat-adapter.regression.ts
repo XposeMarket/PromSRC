@@ -63,9 +63,13 @@ async function main(): Promise<void> {
         assert.equal(String(url), 'https://api.openai.com/v1/responses');
         requestBody = JSON.parse(String(init?.body));
         return sseResponse([
-          'data: {"type":"response.output_text.delta","delta":"Checking"}\n\n',
+          'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_astra","type":"message","phase":"commentary","content":[]}}\n\n',
+          'data: {"type":"response.output_text.delta","item_id":"msg_astra","output_index":0,"delta":"Checking"}\n\n',
           `data: ${JSON.stringify({ type: 'response.completed', response: {
-            output: [{ type: 'function_call', call_id: 'call_astra', name: 'lookup', arguments: '{"key":"status"}' }],
+            output: [
+              { id: 'msg_astra', type: 'message', phase: 'commentary', content: [{ type: 'output_text', text: 'Checking' }] },
+              { type: 'function_call', call_id: 'call_astra', name: 'lookup', arguments: '{"key":"status"}' },
+            ],
             usage: { input_tokens: 20, output_tokens: 8, input_tokens_details: { cached_tokens: 5 } },
           } })}\n\n`,
         ]);
@@ -86,6 +90,8 @@ async function main(): Promise<void> {
       assert.equal(requestBody.tools[0].name, 'lookup');
       assert.equal(result.message.tool_calls?.[0].id, 'call_astra');
       assert.equal(result.message.tool_calls?.[0].function.arguments, '{"key":"status"}');
+      assert.equal(result.message.phase, 'commentary');
+      assert.equal(result.message.item_id, 'msg_astra');
       assert.equal(result.usage?.inputTokens, 20);
       assert.equal(result.usage?.outputTokens, 8);
       assert.deepEqual(tokens, stream ? ['Checking'] : []);
@@ -93,6 +99,7 @@ async function main(): Promise<void> {
       globalThis.fetch = async (_url, init) => {
         const body = JSON.parse(String(init?.body));
         assert.ok(body.input.some((item: any) => item.type === 'function_call_output' && item.call_id === 'call_astra' && item.output === 'Ready'));
+        assert.ok(body.input.some((item: any) => item.role === 'assistant' && item.content === 'Checking' && item.phase === 'commentary'), 'commentary preceding a tool call must be replayed');
         return sseResponse(['data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Ready to go."}]}]}}\n\n']);
       };
       const final = await astra.chat([

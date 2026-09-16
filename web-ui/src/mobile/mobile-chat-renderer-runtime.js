@@ -279,6 +279,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _renderMobileSkillReferencedMarkdown,
   _renderMobileThreadLinkArtifacts,
   _renderMobileUserEditComposer,
+  _renderMobileVoiceLyrics,
   _renderMobileVoiceWorkgroup,
   _renderMobileWorkTimer,
   _wireMobileApprovalActionButton,
@@ -344,6 +345,39 @@ export function createMobileChatRendererRuntime(context = {}) {
   } = context || {};
 
   let mobileFirstTranscriptPaintMarked = false;
+  const mobileBackgroundPersistTimers = new Map();
+
+  function _queueMobileBackgroundWorkPersistence(lane, { immediate = false } = {}) {
+    if (!lane?.id) return;
+    const key = `${String(lane.sessionId || __pmChat.activeSessionId || '')}:${String(lane.id)}`;
+    const flush = () => {
+      mobileBackgroundPersistTimers.delete(key);
+      persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+    };
+    if (immediate) {
+      const pending = mobileBackgroundPersistTimers.get(key);
+      if (pending) clearTimeout(pending.timer);
+      mobileBackgroundPersistTimers.delete(key);
+      persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane), { immediate: true });
+      return;
+    }
+    if (mobileBackgroundPersistTimers.has(key)) return;
+    const timer = setTimeout(flush, 300);
+    timer?.unref?.();
+    mobileBackgroundPersistTimers.set(key, { timer, lane });
+  }
+
+  function _flushMobileBackgroundWorkPersistence() {
+    for (const [key, pending] of mobileBackgroundPersistTimers.entries()) {
+      clearTimeout(pending.timer);
+      mobileBackgroundPersistTimers.delete(key);
+      persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(pending.lane), { immediate: true });
+    }
+  }
+
+  if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('pagehide', _flushMobileBackgroundWorkPersistence);
+  }
 
   function _mobileWorkflowTransitionLabel(message) {
     const groupId = String(message?.workflowGroupId || '');
@@ -379,7 +413,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
     const entryId = String(entry?.id || `compaction_${entry?.time || entry?.ts || ''}_${status}`).trim();
     const label = String(entry?.text || '').trim()
-      || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
+      || (status === 'compacting' ? 'Compacting context' : status === 'failed' ? 'Context compaction failed' : 'Context compacted');
     const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
     const body = summary
       ? `<div class="pm-trace-compaction-body"><div class="pm-live-md">${_renderMobileMarkdown(summary)}</div></div>`
@@ -962,9 +996,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     let groups = _mobileTraceGroups(entries).filter((group) => !kindFilter || kindFilter.has(String(group.kind || '').toLowerCase()));
     if (!groups.length) return '';
     if (!streaming
-      && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)
-      && !kindFilter?.has('thought')
-      && !kindFilter?.has('thought-summary')) return '';
+      && !groups.some((group) => (
+        group.kind === 'tools'
+        || group.kind === 'compaction'
+        || group.kind === 'thought'
+        || group.kind === 'thought-summary'
+        || group.kind === 'vision'
+      ) && group.entries.length > 0)) return '';
     let latestToolGroupIndex = groups.reduce((latest, group, index) => (
       group.kind === 'tools' ? index : latest
     ), -1);
@@ -1122,6 +1160,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     _renderMobileSkillReferencedMarkdown,
     _renderMobileThreadLinkArtifacts,
     _renderMobileUserEditComposer,
+    _renderMobileVoiceLyrics,
     _renderMobileVoiceWorkgroup,
     _renderMobileWorkTimer,
     chatTimelineRowSignature,
@@ -2076,7 +2115,10 @@ export function createMobileChatRendererRuntime(context = {}) {
   }
   
   function _syncMobileTraceNodeAttributes(current, next) {
-    const preserved = new Set(['open']);
+    // A side/background trace can be re-rendered while the stream is still
+    // live. Keep the user's explicit disclosure choice attached to the timer
+    // even though the freshly rendered message does not carry DOM state.
+    const preserved = new Set(['open', 'data-pm-trace-user-toggle']);
     Array.from(current.attributes || []).forEach((attr) => {
       if (!preserved.has(attr.name) && !next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
     });
@@ -2625,6 +2667,7 @@ export function createMobileChatRendererRuntime(context = {}) {
       if (!drawer) return;
       const isExpanded = timerEl.classList.contains('expanded');
       const nextExpanded = !isExpanded;
+      timerEl.setAttribute('data-pm-trace-user-toggle', '1');
       timerEl.classList.toggle('expanded', nextExpanded);
       timerEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
       drawer.classList.toggle('open', nextExpanded);
@@ -3100,7 +3143,12 @@ function _renderMobileAgentChatBubble(message, options = {}) {
   const attachments = _mobileAgentMessageAttachments(message);
   const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
   const progress = message?._progress ? `<div class="pm-sa-progress">${escapeHtml(message._progress)}</div>` : '';
-  const streaming = message?.streaming === true || !!message?._progress || (message && message._done !== true && options.live === true);
+  const terminalFrameReceived = message?._pmFinalReceived === true || message?._done === true;
+  const streaming = !terminalFrameReceived && (
+    message?.streaming === true
+    || !!message?._progress
+    || (message && options.live === true)
+  );
   const explicitStartedAt = Number(message?.workStartedAt || message?.startedAt || 0);
   const assistantLike = {
     ...message,
@@ -3132,8 +3180,11 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     inner = `${voiceMeta ? `<span class="pm-sender">${escapeHtml(voiceMeta)}</span>` : ''}<div class="markdown-body">${_renderMobileMarkdown(markdownText)}</div>${attachmentHtml}`;
   } else {
     const sender = String(options.sender || message?.fromLabel || message?.body?.sender || message?.fromName || 'Agent');
+    const senderIconHtml = typeof options.senderIconHtml === 'string' ? options.senderIconHtml : '';
+    inner += senderIconHtml
+      ? `<span class="pm-sender pm-sender-with-icon">${senderIconHtml}<span class="pm-sender-name">${escapeHtml(voiceMeta || sender)}</span></span>`
+      : `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     inner += _renderMobileWorkTimer(traceMessage, { expanded: traceExpanded });
-    inner += `<span class="pm-sender">${escapeHtml(voiceMeta || sender)}</span>`;
     const answerStarted = !!String(text || '').trim();
     const isVoiceTraceTurn = _isMobileVoiceTraceTurn(traceMessage);
     // Background-agent details are a live work surface: keep their tool
@@ -3144,13 +3195,16 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       : '';
     const hasLiveTrace = !!liveTraceHtml;
     const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
+    const completedTraceHtml = !streaming
+      ? _renderMobileGroupedTrace(completedTraceEntries, { streaming: false })
+      : '';
     if (hasLiveTrace) {
       // Keep activity mounted through final-answer streaming. The work timer
       // owns the disclosure target, so active traces can be collapsed without
       // disappearing or being rebuilt as a second tool stream.
       inner += `<div class="pm-trace-drawer${traceExpanded ? ' open' : ''}" data-trace-live="1">${liveTraceHtml}</div>`;
-    } else if (_mobileTraceHasToolGroup(completedTraceEntries)) {
-      inner += `<div class="pm-trace-drawer${traceExpanded ? ' open' : ''}" data-trace-completed="1">${_renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
+    } else if (completedTraceHtml) {
+      inner += `<div class="pm-trace-drawer${traceExpanded ? ' open' : ''}" data-trace-completed="1">${completedTraceHtml}</div>`;
     } else {
       inner += progress;
     }
@@ -3183,11 +3237,20 @@ function _renderMobileAgentChatBubble(message, options = {}) {
   const backgroundDetailAttr = options.backgroundAgentId
     ? ` data-pm-background-agent-message="${escapeHtml(String(options.backgroundAgentId))}"`
     : '';
+  const backgroundAgentId = String(options.backgroundAgentId || '').trim();
+  const backgroundActionHtml = backgroundAgentId && !fromUser && terminalFrameReceived
+    ? `<div class="pm-msg-actions pm-background-agent-actions" data-pm-background-actions="${escapeHtml(backgroundAgentId)}">
+        <button type="button" class="pm-msg-action" data-pm-background-action="copy" data-pm-background-id="${escapeHtml(backgroundAgentId)}" title="Copy" aria-label="Copy">${ICONS.clipboard}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+        <button type="button" class="pm-msg-action" data-pm-background-action="speak" data-pm-background-id="${escapeHtml(backgroundAgentId)}" title="Speak response" aria-label="Speak response">${ICONS.volume || ICONS.play}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+        <button type="button" class="pm-msg-action" data-pm-background-action="fork" data-pm-background-id="${escapeHtml(backgroundAgentId)}" title="Fork" aria-label="Fork">${ICONS.fork || ICONS.chev}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+      </div>`
+    : '';
   return `
     <div class="pm-msg ${fromUser ? 'from-user' : 'from-ai'} pm-agent-chat-msg"${streaming && !fromUser ? ' data-streaming="1"' : ''}${backgroundDetailAttr}>
       <div class="pm-bubble">
         ${inner}
         ${time ? `<span class="pm-time">${escapeHtml(time)}</span>` : ''}
+        ${backgroundActionHtml}
       </div>
     </div>`;
 }
@@ -3495,6 +3558,11 @@ function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmCha
   const id = _mobileBackgroundSpawnId(status) || String(status.id || '').trim();
   if (!id || _mobileBackgroundSpawnClearedIds()[id]) return false;
   const sid = String(sessionId || status.spawnerSessionId || status.sessionId || __pmChat.activeSessionId || '').trim();
+  const backgroundSessionId = String(
+    status.backgroundSessionId
+      || status.bgSessionId
+      || `background_${id}`,
+  ).trim();
   const rawState = String(status.state || status.status || 'running').toLowerCase();
   const terminalState = rawState === 'completed' || rawState === 'failed' || rawState === 'timed_out';
   const prompt = String(status.prompt || status.taskPrompt || status.promptPreview || '').trim();
@@ -3504,7 +3572,9 @@ function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmCha
     backgroundId: id,
     sessionId: sid,
     spawnerSessionId: sid,
-    state: rawState === 'timed_out' ? 'failed' : rawState,
+    bgSessionId: backgroundSessionId,
+    backgroundSessionId,
+    state: rawState,
     taskPrompt: prompt,
     prompt,
     error: rawState === 'timed_out' ? (status.error || 'Background agent timed out.') : status.error,
@@ -3636,6 +3706,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const streamedFinalResult = isFinalStreamEvent
     ? String(msg.reply || msg.text || msg.result || msg.output || '').trim()
     : '';
+  const storedAnswerText = storedTerminal
+    ? String(stored?.result || stored?.finalResult || stored?.reply || stored?.output || stored?.error || '')
+    : String(stored?.streamingText || '');
   const lane = {
     id,
     sessionId: parentSessionId,
@@ -3653,8 +3726,8 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     message: existing.message || {
       role: 'ai',
       from: identity.name,
-      content: storedTerminal ? String(stored?.result || stored?.error || '') : '',
-      body: { sender: identity.name, text: storedTerminal ? String(stored?.result || stored?.error || '') : '' },
+      content: storedAnswerText,
+      body: { sender: identity.name, text: storedAnswerText },
       processEntries: storedProcessEntries,
       liveTraceEntries: storedLiveTraceEntries,
       streaming: !storedTerminal,
@@ -3663,7 +3736,7 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     },
     fileChanges: msg.fileChanges || existing.fileChanges || stored?.fileChanges || null,
     plan: existing.plan || null,
-    result: streamedFinalResult || existing.result || stored?.result || '',
+    result: streamedFinalResult || existing.result || stored?.result || stored?.finalResult || stored?.reply || stored?.output || '',
     // Like result, a streamed error may describe one failed tool call rather
     // than the background run itself. The terminal bg_agent_done payload owns
     // the durable lane error.
@@ -3680,6 +3753,12 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     lane.message.from = lane.agentName;
     if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
     lane.message.body.sender = lane.agentName;
+    if (!storedTerminal && storedAnswerText
+      && !String(lane.message.content || lane.message.body.text || '').trim()) {
+      lane.message.content = storedAnswerText;
+      lane.message.text = storedAnswerText;
+      lane.message.body.text = storedAnswerText;
+    }
     // Merge, rather than fill only when empty. Recovery can arrive after a
     // live event and must retain both the current tool envelope and durable
     // process/trace entries from the background session checkpoint.
@@ -3745,7 +3824,14 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
     startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
     completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
     updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
-    result: String(lane.result || stored?.result || '').trim(),
+    result: String(
+      lane.result
+      || stored?.result
+      || stored?.finalResult
+      || stored?.reply
+      || stored?.output
+      || '',
+    ).trim(),
     error: String(lane.error || stored?.error || '').trim(),
     fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
     events: processEntries,
@@ -3791,10 +3877,11 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
     task: lane.task || lane.prompt,
     status: lane.status,
     startedAt: lane.startedAt,
-    completedAt: lane.completedAt || (['completed', 'failed'].includes(String(lane.status || '').toLowerCase()) ? lane.updatedAt : 0),
+    completedAt: lane.completedAt || (['completed', 'failed', 'timed_out'].includes(String(lane.status || '').toLowerCase()) ? lane.updatedAt : 0),
     updatedAt: lane.updatedAt,
     result: lane.result,
     error: lane.error,
+    streamingText: String(lane.message?.content || lane.message?.body?.text || ''),
     fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
     events: Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [],
     liveTraceEntries: Array.isArray(lane.message?.liveTraceEntries) ? lane.message.liveTraceEntries : [],
@@ -3810,8 +3897,10 @@ function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
   const eventType = String(
     msg.eventType
       || msg.eventName
+      || msg.event
       || payload.eventType
       || payload.eventName
+      || payload.event
       || wrapperType
       || '',
   ).trim();
@@ -3903,7 +3992,7 @@ function _renderMobileBackgroundSpawnPrompt(lane) {
 }
 
 function _renderMobileBackgroundSpawnFinal(lane) {
-  const failed = String(lane?.status || '').toLowerCase() === 'failed';
+  const failed = ['failed', 'timed_out'].includes(String(lane?.status || '').toLowerCase());
   const text = String(
     failed
       ? (lane?.error || lane?.message?.content || 'Background Spawn failed.')
@@ -3919,7 +4008,7 @@ function _renderMobileBackgroundSpawnFinal(lane) {
 
 function _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml) {
   const status = String(lane?.status || 'running').toLowerCase();
-  if (status === 'completed' || status === 'failed') {
+  if (status === 'completed' || status === 'failed' || status === 'timed_out') {
     return _renderMobileBackgroundSpawnFinal(lane);
   }
   const approval = lane?.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending'
@@ -3961,7 +4050,7 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
     if (evt.seq && evt.seq <= Number(lane.lastSeq || 0)) return false;
   }
   const hasPendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
-  lane.status = lane.status === 'completed' || lane.status === 'failed'
+  lane.status = ['completed', 'failed', 'timed_out'].includes(String(lane.status || '').toLowerCase())
     ? lane.status
     : (hasPendingApproval ? 'approval_required' : 'running');
   if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
@@ -4040,7 +4129,7 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
   lane.updatedAt = Date.now();
   if (evt.streamId && evt.seq) lane.lastSeq = evt.seq;
-  persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+  _queueMobileBackgroundWorkPersistence(lane);
   if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
   return changed || laneChanged;
 }
@@ -4050,7 +4139,8 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   const clearedSessionId = String(sessionId || msg.spawnerSessionId || msg.sessionId || __pmChat.activeSessionId || '').trim();
   if (clearedId && _mobileBackgroundSpawnClearedIds()[clearedId]) {
     const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
-    const failed = msg.state === 'failed' || msg.state === 'timed_out' || !!msg.error;
+    const timedOut = String(msg.state || msg.status || '').trim().toLowerCase() === 'timed_out';
+    const failed = msg.state === 'failed' || timedOut || !!msg.error;
     const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
     const identity = resolveBackgroundAgentIdentity(clearedId, {
       existingName: existing.agentName,
@@ -4063,31 +4153,46 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
       agentName: identity.name,
       agentColor: identity.color,
       task: existing.task || msg.task || msg.prompt || '',
-      status: failed ? 'failed' : 'completed',
+      status: timedOut ? 'timed_out' : (failed ? 'failed' : 'completed'),
       startedAt: existing.startedAt || msg.startedAt || completedAt,
       completedAt,
       updatedAt: Date.now(),
-      result: String(msg.result || existing.result || '').trim(),
-      error: String(msg.error || existing.error || '').trim(),
+      result: String(msg.result || msg.finalResult || msg.reply || msg.output || existing.result || '').trim(),
+      error: String(msg.error || existing.error || (timedOut ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : ''))).trim(),
       fileChanges: msg.fileChanges || existing.fileChanges || null,
       events: existing.events || [],
-    });
+    }, { immediate: true });
     if (mobileSourceState.sessionId === clearedSessionId && !mobileSourceState.history) _renderMobileSourceList(document);
     return true;
   }
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   if (!lane) return false;
-  const failed = msg.state === 'failed' || !!msg.error;
-  lane.status = failed ? 'failed' : 'completed';
+  const rawState = String(msg.state || msg.status || '').trim().toLowerCase();
+  const timedOut = rawState === 'timed_out';
+  const failed = rawState === 'failed' || timedOut || !!msg.error;
+  lane.status = timedOut ? 'timed_out' : (failed ? 'failed' : 'completed');
   lane.completedAt = Number(msg.completedAt || Date.now()) || Date.now();
-  lane.result = String(msg.result || lane.result || lane.message?.content || '').trim();
-  lane.error = String(msg.error || lane.error || '').trim();
+  lane.result = String(
+    msg.result
+    || msg.finalResult
+    || msg.reply
+    || msg.output
+    || lane.result
+    || lane.message?.content
+    || '',
+  ).trim();
+  lane.error = String(
+    msg.error
+      || lane.error
+      || (rawState === 'timed_out' ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : '')),
+  ).trim();
   if (msg.fileChanges) {
     lane.fileChanges = msg.fileChanges;
     lane.message.fileChanges = msg.fileChanges;
   }
   lane.message.streaming = false;
+  lane.message._pmFinalReceived = true;
   lane.message._done = true;
   lane.message.workEndedAt = Date.now();
   lane.message.workDurationMs = Math.max(0, lane.message.workEndedAt - Number(lane.message.workStartedAt || lane.message.createdAt || lane.message.workEndedAt));
@@ -4096,13 +4201,16 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   } else {
     const result = String(lane.result || '').trim();
     _appendMobileProcess(lane.message, 'final', `${lane.agentName || 'Agent'} complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
-    if (result && !String(lane.message.content || '').trim()) {
+    const currentMessageText = String(lane.message.content || lane.message.body?.text || '').trim();
+    const normalizedPrompt = String(lane.prompt || lane.task || '').replace(/\s+/g, ' ').trim();
+    const normalizedCurrent = currentMessageText.replace(/\s+/g, ' ').trim();
+    if (result && (!currentMessageText || (normalizedPrompt && normalizedCurrent === normalizedPrompt))) {
       lane.message.content = result;
       lane.message.body = { ...(lane.message.body || {}), text: result };
     }
   }
   lane.updatedAt = Date.now();
-  persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+  _queueMobileBackgroundWorkPersistence(lane, { immediate: true });
   if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
   return true;
 }
@@ -4190,7 +4298,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     const status = String(lane.status || 'running').toLowerCase();
     const pendingApproval = lane.approvalRequest && String(lane.approvalRequest.status || 'pending').toLowerCase() === 'pending';
     const finalText = status === 'completed' ? String(lane.result || lane.message?.content || '').trim() : '';
-    const errorText = status === 'failed' ? String(lane.error || lane.message?.content || '').trim() : '';
+    const errorText = ['failed', 'timed_out'].includes(status) ? String(lane.error || lane.message?.content || '').trim() : '';
     const traceSummary = entries.length
       ? (_mobileTraceProgressSummary(entries) || (status === 'running' || status === 'in_progress'
         ? _mobileTraceCurrentToolLabel(entries)
@@ -4207,7 +4315,13 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
       : '<div class="pm-background-spawn-empty">Waiting for live events...</div>';
     const planHtml = _renderMobileBackgroundSpawnPlan(lane);
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
-    const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
+    const statusLabel = status === 'approval_required'
+      ? 'approval'
+      : status === 'in_progress'
+        ? 'running'
+        : status === 'timed_out'
+          ? 'timed out'
+          : status;
     return `
       <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}" data-pm-row-key="background:${escapeHtml(lane.id)}">
         <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(identity.name)} background work">
@@ -4363,7 +4477,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
       if (action === 'context_compaction') {
         _appendMobileCompactionTrace(message, 'compacting', '', evt.args || evt);
-        message._progress = 'Compacting Context';
+        message._progress = 'Compacting context';
         return true;
       }
       const stepNum = Number(evt.stepNum || 0);
@@ -4443,6 +4557,13 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       message.text = message.content;
       message.body = { ...(message.body || {}), text: message.content };
       message._progress = '';
+      message._pmFinalReceived = true;
+      message._done = true;
+      message.streaming = false;
+      message.workEndedAt = Number(evt.workEndedAt || message.workEndedAt || Date.now()) || Date.now();
+      message.workDurationMs = Number.isFinite(Number(evt.workDurationMs))
+        ? Math.max(0, Number(evt.workDurationMs))
+        : Math.max(0, message.workEndedAt - Number(message.workStartedAt || message.createdAt || message.timestamp || message.workEndedAt));
       return true;
     }
     case 'done': {
@@ -4460,6 +4581,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
         message._thinking = message._thinking ? `${message._thinking}\n\n${String(evt.thinking).trim()}` : String(evt.thinking).trim();
       }
       message._progress = '';
+      message._pmFinalReceived = true;
       message._done = true;
       message.streaming = false;
       message.workEndedAt = Number(message.workEndedAt || Date.now()) || Date.now();
@@ -4472,6 +4594,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       message.text = message.content;
       message.body = { ...(message.body || {}), text: message.content };
       message._progress = '';
+      message._pmFinalReceived = true;
+      message._done = true;
       message.streaming = false;
       message.workEndedAt = Number(message.workEndedAt || Date.now()) || Date.now();
       _pushMobileStreamProcessEntry(message, 'error', err, evt);
@@ -4481,6 +4605,15 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return false;
   }
 }
+function mobileCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
   // Small process-trace helpers share the deferred Chat renderer boundary.
 function _pushMobileStreamProcessEntry(message, type, text, extra = null, includeLiveTrace = true) {
   const clean = String(text || '').trim();
@@ -4492,6 +4625,15 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null, includ
     || source === 'reasoning_summary'
     || reasoningKind === 'summary'
     || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)) return;
+  const action = String(extra?.action || extra?.toolName || extra?.extra?.action || extra?.extra?.toolName || '').trim().toLowerCase();
+  const compactionStatus = action === 'context_compaction'
+    ? String(extra?.status || extra?.extra?.status || '').trim().toLowerCase() || mobileCompactionStatusFromText(clean) || 'compacted'
+    : String(type || '').toLowerCase() === 'info' ? mobileCompactionStatusFromText(clean) : '';
+  if (compactionStatus) {
+    _appendMobileCompactionTrace(message, compactionStatus, extra?.summary || extra?.extra?.summary || '', extra);
+    message._progress = compactionStatus === 'compacting' ? 'Compacting context' : '';
+    return;
+  }
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const streamId = String(extra?.streamId || '').trim();
   const seq = Math.max(0, Math.floor(Number(extra?.seq || 0)) || 0);
@@ -4703,6 +4845,7 @@ function _mergeMobileLatestAssistantBackgroundFileChanges(sessionId = __pmChat.a
     _renderMobileBackgroundSpawnPanel,
     _pushMobileBackgroundSpawnEvent,
     _completeMobileBackgroundSpawnLane,
+    _flushMobileBackgroundWorkPersistence,
     _reconcileMobileBackgroundSpawnDockMarkup,
     _renderMobileBackgroundSpawnDock,
   });

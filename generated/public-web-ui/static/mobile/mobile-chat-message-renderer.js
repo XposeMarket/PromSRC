@@ -14,7 +14,6 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _hasPendingImageGeneration,
       _isMobileVoiceAgentWorkerHandoff,
       _isMobileVoiceTraceTurn,
-      _mobileTraceHasToolGroup,
       _mobileWorkflowTraceEntriesForMessage,
       _mobileWorkflowTransitionLabel,
       _normalizeMobileMedia,
@@ -35,6 +34,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _renderMobileSkillReferencedMarkdown,
       _renderMobileThreadLinkArtifacts,
       _renderMobileUserEditComposer,
+      _renderMobileVoiceLyrics,
       _renderMobileVoiceWorkgroup,
       _renderMobileWorkTimer,
       chatTimelineRowSignature,
@@ -95,27 +95,21 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     }
     const hasLiveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length > 0;
     const finalFrameReceived = m._pmFinalReceived === true;
+    const terminalFrameReceived = finalFrameReceived || m._done === true;
+    const messageIsLive = m.streaming === true && !terminalFrameReceived;
     const traceFrozenForSteer = m._steerFrozenTrace === true;
-    const showLiveWorkflowTrace = m.streaming && !finalFrameReceived && hasLiveTraceEntries && !traceFrozenForSteer;
+    const showLiveWorkflowTrace = messageIsLive && hasLiveTraceEntries && !traceFrozenForSteer;
     const liveTraceHtml = showLiveWorkflowTrace
       ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
-    const completedTraceEntries = (!m.streaming || finalFrameReceived || traceFrozenForSteer) ? _mobileWorkflowTraceEntriesForMessage(m) : [];
-    const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
-    const liveCompletionThoughts = m._pmLiveActivityCompleted === true
-      ? _renderMobileGroupedTrace(completedTraceEntries, {
-          streaming: false,
-          visibleKinds: ['thought', 'thought-summary'],
-          openThoughts: true,
-        })
-      : '';
-    const liveCompletionTools = m._pmLiveActivityCompleted === true
-      ? _renderMobileGroupedTrace(completedTraceEntries, {
-          streaming: false,
-          visibleKinds: ['tools', 'compaction', 'vision'],
-        })
-      : '';
+    const completedTraceEntries = !messageIsLive || traceFrozenForSteer ? _mobileWorkflowTraceEntriesForMessage(m) : [];
+    // Once the terminal frame arrives, the timer owns the entire activity
+    // disclosure. Thoughts and tool groups must share the same collapsed
+    // surface; keeping thoughts beside it makes the disclosure look broken
+    // after a reconnect even though the turn itself is complete.
+    const completedTraceHtml = _renderMobileGroupedTrace(completedTraceEntries, { streaming: false });
+    const hasCompletedTrace = !!completedTraceHtml;
     const hasPendingImageGeneration = _hasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
     if (hasLiveTrace) {
       inner += liveTraceHtml;
@@ -123,16 +117,13 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // The captured half of a steer is still live conversation context, not a
       // completed historical drawer. Keep its tool stream visible above the
       // injected user message while the continuation runs below it.
-      inner += _renderMobileGroupedTrace(completedTraceEntries, { streaming: false });
+      inner += completedTraceHtml;
     } else if (hasCompletedTrace) {
-      // A live turn keeps its completed thoughts visible as independent,
-      // closable disclosures while the tool stream remains behind the work
-      // timer. Historical turns retain the compact drawer behavior.
-      if (liveCompletionThoughts) inner += `<div class="pm-trace-thoughts-visible">${liveCompletionThoughts}</div>`;
-      inner += `<div class="pm-trace-drawer" data-trace-completed="1">${liveCompletionTools || _renderMobileGroupedTrace(completedTraceEntries, { streaming: false })}</div>`;
-    } else if (liveCompletionThoughts) {
-      inner += `<div class="pm-trace-thoughts-visible">${liveCompletionThoughts}</div>`;
-    } else if (m.streaming && !answerStarted && !hasPendingImageGeneration) {
+      // Completed thoughts and tools belong to one collapsed drawer. The
+      // timer is its only disclosure control, including for turns recovered
+      // from cache after the transport has already finished.
+      inner += `<div class="pm-trace-drawer" data-trace-completed="1">${completedTraceHtml}</div>`;
+    } else if (messageIsLive && !answerStarted && !hasPendingImageGeneration) {
       inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
     }
     if (hasPendingImageGeneration) {
@@ -143,11 +134,14 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // Final-answer text is already authored Markdown. Do not run it through the
       // trace-prose normalizer: that collapses intentional newlines and turns
       // headings/lists into strings such as `text### Heading` while streaming.
-      const answerStreaming = m.streaming === true && m._pmFinalReceived !== true;
-      // Chat history must stay visually stable while a realtime response is
-      // spoken. Karaoke/rolling lyrics belong only to the dedicated voice stage,
-      // never to an assistant bubble in the normal chat page.
-      inner += `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}"${answerStreaming ? ' aria-busy="true"' : ''}>${_renderMobileMarkdown(b.text, m)}</div>`;
+      const answerStreaming = messageIsLive;
+      const realtimeVoiceSpeaking = m.source === 'voice_agent_realtime' && m.voiceRealtimeActive === true;
+      // Realtime Voice deliberately owns a synchronized lyric presentation
+      // while audio is playing. Once playback settles, the same turn falls
+      // through to normal Markdown without creating a second message.
+      inner += realtimeVoiceSpeaking
+        ? _renderMobileVoiceLyrics(b.text, m.voiceRealtimeProgress, { compact: true })
+        : `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}"${answerStreaming ? ' aria-busy="true"' : ''}>${_renderMobileMarkdown(b.text, m)}</div>`;
       // rendered above with the shared desktop Markdown renderer
     }
     if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
@@ -183,7 +177,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
         </button>
       `).join('')}</div>`;
     }
-    const activeApprovals = m.streaming
+    const activeApprovals = messageIsLive
       ? _getPendingApprovalsForSession(__pmChat.activeSessionId).filter((approval) => {
           const approvalId = String(approval?.id || '').trim();
           return !approvalId || !renderedApprovalIds.has(approvalId);
@@ -202,11 +196,11 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     // Tool results can carry the eventual edit summary before the assistant
     // turn has emitted its terminal frame. Keep the data on the turn for the
     // final render, but do not surface the card while work is still running.
-    if (m.streaming !== true) inner += _renderMobileFileChanges(m.fileChanges);
+    if (!messageIsLive) inner += _renderMobileFileChanges(m.fileChanges);
     inner += _renderMobileThreadLinkArtifacts(m);
     inner += _renderMobileGoalCompletionReport(m.goalCompletionReport);
     if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
-    return `<div class="pm-msg from-ai${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:view`)}"${m.streaming ? ' data-streaming="1"' : ''}>
+    return `<div class="pm-msg from-ai${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}" data-pm-row-key="${escapeHtml(stableRowKey)}" data-pm-row-signature="${escapeHtml(`${stableRowSignature}:view`)}"${messageIsLive ? ' data-streaming="1"' : ''}>
       ${workflowLabel ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
       <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }

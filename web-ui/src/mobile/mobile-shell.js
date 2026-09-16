@@ -296,6 +296,7 @@ export const ICONS = {
   moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.8 6.8 0 0 0 9.8 9.8z"/></svg>',
   sun:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   image:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  camera:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.5-2h7L17 8h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="14" r="3.5"/></svg>',
   video:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>',
   layers:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 18l9 5 9-5"/></svg>',
   preset:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 14.9 8.6 22 9.3 16.6 14 18.2 21 12 17.4 5.8 21 7.4 14 2 9.3 9.1 8.6 12 2"/></svg>',
@@ -605,6 +606,7 @@ function _wireDrawerPullToRefresh() {
 }
 
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
+const PM_DRAWER_LAYOUT_STATE_KEY = 'pm_mobile_drawer_layout_v1';
 const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
@@ -796,8 +798,21 @@ function _resolveTheme(themeId) {
 }
 
 function _getTheme() {
-  const currentSkin = document.documentElement.getAttribute('data-skin');
   const list = _getThemeList();
+  // The document attributes are only first-paint hints. The persisted choice
+  // is authoritative on a fresh load; otherwise an early fallback attribute
+  // can overwrite a valid blue/purple choice before the mobile shell starts.
+  try {
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(PM_THEME_KEY);
+    if (saved) {
+      const resolved = _resolveTheme(saved);
+      if (list.some((t) => t.id === resolved.id)) return resolved.id;
+    }
+  } catch {}
+
+  const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
   const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -805,14 +820,6 @@ function _getTheme() {
     const byBase = _resolveTheme(currentTheme);
     if (byBase) return byBase.id;
   }
-
-  try {
-    const saved = localStorage.getItem(PM_THEME_KEY);
-    if (saved) {
-      const resolved = _resolveTheme(saved);
-      if (list.some((t) => t.id === resolved.id)) return resolved.id;
-    }
-  } catch {}
 
   return list[0]?.id || 'dark';
 }
@@ -1221,6 +1228,41 @@ function _saveDrawerState(state) {
   return { ..._drawerStateCache };
 }
 
+function _loadDrawerLayoutState() {
+  const fallback = { pinnedCollapsed: false, projectsCollapsed: false, expandedProjectIds: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PM_DRAWER_LAYOUT_STATE_KEY) || '{}');
+    const expandedProjectIds = Array.isArray(raw?.expandedProjectIds)
+      ? [...new Set(raw.expandedProjectIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : [];
+    return {
+      pinnedCollapsed: raw?.pinnedCollapsed === true,
+      projectsCollapsed: raw?.projectsCollapsed === true,
+      expandedProjectIds,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function _restoreDrawerLayoutState() {
+  const state = _loadDrawerLayoutState();
+  _drawerPinnedCollapsed = state.pinnedCollapsed;
+  _drawerProjectsCollapsed = state.projectsCollapsed;
+  _drawerExpandedProjectIds.clear();
+  state.expandedProjectIds.forEach((id) => _drawerExpandedProjectIds.add(id));
+}
+
+function _saveDrawerLayoutState() {
+  try {
+    localStorage.setItem(PM_DRAWER_LAYOUT_STATE_KEY, JSON.stringify({
+      pinnedCollapsed: _drawerPinnedCollapsed,
+      projectsCollapsed: _drawerProjectsCollapsed,
+      expandedProjectIds: Array.from(_drawerExpandedProjectIds),
+    }));
+  } catch {}
+}
+
 function _drawerGatewayStatusTone(status) {
   const value = String(status || '').toLowerCase();
   if (value === 'online') return 'online';
@@ -1309,6 +1351,7 @@ function _mountDrawerGatewayFilterPanel() {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  _restoreDrawerLayoutState();
   _stopDrawerGatewayHeartbeat();
   _drawerSwipeCleanup?.();
   _drawerSwipeCleanup = null;
@@ -1791,6 +1834,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerPinnedCollapsed = !_drawerPinnedCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-pinned-content');
     toggle.setAttribute('aria-expanded', String(!_drawerPinnedCollapsed));
@@ -1800,6 +1844,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerProjectsCollapsed = !_drawerProjectsCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-project-content');
     toggle.setAttribute('aria-expanded', String(!_drawerProjectsCollapsed));
@@ -1830,6 +1875,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       if (!id) return;
       if (_drawerExpandedProjectIds.has(id)) _drawerExpandedProjectIds.delete(id);
       else _drawerExpandedProjectIds.add(id);
+      _saveDrawerLayoutState();
       _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true }).catch(() => {});
     });
   });
@@ -2002,7 +2048,7 @@ function _sessionStateMeta(session) {
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
     stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
-    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
+    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
@@ -2116,7 +2162,7 @@ function _sessionButtonHtml(session, options = {}) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2147,7 +2193,7 @@ function _searchResultButtonHtml(session, query) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2602,7 +2648,9 @@ export function openDrawer() {
   _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
     _renderDrawerSessions(_drawerCallbacks).catch(() => {});
-    setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
+    // Always reconcile against the gateway when the drawer opens. A recovered
+    // run may have changed state while the mobile client was disconnected.
+    setTimeout(() => refreshMobileDrawerSessions({ force: true }).catch(() => {}), 180);
   }
 }
 

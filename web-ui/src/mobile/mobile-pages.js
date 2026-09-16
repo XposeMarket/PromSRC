@@ -1066,10 +1066,11 @@ function _compactMobileThreadCacheExtra(value) {
   const keys = [
     'event', 'source', 'visibility', 'action', 'toolName', 'toolCallId', 'tool_call_id',
     'callId', 'eventKey', 'streamId', 'seq', 'stepNum', 'status', 'ok', 'durationMs',
-    'message', 'progress', 'error', 'args', 'result', 'output',
+    'message', 'progress', 'error', 'args', 'result', 'output', 'summary', 'phase',
+    'mode', 'reason', 'synthetic', 'actor',
   ];
   for (const key of keys) {
-    const next = _compactMobileThreadCacheValue(value[key], key === 'result' || key === 'output' ? 2800 : 1200);
+    const next = _compactMobileThreadCacheValue(value[key], key === 'result' || key === 'output' || key === 'summary' ? 4200 : 1200);
     if (next !== undefined) compact[key] = next;
   }
   return Object.keys(compact).length ? compact : undefined;
@@ -1081,10 +1082,10 @@ function _compactMobileThreadCacheActivity(activity) {
   const keys = [
     'kind', 'callId', 'action', 'key', 'family', 'countNoun', 'target', 'status', 'ok',
     'progress', 'result', 'durationMs', 'startedAt', 'updatedAt', 'technicalName',
-    'activityId', 'resultAttached', 'eventKey', 'streamId', 'seq', 'stepNum',
+    'activityId', 'resultAttached', 'eventKey', 'streamId', 'seq', 'stepNum', 'diffPreview',
   ];
   for (const key of keys) {
-    const next = _compactMobileThreadCacheValue(activity[key], key === 'result' ? 4200 : 1200);
+    const next = _compactMobileThreadCacheValue(activity[key], key === 'result' || key === 'diffPreview' ? 4200 : 1200);
     if (next !== undefined) compact[key] = next;
   }
   const args = _compactMobileThreadCacheValue(activity.args, 2200);
@@ -1143,6 +1144,8 @@ function _compactMobileThreadCacheTrace(entries, limit = 180) {
       id: String(entry.id || '').trim() || undefined,
       type: String(entry.type || entry.kind || 'event').trim() || 'event',
       text,
+      status: String(entry.status || entry.extra?.status || '').trim() || undefined,
+      summary: String(entry.summary || entry.extra?.summary || '').slice(0, 4200).trim() || undefined,
       ts: Number(entry.ts || entry.timestamp || 0) || undefined,
       time: String(entry.time || '').trim() || undefined,
       endTs: Number(entry.endTs || 0) || undefined,
@@ -1165,6 +1168,7 @@ function _compactMobileThreadCacheProcess(entries, limit = 10) {
     text: String(entry?.text || entry?.content || entry?.message || '').slice(0, 900),
     content: String(entry?.content || entry?.text || entry?.message || '').slice(0, 900),
     toolName: String(entry?.toolName || entry?.action || entry?.name || '').trim() || undefined,
+    summary: String(entry?.summary || entry?.extra?.summary || '').slice(0, 4200).trim() || undefined,
     timestamp: Number(entry?.timestamp || entry?.t || entry?.ts || 0) || undefined,
     time: String(entry?.time || '').trim() || undefined,
     status: String(entry?.status || '').trim() || undefined,
@@ -1195,7 +1199,7 @@ function _compactMobileThreadCacheMessage(m) {
     role: m?.role,
     messageId: String(m?.messageId || '').trim() || undefined,
     messageKind: String(m?.messageKind || '').trim() || undefined,
-    timestamp: Number(m?.timestamp || Date.now()) || Date.now(),
+    timestamp: Number(m?.timestamp || 0) || 0,
     time: String(m?.time || '').trim() || undefined,
     streaming: m?.streaming === true,
     _pmFinalReceived: m?._pmFinalReceived === true || undefined,
@@ -1355,6 +1359,17 @@ function _loadMobileThreadCache(sessionId) {
       const next = { ...message };
       next.processEntries = _mobileDurableReasoningEntries(next.processEntries);
       next.liveTraceEntries = _mobileDurableReasoningEntries(next.liveTraceEntries);
+      // A page can be evicted between the terminal `final` frame and the
+      // transport's later `done` cleanup. The final marker plus visible answer
+      // is already a durable completion boundary; never hydrate that cached
+      // row back into a live turn on the next foreground/reconnect.
+      if (next.role === 'ai'
+        && next.streaming === true
+        && next._pmFinalReceived === true
+        && _mobileAssistantHasVisibleAnswer(next)) {
+        next.streaming = false;
+        next._pmFinalized = true;
+      }
       if (!next.processEntries.length) delete next.processEntries;
       if (!next.liveTraceEntries.length) delete next.liveTraceEntries;
       return next;
@@ -1656,6 +1671,38 @@ function _isMobileRestartContextPacketText(value) {
   return /^Restart Context Packet\b/i.test(String(value || '').trim());
 }
 
+function _isMobileGatewayRestartCheckpointMessage(msg) {
+  if (!msg || (msg.role !== 'ai' && msg.role !== 'assistant')) return false;
+  const messageKind = String(msg.messageKind || '').trim().toLowerCase();
+  if (messageKind === 'restart_checkpoint') return true;
+  return /^\[Hot restart checkpoint: planned by this chat\]/i.test(_mobileMessageCopyText(msg));
+}
+
+function _isMobileGatewayRestartTerminalMessage(msg) {
+  if (!msg || (msg.role !== 'ai' && msg.role !== 'assistant')) return false;
+  if (msg._pmGatewayRestartTerminal === true) return true;
+  const messageKind = String(msg.messageKind || '').trim().toLowerCase();
+  if (messageKind === 'restart_status') return true;
+  const text = _mobileMessageCopyText(msg);
+  return /^(?:Restarted\. Prometheus is back online\.|Gateway restart completed successfully\.)/i.test(text);
+}
+
+function _mobileHistoryHasGatewayRestartContinuity(history = [], startedAt = 0) {
+  const boundary = Number(startedAt || 0) > 0 ? Number(startedAt) - 120_000 : 0;
+  return (Array.isArray(history) ? history : []).some((message) => {
+    if (!_isMobileGatewayRestartCheckpointMessage(message)
+      && !_isMobileGatewayRestartTerminalMessage(message)) return false;
+    if (!boundary) return true;
+    const timestamp = Number(
+      message?.timestamp
+      || message?.workEndedAt
+      || message?.createdAt
+      || 0,
+    ) || 0;
+    return !timestamp || timestamp >= boundary;
+  });
+}
+
 function _stripMobileInternalUploadContext(value) {
   return String(value || '').replace(/\n\n\[UPLOADED FILES\][\s\S]*$/i, '').trim();
 }
@@ -1674,8 +1721,26 @@ function _mapServerHistoryToMobile(history) {
     .filter((msg) => !_isMobileInternalServerMessage(msg))
     .map((msg, index) => _mapServerMessageToMobile(msg, index))
     .filter(Boolean);
-  for (let index = 0; index < mapped.length; index += 1) {
-    const message = mapped[index];
+  const restartCheckpoints = mapped.filter(_isMobileGatewayRestartCheckpointMessage);
+  const visible = mapped.filter((message) => !_isMobileGatewayRestartCheckpointMessage(message));
+  // Keep the lifecycle checkpoint's durable tool trace on the terminal
+  // acknowledgement, but do not expose the checkpoint's implementation text as
+  // a second assistant bubble after the gateway reconnects.
+  if (restartCheckpoints.length) {
+    const terminalTurn = [...visible].reverse().find((message) => (
+      message?.role === 'ai' && String(message?.body?.text || message?.content || '').trim()
+    ));
+    if (terminalTurn) {
+      Object.defineProperty(terminalTurn, '_pmGatewayRestartTerminal', {
+        configurable: true,
+        value: true,
+      });
+      restartCheckpoints.forEach((checkpoint) => _mergeMobileAssistantTurnDetails(terminalTurn, checkpoint));
+    }
+  }
+  for (let index = 0; index < visible.length; index += 1) {
+    const message = visible[index];
+    if (!message) continue;
     const text = String(message?.body?.text || message?.content || '').trim();
     const entries = Array.isArray(message?.processEntries) ? message.processEntries : [];
     const recoveredTraceEntries = Array.isArray(message?.liveTraceEntries) && message.liveTraceEntries.length
@@ -1690,7 +1755,7 @@ function _mapServerHistoryToMobile(history) {
     message.workStartedAt = undefined;
     message.workEndedAt = undefined;
     message.workDurationMs = undefined;
-    mapped.splice(index + 1, 0, {
+    visible.splice(index + 1, 0, {
       role: 'ai',
       messageKind: 'goal_restart_checkpoint',
       activeRunKind: 'main_chat_goal',
@@ -1705,7 +1770,7 @@ function _mapServerHistoryToMobile(history) {
     });
     index += 1;
   }
-  return mapped;
+  return visible;
 }
 
 function _mapServerMessageToMobile(m, index = -1) {
@@ -2079,6 +2144,7 @@ function _isMobileGoalStartAcknowledgement(msg) {
 
 function _isMobileHiddenTranscriptMessage(msg, index = -1) {
   return _isMobileHiddenVoiceDraftMessage(msg, index)
+    || _isMobileGatewayRestartCheckpointMessage(msg)
     || _isMobileGoalStartAcknowledgement(msg);
 }
 
@@ -2093,7 +2159,10 @@ function _isMobileMessagePersistable(msg) {
 
 function _mobileHistoryForServer(thread = _activeMobileThread()) {
   return (Array.isArray(thread) ? thread : [])
-    .filter((msg, index) => msg && (msg.role === 'user' || msg.role === 'ai') && !_isMobileHiddenVoiceDraftMessage(msg, index))
+    .filter((msg, index) => msg
+      && (msg.role === 'user' || msg.role === 'ai')
+      && !_isMobileHiddenVoiceDraftMessage(msg, index)
+      && !_isMobileGatewayRestartCheckpointMessage(msg))
     .filter(_isMobileMessagePersistable)
     .filter((msg) => msg._voiceWorkerLocalTurn !== true && msg._voiceWorkerLocalFinal !== true)
     .filter((msg) => !_isMobileRestartContextPacketText(_mobileMessageCopyText(msg)))
@@ -2933,9 +3002,19 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   if (!String(target.voiceInterruptionEventId || '').trim() && String(source.voiceInterruptionEventId || '').trim()) {
     target.voiceInterruptionEventId = source.voiceInterruptionEventId;
   }
-  if (!String(target.body?.text || '').trim() && String(source.body?.text || source.content || '').trim()) {
+  const targetText = _mobileMessageCopyText(target);
+  const sourceText = _mobileMessageCopyText(source);
+  const sourceExtendsTarget = !!targetText
+    && !!sourceText
+    && sourceText.length > targetText.length
+    && sourceText.startsWith(targetText);
+  if ((!targetText
+    || /^attached file\(s\)$/i.test(targetText)
+    || /^please review the attached file\(s\)\.?$/i.test(targetText)
+    || sourceExtendsTarget)
+    && sourceText) {
     if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
-    target.body.text = String(source.body?.text || source.content || '');
+    target.body.text = sourceText;
     target.content = target.body.text;
   }
   if (!target.time && source.time) target.time = source.time;
@@ -2955,6 +3034,28 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   target.timestamp = Math.min(Number(target.timestamp || Date.now()), Number(source.timestamp || Date.now()));
   const targetHasAnswer = _mobileAssistantHasVisibleAnswer(target);
   const sourceHasAnswer = _mobileAssistantHasVisibleAnswer(source);
+  // A mapped server-history row is a durable completion boundary even when
+  // older clients did not persist an explicit `streaming: false` marker. Do
+  // not let the richer local/cache row resurrect that completed answer after
+  // the recovery merge. `sourceIndex` is assigned by server-history mapping;
+  // explicit terminal metadata covers pinned/cache completions as well.
+  const sourceIsDurablyCompleted = sourceHasAnswer
+    && source.streaming !== true
+    && (source._pmFinalReceived === true
+      || source._pmFinalized === true
+      || Number(source.workEndedAt || 0) > 0
+      || Number.isFinite(Number(source.workDurationMs))
+      || (Number.isFinite(Number(source.sourceIndex)) && Number(source.sourceIndex) >= 0));
+  if (sourceIsDurablyCompleted) {
+    target.streaming = false;
+    target._pmFinalReceived = true;
+    target._pmLiveActivityCompleted = true;
+    if (!Number(target.workEndedAt || 0)) target.workEndedAt = Number(source.workEndedAt || Date.now()) || Date.now();
+    if (!Number.isFinite(Number(target.workDurationMs))) {
+      target.workDurationMs = Math.max(0, target.workEndedAt - _mobileAssistantWorkStartedAt(target));
+    }
+    return target;
+  }
   const canInheritStreaming = !(targetHasAnswer && !sourceHasAnswer);
   target.streaming = target.streaming === true || (
     source.streaming === true
@@ -2963,6 +3064,72 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     && !Number.isFinite(Number(target.workDurationMs))
   );
   return target;
+}
+
+function _isMobileGatewayRestartContinuityCandidate(message) {
+  if (!message || (message.role !== 'ai' && message.role !== 'assistant')) return false;
+  if (_isMobileGatewayRestartTerminalMessage(message)) return false;
+  const traceEntries = [
+    ...(Array.isArray(message.processEntries) ? message.processEntries : []),
+    ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
+  ];
+  const traceText = traceEntries.map((entry) => [
+    entry?.toolName,
+    entry?.action,
+    entry?.name,
+    entry?.content,
+    entry?.message,
+    entry?.extra?.toolName,
+    entry?.extra?.action,
+  ].filter(Boolean).join(' ')).join('\n');
+  return /\bgateway_restart\b|\bgateway restart\b|\brestarting the gateway\b/i.test(
+    `${_mobileMessageCopyText(message)}\n${traceText}`,
+  );
+}
+
+function _mergeMobileGatewayRestartContinuity(mapped, local) {
+  const serverRows = Array.isArray(mapped) ? mapped : [];
+  const localRows = Array.isArray(local) ? local : [];
+  if (!serverRows.length || !localRows.length) return false;
+  let terminalIndex = -1;
+  for (let i = serverRows.length - 1; i >= 0; i -= 1) {
+    if (_isMobileGatewayRestartTerminalMessage(serverRows[i])) {
+      terminalIndex = i;
+      break;
+    }
+  }
+  if (terminalIndex < 0) return false;
+
+  let latestUserIndex = -1;
+  for (let i = localRows.length - 1; i >= 0; i -= 1) {
+    if (localRows[i]?.role === 'user') {
+      latestUserIndex = i;
+      break;
+    }
+  }
+  let candidateIndex = -1;
+  for (let i = localRows.length - 1; i > latestUserIndex; i -= 1) {
+    if (_isMobileGatewayRestartContinuityCandidate(localRows[i])) {
+      candidateIndex = i;
+      break;
+    }
+  }
+  if (candidateIndex < 0) return false;
+
+  const candidate = localRows[candidateIndex];
+  const terminal = serverRows[terminalIndex];
+  const candidateText = _mobileMessageCopyText(candidate);
+  const terminalText = _mobileMessageCopyText(terminal);
+  // Merge the server row into the already-painted row so local process order
+  // stays first (the restart call), followed by the boot acknowledgement.
+  _mergeMobileAssistantTurnDetails(candidate, terminal);
+  if (candidateText && terminalText && candidateText !== terminalText && !candidateText.includes(terminalText)) {
+    if (!candidate.body || typeof candidate.body !== 'object') candidate.body = { text: '' };
+    candidate.body.text = `${candidateText}\n\n${terminalText}`;
+    candidate.content = candidate.body.text;
+  }
+  serverRows.splice(terminalIndex, 1);
+  return true;
 }
 
 function _mergeMobileRichArtifacts(target, incomingArtifacts) {
@@ -3068,8 +3235,19 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     const requestId = _isMobileAssistantMessage(msg) ? String(msg._clientRequestId || '').trim() : '';
     const previousRequestTurn = requestId ? seenRequests.get(requestId) : null;
     const requestIndex = previousRequestTurn ? list.indexOf(previousRequestTurn) : -1;
-    if (requestIndex >= 0) {
+    if (requestIndex >= 0 && _mobileMessagesRepresentSameTurn(previousRequestTurn, msg)) {
       const previous = previousRequestTurn;
+      // A continuation can legitimately reuse the transport request id after
+      // the user steers or resumes a turn. A user row is a hard conversation
+      // boundary: never fold the later assistant response back into the older
+      // one merely because their transport identity matches.
+      const separatedByUser = list.slice(requestIndex + 1, i).some((turn) => turn?.role === 'user');
+      if (separatedByUser) {
+        seenRequests.set(requestId, msg);
+        const contentKey = _mobileAssistantContentKey(msg);
+        if (contentKey) seen.set(contentKey, i);
+        continue;
+      }
       const keepCurrent = _mobileAssistantRichnessScore(msg) > _mobileAssistantRichnessScore(previous);
       const keepIndex = keepCurrent ? i : requestIndex;
       const dropIndex = keepCurrent ? requestIndex : i;
@@ -3156,6 +3334,10 @@ function _mobileTraceHasToolGroup(entries) {
 function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   if (msg?.suppressWorkTimer === true) return '';
+  // delivery_send creates an intermediate durable bubble during an existing
+  // run. Its timestamp is a delivery time, not a model-work start.
+  if (String(msg?.messageKind || '').trim() === 'delivery'
+    || String(msg?.channelLabel || '').trim() === 'delivery') return '';
   const startedAt = _mobileAssistantWorkStartedAt(msg);
   if (!startedAt) return '';
   // A final frame is the UI completion boundary even if the transport's later
@@ -3370,8 +3552,31 @@ function _makeProcessEntry(type, text, extra = null) {
   };
 }
 
+function _mobileCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
 function _appendMobileProcess(message, type, text, extra = null) {
   if (!message) return;
+  const payload = extra && typeof extra === 'object' ? extra : {};
+  const nested = payload.extra && typeof payload.extra === 'object' ? payload.extra : {};
+  const action = String(payload.action || payload.toolName || nested.action || nested.toolName || '').trim().toLowerCase();
+  const textStatus = _mobileCompactionStatusFromText(text || payload.message || payload.content);
+  if (action === 'context_compaction' || textStatus) {
+    const explicitStatus = String(payload.status || nested.status || '').trim().toLowerCase();
+    const status = explicitStatus || textStatus || (String(type || '').toLowerCase() === 'tool'
+      ? 'compacting'
+      : type === 'error' || payload.error === true || payload.ok === false || payload.success === false
+        ? 'failed'
+        : 'compacted');
+    _appendMobileCompactionTrace(message, status, payload.summary || nested.summary || '', payload);
+    return;
+  }
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
   const entry = _makeProcessEntry(type, text, extra);
   if (!entry) return;
@@ -3381,7 +3586,13 @@ function _appendMobileProcess(message, type, text, extra = null) {
   const prev = message.processEntries[message.processEntries.length - 1];
   if (prev && prev.type === entry.type && prev.text === entry.text) return;
   message.processEntries.push(entry);
-  if (message.processEntries.length > 120) message.processEntries.splice(0, message.processEntries.length - 120);
+  // Match the gateway's retained main-chat replay window. Recovery used to
+  // fetch the whole turn and then silently discard everything before the last
+  // 120 process rows while applying those frames on mobile.
+  const maxRecoveredProcessEntries = 12_000;
+  if (message.processEntries.length > maxRecoveredProcessEntries) {
+    message.processEntries.splice(0, message.processEntries.length - maxRecoveredProcessEntries);
+  }
 }
 
 function _recordMobileChatError(message, error) {
@@ -3719,6 +3930,8 @@ function _normalizeMobileProcessEntry(entry) {
     id: recovered.id || `proc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: String(recovered.type || 'info').toLowerCase(),
     text,
+    status: String(recovered.status || recovered.extra?.status || '').trim() || undefined,
+    summary: String(recovered.summary || recovered.extra?.summary || '').trim() || undefined,
     extra: recovered.extra || null,
     time: recovered.time || (recovered.ts ? _formatChatTime(recovered.ts) : ''),
   };
@@ -3778,9 +3991,52 @@ function _isMobileReasoningSummaryTraceEntry(entry) {
 function _normalizeMobileRecoveredTraceEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const nestedExtra = extra.extra && typeof extra.extra === 'object' ? extra.extra : {};
   const rawType = String(entry.type || entry.kind || '').toLowerCase();
   const event = String(extra.event || entry.event || rawType || '').toLowerCase();
   const text = String(entry.text || entry.content || entry.message || '').trim();
+  const action = String(extra.action || extra.toolName || entry.action || entry.toolName || nestedExtra.action || nestedExtra.toolName || '').trim().toLowerCase();
+  if (rawType === 'compaction' || action === 'context_compaction') {
+    const explicitStatus = String(entry.status || extra.status || nestedExtra.status || '').trim().toLowerCase();
+    const status = explicitStatus === 'skipped'
+      ? 'skipped'
+      : explicitStatus === 'failed' || explicitStatus === 'error'
+        || entry.error === true || extra.error === true || nestedExtra.error === true
+        || extra.ok === false || nestedExtra.ok === false || extra.success === false || nestedExtra.success === false
+        ? 'failed'
+        : explicitStatus === 'compacting' || explicitStatus === 'running' || explicitStatus === 'in_progress'
+          ? 'compacting'
+          : event === 'tool_call' || event === 'tool_progress' || /\bcompacting\b|\bpreparing context compaction\b/.test(text.toLowerCase())
+            ? 'compacting'
+            : /\bskipped\b/.test(text.toLowerCase())
+              ? 'skipped'
+              : /\bfailed\b|\berror\b/.test(text.toLowerCase())
+                ? 'failed'
+                : 'compacted';
+    const summary = String(entry.summary || extra.summary || nestedExtra.summary || '').trim();
+    const label = status === 'compacting'
+      ? 'Compacting context'
+      : status === 'failed'
+        ? 'Context compaction failed'
+        : status === 'skipped'
+          ? 'Context compaction skipped'
+          : 'Context compacted';
+    return {
+      ...entry,
+      type: 'compaction',
+      text: label,
+      status,
+      ...(summary ? { summary } : {}),
+      extra: {
+        ...extra,
+        action: 'context_compaction',
+        toolName: extra.toolName || 'context_compaction',
+        status,
+        ...(summary ? { summary } : {}),
+        event: event || 'tool_result',
+      },
+    };
+  }
   const normalizedType = event === 'tool_call' || rawType === 'tool_call'
     ? 'tool'
     : event === 'tool_result' || rawType === 'tool_result'
@@ -3819,9 +4075,9 @@ function _normalizeMobileRecoveredTraceEntry(entry) {
       text,
       extra: {
         ...normalizedExtra,
-        source: 'agent_progress',
+        source: 'agent_thought',
         visibility: 'user',
-        reasoningKind: 'summary',
+        reasoningKind: 'full_thought',
         event: event || 'token_narration_boundary',
       },
     };
@@ -4117,6 +4373,15 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   if (_isMobileBareThinkingTraceText(content)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
+  const traceExtra = extra && typeof extra === 'object' ? extra : {};
+  const traceAction = String(traceExtra.action || traceExtra.toolName || traceExtra.extra?.action || traceExtra.extra?.toolName || '').trim().toLowerCase();
+  const compactionStatus = traceAction === 'context_compaction'
+    ? String(traceExtra.status || traceExtra.extra?.status || '').trim().toLowerCase() || _mobileCompactionStatusFromText(content) || 'compacted'
+    : (normalizedType === 'info' ? _mobileCompactionStatusFromText(content) : '');
+  if (compactionStatus) {
+    _appendMobileCompactionTrace(message, compactionStatus, traceExtra.summary || traceExtra.extra?.summary || '', traceExtra);
+    return;
+  }
   const isThoughtLike = _isMobileTraceThoughtType(normalizedType);
   const thoughtKind = isThoughtLike ? _mobileTraceThoughtKind({ type: normalizedType, extra }) : '';
   if (!isThoughtLike) {
@@ -4262,15 +4527,18 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
   _flushMobileTraceThoughtProbe(message, { force: true });
   const normalizedStatus = String(status || 'compacting').toLowerCase();
   const label = normalizedStatus === 'compacting'
-    ? 'Compacting Context'
+    ? 'Compacting context'
     : normalizedStatus === 'failed'
-      ? 'Context Compaction Failed'
+      ? 'Context compaction failed'
       : normalizedStatus === 'skipped'
-        ? 'Context Compaction Skipped'
-        : 'Context Compacted';
+        ? 'Context compaction skipped'
+        : 'Context compacted';
   const cleanSummary = String(summary || extra?.summary || '').trim();
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
-  const payload = extra && typeof extra === 'object' ? extra : {};
+  const payload = {
+    ...(extra && typeof extra === 'object' ? extra : {}),
+    action: 'context_compaction',
+  };
   if (last && String(last.type || '').toLowerCase() === 'compaction') {
     last.text = label;
     last.status = normalizedStatus;
@@ -4541,18 +4809,23 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     const action = String(extra?.action || extra?.toolName || entry.action || entry.toolName || '').trim();
     const callId = String(extra?.toolCallId || extra?.tool_call_id || entry.toolCallId || '').trim();
     if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
-      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)) return;
+      && (['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)
+        || (type === 'compaction' && out.some((candidate) => (
+          String(candidate?.type || '').toLowerCase() === 'compaction'
+          && String(candidate?.status || candidate?.extra?.status || '').toLowerCase() !== 'compacting'
+        ))))) return;
     if (action === 'context_compaction') {
+      const event = String(extra?.event || entry.event || '').toLowerCase();
       const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
-        || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
+        || (type === 'error' ? 'failed' : event === 'tool_call' || event === 'tool_progress' || (type === 'tool' && !event) ? 'compacting' : 'compacted');
       type = 'compaction';
       text = status === 'compacting'
-        ? 'Compacting Context'
+        ? 'Compacting context'
         : status === 'failed'
-          ? 'Context Compaction Failed'
+          ? 'Context compaction failed'
           : status === 'skipped'
-            ? 'Context Compaction Skipped'
-            : 'Context Compacted';
+            ? 'Context compaction skipped'
+            : 'Context compacted';
       entry = {
         ...entry,
         type,
@@ -4581,6 +4854,20 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     const key = `${type}|${thoughtKind}|${normalizedText}|${previewData.slice(0, 120)}`;
     if (seen.has(key)) return;
     seen.add(key);
+    if (type === 'compaction') {
+      const previous = out[out.length - 1];
+      const previousStatus = String(previous?.status || previous?.extra?.status || '').toLowerCase();
+      if (previous?.type === 'compaction' && previousStatus === 'compacting') {
+        out[out.length - 1] = {
+          ...previous,
+          ...entry,
+          id: previous.id || entry.id,
+          summary: entry.summary || previous.summary,
+          extra: { ...(previous.extra || {}), ...(entry.extra || {}) },
+        };
+        return;
+      }
+    }
     out.push({
       ...entry,
       type,
@@ -4659,7 +4946,7 @@ function _moveMobilePreToolAnswerIntoPreamble(message) {
     _setMobileLiveProgressNarration(message, text);
   } else {
     _appendMobileLiveTrace(message, 'preamble', text, {
-      extra: { visibility: 'user', source: 'reasoning_summary' },
+      extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
     });
   }
   if (message.body) message.body.text = '';
@@ -5236,9 +5523,18 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   if (aKind || bKind) {
     if (!aKind || aKind !== bKind) return false;
   }
-  if (aRequest || bRequest) return !!aRequest && aRequest === bRequest;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
+  if (aRequest || bRequest) {
+    if (!requestIdentityMatches) return false;
+    // Request ids identify a transport run, not necessarily one durable row.
+    // Continuations can reuse them. Only coalesce populated rows when their
+    // content is equal or one is the streamed prefix of the other.
+    if (aText && bText) {
+      return aText === bText || aText.startsWith(bText) || bText.startsWith(aText);
+    }
+    return true;
+  }
   if (aText && bText && aText === bText) return true;
   const aSource = Number(a.sourceIndex);
   const bSource = Number(b.sourceIndex);
@@ -5301,9 +5597,9 @@ function _mobileUserTurnsRepresentSameSend(a, b) {
   if (!a || !b || a.role !== 'user' || b.role !== 'user') return false;
   const aRequest = String(a._clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || '').trim();
-  if (aRequest && bRequest) return aRequest === bRequest;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim().toLowerCase();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (aRequest && bRequest && aRequest !== bRequest) return false;
   if (!aText || aText !== bText) return false;
   if (_mobileUserAttachmentSignature(a) !== _mobileUserAttachmentSignature(b)) return false;
   return Math.abs(Number(a.timestamp || 0) - Number(b.timestamp || 0)) < 15_000;
@@ -5462,7 +5758,10 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
   if (_mobileMessagesRepresentSameTurn(a, b)) return true;
   const aRequest = String(a._clientRequestId || a.clientRequestId || '').trim();
   const bRequest = String(b._clientRequestId || b.clientRequestId || '').trim();
-  if (aRequest && bRequest && aRequest === bRequest) return true;
+  // A request id alone is insufficient: steer/continue paths can reuse it for
+  // multiple durable rows. _mobileMessagesRepresentSameTurn already accepts
+  // the safe empty-vs-streaming and equal/prefix cases above.
+  if (aRequest && bRequest && aRequest !== bRequest) return false;
   const aId = String(a.messageId || a.turnId || a.id || '').trim();
   const bId = String(b.messageId || b.turnId || b.id || '').trim();
   if (aId && bId && aId !== bId) return false;
@@ -5471,12 +5770,20 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
   return !!aText && aText === bText;
 }
 
-function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false } = {}) {
+function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false } = {}) {
   const next = [];
+  const primaryLatestTimestamp = Math.max(0, ...(Array.isArray(primary) ? primary : []).map((message) => Number(message?.timestamp || 0) || 0));
   const append = (candidate, preferIncoming = false) => {
     if (!candidate || typeof candidate !== 'object') return;
     const existingIndex = next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, candidate));
     if (existingIndex < 0) {
+      // A late hydration response may represent an older durable branch. Once
+      // the local continuity spine is populated, unmatched historical rows
+      // must not be appended after the current conversation and masquerade as
+      // new assistant/user messages.
+      const candidateTimestamp = Number(candidate?.timestamp || 0) || 0;
+      if (preferIncoming && appendOnlyNewer && next.length
+        && primaryLatestTimestamp > 0 && candidateTimestamp <= primaryLatestTimestamp) return;
       next.push(candidate);
       return;
     }
@@ -5563,6 +5870,7 @@ function _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal) {
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread, options = {}) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const local = Array.isArray(localThread) ? localThread : [];
+  _mergeMobileGatewayRestartContinuity(mapped, local);
   const durableLocal = local.filter((message, index) => message
     && (message.role === 'user' || message.role === 'ai')
     && !_isMobileHiddenVoiceDraftMessage(message, index));
@@ -5571,10 +5879,22 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
   // older history, or when recovery has a richer local snapshot. Otherwise a
   // cold reopen can render and cache only the tail, and a late stale response
   // can make recovered messages disappear while the user is typing.
-  const preserveLocalHistory = options.preserveLocalHistory === true
+  // Mobile session reads are snapshots, not deletion journals. In particular,
+  // an app-resume freshness request or session_history_changed notification can
+  // race the gateway's durable write and return an older branch with a plausible
+  // total count. Never interpret that snapshot as permission to remove durable
+  // rows that are already visible. Explicit edit/rerun flows truncate the local
+  // thread before reconciliation, so merging the remaining local rows here still
+  // respects intentional branch changes while making ordinary refresh monotonic.
+  const preserveLocalHistory = durableLocal.length > 0 || options.preserveLocalHistory === true
     || _mobileShouldPreserveLocalHistoryContinuity(mapped, durableLocal);
+  // Once a transcript has painted, its row order is the continuity spine.
+  // Server timestamps and optimistic/mobile timestamps are not a shared clock;
+  // sorting their union caused user/assistant rows to jump, disappear, or look
+  // like consecutive assistant messages after hydration. Enrich the painted
+  // rows from the server and append genuinely new durable rows monotonically.
   const base = preserveLocalHistory
-    ? _mergeMobileHistoryRecords(mapped, durableLocal, { sortByTimestamp: true })
+    ? _mergeMobileHistoryRecords(durableLocal, mapped, { appendOnlyNewer: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
   _dedupeMobileUserTurns(merged);
@@ -5614,7 +5934,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   }
   const restartText = String(msg.text || '').trim();
   const isDevApply = String(msg.source || '').trim() === 'dev_apply';
-  const localBeforeRefresh = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+  const localBeforeRefresh = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid].slice() : [];
   const hasActiveTurn = localBeforeRefresh.some((item) => item?.role === 'ai' && item?.streaming === true)
     || !!__pmChat.activeRuns?.[sid]?.busy
     || !!_readMobileActiveRun(sid);
@@ -5628,9 +5948,14 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   _rememberMobileSessionGoal(session, sid);
   try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
-  const localThread = preserveActiveTurn ? localBeforeRefresh : (__pmChat.threads?.[sid] || []);
+  const preserveRestartContinuity = !isDevApply
+    && hasActiveTurn
+    && _mobileHistoryHasGatewayRestartContinuity(history);
+  const localThread = (preserveActiveTurn || preserveRestartContinuity)
+    ? localBeforeRefresh
+    : (__pmChat.threads?.[sid] || []);
   __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread, {
-    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history),
+    preserveLocalHistory: _mobileHistoryPageIsPartial(session, history) || preserveRestartContinuity,
   });
   const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
   for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
@@ -5649,7 +5974,11 @@ async function _applyMobileHotRestartNotification(msg = {}) {
       });
     }
   }
-  if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === restartText) && restartText) {
+  const restartTextAlreadyVisible = restartText && __pmChat.threads[sid].some((item) => {
+    const itemText = _mobileMessageCopyText(item);
+    return itemText === restartText || itemText.includes(restartText);
+  });
+  if (!restartTextAlreadyVisible && restartText) {
     const statusMessage = {
       role: 'ai',
       timestamp: Date.now(),
@@ -6783,7 +7112,8 @@ function _renderMobileVariantNav(index) {
 }
 
 function _renderMobileMessageActions(m, index) {
-  if (m?.streaming || index < 0) return '';
+  const terminalFrameReceived = m?._pmFinalReceived === true || m?._done === true;
+  if ((m?.streaming && !terminalFrameReceived) || index < 0) return '';
   const isUser = m?.role === 'user';
   // User messages: no inline action bar — long-press the bubble opens the popover instead.
   if (isUser) {
@@ -8352,6 +8682,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_renderMobileSkillReferencedMarkdown": { enumerable: true, get: () => _renderMobileSkillReferencedMarkdown },
   "_renderMobileThreadLinkArtifacts": { enumerable: true, get: () => _renderMobileThreadLinkArtifacts },
   "_renderMobileUserEditComposer": { enumerable: true, get: () => _renderMobileUserEditComposer },
+  "_renderMobileVoiceLyrics": { enumerable: true, get: () => _renderMobileVoiceLyrics },
   "_renderMobileVoiceWorkgroup": { enumerable: true, get: () => _renderMobileVoiceWorkgroup },
   "_renderMobileWorkTimer": { enumerable: true, get: () => _renderMobileWorkTimer },
   "_resolveMobileApprovalButton": { enumerable: true, get: () => _resolveMobileApprovalButton },
@@ -9735,6 +10066,7 @@ function loadMobileChatPageRenderer() {
   _mobileChatScrollTarget,
   _mobileHistoryForServer,
   _mobileHistoryHasCompletedTurnSince,
+  _mobileHistoryHasGatewayRestartContinuity,
   _mobileHistoryHasProtectedLocalContinuity,
   _mobileHistoryPageIsPartial,
   _mobileMediaKind,
@@ -10291,7 +10623,9 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       const matches = thread.filter((turn) => turn?.role === "ai" && String(turn._clientRequestId || "").trim() === cid);
       if (!matches.length) return null;
       return [...matches].reverse().find((turn) => String(turn.messageKind || "").trim() === "steer_continuation" || String(turn.workflowPart || "").trim() === "interruption_response")
-        || [...matches].reverse().find((turn) => turn.streaming === true) || null;
+        || [...matches].reverse().find((turn) => turn.streaming === true)
+        || matches[matches.length - 1]
+        || null;
     }
     case '_applyVoiceInterruptionToMobileChat':
       return false;
@@ -11088,10 +11422,14 @@ function _pmRenderTaskJournal(journal) {
     const content = String(entry?.content || entry?.detail || '').trim();
     const color = type === 'error' ? '#d8473a' : type === 'tool_call' ? '#0d4faf' : type === 'tool_result' ? '#2f7d44' : type === 'reasoning' ? '#6d2d9e' : type === 'pause' ? '#7c4d00' : 'var(--pm-muted)';
     const typeClass = type.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    const detail = String(entry?.detail || '').trim();
+    const detailHtml = detail && detail !== content
+      ? `<details class="pm-task-journal-detail"><summary>View full output</summary><pre>${escapeHtml(detail)}</pre></details>`
+      : '';
     return `<div class="pm-task-journal-row type-${escapeHtml(typeClass)}" style="display:grid;grid-template-columns:54px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--pm-border);">
       <span style="color:var(--pm-muted);">${escapeHtml(time)}</span>
       <span style="color:${color};font-weight:800;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(type)}</span>
-      <span style="white-space:pre-wrap;word-break:break-word;color:var(--pm-text-soft);">${escapeHtml(content)}</span>
+      <span style="white-space:pre-wrap;word-break:break-word;color:var(--pm-text-soft);">${escapeHtml(content)}${detailHtml}</span>
     </div>`;
   }).join('')}</div>`;
 }

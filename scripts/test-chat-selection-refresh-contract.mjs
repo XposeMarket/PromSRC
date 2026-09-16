@@ -16,9 +16,12 @@ const generatedMobileRuntime = read('generated/public-web-ui/static/mobile/mobil
 assert.match(desktop, /desktopNewChatContextProjectsCacheReady/);
 assert.match(desktop, /loadDesktopNewChatProjects\(\{ preload: true \}\)/);
 assert.match(desktop, /generation !== desktopSessionOpenGeneration/);
-assert.match(desktop, /desktopSessionOpenRequests\.get\(sessionId\)/);
+assert.match(desktop, /const generation = \+\+desktopSessionOpenGeneration;\s*return _openSession\(sessionId, generation\);/);
+assert.doesNotMatch(desktop, /desktopSessionOpenRequests/);
 assert.match(generatedDesktop, /desktopNewChatContextProjectsCacheReady/);
 assert.match(generatedDesktop, /generation !== desktopSessionOpenGeneration/);
+assert.match(generatedDesktop, /const generation = \+\+desktopSessionOpenGeneration;\s*return _openSession\(sessionId, generation\);/);
+assert.doesNotMatch(generatedDesktop, /desktopSessionOpenRequests/);
 
 assert.match(mobileModel, /MOBILE_CHAT_MODEL_ROUTE_STORAGE_KEY/);
 assert.match(mobileModel, /_readSavedChatModelRoute/);
@@ -37,7 +40,7 @@ const generatedPriorityStart = generatedPriority.indexOf('function _prioritySess
 const generatedPriorityEnd = generatedPriority.indexOf('let _sessionListRefreshFrame', generatedPriorityStart);
 const generatedPriorityBlock = generatedPriority.slice(generatedPriorityStart, generatedPriorityEnd);
 assert.match(priorityBlock, /session\?\.lastMessageAt/);
-assert.match(priorityBlock, /isInternalChatMessage\(message\)/);
+assert.match(priorityBlock, /(?:isInternalChatMessage\(message\)|window\.isInternalChatMessage\?\.\(message\))/);
 assert.doesNotMatch(priorityBlock, /session\?\.(?:updatedAt|lastActiveAt)/);
 assert.doesNotMatch(priorityBlock, /Date\.now\(\)/);
 assert.match(generatedPriorityBlock, /session\?\.lastMessageAt/);
