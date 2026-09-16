@@ -160,6 +160,24 @@ async function main(): Promise<void> {
     assert.ok(reopened.getRule('schedule-cooldown'));
     assert.ok(reopened.listRuns().length >= 4);
 
+    // A single malformed persisted rule is quarantined instead of causing all
+    // unrelated automations to disappear.
+    const quarantinePath = path.join(tmp, 'quarantine.json');
+    fs.writeFileSync(quarantinePath, JSON.stringify({
+      version: 1,
+      updatedAt: now,
+      rules: [
+        rule({ id: 'healthy-rule', name: 'Healthy rule' }),
+        { id: '../../bad-path', name: '', matcher: {}, action: {} },
+      ],
+      reservations: [],
+      lastRunAtByRule: {},
+      runs: [],
+    }), 'utf-8');
+    const quarantined = new JsonTriggerStore(quarantinePath, () => now);
+    assert.ok(quarantined.getRule('healthy-rule'));
+    assert.equal(quarantined.listRules().length, 1);
+
     console.log('trigger-engine regression: ok');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
