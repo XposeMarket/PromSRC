@@ -11,6 +11,37 @@ function textFromRecord(record) {
   return '';
 }
 
+function interactionId(record, kind) {
+  if (!record || typeof record !== 'object') return '';
+  if (kind === 'approval') return String(record.id || record.approvalId || record.approval_id || '');
+  return String(record.id || record.questionId || record.question_id || '');
+}
+
+function normalizeInteraction(record, kind) {
+  const source = record && typeof record === 'object' ? record : {};
+  const id = interactionId(source, kind);
+  return {
+    ...source,
+    id,
+    status: String(source.status || 'pending').toLowerCase(),
+  };
+}
+
+function normalizeInteractionList(records, kind) {
+  return (Array.isArray(records) ? records : [])
+    .map((record) => normalizeInteraction(record, kind))
+    .filter((record) => record.id);
+}
+
+function upsertInteraction(list, record, kind) {
+  const next = normalizeInteraction(record, kind);
+  if (!next.id) return null;
+  const index = list.findIndex((item) => interactionId(item, kind) === next.id);
+  if (index >= 0) list[index] = { ...list[index], ...next };
+  else list.push(next);
+  return index >= 0 ? list[index] : list[list.length - 1];
+}
+
 function normalizeHistory(history = []) {
   return (Array.isArray(history) ? history : []).map((record, index) => ({
     id: String(record?.id || record?.messageId || record?.turnId || `history-${index}`),
@@ -20,7 +51,9 @@ function normalizeHistory(history = []) {
     status: 'done',
     reasoning: '',
     tools: [],
-  })).filter((message) => message.text || message.role === 'assistant');
+    approvals: normalizeInteractionList(record?.approvals, 'approval'),
+    questions: normalizeInteractionList(record?.questions, 'question'),
+  })).filter((message) => message.text || message.role === 'assistant' || message.approvals.length || message.questions.length);
 }
 
 function freshState(gatewayId, sessionId) {
@@ -99,14 +132,30 @@ export class ChatStore {
   appendUser(gatewayId, sessionId, { id, text }) {
     return this.mutate(gatewayId, sessionId, (state) => {
       state.error = '';
-      state.messages.push({ id, role: 'user', text, createdAt: Date.now(), status: 'done', reasoning: '', tools: [] });
+      state.messages.push({ id, role: 'user', text, createdAt: Date.now(), status: 'done', reasoning: '', tools: [], approvals: [], questions: [] });
     });
   }
 
   beginAssistant(gatewayId, sessionId, id) {
     return this.mutate(gatewayId, sessionId, (state) => {
       state.streaming = true;
-      state.messages.push({ id, role: 'assistant', text: '', createdAt: Date.now(), status: 'streaming', reasoning: '', tools: [] });
+      state.messages.push({ id, role: 'assistant', text: '', createdAt: Date.now(), status: 'streaming', reasoning: '', tools: [], approvals: [], questions: [] });
+    });
+  }
+
+  updateInteraction(gatewayId, sessionId, kind, id, patch = {}) {
+    const listKey = kind === 'approval' ? 'approvals' : 'questions';
+    const targetId = String(id || '');
+    if (!targetId) return this.get(gatewayId, sessionId);
+    return this.mutate(gatewayId, sessionId, (state) => {
+      for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+        const message = state.messages[index];
+        const list = Array.isArray(message[listKey]) ? message[listKey] : (message[listKey] = []);
+        const current = list.find((item) => interactionId(item, kind) === targetId);
+        if (!current) continue;
+        Object.assign(current, patch || {}, { id: targetId });
+        return;
+      }
     });
   }
 
@@ -114,12 +163,20 @@ export class ChatStore {
     return this.mutate(gatewayId, sessionId, (state) => {
       const message = state.messages.find((item) => item.id === assistantId);
       if (!message) return;
+      if (!Array.isArray(message.approvals)) message.approvals = [];
+      if (!Array.isArray(message.questions)) message.questions = [];
       if (event.type === 'assistant.delta') message.text += event.text || '';
       if (event.type === 'reasoning.summary.delta') message.reasoning += event.text || '';
       if (event.type === 'tool.activity') {
         const last = message.tools[message.tools.length - 1];
         if (last && last.name === event.name) Object.assign(last, event);
         else message.tools.push({ ...event });
+      }
+      if (event.type === 'approval.required') {
+        upsertInteraction(message.approvals, event.approval || event.raw?.approval || event.raw || {}, 'approval');
+      }
+      if (event.type === 'question.required') {
+        upsertInteraction(message.questions, event.question || event.raw?.question || event.raw || {}, 'question');
       }
       if (event.type === 'assistant.done') {
         if (event.text && !message.text) message.text = event.text;
