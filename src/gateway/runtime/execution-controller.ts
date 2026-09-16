@@ -15,6 +15,7 @@ import {
   nextExecutionAttempt,
   type CreateExecutionEnvelopeInput,
   type ExecutionCheckpoint,
+  type ExecutionEffectClass,
   type ExecutionEnvelope,
   type ExecutionPhase,
   type ExecutionReplayDecision,
@@ -56,6 +57,8 @@ export interface RuntimeExecutionContext {
   checkpoint: (checkpoint: Omit<ExecutionCheckpoint, 'updatedAt'> & { updatedAt?: number }) => void;
 }
 
+const DURABLE_EXECUTION_DETAIL_PREFIX = '[EXECUTION_CONTRACT]';
+
 function checkpointEvent(phase: ExecutionPhase): string {
   if (phase === 'completed') return 'done';
   if (phase === 'failed') return 'error';
@@ -74,6 +77,43 @@ function boundedData(data: Record<string, unknown> | undefined): Record<string, 
     else if (typeof value === 'number' || typeof value === 'boolean' || value === null) out[safeKey] = value;
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * live-runtime-registry intentionally compacts durable checkpoints to a small
+ * allowlist. `detail` is one of the fields that survives that compaction, so
+ * replay-critical metadata is encoded there instead of depending on transient
+ * in-memory checkpoint properties.
+ */
+function durableExecutionDetail(
+  effectClass: ExecutionEffectClass,
+  sideEffectCommitted: boolean | undefined,
+  idempotencyKey: string | undefined,
+): string {
+  const payload = JSON.stringify({
+    e: effectClass,
+    c: sideEffectCommitted === true ? 1 : 0,
+    ...(idempotencyKey ? { k: String(idempotencyKey).slice(0, 240) } : {}),
+  });
+  return `${DURABLE_EXECUTION_DETAIL_PREFIX}${payload}`.slice(0, 500);
+}
+
+function parseDurableExecutionDetail(detail: unknown): Partial<ExecutionCheckpoint> {
+  const raw = String(detail || '');
+  if (!raw.startsWith(DURABLE_EXECUTION_DETAIL_PREFIX)) return {};
+  try {
+    const parsed = JSON.parse(raw.slice(DURABLE_EXECUTION_DETAIL_PREFIX.length));
+    const effectClass = ['read_only', 'idempotent', 'mutating', 'unknown'].includes(String(parsed?.e))
+      ? String(parsed.e) as ExecutionEffectClass
+      : undefined;
+    return {
+      effectClass,
+      sideEffectCommitted: Number(parsed?.c || 0) === 1,
+      idempotencyKey: parsed?.k ? String(parsed.k).slice(0, 240) : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 export class RuntimeExecutionController {
@@ -118,14 +158,19 @@ export class RuntimeExecutionController {
       updatedAt: Number(checkpoint.updatedAt || Date.now()),
       data: boundedData(checkpoint.data),
     };
+    const effectClass = normalized.effectClass || handle.envelope.effectClass;
+    const idempotencyKey = normalized.idempotencyKey || handle.envelope.idempotencyKey;
     this.adapter.checkpoint(handle.runtimeId, {
       event: checkpointEvent(normalized.phase),
       phase: normalized.phase,
       message: normalized.message,
       toolName: normalized.toolName,
-      effectClass: normalized.effectClass || handle.envelope.effectClass,
+      // These fields are useful to live observers. `detail` below is the
+      // compact durable copy that survives live-runtime checkpoint compaction.
+      effectClass,
       sideEffectCommitted: normalized.sideEffectCommitted,
-      idempotencyKey: normalized.idempotencyKey || handle.envelope.idempotencyKey,
+      idempotencyKey,
+      detail: durableExecutionDetail(effectClass, normalized.sideEffectCommitted, idempotencyKey),
       executionId: handle.envelope.executionId,
       executionAttemptId: handle.envelope.attemptId,
       executionAttempt: handle.envelope.attempt,
@@ -149,7 +194,12 @@ export class RuntimeExecutionController {
   recoveryDecision(runtime: LiveRuntimeSnapshot): ExecutionReplayDecision {
     const envelope = envelopeFromLiveRuntime(runtime);
     const checkpoint = runtime.checkpoint as Partial<ExecutionCheckpoint> | undefined;
-    return decideExecutionReplay({ envelope, checkpoint, runtime });
+    const durable = parseDurableExecutionDetail(runtime.checkpoint?.detail);
+    return decideExecutionReplay({
+      envelope,
+      checkpoint: { ...(checkpoint || {}), ...durable },
+      runtime,
+    });
   }
 
   nextAttempt(runtime: LiveRuntimeSnapshot, reason: string): ExecutionEnvelope {
