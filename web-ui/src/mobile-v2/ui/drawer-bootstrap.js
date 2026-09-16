@@ -65,6 +65,15 @@ export function attachMobileV2DrawerBootstrap({ root, shell, gateways, router })
     getActiveSessionRef: readActiveSessionRef,
   });
 
+  // The parity controller inserts its search/switch chrome after the Chats
+  // heading. Move that chrome immediately before the heading so the controller
+  // can continue using list.previousElementSibling as the live section label.
+  const parityChrome = drawer.querySelector('.pm-v2-drawer-parity');
+  const chatLabel = parityChrome?.previousElementSibling;
+  if (parityChrome && chatLabel?.classList?.contains('pm-v2-drawer-label')) {
+    chatLabel.insertAdjacentElement('beforebegin', parityChrome);
+  }
+
   const menu = root.querySelector('.pm-v2-menu');
   const refreshParity = () => {
     parity.refresh({ base: true }).catch(() => {});
