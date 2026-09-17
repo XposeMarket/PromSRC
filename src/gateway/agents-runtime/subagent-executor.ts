@@ -2535,7 +2535,83 @@ function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name: string
   return null;
 }
 
-function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+function copyVercelWrapperAlias(args: Record<string, any>, target: string, ...aliases: string[]): void {
+  if (args[target] == null) {
+    for (const alias of aliases) {
+      if (args[alias] != null) {
+        args[target] = args[alias];
+        break;
+      }
+    }
+  }
+  for (const alias of aliases) delete args[alias];
+}
+
+function normalizeVercelWrapperRecord(value: unknown): any {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const record = { ...(value as Record<string, any>) };
+  copyVercelWrapperAlias(record, 'repoId', 'repo_id');
+  copyVercelWrapperAlias(record, 'prId', 'pr_id');
+  copyVercelWrapperAlias(record, 'productionBranch', 'production_branch');
+  copyVercelWrapperAlias(record, 'buildCommand', 'build_command');
+  copyVercelWrapperAlias(record, 'installCommand', 'install_command');
+  copyVercelWrapperAlias(record, 'outputDirectory', 'output_directory');
+  copyVercelWrapperAlias(record, 'rootDirectory', 'root_directory');
+  copyVercelWrapperAlias(record, 'gitBranch', 'git_branch');
+  copyVercelWrapperAlias(record, 'customEnvironmentId', 'custom_environment_id');
+  return record;
+}
+
+export function normalizeVercelWrapperArgs(action: string, rawArgs: any): any {
+  const args = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs) ? { ...rawArgs } : {};
+  copyVercelWrapperAlias(args, 'teamId', 'team_id');
+  copyVercelWrapperAlias(args, 'projectId', 'project_id');
+  copyVercelWrapperAlias(args, 'projectIds', 'project_ids');
+  copyVercelWrapperAlias(args, 'deploymentId', 'deployment_id');
+  copyVercelWrapperAlias(args, 'withGitRepoInfo', 'with_git_repo_info');
+  copyVercelWrapperAlias(args, 'withLatestCommit', 'with_latest_commit');
+  copyVercelWrapperAlias(args, 'forceNew', 'force_new');
+  copyVercelWrapperAlias(args, 'buildId', 'build_id');
+  copyVercelWrapperAlias(args, 'redirectStatusCode', 'redirect_status_code');
+  copyVercelWrapperAlias(args, 'gitProvider', 'git_provider');
+  copyVercelWrapperAlias(args, 'gitOrg', 'git_org');
+  copyVercelWrapperAlias(args, 'gitRepo', 'git_repo');
+  copyVercelWrapperAlias(args, 'gitRef', 'git_ref');
+  copyVercelWrapperAlias(args, 'gitSha', 'git_sha');
+  copyVercelWrapperAlias(args, 'gitRepoId', 'git_repo_id');
+  copyVercelWrapperAlias(args, 'gitPrId', 'git_pr_id');
+  copyVercelWrapperAlias(args, 'gitMetadata', 'git_metadata');
+  copyVercelWrapperAlias(args, 'projectSettings', 'project_settings');
+  copyVercelWrapperAlias(args, 'customEnvironmentSlugOrId', 'custom_environment_slug_or_id');
+  copyVercelWrapperAlias(args, 'customEnvironmentId', 'custom_environment_id');
+  copyVercelWrapperAlias(args, 'productionBranch', 'production_branch');
+  copyVercelWrapperAlias(args, 'buildCommand', 'build_command');
+  copyVercelWrapperAlias(args, 'installCommand', 'install_command');
+  copyVercelWrapperAlias(args, 'outputDirectory', 'output_directory');
+  copyVercelWrapperAlias(args, 'rootDirectory', 'root_directory');
+  copyVercelWrapperAlias(args, 'gitBranch', 'git_branch');
+  copyVercelWrapperAlias(args, 'gitRepository', 'git_repository');
+  copyVercelWrapperAlias(args, 'gitSource', 'git_source');
+  if (args.gitRepository !== undefined) args.gitRepository = normalizeVercelWrapperRecord(args.gitRepository);
+  if (args.gitSource !== undefined) args.gitSource = normalizeVercelWrapperRecord(args.gitSource);
+  if (args.settings !== undefined) args.settings = normalizeVercelWrapperRecord(args.settings);
+
+  if (action === 'list_projects') {
+    copyVercelWrapperAlias(args, 'search', 'project_name');
+  } else if (action === 'create_project' || action === 'create_deployment') {
+    copyVercelWrapperAlias(args, 'name', 'project_name');
+  } else {
+    copyVercelWrapperAlias(args, 'projectId', 'project_name');
+  }
+  if (action === 'env' || action === 'manage_project_domain') copyVercelWrapperAlias(args, 'action', 'action_type');
+  if (action === 'get_deployment' || action === 'deployment_events' || action === 'cancel_deployment' || action === 'delete_deployment' || action === 'assign_alias') {
+    copyVercelWrapperAlias(args, 'deployment', 'deploymentId');
+  }
+  return args;
+}
+
+
+export function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
   const actionMaps: Record<string, Record<string, string>> = {
     x_search_ops: {
       x_search: 'x_search',
@@ -2604,11 +2680,24 @@ function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: st
       status: 'connector_vercel_status',
       list_teams: 'connector_vercel_list_teams',
       list_projects: 'connector_vercel_list_projects',
+      get_project: 'connector_vercel_get_project',
+      create_project: 'connector_vercel_create_project',
+      update_project: 'connector_vercel_update_project',
+      delete_project: 'connector_vercel_delete_project',
       list_deployments: 'connector_vercel_list_deployments',
       get_deployment: 'connector_vercel_get_deployment',
+      create_deployment: 'connector_vercel_create_deployment',
       redeploy: 'connector_vercel_redeploy',
+      deployment_events: 'connector_vercel_deployment_events',
+      cancel_deployment: 'connector_vercel_cancel_deployment',
+      delete_deployment: 'connector_vercel_delete_deployment',
+      list_aliases: 'connector_vercel_list_aliases',
+      assign_alias: 'connector_vercel_assign_alias',
       env: 'connector_vercel_env',
       domains: 'connector_vercel_domains',
+      get_project_domain: 'connector_vercel_get_project_domain',
+      manage_project_domain: 'connector_vercel_manage_project_domain',
+      api_request: 'connector_vercel_api_request',
     },
   };
   const map = actionMaps[name];
@@ -2619,7 +2708,7 @@ function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: st
   delete args.action;
   const target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
-  return { name: target, args };
+  return { name: target, args: name === 'vercel_ops' ? normalizeVercelWrapperArgs(action, args) : args };
 }
 
 export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {

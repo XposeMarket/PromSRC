@@ -37,4 +37,30 @@ const declaredReadOnlyApi = resolveToolCapabilityMetadata('connector_gdrive_api_
 assert.equal(declaredReadOnlyApi.known, true, 'connector-specific API boundaries may declare safe methods explicitly');
 assert.equal(declaredReadOnlyApi.readOnly, true);
 
+const vercelEnv = resolveToolCapabilityMetadata('connector_vercel_env', undefined, { action: 'list' });
+assert.equal(vercelEnv.known, true);
+assert.equal(vercelEnv.externalWrite, true, 'combined Vercel env tool must fail closed as an external write');
+assert.equal(vercelEnv.destructive, true, 'combined Vercel env tool must conservatively cover its delete action');
+
+const vercelProjectDomain = resolveToolCapabilityMetadata('connector_vercel_manage_project_domain', undefined, { action: 'add' });
+assert.equal(vercelProjectDomain.known, true);
+assert.equal(vercelProjectDomain.externalWrite, true);
+assert.equal(vercelProjectDomain.destructive, true, 'combined Vercel domain tool must conservatively cover its remove action');
+
+const vercelDeleteProject = resolveToolCapabilityMetadata('connector_vercel_delete_project');
+assert.equal(vercelDeleteProject.known, true);
+assert.equal(vercelDeleteProject.externalWrite, true);
+assert.equal(vercelDeleteProject.destructive, true);
+
+const vercelApiRead = resolveToolCapabilityMetadata('connector_vercel_api_request', undefined, { method: 'GET' });
+assert.equal(vercelApiRead.known, true);
+assert.equal(vercelApiRead.readOnly, true);
+assert.equal(vercelApiRead.externalWrite, false);
+
+const vercelApiWrite = resolveToolCapabilityMetadata('connector_vercel_api_request', undefined, { method: 'PATCH' });
+assert.equal(vercelApiWrite.known, true);
+assert.equal(vercelApiWrite.readOnly, false);
+assert.equal(vercelApiWrite.externalWrite, true);
+
+
 console.log('[connector-tool-capabilities.regression] provider-neutral read/write inference, connector namespace boundaries, API method boundaries, explicit declarations, and fail-closed unknowns passed');

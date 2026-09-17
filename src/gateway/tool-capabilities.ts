@@ -111,7 +111,7 @@ const UNKNOWN_FAIL_CLOSED: ToolCapabilityMetadata = Object.freeze({
 const CONNECTOR_READ_OPERATION_TOKENS = new Set([
   'list', 'get', 'read', 'search', 'query', 'status', 'check', 'fetch', 'retrieve',
   'find', 'describe', 'inspect', 'show', 'preview', 'report', 'realtime', 'profile',
-  'history', 'comments', 'labels', 'balance', 'properties', 'domains', 'prepare',
+  'history', 'comments', 'labels', 'balance', 'properties', 'domains', 'prepare', 'events', 'logs',
 ]);
 
 const CONNECTOR_WRITE_OPERATION_TOKENS = new Set([
