@@ -227,7 +227,12 @@ assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ord
 assert.match(durableTrace, /type: 'compaction'/, 'context compaction must have a dedicated durable trace type');
 assert.match(durableTrace, /previousStatus === 'compacting'/, 'durable recovery must merge compaction start and completion into one boundary');
 assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must retain explicit user-visible reasoning summaries');
-assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
+assert.match(runtimeRecovery,
+  /const liveTraceEntries = Array\.isArray\(runtime\.checkpoint\?\.liveTraceEntries\)[\s\S]{0,300}buildDurableChatTraceFromProcessEntries\(processEntries\)/,
+  'restart recovery must retain checkpoint traces or rebuild them from process entries');
+assert.match(runtimeRecovery,
+  /processEntries:\s*processEntries\.length \? processEntries : undefined,\s*liveTraceEntries,/,
+  'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
 assert.match(pages, /const keyFor = \(item\) => \{/, 'recovery must define a stable activity merge key');
 assert.match(pages, /return `event:\$\{eventKey\}`/, 'recovery activity merge must prefer stream event identity');
