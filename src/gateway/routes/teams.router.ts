@@ -12,7 +12,7 @@ import {
   listTeamContextReferences, addTeamContextReference, updateTeamContextReference,
   deleteTeamContextReference, buildTeamContextRuntimeBlock,
   computeTeamHealth, getTeamRunHistory, getTeamRoomState,
-  ensureManagedTeamManagerAgent,
+  ensureManagedTeamManagerAgent, inspectManagedTeamRegistry,
 } from '../teams/managed-teams';
 import { createTask, listTaskSummaries, updateTaskStatus, mutatePlan, appendJournal } from '../tasks/task-store';
 import { findRecoveryTaskForTeamChatTarget, handleTaskRecoveryMessage } from '../tasks/task-router';
@@ -36,6 +36,8 @@ import { appendManagerNote, getTeamMemberAgentIds } from '../teams/managed-teams
 import { type TaskStatus } from '../tasks/task-store';
 import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
+import { teamExecutionQueue } from '../teams/team-execution-queue';
+import { listTeamRunReceipts } from '../teams/team-run-receipts';
 
 export const router = Router();
 
@@ -684,6 +686,43 @@ router.get('/api/teams', (_req, res) => {
   }
 });
 
+router.get('/api/teams/diagnostics', (_req, res) => {
+  try {
+    const teams = listManagedTeams();
+    res.json({
+      success: true,
+      teams: teams.map((team: any) => ({
+        id: team.id,
+        name: team.name,
+        managerAgentId: team.managerAgentId || `${team.id}_manager`,
+        memberAgentIds: team.subagentIds || [],
+        allowedWorkPaths: team.allowedWorkPaths || [],
+        paused: team.manager?.paused === true,
+      })),
+      integrityIssues: inspectManagedTeamRegistry(),
+      executionQueue: teamExecutionQueue.snapshot(),
+      receipts: listTeamRunReceipts({ limit: 50 }),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/api/teams/receipts', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      receipts: listTeamRunReceipts({
+        limit: Number(req.query.limit) || 100,
+        teamId: String(req.query.teamId || '').trim() || undefined,
+        agentId: String(req.query.agentId || '').trim() || undefined,
+      }),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.post('/api/teams', (req, res) => {
   try {
     const {
@@ -1185,6 +1224,12 @@ router.post('/api/teams/:id/dispatch', async (req, res) => {
     }
     const { agentId, task, context } = req.body;
     if (!agentId || !task) return res.status(400).json({ success: false, error: 'agentId and task are required' });
+    if (String(team.managerAgentId || '').trim() === String(agentId).trim() || (getAgentById(agentId) as any)?.isTeamManager === true) {
+      return res.status(409).json({
+        success: false,
+        error: 'This agent is the team manager. Use the manager trigger/start route instead of dispatching the manager as a member.',
+      });
+    }
     if (!team.subagentIds.includes(agentId)) return res.status(403).json({ success: false, error: 'Agent is not a member of this team' });
 
     // Log it in team chat
@@ -1731,6 +1776,7 @@ function serializeSchedule(job: any): any {
     team_id: job.team_id || '',
     assignment_target: job.assignmentTarget || (job.team_id ? 'team' : (job.subagent_id ? 'subagent' : 'main')),
     deliver_to_main_channel: job.deliverToMainChannel === true,
+    preview_only: job.previewOnly === true,
     skillIds: normalizeScheduleSkillIds(job.skillIds),
     context_refs: contextRefs,
     contextReferences: contextRefs,
@@ -1786,6 +1832,7 @@ router.post('/api/schedules', (req: any, res: any) => {
       deliverToMainChannel: !selectedTeamId && !selectedSubagentId,
       skillIds: normalizeScheduleSkillIds(req.body?.skillIds),
       context_refs: normalizeScheduleContextRefs(req.body?.context_refs || req.body?.contextReferences),
+      previewOnly: req.body?.previewOnly === true || req.body?.preview_only === true,
     } as any);
 
     const ownerAgent = selectedTeamId
@@ -1884,6 +1931,8 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
       const hasSkillIds = Object.prototype.hasOwnProperty.call(req.body || {}, 'skillIds');
       const hasContextRefs = Object.prototype.hasOwnProperty.call(req.body || {}, 'context_refs')
         || Object.prototype.hasOwnProperty.call(req.body || {}, 'contextReferences');
+      const hasPreviewOnly = Object.prototype.hasOwnProperty.call(req.body || {}, 'previewOnly')
+        || Object.prototype.hasOwnProperty.call(req.body || {}, 'preview_only');
 
 	    const updates: any = {
 	      name: name ? String(name).slice(0, 100) : undefined,
@@ -1900,6 +1949,7 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
         context_refs: hasContextRefs
           ? normalizeScheduleContextRefs(req.body.context_refs || req.body.contextReferences, existing?.context_refs || existing?.contextReferences)
           : undefined,
+        previewOnly: hasPreviewOnly ? (req.body.previewOnly === true || req.body.preview_only === true) : undefined,
 	    };
 	    const job = _cronScheduler.updateJob(req.params.id, updates);
     

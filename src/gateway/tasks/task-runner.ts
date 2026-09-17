@@ -16,6 +16,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
+import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
@@ -31,6 +32,11 @@ import {
   type BackgroundAgentStreamState,
 } from './background-agent-stream';
 import { appendBackgroundSseTrace } from './background-agent-trace';
+import {
+  canExecuteToolCallsInParallel,
+  executeToolCallsInParallel,
+  type ParallelToolCall,
+} from '../../tools/parallel-tool-calls.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -86,6 +92,7 @@ export interface EphemeralBackgroundStatus {
   timeoutMs: number;
   tags?: string[];
   spawnerSessionId?: string;
+  backgroundSessionId?: string;
   resourceIds?: string[];
   prompt?: string;
   promptPreview?: string;
@@ -221,7 +228,59 @@ export class TaskRunner {
         continue;
       }
 
-      // Execute FIRST tool call (one action per step)
+      // Independent read-only calls may share a step. Mutations and dependent
+      // calls retain the original one-action-per-step behavior.
+      const parallelEntries: Array<{ call: any; index: number; toolName: string; toolArgs: any }> = toolCalls.map((call: any, index: number) => ({
+        call,
+        index,
+        toolName: call.function?.name || 'unknown',
+        toolArgs: call.function?.arguments || {},
+      }));
+      const parallelCalls = parallelEntries.map((entry) => ({
+        id: String(entry.call?.id || `${step}_${entry.index}`),
+        name: String(entry.toolName || 'unknown'),
+        args: entry.toolArgs,
+      } as ParallelToolCall));
+      if (canExecuteToolCallsInParallel(parallelCalls)) {
+        for (const entry of parallelEntries) {
+          const actionStr = `${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 100)})`;
+          console.log(`[Background Task] Parallel action: ${actionStr}`);
+          this.onProgress('task_action', { step, action: entry.toolName, args: entry.toolArgs, parallel: true });
+        }
+        const outcomes = await executeToolCallsInParallel(
+          parallelCalls,
+          async (parallelCall) => {
+            const entry = parallelEntries[parallelCalls.findIndex((candidate: ParallelToolCall) => candidate === parallelCall)];
+            return this.executor(entry.toolName, entry.toolArgs);
+          },
+        );
+        for (const outcome of outcomes) {
+          const entry = parallelEntries[outcome.index];
+          const actionStr = `${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 100)})`;
+          const execution = outcome.result || {
+            result: `Execution error: ${String(outcome.error || 'parallel tool execution failed')}`,
+            error: true,
+          };
+          if (execution.newState) this.state.currentState = execution.newState;
+          const summary = execution.error
+            ? `❌ ${entry.toolName}: ${execution.result.slice(0, 150)}`
+            : `✅ ${entry.toolName}: ${execution.result.slice(0, 150)}`;
+          this.addJournal(actionStr, summary);
+          this.onProgress('task_result', {
+            step,
+            action: entry.toolName,
+            result: execution.result.slice(0, 300),
+            error: execution.error,
+            parallel: true,
+          });
+          console.log(execution.error
+            ? `[Background Task] ❌ ${execution.result.slice(0, 100)}`
+            : `[Background Task] ✅ ${execution.result.slice(0, 100)}`);
+        }
+        continue;
+      }
+
+      // Execute the first tool call when the batch is not a safe read-only batch.
       const call = toolCalls[0];
       const toolName = call.function?.name || 'unknown';
       const toolArgs = call.function?.arguments || {};
@@ -255,7 +314,7 @@ export class TaskRunner {
 
         // If there were additional tool calls, log them but don't execute
         if (toolCalls.length > 1) {
-          console.log(`[Background Task] (${toolCalls.length - 1} additional tool calls ignored — one per step)`);
+          console.log(`[Background Task] (${toolCalls.length - 1} additional tool calls deferred — dependent or mutating work stays serial)`);
         }
       } catch (err: any) {
         const errMsg = `Execution error: ${err.message}`;
@@ -276,15 +335,16 @@ export class TaskRunner {
     // System prompt — compact, focused on task execution
     messages.push({
       role: 'system',
-      content: `You are completing a multi-step task. Pick ONE action per turn.
+      content: `You are completing a multi-step task. Pick one action per turn, or a small batch of independent read-only actions.
 
 RULES:
-1. Take exactly ONE action per turn using the available tools.
-2. After each action, you'll see the result and can take the next action.
-3. When the task is fully complete, respond with text starting with "TASK_COMPLETE:" followed by a summary.
-4. If the task cannot be completed, respond with "TASK_FAILED:" and explain why.
-5. Do NOT explain your reasoning. Just pick the next action.
-6. Use the CURRENT STATE to decide what to do next — don't guess from memory.
+1. Take exactly ONE action, or a small batch of independent read-only actions, using the available tools.
+2. Batch only observations that do not depend on each other: reads, lists, searches, stats, and independent web lookups are good candidates.
+3. Keep writes, commands, browser/desktop actions, approvals, external mutations, and dependent work serial.
+4. After each action or batch, you'll see the result and can take the next action.
+5. When the task is fully complete, respond with text starting with "TASK_COMPLETE:" followed by a summary.
+6. If the task cannot be completed, respond with "TASK_FAILED:" and explain why.
+7. Do NOT explain your reasoning. Use the CURRENT STATE to decide what to do next — don't guess from memory.
 ${this.systemContext ? '\n' + this.systemContext : ''}`,
     });
 
@@ -351,7 +411,7 @@ ${this.systemContext ? '\n' + this.systemContext : ''}`,
     parts.push(stateTrimmed);
 
     parts.push('');
-    parts.push('What is the next action? Pick ONE tool call.');
+    parts.push('What is the next action? Pick one tool call, or a small batch of independent read-only calls.');
 
     return parts.join('\n');
   }
@@ -518,6 +578,82 @@ export function setBackgroundAgentDeps(deps: EphemeralBgDeps): void {
   console.log('[BackgroundAgent] handleChat executor wired — full tool loop active.');
 }
 
+function backgroundRuntimeSessionId(record: Pick<EphemeralBackgroundRecord, 'id'>): string {
+  return `background_${String(record.id || '').trim()}`;
+}
+
+function broadcastBackgroundAgentMessage(record: EphemeralBackgroundRecord, message: Record<string, any>): void {
+  const broadcast = _bgDeps?.broadcastWS || gatewayBroadcastWS;
+  try {
+    broadcast(message);
+  } catch (error: any) {
+    console.warn(`[Background Agent] ${record.id} live broadcast failed: ${error?.message || error}`);
+  }
+}
+
+function emitBackgroundAgentEvent(
+  record: EphemeralBackgroundRecord,
+  event: string,
+  data: any,
+  backgroundSessionId = backgroundRuntimeSessionId(record),
+  existingFrame?: BackgroundAgentStreamFrame,
+): BackgroundAgentStreamFrame {
+  const frame = existingFrame || appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
+  const spawnerSessionId = String(record.spawnerSessionId || '').trim();
+  if (!spawnerSessionId) return frame;
+  const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
+  broadcastBackgroundAgentMessage(record, {
+    ...eventData,
+    ...backgroundVoiceDispatchMetadata(record),
+    type: 'bg_agent_event',
+    sessionId: spawnerSessionId,
+    spawnerSessionId,
+    bgSessionId: backgroundSessionId,
+    backgroundSessionId,
+    bgId: record.id,
+    eventType: event,
+    actor: 'Background Agent',
+    task: record.prompt,
+    prompt: record.prompt,
+    taskPrompt: record.prompt,
+    streamId: frame.streamId,
+    seq: frame.seq,
+    at: frame.at,
+    data: frame.data,
+  });
+  return frame;
+}
+
+function emitBackgroundAgentDone(
+  record: EphemeralBackgroundRecord,
+  state: EphemeralBackgroundState,
+  extra: Record<string, any> = {},
+  backgroundSessionId = backgroundRuntimeSessionId(record),
+): void {
+  const spawnerSessionId = String(record.spawnerSessionId || '').trim();
+  if (!spawnerSessionId) return;
+  broadcastBackgroundAgentMessage(record, {
+    ...backgroundVoiceDispatchMetadata(record),
+    type: 'bg_agent_done',
+    sessionId: spawnerSessionId,
+    spawnerSessionId,
+    bgSessionId: backgroundSessionId,
+    backgroundSessionId,
+    bgId: record.id,
+    state,
+    task: record.prompt,
+    prompt: record.prompt,
+    taskPrompt: record.prompt,
+    fileChanges: record.fileChanges,
+    actor: 'Background Agent',
+    providerId: record.providerId,
+    model: record.model,
+    modelSource: record.modelSource,
+    executor_reasoning_effort: record.reasoningEffort,
+    ...extra,
+  });
+}
+
 // ─── Background Agent Plan State ─────────────────────────────────────────────
 // Isolated per-bg-session plan tracking. Never touches main plan panel or task
 // records — lives entirely in memory, keyed by bg session ID (background_{id}).
@@ -614,7 +750,7 @@ function createBackgroundPrompt(prompt: string): any[] {
       content:
         'You are executing a one-time ephemeral background task in parallel with the main chat. ' +
         'You start with core tools and can request additional categories when needed. ' +
-        'Complete your task efficiently and report the outcome.',
+        'Complete your task efficiently and report the outcome. When several observations are independent, emit them together as a small read-only batch; keep mutations and dependent actions serial.',
     },
     {
       role: 'user',
@@ -628,26 +764,36 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
   const execution = (async () => {
     const abortController = new AbortController();
     const abortSignal = record.abortSignal || { aborted: false };
+    const runtimeSessionId = backgroundRuntimeSessionId(record);
     abortSignal.signal = abortController.signal;
     record.abortSignal = abortSignal;
     record.abortController = abortController;
+    // Publish lifecycle immediately. A background lane must never look like a
+    // blank, indefinitely-running card while admission or startup is waiting.
+    emitBackgroundAgentEvent(record, 'status', {
+      state: 'queued',
+      phase: 'queued',
+      message: 'Background agent queued.',
+    }, runtimeSessionId);
     try {
       runtimeAdmissionLease = await gatewayRuntimeAdmission.acquire({
         lane: 'background',
         resourceWeight: 2,
         signal: abortController.signal,
-        metadata: { sessionId: 'background_' + record.id, backgroundId: record.id },
+        metadata: { sessionId: runtimeSessionId, backgroundId: record.id },
       });
     } catch (error: any) {
       record.state = 'failed';
       record.error = String(error?.message || error || 'Background runtime admission failed');
       record.completedAt = Date.now();
+      emitBackgroundAgentEvent(record, 'error', { message: record.error, state: 'failed' }, runtimeSessionId);
+      finishBackgroundAgentStream(record.backgroundStream);
       persistBackgroundVoiceWorker(record);
       queueBackgroundResultForForeground(record);
+      emitBackgroundAgentDone(record, 'failed', { error: record.error }, runtimeSessionId);
       console.warn('[Background Agent] ' + record.id + ' was not admitted: ' + record.error);
       return;
     }
-    const runtimeSessionId = `background_${record.id}`;
     const runtimeId = registerLiveRuntime({
       kind: 'background_agent',
       label: 'Background agent',
@@ -666,6 +812,11 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       },
     });
     record.state = 'in_progress';
+    emitBackgroundAgentEvent(record, 'status', {
+      state: 'in_progress',
+      phase: 'started',
+      message: 'Background agent started.',
+    }, runtimeSessionId);
     console.log(`[Background Agent] ${record.id} started`);
 
     // ── Full handleChat path (preferred — full tool execution loop + live SSE) ──
@@ -787,28 +938,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         const frame = appendBackgroundAgentStreamEvent(record.backgroundStream, event, data);
         appendBackgroundSseTrace(backgroundProcessEntries, backgroundLiveTraceEntries, event, data, frame);
         persistBackgroundSessionCheckpoint();
-        if (spawnerSessionId) {
-          const eventData = data && typeof data === 'object' ? data : { message: String(data ?? '') };
-          broadcastWS({
-            ...eventData,
-            ...backgroundVoiceDispatchMetadata(record),
-            type: 'bg_agent_event',
-            sessionId: spawnerSessionId,
-            spawnerSessionId,
-            bgSessionId: sessionId,
-            backgroundSessionId: sessionId,
-            bgId: record.id,
-            eventType: event,
-            actor: 'Background Agent',
-            task: prompt,
-            prompt,
-            taskPrompt: prompt,
-            streamId: frame.streamId,
-            seq: frame.seq,
-            at: frame.at,
-            data: frame.data,
-          });
-        }
+        emitBackgroundAgentEvent(record, event, data, sessionId, frame);
         // Capture tool calls for the result summary returned to main agent on join
         if (event === 'tool_call' && data?.name) {
           const argsPreview = JSON.stringify(data.args ?? {}).slice(0, 120);
@@ -848,9 +978,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           persistBackgroundSessionCheckpoint(true, '', String((chatResult as any)?.reasoningSummary || ''));
           finishBackgroundAgentStream(record.backgroundStream);
           persistBackgroundVoiceWorker(record);
-          if (spawnerSessionId) {
-            broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
-          }
+          emitBackgroundAgentDone(record, 'failed', { error: record.error }, sessionId);
           finishLiveRuntime(runtimeId);
           return;
         }
@@ -867,9 +995,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} completed`);
 
-        if (spawnerSessionId) {
-          broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
-        }
+        emitBackgroundAgentDone(record, 'completed', { result: record.result }, sessionId);
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
         record.state = 'failed';
@@ -879,9 +1005,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         persistBackgroundVoiceWorker(record);
         queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
-        if (spawnerSessionId) {
-          broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
-        }
+        emitBackgroundAgentDone(record, 'failed', { error: record.error }, sessionId);
       }
       finishLiveRuntime(runtimeId);
       return;
@@ -901,13 +1025,17 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.result = text || 'Background task completed with no textual output.';
       record.state = 'completed';
       record.completedAt = Date.now();
+      emitBackgroundAgentEvent(record, 'final', { text: record.result }, runtimeSessionId);
       finishBackgroundAgentStream(record.backgroundStream);
+      emitBackgroundAgentDone(record, 'completed', { result: record.result }, runtimeSessionId);
       console.log(`[Background Agent] ${record.id} completed (fallback — no handleChat wired)`);
     } catch (err: any) {
       record.error = String(err?.message || err || 'Background execution failed');
       record.state = 'failed';
       record.completedAt = Date.now();
+      emitBackgroundAgentEvent(record, 'error', { message: record.error, state: 'failed' }, runtimeSessionId);
       finishBackgroundAgentStream(record.backgroundStream);
+      emitBackgroundAgentDone(record, 'failed', { error: record.error }, runtimeSessionId);
       console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
     } finally {
       persistBackgroundVoiceWorker(record);
@@ -970,6 +1098,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     timeoutMs: record.timeoutMs,
     tags: record.tags,
     spawnerSessionId: record.spawnerSessionId,
+    backgroundSessionId: backgroundRuntimeSessionId(record),
     resourceIds: record.resourceIds,
     prompt,
     promptPreview: record.promptPreview,
@@ -994,6 +1123,7 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
+    backgroundSessionId: backgroundRuntimeSessionId(rec),
     resourceIds: rec.resourceIds,
     prompt: rec.prompt,
     promptPreview: rec.promptPreview,
@@ -1071,8 +1201,9 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
       kind: queued.event.kind,
     });
     const spawnerSessionId = String(rec.spawnerSessionId || '').trim();
-    if (spawnerSessionId && _bgDeps?.broadcastWS) {
-      _bgDeps.broadcastWS({
+    if (spawnerSessionId) {
+      const broadcast = _bgDeps?.broadcastWS || gatewayBroadcastWS;
+      broadcast({
         ...backgroundVoiceDispatchMetadata(rec),
         type: 'bg_agent_event',
         sessionId: spawnerSessionId,
@@ -1109,8 +1240,10 @@ export function backgroundAbort(backgroundId: string): { ok: boolean; status?: E
   rec.state = 'failed';
   rec.error = 'Aborted by operator.';
   rec.completedAt = Date.now();
+  emitBackgroundAgentEvent(rec, 'error', { message: rec.error, state: 'failed' });
   finishBackgroundAgentStream(rec.backgroundStream);
   persistBackgroundVoiceWorker(rec);
+  emitBackgroundAgentDone(rec, 'failed', { error: rec.error });
   return { ok: true, status: statusFromRecord(rec) };
 }
 
@@ -1157,6 +1290,7 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
+    backgroundSessionId: `background_${rec.id}`,
     prompt: rec.prompt,
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,

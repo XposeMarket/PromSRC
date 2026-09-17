@@ -1,7 +1,12 @@
 import { deriveContextWindowUsage } from './context-window-usage';
+import { appendDurableCommentaryContext } from './commentary-context';
 
 export interface ContextPressureMessageLike {
   content?: unknown;
+  liveTraceEntries?: unknown;
+  processEntries?: unknown;
+  visibleReasoningSummary?: unknown;
+  commentaryContext?: unknown;
 }
 
 export interface ContextWindowPressureInput {
@@ -34,7 +39,7 @@ function nonNegativeFinite(value: unknown, fallback = 0): number {
 }
 
 function estimateSessionMessageTokens(message: ContextPressureMessageLike): number {
-  const content = String(message?.content || '');
+  const content = appendDurableCommentaryContext(message?.content, message);
   return Math.max(1, Math.ceil(content.length / 3.5)) + 6;
 }
 

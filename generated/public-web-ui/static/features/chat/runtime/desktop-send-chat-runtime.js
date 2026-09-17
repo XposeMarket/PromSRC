@@ -4,6 +4,15 @@
  * The page keeps the DOM/session wiring and supplies this runtime through a
  * lazy context resolver so late-initialized page state remains live.
  */
+function desktopCompactionStatusFromText(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(?:context|thread) compacted\b/.test(text)) return 'compacted';
+  if (/^(?:context|thread) compaction (?:failed|error)\b/.test(text)) return 'failed';
+  if (/^(?:context|thread) compaction skipped\b/.test(text)) return 'skipped';
+  if (/^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(text)) return 'compacting';
+  return '';
+}
+
 export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
   return async function sendChat(queuedMessage = null, options = {}) {
       let {
@@ -370,15 +379,18 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
       const normalizedStatus = String(status || 'compacting').toLowerCase();
       const label = normalizedStatus === 'compacting'
-        ? 'Compacting Context'
+        ? 'Compacting context'
         : normalizedStatus === 'failed'
-          ? 'Context Compaction Failed'
+          ? 'Context compaction failed'
           : normalizedStatus === 'skipped'
-            ? 'Context Compaction Skipped'
-            : 'Context Compacted';
+            ? 'Context compaction skipped'
+            : 'Context compacted';
       const cleanSummary = String(summary || extra?.summary || '').trim();
       const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
-      const payload = extra && typeof extra === 'object' ? extra : {};
+      const payload = {
+        ...(extra && typeof extra === 'object' ? extra : {}),
+        action: 'context_compaction',
+      };
       if (last && String(last.type || '').toLowerCase() === 'compaction') {
         last.text = label;
         last.status = normalizedStatus;
@@ -407,7 +419,9 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         // Keep that paragraph as visible, immutable reasoning instead of
         // recategorising it as an internal raw-thought entry.
         appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text, {
-          extra: { visibility: 'user', source: 'reasoning_summary' },
+          // Commentary that already streamed visibly before a tool is a durable
+          // timeline beat, not the provider's replaceable summary-status slot.
+          extra: { visibility: 'user', source: 'agent_thought', reasoningKind: 'full_thought' },
         });
       }
       streamState.streamingAIText = '';
@@ -843,9 +857,39 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	  let turnAbortController = null;
 	  let sawTerminalStreamEvent = false;
 	  let sawFinalStreamEvent = false;
+	  let finalAssistantTurnCommitted = false;
+	  let finalFrameShouldStopReader = false;
 	  let desktopStreamRecoveryPending = false;
 	  let interruptedTurnSaved = false;
-		  const saveInterruptedAssistantTurn = () => {
+	  const commitFinalAssistantTurn = async () => {
+	    if (finalAssistantTurnCommitted || !finalReply) return false;
+	    const mergedThinking = persistTurnThinkingToProcess();
+	    await applyDesignAssistantOps(finalReply);
+	    applyCreativeAssistantOps(finalReply);
+	    const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
+	    appendAssistantTurnForUser({
+	      role: 'ai',
+	      content: finalReply,
+	      artifacts: finalArtifacts,
+	      fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
+	      productCarousel: finalProductCarousel || undefined,
+	      richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
+	      goalCompletionReport: finalGoalCompletionReport || undefined,
+	      canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
+	      generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
+	      generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
+	      steps: allSteps,
+	      mode: window.useAgentMode ? 'agentic' : 'chat',
+	      thinking: mergedThinking || undefined,
+	      processEntries: turnEntries,
+	      liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
+	    });
+	    finalAssistantTurnCommitted = true;
+	    clearBackgroundSpawnDockForSession(thisSessionId);
+	    renderIfViewingThisSession();
+	    return true;
+	  };
+	  const saveInterruptedAssistantTurn = () => {
 		    if (interruptedTurnSaved) return;
 		    interruptedTurnSaved = true;
 		    const isEditRerunReset = window._editRerunAbortResetSessions?.has?.(thisSessionId);
@@ -1142,6 +1186,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             case 'info': {
               if (event.message) {
                 const msg = String(event.message);
+                const compactionStatus = desktopCompactionStatusFromText(msg);
+                if (compactionStatus) {
+                  appendCompactionTrace(compactionStatus, '', event);
+                  break;
+                }
                 addProcessEntry('info', msg, event.actor ? { actor: event.actor } : undefined);
               }
               break;
@@ -1203,7 +1252,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               break;
 
             case 'tool_call': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const stepNum = Number(event.stepNum || 0);
               const stepPrefix = nextDeclaredPlanToolPrefix(stepNum);
               const args = (event.args && typeof event.args === 'object') ? event.args : null;
@@ -1213,11 +1262,6 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               if (action === 'context_compaction') {
                 pushProgressLine('Compacting thread context...');
                 appendCompactionTrace('compacting', '', args || event);
-                addProcessEntry(
-                  'tool',
-                  `${stepPrefix}Compacting thread context...${syntheticTag}`,
-                  { action, ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) },
-                );
                 break;
               }
               sawToolActivityThisTurn = true;
@@ -1251,7 +1295,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             }
 
             case 'tool_result': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const stepNum = Number(event.stepNum || 0);
               const stepPrefix = getDeclaredPlanToolPrefix(stepNum);
               movePreToolAnswerTextIntoPreamble();
@@ -1275,23 +1319,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	              }
 	            }
 	            if (event.actor || isBackgroundAgentTool) extraData.actor = event.actor || 'Background Agent';
-	            const extraPayload = Object.keys(extraData).length ? extraData : undefined;
+              const extraPayload = Object.keys(extraData).length ? extraData : undefined;
               if (action === 'context_compaction') {
                 const status = String(event?.extra?.status || '').toLowerCase();
-                const mode = String(event?.extra?.mode || '').trim();
-                const baseResultText = ok
-                  ? (status === 'skipped'
-                    ? 'Thread compaction skipped (continuing with normal flow).'
-                    : `Thread compacted${mode ? ` (${mode})` : ''}.`)
-                  : `Thread compaction failed: ${text || '(no output)'}`;
-                const displayResultText = String(text || '').trim() || baseResultText;
                 pushProgressLine(status === 'skipped' ? 'Thread compaction skipped' : (ok ? 'Thread compacted' : 'Thread compaction failed'));
                 appendCompactionTrace(status || (ok ? 'compacted' : 'failed'), extraData.summary || '', extraData);
-                addProcessEntry(
-                  ok ? 'result' : 'error',
-                  `${stepPrefix}${displayResultText}${syntheticTag}`,
-                  { action, ...(extraPayload || {}) },
-                );
                 break;
               }
               sawToolActivityThisTurn = true;
@@ -1318,8 +1350,12 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
             }
 
             case 'tool_progress': {
-              const action = String(event.action || '').trim();
+              const action = String(event.action || event.name || event.toolName || event.extra?.action || event.extra?.toolName || '').trim();
               const message = String(event.message || '').trim();
+              if (action.toLowerCase() === 'context_compaction') {
+                appendCompactionTrace(String(event?.extra?.status || event?.status || '').toLowerCase() || 'compacting', event?.extra?.summary || event?.summary || '', event.extra || event);
+                break;
+              }
               if (action && message) {
                 movePreToolAnswerTextIntoPreamble();
                 sawToolActivityThisTurn = true;
@@ -1684,14 +1720,30 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
 	            if (Array.isArray(event.richArtifacts)) finalRichArtifacts = event.richArtifacts;
 	            if (event.goalCompletionReport) finalGoalCompletionReport = event.goalCompletionReport;
+	            if (finalReply) {
+	              // The final frame already contains the durable answer. Commit
+	              // it now so a WebView that never exposes the later `done`
+	              // frame cannot leave the response trapped in stream state.
+	              await commitFinalAssistantTurn();
+	              finalFrameShouldStopReader = true;
+	            }
 	            break;
 
             case 'turn_execution_created':
             case 'turn_execution_updated':
               break;
-          }
-        }
-      }
+	        }
+	      }
+	      if (finalFrameShouldStopReader) break;
+	    }
+
+	    // `final` is the durable completion boundary. Some mobile/webview
+	    // transports never deliver the subsequent `done` frame or leave the
+	    // reader open after the answer is already visible. Stop consuming the
+	    // transport once the terminal answer has been committed.
+	    if (finalFrameShouldStopReader) {
+	      try { await reader.cancel(); } catch {}
+	    }
 
 	    if (!streamState.abortRequested && !turnAbortController?.signal?.aborted
 	      && !finalReply && !sawTerminalStreamEvent && !sawFinalStreamEvent) {
@@ -1704,27 +1756,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	      persistTurnThinkingToProcess();
 	      saveInterruptedAssistantTurn();
 	    } else if (finalReply) {
-	      const mergedThinking = persistTurnThinkingToProcess();
-	      await applyDesignAssistantOps(finalReply);
-	      applyCreativeAssistantOps(finalReply);
-	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
-	      appendAssistantTurnForUser({
-	        role: 'ai',
-	        content: finalReply,
-	        artifacts: finalArtifacts,
-	        fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
-	        productCarousel: finalProductCarousel || undefined,
-	        richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
-	        goalCompletionReport: finalGoalCompletionReport || undefined,
-	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
-	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
-	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
-	        steps: allSteps,
-	        mode: window.useAgentMode ? 'agentic' : 'chat',
-	        processEntries: turnEntries,
-	        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
-	      });
-	      clearBackgroundSpawnDockForSession(thisSessionId);
+	      await commitFinalAssistantTurn();
 	    } else {
 	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
 	      appendAssistantTurnForUser({
@@ -1765,7 +1797,11 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         || turnAbortController?.signal?.aborted
         || streamState.abortRequested === true
         || /abort/i.test(String(err?.message || err || '')));
-      if (wasAborted) {
+      if (finalAssistantTurnCommitted && finalReply) {
+        // The answer was committed from the terminal `final` frame. A late
+        // reader-close/abort error is transport noise and must not downgrade
+        // the completed turn into an interruption or recovery placeholder.
+      } else if (wasAborted) {
         saveInterruptedAssistantTurn();
       } else if (pageLifecycleDisconnected || isDesktopChatTransportDisconnect(err)) {
         desktopStreamRecoveryPending = true;

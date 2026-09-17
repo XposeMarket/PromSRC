@@ -401,7 +401,10 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
 export async function renderSubagentChatPage(page, { agentId, navigate }) {
   // This route owns a nested message scroller. Ordinary mobile pages use the
   // document scroller, so opt out before the async history renders.
+  page.classList.add('pm-agent-chat-page', 'pm-subagent-agent-chat-page');
+  page.dataset.mobileAgentChatRoute = 'subagent';
   document.body.classList.add('pm-mobile-subagent-chat-locked');
+  document.body.classList.add('pm-mobile-agent-chat-locked');
   setMobileSubagentReasoningContext(null);
   const sessionId = subagentChatSessionId(agentId);
   let agentRef = null;
@@ -458,9 +461,22 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   });
   const body = page.querySelector('#pm-subagent-chat-body');
   let activeStream = null;
+  let cleanupDone = false;
+  // Register route cleanup before the first await. If the user backs out while
+  // the agent detail request is in flight, the locked-chat class must not leak
+  // into the next route and make its shell look like a broken conversation.
+  page._pmCleanup = () => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    try { body?._pmCleanup?.(); } catch {}
+    try { activeStream?.abort?.(); } catch {}
+    setMobileSubagentReasoningContext(null);
+    document.body.classList.remove('pm-mobile-agent-chat-locked', 'pm-mobile-subagent-chat-locked');
+  };
   try {
     const agent = await loadMobileSubagentDetail(agentId);
     if (!agent) throw new Error('Subagent not found');
+    if (cleanupDone || page.isConnected === false) return;
     agentRef = agent;
     const label = _mobileSubagentHeaderLabel(agent);
     if (badgeLabel) badgeLabel.textContent = label;
@@ -503,12 +519,6 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   } catch (err) {
     body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.robot}</div><h2>Couldn’t load subagent chat</h2><p>${escapeHtml(err?.message || 'Network error')}</p></div>`;
   }
-  page._pmCleanup = () => {
-    try { body?._pmCleanup?.(); } catch {}
-    try { activeStream?.abort?.(); } catch {}
-    setMobileSubagentReasoningContext(null);
-    document.body.classList.remove('pm-mobile-subagent-chat-locked');
-  };
 }
 
 

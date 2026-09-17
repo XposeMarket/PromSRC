@@ -61,11 +61,15 @@ import {
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHistoryForApiCall, getActiveHistoryForPersistence, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, captureToolCategoryActivationState, restoreToolCategoryActivationState, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
+import {
+  appendDurableCommentaryContext,
+  buildDurableCommentaryContext,
+} from '../context/commentary-context';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -1352,9 +1356,14 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
     type: 'think',
     actor: 'Prom',
     content,
-    extra: { source: 'runtime_checkpoint', event: 'token_narration_boundary' },
+    extra: {
+      source: 'agent_thought',
+      event: 'token_narration_boundary',
+      visibility: 'user',
+      reasoningKind: 'full_thought',
+    },
   });
-  if (entries.length > 250) entries.splice(0, entries.length - 250);
+  if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
 }
 
 function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
@@ -1404,7 +1413,36 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
     || eventType === 'token'
     || (eventType === 'thinking_delta' && !isUserVisibleReasoning)) return null;
   const ts = new Date().toLocaleTimeString();
-  const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  const compactionExtra = data?.extra && typeof data.extra === 'object' ? data.extra : {};
+  const action = String(data?.action || data?.name || data?.toolName || compactionExtra.action || compactionExtra.toolName || '').trim();
+  const isContextCompaction = action.toLowerCase() === CONTEXT_COMPACTION_TOOL_NAME;
+  const explicitCompactionStatus = String(data?.status || compactionExtra.status || '').trim().toLowerCase();
+  const compactionStatus = explicitCompactionStatus === 'skipped'
+    ? 'skipped'
+    : explicitCompactionStatus === 'failed' || explicitCompactionStatus === 'error'
+      || data?.error === true || data?.ok === false || data?.success === false
+      ? 'failed'
+      : explicitCompactionStatus === 'compacting' || explicitCompactionStatus === 'running' || explicitCompactionStatus === 'in_progress'
+        ? 'compacting'
+        : eventType === 'tool_call' || eventType === 'tool_progress' ? 'compacting' : 'compacted';
+  const compactionSummary = String(data?.summary || compactionExtra.summary || '').trim();
+  const compactionLabel = compactionStatus === 'compacting'
+    ? 'Compacting context'
+    : compactionStatus === 'failed'
+      ? 'Context compaction failed'
+      : compactionStatus === 'skipped'
+        ? 'Context compaction skipped'
+      : 'Context compacted';
+  const compactionInfoText = String(data?.message || data?.content || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const compactionInfoStatus = /^(?:context|thread) compacted\b/.test(compactionInfoText)
+    ? 'compacted'
+    : /^(?:context|thread) compaction (?:failed|error)\b/.test(compactionInfoText)
+      ? 'failed'
+      : /^(?:context|thread) compaction skipped\b/.test(compactionInfoText)
+        ? 'skipped'
+        : /^(?:compacting context|compacting (?:the )?thread|preparing context compaction)\b/.test(compactionInfoText)
+          ? 'compacting'
+          : '';
   if (isUserVisibleReasoning && (eventType === 'thinking_delta' || eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary')) {
     const content = truncateRuntimeProcessText(data?.text || data?.thinking || data?.summary || data?.message);
     if (!content) return null;
@@ -1437,16 +1475,65 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       extra: { source: 'runtime_checkpoint', event: eventType, activeIndex, total: items.length },
     };
   }
-  if (eventType === 'tool_call') {
+  if ((eventType === 'info' || eventType === 'ui_preflight') && compactionInfoStatus) {
     return {
       ts,
-      type: 'tool',
+      type: 'compaction',
       actor: 'Prom',
-      content: truncateRuntimeProcessText(action ? `Preparing ${action}` : data?.message || 'Preparing tool'),
+      content: compactionInfoStatus === 'compacting'
+        ? 'Compacting context'
+        : compactionInfoStatus === 'failed'
+          ? 'Context compaction failed'
+          : compactionInfoStatus === 'skipped'
+            ? 'Context compaction skipped'
+            : 'Context compacted',
+      status: compactionInfoStatus,
+      ...(data?.summary ? { summary: String(data.summary).slice(0, 4_000) } : {}),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        toolName: CONTEXT_COMPACTION_TOOL_NAME,
+        status: compactionInfoStatus,
+        ...(data?.summary ? { summary: String(data.summary).slice(0, 4_000) } : {}),
+      },
+    };
+  }
+  if (eventType === 'tool_progress' && isContextCompaction) {
+    return {
+      ts,
+      type: 'compaction',
+      actor: 'Prom',
+      content: compactionLabel,
+      status: compactionStatus,
+      ...(compactionSummary ? { summary: compactionSummary } : {}),
       extra: {
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        status: compactionStatus,
+        ...(compactionSummary ? { summary: compactionSummary } : {}),
+        message: data?.message,
+      },
+    };
+  }
+  if (eventType === 'tool_call') {
+    return {
+      ts,
+      type: isContextCompaction ? 'compaction' : 'tool',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(isContextCompaction ? compactionLabel : (action ? `Preparing ${action}` : data?.message || 'Preparing tool')),
+      ...(isContextCompaction ? { status: compactionStatus, ...(compactionSummary ? { summary: compactionSummary } : {}) } : {}),
+      extra: {
+        source: 'runtime_checkpoint',
+        event: eventType,
+        toolName: action,
+        ...(isContextCompaction ? {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          status: compactionStatus,
+          ...(compactionSummary ? { summary: compactionSummary } : {}),
+        } : {}),
         args: data?.args,
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
@@ -1456,13 +1543,19 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
   if (eventType === 'tool_result') {
     return {
       ts,
-      type: data?.error ? 'error' : 'result',
+      type: isContextCompaction ? 'compaction' : (data?.error ? 'error' : 'result'),
       actor: 'Prom',
-      content: truncateRuntimeProcessText(data?.result || (action ? `${action} complete` : 'Tool complete')),
+      content: truncateRuntimeProcessText(isContextCompaction ? compactionLabel : (data?.result || (action ? `${action} complete` : 'Tool complete'))),
+      ...(isContextCompaction ? { status: compactionStatus, ...(compactionSummary ? { summary: compactionSummary } : {}) } : {}),
       extra: {
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
+        ...(isContextCompaction ? {
+          action: CONTEXT_COMPACTION_TOOL_NAME,
+          status: compactionStatus,
+          ...(compactionSummary ? { summary: compactionSummary } : {}),
+        } : {}),
         args: data?.args,
         error: data?.ok === false || data?.success === false || Boolean(data?.error),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
@@ -1661,6 +1754,11 @@ const loadFileOpCheckpoint: any = () => null;
 const saveFileOpCheckpoint: any = () => {};
 const clearFileOpCheckpoint: any = () => {};
 import { webSearch, webFetch } from '../../tools/web';
+import {
+  canExecuteToolCallsInParallel,
+  executeToolCallsInParallel,
+  type ParallelToolCall,
+} from '../../tools/parallel-tool-calls.js';
 import {
 	  buildTools as _buildTools,
 	  getToolCategory,
@@ -1995,6 +2093,8 @@ type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 
 function runtimeAdmissionLaneForExecutionMode(executionMode: ExecutionMode): RuntimeAdmissionLane {
   if (executionMode === 'interactive') return 'interactive';
   if (executionMode === 'background_task' || executionMode === 'background_agent') return 'background';
+  if (executionMode === 'team_manager') return 'manager';
+  if (executionMode === 'team_subagent') return 'team_member';
   return 'system';
 }
 
@@ -2116,15 +2216,20 @@ function extractLastCompactionSummary(history: Array<any>): string {
   return '';
 }
 
+function formatCompactionMessageBody(message: any, maxChars = 2_400): string {
+  const body = Array.isArray(message?.content)
+    ? message.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
+    : String(message?.content || '').trim();
+  return appendDurableCommentaryContext(body, message, maxChars);
+}
+
 function formatCompactionMessages(messages: Array<any>): string {
   const newestFirst = [...messages].reverse();
   return newestFirst.map((msg, idx) => {
     const role = String(msg.role || 'unknown');
     const ts = Number(msg.timestamp);
     const stamp = Number.isFinite(ts) ? new Date(ts).toISOString() : 'unknown-time';
-    const body = Array.isArray(msg.content)
-      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join('\n').trim()
-      : String(msg.content || '').trim();
+    const body = formatCompactionMessageBody(msg);
     return [
       `--- message ${idx + 1} ---`,
       `role: ${role}`,
@@ -2331,9 +2436,7 @@ function buildFallbackCompactionSummary(
   const newestFirst = [...recentWindow].reverse().slice(0, 10);
   for (const msg of newestFirst) {
     const role = String(msg.role || 'unknown');
-    const rawContent = Array.isArray(msg.content)
-      ? msg.content.map((part: any) => part?.type === 'text' ? String(part.text || '') : '[image]').join(' ')
-      : String(msg.content || '');
+    const rawContent = formatCompactionMessageBody(msg, 1_800);
     const body = rawContent.replace(/\s+/g, ' ').trim().slice(0, 240);
     if (body) lines.push(`- ${role}: ${body}`);
   }
@@ -5135,7 +5238,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       planProtocolInstruction,
       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
       executionMode === 'interactive' && !isBootStartupTurn
-        ? 'For tool-using work, keep the user oriented with brief visible work updates: state the approach before the first meaningful tool call; after important tool results, report what you found and what you will do next; and add another update when the approach changes, a blocker appears, or verification finishes. These updates are user-facing commentary, not private chain-of-thought. Make them concrete and evidence-based, avoid narrating every low-level call, and do not repeat information already obvious from the tool activity UI.'
+        ? 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, write commentary only for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. Every later update must contain new evidence plus what it changes or what you will do next; if nothing materially changed, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls, paraphrasing an earlier update, or repeating information already visible in the tool activity UI.'
         : '',
       isBootStartupTurn
         ? 'BOOT MODE: This is an internal daily startup summary. Use only the pre-fetched BOOT snapshot supplied by the caller, do not infer missing events, and do not call tools.'
@@ -8534,6 +8637,75 @@ RULES:
 
     messages.push(response);
 
+    // Providers can return several tool calls in one assistant message. Keep
+    // the rollout intentionally conservative: only a whole batch of unique,
+    // independent read-only calls is started early. Mixed batches stay on the
+    // existing ordered path so a read can never race a write or browser action.
+    const parallelToolResults = new Map<any, ToolResult>();
+    type ParallelCallEntry = {
+      sourceCall: any;
+      toolName: string;
+      toolArgs: any;
+      toolCallId: string;
+      index: number;
+      parallelCall: ParallelToolCall;
+    };
+    const parallelCallEntries: ParallelCallEntry[] = toolCalls.map((call: any, index: number) => {
+      const toolName = String(call?.function?.name || 'unknown');
+      const toolArgs = normalizeToolArgsForTool(toolName, call?.function?.arguments);
+      const toolCallId = String(call?.id || '').trim();
+      return {
+        sourceCall: call,
+        toolName,
+        toolArgs,
+        toolCallId,
+        index,
+        parallelCall: { id: toolCallId, name: toolName, args: toolArgs } as ParallelToolCall,
+      };
+    });
+    const canRunParallelBatch =
+      parallelCallEntries.length > 1
+      && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
+      && !isBootStartupTurn
+      && !isHotRestartTurn
+      && !fileOpV2Active
+      && !isSupervisionLoop
+      && !isBrainThoughtRuntime
+      && canExecuteToolCallsInParallel(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall));
+    if (canRunParallelBatch) {
+      for (const entry of parallelCallEntries) {
+        toolPerformance.start(entry.toolName, entry.toolCallId, round);
+        console.log(`[v2] TOOL[${round + 1}] parallel dispatch: ${entry.toolName}(${JSON.stringify(entry.toolArgs).slice(0, 150)})`);
+        markProgressStepStart(entry.toolName);
+        sendSSE('tool_call', {
+          action: entry.toolName,
+          args: entry.toolArgs,
+          stepNum: allToolResults.length + entry.index + 1,
+          toolCallId: entry.toolCallId || undefined,
+          tool_call_id: entry.toolCallId || undefined,
+          parallel: true,
+        });
+      }
+      const parallelOutcomes = await executeToolCallsInParallel(
+        parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall),
+        async (parallelCall) => {
+          const entry = parallelCallEntries.find((candidate: ParallelCallEntry) => candidate.parallelCall === parallelCall)!;
+          return executeToolWithTelemetry(entry.toolName, entry.toolArgs, entry.toolCallId);
+        },
+        { signal: abortSignal?.signal },
+      );
+      for (const outcome of parallelOutcomes) {
+        const entry = parallelCallEntries.find((candidate: ParallelCallEntry) => candidate.parallelCall === outcome.call)!;
+        const result = outcome.result || makeInstrumentedToolResult(
+          entry.toolName,
+          entry.toolArgs,
+          `Parallel tool execution failed: ${String(outcome.error || 'unknown error')}`,
+          true,
+        );
+        parallelToolResults.set(entry.sourceCall, result);
+      }
+    }
+
     const batchCreatedFiles = new Set<string>();
     let roundHadProgress = false;
     resetProgressRoundStats();
@@ -8542,7 +8714,9 @@ RULES:
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
-      toolPerformance.start(toolName, toolCallId, round);
+      if (!parallelToolResults.has(call)) {
+        toolPerformance.start(toolName, toolCallId, round);
+      }
 
       if (toolName === 'desktop_click') {
         const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
@@ -9003,17 +9177,19 @@ RULES:
         }
       }
 
-      console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
-      if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
-        markProgressStepStart(toolName);
+      if (!parallelToolResults.has(call)) {
+        console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
+        if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
+          markProgressStepStart(toolName);
+        }
+        sendSSE('tool_call', {
+          action: toolName,
+          args: toolArgs,
+          stepNum: allToolResults.length + 1,
+          toolCallId: toolCallId || undefined,
+          tool_call_id: toolCallId || undefined,
+        });
       }
-      sendSSE('tool_call', {
-        action: toolName,
-        args: toolArgs,
-        stepNum: allToolResults.length + 1,
-        toolCallId: toolCallId || undefined,
-        tool_call_id: toolCallId || undefined,
-      });
 
       // ── Goal lifecycle: Prometheus owns completion and blocking. ───────────
       if (toolName === 'complete_goal') {
@@ -9503,7 +9679,7 @@ RULES:
 
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
-	      const toolResult = await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
+	      const toolResult = parallelToolResults.get(call) || await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.
@@ -10128,6 +10304,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const runtimeProcessEntries: Record<string, any>[] = [];
         let runtimeThinkingTail = '';
         let runtimeNarrationTail = '';
+        let lastRuntimeNarrationCheckpointAt = 0;
 
         let result: HandleChatResult | null = null;
         try {
@@ -10139,6 +10316,17 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
               if (event === 'token') {
                 const token = String(data?.text || '').trim();
                 if (token) runtimeNarrationTail = `${runtimeNarrationTail}${data?.text || ''}`.slice(-12_000);
+                const now = Date.now();
+                const persistNarrationCheckpoint = !!runtimeNarrationTail
+                  && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+                if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+                updateLiveRuntimeCheckpoint(runtimeId, {
+                  event,
+                  at: now,
+                  narrationTail: runtimeNarrationTail,
+                  ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+                  ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+                }, { persist: persistNarrationCheckpoint });
                 return;
               }
               if (event === 'tool_call' && runtimeNarrationTail.trim()) {
@@ -10157,8 +10345,8 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                 const processEntry = runtimeProcessEntryFromSseEvent(event, data);
                 if (processEntry) {
                   runtimeProcessEntries.push(processEntry);
-                  if (runtimeProcessEntries.length > 250) {
-                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+                  if (runtimeProcessEntries.length > 12_000) {
+                    runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
                   }
                   checkpoint.processEntries = [...runtimeProcessEntries];
                 }
@@ -10167,6 +10355,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                   if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
                 }
                 if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+                checkpoint.narrationTail = runtimeNarrationTail;
               }
               updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
               try {
@@ -11095,6 +11284,7 @@ async function runInteractiveTurn(
       workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
       toolLog: toolLogText || checkpointPacket,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
+      visibleReasoningSummary: result.reasoningSummary || undefined,
       turnProviderUsage,
       toolResultBudget,
       goalCompletionReport: result.goalCompletionReport,
@@ -11108,7 +11298,9 @@ async function runInteractiveTurn(
         extra: { packetType: 'restart_context_packet', interrupted: true },
       }],
     } as any, {
-      disableCompactionCheck: isSubagentChatSession,
+      // Subagent threads use the same rolling compaction boundary as main
+      // chat. Their shared agent-chat store mirrors the resulting summary.
+      disableCompactionCheck: false,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
@@ -11160,12 +11352,15 @@ async function runInteractiveTurn(
       richArtifacts: Array.isArray(result.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
       toolLog: toolLogText || undefined,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
+      visibleReasoningSummary: result.reasoningSummary || undefined,
       liveTraceEntries: durableToolStreamTrace,
       turnProviderUsage,
       toolResultBudget,
       goalCompletionReport: result.goalCompletionReport,
     } as any, {
-      disableCompactionCheck: isSubagentChatSession,
+      // Keep the direct subagent transcript on the same compaction contract
+      // as every other long-lived thread.
+      disableCompactionCheck: false,
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
@@ -11296,12 +11491,62 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   });
 
   setModelBusy(true);
+  const runtimeProcessEntries: Record<string, any>[] = [];
+  let runtimeThinkingTail = '';
+  let runtimeNarrationTail = '';
+  let lastRuntimeNarrationCheckpointAt = 0;
   const sendSSE = (event: string, data: any) => {
+    if (event === 'thinking_delta') {
+      const delta = String(data?.thinking || data?.text || '').trim();
+      if (delta) runtimeThinkingTail = `${runtimeThinkingTail}${delta}`.slice(-4000);
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: Date.now(),
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        ...(runtimeNarrationTail ? { narrationTail: runtimeNarrationTail } : {}),
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: false });
+      return;
+    }
+    if (event === 'thinking') {
+      const thinking = String(data?.thinking || data?.text || '').trim();
+      if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
+    }
+    if (event === 'token') {
+      const token = String(data?.text || '');
+      if (token.trim()) runtimeNarrationTail = `${runtimeNarrationTail}${token}`.slice(-12_000);
+      const now = Date.now();
+      const persistNarrationCheckpoint = !!runtimeNarrationTail
+        && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+      if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: now,
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        narrationTail: runtimeNarrationTail,
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: persistNarrationCheckpoint });
+      return;
+    }
+    if (event === 'tool_call' && runtimeNarrationTail.trim()) {
+      appendRuntimeNarrationBoundary(runtimeProcessEntries, runtimeNarrationTail);
+      runtimeNarrationTail = '';
+    }
     const checkpoint: Record<string, any> = { event, at: Date.now() };
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+    if (runtimeNarrationTail) checkpoint.narrationTail = runtimeNarrationTail;
+    const processEntry = runtimeProcessEntryFromSseEvent(event, data);
+    if (processEntry) {
+      runtimeProcessEntries.push(processEntry);
+      if (runtimeProcessEntries.length > 12_000) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
+      }
+      checkpoint.processEntries = [...runtimeProcessEntries];
+    }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };
   const checkpointSummary = [
@@ -11571,8 +11816,7 @@ function voiceNarrationSafeEvent(type: string, data: any): Record<string, any> {
 
 function voiceNarrationRecentMessages(sessionId: string, userMessage: string) {
   try {
-    const session = getSession(sessionId);
-    const history = Array.isArray(session?.history) ? session.history : [];
+    const history = getActiveHistoryForPersistence(sessionId, 12);
     const visible = history
       .filter((msg: any) => (msg?.role === 'user' || msg?.role === 'assistant') && String(msg?.content || '').trim())
       .slice(-5)
@@ -12363,7 +12607,7 @@ function buildVoiceConversationTranscript(sessionId: string, maxTurns = 24, maxC
       const sessionSummary = cleanVoiceCompactionSummaryText((session as any)?.latestContextSummary || '', 4000);
       const sessionHistory = Array.isArray(session?.history) ? session.history : [];
       const sourceHistory = sessionSummary && sessionHistory.length
-        ? sessionHistory.map((entry: any) => ({
+        ? getActiveHistoryForPersistence(sessionId, Math.max(80, maxTurns * 3)).map((entry: any) => ({
           role: String(entry?.role || '') === 'assistant' || String(entry?.role || '') === 'ai' ? 'agent' : entry?.role,
           content: entry?.content || entry?.body?.text || '',
           metadata: entry?.metadata || {},
@@ -16975,6 +17219,10 @@ function attachRuntimeProcessEntriesToLatestAssistant(
       history[i] = {
         ...msg,
         processEntries: merged.slice(-300),
+        commentaryContext: buildDurableCommentaryContext({
+          ...msg,
+          processEntries: merged.slice(-300),
+        }),
       };
       replaceHistory(sid, history);
       return;
@@ -17821,6 +18069,9 @@ export function buildContextWindowCurrentState(input: {
   const latestProviderInputTokens = hasCurrentHistory
     ? Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0))
     : 0;
+  const latestProviderReportedInputTokens = hasCurrentHistory && lastCall.source === 'provider'
+    ? Math.max(0, Number(lastCall.inputTokens || 0))
+    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
   const legacySystemPromptEstimate = hasCurrentHistory
@@ -17855,11 +18106,17 @@ export function buildContextWindowCurrentState(input: {
   const runtimeOverheadBasis = latestSystemPromptTokens > 0
     ? latestMessageInputTokens + latestToolSchemaTokens
     : inContextRowTotal;
-  const runtimeOverheadTokens = Math.max(0, latestProviderInputTokens - runtimeOverheadBasis);
+  // Provider input_tokens is the actual context submitted on the latest call.
+  // Prefer it over the locally reconstructed estimate, which can omit restored
+  // tool/reasoning history after reconnect or compaction.
+  const authoritativeProviderInputTokens = latestProviderReportedInputTokens || latestProviderInputTokens;
+  const runtimeOverheadTokens = Math.max(0, authoritativeProviderInputTokens - runtimeOverheadBasis);
   const runtimeOverheadRow = runtimeOverheadTokens > 0
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
-  const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+  const currentStateTokens = authoritativeProviderInputTokens > 0
+    ? authoritativeProviderInputTokens
+    : inContextRowTotal;
   const contextUsage = deriveContextWindowUsage(currentStateTokens, contextLimitTokens);
   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
   const providerUsageRow = buildProviderUsageGroup('provider_session_total', 'Model usage · thread total', input.modelUsage, 'total');
@@ -17873,6 +18130,7 @@ export function buildContextWindowCurrentState(input: {
     cachedTokens,
     totalThreadTokens,
     latestProviderInputTokens,
+    latestProviderReportedInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
@@ -21633,6 +21891,7 @@ router.post('/api/chat', async (req, res) => {
   let runtimeThinkingTail = '';
   let runtimeNarrationTail = '';
   let lastRuntimeThinkingCheckpointAt = 0;
+  let lastRuntimeNarrationCheckpointAt = 0;
   sendSSE = (event, data) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
     rawSendSSE(event, data);
@@ -21660,6 +21919,22 @@ router.post('/api/chat', async (req, res) => {
       const token = String(data?.text || '');
       if (token.trim()) runtimeNarrationTail = `${runtimeNarrationTail}${token}`.slice(-12_000);
       markLiveRuntimeProgress(runtimeId, { event: 'token', phase: 'model_stream' });
+      // Keep the newest visible answer/commentary tail in the in-memory
+      // runtime checkpoint without reintroducing synchronous per-token disk
+      // writes. A graceful shutdown or abort can now capture this tail even
+      // when no tool boundary has arrived yet; the debounced normal
+      // checkpoints still persist it periodically through non-token events.
+      const now = Date.now();
+      const persistNarrationCheckpoint = !!runtimeNarrationTail
+        && now - lastRuntimeNarrationCheckpointAt >= 2_000;
+      if (persistNarrationCheckpoint) lastRuntimeNarrationCheckpointAt = now;
+      updateLiveRuntimeCheckpoint(runtimeId, {
+        event,
+        at: now,
+        narrationTail: runtimeNarrationTail,
+        ...(runtimeThinkingTail ? { thinkingTail: runtimeThinkingTail } : {}),
+        ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      }, { persist: persistNarrationCheckpoint });
       return;
     }
     if (event === 'tool_call' && runtimeNarrationTail.trim()) {
@@ -21678,11 +21953,12 @@ router.post('/api/chat', async (req, res) => {
       if (thinking) runtimeThinkingTail = `${runtimeThinkingTail}\n${thinking}`.trim().slice(-4000);
     }
     if (runtimeThinkingTail) checkpoint.thinkingTail = runtimeThinkingTail;
+    if (runtimeNarrationTail) checkpoint.narrationTail = runtimeNarrationTail;
     const processEntry = runtimeProcessEntryFromSseEvent(event, data);
     if (processEntry) {
       runtimeProcessEntries.push(processEntry);
-      if (runtimeProcessEntries.length > 250) {
-        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 250);
+      if (runtimeProcessEntries.length > 12_000) {
+        runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
       }
       checkpoint.processEntries = [...runtimeProcessEntries];
     }
@@ -21697,19 +21973,32 @@ router.post('/api/chat', async (req, res) => {
       .slice(-10)
       .map((entry: any) => {
         const toolName = String(entry?.extra?.toolName || '').trim();
-        const content = String(entry?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+        const content = String(entry?.text || entry?.content || entry?.message || entry?.result || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 220);
         return `${toolName || 'runtime step'}: ${entry?.type === 'error' ? 'error' : 'recorded'}${content ? ` — ${content}` : ''}`;
       });
     const activeTool = String(checkpoint.toolName || '').trim();
+    const visibleCommentary = String(runtimeNarrationTail || checkpoint.narrationTail || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(-2_400);
     const packet = buildTurnContextPacket({
       turnId: runtimeId,
       sessionId: resolvedSessionId,
       status: 'aborted',
       request: String(message || ''),
-      findings: completedActions.length ? [`The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.`] : [],
+      findings: [
+        completedActions.length ? `The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.` : '',
+        visibleCommentary ? `Last visible commentary before cancellation: ${visibleCommentary}` : '',
+      ].filter(Boolean),
       completedActions,
       toolState: activeTool ? `Last runtime boundary: ${activeTool}` : '',
-      progressState: String(checkpoint.message || '').slice(0, 700),
+      progressState: [
+        String(checkpoint.message || '').slice(0, 700),
+        visibleCommentary ? `Visible commentary tail: ${visibleCommentary}` : '',
+      ].filter(Boolean).join('\n'),
       uncertainties: [
         activeTool
           ? `The boundary for ${activeTool} may have been in flight when cancellation arrived; verify its effect before retrying.`
@@ -21858,7 +22147,11 @@ function isTerminalProviderCapacityFailure(error: unknown): boolean {
 function markActiveRunsOnSessionList<T extends any>(input: T): T {
   const activeSessionIds = new Set(
     listLiveRuntimes()
-      .filter((runtime: any) => runtime?.kind === 'main_chat' && runtime?.sessionId)
+      .filter((runtime: any) => (
+        isLiveRunningRuntime(runtime)
+        && (runtime?.kind === 'main_chat' || runtime?.kind === 'main_chat_goal')
+        && runtime?.sessionId
+      ))
       .map((runtime: any) => String(runtime.sessionId)),
   );
 

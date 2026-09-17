@@ -143,6 +143,65 @@ async function main(): Promise<void> {
       'plain manual restart should persist a deterministic post-boot acknowledgement',
     );
 
+    const compoundSessionId = 'quick_compound_restart_session';
+    const compoundRequest = 'Okay now restart the gateway and run the ai surface smoke research pls';
+    const compoundRuntimeId = runtimes.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'quick compound restart',
+      sessionId: compoundSessionId,
+      recoveryPolicy: 'mark_interrupted',
+      recoveryData: { message: compoundRequest },
+    });
+    session.addMessage(compoundSessionId, {
+      role: 'user',
+      content: compoundRequest,
+      timestamp: Date.now(),
+    });
+    runtimes.updateLiveRuntimeCheckpoint(compoundRuntimeId, {
+      event: 'tool_call',
+      toolName: 'gateway_restart',
+      message: 'restart tool accepted',
+    });
+    recovery.prepareActiveRuntimesForGatewayShutdown('gateway_restart');
+    runtimes.finishLiveRuntime(compoundRuntimeId);
+    runtimes.markDurableRuntimeRecovered(compoundRuntimeId, 'interrupted', { recovery: 'chat_checkpointed' });
+    lifecycle.writeRestartContext({
+      reason: 'manual',
+      timestamp: Date.now(),
+      previousSessionId: compoundSessionId,
+      quickRestart: true,
+      summary: 'quick compound restart',
+    });
+    const compoundBootResult = await boot.runBootMd(root, async () => {
+      throw new Error('compound quick restart must be handed to the foreground continuation queue');
+    });
+    assert.equal(compoundBootResult.status, 'ran');
+    assert.ok(
+      (compoundBootResult.resumableForegroundRuntimeIds || []).includes(compoundRuntimeId),
+      'quickRestart must queue the original compound turn after the gateway returns',
+    );
+    assert.equal(
+      session.getHistory(compoundSessionId).some((message) => message.content === 'Restarted. Prometheus is back online.'),
+      false,
+      'a compound quick restart must not emit a terminal acknowledgement before the follow-up runs',
+    );
+    const retriggeredCompound: string[] = [];
+    const compoundResumeResult = recovery.resumePlannedRestartMainChats(
+      compoundBootResult.resumableForegroundRuntimeIds || [],
+      (runtime) => {
+        retriggeredCompound.push(runtime.id);
+        assert.equal(runtime.sessionId, compoundSessionId);
+        assert.equal(runtime.checkpoint?.toolName, 'gateway_restart');
+        return true;
+      },
+    );
+    assert.deepEqual(
+      compoundResumeResult,
+      [compoundSessionId],
+      'the queued compound quick restart must launch one post-restart foreground turn',
+    );
+    assert.deepEqual(retriggeredCompound, [compoundRuntimeId]);
+
     console.log('planned restart foreground continuation regression: ok');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

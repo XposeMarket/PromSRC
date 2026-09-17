@@ -139,6 +139,8 @@ async function runDynamicSubagent(
   const runPromise = reactor.run(fullPrompt, {
     role: 'executor',
     workspacePath,
+    sessionId: `agent_${agentId}`,
+    agentId,
     promptMode: 'minimal',
     subagentSystemPromptOnly: true,
     label: `subagent:${agentId}`,

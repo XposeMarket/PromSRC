@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-export type RuntimeAdmissionLane = 'interactive' | 'system' | 'background';
+export type RuntimeAdmissionLane = 'interactive' | 'manager' | 'system' | 'team_member' | 'background';
 
 export interface RuntimeAdmissionBudget {
   /** Relative scheduler cost. Interactive work defaults to 1; maintenance can be heavier. */
@@ -21,10 +21,12 @@ export interface RuntimeAdmissionLease {
 }
 
 export interface RuntimeAdmissionSnapshot {
+  limitsEnabled: boolean;
   maxActive: number;
   maxBackgroundActive: number;
   maxQueued: number;
   reservedInteractiveSlots: number;
+  reservedManagerSlots: number;
   maxResourceWeight: number;
   maxResourceBytes: number;
   active: number;
@@ -82,14 +84,14 @@ function abortError(): RuntimeAdmissionError {
 }
 
 /**
- * Process-wide governor for model/tool executions.
+ * Process-wide execution accounting with an optional governor.
  *
  * SessionTurnCoordinator prevents duplicate turns in one chat. This governor
- * is the second boundary: it limits the total number of model loops and keeps
- * background work from consuming every available worker while foreground chat
- * is waiting for service.
+ * can be enabled as an operational safeguard, but the gateway default leaves
+ * independent scheduled, interactive, and subagent work free to run together.
  */
 export class RuntimeAdmissionController {
+  readonly limitsEnabled: boolean;
   readonly maxActive: number;
   readonly maxBackgroundActive: number;
   readonly maxQueued: number;
@@ -98,14 +100,29 @@ export class RuntimeAdmissionController {
   private readonly waiters: AdmissionWaiter[] = [];
 
   constructor(options: {
+    /** Admission limits are opt-in; the gateway default is independent task execution. */
+    enforceLimits?: boolean;
     maxActive?: number;
     maxBackgroundActive?: number;
     maxQueued?: number;
     maxWaitMs?: number;
     reservedInteractiveSlots?: number;
+    reservedManagerSlots?: number;
     maxResourceWeight?: number;
     maxResourceBytes?: number;
   } = {}) {
+    const explicitLimitOptions = options.maxActive !== undefined
+      || options.maxBackgroundActive !== undefined
+      || options.maxQueued !== undefined
+      || options.maxWaitMs !== undefined
+      || options.reservedInteractiveSlots !== undefined
+      || options.reservedManagerSlots !== undefined
+      || options.maxResourceWeight !== undefined
+      || options.maxResourceBytes !== undefined;
+    this.limitsEnabled = options.enforceLimits !== undefined
+      ? options.enforceLimits
+      : explicitLimitOptions
+        || String(process.env.PROMETHEUS_RUNTIME_ENFORCE_ADMISSION_LIMITS || '').trim() === '1';
     this.maxActive = Math.max(1, Math.floor(options.maxActive ?? envInt('PROMETHEUS_RUNTIME_MAX_ACTIVE', 3, 1, 16)));
     this.maxBackgroundActive = Math.max(
       0,
@@ -116,6 +133,13 @@ export class RuntimeAdmissionController {
     this.reservedInteractiveSlots = Math.max(
       0,
       Math.min(Math.max(0, this.maxActive - 1), Math.floor(options.reservedInteractiveSlots ?? envInt('PROMETHEUS_RUNTIME_RESERVED_INTERACTIVE_SLOTS', 1, 0, 16))),
+    );
+    this.reservedManagerSlots = Math.max(
+      0,
+      Math.min(
+        Math.max(0, this.maxActive - this.reservedInteractiveSlots - 1),
+        Math.floor(options.reservedManagerSlots ?? envInt('PROMETHEUS_RUNTIME_RESERVED_MANAGER_SLOTS', 1, 0, 16)),
+      ),
     );
     this.maxResourceWeight = Math.max(
       1,
@@ -128,6 +152,7 @@ export class RuntimeAdmissionController {
   }
 
   readonly reservedInteractiveSlots: number;
+  readonly reservedManagerSlots: number;
   readonly maxResourceWeight: number;
   readonly maxResourceBytes: number;
 
@@ -216,12 +241,16 @@ export class RuntimeAdmissionController {
   snapshot(): RuntimeAdmissionSnapshot {
     const activeByLane: Record<RuntimeAdmissionLane, number> = {
       interactive: 0,
+      manager: 0,
       system: 0,
+      team_member: 0,
       background: 0,
     };
     const queuedByLane: Record<RuntimeAdmissionLane, number> = {
       interactive: 0,
+      manager: 0,
       system: 0,
+      team_member: 0,
       background: 0,
     };
     let activeResourceWeight = 0;
@@ -242,10 +271,12 @@ export class RuntimeAdmissionController {
     });
     for (const waiter of this.waiters) queuedByLane[waiter.lane] += 1;
     return {
+      limitsEnabled: this.limitsEnabled,
       maxActive: this.maxActive,
       maxBackgroundActive: this.maxBackgroundActive,
       maxQueued: this.maxQueued,
       reservedInteractiveSlots: this.reservedInteractiveSlots,
+      reservedManagerSlots: this.reservedManagerSlots,
       maxResourceWeight: this.maxResourceWeight,
       maxResourceBytes: this.maxResourceBytes,
       active: this.active.size,
@@ -280,8 +311,22 @@ export class RuntimeAdmissionController {
   }
 
   private canStart(lane: RuntimeAdmissionLane, resourceWeight = 1, resourceBytes = 0): boolean {
+    if (!this.limitsEnabled) return true;
     if (this.active.size >= this.maxActive) return false;
     if (lane !== 'interactive' && this.active.size >= this.maxActive - this.reservedInteractiveSlots) return false;
+    if (lane === 'team_member' && this.reservedManagerSlots > 0) {
+      let managerActive = 0;
+      for (const { lease } of this.active.values()) {
+        if (lease.lane === 'manager') managerActive += 1;
+      }
+      const managerQueued = this.waiters.some((waiter) => waiter.lane === 'manager');
+      // Do not let team-member work consume the final slot reserved for a
+      // team manager. A manager itself may use the slot when it is queued.
+      if (managerQueued && managerActive < this.reservedManagerSlots
+        && this.active.size >= this.maxActive - this.reservedInteractiveSlots - this.reservedManagerSlots) {
+        return false;
+      }
+    }
     if (lane === 'background') {
       let backgroundActive = 0;
       for (const { lease } of this.active.values()) {
@@ -307,7 +352,15 @@ export class RuntimeAdmissionController {
       for (let index = 0; index < this.waiters.length; index += 1) {
         const waiter = this.waiters[index];
         if (!this.canStart(waiter.lane, waiter.resourceWeight, waiter.resourceBytes)) continue;
-        const priority = waiter.lane === 'interactive' ? 0 : waiter.lane === 'system' ? 1 : 2;
+        const priority = waiter.lane === 'interactive'
+          ? 0
+          : waiter.lane === 'manager'
+            ? 1
+            : waiter.lane === 'system'
+              ? 2
+              : waiter.lane === 'team_member'
+                ? 3
+                : 4;
         if (priority < nextPriority) {
           nextIndex = index;
           nextPriority = priority;
@@ -352,4 +405,8 @@ export class RuntimeAdmissionController {
   }
 }
 
-export const gatewayRuntimeAdmission = new RuntimeAdmissionController();
+// The gateway owns independent task/session lifecycles; do not impose a
+// process-wide concurrency cap on scheduled, interactive, or subagent work.
+// Tests and operators can still opt into the governor with enforceLimits or
+// PROMETHEUS_RUNTIME_ENFORCE_ADMISSION_LIMITS=1.
+export const gatewayRuntimeAdmission = new RuntimeAdmissionController({ enforceLimits: false });

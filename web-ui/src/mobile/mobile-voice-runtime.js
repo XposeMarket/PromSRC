@@ -4691,7 +4691,14 @@ export function createMobileVoiceRuntime(context = {}) {
       String(turn.messageKind || '').trim() === 'steer_continuation'
       || String(turn.workflowPart || '').trim() === 'interruption_response'
     ));
-    return continuation || [...matches].reverse().find((turn) => turn.streaming === true) || null;
+    // During a transport gap the UI may temporarily freeze the owned row as
+    // non-streaming. Active run status still proves this request owns that
+    // exact row, so return it and let recovery revive it in place instead of
+    // allocating a second assistant/tool stream beneath it.
+    return continuation
+      || [...matches].reverse().find((turn) => turn.streaming === true)
+      || matches[matches.length - 1]
+      || null;
   }
 
   function _applyVoiceInterruptionToMobileChat(sessionId, result, transcript = '') {

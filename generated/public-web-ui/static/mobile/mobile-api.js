@@ -1028,7 +1028,7 @@ export function streamTeamChat(teamId, { message, signal }, handlers = {}) {
             case 'tool_call':      cb('onToolCall', evt); break;
             case 'tool_result':    cb('onToolResult', evt); break;
             case 'tool_progress':  cb('onToolProgress', evt); break;
-            case 'final':          gotFinal = true; cb('onFinal', String(evt.text || evt.reply || ''), evt); break;
+            case 'final':          gotFinal = true; cb('onFinal', String(evt.text || evt.reply || ''), evt); cb('onDone'); return;
             case 'done':
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
               cb('onDone');
@@ -1287,7 +1287,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
             case 'voice_milestone': if (evt.text) cb('onVoiceMilestone', evt); break;
             case 'tool_call':     cb('onToolCall', evt); break;
             case 'tool_result':   cb('onToolResult', evt); break;
-            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || evt.content || ''), evt); break;
+            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || evt.content || ''), evt); cb('onDone'); return;
             case 'done':
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
               finishOnce(); return;
@@ -1774,8 +1774,23 @@ export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, 
     includeAutomated: '1',
     state: ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active',
   });
-  const r = await mfetch(`/api/sessions?${params.toString()}`);
-  return _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
+  const [r, runStatus] = await Promise.all([
+    mfetch(`/api/sessions?${params.toString()}`),
+    loadMobileChatRunStatuses().catch(() => null),
+  ]);
+  const page = _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
+  const activeSessionIds = new Set(
+    (Array.isArray(runStatus?.activeSessionIds) ? runStatus.activeSessionIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean),
+  );
+  const activeRunKnown = Array.isArray(runStatus?.activeSessionIds);
+  page.sessions = page.sessions.map((session) => ({
+    ...session,
+    activeRun: session.activeRun === true || activeSessionIds.has(String(session.id || '')),
+    activeRunKnown,
+  }));
+  return page;
 }
 
 // Pinned chats are intentionally loaded through a server-side filtered page.
@@ -1834,6 +1849,8 @@ export async function searchMobileChatSessions(query, { limit = 100, mode = 'con
     const raw = r.sessions[idx] || {};
     return {
       ...s,
+      activeRunKnown: raw.activeRun === true,
+      mobileUnreadKnown: Object.prototype.hasOwnProperty.call(raw, 'mobileUnread'),
       matchedRole: String(raw.matchedRole || ''),
       matchedContent: String(raw.matchedContent || ''),
       matchedIndex: Number.isFinite(Number(raw.matchedIndex)) ? Number(raw.matchedIndex) : -1,
@@ -2510,7 +2527,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
             case 'model_reverted':
               cb('onModelEvent', evt);
               break;
-            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || ''), evt); break;
+            case 'final':         gotFinal = true; cb('onFinal', String(evt.text || ''), evt); cb('onDone'); return;
             case 'done':
               gotDone = true;
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);

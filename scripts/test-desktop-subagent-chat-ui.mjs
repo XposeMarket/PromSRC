@@ -29,6 +29,9 @@ const teamDispatchRuntime = read('src/gateway/teams/team-dispatch-runtime.ts');
 const teamMemberRoom = read('src/gateway/teams/team-member-room.ts');
 const cronScheduler = read('src/gateway/scheduling/cron-scheduler.ts');
 const subagentExecutor = read('src/gateway/agents-runtime/subagent-executor.ts');
+const backgroundTrace = read('src/gateway/tasks/background-agent-trace.ts');
+const backgroundRunner = read('src/gateway/tasks/background-task-runner.ts');
+const teamCoordinator = read('src/gateway/teams/team-coordinator.ts');
 
 assert.match(
   subagents,
@@ -206,5 +209,16 @@ assert.match(channelsRouter, /router\.get\('\/api\/agents\/:id\/workspace'/);
 assert.match(channelsRouter, /router\.get\('\/api\/agents\/:id\/workspace\/:filename'/);
 assert.match(channelsRouter, /router\.post\('\/api\/agents\/:id\/workspace\/:filename'/);
 assert.match(channelsRouter, /Workspace path escapes the agent workspace/);
+
+// Every agent surface must persist the same visible commentary contract as
+// main chat: narration boundaries and agent thoughts, never provider summary
+// packets masquerading as commentary.
+assert.match(channelsRouter, /processEntries:\s*buildDurableChatTraceFromFrames\(options\?\.traceFrames/, 'direct subagent replies must persist their retained stream trace');
+assert.match(channelsRouter, /const SUBAGENT_CHAT_STREAM_MAX_EVENTS = 12_000/, 'direct subagent recovery must retain the full main-chat-sized event window');
+assert.match(backgroundTrace, /eventType === 'token_narration_boundary'[\s\S]{0,260}type: 'preamble'/, 'spawned/background agents must retain commentary preambles');
+assert.match(backgroundTrace, /if \(isReasoningSummary \|\| explicitlyPrivateReasoning\) return null/, 'spawned/background agents must not persist summary packets as commentary');
+assert.match(backgroundRunner, /event === 'token_narration_boundary'[\s\S]{0,420}appendJournal\(taskId,[\s\S]{0,120}type: 'reasoning'/, 'task agents must journal actual commentary boundaries for recovery');
+assert.match(teamCoordinator, /event === 'token_narration_boundary'[\s\S]{0,300}'preamble'/, 'team managers must persist commentary preambles');
+assert.match(teamMemberRoom, /event === 'token_narration_boundary'[\s\S]{0,300}'preamble'/, 'team members must persist commentary preambles');
 
 console.log('desktop subagent/team/side composer contract: visible surfaces reuse the real main composer DOM without duplicate main ids');

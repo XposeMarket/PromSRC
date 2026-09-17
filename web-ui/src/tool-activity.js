@@ -490,7 +490,7 @@ function describeTool(actionRaw, argsRaw = {}) {
     countNoun: options.countNoun || noun.toLowerCase(),
   });
 
-  if (action === 'context_compaction') return make('context.compact', 'context compaction', 'Preparing context compaction…', 'Compacting context', 'Compacted context', { family: 'system', target: '' });
+  if (action === 'context_compaction') return make('context.compact', 'context compaction', 'Preparing context compaction…', 'Compacting context', 'Context compacted', { family: 'system', target: '' });
   if (action === 'declare_plan') return make('plan.declare', 'plan', 'Preparing plan…', 'Creating plan', 'Created plan', { family: 'plan', target: '' });
   if (['complete_plan_step', 'step_complete', 'bg_plan_advance'].includes(action)) return make('plan.step', 'plan step', 'Preparing plan update…', 'Updating plan', 'Updated plan', { family: 'plan', target: '' });
   if (action === 'write_note') return make('note.write', 'note', 'Preparing note…', 'Writing note', 'Saved note', { family: 'memory', target: firstValue(args, ['tag', 'title'], 72) });
@@ -707,6 +707,10 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
 
   const resultActivity = makeActivity(payload, 'result', operationEntry.activity);
   resultActivity.kind = 'result';
+  // Keep a bounded, display-ready diff on the result itself. Reconnect caches
+  // intentionally trim large tool arguments, but the inline disclosure must
+  // remain expandable after the live event has been rehydrated.
+  resultActivity.diffPreview = editActivityDiff(resultActivity);
   const existingResult = entries.find((entry) => entry?.activity?.kind === 'result'
     && ((resultActivity.eventKey && entry.activity.eventKey === resultActivity.eventKey)
       || (resultActivity.callId && entry.activity.callId === resultActivity.callId)
@@ -900,6 +904,211 @@ export function toolActivityDetailItems(_activity = {}) {
   return [];
 }
 
+function skillActivityDetail(activity = {}) {
+  if (activity.kind !== 'result' || activity.ok === false || activity.key !== 'skill.read') return null;
+  const args = parseArgs(activity.args);
+  const result = String(activity.result || '').trim();
+  let parsed = null;
+  try { parsed = JSON.parse(result); } catch {}
+  const source = parsed && typeof parsed === 'object' ? parsed : {};
+  const markdown = String(source.content || source.text || source.markdown || result).trim();
+  const frontmatter = markdown.match(/^---\s*\n([\s\S]*?)\n---/);
+  const metadata = frontmatter?.[1] || '';
+  const readMeta = (key) => {
+    const match = metadata.match(new RegExp(`^${key}:\\s*["']?(.+?)["']?\\s*$`, 'mi'));
+    return String(match?.[1] || '').trim();
+  };
+  const name = String(source.name || source.skill?.name || args.name || args.id || args.skill_id || readMeta('name') || activity.target || 'Skill').trim();
+  const description = String(source.description || source.skill?.description || readMeta('description')).trim();
+  if (!name && !description) return null;
+  return { name, description: description || 'No description provided.' };
+}
+
+function editActivityDiff(activity = {}) {
+  if (activity.kind !== 'result' || activity.ok === false || activity.key !== 'file.edit') return '';
+  const args = parseArgs(activity.args);
+  let parsedResult = null;
+  try { parsedResult = JSON.parse(String(activity.result || '')); } catch {}
+  const cropPatch = (value, context = 3) => {
+    const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+    const keep = new Set();
+    lines.forEach((line, index) => {
+      if (/^(?:\+\+\+|---|@@|diff --git|\*\*\* (?:Begin|End|Update|Add|Delete) Patch)/.test(line)) keep.add(index);
+      if (!/^[+-]/.test(line) || /^(?:\+\+\+|---)/.test(line)) return;
+      for (let nearby = Math.max(0, index - context); nearby <= Math.min(lines.length - 1, index + context); nearby += 1) keep.add(nearby);
+    });
+    return lines.filter((_, index) => keep.has(index)).join('\n').trim();
+  };
+  const cachedPreview = String(activity.diffPreview || '').trim();
+  if (cachedPreview) return cropPatch(cachedPreview);
+  const directPatch = String(args.patch || args.diff || parsedResult?.patch || parsedResult?.diff || '').trim();
+  if (directPatch) return cropPatch(directPatch);
+  const operation = editOperationName(activity.action, args);
+  if (operation === 'find_replace') {
+    const before = stringArg(args, ['find', 'old_str', 'old_text', 'oldText']);
+    const after = stringArg(args, ['replace', 'new_str', 'new_text', 'newText']);
+    if (before != null && after != null) {
+      return [
+        ...String(before).replace(/\r\n/g, '\n').split('\n').map((line) => `-${line}`),
+        ...String(after).replace(/\r\n/g, '\n').split('\n').map((line) => `+${line}`),
+      ].join('\n');
+    }
+  }
+  const pair = textPair(args) || textPair(activity.result);
+  if (!pair && Array.isArray(args.edits)) {
+    return args.edits.map((edit, index) => {
+      const editArgs = edit && typeof edit === 'object' ? edit : {};
+      const patch = String(editArgs.patch || editArgs.diff || '').trim();
+      if (patch) return cropPatch(patch);
+      const editPair = textPair(editArgs);
+      if (!editPair) return '';
+      const path = String(editArgs.path || editArgs.file || `edit ${index + 1}`);
+      return [
+        `--- ${path}`,
+        `+++ ${path}`,
+        ...String(editPair.before || '').replace(/\r\n/g, '\n').split('\n').map((line) => `-${line}`),
+        ...String(editPair.after || '').replace(/\r\n/g, '\n').split('\n').map((line) => `+${line}`),
+      ].join('\n');
+    }).filter(Boolean).join('\n\n');
+  }
+  if (!pair) return '';
+  const before = String(pair.before || '').replace(/\r\n/g, '\n').split('\n');
+  const after = String(pair.after || '').replace(/\r\n/g, '\n').split('\n');
+  return [
+    '--- before',
+    '+++ after',
+    ...before.map((line) => `-${line}`),
+    ...after.map((line) => `+${line}`),
+  ].join('\n');
+}
+
+function formatMarkupSnippet(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  const tokens = raw.replace(/>\s*</g, '>\n<').split('\n').map((line) => line.trim()).filter(Boolean);
+  const voidTag = /^<(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i;
+  let depth = 0;
+  return tokens.map((token) => {
+    if (/^<\//.test(token)) depth = Math.max(0, depth - 1);
+    const formatted = `${'  '.repeat(depth)}${token}`;
+    const opens = /^<[a-z][^>]*>/i.test(token)
+      && !voidTag.test(token)
+      && !/\/\s*>$/.test(token)
+      && !/<\/[^>]+>\s*$/.test(token);
+    if (opens) depth += 1;
+    return formatted;
+  });
+}
+
+function formatDiffForDisplay(value, target = '') {
+  const source = String(value || '').replace(/\r\n/g, '\n').trim();
+  if (!source) return '';
+  const markup = /\.(?:html?|xml|svg|vue|svelte)$/i.test(String(target || ''));
+  if (!markup) return source;
+  return source.split('\n').flatMap((line) => {
+    const prefix = /^[+-](?!---|\+\+\+)/.test(line) ? line[0] : '';
+    const body = prefix ? line.slice(1) : line;
+    if (!body.includes('><')) return [line];
+    return formatMarkupSnippet(body).map((formatted) => `${prefix}${formatted}`);
+  }).join('\n');
+}
+
+function highlightMarkupTag(tag, esc) {
+  const match = String(tag).match(/^(<\/?)([\w:-]+)([\s\S]*?)(\/?>)$/);
+  if (!match) return esc(tag);
+  const [, open, name, tail, close] = match;
+  let renderedTail = '';
+  let cursor = 0;
+  const tokenPattern = /([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*')/g;
+  let token;
+  while ((token = tokenPattern.exec(tail))) {
+    renderedTail += esc(tail.slice(cursor, token.index));
+    renderedTail += `<span class="tok-attr">${esc(token[1])}</span>${esc(token[2])}<span class="tok-string">${esc(token[3])}</span>`;
+    cursor = token.index + token[0].length;
+  }
+  renderedTail += esc(tail.slice(cursor));
+  return `<span class="tok-punctuation">${esc(open)}</span><span class="tok-tag">${esc(name)}</span>${renderedTail}<span class="tok-punctuation">${esc(close)}</span>`;
+}
+
+function highlightMarkupLine(content, esc) {
+  const source = String(content || '');
+  let html = '';
+  let cursor = 0;
+  const tagPattern = /<!--[\s\S]*?-->|<\/?[A-Za-z][^>]*>/g;
+  let match;
+  while ((match = tagPattern.exec(source))) {
+    html += esc(source.slice(cursor, match.index));
+    html += match[0].startsWith('<!--')
+      ? `<span class="tok-comment">${esc(match[0])}</span>`
+      : highlightMarkupTag(match[0], esc);
+    cursor = match.index + match[0].length;
+  }
+  return html + esc(source.slice(cursor));
+}
+
+function highlightCodeLine(content, target, esc) {
+  const source = String(content || ' ');
+  const markup = /\.(?:html?|xml|svg|vue|svelte)$/i.test(String(target || '')) || /^\s*</.test(source);
+  if (markup) return highlightMarkupLine(source, esc);
+  const keywords = /^(?:async|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|export|extends|false|finally|for|from|function|if|import|in|instanceof|let|new|null|of|return|static|super|switch|this|throw|true|try|typeof|undefined|var|void|while|yield)$/;
+  let html = '';
+  let cursor = 0;
+  const tokenPattern = /(\/\/.*$|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b)/gm;
+  let match;
+  while ((match = tokenPattern.exec(source))) {
+    html += esc(source.slice(cursor, match.index));
+    const value = match[0];
+    const after = source.slice(match.index + value.length);
+    const kind = /^\/[/\*]/.test(value) ? 'comment'
+      : /^["'`]/.test(value) ? 'string'
+        : /^\d/.test(value) ? 'number'
+          : keywords.test(value) ? 'keyword'
+            : /^\s*\(/.test(after) ? 'function'
+              : 'plain';
+    html += kind === 'plain' ? esc(value) : `<span class="tok-${kind}">${esc(value)}</span>`;
+    cursor = match.index + value.length;
+  }
+  return html + esc(source.slice(cursor));
+}
+
+function renderDiffLines(value, esc, target = '') {
+  let oldLine = null;
+  let newLine = null;
+  return String(value || '').split('\n').map((line, index) => {
+    const hunk = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
+    const meta = /^(?:@@|---|\+\+\+|diff --git|\*\*\*)/.test(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+    }
+    if (meta) {
+      return `<div class="tool-activity-diff-line is-meta" data-diff-row="${index}"><span class="tool-activity-diff-meta">${esc(line || ' ')}</span></div>`;
+    }
+
+    const kind = line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'context';
+    const content = kind === 'context' && line.startsWith(' ') ? line.slice(1) : (kind === 'context' ? line : line.slice(1));
+    const oldNumber = kind === 'added' ? '' : (oldLine == null ? '' : oldLine++);
+    const newNumber = kind === 'removed' ? '' : (newLine == null ? '' : newLine++);
+    const marker = kind === 'added' ? '+' : kind === 'removed' ? '−' : '';
+    return `<div class="tool-activity-diff-line is-${kind}" data-diff-row="${index}">
+      <span class="tool-activity-diff-number" aria-hidden="true">${oldNumber}</span>
+      <span class="tool-activity-diff-number" aria-hidden="true">${newNumber}</span>
+      <span class="tool-activity-diff-marker" aria-hidden="true">${marker}</span>
+      <code class="tool-activity-diff-code">${highlightCodeLine(content, target, esc)}</code>
+    </div>`;
+  }).join('');
+}
+
+function displayedDiffDelta(value) {
+  let added = 0;
+  let removed = 0;
+  for (const line of String(value || '').split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+  }
+  return { added, removed };
+}
+
 export function renderToolActivityEntry(entry, escapeHtml) {
   const activity = entry?.activity;
   if (!activity) return '';
@@ -908,7 +1117,11 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = String(entry.text || activityText(activity));
   const toolIconHtml = renderToolActivityIcon(activity, esc);
-  const editStats = toolActivityEditStats(activity);
+  // The badge and disclosure must describe the same rows. Markup edits are
+  // expanded for readability, so counting the raw one-line replacement here
+  // would produce +1/−1 beside a visibly multi-line diff.
+  const editDiff = formatDiffForDisplay(editActivityDiff(activity), activity.target);
+  const editStats = editDiff ? displayedDiffDelta(editDiff) : toolActivityEditStats(activity);
   const durationMatch = editStats ? label.match(/(\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s))$/i) : null;
   const labelBase = durationMatch ? label.slice(0, -durationMatch[1].length) : label;
   const editStatsHtml = editStats
@@ -935,6 +1148,24 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     <summary><span>${terminalActive ? 'Live terminal' : 'Terminal output'}</span><em>${terminalActive ? 'streaming' : 'completed'}</em><i aria-hidden="true">›</i></summary>
     <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(terminal.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
   </details>` : '';
+  const skillDetail = skillActivityDetail(activity);
+  const inlineDetailKind = skillDetail ? 'skill' : (editDiff ? 'file' : '');
+  const inlineDisclosureKey = inlineDetailKind ? `${inlineDetailKind}:${activityKey}` : '';
+  const inlineOpen = inlineDisclosureKey && disclosureState()?.get(inlineDisclosureKey) === true;
+  const inlineDetailHtml = skillDetail
+    ? `<div class="tool-activity-inline-detail tool-activity-skill-detail"><strong>${esc(skillDetail.name)}</strong><span>${esc(skillDetail.description)}</span></div>`
+    : editDiff
+      ? `<div class="tool-activity-inline-detail tool-activity-file-diff" aria-label="File diff" role="region"><span class="tool-activity-diff-sr">File changes</span>${renderDiffLines(editDiff, esc, activity.target)}</div>`
+      : '';
+  if (inlineDetailHtml) {
+    return `<details class="tool-activity-wrap tool-activity-disclosure" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(inlineDisclosureKey)}"${inlineOpen ? ' open' : ''}>
+  <summary class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
+    <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span><i class="tool-activity-chevron" aria-hidden="true">›</i></div>
+  </summary>
+  ${inlineDetailHtml}
+  ${terminalHtml}
+  </details>`;
+  }
   return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}">
   <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
     <div class="tool-activity-entry-summary">${toolIconHtml}${statusIconHtml}<span class="tool-activity-label">${labelHtml}</span></div>

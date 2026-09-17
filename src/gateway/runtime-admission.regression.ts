@@ -67,6 +67,30 @@ async function main(): Promise<void> {
   interactive!.release();
   system!.release();
 
+  const teamAdmission = new RuntimeAdmissionController({
+    maxActive: 3,
+    maxBackgroundActive: 1,
+    maxQueued: 4,
+    reservedInteractiveSlots: 1,
+    reservedManagerSlots: 1,
+  });
+  const memberOne = teamAdmission.tryAcquire('team_member');
+  const memberTwo = teamAdmission.tryAcquire('team_member');
+  assert.ok(memberOne);
+  assert.ok(memberTwo);
+  const managerWaiter = teamAdmission.acquire({ lane: 'manager' });
+  memberOne!.release();
+  const managerLease = await managerWaiter;
+  assert.equal(managerLease.lane, 'manager');
+  memberTwo!.release();
+  managerLease.release();
+
+  const independent = new RuntimeAdmissionController({ enforceLimits: false });
+  const independentLeases = Array.from({ length: 8 }, () => independent.tryAcquire('background'));
+  assert.ok(independentLeases.every(Boolean), 'unlimited gateway mode must admit independent work without a global cap');
+  assert.equal(independent.snapshot().limitsEnabled, false);
+  independentLeases.forEach((lease) => lease?.release());
+
   console.log('runtime-admission regression passed');
 }
 

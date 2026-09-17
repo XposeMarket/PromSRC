@@ -29,6 +29,7 @@ const pureCases = [
   ['memory-platform', 'tsx', 'src/gateway/memory/memory-platform.regression.ts'],
   ['memory-wrapper', 'tsx', 'src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts'],
   ['turn-context-packet', 'tsx', 'src/gateway/context/turn-context-packet.regression.ts'],
+  ['commentary-context', 'tsx', 'src/gateway/context/commentary-context.regression.ts'],
   ['context-window', 'tsx', 'src/gateway/context/context-window-usage.regression.ts'],
   ['context-build-worker', 'tsx', 'src/gateway/chat/context-build-worker.regression.ts'],
   ['subagent-prompt-context', 'tsx', 'src/gateway/subagent-prompt-context.regression.ts'],

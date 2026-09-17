@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 
 const desktopPath = new URL('../web-ui/src/pages/ChatPage.js', import.meta.url);
 const desktop = fs.readFileSync(desktopPath, 'utf8');
+const desktopSendRuntime = fs.readFileSync(new URL('../web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js', import.meta.url), 'utf8');
+const generatedDesktopSendRuntime = fs.readFileSync(new URL('../generated/public-web-ui/static/features/chat/runtime/desktop-send-chat-runtime.js', import.meta.url), 'utf8');
 const teams = fs.readFileSync(new URL('../web-ui/src/pages/TeamsPage.js', import.meta.url), 'utf8');
 
 function extractFunction(source, name) {
@@ -205,6 +207,10 @@ assert.equal(transientContext.isDesktopTransientReasoningTraceEntry({
 assert.match(desktop, /case 'agent_thought':\s*\{[\s\S]{0,180}msg\.thinking \|\| msg\.text/);
 assert.match(desktop, /source: visibility === 'summary' \? 'reasoning_summary' : 'agent_thought'/);
 assert.match(desktop, /function setDesktopLiveProgressNarration\([\s\S]*source: 'agent_progress'/);assert.match(desktop, /const hideMutableProgress = isSummaryThought && isLiveThought && Boolean\(progressSummary\)/);
+for (const text of [desktopSendRuntime, generatedDesktopSendRuntime]) {
+  assert.match(text, /Commentary that already streamed visibly[\s\S]{0,260}source: 'agent_thought', reasoningKind: 'full_thought'/,
+    'pre-tool assistant commentary must be durable on the locally-owned SSE path');
+}
 assert.match(desktop, /const isMutableProgress = isDesktopMutableProgressTraceEntry\(entry\)/);
 assert.doesNotMatch(desktop, /const pendingSummary = previous\?\.kind === 'thought-summary'/,
   'the first tool event must not absorb and erase a preceding thought group');
