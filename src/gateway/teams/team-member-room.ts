@@ -19,13 +19,17 @@ import {
   updateTeamMemberState,
 } from './managed-teams';
 import { ensureTeamWorkspace, ensureTeamAgentIdentity, getTeamWorkspacePath } from './team-workspace';
-import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { finishLiveRuntime, registerLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
 import { appendBackgroundSseTrace } from '../tasks/background-agent-trace';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
+import { TeamExecutionQueueError, teamExecutionQueue } from './team-execution-queue';
+import { RuntimeAdmissionError } from '../runtime-admission';
+import { createTeamRunReceipt, type TeamRunReceiptWriter } from './team-run-receipts';
 
 type HandleChatFn = (
   message: string,
@@ -72,6 +76,7 @@ interface TeamMemberTurnTracker {
   processEntries: TeamMemberProcessEntry[];
   liveTraceEntries: Array<Record<string, any>>;
   traceSeq: number;
+  visibleReasoningSummary: string;
 }
 
 const TEAM_MEMBER_ROOM_SESSION_PREFIX = 'team_room_member_';
@@ -303,6 +308,7 @@ function createTeamMemberTurnTracker(teamId: string, agentId: string): TeamMembe
     processEntries: [],
     liveTraceEntries: [],
     traceSeq: 0,
+    visibleReasoningSummary: '',
   };
 }
 
@@ -320,8 +326,8 @@ function pushTeamMemberProcessEntry(
     content: text,
     ...extra,
   });
-  if (tracker.processEntries.length > 250) {
-    tracker.processEntries.splice(0, tracker.processEntries.length - 250);
+  if (tracker.processEntries.length > 12_000) {
+    tracker.processEntries.splice(0, tracker.processEntries.length - 12_000);
   }
 }
 
@@ -350,11 +356,32 @@ function captureTeamMemberStreamEvent(
     if (chunk) tracker.thinking = `${tracker.thinking}${chunk}`;
     return;
   }
+  if (event === 'reasoning_summary_delta' || event === 'reasoning_summary') return;
+  if (event === 'token_narration_boundary') {
+    const thought = String(data?.text || data?.message || data?.narration || '').trim();
+    if (thought) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamMemberProcessEntry(tracker, 'preamble', thought, { source: 'agent_thought', visibility: 'user' });
+    }
+    return;
+  }
   if (event === 'thinking' || event === 'agent_thought') {
     const thought = String(data?.thinking || data?.text || '').trim();
     if (!thought) return;
     tracker.thinking = tracker.thinking ? `${tracker.thinking}\n\n${thought}` : thought;
-    pushTeamMemberProcessEntry(tracker, 'think', thought, data?.actor ? { actor: data.actor } : {});
+    const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
+    const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
+    const isVisible = visibility === 'user' || visibility === 'summary' || visibility === 'visible'
+      || source === 'agent_thought' || source === 'agent_progress';
+    if (isVisible) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamMemberProcessEntry(tracker, 'think', thought, {
+        source: data?.source || 'agent_thought',
+        visibility: visibility || 'user',
+        event: data?.event || event,
+        ...(data?.actor ? { actor: data.actor } : {}),
+      });
+    }
     return;
   }
   if (event === 'info') {
@@ -417,6 +444,8 @@ function buildTeamMemberTurnMetadata(
   thinking?: string;
   processEntries?: TeamMemberProcessEntry[];
   liveTraceEntries?: Array<Record<string, any>>;
+  commentaryContext?: string;
+  visibleReasoningSummary?: string;
 } {
   const reply = String(finalText || tracker.replyText || '').trim();
   const processEntries = Array.isArray(tracker.processEntries) ? [...tracker.processEntries] : [];
@@ -436,7 +465,38 @@ function buildTeamMemberTurnMetadata(
     thinking: String(tracker.thinking || '').trim() || undefined,
     processEntries: processEntries.length > 0 ? processEntries : undefined,
     liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries: tracker.liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }) || undefined,
+    visibleReasoningSummary: tracker.visibleReasoningSummary.trim() || undefined,
   };
+}
+
+function persistTeamMemberRuntimeCheckpoint(
+  runtimeId: string | undefined,
+  tracker: TeamMemberTurnTracker,
+  event: string,
+  data?: any,
+  force = false,
+): void {
+  if (!runtimeId) return;
+  const processEntries = tracker.processEntries.slice(-320);
+  const liveTraceEntries = tracker.liveTraceEntries.slice(-320);
+  updateLiveRuntimeCheckpoint(runtimeId, {
+    event,
+    ...(data?.action || data?.tool || data?.name ? { toolName: String(data.action || data.tool || data.name) } : {}),
+    ...(data?.result ? { result: String(data.result).slice(0, 1_200) } : {}),
+    processEntries,
+    liveTraceEntries,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }),
+    visibleReasoningSummary: tracker.visibleReasoningSummary.slice(-4_000),
+  }, { persist: force });
 }
 
 function parseProviderModel(raw: string): { providerOverride?: string; modelOverride?: string } {
@@ -474,9 +534,9 @@ function resolveTeamMemberAllowedWorkPaths(agentId: string, teamId: string): str
     ...(Array.isArray(team?.allowedWorkPaths) ? team.allowedWorkPaths : []),
     ...(Array.isArray(team?.allowed_work_paths) ? team.allowed_work_paths : []),
   ];
-  const roots = [mainWorkspace, teamWorkspace];
+  const roots = [teamWorkspace];
   for (const raw of rawValues) {
-    const value = String(raw || '').trim();
+    const value = String(raw || '').trim().replace(/[\\/]\*\*?$/, '');
     if (!value) continue;
     roots.push(path.isAbsolute(value) ? value : path.join(mainWorkspace, value));
   }
@@ -709,7 +769,7 @@ function broadcastTeamMemberStreamDone(
   });
 }
 
-export async function runTeamMemberRoomTurn(
+async function runTeamMemberRoomTurnInternal(
   teamId: string,
   agentId: string,
   prompt: string,
@@ -810,6 +870,7 @@ export async function runTeamMemberRoomTurn(
         streamId: tracker.streamId,
         data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
       });
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -846,6 +907,7 @@ export async function runTeamMemberRoomTurn(
     if (responseText) {
       tracker.replyText = responseText;
       pushTeamMemberProcessEntry(tracker, 'final', responseText);
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'final', { text: responseText }, true);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, 'final', { text: responseText });
       const chatMsg = appendTeamChat(teamId, {
         from: 'subagent',
@@ -892,15 +954,20 @@ export async function runTeamMemberRoomTurn(
     };
   } catch (err: any) {
     const errorText = String(err?.message || err || 'Unknown room turn error').trim();
+    const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'error', { result: errorText }, true);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,
       fromAgentId: agentId,
-      content: `Room turn failed: ${errorText}`,
+      content: admissionCode
+        ? `Room turn queued for retry: ${errorText}`
+        : `Room turn failed: ${errorText}`,
       metadata: {
         ...buildTeamMemberTurnMetadata(tracker, agentId, `Room turn failed: ${errorText}`),
         runSuccess: false,
+        admissionCode,
       },
     });
     deps.broadcastTeamEvent({
@@ -911,9 +978,11 @@ export async function runTeamMemberRoomTurn(
       text: String(chatMsg?.content || ''),
     });
 	    updateTeamMemberState(teamId, agentId, {
-	      status: 'blocked',
+	      status: admissionCode ? 'waiting_for_context' : 'blocked',
 	      currentTask: currentTaskLabel || undefined,
-	      blockedReason: errorText.slice(0, 500),
+	      blockedReason: admissionCode
+	        ? `Capacity limited; retryable admission result (${admissionCode}). ${errorText}`.slice(0, 500)
+	        : errorText.slice(0, 500),
 	      lastResult: errorText.slice(0, 1000),
 	    });
     broadcastTeamMemberStreamDone(deps, team, tracker, agentId, agentName, false);
@@ -921,6 +990,7 @@ export async function runTeamMemberRoomTurn(
       success: false,
       result: '',
       error: errorText,
+      admissionCode,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
       liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
@@ -952,7 +1022,77 @@ export async function runTeamMemberRoomTurn(
   }
 }
 
-export async function runTeamMemberDirectTurn(
+/** Serialize room turns with dispatches so shared team state is not mutated concurrently. */
+function finalizeTeamMemberReceipt(
+  receipt: TeamRunReceiptWriter,
+  result: RunAgentResult,
+  workspacePath: string,
+  executionStartedAt?: number,
+): RunAgentResult {
+  const finishedAt = Date.now();
+  const capacityLimited = Boolean(result.admissionCode);
+  receipt.update({
+    status: result.success ? 'complete' : capacityLimited ? 'capacity_limited' : 'failed',
+    finishedAt,
+    durationMs: Math.max(0, finishedAt - receipt.queuedAt),
+    executionStartedAt,
+    queueWaitMs: executionStartedAt === undefined ? undefined : Math.max(0, executionStartedAt - receipt.queuedAt),
+    taskId: result.taskId,
+    workspacePath,
+    stepCount: result.stepCount,
+    errorCategory: result.admissionCode || (result.error ? 'TEAM_MEMBER_TURN_FAILED' : undefined),
+    error: result.error,
+    resultPreview: String(result.result || '').slice(0, 1200) || undefined,
+    acceptanceState: result.success ? 'pending' : capacityLimited ? 'retryable' : 'rejected',
+  });
+  return result;
+}
+
+function queuedTeamMemberResult(agentId: string, error: unknown, admissionCode?: string): RunAgentResult {
+  return {
+    success: false,
+    result: '',
+    error: String((error as any)?.message || error || 'Team member execution could not be admitted.'),
+    durationMs: 0,
+    agentName: String(getAgentById(agentId)?.name || agentId),
+    admissionCode,
+  };
+}
+
+export async function runTeamMemberRoomTurn(
+  teamId: string,
+  agentId: string,
+  prompt: string,
+  options: TeamMemberRoomTurnOptions = {},
+): Promise<RunAgentResult> {
+  const agentName = String(getAgentById(agentId)?.name || agentId);
+  const workspacePath = getTeamWorkspacePath(teamId);
+  const receipt = createTeamRunReceipt({ teamId, agentId, agentName, trigger: 'manual' });
+  let executionStartedAt: number | undefined;
+  const onStarted = () => receipt.update({
+    status: 'running',
+    executionStartedAt: executionStartedAt = Date.now(),
+    queueWaitMs: Math.max(0, (executionStartedAt || Date.now()) - receipt.queuedAt),
+    workspacePath,
+  });
+  try {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      await teamExecutionQueue.run(teamId, () => runTeamMemberRoomTurnInternal(teamId, agentId, prompt, options), { onStarted }),
+      workspacePath,
+      executionStartedAt,
+    );
+  } catch (error: any) {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      queuedTeamMemberResult(agentId, error, error instanceof TeamExecutionQueueError ? error.code : undefined),
+      workspacePath,
+      executionStartedAt,
+    );
+  }
+}
+
+async function runTeamMemberDirectTurnInternal(
   teamId: string,
   agentId: string,
   threadId: string,
@@ -1059,6 +1199,7 @@ export async function runTeamMemberDirectTurn(
         streamId: tracker.streamId,
         data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
       });
+      persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, event, data);
       broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, event, data);
     };
 
@@ -1090,6 +1231,7 @@ export async function runTeamMemberDirectTurn(
     }
     tracker.replyText = responseText;
     pushTeamMemberProcessEntry(tracker, 'final', responseText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'final', { text: responseText }, true);
     broadcastTeamMemberStreamEvent(deps, team, tracker, agentId, agentName, 'final', { text: responseText });
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
@@ -1142,16 +1284,21 @@ export async function runTeamMemberDirectTurn(
     };
   } catch (err: any) {
     const errorText = String(err?.message || err || 'Unknown direct chat error').trim();
+    const admissionCode = err instanceof RuntimeAdmissionError ? err.code : undefined;
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
+    persistTeamMemberRuntimeCheckpoint(runtimeId, tracker, 'error', { result: errorText }, true);
     const chatMsg = appendTeamChat(teamId, {
       from: 'subagent',
       fromName: agentName,
       fromAgentId: agentId,
-      content: `Direct reply failed: ${errorText}`,
+      content: admissionCode
+        ? `Direct reply queued for retry: ${errorText}`
+        : `Direct reply failed: ${errorText}`,
       threadId,
       metadata: {
         ...buildTeamMemberTurnMetadata(tracker, agentId, `Direct reply failed: ${errorText}`),
         runSuccess: false,
+        admissionCode,
         targetType: 'user',
         targetId: 'user',
         targetLabel: 'You',
@@ -1165,9 +1312,11 @@ export async function runTeamMemberDirectTurn(
       text: String(chatMsg?.content || ''),
     });
     updateTeamMemberState(teamId, agentId, {
-      status: 'blocked',
+      status: admissionCode ? 'waiting_for_context' : 'blocked',
       currentTask: currentTaskLabel,
-      blockedReason: errorText.slice(0, 500),
+      blockedReason: admissionCode
+        ? `Capacity limited; retryable admission result (${admissionCode}). ${errorText}`.slice(0, 500)
+        : errorText.slice(0, 500),
       lastResult: errorText.slice(0, 1000),
     });
     broadcastTeamMemberStreamDone(deps, team, tracker, agentId, agentName, false);
@@ -1175,6 +1324,7 @@ export async function runTeamMemberDirectTurn(
       success: false,
       result: '',
       error: errorText,
+      admissionCode,
       thinking: tracker.thinking.trim() || undefined,
       processEntries: tracker.processEntries.length > 0 ? [...tracker.processEntries] : undefined,
       liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries] : undefined,
@@ -1202,5 +1352,39 @@ export async function runTeamMemberDirectTurn(
       });
     }
     finishLiveRuntime(runtimeId);
+  }
+}
+
+/** Serialize direct member follow-ups with the same team queue as other work. */
+export async function runTeamMemberDirectTurn(
+  teamId: string,
+  agentId: string,
+  threadId: string,
+  options: TeamMemberRoomTurnOptions = {},
+): Promise<RunAgentResult> {
+  const agentName = String(getAgentById(agentId)?.name || agentId);
+  const workspacePath = getTeamWorkspacePath(teamId);
+  const receipt = createTeamRunReceipt({ teamId, agentId, agentName, trigger: 'manual' });
+  let executionStartedAt: number | undefined;
+  const onStarted = () => receipt.update({
+    status: 'running',
+    executionStartedAt: executionStartedAt = Date.now(),
+    queueWaitMs: Math.max(0, (executionStartedAt || Date.now()) - receipt.queuedAt),
+    workspacePath,
+  });
+  try {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      await teamExecutionQueue.run(teamId, () => runTeamMemberDirectTurnInternal(teamId, agentId, threadId, options), { onStarted }),
+      workspacePath,
+      executionStartedAt,
+    );
+  } catch (error: any) {
+    return finalizeTeamMemberReceipt(
+      receipt,
+      queuedTeamMemberResult(agentId, error, error instanceof TeamExecutionQueueError ? error.code : undefined),
+      workspacePath,
+      executionStartedAt,
+    );
   }
 }

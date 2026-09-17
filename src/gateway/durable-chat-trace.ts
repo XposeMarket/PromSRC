@@ -15,6 +15,7 @@ export type DurableChatTraceFrame = {
 };
 
 const MAX_TRACE_TEXT = 4_000;
+const CONTEXT_COMPACTION_ACTION = 'context_compaction';
 
 function asRecord(value: unknown): Record<string, any> {
   return value && typeof value === 'object' ? value as Record<string, any> : {};
@@ -33,7 +34,8 @@ function traceTime(value: unknown): number | string {
 }
 
 function eventAction(data: Record<string, any>): string {
-  return String(data.action || data.name || data.toolName || '').trim();
+  const nested = asRecord(data.extra);
+  return String(data.action || data.name || data.toolName || nested.action || nested.toolName || '').trim();
 }
 
 function eventCallId(data: Record<string, any>): string {
@@ -46,6 +48,81 @@ function eventText(data: Record<string, any>, keys: string[], max = MAX_TRACE_TE
     if (value) return value;
   }
   return '';
+}
+
+function compactionStatus(eventType: string, data: Record<string, any>): string {
+  const nested = asRecord(data.extra);
+  const explicit = String(data.status || nested.status || '').trim().toLowerCase();
+  if (explicit === 'compacting' || explicit === 'running' || explicit === 'in_progress') return 'compacting';
+  if (explicit === 'skipped') return 'skipped';
+  if (explicit === 'failed' || explicit === 'error') return 'failed';
+  if (explicit === 'compacted' || explicit === 'done' || explicit === 'complete' || explicit === 'completed' || explicit === 'success') return 'compacted';
+  if (data.error === true || data.ok === false || data.success === false || nested.error === true || nested.ok === false || nested.success === false) return 'failed';
+  return eventType === 'tool_result' ? 'compacted' : 'compacting';
+}
+
+function compactionLabel(status: string): string {
+  if (status === 'compacting') return 'Compacting context';
+  if (status === 'failed') return 'Context compaction failed';
+  if (status === 'skipped') return 'Context compaction skipped';
+  return 'Context compacted';
+}
+
+function compactionEntry(
+  eventType: string,
+  data: Record<string, any>,
+  time: unknown,
+  id: string,
+): Record<string, any> {
+  const nested = asRecord(data.extra);
+  const source = { ...nested, ...data };
+  const status = compactionStatus(eventType, source);
+  const summary = textValue(source.summary, MAX_TRACE_TEXT);
+  const action = eventAction(source) || CONTEXT_COMPACTION_ACTION;
+  const callId = eventCallId(source);
+  const extra = {
+    ...data,
+    ...(action ? { action, toolName: data.toolName || action } : {}),
+    ...(callId ? { toolCallId: data.toolCallId || data.tool_call_id || callId } : {}),
+    status,
+    ...(summary ? { summary } : {}),
+    event: eventType,
+  };
+  return {
+    id,
+    type: 'compaction',
+    text: compactionLabel(status),
+    status,
+    ...(summary ? { summary } : {}),
+    time: traceTime(time),
+    extra,
+  };
+}
+
+function appendDurableTraceEntry(entries: Record<string, any>[], entry: Record<string, any> | null): void {
+  if (!entry) return;
+  const previous = entries[entries.length - 1];
+  const previousStatus = String(previous?.status || '').trim().toLowerCase();
+  const previousAction = String(previous?.extra?.action || previous?.extra?.toolName || '').trim().toLowerCase();
+  const entryAction = String(entry?.extra?.action || entry?.extra?.toolName || '').trim().toLowerCase();
+  const duplicateTerminalCompaction = previousStatus !== 'compacting'
+    && String(entry.status || '').trim().toLowerCase() !== 'compacting'
+    && previousAction === CONTEXT_COMPACTION_ACTION
+    && entryAction === CONTEXT_COMPACTION_ACTION;
+  if (entry.type === 'compaction' && previous?.type === 'compaction'
+    && (previousStatus === 'compacting' || duplicateTerminalCompaction)) {
+    entries[entries.length - 1] = {
+      ...previous,
+      ...entry,
+      // Keep the start id stable so a replay/cache refresh updates the same
+      // boundary instead of painting a second row.
+      id: previous.id || entry.id,
+      summary: entry.summary || previous.summary,
+      extra: { ...(previous.extra || {}), ...(entry.extra || {}) },
+    };
+    return;
+  }
+  entries.push(entry);
 }
 
 function visibleReasoning(data: Record<string, any>, eventType: string): boolean {
@@ -204,8 +281,10 @@ export function buildDurableChatTraceFromFrames(
     const time = traceTime(frame.at);
 
     if (eventType === 'tool_call' || eventType === 'tool_progress' || eventType === 'tool_result') {
-      const entry = toolEntry(eventType, data, time, id);
-      if (entry) entries.push(entry);
+      const entry = eventAction(data).toLowerCase() === CONTEXT_COMPACTION_ACTION
+        ? compactionEntry(eventType, data, time, id)
+        : toolEntry(eventType, data, time, id);
+      appendDurableTraceEntry(entries, entry);
       continue;
     }
     if (eventType === 'vision_injected') {
@@ -213,11 +292,11 @@ export function buildDurableChatTraceFromFrames(
       if (entry) entries.push(entry);
       continue;
     }
-    if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
-      if (privateReasoning(data)) continue;
-      appendVisibleThought(entries, eventText(data, ['text', 'summary', 'message']), time, reasoningExtra(data, eventType), id);
-      continue;
-    }
+    // Reasoning summaries are mutable header/status packets, not the model's
+    // full user-visible commentary. Do not materialize them as recovered body
+    // rows; the durable narration boundary and agent_thought events below own
+    // the actual thought timeline.
+    if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') continue;
     if (eventType === 'agent_thought' || eventType === 'thinking') {
       if (!visibleReasoning(data, eventType)) continue;
       appendVisibleThought(entries, eventText(data, ['text', 'thinking', 'message', 'summary']), time, reasoningExtra(data, eventType), id);
@@ -226,9 +305,10 @@ export function buildDurableChatTraceFromFrames(
     if (eventType === 'token_narration_boundary') {
       appendVisibleThought(entries, eventText(data, ['text', 'message', 'narration']), time, {
         ...data,
-        source: 'agent_progress',
+        source: 'agent_thought',
         visibility: 'user',
         event: eventType,
+        reasoningKind: 'full_thought',
       }, id, 'preamble');
     }
   }
@@ -237,6 +317,10 @@ export function buildDurableChatTraceFromFrames(
 
 function normalizedProcessEntry(entry: Record<string, any>, index: number): Record<string, any> | null {
   const extra = asRecord(entry.extra);
+  // Older task/team trackers stored source and visibility beside `type` and
+  // `content`, while newer session traces put them under `extra`. Treat both
+  // shapes identically so visible commentary survives every resume path.
+  const presentation = { ...entry, ...extra };
   const eventType = String(extra.event || entry.event || entry.type || '').trim().toLowerCase();
   const type = String(entry.type || entry.kind || 'info').trim().toLowerCase();
   const content = textValue(entry.text || entry.content || entry.message);
@@ -244,16 +328,7 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
   const time = entry.time || entry.ts || entry.timestamp || Date.now();
   const id = String(entry.id || `process_trace_${index + 1}`);
 
-  if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') {
-    if (!content || privateReasoning(extra)) return null;
-    return {
-      id,
-      type: 'think',
-      text: content,
-      time,
-      extra: reasoningExtra(extra, eventType),
-    };
-  }
+  if (eventType === 'reasoning_summary_delta' || eventType === 'reasoning_summary') return null;
   if (eventType === 'token_narration_boundary') {
     if (!content) return null;
     return {
@@ -261,21 +336,51 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
       type: 'preamble',
       text: content,
       time,
-      extra: { ...extra, source: 'agent_progress', visibility: 'user', event: eventType },
+      extra: {
+        ...extra,
+        source: 'agent_thought',
+        visibility: 'user',
+        event: eventType,
+        reasoningKind: 'full_thought',
+      },
     };
   }
   if (eventType === 'thinking' || eventType === 'agent_thought') {
-    if (!visibleReasoning(extra, eventType) || !content) return null;
+    if (!visibleReasoning(presentation, eventType) || !content) return null;
     return {
       ...entry,
       id,
       type: 'think',
       text: content,
       time,
-      extra: reasoningExtra(extra, eventType),
+      extra: reasoningExtra(presentation, eventType),
     };
   }
+  if (type === 'compaction') {
+    const rawStatus = String(entry.status || extra.status || '').trim().toLowerCase();
+    const compactEventType = eventType === 'tool_call' || eventType === 'tool_progress' || eventType === 'tool_result'
+      ? eventType
+      : rawStatus === 'compacting' || /\bcompacting\b|\bpreparing context compaction\b/i.test(content)
+        ? 'tool_call'
+        : 'tool_result';
+    return compactionEntry(compactEventType, {
+      ...entry,
+      ...extra,
+      extra,
+      action: CONTEXT_COMPACTION_ACTION,
+      toolName: extra.toolName || action || CONTEXT_COMPACTION_ACTION,
+    }, time, id);
+  }
   if (eventType === 'tool_call' || eventType === 'tool_progress' || eventType === 'tool_result') {
+    if (action.toLowerCase() === CONTEXT_COMPACTION_ACTION) {
+      return compactionEntry(eventType, {
+        ...entry,
+        ...extra,
+        extra,
+        action: CONTEXT_COMPACTION_ACTION,
+        toolName: extra.toolName || action,
+      }, time, id);
+    }
     return {
       ...entry,
       id,
@@ -303,8 +408,8 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
     };
   }
   if ((type === 'think' || type === 'preamble' || type === 'assistant')
-    && content && visibleReasoning(extra, String(extra.event || extra.source || type))) {
-    return { ...entry, id, type, text: content, time, extra };
+    && content && visibleReasoning(presentation, String(presentation.event || presentation.source || type))) {
+    return { ...entry, id, type, text: content, time, extra: presentation };
   }
   return null;
 }
@@ -321,7 +426,7 @@ export function buildDurableChatTraceFromProcessEntries(
       && String(normalized.extra?.source || '').toLowerCase() === 'reasoning_summary') {
       appendVisibleThought(entries, normalized.text, normalized.time, normalized.extra || {}, normalized.id, normalized.type);
     } else {
-      entries.push(normalized);
+      appendDurableTraceEntry(entries, normalized);
     }
   }
   return entries.length ? entries : undefined;

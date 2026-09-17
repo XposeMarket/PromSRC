@@ -17,11 +17,14 @@ import {
 } from './tasks/task-store';
 import { collectTurnFileChangesFromProcessEntries } from './file-change-summary';
 import { buildDurableChatTraceFromProcessEntries } from './durable-chat-trace';
+import { buildDurableCommentaryContext } from './context/commentary-context.js';
 import { addMessage, flushSession, getHistory, getWorkspace } from './session';
 import {
   finalizeMainChatGoalCrashRecovery,
   recordMainChatGoalInterruptedForRestart,
 } from './main-chat-goals';
+import { buildTaskContinuitySnapshot } from './tasks/task-continuity';
+import { appendSubagentChatMessage } from './agents-runtime/subagent-chat-store';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -30,6 +33,7 @@ const TASK_RUNTIME_KINDS = new Set([
   'team_subagent',
   'proposal_execution',
 ]);
+const CONTINUITY_SESSION_RUNTIME_KINDS = new Set(['subagent', 'team_manager', 'team_member']);
 
 export interface HotRestartMainChatRecovery {
   sessionId: string;
@@ -99,6 +103,37 @@ export function consumeCrashRecoveredMainChatGoalSessionIds(): string[] {
 
 function isTaskRuntime(runtime: LiveRuntimeSnapshot): boolean {
   return !!runtime.taskId || TASK_RUNTIME_KINDS.has(String(runtime.kind || ''));
+}
+
+function isContinuitySessionRuntime(runtime: LiveRuntimeSnapshot): boolean {
+  return CONTINUITY_SESSION_RUNTIME_KINDS.has(String(runtime.kind || ''))
+    && !!String(runtime.sessionId || '').trim();
+}
+
+function mirrorSessionCheckpointToAgentChat(runtime: LiveRuntimeSnapshot): void {
+  const agentId = String(runtime.agentId || '').trim();
+  const sessionId = String(runtime.sessionId || '').trim();
+  if (!agentId || !sessionId) return;
+  const checkpoint = getHistory(sessionId, 1).find((message: any) => message.role === 'assistant');
+  if (!checkpoint) return;
+  appendSubagentChatMessage(agentId, {
+    id: `runtime_recovery_${runtime.id}`,
+    role: 'agent',
+    content: String(checkpoint.content || '').trim() || '[Interrupted runtime checkpoint preserved.]',
+    commentaryContext: checkpoint.commentaryContext,
+    visibleReasoningSummary: checkpoint.visibleReasoningSummary,
+    processEntries: checkpoint.processEntries,
+    liveTraceEntries: checkpoint.liveTraceEntries,
+    metadata: {
+      source: 'runtime_recovery',
+      runtimeId: runtime.id,
+      interrupted: true,
+      commentaryContext: checkpoint.commentaryContext,
+      visibleReasoningSummary: checkpoint.visibleReasoningSummary,
+      processEntries: checkpoint.processEntries,
+      liveTraceEntries: checkpoint.liveTraceEntries,
+    },
+  });
 }
 
 function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
@@ -174,12 +209,16 @@ function formatCheckpointProcessPacket(runtime: LiveRuntimeSnapshot): string[] {
     lines.push('Recent reasoning/thinking tail:');
     lines.push(compactCheckpointValue(checkpoint.thinkingTail, 1400));
   }
+  if (checkpoint.narrationTail) {
+    lines.push('Recent visible commentary tail:');
+    lines.push(compactCheckpointValue(checkpoint.narrationTail, 2400));
+  }
   if (entries.length) {
     lines.push('Recent runtime process/tool log:');
     for (const entry of entries) {
       const type = String(entry.type || entry.event || 'info').toUpperCase();
       const toolName = compactCheckpointValue(entry.extra?.toolName || entry.toolName || '', 80);
-      const content = compactCheckpointValue(entry.content || entry.message || entry.result || '', 500);
+      const content = compactCheckpointValue(entry.content || entry.text || entry.message || entry.result || '', 500);
       if (!content && !toolName) continue;
       lines.push(`- [${type}]${toolName ? ` ${toolName}:` : ''} ${content}`.trim());
     }
@@ -249,23 +288,44 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   const rawProcessEntries = Array.isArray(runtime.checkpoint?.processEntries)
     ? runtime.checkpoint.processEntries
     : [];
+  const workStartedAt = Number(runtime.startedAt || 0) || Date.now();
+  const workEndedAt = Number(runtime.interruptedAt || runtime.updatedAt || Date.now()) || Date.now();
   const processEntries = rawProcessEntries
     .filter((entry) => entry && typeof entry === 'object')
     .slice(-250);
+  if (String(runtime.checkpoint?.narrationTail || '').trim()) {
+    processEntries.push({
+      ts: new Date(workEndedAt).toLocaleTimeString(),
+      type: 'think',
+      actor: 'Prom',
+      content: String(runtime.checkpoint?.narrationTail || '').slice(-12_000),
+      extra: {
+        source: 'agent_thought',
+        event: 'token_narration_boundary',
+        visibility: 'user',
+        reasoningKind: 'full_thought',
+      },
+    });
+  }
   const processToolLog = processEntries.length
     ? processEntries.map((entry: any) => {
       const type = String(entry.type || 'info').toUpperCase();
-      const text = String(entry.content || '').trim();
+      const text = String(entry.content || entry.text || entry.message || entry.result || '').trim();
       const toolName = String(entry.extra?.toolName || entry.toolName || '').trim();
       return `[${type}]${toolName ? ` ${toolName}:` : ''} ${text}`.trim();
     }).join('\n')
     : undefined;
   const toolLog = [recoveryPacket, processToolLog].filter(Boolean).join('\n\n');
-  const liveTraceEntries = buildDurableChatTraceFromProcessEntries(processEntries);
+  const liveTraceEntries = Array.isArray(runtime.checkpoint?.liveTraceEntries) && runtime.checkpoint.liveTraceEntries.length > 0
+    ? runtime.checkpoint.liveTraceEntries.slice(-320)
+    : buildDurableChatTraceFromProcessEntries(processEntries);
+  const commentaryContext = buildDurableCommentaryContext({
+    processEntries,
+    liveTraceEntries,
+    visibleReasoningSummary: runtime.checkpoint?.narrationTail,
+  });
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
-  const workStartedAt = Number(runtime.startedAt || 0) || Date.now();
-  const workEndedAt = Number(runtime.interruptedAt || runtime.updatedAt || Date.now()) || Date.now();
   addMessage(runtime.sessionId, {
     role: 'assistant',
     messageKind: runtime.kind === 'main_chat_goal' ? 'goal_restart_checkpoint' : undefined,
@@ -283,6 +343,8 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     channelLabel: runtime.source || 'system',
     processEntries: processEntries.length ? processEntries : undefined,
     liveTraceEntries,
+    commentaryContext: commentaryContext || undefined,
+    visibleReasoningSummary: String(runtime.checkpoint?.narrationTail || '').trim().slice(-4_000) || undefined,
     toolLog: toolLog || undefined,
     fileChanges: fileChanges || undefined,
   }, {
@@ -366,8 +428,39 @@ function pauseTaskForRestart(task: TaskRecord, runtime: LiveRuntimeSnapshot, rea
   const current = loadTask(task.id) || task;
   if (current.status === 'complete' || current.status === 'failed') return;
   const checkpoint = buildCheckpointText(runtime, reason);
+  const checkpointProcessEntries = [
+    ...(Array.isArray(current.resumeContext?.processEntries) ? current.resumeContext.processEntries : []),
+    ...(Array.isArray(runtime.checkpoint?.processEntries) ? runtime.checkpoint.processEntries : []),
+  ].slice(-320);
+  const checkpointLiveTraceEntries = [
+    ...(Array.isArray(current.resumeContext?.liveTraceEntries) ? current.resumeContext.liveTraceEntries : []),
+    ...(Array.isArray(runtime.checkpoint?.liveTraceEntries) ? runtime.checkpoint.liveTraceEntries : []),
+  ].slice(-320);
+  const narrationTail = String(runtime.checkpoint?.narrationTail || '').trim();
+  if (narrationTail) {
+    checkpointProcessEntries.push({
+      type: 'preamble',
+      text: narrationTail.slice(-4_000),
+      content: narrationTail.slice(-4_000),
+      extra: { source: 'agent_thought', visibility: 'user', event: 'token_narration_boundary' },
+    });
+  }
+  const continuity = buildTaskContinuitySnapshot({
+    task: current,
+    sessionId: `task_${current.id}`,
+    status: 'aborted',
+    processEntries: checkpointProcessEntries,
+    liveTraceEntries: checkpointLiveTraceEntries,
+    visibleReasoningSummary: narrationTail || current.resumeContext?.visibleReasoningSummary,
+    resultText: runtime.checkpoint?.result || runtime.checkpoint?.message,
+    abortReason: reason,
+  });
   updateResumeContext(current.id, {
-    ...(current.resumeContext || {}),
+    commentaryContext: continuity.commentaryContext || current.resumeContext?.commentaryContext,
+    visibleReasoningSummary: continuity.visibleReasoningSummary,
+    processEntries: continuity.processEntries,
+    liveTraceEntries: continuity.liveTraceEntries,
+    lastTurnPacket: continuity.packet,
     onResumeInstruction: [
       current.resumeContext?.onResumeInstruction,
       checkpoint,
@@ -393,6 +486,12 @@ export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdo
       if (isTaskRuntime(runtime) && runtime.taskId) {
         const task = loadTask(runtime.taskId);
         if (task) pauseTaskForRestart(task, runtime, reason);
+        continue;
+      }
+
+      if (isContinuitySessionRuntime(runtime)) {
+        addCheckpointMessageToSession(runtime, reason);
+        mirrorSessionCheckpointToAgentChat(runtime);
         continue;
       }
 
@@ -750,6 +849,19 @@ export function recoverInterruptedRuntimes(opts: {
         } else {
           markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'task_left_paused', taskId: latest.id });
         }
+        continue;
+      }
+
+      if (isContinuitySessionRuntime(runtime)) {
+        // Team managers and room/direct subagents may not own a TaskRecord,
+        // but their dedicated session still needs the interrupted turn packet.
+        addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart');
+        mirrorSessionCheckpointToAgentChat(runtime);
+        interruptedChats.push(String(runtime.sessionId || '').trim());
+        markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+          recovery: 'session_checkpointed',
+          sessionId: runtime.sessionId,
+        });
         continue;
       }
 

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
-import { summarizeRuntimeDiagnostics } from './system-diagnostics.js';
+import { classifyJobDiagnostics, summarizeRuntimeDiagnostics } from './system-diagnostics.js';
 
 function main(): void {
+  const jobs = ['paused', 'running', 'healthy', 'unverified', 'unknown', 'error_backoff', 'overdue', 'output_alert']
+    .map((state) => ({ id: state, health: { state, consecutiveErrors: 3 } }));
+  const classified = classifyJobDiagnostics(jobs);
+  assert.deepEqual(classified.unhealthyJobs.map((job) => job.id), ['error_backoff', 'overdue', 'output_alert']);
+  assert.deepEqual(classified.intentionalJobs.map((job) => job.id), ['paused']);
+  assert.deepEqual(classified.unverifiedJobs.map((job) => job.id), ['unverified', 'unknown']);
   const now = Date.parse('2026-09-05T16:30:00.000Z');
   const rows = [
     { id: 'active-1', status: 'running', updatedAt: now - 1_000 },

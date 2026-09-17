@@ -45,12 +45,48 @@ const streamTrace = buildDurableChatTraceFromFrames([
 ]);
 
 assert.ok(streamTrace, 'ordinary tool traces must survive without a vision event');
-assert.deepEqual(streamTrace?.map((entry) => entry.type), ['tool', 'think', 'progress', 'result']);
+assert.deepEqual(streamTrace?.map((entry) => entry.type), ['tool', 'progress', 'result']);
 assert.equal(streamTrace?.[0]?.extra?.action, 'workspace_run');
 assert.equal(streamTrace?.[0]?.extra?.toolCallId, 'call-1');
-assert.equal(streamTrace?.[1]?.text, 'Inspecting the workspace');
-assert.equal(streamTrace?.[1]?.extra?.source, 'reasoning_summary');
+assert.equal(streamTrace?.some((entry) => String(entry.extra?.source || '') === 'reasoning_summary'), false);
 assert.equal(streamTrace?.some((entry) => String(entry.text || '').includes('private provider')), false);
+
+const compactionTrace = buildDurableChatTraceFromFrames([
+  {
+    seq: 10,
+    type: 'tool_call',
+    at: 10,
+    data: {
+      action: 'context_compaction',
+      args: { phase: 'start', mode: 'rolling_window' },
+      synthetic: true,
+    },
+  },
+  {
+    seq: 11,
+    type: 'tool_result',
+    at: 11,
+    data: {
+      action: 'context_compaction',
+      result: 'Thread compacted before continuing.',
+      error: false,
+      extra: {
+        phase: 'result',
+        status: 'compacted',
+        mode: 'rolling_window',
+        summary: 'Retained the active request, completed work, and pending next step.',
+      },
+    },
+  },
+]);
+
+assert.ok(compactionTrace, 'context compaction must survive durable stream recovery');
+assert.deepEqual(compactionTrace?.map((entry) => entry.type), ['compaction']);
+assert.equal(compactionTrace?.[0]?.status, 'compacted');
+assert.equal(compactionTrace?.[0]?.extra?.status, 'compacted');
+assert.equal(compactionTrace?.[0]?.summary, 'Retained the active request, completed work, and pending next step.');
+assert.equal(compactionTrace?.[0]?.extra?.action, 'context_compaction');
+assert.equal(compactionTrace?.[0]?.id, 'trace_chat_10');
 
 const structuredResultTrace = buildDurableChatTraceFromFrames([
   {
@@ -104,10 +140,56 @@ const checkpointTrace = buildDurableChatTraceFromProcessEntries([
 ]);
 
 assert.ok(checkpointTrace, 'restart checkpoints must expose a durable trace');
-assert.deepEqual(checkpointTrace?.map((entry) => entry.type), ['think', 'tool', 'result', 'preamble']);
-assert.equal(checkpointTrace?.[0]?.extra?.source, 'reasoning_summary');
-assert.equal(checkpointTrace?.[1]?.extra?.action, 'workspace_run');
-assert.equal(checkpointTrace?.[3]?.extra?.source, 'agent_progress');
+assert.deepEqual(checkpointTrace?.map((entry) => entry.type), ['tool', 'result', 'preamble']);
+assert.equal(checkpointTrace?.[0]?.extra?.action, 'workspace_run');
+assert.equal(checkpointTrace?.[2]?.extra?.source, 'agent_thought');
+assert.equal(checkpointTrace?.[2]?.extra?.reasoningKind, 'full_thought');
 assert.equal(checkpointTrace?.some((entry) => String(entry.text || '').includes('private thinking')), false);
+
+const checkpointCompactionTrace = buildDurableChatTraceFromProcessEntries([
+  {
+    id: 'checkpoint-compact-start',
+    type: 'tool',
+    content: 'Preparing context_compaction',
+    extra: {
+      source: 'runtime_checkpoint',
+      event: 'tool_call',
+      action: 'context_compaction',
+      toolName: 'context_compaction',
+    },
+  },
+  {
+    id: 'checkpoint-compact-result',
+    type: 'result',
+    content: 'Thread compacted before continuing.',
+    extra: {
+      source: 'runtime_checkpoint',
+      event: 'tool_result',
+      action: 'context_compaction',
+      toolName: 'context_compaction',
+      status: 'compacted',
+      summary: 'Recovered compaction summary.',
+    },
+  },
+  {
+    id: 'checkpoint-compact-info',
+    type: 'compaction',
+    content: 'Context compacted. Continuing the active workflow...',
+    status: 'compacted',
+    extra: {
+      source: 'runtime_checkpoint',
+      event: 'info',
+      action: 'context_compaction',
+      toolName: 'context_compaction',
+      status: 'compacted',
+    },
+  },
+]);
+
+assert.ok(checkpointCompactionTrace, 'context compaction must survive checkpoint recovery');
+assert.deepEqual(checkpointCompactionTrace?.map((entry) => entry.type), ['compaction']);
+assert.equal(checkpointCompactionTrace?.[0]?.status, 'compacted');
+assert.equal(checkpointCompactionTrace?.[0]?.summary, 'Recovered compaction summary.');
+assert.equal(checkpointCompactionTrace?.[0]?.id, 'checkpoint-compact-start');
 
 console.log('durable chat trace recovery regression passed');

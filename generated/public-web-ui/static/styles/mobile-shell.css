@@ -399,11 +399,16 @@ body.pm-mobile-active.pm-mobile-document-scroll {
   overflow-y: auto;
   overscroll-behavior-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* Route hydration replaces the loading row with the real transcript. The
+     chat runtime restores intentional anchors itself; native scroll anchoring
+     must not move the whole shell during that replacement. */
+  overflow-anchor: none;
 }
 body.pm-mobile-active.pm-mobile-document-scroll #mobile-root {
   display: block;
   width: 100%;
   min-height: 100dvh;
+  overflow-anchor: none;
 }
 body.pm-mobile-active.pm-mobile-document-scroll .pm-app {
   position: relative;
@@ -413,6 +418,7 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-app {
   overflow: visible;
   transform: none;
   will-change: auto;
+  overflow-anchor: none;
 }
 body.pm-mobile-active.pm-mobile-document-scroll .pm-page {
   min-height: 100dvh !important;

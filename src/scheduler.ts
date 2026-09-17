@@ -23,6 +23,13 @@ export interface AgentRunHistoryEntry {
   agentName: string;
   trigger: 'cron' | 'manual' | 'team_dispatch' | 'heartbeat';
   taskId?: string;
+  scheduleId?: string;
+  workspacePath?: string;
+  executionStartedAt?: number;
+  queueWaitMs?: number;
+  admissionLane?: string;
+  acceptanceState?: 'pending' | 'accepted' | 'rejected' | 'retryable';
+  sideEffectSummary?: string;
   success: boolean;
   startedAt: number;
   finishedAt: number;

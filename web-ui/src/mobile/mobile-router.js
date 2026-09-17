@@ -108,6 +108,32 @@ function _pairCodeFromUrl() {
   } catch { return ''; }
 }
 
+// iOS can restore the document's previous scroll offset after a cold PWA
+// launch or while a route shell is being replaced. Mobile chat uses the
+// document as its scroller, so that offset makes the whole UI appear to jump
+// upward until the user drags it back down. Start each mobile route render at
+// a deterministic top position; chat history still uses its own explicit
+// latest-message anchor after it mounts.
+function _resetMobileDocumentScroll() {
+  if (!document.body?.classList?.contains('pm-mobile-document-scroll')) return;
+  try { history.scrollRestoration = 'manual'; } catch {}
+  const reset = () => {
+    try { window.scrollTo({ left: 0, top: 0, behavior: 'auto' }); } catch {
+      try { window.scrollTo(0, 0); } catch {}
+    }
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    if (scrollingElement && scrollingElement.scrollTop) scrollingElement.scrollTop = 0;
+    if (document.body && document.body.scrollTop) document.body.scrollTop = 0;
+  };
+  reset();
+  // Safari may apply its saved offset again after the new shell gets a layout
+  // box. Reassert the position over the next two frames without animation.
+  requestAnimationFrame(() => {
+    reset();
+    requestAnimationFrame(reset);
+  });
+}
+
 function normalizeMobileRouteParts(parts) {
   const clean = Array.isArray(parts) ? parts.map(p => String(p || '').trim()).filter(Boolean) : [];
   if (clean[0] === 'm') clean[0] = 'mobile';
@@ -226,6 +252,13 @@ const TAB_FOR_PAGE = {
   schedule: null, teams: null, subagents: null, proposals: null, creative: 'hub', settings: null, more: null, gateways: null,
 };
 
+function isDedicatedAgentChatRoute(route = {}) {
+  const page = String(route?.page || '').toLowerCase();
+  return (page === 'teams' || page === 'subagents')
+    && !!route?.arg
+    && String(route?.extra?.[0] || '').toLowerCase() === 'chat';
+}
+
 function _repairNamespacedChatRoute(page, arg) {
   if (page !== 'chat' || !arg) return arg;
   try {
@@ -277,6 +310,7 @@ function render() {
   }
 
   document.body.classList.add('pm-mobile-active', 'pm-mobile-document-scroll');
+  _resetMobileDocumentScroll();
   // Allow auth-pending body to still show mobile root.
   document.body.classList.remove('auth-pending');
 
@@ -335,7 +369,12 @@ function render() {
 
   if (page !== 'settings') closeMobileSettings();
 
-  const activeTab = TAB_FOR_PAGE[page] || null;
+  // Team/subagent conversations are chat surfaces even though their route
+  // owners are separate. Keeping the Chat tab active also makes the shared
+  // tabbar mount with the same stacking/keyboard contract as main Chat.
+  const activeTab = isDedicatedAgentChatRoute({ page, arg, extra })
+    ? 'chat'
+    : (TAB_FOR_PAGE[page] || null);
   const shell = createMobileShell({
     activeTab,
     onNavigate: (route) => mobileNavigate(route),
@@ -389,6 +428,10 @@ function render() {
   // voice accents native in Blue/Violet while allowing the rest of the app to
   // share the Prometheus One gold component language.
   slot.dataset.mobilePage = page;
+  slot.dataset.mobileAgentChatRoute = isDedicatedAgentChatRoute({ page, arg, extra })
+    ? (page === 'teams' ? 'team' : 'subagent')
+    : '';
+  slot.classList.toggle('pm-agent-chat-page', isDedicatedAgentChatRoute({ page, arg, extra }));
   // The shell is created synchronously, but each route owner is lazy-loaded.
   // Keep that hand-off explicit so a slow chunk cannot look like a valid empty
   // page (and so resume recovery can distinguish a real route from a shell
@@ -449,6 +492,7 @@ function render() {
       }
       return owner.renderSchedulePage(slot, { navigate: mobileNavigate });
     case 'teams':
+      if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return owner.renderTeamChatPage(slot, { teamId: decodeURIComponent(arg), navigate: mobileNavigate });
       if (arg) return owner.renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return owner.renderTeamsPage(slot, { navigate: mobileNavigate });
     case 'tasks':     return owner.renderTasksPage(slot, { navigate: mobileNavigate, taskId: arg ? decodeURIComponent(arg) : '' });
@@ -564,7 +608,14 @@ function recoverMobileBootSurface() {
   // retry it. A completed route with a missing chat body is always repairable.
   const routeStalled = routePending && routeAge > 8000;
   const missingRouteSurface = !routePending && !routeReady;
-  if (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat || routeStalled || missingRouteSurface) {
+  // A focused dedicated composer is in the middle of an iOS keyboard handoff.
+  // A focus/pageshow recovery pass must not rebuild the shell underneath it:
+  // rebuilding removes the textarea, closes the keyboard, and falls back to
+  // the default Chat surface on the next browser focus event.
+  const focusedDedicatedComposer = isDedicatedAgentChatRoute(route)
+    && slot?.classList?.contains('pm-agent-chat-page')
+    && document.activeElement?.matches?.('.pm-agent-chat-composer textarea');
+  if (!focusedDedicatedComposer && (!root || root.hidden || !root.querySelector('.pm-app') || targetedChat || routeStalled || missingRouteSurface)) {
     safeRender();
   }
   if (getDeviceToken()) {
@@ -587,7 +638,12 @@ window.addEventListener('popstate', safeRender);
 window.addEventListener('pm-device-revoked', safeRender);
 window.addEventListener('online', recoverMobileBootSurface);
 window.addEventListener('pageshow', recoverMobileBootSurface);
-window.addEventListener('focus', recoverMobileBootSurface);
+window.addEventListener('focus', () => {
+  const route = mobileRouteFromLocation();
+  const focusedDedicatedComposer = isDedicatedAgentChatRoute(route)
+    && document.activeElement?.matches?.('.pm-agent-chat-composer textarea');
+  if (!focusedDedicatedComposer) recoverMobileBootSurface();
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') recoverMobileBootSurface();
 });

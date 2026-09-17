@@ -15,9 +15,10 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config.js';
+import { getAgentById, getAgents, ensureAgentWorkspace, getConfig } from '../../config/config.js';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
 import { ensureAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -44,7 +45,11 @@ export interface TeamChatMessage {
     messageType?: TeamRoomMessageCategory;
     stepCount?: number;
     durationMs?: number;
+    admissionCode?: string;
     thinking?: string;
+    /** Safe, bounded commentary capsule for the next manager/member turn. */
+    commentaryContext?: string;
+    visibleReasoningSummary?: string;
     attachmentPreviews?: Array<{
       kind?: string;
       name?: string;
@@ -156,7 +161,7 @@ export type TeamMemberPresenceState =
   | 'reviewing';
 export type TeamPlanPriority = 'high' | 'medium' | 'low';
 export type TeamPlanStatus = 'pending' | 'active' | 'completed' | 'blocked' | 'dropped';
-export type TeamDispatchStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type TeamDispatchStatus = 'queued' | 'running' | 'completed' | 'failed' | 'capacity_limited';
 
 export interface TeamRoomMessage {
   id: string;
@@ -173,9 +178,14 @@ export interface TeamRoomMessage {
     agentId?: string;
     dispatchId?: string;
     runSuccess?: boolean;
+    admissionCode?: string;
     source?: string;
     stepCount?: number;
     durationMs?: number;
+    commentaryContext?: string;
+    visibleReasoningSummary?: string;
+    processEntries?: Array<Record<string, any>>;
+    liveTraceEntries?: Array<Record<string, any>>;
   };
 }
 
@@ -209,6 +219,7 @@ export interface TeamDispatchRecord {
   status: TeamDispatchStatus;
   requestedBy?: string;
   taskId?: string;
+  admissionCode?: string;
   createdAt: number;
   startedAt?: number;
   finishedAt?: number;
@@ -291,6 +302,7 @@ export interface AgentPauseState {
 
 export interface TeamRunEntry {
   id: string;
+  receiptId?: string;
   agentId: string;
   agentName: string;
   trigger: 'cron' | 'team_dispatch' | 'manual';
@@ -301,6 +313,7 @@ export interface TeamRunEntry {
   durationMs: number;
   stepCount?: number;
   zeroToolCalls?: boolean;   // true when agent returned 0 tool calls (Issue 12 signal)
+  admissionCode?: string;
   error?: string;
   resultPreview?: string;
   processEntries?: Array<Record<string, any>>;
@@ -430,6 +443,7 @@ export interface TeamHealthResult {
   status: TeamHealth;
   successRate: number;   // 0–1 over the last HEALTH_WINDOW_RUNS runs
   runsInWindow: number;
+  capacityLimitedRuns?: number;
   lastRunAt?: number;
   stalledSince?: number; // set when no run in 24 h and team has a cron schedule
 }
@@ -444,15 +458,23 @@ export function computeTeamHealth(team: ManagedTeam): TeamHealthResult {
 
   const history = Array.isArray(team.runHistory) ? team.runHistory : [];
   const window = history.slice(-HEALTH_WINDOW_RUNS);
-  const runsInWindow = window.length;
+  const capacityLimitedRuns = window.filter(r => !!r.admissionCode).length;
+  const qualityWindow = window.filter(r => !r.admissionCode);
+  const runsInWindow = qualityWindow.length;
   const lastRunAt = history.length > 0 ? history[history.length - 1].startedAt : undefined;
 
   if (runsInWindow === 0) {
     // No runs ever — only stalled if there IS a scheduled subagent (expected to have run)
-    return { status: 'healthy', successRate: 1, runsInWindow: 0, lastRunAt };
+    return {
+      status: capacityLimitedRuns > 0 ? 'degraded' : 'healthy',
+      successRate: capacityLimitedRuns > 0 ? 0 : 1,
+      runsInWindow: 0,
+      capacityLimitedRuns,
+      lastRunAt,
+    };
   }
 
-  const successCount = window.filter(r => r.success).length;
+  const successCount = qualityWindow.filter(r => r.success).length;
   const successRate = successCount / runsInWindow;
 
   // Stalled: no activity in 24h (only meaningful when there's a cron schedule)
@@ -469,7 +491,7 @@ export function computeTeamHealth(team: ManagedTeam): TeamHealthResult {
     status = 'stalled';
   }
 
-  return { status, successRate, runsInWindow, lastRunAt, stalledSince };
+  return { status, successRate, runsInWindow, capacityLimitedRuns, lastRunAt, stalledSince };
 }
 
 export interface ManagedTeamStore {
@@ -671,7 +693,7 @@ function normalizeTeamPlanStatus(raw: any): TeamPlanStatus {
 
 function normalizeTeamDispatchStatus(raw: any): TeamDispatchStatus {
   const value = String(raw || '').trim().toLowerCase();
-  if (value === 'queued' || value === 'running' || value === 'completed' || value === 'failed') {
+  if (value === 'queued' || value === 'running' || value === 'completed' || value === 'failed' || value === 'capacity_limited') {
     return value as TeamDispatchStatus;
   }
   if (value === 'complete') return 'completed';
@@ -725,6 +747,10 @@ function mapChatMessageToRoomMessage(message: TeamChatMessage): TeamRoomMessage 
       runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
       stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
       durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
+      commentaryContext: String(message.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+      visibleReasoningSummary: String(message.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+      processEntries: Array.isArray(message.metadata.processEntries) ? message.metadata.processEntries.slice(-320) : undefined,
+      liveTraceEntries: Array.isArray(message.metadata.liveTraceEntries) ? message.metadata.liveTraceEntries.slice(-320) : undefined,
     } : undefined,
   };
 }
@@ -763,6 +789,10 @@ function mapRoomMessageToChatMessage(message: TeamRoomMessage): TeamChatMessage 
         runSuccess: typeof message.metadata.runSuccess === 'boolean' ? message.metadata.runSuccess : undefined,
         stepCount: Number.isFinite(Number(message.metadata.stepCount)) ? Number(message.metadata.stepCount) : undefined,
         durationMs: Number.isFinite(Number(message.metadata.durationMs)) ? Number(message.metadata.durationMs) : undefined,
+        commentaryContext: String(message.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+        visibleReasoningSummary: String(message.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+        processEntries: Array.isArray(message.metadata.processEntries) ? message.metadata.processEntries.slice(-320) : undefined,
+        liveTraceEntries: Array.isArray(message.metadata.liveTraceEntries) ? message.metadata.liveTraceEntries.slice(-320) : undefined,
       } : {}),
       ...mapRoomTargetToChatMetadata(message.target),
     },
@@ -791,6 +821,10 @@ function normalizeTeamRoomMessage(raw: any): TeamRoomMessage | null {
       source: String(raw.metadata.source || '').trim() || undefined,
       stepCount: Number.isFinite(Number(raw.metadata.stepCount)) ? Number(raw.metadata.stepCount) : undefined,
       durationMs: Number.isFinite(Number(raw.metadata.durationMs)) ? Number(raw.metadata.durationMs) : undefined,
+      commentaryContext: String(raw.metadata.commentaryContext || '').trim().slice(0, 6_000) || undefined,
+      visibleReasoningSummary: String(raw.metadata.visibleReasoningSummary || '').trim().slice(0, 2_400) || undefined,
+      processEntries: Array.isArray(raw.metadata.processEntries) ? raw.metadata.processEntries.slice(-320) : undefined,
+      liveTraceEntries: Array.isArray(raw.metadata.liveTraceEntries) ? raw.metadata.liveTraceEntries.slice(-320) : undefined,
     } : undefined,
   };
 }
@@ -838,6 +872,7 @@ function normalizeTeamDispatchRecord(raw: any): TeamDispatchRecord | null {
     status: normalizeTeamDispatchStatus(raw.status),
     requestedBy: String(raw.requestedBy || '').trim() || undefined,
     taskId: String(raw.taskId || '').trim() || undefined,
+    admissionCode: String(raw.admissionCode || raw.admission_code || '').trim() || undefined,
     createdAt: Number(raw.createdAt) || Date.now(),
     startedAt: Number(raw.startedAt) || undefined,
     finishedAt: Number(raw.finishedAt) || undefined,
@@ -1158,19 +1193,24 @@ function getStorePath(): string {
 
 let _cache: ManagedTeamStore | null = null;
 let _cacheTimestamp: number = 0;
-const _cacheTTL = 5 * 60 * 1000; // 5 minutes TTL for managed teams cache
+let _cacheFileMtimeMs = 0;
+const _cacheTTL = 5 * 60 * 1000;
 
 export function loadManagedTeamStore(): ManagedTeamStore {
   const now = Date.now();
-  // Return cached version if still valid
-  if (_cache && (now - _cacheTimestamp) < _cacheTTL) {
+  const p = getStorePath();
+  let fileMtimeMs = 0;
+  try { fileMtimeMs = fs.statSync(p).mtimeMs; } catch { /* missing store */ }
+  // TTL is only an optimization. Always notice a store written by another
+  // process/gateway instance so registry and workspace state cannot drift via
+  // a stale in-process cache.
+  if (_cache && (now - _cacheTimestamp) < _cacheTTL && fileMtimeMs === _cacheFileMtimeMs) {
     return _cache;
   }
-  
-  const p = getStorePath();
   if (!fs.existsSync(p)) {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
+    _cacheFileMtimeMs = 0;
     return _cache;
   }
   try {
@@ -1235,11 +1275,13 @@ export function loadManagedTeamStore(): ManagedTeamStore {
       updatedAt: Number(parsed?.updatedAt) || Date.now(),
     };
     _cacheTimestamp = now;
+    _cacheFileMtimeMs = fileMtimeMs;
     if (mutated) saveManagedTeamStore(_cache);
     return _cache;
   } catch {
     _cache = { teams: [], version: 1, updatedAt: Date.now() };
     _cacheTimestamp = now;
+    _cacheFileMtimeMs = fileMtimeMs;
     return _cache;
   }
 }
@@ -1251,11 +1293,13 @@ export function saveManagedTeamStore(store: ManagedTeamStore): void {
   const tmp = `${p}.tmp-${Date.now()}`;
   fs.writeFileSync(tmp, JSON.stringify(_cache, null, 2), 'utf-8');
   fs.renameSync(tmp, p);
+  try { _cacheFileMtimeMs = fs.statSync(p).mtimeMs; } catch { _cacheFileMtimeMs = 0; }
 }
 
 function invalidateCache(): void {
   _cache = null;
   _cacheTimestamp = 0;
+  _cacheFileMtimeMs = 0;
 }
 
 // ─── Pagination Support ────────────────────────────────────────────────────────
@@ -1343,6 +1387,115 @@ export function getTeamManagerIdentityPath(teamId: string): string {
   return path.join(getConfig().getWorkspacePath(), 'teams', safeTeamPathId(teamId), 'manager');
 }
 
+export interface ManagedTeamIntegrityIssue {
+  code: 'MISSING_WORKSPACE' | 'MISSING_MANAGER' | 'INVALID_MANAGER_LINK' | 'MISSING_MEMBER' | 'INVALID_MEMBER_LINK' | 'ORPHAN_WORKSPACE' | 'DUPLICATE_AGENT_LABEL';
+  teamId?: string;
+  agentId?: string;
+  path?: string;
+  message: string;
+}
+
+/**
+ * Move unregistered team workspaces out of the live team namespace without
+ * deleting them. The quarantine is deliberately recoverable and keeps the
+ * original team directory name so an operator can restore it after repairing
+ * or re-registering the team.
+ */
+export function quarantineOrphanedTeamWorkspaces(): string[] {
+  const teamsRoot = path.join(getConfig().getWorkspacePath(), 'teams');
+  const quarantineRoot = path.join(teamsRoot, '.orphaned');
+  const liveTeamIds = new Set(listManagedTeams().map((team) => team.id));
+  const moved: string[] = [];
+  try {
+    if (!fs.existsSync(teamsRoot)) return moved;
+    for (const entry of fs.readdirSync(teamsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === '.orphaned' || liveTeamIds.has(entry.name)) continue;
+      const infoPath = path.join(teamsRoot, entry.name, 'workspace', 'team_info.md');
+      if (!fs.existsSync(infoPath)) continue;
+      fs.mkdirSync(quarantineRoot, { recursive: true });
+      let target = path.join(quarantineRoot, entry.name);
+      if (fs.existsSync(target)) target = path.join(quarantineRoot, `${entry.name}-${Date.now().toString(36)}`);
+      fs.renameSync(path.join(teamsRoot, entry.name), target);
+      try {
+        fs.writeFileSync(
+          path.join(target, 'QUARANTINE.md'),
+          `This unregistered managed-team workspace was quarantined by Prometheus on ${new Date().toISOString()}.\n` +
+          `Original live path: ${path.join(teamsRoot, entry.name)}\n` +
+          'No files were deleted. Restore or re-register the team before moving this directory back.\n',
+          'utf-8',
+        );
+      } catch { /* the move itself is the important recoverable action */ }
+      moved.push(`${entry.name} -> ${target}`);
+    }
+  } catch (error: any) {
+    console.warn('[TeamRegistry] Could not quarantine orphaned workspaces:', error?.message || error);
+  }
+  return moved;
+}
+
+/** Read-only runtime inventory used by startup diagnostics and operators. */
+export function inspectManagedTeamRegistry(): ManagedTeamIntegrityIssue[] {
+  const issues: ManagedTeamIntegrityIssue[] = [];
+  const teams = listManagedTeams();
+  const liveTeamIds = new Set(teams.map((team) => team.id));
+  const labelGroups = new Map<string, string[]>();
+
+  for (const agent of getAgents()) {
+    const label = String(agent?.name || '').trim().toLowerCase();
+    if (!label) continue;
+    const ids = labelGroups.get(label) || [];
+    ids.push(agent.id);
+    labelGroups.set(label, ids);
+  }
+  for (const [label, ids] of labelGroups) {
+    if (ids.length < 2) continue;
+    issues.push({
+      code: 'DUPLICATE_AGENT_LABEL',
+      message: `Agent label "${label}" is shared by ${ids.join(', ')}.`,
+    });
+  }
+
+  for (const team of teams) {
+    const teamRoot = path.join(getConfig().getWorkspacePath(), 'teams', safeTeamPathId(team.id));
+    const workspacePath = path.join(teamRoot, 'workspace');
+    const managerPath = path.join(teamRoot, 'manager');
+    if (!fs.existsSync(workspacePath) || !fs.existsSync(managerPath)) {
+      issues.push({
+        code: 'MISSING_WORKSPACE',
+        teamId: team.id,
+        path: teamRoot,
+        message: `Registered team "${team.name}" is missing its workspace or manager artifact.`,
+      });
+    }
+    const managerId = String(team.managerAgentId || `${team.id}_manager`).trim();
+    const manager = getAgentById(managerId) as any;
+    if (!manager) {
+      issues.push({ code: 'MISSING_MANAGER', teamId: team.id, agentId: managerId, message: `Registered team "${team.name}" has no manager agent ${managerId}.` });
+    } else if (manager.isTeamManager !== true || String(manager.teamId || '').trim() !== team.id) {
+      issues.push({ code: 'INVALID_MANAGER_LINK', teamId: team.id, agentId: managerId, message: `Manager ${managerId} is not linked back to team ${team.id}.` });
+    }
+    for (const memberId of team.subagentIds || []) {
+      const member = getAgentById(memberId) as any;
+      if (!member) {
+        issues.push({ code: 'MISSING_MEMBER', teamId: team.id, agentId: memberId, message: `Team "${team.name}" references missing member ${memberId}.` });
+      } else if (member.teamId && String(member.teamId).trim() !== team.id) {
+        issues.push({ code: 'INVALID_MEMBER_LINK', teamId: team.id, agentId: memberId, message: `Member ${memberId} points at team ${member.teamId}, not ${team.id}.` });
+      }
+    }
+  }
+
+  const teamsRoot = path.join(getConfig().getWorkspacePath(), 'teams');
+  try {
+    for (const entry of fs.readdirSync(teamsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || liveTeamIds.has(entry.name)) continue;
+      const infoPath = path.join(teamsRoot, entry.name, 'workspace', 'team_info.md');
+      if (!fs.existsSync(infoPath)) continue;
+      issues.push({ code: 'ORPHAN_WORKSPACE', path: path.join(teamsRoot, entry.name), message: `Workspace directory ${entry.name} contains team_info.md but is not in the live team registry.` });
+    }
+  } catch { /* workspace may not exist yet */ }
+  return issues;
+}
+
 /** Ensure a managed team has a real, named manager agent with private identity and memory. */
 export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: string; identityPath: string } {
   const agentId = String(team.managerAgentId || `${team.id}_manager`).trim();
@@ -1417,6 +1570,56 @@ export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: str
   return { agentId, identityPath };
 }
 
+/**
+ * Detach manager records that point at a team no longer present in the
+ * authoritative registry. Keep their identity/workspace for recovery, but
+ * make them non-operational so they cannot be routed as live managers.
+ */
+export function reconcileOrphanedManagerAgents(): string[] {
+  const liveTeamIds = new Set(listManagedTeams().map((team) => team.id));
+  const cm = getConfig();
+  const cfg = cm.getConfig() as any;
+  const agents = Array.isArray(cfg.agents) ? [...cfg.agents] : [];
+  const changed: string[] = [];
+  for (const agent of agents) {
+    const isAlreadyDetached = agent?.roleType === 'orphaned_manager';
+    if (!isAlreadyDetached && agent?.isTeamManager !== true) continue;
+    const teamId = String(agent?.orphanedFromTeamId || agent?.teamId || '').trim();
+    if (!teamId || liveTeamIds.has(teamId)) continue;
+    const agentId = String(agent?.id || '').trim();
+    const originalName = String(agent?.name || agentId || 'Manager')
+      .replace(/^Orphaned\s+/i, '')
+      .split(' (', 1)[0]
+      .split(' · ', 1)[0]
+      .trim();
+    const teamLabel = teamId.replace(/^team_/i, '') || agentId.replace(/_manager$/i, '').slice(-12);
+    const desiredName = `Orphaned ${originalName || 'Manager'} · ${teamLabel}`;
+    const identityDisplayName = String(agent?.identity?.displayName || '').trim();
+    const needsUpdate = agent?.isTeamManager !== false
+      || agent?.roleType !== 'orphaned_manager'
+      || agent?.teamRole !== 'Orphaned manager (unassigned)'
+      || String(agent?.orphanedFromTeamId || '').trim() !== teamId
+      || String(agent?.name || '').trim() !== desiredName
+      || identityDisplayName !== desiredName
+      || (agent?.teamId !== undefined && agent?.teamId !== null)
+      || (agent?.teamName !== undefined && agent?.teamName !== null);
+    if (!needsUpdate) continue;
+    agent.orphanedFromTeamId = teamId;
+    agent.isTeamManager = false;
+    agent.roleType = 'orphaned_manager';
+    agent.teamRole = 'Orphaned manager (unassigned)';
+    agent.teamId = undefined;
+    agent.teamName = undefined;
+    agent.name = desiredName;
+    if (agent.identity && typeof agent.identity === 'object') {
+      agent.identity = { ...agent.identity, displayName: agent.name };
+    }
+    changed.push(`${agentId}: detached from missing team ${teamId}`);
+  }
+  if (changed.length > 0) cm.updateConfig({ agents } as any);
+  return changed;
+}
+
 export function createManagedTeam(input: {
   name: string;
   description: string;
@@ -1489,13 +1692,15 @@ export function createManagedTeam(input: {
   };
   syncLegacyTeamFields(team);
   ensureManagedTeamManagerAgent(team);
-  saveManagedTeam(team);
-
-  // Initialize memory files for the purpose→task workflow
+  // Provision the workspace before publishing the team to the authoritative
+  // registry. A registered team with missing artifacts cannot execute safely.
   try {
     const { initTeamWorkspaceArtifacts } = require('../teams/team-workspace');
     initTeamWorkspaceArtifacts(team);
-  } catch { /* non-fatal */ }
+  } catch (error: any) {
+    throw new Error(`Could not provision managed team workspace for ${team.id}: ${error?.message || error}`);
+  }
+  saveManagedTeam(team);
 
   return team;
 }
@@ -1984,7 +2189,7 @@ export function buildTeamContextRuntimeBlock(team: ManagedTeam): string {
 export function getAgentTeamId(agentId: string): string | null {
   const teams = listManagedTeams();
   for (const team of teams) {
-    if (team.subagentIds.includes(agentId)) return team.id;
+    if (team.subagentIds.includes(agentId) || String(team.managerAgentId || '').trim() === String(agentId || '').trim()) return team.id;
   }
   return null;
 }
@@ -1998,6 +2203,7 @@ export function getTeamMemberAgentIds(): Set<string> {
   const ids = new Set<string>();
   for (const team of teams) {
     for (const id of team.subagentIds) ids.add(id);
+    if (team.managerAgentId) ids.add(team.managerAgentId);
   }
   return ids;
 }
@@ -2007,7 +2213,7 @@ export function getTeamMemberAgentIds(): Set<string> {
  */
 export function getTeamForAgent(agentId: string): ManagedTeam | null {
   const teams = listManagedTeams();
-  return teams.find(t => t.subagentIds.includes(agentId)) ?? null;
+  return teams.find(t => t.subagentIds.includes(agentId) || String(t.managerAgentId || '').trim() === String(agentId || '').trim()) ?? null;
 }
 
 // ─── Issue 9: Run History (team-scoped, persisted) ─────────────────────────────
@@ -2461,6 +2667,7 @@ export function createTeamDispatchRecord(
     taskSummary: string;
     requestedBy?: string;
     taskId?: string;
+    admissionCode?: string;
   },
 ): TeamDispatchRecord | null {
   invalidateCache();
@@ -2478,6 +2685,7 @@ export function createTeamDispatchRecord(
     status: 'queued',
     requestedBy: String(input.requestedBy || '').trim() || undefined,
     taskId: String(input.taskId || '').trim() || undefined,
+    admissionCode: String(input.admissionCode || '').trim() || undefined,
     createdAt: Date.now(),
   };
   roomState.dispatches = [...(roomState.dispatches || []), dispatch].slice(-200);
@@ -2494,6 +2702,7 @@ export function updateTeamDispatchRecord(
     startedAt?: number;
     finishedAt?: number;
     resultPreview?: string;
+    admissionCode?: string;
   },
 ): TeamDispatchRecord | null {
   invalidateCache();
@@ -2511,6 +2720,9 @@ export function updateTeamDispatchRecord(
     resultPreview: patch.resultPreview !== undefined
       ? (String(patch.resultPreview || '').trim().slice(0, 1500) || undefined)
       : roomState.dispatches[idx].resultPreview,
+    admissionCode: patch.admissionCode !== undefined
+      ? (String(patch.admissionCode || '').trim() || undefined)
+      : roomState.dispatches[idx].admissionCode,
   };
   saveManagedTeam(team);
   return roomState.dispatches[idx];
@@ -2619,6 +2831,13 @@ export function buildTeamRoomSummary(
       if (typeof message.metadata?.runSuccess === 'boolean') metaBits.push(message.metadata.runSuccess ? 'success' : 'failed');
       const meta = metaBits.length ? ` (${metaBits.join(', ')})` : '';
       lines.push(`  - [${actor}${target}]${meta} ${message.content.slice(0, 300)}`);
+      const commentary = buildDurableCommentaryContext(message.metadata || {}, 1_000);
+      if (commentary) {
+        lines.push(`    Durable turn continuity:`);
+        for (const commentaryLine of commentary.split('\n').slice(0, 8)) {
+          lines.push(`      ${commentaryLine.slice(0, 280)}`);
+        }
+      }
     }
   }
 

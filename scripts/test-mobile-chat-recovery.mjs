@@ -27,6 +27,8 @@ const desktop = [
 ].join('\n');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
 const mobileBadge = read('web-ui/src/mobile/mobile-model-badge.js');
+const mobileContextWindow = read('web-ui/src/mobile/mobile-context-window.js');
+const mobileChatAdapter = read('web-ui/src/features/chat/runtime/mobile-chat-adapter.js');
 const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
 const desktopEntry = read('web-ui/src/desktop-entry.js');
 const settingsReturn = read('web-ui/src/settings-return.js');
@@ -67,6 +69,26 @@ assert.doesNotMatch(
   pages,
   /mobileStreamDisconnected[\s\S]{0,500}body\.text\s*=.*Connection dropped/,
   'disconnect handling must never write transport status into assistant message text',
+);
+assert.match(
+  pages,
+  /function _isMobileGatewayRestartCheckpointMessage\([\s\S]{0,320}Hot restart checkpoint: planned by this chat/,
+  'planned gateway restart checkpoints must be recognized as internal mobile lifecycle messages',
+);
+assert.match(
+  pages,
+  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,700}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
+  'cold mobile history must omit internal planned-restart checkpoint bubbles',
+);
+assert.match(
+  pages,
+  /function _isMobileHiddenTranscriptMessage\([\s\S]{0,400}_isMobileGatewayRestartCheckpointMessage\(msg\)/,
+  'live and cached mobile rows must omit internal planned-restart checkpoint bubbles',
+);
+assert.match(
+  pages,
+  /const restartCheckpoints = mapped\.filter\(_isMobileGatewayRestartCheckpointMessage\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails\(terminalTurn, checkpoint\)/,
+  'mobile history must fold restart checkpoint activity into the terminal acknowledgement row',
 );
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
@@ -162,6 +184,26 @@ assert.match(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
+assert.match(api, /loadMobileSessionPage[\s\S]{0,900}loadMobileChatRunStatuses\(\)\.catch/, 'the paginated mobile drawer must query the recovery-authoritative active run list');
+assert.match(api, /activeRun:\s*session\.activeRun === true \|\| activeSessionIds\.has/, 'paginated session rows must merge active run state before rendering');
+assert.match(shell, /pm-session-working-spinner[^>]*role="status"[^>]*aria-label="Working"/, 'active mobile sessions must replace the text status with an accessible spinner');
+assert.match(shell, /const timestamp = state\.activeRun \? '' : _mobileSessionTimeLabel\(session\)/, 'active mobile sessions must replace their timestamp with the working spinner');
+assert.match(shell, /refreshMobileDrawerSessions\(\{ force: true \}\)/, 'opening the mobile drawer must reconcile recovered run state with the gateway');
+assert.match(router, /isLiveRunningRuntime\(runtime\)[\s\S]{0,160}runtime\?\.kind === 'main_chat_goal'/, 'mobile session activity must include recovered goal runs and reject stale runtimes');
+assert.match(mobileCss, /\.pm-session-working-spinner\s*\{[\s\S]{0,420}animation:\s*pm-session-working-spin/, 'mobile working state must render an animated theme-aware spinner');
+assert.match(mobileCss, /\.pm-session-row\.is-working[\s\S]{0,300}background:\s*color-mix\(in srgb, var\(--pm-bg/, 'working and unread rows must use the active mobile theme instead of a hard-coded black card');
+assert.match(mobileContextWindow, /resolveActiveContextTokens\(\{[\s\S]{0,220}pressureTokens:/, 'mobile context UI must include compaction pressure in its visible token total');
+assert.match(mobileContextWindow, /context-pressure`\)\.catch/, 'mobile context UI must fetch the agent active-context estimator instead of showing only the bounded call slice');
+assert.match(mobileContextWindow, /pressureTokens: pressure\?\.success !== false \? pressure\?\.pressureTokens/, 'mobile context UI must merge the authoritative thread pressure into its gauge payload');
+assert.match(mobileChatAdapter, /source: 'mobile-render-reconciliation'/, 'mobile paints must reconcile compatibility recovery state into the shared runtime');
+assert.match(mobileChatAdapter, /runtimeHistory\.some\(\(message, index\) => message !== compatibilityThread\[index\]\)/, 'mobile render reconciliation must detect same-length transcript replacements');
+assert.match(pages, /const maxRecoveredProcessEntries = 12_000/, 'mobile replay must retain the complete gateway replay window instead of truncating long turns to 120 rows');
+assert.match(pages, /String\(msg\?\.messageKind \|\| ''\)[\s\S]{0,80}=== 'delivery'[\s\S]{0,160}return ''/, 'delivery bubbles must not render fake zero-second work timers');
+assert.match(voiceRuntime, /turn\.streaming === true\)[\s\S]{0,120}\|\| matches\[matches\.length - 1\]/, 'active recovery must reclaim a request-owned row even when disconnect temporarily froze its streaming flag');
+assert.match(pages, /if \(aiTurn\.streaming !== true && foundRequestOwnedTurn\)[\s\S]{0,420}aiTurn\.workEndedAt = 0/, 'reviving a frozen request-owned row must clear its provisional completion boundary');
+assert.match(pages, /function _earliestMobileWorkStart\([\s\S]{0,260}Math\.min\(\.\.\.candidates\)/, 'mobile recovery must keep the earliest known work-start boundary');
+assert.match(pages, /_resetMobileLiveAiTurnForReplay[\s\S]{0,520}_earliestMobileWorkStart\([\s\S]{0,180}options\.startedAt/, 'full replay must not replace an earlier visible turn start with a reconnect timestamp');
+assert.match(pages, /Math\.max\(0, Number\(evt\.workDurationMs\), aiTurn\.workEndedAt - aiTurn\.workStartedAt\)/, 'terminal recovery must not let a restarted runtime report a shorter duration than the visible turn');
 assert.match(api, /const _mobileHistoryWriteQueues = new Map\(\)/, 'mobile history writes must be serialized per session');
 assert.match(api, /const previous = _mobileHistoryWriteQueues\.get\(queueKey\) \|\| Promise\.resolve\(\)/, 'mobile history writes must wait for the prior snapshot');
 assert.match(api, /if \(_mobileHistoryWriteQueues\.get\(queueKey\) === write\) _mobileHistoryWriteQueues\.delete\(queueKey\)/, 'mobile history write queues must release only their own settled write');
@@ -182,6 +224,8 @@ assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 's
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
 assert.match(router, /buildDurableChatTraceFromFrames\(stream\.events/, 'completed turns must use the shared durable trace adapter');
 assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ordinary tool traces must not depend on a vision event');
+assert.match(durableTrace, /type: 'compaction'/, 'context compaction must have a dedicated durable trace type');
+assert.match(durableTrace, /previousStatus === 'compacting'/, 'durable recovery must merge compaction start and completion into one boundary');
 assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must retain explicit user-visible reasoning summaries');
 assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
@@ -193,6 +237,9 @@ assert.match(toolActivityRuntime, /normalizeLegacyToolActivityEntry/, 'legacy to
 assert.match(toolActivityRuntime, /const isToolRecord = \['tool', 'skill', 'result', 'error', 'progress'\]/, 'cold recovery must preserve model prose beside structured tools');
 assert.match(pages, /rawType = String\(entry\.type \|\| entry\.kind \|\| ''\)\.toLowerCase\(\)/, 'mobile recovery must inspect legacy event-shaped trace types');
 assert.match(pages, /rawType === 'tool_result'/, 'mobile recovery must convert legacy tool_result rows into result rows');
+assert.match(pages, /status: String\(recovered\.status \|\| recovered\.extra\?\.status/, 'mobile cache hydration must retain compaction status');
+assert.match(pages, /summary: String\(entry\.summary \|\| entry\.extra\?\.summary/, 'mobile cache snapshots must retain the compaction summary');
+assert.doesNotMatch(pages, /_appendMobileProcess\(aiTurn, evt\.error \? 'error' : 'result', status === 'failed' \? 'Context compaction failed' : 'Context compacted'/, 'compaction results must not be duplicated as ordinary process rows');
 assert.match(pages, /__pmMobileBackgroundAgentDetailRender/, 'background detail recovery must repaint after the rich renderer loads');
 
 // The rich tool renderer is deliberately lazy. Recovered mobile history must
@@ -344,9 +391,14 @@ assert.match(
 );
 assert.match(
   pages,
-  /const seenRequests = new Map\(\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails/,
-  'assistant recovery dedupe must collapse duplicate bubbles by stable request identity across user boundaries',
+  /const seenRequests = new Map\(\)[\s\S]{0,1200}const separatedByUser = list\.slice\(requestIndex \+ 1, i\)[\s\S]{0,300}continue;/,
+  'assistant recovery dedupe must preserve later responses when a user turn separates a reused request identity',
 );
+assert.match(pages, /if \(requestIndex >= 0 && _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)/, 'request-id dedupe must also verify compatible assistant content');
+assert.match(pages, /Request ids identify a transport run[\s\S]{0,360}aText\.startsWith\(bText\)/, 'transport request identity must not collapse distinct durable rows');
+assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true \}\)/, 'painted transcript order must remain the hydration continuity spine');
+assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,180}candidateTimestamp <= primaryLatestTimestamp/, 'stale unmatched hydration rows must not be appended as fake new messages');
+assert.doesNotMatch(pages, /_mergeMobileHistoryRecords\(mapped, durableLocal, \{ sortByTimestamp: true \}\)/, 'mixed-clock hydration must never reorder the transcript by timestamp');
 assert.match(
   pages,
   /const separatedByUser = list\.slice\(prevIndex \+ 1, i\)[\s\S]{0,420}Math\.abs\(currentAt - previousAt\) < 30_000/,
@@ -396,8 +448,23 @@ assert.match(
 );
 assert.match(
   renderer,
-  /const completedTraceEntries = \(!m\.streaming \|\| finalFrameReceived \|\| traceFrozenForSteer\) \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
+  /const messageIsLive = m\.streaming === true && !terminalFrameReceived;[\s\S]{0,700}const completedTraceEntries = !messageIsLive \|\| traceFrozenForSteer \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
   'the deferred renderer must expose a final response or frozen pre-steer trace immediately',
+);
+assert.match(
+  pages,
+  /if \(applied === 'final' \|\| applied === 'done' \|\| applied === 'error'\) finishAiTurn\(\);/,
+  'the foreground mobile SSE client must settle on the final frame instead of waiting for done',
+);
+assert.match(
+  pages,
+  /if \(applied === 'final' \|\| applied === 'done' \|\| applied === 'error'\) finishMobileSideTurn\(\);/,
+  'the mobile side chat must persist the answer at the final frame boundary',
+);
+assert.match(
+  renderer,
+  /const terminalFrameReceived = message\?\._pmFinalReceived/,
+  'agent bubbles must not keep rendering a terminal final frame as live work',
 );
 assert.match(
   pages,
@@ -408,6 +475,51 @@ assert.match(
   pages,
   /if \(aiTurn\?\._pmFinalReceived && _mobileAssistantHasVisibleAnswer\(aiTurn\)\)/,
   'foreground recovery must preserve and finalize an already-received response',
+);
+assert.match(
+  pages,
+  /const isTerminalStreamEvent = \['final', 'done', 'error'\]\.includes[\s\S]{0,800}aiTurn\._pmFinalReceived === true/,
+  'a terminal frame must still settle a turn when reconnect dedupe has already consumed its sequence',
+);
+assert.match(
+  pages,
+  /const isTerminalMainStreamEvent = \['final', 'done', 'error'\]\.includes[\s\S]{0,620}receipts\.has\(requestedSession, evt\)/,
+  'the websocket/replay envelope must not discard the only terminal frame before the stream reducer sees it',
+);
+assert.match(
+  pages,
+  /aiTurn\.streaming\s*&&\s*aiTurn\._pmFinalReceived !== true\s*&&\s*_readMobileActiveRun\(actualSessionId\)\?\.disconnected/,
+  'onDone recovery must not defer cleanup after the final boundary has arrived',
+);
+assert.match(
+  pages,
+  /case 'done':[\s\S]{0,900}aiTurn\._pmFinalReceived = true;/,
+  'side-chat done frames must carry the same terminal marker as main-chat frames',
+);
+assert.match(
+  pages,
+  /status\?\.latestAssistant\?\.content/,
+  'recovery must compare a cached live row with the gateway\'s durable latest answer',
+);
+assert.match(
+  pages,
+  /sourceIsDurablyCompleted[\s\S]{0,700}target\.streaming = false/,
+  'durable history must be authoritative over a stale local streaming flag',
+);
+assert.match(
+  pages,
+  /const staleActiveStatusAfterCompletedAnswer = status\?\.active === true/,
+  'recovery must not revive a cached completed answer while the gateway is still unwinding its old runtime',
+);
+assert.match(
+  pages,
+  /latestUserAt <= latestAssistantCompletedAt \+ 1_000/,
+  'stale active-status suppression must still allow a genuinely newer user turn',
+);
+assert.match(
+  pages,
+  /if \(next\.role === 'ai'[\s\S]{0,260}next\._pmFinalReceived === true[\s\S]{0,180}next\.streaming = false/,
+  'cached terminal rows must remain completed during cold hydration',
 );
 assert.doesNotMatch(
   pages,
@@ -474,7 +586,21 @@ assert.match(
   'an inactive or recovered read must preserve the visible turn until durable completion is proven',
 );
 assert.match(pages, /const localThreadBeforeClear = localThread\.slice\(\)/, 'inactive recovery must snapshot the live array before destructive cleanup');
-assert.match(pages, /const localThreadForMerge = completedDurableTurn \? localThread : localThreadBeforeClear/, 'inactive recovery must merge the pre-clear snapshot unless durable completion is proven');
+assert.match(
+  pages,
+  /const localThreadForMerge = completedDurableTurn && !gatewayRestartContinuity\s*\?\s*localThread\s*:\s*localThreadBeforeClear/,
+  'inactive recovery must merge the pre-clear snapshot for planned gateway restart continuity',
+);
+assert.match(
+  pages,
+  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,2200}serverRows\.splice\(terminalIndex, 1\)/,
+  'planned gateway restart recovery must coalesce the local restart row with the durable acknowledgement',
+);
+assert.match(
+  pages,
+  /const localBeforeRefresh = Array\.isArray\(__pmChat\.threads\?\.\[sid\]\) \? __pmChat\.threads\[sid\]\.slice\(\) : \[\]/,
+  'restart notifications must snapshot the local row before clearing the live array',
+);
 assert.doesNotMatch(pages, /localAiTurn\?\.streaming && !completedDurableTurn && status\?\.recovered !== true/, 'recovered status must not authorize dropping the visible live turn');
 assert.match(pages, /const recoveryStartedAt = Number\([\s\S]{0,260}localAiTurn\?\.timestamp/, 'inactive recovery must scope durable-history completion to the recovered turn boundary');
 assert.match(router, /stream: reconciliation\.stream \? \{[\s\S]{0,300}lastSeq:/, 'run status must expose the canonical stream cursor for cross-tab recovery');
@@ -488,8 +614,23 @@ assert.match(
 assert.match(pages, /function _mobileHistoryPageIsPartial\(session, history = \[\]\)/, 'mobile recovery must recognize bounded gateway history pages');
 assert.match(pages, /preserveLocalHistory: _mobileHistoryPageIsPartial\(session, history\)/, 'bounded recovery pages must preserve the existing local transcript');
 assert.match(pages, /function _mobileHistoryHasProtectedLocalContinuity\(messages = \[\]\)/, 'mobile recovery must identify local live/final continuity markers');
+assert.match(
+  pages,
+  /_appendMobileLiveTrace\(message, 'preamble', text,[\s\S]{0,180}reasoningKind: 'full_thought'/,
+  'mobile preamble text must be cached as a durable full thought',
+);
+assert.match(
+  pages,
+  /event === 'token_narration_boundary'[\s\S]{0,700}source: 'agent_thought'[\s\S]{0,180}reasoningKind: 'full_thought'/,
+  'mobile recovery must restore narration boundaries as full commentary rather than summary rows',
+);
 assert.match(pages, /localRows\.length > durableServerCount/, 'mobile recovery must retain a richer local transcript over a shorter server snapshot');
 assert.match(pages, /_mobileShouldPreserveLocalHistoryContinuity\(mapped, durableLocal\)/, 'mobile history hydration must guard against stale snapshot replacement');
+assert.match(
+  pages,
+  /const preserveLocalHistory = durableLocal\.length > 0 \|\| options\.preserveLocalHistory === true/,
+  'mobile snapshot reconciliation must never remove durable rows that are already visible',
+);
 assert.match(api, /let _sessionCacheGeneration = 0/, 'mobile session cache invalidation must have a generation fence');
 assert.match(api, /cacheGeneration === _sessionCacheGenerationFor\(sid, gatewayScope\)/, 'invalidated in-flight session responses must not repopulate the cache');
 assert.match(api, /const requestPrefix = `\$\{scope\}:\$\{sid\}:`/, 'session invalidation must detach stale in-flight request coalescing');
@@ -518,7 +659,7 @@ assert.match(
 );
 assert.match(
   pages,
-  /_clearRecoveredMobileChatError\(aiTurn\);\s*aiTurn\.streaming = true/,
+  /_clearRecoveredMobileChatError\(aiTurn\);[\s\S]{0,520}aiTurn\.streaming = true/,
   'live frames must clear the connection placeholder and revive the existing continuation in place',
 );
 assert.match(pages, /\.filter\(_isMobileMessageCacheable\)/, 'in-progress trace messages must be cacheable');

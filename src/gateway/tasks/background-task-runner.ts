@@ -39,7 +39,18 @@ import {
   shouldAppendWriteNoteCompletionStep,
   WRITE_NOTE_COMPLETION_MARKER,
 } from './task-completion-protocol.js';
-import { clearHistory, addMessage, getHistory, flushSession, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace } from '../session';
+import {
+  clearHistory,
+  addMessage,
+  getActiveHistoryForPersistence,
+  getSession,
+  restoreSessionContextState,
+  flushSession,
+  activateToolCategory,
+  clearSessionMutationScope,
+  setSessionMutationScope,
+  setWorkspace,
+} from '../session';
 import {
   buildTaskPauseSnapshot,
   formatTaskPauseSnapshot,
@@ -82,9 +93,16 @@ import {
 import { buildObsoleteBrandBlockMessage, containsObsoleteProductBrand } from '../scheduled-output-guard';
 import { appendSubagentChatMessage } from '../agents-runtime/subagent-chat-store';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
+import { appendBackgroundSseTrace } from './background-agent-trace';
+import {
+  buildTaskContinuitySnapshot,
+  formatTaskContinuityForPrompt,
+  serializeTaskSessionMessage,
+} from './task-continuity';
 import {
   addPendingRuntimeSteerForSession,
   finishLiveRuntime,
+  listLiveRuntimes,
   registerLiveRuntime,
   updateLiveRuntimeCheckpoint,
 } from '../live-runtime-registry';
@@ -96,9 +114,53 @@ const pauseRequests = new Set<string>();
 const activeRunners = new Set<string>();
 const taskAbortSignals = new Map<string, { aborted: boolean }>();  // Per-task abort signals for immediate pause
 
-const MAX_RESUME_MESSAGES = 10;
 const BACKGROUND_SESSION_MAX_MESSAGES = 40;
+// Keep the whole bounded active task transcript, including every assistant
+// turn's durable commentary capsule, until the session itself compacts.
+const MAX_RESUME_MESSAGES = BACKGROUND_SESSION_MAX_MESSAGES;
 const DEFAULT_ROUND_TIMEOUT_MS = 120_000;
+
+function persistExternallyInterruptedTaskContinuity(
+  taskId: string,
+  status: 'aborted' | 'failed',
+  reason: string,
+): void {
+  const task = loadTask(taskId);
+  if (!task) return;
+  const runtime = listLiveRuntimes().find((entry) => String(entry.taskId || '') === taskId);
+  const processEntries = [
+    ...(Array.isArray(task.resumeContext?.processEntries) ? task.resumeContext.processEntries : []),
+    ...(Array.isArray(runtime?.checkpoint?.processEntries) ? runtime!.checkpoint.processEntries : []),
+  ].slice(-320);
+  const liveTraceEntries = [
+    ...(Array.isArray(task.resumeContext?.liveTraceEntries) ? task.resumeContext.liveTraceEntries : []),
+    ...(Array.isArray(runtime?.checkpoint?.liveTraceEntries) ? runtime!.checkpoint.liveTraceEntries : []),
+  ].slice(-320);
+  const continuity = buildTaskContinuitySnapshot({
+    task,
+    sessionId: `task_${taskId}`,
+    status,
+    processEntries,
+    liveTraceEntries,
+    visibleReasoningSummary: String(
+      runtime?.checkpoint?.narrationTail || task.resumeContext?.visibleReasoningSummary || '',
+    ).trim(),
+    resultText: runtime?.checkpoint?.result || runtime?.checkpoint?.message,
+    abortReason: reason,
+  });
+  updateResumeContext(taskId, {
+    commentaryContext: continuity.commentaryContext || task.resumeContext?.commentaryContext,
+    visibleReasoningSummary: continuity.visibleReasoningSummary || task.resumeContext?.visibleReasoningSummary,
+    processEntries: continuity.processEntries.length ? continuity.processEntries : task.resumeContext?.processEntries,
+    liveTraceEntries: continuity.liveTraceEntries.length ? continuity.liveTraceEntries : task.resumeContext?.liveTraceEntries,
+    lastTurnPacket: continuity.packet,
+    onResumeInstruction: [
+      task.resumeContext?.onResumeInstruction,
+      `The task was externally ${status === 'failed' ? 'failed' : 'interrupted'} before its runner could finish: ${reason}`,
+      'Resume from this packet and the task journal. Verify the last recorded tool boundary before repeating any action.',
+    ].filter(Boolean).join('\n\n'),
+  });
+}
 // How long to wait after the LAST tool call before timing out a round.
 // This resets on every tool_call SSE event so slow-starting models don't
 // burn the budget before their first tool fires.
@@ -474,6 +536,13 @@ export class BackgroundTaskRunner {
   } | null;
   private openingAction: string | undefined;
   private runtimeId: string | undefined;
+  private continuityProcessEntries: Array<Record<string, any>> = [];
+  private continuityLiveTraceEntries: Array<Record<string, any>> = [];
+  private continuityTraceSeq = 0;
+  private continuityVisibleReasoning = '';
+  private continuityLastPersistAt = 0;
+  private continuitySessionId = '';
+  private continuitySummaryUpdatedAt = 0;
 
   constructor(
     taskId: string,
@@ -505,6 +574,7 @@ export class BackgroundTaskRunner {
   static cancelTask(taskId: string, reason: string = 'Cancelled by operator.'): boolean {
     const task = loadTask(taskId);
     if (!task) return false;
+    persistExternallyInterruptedTaskContinuity(taskId, 'failed', reason);
     pauseRequests.add(taskId);
     const signal = taskAbortSignals.get(taskId);
     if (signal) {
@@ -534,6 +604,11 @@ export class BackgroundTaskRunner {
     if (!activeRunners.has(taskId)) return false;
     const task = loadTask(taskId);
     if (!task) return false;
+    persistExternallyInterruptedTaskContinuity(
+      taskId,
+      'aborted',
+      `interrupted by scheduled task ${scheduleId}`,
+    );
     updateTaskStatus(taskId, 'paused', {
       pauseReason: 'interrupted_by_schedule',
       pausedByScheduleId: scheduleId,
@@ -652,6 +727,13 @@ export class BackgroundTaskRunner {
       }
     } catch (err: any) {
       const failure = compactProposalError(err, 'Proposal executor stopped unexpectedly.');
+      this._persistResumeContextSnapshot(
+        taskId,
+        this.continuitySessionId || `task_${taskId}`,
+        'failed',
+        failure,
+        'runner_exception',
+      );
       const failedTask = updateTaskStatus(taskId, 'failed', { finalSummary: failure });
       const proposalId = String(failedTask?.proposalExecution?.proposalId || task?.proposalExecution?.proposalId || '').trim();
       if (proposalId) {
@@ -762,6 +844,7 @@ export class BackgroundTaskRunner {
       const current = i === task.currentStepIndex ? ' ← CURRENT' : '';
       return `  [${icon}] Step ${i + 1}: ${s.description.slice(0, 120)}${current}`;
     }).join('\n');
+    const continuityNote = formatTaskContinuityForPrompt(task.resumeContext);
 
     return [
       `[BACKGROUND TASK CONTEXT]`,
@@ -779,6 +862,7 @@ export class BackgroundTaskRunner {
       `- Do NOT call declare_plan again — your plan is already set.`,
       ...buildTaskCompletionProtocol(task),
       `- If blocked, say what is blocking you and stop.`,
+      continuityNote,
       `You are running autonomously.${teamSubagentNote}${profileNote}${standaloneRoleBlock}${standaloneAssignments}${blockedStateNote}${latestPauseAnalysis}${latestResumeBrief}${resumeNote}${xLoginGuidance}`,
       `[/BACKGROUND TASK CONTEXT]`,
     ].filter(Boolean).join('\n');
@@ -1365,10 +1449,17 @@ export class BackgroundTaskRunner {
   }
 
   private _restoreSessionForRetry(sessionId: string, resumeMessages: any[]): void {
+    const currentSession = getSession(sessionId);
+    const contextState = {
+      latestContextSummary: currentSession.latestContextSummary,
+      contextSummaryUpdatedAt: currentSession.contextSummaryUpdatedAt,
+      workingContextPackets: currentSession.workingContextPackets,
+    };
     clearHistory(sessionId);
     for (const msg of resumeMessages) {
       if (msg && (msg.role === 'user' || msg.role === 'assistant')) {
         addMessage(sessionId, {
+          ...msg,
           role: msg.role,
           content: String(msg.content || ''),
           timestamp: msg.timestamp || Date.now(),
@@ -1380,20 +1471,86 @@ export class BackgroundTaskRunner {
         });
       }
     }
+    if (contextState.latestContextSummary) {
+      restoreSessionContextState(sessionId, {
+        ...contextState,
+        // resumeMessages are already the active tail for this task run.
+        contextStartIndex: 0,
+      });
+    }
   }
 
-  private _persistResumeContextSnapshot(taskId: string, sessionId: string): void {
+  private _captureContinuityEvent(event: string, data: any): void {
+    appendBackgroundSseTrace(
+      this.continuityProcessEntries,
+      this.continuityLiveTraceEntries,
+      event,
+      data,
+      {
+        seq: ++this.continuityTraceSeq,
+        type: event,
+        at: Date.now(),
+        streamId: this.taskId,
+        data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
+      },
+    );
+    if (event === 'token_narration_boundary') {
+      const text = String(data?.text || data?.message || data?.narration || '').trim();
+      if (text) this.continuityVisibleReasoning = `${this.continuityVisibleReasoning}\n${text}`.trim().slice(-4_000);
+    } else if (event === 'thinking' || event === 'agent_thought') {
+      const visibility = String(data?.visibility || '').toLowerCase();
+      if (visibility !== 'private' && visibility !== 'internal') {
+        const text = String(data?.thinking || data?.text || data?.message || '').trim();
+        if (text) this.continuityVisibleReasoning = `${this.continuityVisibleReasoning}\n${text}`.trim().slice(-4_000);
+      }
+    }
+  }
+
+  private _persistResumeContextSnapshot(
+    taskId: string,
+    sessionId: string,
+    status: 'completed' | 'aborted' | 'failed' = 'completed',
+    resultText?: string,
+    abortReason?: string,
+  ): void {
     const task = loadTask(taskId);
+    if (!task) return;
     const existingRound = Number(task?.resumeContext?.round) || 0;
-    const sessionHistory = getHistory(sessionId, 40);
-    updateResumeContext(taskId, {
-      messages: sessionHistory.slice(-MAX_RESUME_MESSAGES).map(h => ({
-        role: h.role,
-        content: h.content,
-        timestamp: h.timestamp,
-      })),
-      round: existingRound,
+    const session = getSession(sessionId);
+    const sessionSummaryUpdatedAt = Number(session.contextSummaryUpdatedAt || 0) || 0;
+    if (sessionSummaryUpdatedAt > this.continuitySummaryUpdatedAt) {
+      // The rolling summary is now the source of truth for everything before
+      // the boundary.  Drop the pre-compaction commentary/process tail so a
+      // later task resume cannot replay it beside that summary.
+      this.continuityProcessEntries = [];
+      this.continuityLiveTraceEntries = [];
+      this.continuityVisibleReasoning = '';
+      this.continuityTraceSeq = 0;
+      this.continuitySummaryUpdatedAt = sessionSummaryUpdatedAt;
+    }
+    const sessionHistory = getActiveHistoryForPersistence(sessionId, MAX_RESUME_MESSAGES);
+    const continuity = buildTaskContinuitySnapshot({
+      task,
+      sessionId,
+      status,
+      processEntries: this.continuityProcessEntries,
+      liveTraceEntries: this.continuityLiveTraceEntries,
+      visibleReasoningSummary: this.continuityVisibleReasoning,
+      resultText,
+      abortReason,
     });
+    updateResumeContext(taskId, {
+      messages: sessionHistory.map(serializeTaskSessionMessage),
+      round: existingRound,
+      latestContextSummary: session.latestContextSummary,
+      contextSummaryUpdatedAt: session.contextSummaryUpdatedAt,
+      commentaryContext: continuity.commentaryContext || task.resumeContext?.commentaryContext,
+      visibleReasoningSummary: continuity.visibleReasoningSummary,
+      processEntries: continuity.processEntries,
+      liveTraceEntries: continuity.liveTraceEntries,
+      lastTurnPacket: continuity.packet,
+    });
+    this.continuityLastPersistAt = Date.now();
   }
 
   private async _withRoundTimeout<T>(
@@ -1606,6 +1763,31 @@ export class BackgroundTaskRunner {
     // can resolve the task record from the session ID.
     const sessionId = `task_${taskId}`;
     clearHistory(sessionId);
+    this.continuitySessionId = sessionId;
+    this.continuityProcessEntries = [];
+    this.continuityLiveTraceEntries = [];
+    this.continuityTraceSeq = 0;
+    this.continuityVisibleReasoning = '';
+    this.continuityLastPersistAt = 0;
+    this.continuitySummaryUpdatedAt = 0;
+    // A resumed/failed task must carry the previous turn's durable trace
+    // forward until a new compaction boundary is recorded.  Otherwise a
+    // pause immediately after restart could replace the only useful packet
+    // with an empty current-round snapshot.
+    this.continuityProcessEntries = Array.isArray(initialTask.resumeContext?.processEntries)
+      ? initialTask.resumeContext.processEntries.slice(-320)
+      : [];
+    this.continuityLiveTraceEntries = Array.isArray(initialTask.resumeContext?.liveTraceEntries)
+      ? initialTask.resumeContext.liveTraceEntries.slice(-320)
+      : [];
+    this.continuityVisibleReasoning = String(initialTask.resumeContext?.visibleReasoningSummary || '').trim().slice(-4_000);
+    this.continuitySummaryUpdatedAt = Number(initialTask.resumeContext?.contextSummaryUpdatedAt || 0) || 0;
+    this.continuityTraceSeq = Math.max(
+      0,
+      ...[...this.continuityProcessEntries, ...this.continuityLiveTraceEntries]
+        .map((entry: any) => Number(entry?.seq || entry?.extra?.seq || 0))
+        .filter((value) => Number.isFinite(value)),
+    );
     if (initialTask.teamSubagent?.teamId && initialTask.teamSubagent?.agentId) {
       try {
         const { registerBrowserSessionMetadata } = await import('../browser-tools');
@@ -1677,6 +1859,7 @@ export class BackgroundTaskRunner {
       for (const msg of initialMessages) {
         if (msg && (msg.role === 'user' || msg.role === 'assistant')) {
           addMessage(sessionId, {
+            ...msg,
             role: msg.role,
             content: String(msg.content || ''),
             timestamp: msg.timestamp || Date.now(),
@@ -1689,6 +1872,13 @@ export class BackgroundTaskRunner {
         }
       }
       appendJournal(taskId, { type: 'resume', content: `Restored ${initialMessages.length}/${rawResumeMessages.length} message(s) (${resumeTotalChars} chars).` });
+    }
+    if (initialTask.resumeContext?.latestContextSummary) {
+      restoreSessionContextState(sessionId, {
+        latestContextSummary: initialTask.resumeContext.latestContextSummary,
+        contextSummaryUpdatedAt: initialTask.resumeContext.contextSummaryUpdatedAt,
+        contextStartIndex: 0,
+      });
     }
 
     // ── Stall counter state ───────────────────────────────────────────────────
@@ -1732,13 +1922,10 @@ export class BackgroundTaskRunner {
 
     const sendSSE = (event: string, data: any) => {
       const visibility = String(data?.visibility || '').toLowerCase();
-      if (event === 'reasoning_summary_delta') {
-        // The gateway explicitly marks these summaries as user-visible. Raw
-        // thinking_delta remains private and is deliberately not journaled.
-        queueVisibleReasoning(data?.text || data?.summary || data?.thinking);
-      } else {
-        flushVisibleReasoning();
-      }
+      this._captureContinuityEvent(event, data);
+      // Provider summaries are mutable status packets. Persist the actual
+      // narration/commentary events, matching main chat and spawned agents.
+      if (event !== 'reasoning_summary_delta' && event !== 'reasoning_summary') flushVisibleReasoning();
       if (this.runtimeId) {
         updateLiveRuntimeCheckpoint(this.runtimeId, {
           event,
@@ -1746,10 +1933,20 @@ export class BackgroundTaskRunner {
           toolName: data?.action ? String(data.action) : undefined,
           result: data?.result ? String(data.result).slice(0, 1000) : undefined,
           currentStepIndex: loadTask(taskId)?.currentStepIndex,
+          commentaryContext: this.continuityVisibleReasoning.slice(-4_000),
+          processEntries: this.continuityProcessEntries.slice(-320),
+          liveTraceEntries: this.continuityLiveTraceEntries.slice(-320),
         });
       }
       this._broadcast('task_stream_event', { taskId, eventType: event, data });
-      if ((event === 'thinking' || event === 'agent_thought') && visibility !== 'private') {
+      if (event === 'token_narration_boundary') {
+        const text = String(data?.text || data?.message || data?.narration || '').trim();
+        if (text) {
+          appendJournal(taskId, { type: 'reasoning', content: text.slice(0, 1200), detail: text.length > 1200 ? text.slice(0, 4000) : undefined });
+          this._broadcast('task_reasoning', { taskId, text: text.slice(0, 1200), reasoningKind: 'full_thought' });
+          this._broadcast('task_panel_update', { taskId });
+        }
+      } else if ((event === 'thinking' || event === 'agent_thought') && visibility !== 'private') {
         const text = String(data?.thinking || data?.text || data?.message || '').trim();
         if (text) {
           appendJournal(taskId, {
@@ -2135,6 +2332,13 @@ export class BackgroundTaskRunner {
       if (pauseRequests.has(taskId)) {
         const pauseReason = task.pauseReason || 'user_pause';
         const scheduleId = task.pausedByScheduleId;
+        this._persistResumeContextSnapshot(
+          taskId,
+          sessionId,
+          'aborted',
+          lastResultSummary,
+          pauseReason,
+        );
         updateTaskStatus(taskId, 'paused', { pauseReason });
         const pauseMsg = pauseReason === 'interrupted_by_schedule' && scheduleId
           ? `Paused by scheduled task (schedule: ${scheduleId}). Will resume after schedule completes.`
@@ -2148,6 +2352,7 @@ export class BackgroundTaskRunner {
 
       if (task.status === 'waiting_subagent') {
         activeRunners.delete(taskId);
+        this._persistResumeContextSnapshot(taskId, sessionId, 'aborted', lastResultSummary, 'waiting for sub-agents');
         appendJournal(taskId, { type: 'pause', content: 'Waiting for sub-agents to complete.' });
         flushSession(sessionId);
         return;
@@ -2319,6 +2524,7 @@ export class BackgroundTaskRunner {
             `${roundOutcome.reason} ${roundOutcome.detail}`,
             'Proposal executor returned an invalid response.',
           );
+          this._persistResumeContextSnapshot(taskId, sessionId, 'failed', failure, roundOutcome.reason);
           const failedTask = updateTaskStatus(taskId, 'failed', { finalSummary: failure });
           const proposalId = String(liveTask.proposalExecution?.proposalId || '').trim();
           if (proposalId) {
@@ -2336,6 +2542,7 @@ export class BackgroundTaskRunner {
           flushSession(sessionId);
           return;
         }
+        this._persistResumeContextSnapshot(taskId, sessionId, 'aborted', roundOutcome.reason, roundOutcome.detail);
         await this._pauseForAssistance(task, roundOutcome.reason, roundOutcome.detail);
         return;
       }
@@ -2360,14 +2567,11 @@ export class BackgroundTaskRunner {
         return;
       }
 
-      // Persist session context
-      const sessionHistory = getHistory(sessionId, 40);
+      // Persist the active transcript and the durable commentary/packet for
+      // the next round or a later task resume. The transcript remains the
+      // source of truth until compaction; the summary is restored separately.
+      this._persistResumeContextSnapshot(taskId, sessionId, 'completed', result.text);
       updateResumeContext(taskId, {
-        messages: sessionHistory.slice(-MAX_RESUME_MESSAGES).map(h => ({
-          role: h.role,
-          content: h.content,
-          timestamp: h.timestamp,
-        })),
         round: (Number(task.resumeContext?.round) || 0) + 1,
       });
       flushSession(sessionId);
@@ -2521,6 +2725,13 @@ export class BackgroundTaskRunner {
 	  }
 
   private async _pauseForClarification(task: TaskRecord, question: string): Promise<void> {
+    this._persistResumeContextSnapshot(
+      task.id,
+      this.continuitySessionId || `task_${task.id}`,
+      'aborted',
+      question,
+      'awaiting_user_input',
+    );
     if (task.teamSubagent?.teamId && task.teamSubagent?.agentId) {
       try {
         const { appendTeamChat, queueManagerMessage } = await import('../teams/managed-teams.js');
@@ -2560,6 +2771,13 @@ export class BackgroundTaskRunner {
     detail?: string,
     opts?: { pauseReason?: PauseReason },
   ): Promise<void> {
+    this._persistResumeContextSnapshot(
+      task.id,
+      this.continuitySessionId || `task_${task.id}`,
+      'aborted',
+      reason,
+      detail,
+    );
     const pausedTask = updateTaskStatus(task.id, 'needs_assistance', { pauseReason: opts?.pauseReason || 'error' }) || loadTask(task.id) || task;
     appendJournal(task.id, {
       type: 'pause',

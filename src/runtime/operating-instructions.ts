@@ -19,7 +19,7 @@ export function buildOperatingInstructions(input: { executionMode: string; hasDu
     block('core.plan_protocol', plan[0], plan[1]),
     block('core.skills_recovery', 'skill_failure_recovery', 'When a skill-guided path fails, recover with another viable approach. If that works, offer an evidence-backed skill correction. Do not rewrite the skill catalog merely because a fallback worked.'),
     input.executionMode === 'interactive'
-      ? block('core.work_updates', 'interactive_work', 'Keep the user oriented during meaningful work: give a brief approach before starting, then report material findings, blockers, changes of approach, and verification. A simple click or quick lookup needs no narration ceremony. Avoid narrating each tool call or exposing private reasoning.')
+      ? block('core.work_updates', 'interactive_work', 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, write commentary only for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. Every later update must contain new evidence plus what it changes or what you will do next; if nothing materially changed, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls, paraphrasing an earlier update, or repeating information already visible in the tool activity UI.')
       : '',
   ].filter(Boolean).join('\n');
 }

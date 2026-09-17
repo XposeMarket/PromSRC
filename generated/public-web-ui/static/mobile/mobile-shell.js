@@ -228,14 +228,9 @@ async function _togglePin(sessionId) {
 function _setCachedSessionUnread(sessionId, unread, mobileLastReadAt = null) {
   const id = String(sessionId || '');
   if (!id) return;
-  const states = [_drawerSessionPaging?.all, _drawerSessionPaging?.settled];
-  for (const state of states) {
-    for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
-      if (String(session?.id || '') !== id) continue;
-      session.mobileUnread = unread === true;
-      if (mobileLastReadAt !== null) session.mobileLastReadAt = mobileLastReadAt;
-    }
-  }
+  const patch = { mobileUnread: unread === true };
+  if (mobileLastReadAt !== null) patch.mobileLastReadAt = mobileLastReadAt;
+  _patchDrawerSessionState(id, patch);
 }
 
 async function _markSessionUnread(sessionId) {
@@ -296,6 +291,7 @@ export const ICONS = {
   moon:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.8 6.8 0 0 0 9.8 9.8z"/></svg>',
   sun:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   image:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  camera:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.5-2h7L17 8h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="14" r="3.5"/></svg>',
   video:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>',
   layers:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 18l9 5 9-5"/></svg>',
   preset:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 14.9 8.6 22 9.3 16.6 14 18.2 21 12 17.4 5.8 21 7.4 14 2 9.3 9.1 8.6 12 2"/></svg>',
@@ -605,9 +601,16 @@ function _wireDrawerPullToRefresh() {
 }
 
 const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
+const PM_DRAWER_LAYOUT_STATE_KEY = 'pm_mobile_drawer_layout_v1';
+const PM_DRAWER_SESSION_STATE_KEY = 'pm_mobile_drawer_session_state_v1';
+const PM_MOBILE_ACTIVE_RUN_KEY = 'pm_mobile_active_chat_run';
+const PM_MOBILE_ACTIVE_RUNS_KEY = 'pm_mobile_active_chat_runs';
+const PM_DRAWER_SESSION_STATE_ACTIVE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const PM_DRAWER_SESSION_STATE_MAX_ENTRIES = 400;
 const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
+let _drawerSessionStateCache = null;
 let _drawerSessionView = 'active';
 const _drawerSessionPaging = {
   all: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
@@ -691,7 +694,10 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
         page = { sessions: [], total: 0, offset, hasMore: false };
       }
 
-      const incoming = (Array.isArray(page?.sessions) ? page.sessions : []).filter((session) => !_isDrawerHiddenRuntimeSession(session));
+      const incoming = _hydrateDrawerSessionStates(
+        (Array.isArray(page?.sessions) ? page.sessions : [])
+          .filter((session) => !_isDrawerHiddenRuntimeSession(session)),
+      );
       _syncPinnedCacheFromSessions(incoming);
       const seen = new Set(reset ? [] : state.sessions.map((s) => String(s?.id || '')));
       const merged = reset ? [] : state.sessions.slice();
@@ -796,8 +802,21 @@ function _resolveTheme(themeId) {
 }
 
 function _getTheme() {
-  const currentSkin = document.documentElement.getAttribute('data-skin');
   const list = _getThemeList();
+  // The document attributes are only first-paint hints. The persisted choice
+  // is authoritative on a fresh load; otherwise an early fallback attribute
+  // can overwrite a valid blue/purple choice before the mobile shell starts.
+  try {
+    const saved = typeof window.PROM_READ_SAVED_THEME === 'function'
+      ? window.PROM_READ_SAVED_THEME()
+      : localStorage.getItem(PM_THEME_KEY);
+    if (saved) {
+      const resolved = _resolveTheme(saved);
+      if (list.some((t) => t.id === resolved.id)) return resolved.id;
+    }
+  } catch {}
+
+  const currentSkin = document.documentElement.getAttribute('data-skin');
   if (list.some((t) => t.id === currentSkin)) return currentSkin;
 
   const currentTheme = document.documentElement.getAttribute('data-theme');
@@ -805,14 +824,6 @@ function _getTheme() {
     const byBase = _resolveTheme(currentTheme);
     if (byBase) return byBase.id;
   }
-
-  try {
-    const saved = localStorage.getItem(PM_THEME_KEY);
-    if (saved) {
-      const resolved = _resolveTheme(saved);
-      if (list.some((t) => t.id === resolved.id)) return resolved.id;
-    }
-  } catch {}
 
   return list[0]?.id || 'dark';
 }
@@ -1221,6 +1232,235 @@ function _saveDrawerState(state) {
   return { ..._drawerStateCache };
 }
 
+function _loadDrawerLayoutState() {
+  const fallback = { pinnedCollapsed: false, projectsCollapsed: false, expandedProjectIds: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(PM_DRAWER_LAYOUT_STATE_KEY) || '{}');
+    const expandedProjectIds = Array.isArray(raw?.expandedProjectIds)
+      ? [...new Set(raw.expandedProjectIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : [];
+    return {
+      pinnedCollapsed: raw?.pinnedCollapsed === true,
+      projectsCollapsed: raw?.projectsCollapsed === true,
+      expandedProjectIds,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function _restoreDrawerLayoutState() {
+  const state = _loadDrawerLayoutState();
+  _drawerPinnedCollapsed = state.pinnedCollapsed;
+  _drawerProjectsCollapsed = state.projectsCollapsed;
+  _drawerExpandedProjectIds.clear();
+  state.expandedProjectIds.forEach((id) => _drawerExpandedProjectIds.add(id));
+}
+
+function _saveDrawerLayoutState() {
+  try {
+    localStorage.setItem(PM_DRAWER_LAYOUT_STATE_KEY, JSON.stringify({
+      pinnedCollapsed: _drawerPinnedCollapsed,
+      projectsCollapsed: _drawerProjectsCollapsed,
+      expandedProjectIds: Array.from(_drawerExpandedProjectIds),
+    }));
+  } catch {}
+}
+
+function _readDrawerSessionStateCache() {
+  if (_drawerSessionStateCache) return _drawerSessionStateCache;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PM_DRAWER_SESSION_STATE_KEY) || '{}');
+    _drawerSessionStateCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    _drawerSessionStateCache = {};
+  }
+  return _drawerSessionStateCache;
+}
+
+function _writeDrawerSessionStateCache() {
+  const cache = _readDrawerSessionStateCache();
+  const entries = Object.entries(cache)
+    .filter(([id, state]) => id && state && typeof state === 'object')
+    .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+    .slice(0, PM_DRAWER_SESSION_STATE_MAX_ENTRIES);
+  _drawerSessionStateCache = entries.reduce((result, [id, state]) => {
+    result[id] = state;
+    return result;
+  }, {});
+  try { localStorage.setItem(PM_DRAWER_SESSION_STATE_KEY, JSON.stringify(_drawerSessionStateCache)); } catch {}
+}
+
+function _drawerSessionStateIsFresh(state) {
+  const updatedAt = Number(state?.updatedAt || 0);
+  return updatedAt > 0 && (Date.now() - updatedAt) <= PM_DRAWER_SESSION_STATE_ACTIVE_MAX_AGE_MS;
+}
+
+function _readDrawerLocalActiveRun(sessionIds = []) {
+  const ids = [...new Set((Array.isArray(sessionIds) ? sessionIds : [sessionIds])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))];
+  if (!ids.length) return null;
+  try {
+    const runs = JSON.parse(localStorage.getItem(PM_MOBILE_ACTIVE_RUNS_KEY) || '{}') || {};
+    for (const id of ids) {
+      if (runs[id]?.sessionId) return runs[id];
+    }
+    const legacy = JSON.parse(localStorage.getItem(PM_MOBILE_ACTIVE_RUN_KEY) || 'null');
+    if (legacy?.sessionId && ids.includes(String(legacy.sessionId || '').trim())) return legacy;
+  } catch {}
+  return null;
+}
+
+function _drawerLiveActiveRun(sessionIds = []) {
+  const ids = new Set((Array.isArray(sessionIds) ? sessionIds : [sessionIds])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean));
+  if (!ids.size) return false;
+  const chat = window.__pmChat;
+  if (chat?.drawerRunSessionIds instanceof Set) {
+    for (const id of ids) if (chat.drawerRunSessionIds.has(id)) return true;
+  }
+  if (chat?.activeRuns && typeof chat.activeRuns === 'object') {
+    for (const id of ids) if (chat.activeRuns[id]?.busy === true) return true;
+  }
+  return false;
+}
+
+function _drawerSessionStateView(session) {
+  const id = String(session?.id || '').trim();
+  const cached = id ? (_readDrawerSessionStateCache()[id] || {}) : {};
+  const sessionIds = [id, session?.targetSessionId];
+  const localRun = _readDrawerLocalActiveRun(sessionIds);
+  const localRunFresh = _drawerSessionStateIsFresh(localRun);
+  const cachedRunFresh = _drawerSessionStateIsFresh(cached);
+  const has = (key) => Object.prototype.hasOwnProperty.call(session || {}, key);
+  const activeRunKnown = session?.activeRunKnown === true
+    || (has('activeRun') && session?.activeRunKnown !== false);
+  const activeRun = session?.activeRun === true
+    || _drawerLiveActiveRun(sessionIds)
+    || localRunFresh
+    || (!activeRunKnown && cachedRunFresh && cached.activeRun === true);
+  const mobileUnreadKnown = session?.mobileUnreadKnown === true
+    || (has('mobileUnread') && session?.mobileUnreadKnown !== false);
+  const mobileUnread = session?.mobileUnread === true
+    || (!mobileUnreadKnown && cached.mobileUnread === true);
+  const mobileLastReadAt = has('mobileLastReadAt')
+    ? (Number(session?.mobileLastReadAt || 0) || null)
+    : (Number(cached.mobileLastReadAt || 0) || null);
+  const settledAt = has('settledAt')
+    ? (Number(session?.settledAt || 0) || null)
+    : (Number(cached.settledAt || 0) || null);
+  const settled = has('settled') || has('settledAt')
+    ? session?.settled === true || Number(session?.settledAt || 0) > 0
+    : cached.settled === true || Number(cached.settledAt || 0) > 0;
+  const stateName = activeRun
+    ? 'working'
+    : (mobileUnread ? 'unread' : (settled ? 'settled' : 'idle'));
+  return {
+    activeRun,
+    mobileUnread,
+    mobileLastReadAt,
+    settled,
+    settledAt,
+    stateName,
+  };
+}
+
+function _storeDrawerSessionState(session, state = _drawerSessionStateView(session)) {
+  const id = String(session?.id || '').trim();
+  if (!id) return;
+  const cache = _readDrawerSessionStateCache();
+  cache[id] = {
+    activeRun: state.activeRun === true,
+    mobileUnread: state.mobileUnread === true,
+    mobileLastReadAt: state.mobileLastReadAt || null,
+    settled: state.settled === true,
+    settledAt: state.settledAt || null,
+    lastKnownState: state.stateName || 'idle',
+    updatedAt: Date.now(),
+  };
+}
+
+function _hydrateDrawerSessionState(session) {
+  if (!session || !String(session?.id || '').trim()) return session;
+  const state = _drawerSessionStateView(session);
+  _storeDrawerSessionState(session, state);
+  return {
+    ...session,
+    activeRun: state.activeRun,
+    mobileUnread: state.mobileUnread,
+    mobileLastReadAt: state.mobileLastReadAt,
+    settled: state.settled,
+    settledAt: state.settledAt,
+  };
+}
+
+function _hydrateDrawerSessionStates(sessions) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const hydrated = rows.map(_hydrateDrawerSessionState);
+  if (hydrated.some((session) => String(session?.id || '').trim())) _writeDrawerSessionStateCache();
+  return hydrated;
+}
+
+function _sessionStateNameFromCache(state) {
+  if (state?.activeRun === true) return 'working';
+  if (state?.mobileUnread === true) return 'unread';
+  if (state?.settled === true || Number(state?.settledAt || 0) > 0) return 'settled';
+  return 'idle';
+}
+
+function _forEachDrawerSession(callback) {
+  const rows = [
+    ...(_drawerSessionPaging?.all?.sessions || []),
+    ...(_drawerSessionPaging?.settled?.sessions || []),
+    ...(_drawerPinnedSessions || []),
+    ..._drawerProjects.flatMap((project) => Array.isArray(project?.sessions) ? project.sessions : []),
+  ];
+  const seen = new Set();
+  rows.forEach((session) => {
+    const id = String(session?.id || '').trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    callback(session, id);
+  });
+}
+
+function _patchDrawerSessionState(sessionId, patch = {}) {
+  const id = String(sessionId || '').trim();
+  if (!id) return;
+  const cache = _readDrawerSessionStateCache();
+  const next = { ...(cache[id] || {}) };
+  ['activeRun', 'mobileUnread', 'settled'].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key] === true;
+  });
+  ['mobileLastReadAt', 'settledAt'].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = Number(patch[key] || 0) || null;
+  });
+  next.lastKnownState = _sessionStateNameFromCache(next);
+  next.updatedAt = Date.now();
+  cache[id] = next;
+  _forEachDrawerSession((session, sessionIdForRow) => {
+    if (sessionIdForRow !== id) return;
+    ['activeRun', 'mobileUnread', 'settled'].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) session[key] = patch[key] === true;
+    });
+    ['mobileLastReadAt', 'settledAt'].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) session[key] = Number(patch[key] || 0) || null;
+    });
+  });
+  _writeDrawerSessionStateCache();
+}
+
+function _forgetDrawerSessionState(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return;
+  delete _readDrawerSessionStateCache()[id];
+  _writeDrawerSessionStateCache();
+}
+
 function _drawerGatewayStatusTone(status) {
   const value = String(status || '').toLowerCase();
   if (value === 'online') return 'online';
@@ -1309,6 +1549,7 @@ function _mountDrawerGatewayFilterPanel() {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  _restoreDrawerLayoutState();
   _stopDrawerGatewayHeartbeat();
   _drawerSwipeCleanup?.();
   _drawerSwipeCleanup = null;
@@ -1574,8 +1815,8 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
       try {
         const remotePinned = await loadMobileGatewayPinnedSessions({ state: 'active' });
         if (Array.isArray(remotePinned)) {
-          _drawerPinnedSessions = remotePinned;
-          _syncPinnedCacheFromSessions(remotePinned);
+          _drawerPinnedSessions = _hydrateDrawerSessionStates(remotePinned);
+          _syncPinnedCacheFromSessions(_drawerPinnedSessions);
         }
       } catch (err) {
         console.warn('[mobile drawer] Failed to load pinned sessions', err);
@@ -1762,9 +2003,10 @@ function _wireDrawerLongPress(callbacks) {
 function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
   var pinnedEl = _drawerEl && _drawerEl.querySelector('#pm-drawer-pinned-list');
   if (!pinnedEl) return;
-  var sessions = Array.isArray(pinnedOverride)
+  var sourceSessions = Array.isArray(pinnedOverride)
     ? pinnedOverride
     : (Array.isArray(pageState && pageState.sessions) ? pageState.sessions : []);
+  var sessions = _hydrateDrawerSessionStates(sourceSessions);
   var localOrder = _getPinnedSessionIds();
   var pinnedSessions = sessions.filter(function(session) {
     return !_isDrawerHiddenRuntimeSession(session) && _isPinned(session && session.id);
@@ -1791,6 +2033,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerPinnedCollapsed = !_drawerPinnedCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-pinned-content');
     toggle.setAttribute('aria-expanded', String(!_drawerPinnedCollapsed));
@@ -1800,6 +2043,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     event.preventDefault();
     event.stopPropagation();
     _drawerProjectsCollapsed = !_drawerProjectsCollapsed;
+    _saveDrawerLayoutState();
     const toggle = event.currentTarget;
     const content = _drawerEl.querySelector('#pm-drawer-project-content');
     toggle.setAttribute('aria-expanded', String(!_drawerProjectsCollapsed));
@@ -1830,6 +2074,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       if (!id) return;
       if (_drawerExpandedProjectIds.has(id)) _drawerExpandedProjectIds.delete(id);
       else _drawerExpandedProjectIds.add(id);
+      _saveDrawerLayoutState();
       _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true }).catch(() => {});
     });
   });
@@ -1855,6 +2100,7 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     const openSession = () => {
       const sessionId = btn.getAttribute('data-session-id');
       const sessionChannel = btn.getAttribute('data-session-channel') || '';
+      _patchDrawerSessionState(sessionId, { mobileUnread: false });
       closeDrawer();
       if (typeof onOpenSession === 'function') onOpenSession(sessionId, sessionChannel);
     };
@@ -1925,11 +2171,13 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
   const seq = ++_drawerSearchSeq;
   _drawerSearchTimer = setTimeout(async () => {
     const renderMatches = (items) => {
-      list.innerHTML = items.map((s) => _searchResultButtonHtml(s, query)).join('');
+      const hydratedItems = _hydrateDrawerSessionStates(items);
+      list.innerHTML = hydratedItems.map((s) => _searchResultButtonHtml(s, query)).join('');
       list.querySelectorAll('[data-session-id]').forEach((btn) => {
         const openSession = () => {
           const sessionId = btn.getAttribute('data-session-id');
           const sessionChannel = btn.getAttribute('data-session-channel') || '';
+          _patchDrawerSessionState(sessionId, { mobileUnread: false });
           closeDrawer();
           if (typeof onOpenSession === 'function') onOpenSession(sessionId, sessionChannel);
         };
@@ -1994,15 +2242,16 @@ async function _localSessionSearchFallback(loadSessions, query) {
 }
 
 function _sessionStateMeta(session) {
-  const activeRun = session?.activeRun === true;
-  const unread = session?.mobileUnread === true && !activeRun;
-  const settled = session?.settled === true || Number(session?.settledAt || 0) > 0;
+  const cachedState = _drawerSessionStateView(session);
+  const activeRun = cachedState.activeRun;
+  const unread = cachedState.mobileUnread === true && !activeRun;
+  const settled = cachedState.settled;
   return {
     activeRun,
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
     stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
-    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
+    stateLabel: activeRun ? '<span class="pm-session-working-spinner" role="status" aria-label="Working"></span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
@@ -2078,10 +2327,11 @@ function _mobileSessionTimeLabel(session) {
 function _projectSessionRows(project) {
   const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
   if (!_drawerExpandedProjectIds.has(String(project?.id || ''))) return '';
-  return '<div class="pm-project-chat-list">' + sessions.map((session) => {
+  const rows = _hydrateDrawerSessionStates(sessions.map((session) => {
     const row = { ...session, projectId: project.id, projectName: project.name };
-    return _sessionButtonHtml(row, { projectChild: true });
-  }).join('') + '</div>';
+    return row;
+  }));
+  return '<div class="pm-project-chat-list">' + rows.map((session) => _sessionButtonHtml(session, { projectChild: true })).join('') + '</div>';
 }
 
 function _projectButtonHtml(project) {
@@ -2116,7 +2366,7 @@ function _sessionButtonHtml(session, options = {}) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2147,7 +2397,7 @@ function _searchResultButtonHtml(session, query) {
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
   const sourceLogo = _mobileImportedSourceLogo(session);
-  const timestamp = _mobileSessionTimeLabel(session);
+  const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
@@ -2524,6 +2774,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks, item
       pmHaptic(14);
       // Remove from pin list
       _savePinnedSessionIds(_getPinnedSessionIds().filter(function(id) { return id !== sessionId; }));
+      if (itemType !== 'project') _forgetDrawerSessionState(sessionId);
       // Clear any localStorage keys containing this session id
       try {
         var keysToRemove = [];
@@ -2602,7 +2853,9 @@ export function openDrawer() {
   _startDrawerGatewayHeartbeat();
   if (_drawerCallbacks) {
     _renderDrawerSessions(_drawerCallbacks).catch(() => {});
-    setTimeout(() => refreshMobileDrawerSessions({ force: false }).catch(() => {}), 180);
+    // Always reconcile against the gateway when the drawer opens. A recovered
+    // run may have changed state while the mobile client was disconnected.
+    setTimeout(() => refreshMobileDrawerSessions({ force: true }).catch(() => {}), 180);
   }
 }
 

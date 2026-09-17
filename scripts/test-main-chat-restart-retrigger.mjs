@@ -41,6 +41,12 @@ function register(sessionId, message, plannedTool, restartRecoveryAttempts = 0) 
     event: plannedTool ? 'tool_call' : 'heartbeat',
     toolName: plannedTool,
     message: plannedTool ? 'Restart tool accepted.' : 'Visible response had started.',
+    narrationTail: plannedTool ? 'The planned restart boundary was reached.' : 'Recovered visible commentary before the interruption.',
+    processEntries: [{
+      type: 'think',
+      content: plannedTool ? 'Preparing the planned restart.' : 'Checking the interrupted work before continuing.',
+      extra: { source: 'agent_thought', event: 'token_narration_boundary', visibility: 'user' },
+    }],
   });
   sessions.flushSession(sessionId);
 }
@@ -81,6 +87,8 @@ assert.match(
   /runtime\.recoveryPolicy === 'resume'/,
   'restart-safe background tasks and subagent threads should resume without a global opt-in',
 );
+assert.match(recoverySource, /narrationTail/, 'restart recovery must preserve the in-flight visible narration tail');
+assert.match(chatSource, /commentaryContext: buildDurableCommentaryContext/, 'deferred runtime process attachment must refresh model-safe commentary');
 
 try {
   const attempts = [];
@@ -104,6 +112,8 @@ try {
   );
   assert.ok(unexpectedCheckpoint, 'recovery must preserve a visible interruption checkpoint');
   assert.match(unexpectedCheckpoint.content, /automatically continue this turn/i);
+  assert.match(String(unexpectedCheckpoint.commentaryContext || ''), /Recovered visible commentary/);
+  assert.ok(unexpectedCheckpoint.liveTraceEntries?.some((entry) => /Recovered visible commentary/.test(String(entry.text || entry.content || ''))), 'restart checkpoint must retain the visible narration trace');
 
   const plannedCheckpoint = sessions.getHistory(plannedSessionId, 10).find((entry) =>
     entry.role === 'assistant' && /^\[Hot restart checkpoint: planned by this chat\]/.test(String(entry.content || ''))

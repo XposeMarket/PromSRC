@@ -35,7 +35,11 @@ assert.match(sourceMessageRenderer, /function _renderChatMessageHtml\s*\(/, 'ren
 assert.match(sourceRuntime, /function _renderThread\s*\(/, 'renderer runtime must own transcript rendering');
 assert.match(sourceRuntime, /function _applyMobileAgentStreamEvent\s*\(/, 'renderer runtime must own stream reduction');
 assert.match(sourceRuntime, /function _renderMobileBackgroundSpawnDock\s*\(/, 'renderer runtime must own background-agent dock rendering');
-assert.match(sourceMessageRenderer, /if \(m\.streaming !== true\) inner \+= _renderMobileFileChanges\(m\.fileChanges\);/, 'main file-change cards must wait for the terminal turn state');
+assert.match(
+  sourceMessageRenderer,
+  /if \(!messageIsLive\) inner \+= _renderMobileFileChanges\(m\.fileChanges\);/,
+  'main file-change cards must wait for the terminal turn state',
+);
 assert.match(sourceRuntime, /if \(!streaming\) inner \+= _renderMobileFileChanges\(_mobileAgentMessageFileChanges\(turnPresentation\)\);/, 'background file-change cards must wait for the terminal turn state');
 
 function outputFor(source) {

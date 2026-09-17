@@ -59,6 +59,39 @@ async function main(): Promise<void> {
 
     const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
     assert.equal(index.summaries[sessionId].messageCount, 3);
+
+    const compactedSessionId = 'session_active-history-regression';
+    sessionApi.addMessage(compactedSessionId, {
+      role: 'user',
+      content: 'before compaction request',
+      timestamp: Date.now() + 10,
+    });
+    sessionApi.addMessage(compactedSessionId, {
+      role: 'assistant',
+      content: 'before compaction response',
+      timestamp: Date.now() + 11,
+    });
+    sessionApi.addMessage(compactedSessionId, {
+      role: 'user',
+      content: 'active work after boundary',
+      timestamp: Date.now() + 12,
+    });
+    sessionApi.recordSessionCompaction(
+      compactedSessionId,
+      'rolling',
+      'Summary of everything before the active work boundary.',
+      2,
+    );
+    sessionApi.addMessage(compactedSessionId, {
+      role: 'assistant',
+      content: 'active response after boundary',
+      timestamp: Date.now() + 13,
+    });
+    assert.deepEqual(
+      sessionApi.getActiveHistoryForPersistence(compactedSessionId, 20).map((message: any) => message.content),
+      ['active work after boundary', 'active response after boundary'],
+      'task and agent resume stores must persist only the active transcript after compaction',
+    );
     console.log('session persistence regression passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
