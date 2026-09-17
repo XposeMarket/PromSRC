@@ -1,8 +1,9 @@
 /**
  * cron-scheduler.ts — Prometheus Tasks / Cron System
  *
- * Design constraints (4B model reality):
- *  - One task at a time, no parallelism
+ * Design constraints:
+ *  - Independent schedule/task runs may execute in parallel
+ *  - Same-job duplicate runs remain guarded; shared team/session state keeps its own locks
  *  - Minimal cron parsing — handles the 90% patterns without external deps
  *  - HEARTBEAT_OK response is silently suppressed
  *  - Any real content → creates an automated chat session broadcast over WS
@@ -12,7 +13,6 @@
 import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
-import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
@@ -38,7 +38,6 @@ import {
   getAgentTeamId,
   appendTeamChat,
   getManagedTeam,
-  saveManagedTeam,
   type ManagedTeam,
 } from '../teams/managed-teams';
 import { handleManagerConversationDetailed, triggerManagerReview } from '../teams/team-manager-runner';
@@ -46,6 +45,7 @@ import { broadcastTeamEvent } from '../comms/broadcaster';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { createTeamRunReceipt } from '../teams/team-run-receipts';
 import {
   buildMissingSourceBlockMessage,
   buildObsoleteBrandBlockMessage,
@@ -81,6 +81,8 @@ export interface CronJob {
   deliverToMainChannel?: boolean;
   runAt: string | null;      // ISO timestamp for one-shots
   enabled: boolean;
+  /** Run with a fail-closed read-only tool allowlist and produce a preview. */
+  previewOnly?: boolean;
   priority: number;          // lower number = higher priority
   delivery: 'web';           // 'telegram' coming later — stub is ready
   lastRun: string | null;
@@ -92,10 +94,11 @@ export interface CronJob {
   lastRunnerDurationMs?: number | null;
   lastOrchestrationDurationMs?: number | null;
   consecutiveErrors?: number;
+  queuedAt?: string | null;
   deleteAfterRun?: boolean;
   nextRun: string | null;
   status: 'scheduled' | 'queued' | 'running' | 'completed' | 'paused';
-  pausedReason?: 'manual' | 'interrupted_by_schedule';
+  pausedReason?: 'manual' | 'interrupted_by_schedule' | 'configuration_error';
   lastOutputSessionId: string | null;  // last auto-created session containing output
   expectedOutputs?: Array<{
     path: string;
@@ -148,6 +151,22 @@ export interface RunJobNowOptions {
   // Default false for direct user-triggered runs.
   // Automated recovery callers should pass true.
   respectActiveHours?: boolean;
+}
+
+function buildPreviewToolFilter(availableNames?: string[]): string[] {
+  const safeFallback = [
+    'list_files', 'read_file', 'list_directory', 'agent_list', 'agent_info',
+    'browser_snapshot', 'browser_get_page_text', 'browser_get_tabs',
+    'web_search', 'web_open', 'web_fetch', 'git_status', 'git_diff', 'git_log',
+  ];
+  const names = Array.isArray(availableNames) && availableNames.length > 0
+    ? availableNames.map((name) => String(name || '').trim()).filter(Boolean)
+    : safeFallback;
+  const blocked = /(?:write|create|update|delete|remove|move|copy|rename|send|post|publish|reply|follow|like|comment|submit|purchase|checkout|login|logout|click|type|press|navigate|run_command|shell|terminal|execute|dispatch|schedule|proposal|approve|apply|upload|download)/i;
+  const readable = /(?:^|_)(?:list|read|get|search|find|lookup|fetch|view|inspect|describe|status|health|quote|history|snapshot|diff|log|open|text|tabs?)(?:_|$)/i;
+  const filtered = names.filter((name) => !blocked.test(name) && readable.test(name));
+  const result = Array.from(new Set([...safeFallback.filter((name) => names.includes(name)), ...filtered]));
+  return result.length > 0 ? result : safeFallback;
 }
 
 // Short "last run" orientation injected at the very top of a scheduled run's
@@ -647,18 +666,6 @@ function applyDeterministicStagger(nextRunIso: string, jobId: string, schedule: 
   return new Date(nextRunDate.getTime() + staggerMs).toISOString();
 }
 
-function getMarkdownSection(content: string, heading: string): string {
-  const lines = content.split(/\r?\n/);
-  const start = lines.findIndex(line => line.trim().toLowerCase() === `## ${heading}`.toLowerCase());
-  if (start < 0) return '';
-  const out: string[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    if (/^##\s+/.test(lines[i].trim())) break;
-    out.push(lines[i]);
-  }
-  return out.join('\n').trim();
-}
-
 function hydrateManagedTeamFromWorkspaceInfo(agentId: string): ManagedTeam | null {
   const workspace = getConfig().getWorkspacePath() || process.cwd();
   const teamsRoot = path.join(workspace, 'teams');
@@ -678,50 +685,11 @@ function hydrateManagedTeamFromWorkspaceInfo(agentId: string): ManagedTeam | nul
       const teamId = content.match(/^Team ID:\s*(\S+)/m)?.[1]?.trim() || dirent.name;
       const existing = getManagedTeam(teamId);
       if (existing) return existing;
-
-      const title = content.match(/^#\s+(.+?)\s+Team Info\s*$/m)?.[1]?.trim() || teamId;
-      const purpose = getMarkdownSection(content, 'Enduring Purpose / Mandate')
-        || getMarkdownSection(content, 'What This Team Is For')
-        || title;
-      const now = Date.now();
-      const team: ManagedTeam = {
-        id: teamId,
-        name: title,
-        description: purpose,
-        emoji: 'T',
-        manager: {
-          systemPrompt: `Coordinate the ${title} team. Purpose: ${purpose}`,
-          reviewTrigger: 'after_each_run',
-          autoApplyLowRisk: true,
-          paused: false,
-        },
-        subagentIds,
-        teamContext: purpose,
-        teamMode: 'autonomous',
-        mission: purpose,
-        purpose,
-        currentFocus: '',
-        currentTask: undefined,
-        completedWork: [],
-        milestones: [],
-        mainAgentThread: [],
-        agentPauseStates: {},
-        contextReferences: [],
-        managerNotes: [],
-        teamChat: [],
-        pendingChanges: [],
-        changeHistory: [],
-        pendingMessages: {},
-        pendingManagerMessages: [],
-        runHistory: [],
-        totalRuns: 0,
-        createdAt: now,
-        updatedAt: now,
-        notificationTargets: [],
-      };
-      saveManagedTeam(team);
-      console.log(`[CronScheduler] Hydrated managed team "${team.name}" (${team.id}) from ${teamInfoPath}`);
-      return team;
+      // Filesystem artifacts are evidence of a stale/orphaned team, not an
+      // authoritative registration. Recreating a live team from a directory
+      // was the source of registry/filesystem drift and stale team IDs.
+      console.warn(`[CronScheduler] Ignoring unregistered team workspace ${teamInfoPath} for agent ${agentId}; repair the managed-team registry explicitly.`);
+      return null;
     }
   } catch (err: any) {
     console.warn(`[CronScheduler] Failed to scan team workspaces for ${agentId}:`, err?.message || err);
@@ -833,8 +801,9 @@ export class CronScheduler {
   private store: CronStore;
   private deps: SchedulerDeps;
   private tickInterval: NodeJS.Timeout | null = null;
-  private runningJobIds: Set<string> = new Set(); // job IDs currently executing (parallel)
-  private interruptedTasksBySchedule: Map<string, string[]> = new Map(); // scheduleId -> [taskIds]
+  // Each schedule owns an independent task/session. Keep only a per-job guard
+  // so a single schedule cannot accidentally run twice at the same time.
+  private runningJobIds: Set<string> = new Set();
   private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
   private defaultStore(): CronStore {
@@ -853,8 +822,25 @@ export class CronScheduler {
     this.deps = deps;
     this.storePath = deps.storePath;
     this.store = this.loadStore();
-    console.log(`[CronScheduler] Loaded ${this.store.jobs.length} jobs from ${this.storePath}`);
+    this.normalizeDisabledJobStatuses();
+    console.log(`[CronScheduler] Loaded ${this.store.jobs.length} jobs from ${this.storePath} (independent schedule execution enabled)`);
     this.maybeConsolidateLegacyAutomatedSessions();
+  }
+
+  /** Keep disabled jobs visibly paused so stale schedules cannot look runnable after restart. */
+  private normalizeDisabledJobStatuses(): void {
+    let changed = 0;
+    for (const job of this.store.jobs) {
+      if (job.enabled !== false || job.status === 'paused' || job.status === 'completed') continue;
+      job.status = 'paused';
+      job.pausedReason = job.pausedReason || 'manual';
+      job.queuedAt = null;
+      changed += 1;
+    }
+    if (changed > 0) {
+      this.saveStore();
+      console.log(`[CronScheduler] Normalized ${changed} disabled job(s) to paused state.`);
+    }
   }
 
   /**
@@ -906,6 +892,7 @@ export class CronScheduler {
               team_id: teamId,
               assignmentTarget: legacyMainJob ? 'main' : assignmentTarget,
               deliverToMainChannel: legacyMainJob ? true : j?.deliverToMainChannel,
+              previewOnly: j?.previewOnly === true,
               payloadKind: j?.payloadKind === 'systemEvent' ? 'systemEvent' : 'agentTurn',
               lastOutputSessionId: j?.lastOutputSessionId ?? j?.sessionId ?? null,
               skillIds: normalizeScheduleSkillIds(j?.skillIds),
@@ -1017,6 +1004,7 @@ export class CronScheduler {
       deliverToMainChannel: partial.deliverToMainChannel === true,
       runAt: partial.runAt || null,
       enabled: partial.enabled !== false,
+      previewOnly: partial.previewOnly === true,
       priority: typeof partial.priority === 'number' ? partial.priority : this.store.jobs.length,
       delivery: 'web',
       lastRun: null,
@@ -1213,12 +1201,12 @@ export class CronScheduler {
 
     if (overdue.length === 0) return;
 
-    // Fire ALL overdue jobs in parallel. Independent jobs must not block each other;
-    // a job already executing (in runningJobIds) is skipped so it can't double-fire.
-    const toRun = overdue.filter(j => !this.runningJobIds.has(j.id));
-    if (toRun.length === 0) return;
-    for (const job of toRun) {
-      console.log(`[CronScheduler] Tick — running job "${job.name}"`);
+    // Do not serialize unrelated schedules. Each run gets its own task/session
+    // and the gateway admission layer is observability-only by default; only
+    // the same schedule is guarded against duplicate execution.
+    for (const job of overdue) {
+      if (this.runningJobIds.has(job.id)) continue;
+      console.log(`[CronScheduler] Tick — starting scheduled job "${job.name}"`);
       // Fire async but don't await — tick returns immediately
       this.executeJob(job).catch(err =>
         console.error(`[CronScheduler] Job "${job.name}" crashed:`, err?.message || err)
@@ -1229,8 +1217,9 @@ export class CronScheduler {
   // ─── Job Execution ────────────────────────────────────────────────────────────
 
   private async executeJob(job: CronJob): Promise<void> {
-    // Per-job lock so independent jobs run in parallel; ALWAYS released in finally
-    // so a crashed job can never wedge the scheduler for everything else.
+    // Always release the per-job guard in finally so a crashed run can never
+    // wedge future runs of that schedule.
+    if (this.runningJobIds.has(job.id)) return;
     this.runningJobIds.add(job.id);
     try {
       await this.executeJobInner(job);
@@ -1241,35 +1230,15 @@ export class CronScheduler {
 
   private async executeJobInner(job: CronJob): Promise<void> {
     const start = Date.now();
+    const queuedAt = job.queuedAt ? new Date(job.queuedAt).getTime() : start;
 
     // Mark as running
     job.status = 'running';
+    job.queuedAt = null;
     job.lastRunStartedAt = new Date(start).toISOString();
     this.saveStore();
     this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
     this.deps.broadcast({ type: 'task_running', jobId: job.id, jobName: job.name });
-
-    // Check for running background tasks and interrupt them if this schedule requires it
-    const interruptedTasks: string[] = [];
-    const runningTasks = BackgroundTaskRunner.getRunningTasks();
-    if (runningTasks.length > 0) {
-      console.log(`[CronScheduler] Schedule "${job.name}" found ${runningTasks.length} running background task(s) - interrupting...`);
-      for (const taskId of runningTasks) {
-        const interrupted = BackgroundTaskRunner.interruptTaskForSchedule(taskId, job.id);
-        if (interrupted) {
-          interruptedTasks.push(taskId);
-          console.log(`[CronScheduler] Interrupted background task ${taskId} for schedule ${job.id}`);
-        }
-      }
-      // Store interrupted tasks by schedule ID for later resumption
-      if (interruptedTasks.length > 0) {
-        this.interruptedTasksBySchedule.set(job.id, interruptedTasks);
-      }
-      // Give tasks a moment to pause at round boundary
-      if (interruptedTasks.length > 0) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
 
     // Fake sessionId for the cron call — isolated from user sessions
     const mainSessionId = this.deps.getMainSessionId?.() || 'default';
@@ -1328,8 +1297,9 @@ export class CronScheduler {
     let scheduledSubagentTaskId: string | undefined;
     let activeCronTaskId: string | undefined;
     let activeRunId: string | undefined;
-    let activeScheduledAt: number | undefined;
-    let scheduledTeamRunResult: any = null;
+  let activeScheduledAt: number | undefined;
+  let scheduledTeamRunResult: any = null;
+  let scheduledManagerReceipt: ReturnType<typeof createTeamRunReceipt> | null = null;
 
     try {
       if (job.payloadKind === 'systemEvent') {
@@ -1353,6 +1323,15 @@ export class CronScheduler {
         const completionScope = buildScheduledRunCompletionScope(job);
         const attachmentsContext = buildScheduleAttachmentsContext(job);
         const promptParts = [];
+        if (job.previewOnly === true) {
+          promptParts.push(
+            '[PREVIEW-ONLY SCHEDULE]',
+            'This scheduled run is a dry run. Use only the read-only tools exposed to this turn.',
+            'Do not publish, post, reply, send, click, type, purchase, modify files, change configuration, or perform any external side effect.',
+            'If the requested workflow would require a mutation, describe the proposed action and stop at the preview. Do not claim it was performed.',
+            '',
+          );
+        }
         if (lastRunCtx) promptParts.push(lastRunCtx, '');
         promptParts.push(completionScope);
         if (attachmentsContext) promptParts.push('', attachmentsContext);
@@ -1363,6 +1342,9 @@ export class CronScheduler {
         if (memText || lastRunCtx || interRunCtx) {
           console.log(`[CronScheduler] Injected schedule context for "${job.name}"${interRunCtx ? ' (incl. since-last-run messages)' : ''}`);
         }
+        const previewToolFilter = job.previewOnly === true
+          ? buildPreviewToolFilter(this.deps.getAvailableToolNames?.())
+          : undefined;
 
         const selfLearnInstruction = buildSelfReflectionInstruction({
           availableTools: this.deps.getAvailableToolNames?.() || [],
@@ -1374,6 +1356,11 @@ export class CronScheduler {
 
         if (scheduledTeamId) {
           if (!team) {
+            job.status = 'paused';
+            job.pausedReason = 'configuration_error';
+            job.lastResult = `ERROR: Scheduled team not found: ${scheduledTeamId}. Repair the team registry or schedule target before resuming.`;
+            this.saveStore();
+            this.broadcastUpdate();
             throw new Error(`Scheduled team not found: ${scheduledTeamId}`);
           }
           const scheduledAt = Date.now();
@@ -1429,44 +1416,90 @@ export class CronScheduler {
             text: chatMessage?.content || '',
           });
 
+          const managerAgentId = String(team.managerAgentId || `${team.id}_manager`).trim();
+          const managerAgentName = String(getAgentById(managerAgentId)?.name || 'Team Manager').trim();
+          scheduledManagerReceipt = createTeamRunReceipt({
+            teamId: team.id,
+            agentId: managerAgentId,
+            agentName: managerAgentName,
+            trigger: 'cron',
+          });
+          const managerWorkspacePath = path.join(getConfig().getWorkspacePath(), 'teams', team.id, 'manager');
+          const managerExecutionStartedAt = Date.now();
+          scheduledManagerReceipt.update({
+            status: 'running',
+            executionStartedAt: managerExecutionStartedAt,
+            queueWaitMs: Math.max(0, managerExecutionStartedAt - scheduledManagerReceipt.queuedAt),
+            taskId: cronTask.id,
+            workspacePath: managerWorkspacePath,
+            sideEffectSummary: job.previewOnly === true
+              ? 'Preview-only schedule: read-only tools only; no external side effects.'
+              : 'No external side effects declared by the managed-team runtime.',
+          });
+
           const managerPrompt = buildScheduledTeamRunPrompt(team, job, effectivePrompt);
           const managerResult = await handleManagerConversationDetailed(
             team.id,
             managerPrompt,
             broadcastTeamEvent,
             true,
-            { suppressOriginatingSessionProgress: true },
+            { suppressOriginatingSessionProgress: true, toolFilter: previewToolFilter },
           );
-          const reason = String(managerResult?.reason || 'completed');
+          scheduledTeamRunResult = managerResult;
+          const reason = String(managerResult?.reason || 'error');
           const turns = Number(managerResult?.turns || 0);
           const managerMessage = String(managerResult?.managerMessage || '').trim();
-          resultText = managerMessage
+          const managerQueued = reason === 'manager_busy_queued';
+          const taskSuccess = !managerQueued && reason !== 'error' && !/^\s*ERROR:/i.test(managerMessage);
+          resultText = managerQueued
+            ? `QUEUED: ${managerMessage || 'Manager is already working; the scheduled request was added to the manager inbox.'}`
+            : managerMessage
             ? `Team manager scheduled run finished (${reason}, ${turns} turn(s)): ${managerMessage}`
             : `Team manager scheduled run finished (${reason}, ${turns} turn(s)).`;
-          const taskSuccess = reason !== 'error' && !/^\s*ERROR:/i.test(resultText);
-          mutatePlan(cronTask.id, [{
-            op: 'complete',
-            step_index: 0,
-            notes: resultText.slice(0, 200),
-          }]);
-          updateTaskStatus(cronTask.id, taskSuccess ? 'complete' : 'failed', {
+          if (managerQueued) {
+            updateTaskStatus(cronTask.id, 'queued', { finalSummary: resultText });
+            appendJournal(cronTask.id, {
+              type: 'status_push',
+              content: `Queued for the active manager run: ${resultText.slice(0, 200)}`,
+            });
+            this.deps.broadcast({ type: 'task_queued', taskId: cronTask.id, jobId: job.id, summary: resultText });
+          } else {
+            mutatePlan(cronTask.id, [{
+              op: 'complete',
+              step_index: 0,
+              notes: resultText.slice(0, 200),
+            }]);
+            updateTaskStatus(cronTask.id, taskSuccess ? 'complete' : 'failed', {
             finalSummary: resultText,
+            });
+            appendJournal(cronTask.id, {
+              type: 'status_push',
+              content: taskSuccess ? `Done: ${resultText.slice(0, 200)}` : `Failed: ${resultText.slice(0, 200)}`,
+            });
+            this.deps.broadcast({ type: 'task_complete', taskId: cronTask.id, summary: resultText });
+            this.deps.broadcast({ type: 'task_step_done', taskId: cronTask.id, stepIndex: 0 });
+          }
+          const managerFinishedAt = Date.now();
+          scheduledManagerReceipt.update({
+            status: managerQueued ? 'capacity_limited' : taskSuccess ? 'complete' : 'failed',
+            finishedAt: managerFinishedAt,
+            durationMs: Math.max(0, managerFinishedAt - managerExecutionStartedAt),
+            stepCount: managerQueued ? 0 : Math.max(1, turns),
+            errorCategory: managerQueued ? 'manager_busy' : taskSuccess ? undefined : 'manager_error',
+            error: managerQueued || !taskSuccess ? resultText.slice(0, 800) : undefined,
+            acceptanceState: managerQueued ? 'retryable' : taskSuccess ? 'accepted' : 'rejected',
+            resultPreview: resultText.slice(0, 1200),
           });
-          appendJournal(cronTask.id, {
-            type: 'status_push',
-            content: taskSuccess ? `Done: ${resultText.slice(0, 200)}` : `Failed: ${resultText.slice(0, 200)}`,
-          });
-          this.deps.broadcast({ type: 'task_complete', taskId: cronTask.id, summary: resultText });
-          this.deps.broadcast({ type: 'task_step_done', taskId: cronTask.id, stepIndex: 0 });
           try {
             completeScheduledRun({
               scheduleId: job.id,
               runId,
               taskId: cronTask.id,
               success: taskSuccess,
+              status: managerQueued ? 'queued' : undefined,
               summary: resultText.slice(0, 400),
-              stepCount: Math.max(1, turns),
-              errorIfAny: !taskSuccess ? resultText.slice(0, 200) : undefined,
+              stepCount: managerQueued ? 0 : Math.max(1, turns),
+              errorIfAny: managerQueued || !taskSuccess ? resultText.slice(0, 200) : undefined,
               scheduledAt,
             });
           } catch { /* best effort */ }
@@ -1482,7 +1515,8 @@ export class CronScheduler {
               teamSubagentId,
               effectivePrompt,
               teamId,
-              'cron'
+              'cron',
+              previewToolFilter,
             );
             scheduledTeamRunResult = teamResult;
             scheduledSubagentTaskId = teamResult.taskId;
@@ -1654,7 +1688,8 @@ export class CronScheduler {
                   runId,
                 ),
                 modelOverride || String((agentDef as any)?.model || '').trim() || undefined,
-                'cron'
+                'cron',
+                previewToolFilter,
               );
               resultText = abortSignal.aborted
                 ? 'ERROR: Run aborted by operator.'
@@ -1717,6 +1752,13 @@ export class CronScheduler {
                 agentName: agentDef?.name || teamSubagentId,
                 trigger: 'cron',
                 taskId: scheduledSubagentTaskId,
+                scheduleId: job.id,
+                workspacePath: getConfig().getWorkspacePath(),
+                executionStartedAt: start,
+                queueWaitMs: 0,
+                admissionLane: 'system',
+                acceptanceState: taskSuccess ? 'accepted' : 'rejected',
+                sideEffectSummary: job.previewOnly === true ? 'Preview-only read-only tool allowlist.' : 'Scheduled run; inspect task/tool trace for side effects.',
                 success: taskSuccess,
                 startedAt: start,
                 finishedAt,
@@ -1850,7 +1892,8 @@ export class CronScheduler {
           abortSignal,
           undefined,
           modelOverride,
-          'cron'
+          'cron',
+          previewToolFilter,
         );
         resultText = abortSignal.aborted
           ? 'ERROR: Run aborted by operator.'
@@ -1877,7 +1920,8 @@ export class CronScheduler {
               abortSignal,
               undefined,
               modelOverride,
-              'cron'
+              'cron',
+              previewToolFilter,
             );
             const synthText = String(synthResult.text || '').trim();
             if (synthText.length > resultText.trim().length + 50) {
@@ -1935,6 +1979,18 @@ export class CronScheduler {
       resultText = `ERROR: ${err.message}`;
       duration = Date.now() - start;
       console.error(`[CronScheduler] Job "${job.name}" error:`, err.message);
+      if (scheduledManagerReceipt) {
+        const finishedAt = Date.now();
+        scheduledManagerReceipt.update({
+          status: 'failed',
+          finishedAt,
+          durationMs: Math.max(0, finishedAt - (scheduledManagerReceipt.queuedAt || finishedAt)),
+          errorCategory: 'manager_error',
+          error: resultText.slice(0, 800),
+          acceptanceState: 'rejected',
+          resultPreview: resultText.slice(0, 1200),
+        });
+      }
       if (activeCronTaskId) {
         updateTaskStatus(activeCronTaskId, 'failed', { finalSummary: resultText });
         appendJournal(activeCronTaskId, {
@@ -2016,10 +2072,15 @@ export class CronScheduler {
     job.lastDuration = duration;
     job.lastRunnerDurationMs = duration;
     job.lastOrchestrationDurationMs = duration;
-    job.lastQueueDurationMs = Math.max(0, new Date(job.lastRunStartedAt || job.lastRun || Date.now()).getTime() - new Date(job.lastRunStartedAt || job.lastRun || Date.now()).getTime());
+    job.lastQueueDurationMs = Math.max(0, start - queuedAt);
 
     if (job.type === 'one-shot' || job.deleteAfterRun) {
       this.store.jobs = this.store.jobs.filter(j => j.id !== job.id);
+    } else if (job.status === 'paused' && job.pausedReason === 'configuration_error') {
+      // Preserve the explicit configuration pause raised for a missing team.
+      // Without this branch the generic completion path immediately changed
+      // the job back to scheduled and retried the same bad target forever.
+      job.nextRun = null;
     } else {
       job.status = 'scheduled';
       if (runStatus === 'error' && !isBlockedMissingSource) {
@@ -2217,21 +2278,6 @@ export class CronScheduler {
     if (isolatedRunSession) {
       // Isolated cron runs should not retain conversation context after completion.
       clearHistory(targetSessionId);
-    }
-
-    // After schedule completes, resume any tasks that were interrupted by this schedule
-    const tasksToResume = this.interruptedTasksBySchedule.get(job.id);
-    if (tasksToResume && tasksToResume.length > 0) {
-      console.log(`[CronScheduler] Schedule "${job.name}" completed - scheduling resumption of ${tasksToResume.length} task(s)`);
-      // Schedule resumption for next heartbeat cycle or shortly after
-      setTimeout(() => {
-        for (const taskId of tasksToResume) {
-          if (BackgroundTaskRunner.resumeTaskAfterSchedule(taskId, job.id)) {
-            console.log(`[CronScheduler] Resumed task ${taskId} after schedule ${job.id} completed`);
-          }
-        }
-        this.interruptedTasksBySchedule.delete(job.id);
-      }, 2000); // 2 second delay to ensure final state is persisted
     }
 
     // Broadcast final state to all WebSocket clients

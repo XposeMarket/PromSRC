@@ -34,6 +34,7 @@ export interface RunSummary {
   scheduledAt: number;
   completedAt: number;
   success: boolean;
+  status?: 'complete' | 'failed' | 'queued';
   summary: string;        // max 400 chars
   stepCount: number;
   errorIfAny?: string;
@@ -94,7 +95,7 @@ export interface RunLogEntry {
   scheduledAt: number;
   startedAt: number;
   completedAt?: number;
-  status: 'running' | 'complete' | 'failed' | 'skipped';
+  status: 'running' | 'complete' | 'failed' | 'queued' | 'skipped';
   taskId: string;          // the BackgroundTask ID that handled this run
   /** User-facing conversation created or used by this scheduled execution. */
   chatSessionId?: string;
@@ -490,6 +491,7 @@ export function completeScheduledRun(input: {
   runId: string;
   taskId: string;
   success: boolean;
+  status?: 'complete' | 'failed' | 'queued';
   summary: string;
   stepCount: number;
   errorIfAny?: string;
@@ -502,13 +504,14 @@ export function completeScheduledRun(input: {
   memoryUpdates?: Array<{ category: 'dedup_key' | 'learned_context' | 'note'; key?: string; value: string }>;
 }): void {
   const completedAt = Date.now();
+  const completionStatus = input.status || (input.success ? 'complete' : 'failed');
 
   const startedAt = Date.now() - (input.stepCount * 2000); // rough estimate if not available
 
   // Update run log
   updateRunLogEntry(input.scheduleId, input.runId, {
     completedAt,
-    status: input.success ? 'complete' : 'failed',
+    status: completionStatus,
     summary: input.summary.slice(0, 400),
     errorIfAny: input.errorIfAny,
     errorType: input.errorType,
@@ -525,7 +528,7 @@ export function completeScheduledRun(input: {
       triggeredAt: input.scheduledAt,
       completedAt,
       durationMs: completedAt - input.scheduledAt,
-      status: input.success ? 'success' : 'error',
+      status: completionStatus === 'complete' ? 'success' : completionStatus === 'queued' ? 'skipped' : 'error',
       errorType: input.errorType,
       errorMessage: input.errorIfAny ? input.errorIfAny.slice(0, 200) : undefined,
       attempts: input.attempts || 1,
@@ -540,6 +543,7 @@ export function completeScheduledRun(input: {
     scheduledAt: input.scheduledAt,
     completedAt,
     success: input.success,
+    status: completionStatus,
     summary: input.summary.slice(0, 400),
     stepCount: input.stepCount,
     errorIfAny: input.errorIfAny,

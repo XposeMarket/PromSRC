@@ -24,10 +24,12 @@ import { notifyMainAgent } from './notify-bridge';
 import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
 import { getTeamWorkspacePath, readTeamMemoryContext, ensureTeamInfoFile } from './team-workspace';
-import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import { registerLiveRuntime, finishLiveRuntime, updateLiveRuntimeCheckpoint } from '../live-runtime-registry';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { setRuntimeActorContext } from '../runtime-actor.js';
+import { appendBackgroundSseTrace } from '../tasks/background-agent-trace.js';
+import { buildDurableCommentaryContext } from '../context/commentary-context.js';
 
 type HandleChatFn = (
   message: string,
@@ -74,6 +76,8 @@ export interface CoordinatorConversationOptions {
   replyTargetLabel?: string;
   attachments?: Array<{ base64: string; mimeType: string; name: string }>;
   suppressOriginatingSessionProgress?: boolean;
+  /** Optional allowlist used by preview/read-only scheduled runs. */
+  toolFilter?: string[];
 }
 
 export interface CoordinatorConversationResult {
@@ -98,6 +102,9 @@ interface TeamManagerTurnTracker {
   thinking: string;
   replyText: string;
   processEntries: TeamManagerProcessEntry[];
+  liveTraceEntries: Array<Record<string, any>>;
+  traceSeq: number;
+  visibleReasoningSummary: string;
 }
 
 function broadcastTeamChatMessage(
@@ -134,6 +141,9 @@ function createTeamManagerTurnTracker(teamId: string, turn: number): TeamManager
     thinking: '',
     replyText: '',
     processEntries: [],
+    liveTraceEntries: [],
+    traceSeq: 0,
+    visibleReasoningSummary: '',
   };
 }
 
@@ -167,8 +177,8 @@ function pushTeamManagerProcessEntry(
     content: text,
     ...extra,
   });
-  if (tracker.processEntries.length > 250) {
-    tracker.processEntries.splice(0, tracker.processEntries.length - 250);
+  if (tracker.processEntries.length > 12_000) {
+    tracker.processEntries.splice(0, tracker.processEntries.length - 12_000);
   }
 }
 
@@ -177,6 +187,13 @@ function captureTeamManagerStreamEvent(
   event: string,
   data: any,
 ): void {
+  appendBackgroundSseTrace([], tracker.liveTraceEntries, event, data, {
+    seq: ++tracker.traceSeq,
+    type: event,
+    at: Date.now(),
+    streamId: tracker.streamId,
+    data: data && typeof data === 'object' ? data : { message: String(data ?? '') },
+  });
   if (event === 'token') {
     const chunk = String(data?.text || '');
     if (chunk) tracker.replyText = `${tracker.replyText}${chunk}`;
@@ -187,11 +204,32 @@ function captureTeamManagerStreamEvent(
     if (chunk) tracker.thinking = `${tracker.thinking}${chunk}`;
     return;
   }
+  if (event === 'reasoning_summary_delta' || event === 'reasoning_summary') return;
+  if (event === 'token_narration_boundary') {
+    const thought = String(data?.text || data?.message || data?.narration || '').trim();
+    if (thought) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamManagerProcessEntry(tracker, 'preamble', thought, { source: 'agent_thought', visibility: 'user' });
+    }
+    return;
+  }
   if (event === 'thinking' || event === 'agent_thought') {
     const thought = String(data?.thinking || data?.text || '').trim();
     if (!thought) return;
     tracker.thinking = tracker.thinking ? `${tracker.thinking}\n\n${thought}` : thought;
-    pushTeamManagerProcessEntry(tracker, 'think', thought, data?.actor ? { actor: data.actor } : {});
+    const visibility = String(data?.visibility || data?.extra?.visibility || '').trim().toLowerCase();
+    const source = String(data?.source || data?.extra?.source || '').trim().toLowerCase();
+    const isVisible = visibility === 'user' || visibility === 'summary' || visibility === 'visible'
+      || source === 'agent_thought' || source === 'agent_progress';
+    if (isVisible) {
+      tracker.visibleReasoningSummary = `${tracker.visibleReasoningSummary}\n${thought}`.trim().slice(-4_000);
+      pushTeamManagerProcessEntry(tracker, 'think', thought, {
+        source: data?.source || 'agent_thought',
+        visibility: visibility || 'user',
+        event: data?.event || event,
+        ...(data?.actor ? { actor: data.actor } : {}),
+      });
+    }
     return;
   }
   if (event === 'info') {
@@ -255,6 +293,9 @@ function buildTeamManagerTurnMetadata(
   durationMs?: number;
   thinking?: string;
   processEntries?: TeamManagerProcessEntry[];
+  liveTraceEntries?: Array<Record<string, any>>;
+  commentaryContext?: string;
+  visibleReasoningSummary?: string;
   targetType?: 'room' | 'team' | 'manager' | 'member' | 'user';
   targetId?: string;
   targetLabel?: string;
@@ -274,10 +315,47 @@ function buildTeamManagerTurnMetadata(
     durationMs: Math.max(0, Date.now() - tracker.startedAt),
     thinking: String(tracker.thinking || '').trim() || undefined,
     processEntries: processEntries.length > 0 ? processEntries : undefined,
+    liveTraceEntries: tracker.liveTraceEntries.length > 0 ? [...tracker.liveTraceEntries].slice(-320) : undefined,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries: tracker.liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }) || undefined,
+    visibleReasoningSummary: tracker.visibleReasoningSummary.trim() || undefined,
     targetType: extra.targetType,
     targetId: extra.targetId,
     targetLabel: extra.targetLabel,
   };
+}
+
+/**
+ * Keep the manager's in-flight commentary and tool boundary durable while a
+ * team turn is running. A gateway restart can then recover the same packet
+ * instead of only seeing the manager's last completed room message.
+ */
+function persistTeamManagerRuntimeCheckpoint(
+  runtimeId: string | undefined,
+  tracker: TeamManagerTurnTracker,
+  event: string,
+  data?: any,
+  force = false,
+): void {
+  if (!runtimeId) return;
+  const processEntries = tracker.processEntries.slice(-320);
+  const liveTraceEntries = tracker.liveTraceEntries.slice(-320);
+  updateLiveRuntimeCheckpoint(runtimeId, {
+    event,
+    ...(data?.action || data?.tool || data?.name ? { toolName: String(data.action || data.tool || data.name) } : {}),
+    ...(data?.result ? { result: String(data.result).slice(0, 1_200) } : {}),
+    processEntries,
+    liveTraceEntries,
+    commentaryContext: buildDurableCommentaryContext({
+      processEntries,
+      liveTraceEntries,
+      visibleReasoningSummary: tracker.visibleReasoningSummary,
+    }),
+    visibleReasoningSummary: tracker.visibleReasoningSummary.slice(-4_000),
+  }, { persist: force });
 }
 
 function broadcastTeamManagerStreamStart(
@@ -593,6 +671,7 @@ export async function runCoordinatorConversation(
     label: `Team manager - ${team.name}`,
     sessionId,
     teamId,
+    agentId: team.managerAgentId,
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
@@ -636,6 +715,7 @@ export async function runCoordinatorConversation(
       const originatingSession = (freshTeam as any)?.originatingSessionId || '';
 	      const trackingSse = (event: string, data: any) => {
 	        captureTeamManagerStreamEvent(streamTracker, event, data);
+	        persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
 	        broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, event, data);
 	        if (event === 'tool_call') {
 	          const toolName = String(data?.action || data?.tool || data?.name || '');
@@ -666,7 +746,7 @@ export async function runCoordinatorConversation(
         callerContext,
         managerRouting.modelOverride,
         'team_manager',
-        TEAM_MANAGER_TOOL_FILTER,
+        options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
 	        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	        undefined,
 	        managerRouting.providerOverride,
@@ -687,6 +767,7 @@ export async function runCoordinatorConversation(
       }
 	      if (responseText) {
 	        captureTeamManagerStreamEvent(streamTracker, 'final', { text: responseText });
+	        persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'final', { text: responseText }, true);
 	        broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, 'final', { text: responseText });
 	      }
 	      broadcastTeamManagerStreamEvent(bfn, team, streamTracker, turn + 1, 'conversation', autoContinue, 'done', {
@@ -719,6 +800,7 @@ export async function runCoordinatorConversation(
 	      }
 	      console.error('[TeamCoordinator] conversation error:', err.message);
 	      pushTeamManagerProcessEntry(streamTracker, 'error', String(err.message || err));
+	      persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'error', { result: String(err.message || err) }, true);
 	      const chatMsg = appendTeamChat(teamId, {
 	        from: 'manager',
 	        fromName: 'Manager',
@@ -864,6 +946,7 @@ export async function runCoordinatorConversationDetailed(
     label: `Team manager - ${team.name}`,
     sessionId,
     teamId,
+    agentId: team.managerAgentId,
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
@@ -901,6 +984,7 @@ export async function runCoordinatorConversationDetailed(
 	        const trackingSse = (event: string, data: any) => {
 	          emitSSE(event, data);
 	          captureTeamManagerStreamEvent(streamTracker, event, data);
+	          persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
 	          if (event === 'tool_call') {
 	            const toolName = String(data?.action || data?.tool || data?.name || '');
             if (toolName === 'dispatch_team_agent' || toolName === 'request_team_member_turn') {
@@ -929,7 +1013,7 @@ export async function runCoordinatorConversationDetailed(
           callerContext,
           managerRouting.modelOverride,
           'team_manager',
-          TEAM_MANAGER_TOOL_FILTER,
+          options.toolFilter || TEAM_MANAGER_TOOL_FILTER,
           turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
 	          undefined,
 	          managerRouting.providerOverride,
@@ -950,6 +1034,7 @@ export async function runCoordinatorConversationDetailed(
         }
 	        if (responseText) {
 	          captureTeamManagerStreamEvent(streamTracker, 'final', { text: responseText });
+	          persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'final', { text: responseText }, true);
 	        }
 	        turnsCompleted = turn + 1;
 	        if (abortSignal.aborted) {
@@ -996,7 +1081,8 @@ export async function runCoordinatorConversationDetailed(
 	        finalReason = 'error';
 	        lastManagerMessage = `Error processing your request: ${err.message}`;
 	        pushTeamManagerProcessEntry(streamTracker, 'error', String(err.message || err));
-	        const chatMsg = appendTeamChat(teamId, {
+	        persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'error', { result: String(err.message || err) }, true);
+        const chatMsg = appendTeamChat(teamId, {
 	          from: 'manager',
 	          fromName: 'Manager',
 	          content: lastManagerMessage,
@@ -1137,6 +1223,15 @@ export async function runCoordinatorReview(
   const sessionId = getCoordSessionId(teamId);
   const callerContext = buildTeamCallerContext(teamId);
   const bfn = broadcastFn || _deps.broadcastTeamEvent;
+  const runtimeId = registerLiveRuntime({
+    kind: 'team_manager',
+    label: `Team manager review - ${team.name}`,
+    sessionId,
+    teamId,
+    agentId: team.managerAgentId,
+    source: 'system',
+    detail: 'Scheduled team-state review',
+  });
   try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
 
   // Ensure team_ops + source_write tools are available in the coordinator session
@@ -1165,6 +1260,7 @@ export async function runCoordinatorReview(
     broadcastTeamManagerStreamStart(bfn, team, streamTracker, 1, 'review', false);
     const trackingSse = (event: string, data: any) => {
       captureTeamManagerStreamEvent(streamTracker, event, data);
+      persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, event, data);
       broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, event, data);
     };
     const managerRouting = prepareTeamManagerRuntime(team, sessionId);
@@ -1192,6 +1288,7 @@ export async function runCoordinatorReview(
     }
     if (responseText) {
       captureTeamManagerStreamEvent(streamTracker, 'final', { text: responseText });
+      persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'final', { text: responseText }, true);
       broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, 'final', { text: responseText });
     }
     broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, 'done', {
@@ -1211,6 +1308,7 @@ export async function runCoordinatorReview(
   } catch (err: any) {
     console.error('[TeamCoordinator] review error:', err.message);
     pushTeamManagerProcessEntry(streamTracker, 'error', String(err.message || err));
+    persistTeamManagerRuntimeCheckpoint(runtimeId, streamTracker, 'error', { result: String(err.message || err) }, true);
     const chatMsg = appendTeamChat(teamId, {
       from: 'manager',
       fromName: 'Manager',
@@ -1220,6 +1318,8 @@ export async function runCoordinatorReview(
     broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
     closeStream('error');
   }
+
+  finishLiveRuntime(runtimeId);
 
   // Update lastReviewAt
   const freshTeam = getManagedTeam(teamId);

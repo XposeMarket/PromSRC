@@ -20,6 +20,16 @@ assert.match(desktop, /mergeTraceField\('liveTraceEntries', 500\)/, 'desktop ser
 assert.match(desktop, /const historyRef = Array\.isArray\(sess\.history\) \? sess\.history : \[\]/, 'recovery must retain the in-flight history array identity');
 assert.match(desktop, /historyRef\.splice\(0, historyRef\.length, \.\.\.mergedHistory\)/, 'recovery must commit history merges in place');
 assert.match(desktop, /const processLogRef = Array\.isArray\(sess\.processLog\) \? sess\.processLog : \[\]/, 'recovery must retain the in-flight process log identity');
+assert.doesNotMatch(
+  desktop,
+  /window\.chatSessions\s*=\s*(?:compact|minimal)\s*;/,
+  'localStorage quota fallback must never replace the live transcript with its trimmed persistence payload',
+);
+assert.match(
+  desktop,
+  /appendTrace\(streamState\.toolActivityStarted \? 'think' : 'preamble', text,[\s\S]{0,180}reasoningKind: 'full_thought'/,
+  'desktop preamble text must be durable before any tool call exists',
+);
 
 const recovered = [
   {
@@ -56,8 +66,33 @@ assert.equal(normalized[0].extra.source, 'reasoning_summary');
 assert.equal(normalized[0].extra.visibility, 'user');
 assert.equal(normalized[1].extra.action, 'workspace_read');
 assert.equal(normalized[2].type, 'result');
-assert.equal(normalized[3].extra.source, 'agent_progress');
+assert.equal(normalized[3].extra.source, 'agent_thought');
 assert.equal(normalized[3].extra.visibility, 'user');
+assert.equal(normalized[3].extra.reasoningKind, 'full_thought');
+
+const recoveredCompaction = normalizeRecoveredTraceEntries([
+  {
+    id: 'compact-start',
+    type: 'tool',
+    content: 'Preparing context_compaction',
+    extra: { event: 'tool_call', action: 'context_compaction' },
+  },
+  {
+    id: 'compact-result',
+    type: 'result',
+    content: 'Thread compacted before continuing.',
+    extra: {
+      event: 'tool_result',
+      action: 'context_compaction',
+      status: 'compacted',
+      summary: 'Recovered context summary.',
+    },
+  },
+]);
+assert.deepEqual(recoveredCompaction.map((entry) => entry.type), ['compaction']);
+assert.equal(recoveredCompaction[0].status, 'compacted');
+assert.equal(recoveredCompaction[0].summary, 'Recovered context summary.');
+assert.equal(recoveredCompaction[0].id, 'compact-start');
 
 const sourceOnlySummary = normalizeRecoveredTraceEntry({
   type: 'info',

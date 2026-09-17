@@ -18,7 +18,7 @@ function interactionId(record, kind) {
 }
 
 function approvalTerminal(status) {
-  return ['approved', 'rejected', 'denied', 'cancelled', 'expired'].includes(String(status || '').toLowerCase());
+  return ['approved', 'rejected', 'denied', 'cancelled', 'expired', 'executed', 'failed'].includes(String(status || '').toLowerCase());
 }
 
 function questionTerminal(status) {

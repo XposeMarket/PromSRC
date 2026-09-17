@@ -27,6 +27,11 @@ import {
   type TurnContextPacketInput,
 } from './context/turn-context-packet';
 import {
+  appendDurableCommentaryContext,
+  buildDurableCommentaryContext,
+  DURABLE_COMMENTARY_CONTEXT_MAX_CHARS,
+} from './context/commentary-context';
+import {
   assertSafeStorageId,
   isSafeStorageId,
   resolveConfinedStoragePath,
@@ -62,6 +67,10 @@ export interface ChatMessage {
   toolLog?: string; // full tool call log for this turn (injected by chat.router after turn completes)
   /** Bounded provider reasoning summary retained for background supervision. */
   reasoningSummary?: string;
+  /** Explicitly user-visible reasoning summary; never a private provider trace. */
+  visibleReasoningSummary?: string;
+  /** Bounded model-safe commentary capsule derived from the durable activity trace. */
+  commentaryContext?: string;
   turnProviderUsage?: any;
   toolResultBudget?: any;
   liveTraceEntries?: any[];
@@ -91,6 +100,7 @@ export interface ChatMessage {
 // serialization from becoming an event-loop hotspot.
 const MAX_PERSISTED_PROCESS_ENTRIES = 300;
 const MAX_PERSISTED_LIVE_TRACE_ENTRIES = 300;
+const MAX_PERSISTED_COMMENTARY_CONTEXT_CHARS = DURABLE_COMMENTARY_CONTEXT_MAX_CHARS;
 
 function boundHistoryRuntimeMetadata(history: any[]): any[] {
   return (Array.isArray(history) ? history : []).map((message: any) => {
@@ -102,11 +112,17 @@ function boundHistoryRuntimeMetadata(history: any[]): any[] {
     const boundedLiveTraceEntries = liveTraceEntries && liveTraceEntries.length > MAX_PERSISTED_LIVE_TRACE_ENTRIES
       ? liveTraceEntries.slice(-MAX_PERSISTED_LIVE_TRACE_ENTRIES)
       : liveTraceEntries;
-    if (boundedProcessEntries === processEntries && boundedLiveTraceEntries === liveTraceEntries) return message;
+    const commentaryContext = typeof message?.commentaryContext === 'string'
+      ? message.commentaryContext.slice(0, MAX_PERSISTED_COMMENTARY_CONTEXT_CHARS)
+      : message?.commentaryContext;
+    if (boundedProcessEntries === processEntries
+      && boundedLiveTraceEntries === liveTraceEntries
+      && commentaryContext === message?.commentaryContext) return message;
     return {
       ...message,
       ...(boundedProcessEntries ? { processEntries: boundedProcessEntries } : {}),
       ...(boundedLiveTraceEntries ? { liveTraceEntries: boundedLiveTraceEntries } : {}),
+      ...(commentaryContext ? { commentaryContext } : {}),
     };
   });
 }
@@ -1883,7 +1899,8 @@ function resolveNumCtx(): number {
 }
 
 function estimateMessageTokens(msg: ChatMessage): number {
-  const contentTokens = Math.max(1, Math.ceil(String(msg.content || '').length / 3.5));
+  const content = appendDurableCommentaryContext(msg.content, msg);
+  const contentTokens = Math.max(1, Math.ceil(content.length / 3.5));
   // Per-message framing overhead
   return contentTokens + 6;
 }
@@ -2258,6 +2275,10 @@ export function recordSessionCompaction(
       ? `after:${stableMessageIdentity(session.history[session.history.length - 1])}`
       : undefined;
   session.contextSummaryUpdatedAt = Date.now();
+  // The rolling summary is now the handoff for everything before the
+  // checkpoint. Do not replay working packets from the pre-compaction era
+  // alongside the new active transcript.
+  session.workingContextPackets = [];
   // Reconcile persisted pressure immediately after compaction so diagnostics
   // and the next preflight reflect the new active context rather than the old peak.
   session.contextTokenEstimate = estimateActiveContextTokens(session);
@@ -2381,6 +2402,7 @@ export function applyRollingCompactionToHistory(
     timestamp: Date.now(),
   };
   session.history = [summaryMsg];
+  session.workingContextPackets = [];
   session.contextTokenEstimate = estimateActiveContextTokens(session);
   saveSession(sessionId);
 }
@@ -2707,11 +2729,15 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     }
   }
 
+  const storedCommentaryContext = msg.role === 'assistant'
+    ? buildDurableCommentaryContext(msg)
+    : '';
   const storedMsg: ChatMessage = {
     ...msg,
     content: msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content) || '[Internal tool observation omitted.]'
       : msg.content,
+    ...(storedCommentaryContext ? { commentaryContext: storedCommentaryContext } : {}),
   };
 
   if (!deferredForCompaction && !deferredForMemoryFlush) {
@@ -2846,6 +2872,25 @@ export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {
 }
 
 /**
+ * Return only the raw transcript that is still active after the latest
+ * rolling-compaction boundary.  Durable task/agent stores use this instead
+ * of getHistory(), because getHistory() intentionally exposes the complete
+ * audit transcript and would otherwise replay pre-compaction messages next to
+ * the retained summary after a worker is rebuilt.
+ */
+export function getActiveHistoryForPersistence(id: string, maxMessages = 60): ChatMessage[] {
+  const session = getSession(id);
+  const rawMessages = Array.isArray(session.history) ? session.history : [];
+  const summary = String(session.latestContextSummary || '').trim();
+  const base = summary ? resolveCompactionStartIndex(session, rawMessages) : 0;
+  const active = summary ? rawMessages.slice(base) : rawMessages;
+  const max = Number.isFinite(Number(maxMessages))
+    ? Math.max(1, Math.floor(Number(maxMessages)))
+    : active.length;
+  return active.slice(-max);
+}
+
+/**
  * Store or update the bounded, safe handoff for a runtime turn. A later
  * normal completion replaces the earlier abort snapshot by turnId, so abort
  * persistence can be immediate without creating duplicate context entries.
@@ -2916,7 +2961,7 @@ function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
 export function getHistoryForApiCall(
   id: string,
   maxTurns: number = 60,
-  options?: { maxMessages?: number; fullActiveHistory?: boolean },
+  options?: { maxMessages?: number; fullActiveHistory?: boolean; includeCommentaryContext?: boolean },
 ): ChatMessage[] {
   const session = getSession(id);
   const maxMessages = options?.fullActiveHistory === true
@@ -2951,21 +2996,31 @@ export function getHistoryForApiCall(
       : rawMessages.slice(-maxMessages);
   }
 
+  const includeCommentaryContext = options?.includeCommentaryContext !== false;
   return messages.map((msg) => {
     const cleaned = msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content)
       : String(msg.content || '');
     const content = cleaned || (/\[tool-note:[^\]]+\]/i.test(String(msg.content || '')) ? '' : String(msg.content || ''));
-    if (!content.trim()) return null;
-    // Keep model-context copies small. Full process/live traces remain in the
-    // session/audit stores for UI continuity and diagnostics, but the model
-    // only receives role/content below in chat.router.
+    // Keep the raw UI/audit traces out of the model payload, but replay the
+    // bounded user-visible commentary capsule. This is the continuity layer
+    // between turns; it is intentionally cut at the rolling-compaction
+    // checkpoint because the retained summary becomes the new starting point.
     const contextMessage = { ...msg } as any;
+    const modelContent = includeCommentaryContext
+      ? appendDurableCommentaryContext(content, msg)
+      : content;
+    // A recovered/interrupted turn may have no final prose yet but can still
+    // carry a durable visible commentary capsule. Keep that evidence in the
+    // next model call instead of dropping the whole assistant message.
+    if (!content.trim() && !modelContent.trim()) return null;
     delete contextMessage.processEntries;
     delete contextMessage.liveTraceEntries;
     delete contextMessage.toolLog;
     delete contextMessage.historicalEvents;
-    return { ...contextMessage, content };
+    delete contextMessage.commentaryContext;
+    delete contextMessage.visibleReasoningSummary;
+    return { ...contextMessage, content: modelContent };
   }).filter((msg): msg is ChatMessage => !!msg);
 }
 
@@ -3060,6 +3115,36 @@ export function clearHistory(id: string): void {
     historyCount: 0,
     source: 'clear_history',
   });
+}
+
+/**
+ * Restore the non-transcript continuity boundary after a worker/session is
+ * rebuilt from a durable subagent or task store. The caller has already
+ * restored the active messages; this only restores the rolling summary and
+ * bounded working packets that sit before/alongside that transcript.
+ */
+export function restoreSessionContextState(
+  id: string,
+  state: {
+    latestContextSummary?: string;
+    contextSummaryUpdatedAt?: number;
+    contextStartIndex?: number;
+    workingContextPackets?: TurnContextPacket[];
+  },
+): void {
+  const session = getSession(id);
+  session.latestContextSummary = String(state.latestContextSummary || '').trim() || undefined;
+  session.contextSummaryUpdatedAt = Number(state.contextSummaryUpdatedAt || 0) || undefined;
+  session.contextStartIndex = Math.max(0, Math.min(
+    Number.isFinite(Number(state.contextStartIndex)) ? Math.floor(Number(state.contextStartIndex)) : 0,
+    session.history.length,
+  ));
+  session.contextStartMessageId = undefined;
+  session.workingContextPackets = Array.isArray(state.workingContextPackets)
+    ? state.workingContextPackets.slice(-WORKING_CONTEXT_PACKET_LIMIT)
+    : [];
+  session.contextTokenEstimate = estimateActiveContextTokens(session);
+  saveSession(id);
 }
 
 export function replaceHistory(
@@ -3456,6 +3541,12 @@ function scrubSession(session: Session): Session {
       ...msg,
       content: scrubPersistedText(msg.content),
       toolLog: msg.toolLog ? scrubPersistedText(msg.toolLog) : msg.toolLog,
+      visibleReasoningSummary: msg.visibleReasoningSummary
+        ? scrubPersistedText(msg.visibleReasoningSummary)
+        : msg.visibleReasoningSummary,
+      commentaryContext: msg.commentaryContext
+        ? scrubPersistedText(msg.commentaryContext).slice(0, MAX_PERSISTED_COMMENTARY_CONTEXT_CHARS)
+        : msg.commentaryContext,
       historicalEvents: Array.isArray(msg.historicalEvents)
         ? scrubPersistedData(msg.historicalEvents).slice(0, 500)
         : msg.historicalEvents,

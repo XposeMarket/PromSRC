@@ -64,6 +64,10 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   let firstRender = true;
   let attachments = [];
   let reconcilePromise = null;
+  let interactionSyncPromise = null;
+  let eventSocket = null;
+  let eventReconnectTimer = null;
+  let eventReconnectDelay = 1000;
 
   shell.setActiveTab('chat');
   shell.setTitle('Prometheus');
@@ -79,6 +83,92 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   const send = shell.page.querySelector('.pm-v2-send');
   const fileInput = shell.page.querySelector('[data-v2-file-input]');
   const attachmentStrip = shell.page.querySelector('[data-v2-attachments]');
+
+  async function syncPendingInteractions() {
+    if (destroyed || interactionSyncPromise || typeof gateway.pendingInteractions !== 'function') return interactionSyncPromise;
+    interactionSyncPromise = gateway.pendingInteractions(id).then(({ approvals, questions }) => {
+      if (destroyed) return;
+      approvals.forEach((approval) => chatStore.upsertInteraction(gatewayId, id, 'approval', approval));
+      questions.forEach((question) => chatStore.upsertInteraction(gatewayId, id, 'question', question));
+    }).catch(() => {}).finally(() => { interactionSyncPromise = null; });
+    return interactionSyncPromise;
+  }
+
+  function applyGatewayEvent(message) {
+    const type = String(message?.type || '').toLowerCase();
+    const approval = message?.approval || {};
+    const question = message?.question || {};
+    const eventSessionId = message?.sessionId || approval.sessionId || approval.sourceSessionId || question.sessionId || question.sourceSessionId;
+    if (String(eventSessionId || '') !== id) return;
+
+    if (type.startsWith('approval_')) {
+      const id = String(approval.id || message.approvalId || approval.approvalId || '');
+      if (!id) return;
+      const statusByType = {
+        approval_created: 'pending', approval_approved: 'approved', approval_denied: 'rejected',
+        approval_rejected: 'rejected', approval_cancelled: 'cancelled', approval_expired: 'expired',
+        approval_executed: 'executed', approval_failed: 'failed',
+      };
+      chatStore.upsertInteraction(gatewayId, sessionId, 'approval', {
+        ...approval,
+        id,
+        status: approval.status || message.status || statusByType[type] || 'pending',
+        summary: approval.summary || message.summary,
+        toolName: approval.toolName || message.toolName,
+        sessionId: eventSessionId,
+      });
+      return;
+    }
+
+    if (type.startsWith('question_')) {
+      const id = String(question.id || message.questionId || question.questionId || '');
+      if (!id) return;
+      const statusByType = {
+        question_created: 'pending', question_answered: 'answered',
+        question_cancelled: 'cancelled', question_expired: 'expired',
+      };
+      chatStore.upsertInteraction(gatewayId, sessionId, 'question', {
+        ...question,
+        id,
+        status: question.status || message.status || statusByType[type] || 'pending',
+        prompt: question.prompt || message.summary,
+        sessionId: eventSessionId,
+      });
+    }
+  }
+
+  function connectEventSocket() {
+    if (destroyed || eventSocket || typeof WebSocket === 'undefined') return;
+    let socket;
+    try { socket = new WebSocket(gateway.wsUrl('/ws')); }
+    catch { scheduleEventSocketReconnect(); return; }
+    eventSocket = socket;
+    socket.addEventListener('open', () => {
+      if (eventSocket !== socket || destroyed) return;
+      eventReconnectDelay = 1000;
+      syncPendingInteractions();
+    });
+    socket.addEventListener('message', (event) => {
+      if (eventSocket !== socket || destroyed) return;
+      try { applyGatewayEvent(JSON.parse(event.data)); } catch {}
+    });
+    socket.addEventListener('close', () => {
+      if (eventSocket !== socket) return;
+      eventSocket = null;
+      scheduleEventSocketReconnect();
+    });
+    socket.addEventListener('error', () => { try { socket.close(); } catch {} });
+  }
+
+  function scheduleEventSocketReconnect() {
+    if (destroyed || eventReconnectTimer) return;
+    const delay = eventReconnectDelay;
+    eventReconnectDelay = Math.min(eventReconnectDelay * 2, 30_000);
+    eventReconnectTimer = window.setTimeout(() => {
+      eventReconnectTimer = null;
+      connectEventSocket();
+    }, delay);
+  }
 
   function paintAttachments() {
     attachmentStrip.hidden = !attachments.length;
@@ -110,12 +200,14 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
     try {
       const payload = await gateway.getSession(id);
       chatStore.hydrate(gatewayId, id, payload);
+      await syncPendingInteractions();
     } catch (error) {
       if (Number(error?.status) === 404) {
         try {
           await gateway.createSession({ id, title: 'New Chat' });
           const payload = await gateway.getSession(id);
           chatStore.hydrate(gatewayId, id, payload);
+          await syncPendingInteractions();
         } catch (inner) {
           chatStore.mutate(gatewayId, id, (state) => { state.loading = false; state.error = String(inner?.message || inner); });
         }
@@ -287,9 +379,14 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
   window.addEventListener('online', onOnline);
   document.addEventListener('visibilitychange', onVisibilityChange);
 
+  connectEventSocket();
   await load();
   return () => {
     destroyed = true;
+    if (eventReconnectTimer) window.clearTimeout(eventReconnectTimer);
+    eventReconnectTimer = null;
+    try { eventSocket?.close(1000, 'chat view disposed'); } catch {}
+    eventSocket = null;
     streamController?.abort();
     disposeInteractions();
     window.removeEventListener('online', onOnline);

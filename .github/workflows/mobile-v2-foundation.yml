@@ -6,6 +6,7 @@ on:
       - 'web-ui/mobile-v2.html'
       - 'web-ui/src/mobile-v2/**'
       - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/test-mobile-v2-integration.mjs'
       - 'scripts/prepare-public-build.js'
       - 'scripts/check-public-web-ui-sync.js'
       - 'generated/public-web-ui/mobile-v2.html'
@@ -18,6 +19,7 @@ on:
       - 'web-ui/mobile-v2.html'
       - 'web-ui/src/mobile-v2/**'
       - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/test-mobile-v2-integration.mjs'
       - 'scripts/prepare-public-build.js'
       - 'scripts/check-public-web-ui-sync.js'
       - 'generated/public-web-ui/mobile-v2.html'
@@ -39,3 +41,5 @@ jobs:
         run: find web-ui/src/mobile-v2 -name '*.js' -print0 | sort -z | xargs -0 -n1 node --check
       - name: Verify complete V2 isolation and feature contract
         run: node scripts/test-mobile-v2-foundation.mjs
+      - name: Verify mobile API integration contracts
+        run: node --experimental-default-type=module scripts/test-mobile-v2-integration.mjs

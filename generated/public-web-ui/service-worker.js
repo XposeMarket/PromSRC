@@ -17,10 +17,10 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const RELEASE_VERSION = 'pm-v312-2026-09-07-mobile-controls';
+const RELEASE_VERSION = 'pm-v313-2026-09-16-background-side-stream';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '51cfd9672624b7c9';
+const ASSET_BUILD_ID = '283912ca62cd3a88';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -42,24 +42,24 @@ const SOURCE_PRECACHE = [
 const BUILD_PRECACHE = [
   "/asset-manifest.json",
   "/assets/Prometheus.png",
-  "/build/chunks/chunk-2BWEHTPG.js",
   "/build/chunks/chunk-5RLMNBA7.js",
   "/build/chunks/chunk-CP4XDM65.js",
-  "/build/chunks/chunk-EIYUY45O.js",
+  "/build/chunks/chunk-EM5YFMF7.js",
   "/build/chunks/chunk-EPSJJCWL.js",
   "/build/chunks/chunk-GBLBNUG2.js",
   "/build/chunks/chunk-JF4LWGNM.js",
   "/build/chunks/chunk-M3KXBAIH.js",
   "/build/chunks/chunk-M5JONE3D.js",
-  "/build/chunks/chunk-QUJUYRRC.js",
+  "/build/chunks/chunk-ONSPB6TK.js",
+  "/build/chunks/chunk-RGQXSKNG.js",
   "/build/chunks/chunk-VT2SUWLA.js",
+  "/build/chunks/chunk-Y4PTFYGQ.js",
   "/build/chunks/chunk-YMT6MSCC.js",
-  "/build/chunks/chunk-YYMYNLD4.js",
-  "/build/chunks/mobile-router-O3GCTD2Z.js",
-  "/build/entries/mobile-4YDI25DP.js",
+  "/build/chunks/mobile-router-MRW3WTCE.js",
+  "/build/entries/mobile-NKPWPQD5.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-  "/build/styles/mobile-YITKWVXK.css",
+  "/build/styles/mobile-O6JSTBCW.css",
   "/mobile.html",
   "/mobile/chat",
 ];

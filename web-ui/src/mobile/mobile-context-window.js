@@ -8,6 +8,7 @@
 
 import { mobileGatewayFetch } from './mobile-api.js';
 import { escapeHtml } from './mobile-shell.js';
+import { readContextWindowCache, resolveActiveContextTokens, writeContextWindowCache } from '../context-window-value.js';
 
 let _open = false;
 let _expanded = false;
@@ -26,6 +27,7 @@ let _getSessionId = null;
 let _getProvider = null;
 let _getAccountId = null;
 let _liveTurn = null;
+const _contextSnapshotsBySession = new Map();
 
 const MOBILE_CONTEXT_REFRESH_INTERVAL_MS = 5000;
 
@@ -166,6 +168,43 @@ function _applyLiveOverlay(data) {
   return data;
 }
 
+function _contextSnapshotForSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return { data: null, pressure: null };
+  let snapshot = _contextSnapshotsBySession.get(sid);
+  if (!snapshot) {
+    const cached = readContextWindowCache(sid);
+    snapshot = {
+      data: cached?.data || null,
+      pressure: cached?.pressure || null,
+    };
+    _contextSnapshotsBySession.set(sid, snapshot);
+  }
+  return snapshot;
+}
+
+function _mergedContextSnapshot(snapshot) {
+  const data = snapshot?.data;
+  const pressure = snapshot?.pressure;
+  if (data) {
+    return {
+      ...data,
+      pressureTokens: pressure?.success !== false ? pressure?.pressureTokens : undefined,
+      pressureContextWindowTokens: pressure?.success !== false ? pressure?.contextWindowTokens : undefined,
+    };
+  }
+  if (pressure) {
+    return {
+      success: true,
+      pressureTokens: pressure.pressureTokens,
+      pressureContextWindowTokens: pressure.contextWindowTokens,
+      contextWindowTokens: pressure.contextWindowTokens,
+      currentState: { rows: [] },
+    };
+  }
+  return null;
+}
+
 function _gaugeClass(pct) {
   const p = Number(pct) || 0;
   if (p >= 90) return 'crit';
@@ -272,8 +311,12 @@ function _renderContext(data) {
     return;
   }
   const currentState = data.currentState || {};
-  const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
-  const windowTokens = _displayLimit(data, currentState);
+  const current = resolveActiveContextTokens({
+    currentStateTokens: data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens,
+    pressureTokens: data.pressureTokens || currentState.pressureTokens,
+    fallbackTokens: data.activeContextTokens || currentState.activeContextTokens,
+  });
+  const windowTokens = Math.max(0, Number(data.pressureContextWindowTokens || 0)) || _displayLimit(data, currentState);
   const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
   if (ring) ring.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
   if (chip) chip.title = `Context window: ${_fmtTokens(current)} / ${_fmtTokens(windowTokens)} tokens`;
@@ -332,7 +375,8 @@ function _renderPlan() {
 
 async function _refresh(sessionId, { force = false, provider = '', accountId = '' } = {}) {
   const seq = ++_refreshSeq;
-  _lastSessionId = String(sessionId || _lastSessionId || '');
+  const sid = String(sessionId || _lastSessionId || '').trim();
+  _lastSessionId = sid;
   const providerOverride = String(provider || '').trim().toLowerCase();
   const accountOverride = String(accountId || '').trim();
   if (force) {
@@ -357,13 +401,34 @@ async function _refresh(sessionId, { force = false, provider = '', accountId = '
 
   // Context window for the active session.
   try {
-    if (sessionId) {
-      const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/context-window`);
-      if (seq === _refreshSeq) _renderContext(data && data.success !== false ? data : null);
+    if (sid) {
+      const snapshot = _contextSnapshotForSession(sid);
+      // The composition endpoint is intentionally a bounded next-call slice.
+      // The number in the gauge is the agent's full active context for this
+      // thread, so pair those rows with the estimator used by compaction.
+      const encodedSessionId = encodeURIComponent(sid);
+      const [data, pressure] = await Promise.all([
+        mobileGatewayFetch(`/api/sessions/${encodedSessionId}/context-window`),
+        mobileGatewayFetch(`/api/sessions/${encodedSessionId}/context-pressure`).catch(() => null),
+      ]);
+      const hasData = !!(data && data.success !== false);
+      const hasPressure = !!(pressure && pressure.success !== false);
+      // Preserve the last good session snapshot when the gateway is briefly
+      // restarting. Each endpoint can recover independently, so merge the
+      // successful half instead of replacing the ring with zero/unavailable.
+      if (hasData) snapshot.data = data;
+      if (hasPressure) snapshot.pressure = pressure;
+      if (hasData || hasPressure) writeContextWindowCache(sid, snapshot);
+      const merged = _mergedContextSnapshot(snapshot);
+      if (seq === _refreshSeq) _renderContext(merged);
     } else if (seq === _refreshSeq) {
       _renderContext(null);
     }
-  } catch { if (seq === _refreshSeq) _renderContext(null); }
+  } catch {
+    // A transport exception (for example while the gateway reconnects) must
+    // not erase the last good session snapshot from the ring.
+    if (seq === _refreshSeq) _renderContext(_mergedContextSnapshot(_contextSnapshotForSession(sid)));
+  }
 
   // Active provider/account (for plan-usage scoping) + usage limits. Model-change
   // events force this cache so plan usage updates with the context ring.
@@ -399,7 +464,7 @@ async function _refresh(sessionId, { force = false, provider = '', accountId = '
       if (lim && lim.success !== false) { _planData = lim; _planFetchAt = now; }
     }
     if (seq === _refreshSeq) _renderPlan();
-    if (force) console.info('[mobile context] refreshed after model change', { sessionId, provider: _activeProvider, accountId: _activeAccountId });
+    if (force) console.info('[mobile context] refreshed after model change', { sessionId: sid, provider: _activeProvider, accountId: _activeAccountId });
   } catch { /* leave plan hidden */ }
 }
 

@@ -10,7 +10,7 @@ function matchesFilter(task, filter) {
   const status = taskStatus(task);
   if (filter === 'all') return true;
   if (filter === 'waiting') return /waiting|needs_assistance|awaiting_user_input|waiting_subagent/.test(status);
-  if (filter === 'completed') return /completed|succeeded/.test(status);
+  if (filter === 'completed') return /complete|succeeded/.test(status);
   return status.includes(filter);
 }
 
@@ -20,7 +20,7 @@ function actionButtons(task) {
   if (/running|queued/.test(status)) rows.push(['pause','Pause']);
   if (/paused|stalled|needs_assistance|awaiting_user_input|waiting_subagent/.test(status)) rows.push(['resume','Resume']);
   if (/failed|cancelled/.test(status)) rows.push(['retry','Retry']);
-  if (!/completed|succeeded|cancelled/.test(status)) rows.push(['cancel','Cancel']);
+  if (!/complete|succeeded|cancelled|failed/.test(status)) rows.push(['cancel','Cancel']);
   rows.push(['delete','Delete']);
   return rows.map(([id,label]) => `<button type="button" class="pm-btn ${id === 'delete' ? 'ghost danger' : 'ghost'}" data-task-action="${id}">${label}</button>`).join('');
 }

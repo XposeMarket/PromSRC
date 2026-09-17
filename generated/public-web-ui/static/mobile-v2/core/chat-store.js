@@ -112,8 +112,9 @@ export class ChatStore {
       state.title = String(session.title || state.title || 'New Chat');
       state.messages = normalizeHistory(history);
       const page = session.historyPage || payload?.historyPage || {};
-      state.olderCursor = page?.pageInfo?.olderCursor || null;
-      state.hasOlder = page?.pageInfo?.hasOlder === true || session.historyTruncated === true;
+      const pageInfo = page?.pageInfo || page;
+      state.olderCursor = pageInfo?.olderCursor || null;
+      state.hasOlder = pageInfo?.hasOlder === true || session.historyTruncated === true;
       state.loading = false;
       state.error = '';
     });
@@ -124,8 +125,9 @@ export class ChatStore {
       const older = normalizeHistory(page?.items || []);
       const existing = new Set(state.messages.map((message) => message.id));
       state.messages = [...older.filter((message) => !existing.has(message.id)), ...state.messages];
-      state.olderCursor = page?.pageInfo?.olderCursor || null;
-      state.hasOlder = page?.pageInfo?.hasOlder === true;
+      const pageInfo = page?.pageInfo || page;
+      state.olderCursor = pageInfo?.olderCursor || null;
+      state.hasOlder = pageInfo?.hasOlder === true;
     });
   }
 
@@ -156,6 +158,35 @@ export class ChatStore {
         Object.assign(current, patch || {}, { id: targetId });
         return;
       }
+    });
+  }
+
+  upsertInteraction(gatewayId, sessionId, kind, record) {
+    const listKey = kind === 'approval' ? 'approvals' : 'questions';
+    const normalized = normalizeInteraction(record, kind);
+    if (!normalized.id) return this.get(gatewayId, sessionId);
+    return this.mutate(gatewayId, sessionId, (state) => {
+      let message = [...state.messages].reverse().find((item) => (
+        item.role === 'assistant'
+        && (Array.isArray(item[listKey]) ? item[listKey] : []).some((entry) => interactionId(entry, kind) === normalized.id)
+      ));
+      message ||= [...state.messages].reverse().find((item) => item.role === 'assistant');
+      if (!message) {
+        message = {
+          id: `interaction-${kind}-${normalized.id}`,
+          role: 'assistant',
+          text: '',
+          createdAt: Date.now(),
+          status: 'done',
+          reasoning: '',
+          tools: [],
+          approvals: [],
+          questions: [],
+        };
+        state.messages.push(message);
+      }
+      if (!Array.isArray(message[listKey])) message[listKey] = [];
+      upsertInteraction(message[listKey], normalized, kind);
     });
   }
 

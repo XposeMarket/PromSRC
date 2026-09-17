@@ -402,6 +402,10 @@ router.get('/api/bg-tasks', (req, res) => {
     pendingClarificationQuestion: compact ? String(task.pendingClarificationQuestion || '').slice(0, 320) || undefined : task.pendingClarificationQuestion,
     scheduleId: task.scheduleId,
     taskKind: task.taskKind,
+    brainJob: task.brainJob,
+    brainRunId: task.brainRunId,
+    brainDate: task.brainDate,
+    brainArtifact: task.brainArtifact,
     verificationStatus: task.verificationStatus,
     voiceDispatch: task.voiceDispatch,
     managerEnabled: task.managerEnabled,
@@ -577,6 +581,25 @@ router.delete('/api/bg-tasks/:id', (req, res) => {
   const ok = deleteTask(req.params.id);
   if (!ok) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   res.json({ success: true });
+});
+
+router.post('/api/bg-tasks/:id/cancel', (req, res) => {
+  const task = loadTask(req.params.id);
+  if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (isImmutableCompletedAgentTask(task)) {
+    res.status(409).json({ success: false, code: 'completed_agent_task_immutable', error: `Completed subagent task "${task.title}" is immutable.` });
+    return;
+  }
+  if (['complete', 'completed', 'succeeded', 'failed', 'cancelled'].includes(String(task.status || '').toLowerCase())) {
+    res.status(409).json({ success: false, error: `Task is already ${task.status}.` });
+    return;
+  }
+  const reason = String(req.body?.reason || 'Cancelled from Mobile V2.').trim().slice(0, 300) || 'Cancelled from Mobile V2.';
+  if (!BackgroundTaskRunner.cancelTask(task.id, reason)) {
+    res.status(404).json({ success: false, error: 'Task not found' });
+    return;
+  }
+  res.json({ success: true, task: loadTask(task.id) });
 });
 
 function buildTaskResumeInstruction(task: any, mode: 'resume' | 'restart'): string {

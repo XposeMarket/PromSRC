@@ -3516,11 +3516,17 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
         seen.add(key);
         parts.push(t);
       };
-      ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(value?.[key]));
-      const item = value?.item || value?.response || value?.message || null;
-      ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(item?.[key]));
-      const content = Array.isArray(item?.content) ? item.content : (Array.isArray(value?.content) ? value.content : []);
-      content.forEach((part) => ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(part?.[key])));
+      const visit = (node, depth = 0) => {
+        if (!node || typeof node !== 'object' || depth > 4) return;
+        ['transcript', 'text', 'delta', 'output_text', 'audio_transcript'].forEach((key) => push(node?.[key]));
+        ['item', 'response', 'message'].forEach((key) => visit(node?.[key], depth + 1));
+        ['content', 'output'].forEach((key) => {
+          const nested = node?.[key];
+          if (Array.isArray(nested)) nested.forEach((part) => visit(part, depth + 1));
+          else visit(nested, depth + 1);
+        });
+      };
+      visit(value);
       return parts;
     };
     const _eventText = (value = event, options = {}) => {
@@ -3952,6 +3958,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
       || type === 'response.text.done'
       || type === 'response.output_text.done'
       || type === 'response.content_part.done'
+      || type === 'response.done'
       || (type === 'response.output_item.done' && String(event?.item?.role || event?.item?.type || '').toLowerCase() !== 'function_call')
     ) {
       if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
@@ -4004,7 +4011,7 @@ export function createMobileVoiceRealtimeRuntime(scope = {}) {
           _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_transcript', force: true });
         } catch {}
       }
-      return;
+      if (type !== 'response.done') return;
     }
     if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
       const cameraState = _mobileRealtimeLiveVisionState();

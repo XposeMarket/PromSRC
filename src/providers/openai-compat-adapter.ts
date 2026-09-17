@@ -523,6 +523,14 @@ export class OpenAICompatAdapter implements LLMProvider {
 	        continue;
 	      }
 	      if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+	        const assistantText = typeof m.content === 'string' ? m.content.trim() : '';
+	        if (assistantText) {
+	          input.push({
+	            role: 'assistant',
+	            content: assistantText,
+	            ...(m.phase ? { phase: m.phase } : {}),
+	          });
+	        }
 	        for (const tc of m.tool_calls) {
 	          input.push({
 	            type: 'function_call',
@@ -623,6 +631,9 @@ export class OpenAICompatAdapter implements LLMProvider {
 	    let thinking = '';
 	    let usage: ModelUsage | undefined;
 	    let toolCalls: any[] = [];
+	    let assistantPhase: 'commentary' | 'final_answer' | undefined;
+	    let assistantItemId = '';
+	    let assistantOutputIndex: number | undefined;
 	    const toolCallByOutputIndex = new Map<number, any>();
 	    const toolCallByItemId = new Map<string, any>();
 	    const toolCallByCallId = new Map<string, any>();
@@ -667,13 +678,28 @@ export class OpenAICompatAdapter implements LLMProvider {
 	          try {
 	            const event = JSON.parse(data);
 	            const type = String(event.type || '');
+	            if (type === 'response.output_item.added' && event.item?.type === 'message') {
+	              assistantPhase = event.item.phase === 'commentary' || event.item.phase === 'final_answer' ? event.item.phase : assistantPhase;
+	              assistantItemId = String(event.item.id || event.item_id || assistantItemId || '');
+	              assistantOutputIndex = typeof event.output_index === 'number' ? event.output_index : assistantOutputIndex;
+	              options?.onModelEvent?.({ type: 'assistant_item_start', itemId: assistantItemId || undefined, outputIndex: assistantOutputIndex, phase: assistantPhase, nativeType: type, provider: this.id, model });
+	            }
 	            if (type === 'response.output_text.delta') {
 	              const delta = String(event.delta || '');
 	              if (delta) {
 	                content += delta;
 	                options?.onToken?.(delta);
-	                options?.onModelEvent?.({ type: 'assistant_delta', text: delta, nativeType: type, provider: this.id, model });
+	                options?.onModelEvent?.({ type: 'assistant_delta', text: delta, itemId: String(event.item_id || assistantItemId || '') || undefined, outputIndex: typeof event.output_index === 'number' ? event.output_index : assistantOutputIndex, phase: assistantPhase, nativeType: type, provider: this.id, model });
 	              }
+	            }
+	            if (type === 'response.output_item.done' && event.item?.type === 'message') {
+	              const itemText = Array.isArray(event.item.content)
+	                ? event.item.content.filter((part: any) => part?.type === 'output_text').map((part: any) => part.text || '').join('')
+	                : '';
+	              assistantPhase = event.item.phase === 'commentary' || event.item.phase === 'final_answer' ? event.item.phase : assistantPhase;
+	              assistantItemId = String(event.item.id || event.item_id || assistantItemId || '');
+	              assistantOutputIndex = typeof event.output_index === 'number' ? event.output_index : assistantOutputIndex;
+	              options?.onModelEvent?.({ type: 'assistant_item_done', text: itemText || undefined, itemId: assistantItemId || undefined, outputIndex: assistantOutputIndex, phase: assistantPhase, nativeType: type, provider: this.id, model });
 	            }
 	            if (type === 'response.reasoning_summary_text.delta' || type === 'response.reasoning_summary.delta') {
 	              emitReasoning(event.delta || event.text, true);
@@ -732,6 +758,8 @@ export class OpenAICompatAdapter implements LLMProvider {
 	              const outputs = event.response?.output || [];
 	              for (const item of outputs) {
 	                if (item.type === 'message') {
+	                  assistantPhase = item.phase === 'commentary' || item.phase === 'final_answer' ? item.phase : assistantPhase;
+	                  assistantItemId = String(item.id || assistantItemId || '');
 	                  content = (item.content || [])
 	                    .filter((c: any) => c.type === 'output_text')
 	                    .map((c: any) => c.text || '')
@@ -774,6 +802,9 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      role: 'assistant',
 	      content,
 	      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+	      ...(assistantPhase ? { phase: assistantPhase } : {}),
+	      ...(assistantItemId ? { item_id: assistantItemId } : {}),
+	      ...(assistantOutputIndex !== undefined ? { output_index: assistantOutputIndex } : {}),
 	    };
 	    return { message, thinking: thinking || undefined, usage };
 	  }

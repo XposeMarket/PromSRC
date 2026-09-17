@@ -1595,10 +1595,12 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
   const queue = getApprovalQueue();
   const status = String(req.query.status || 'pending').trim().toLowerCase();
   const taskId = String(req.query.taskId || '').trim();
+  const sessionId = String(req.query.sessionId || '').trim();
   const approvals = (status === 'all'
     ? queue.listAll()
     : queue.listAll().filter((record) => record.status === status))
     .filter((record) => !taskId || String(record.taskId || '') === taskId)
+    .filter((record) => !sessionId || String(record.sessionId || '') === sessionId)
     .map((record) => ({
       ...record,
       command: String(record.toolArgs?.command || ''),

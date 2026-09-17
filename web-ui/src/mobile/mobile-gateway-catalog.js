@@ -813,6 +813,22 @@ async function _loadOnlineSelectedGatewayEntries() {
   return filterOnlineGatewayEntries(filterGatewayEntries(loadGatewayCatalog()));
 }
 
+async function _loadGatewayActiveSessionIds(entry) {
+  try {
+    const status = await gatewayFetchJson(entry, '/api/mobile/chat/runs');
+    return {
+      known: Array.isArray(status?.activeSessionIds),
+      ids: new Set(
+        (Array.isArray(status?.activeSessionIds) ? status.activeSessionIds : [])
+          .map((id) => String(id || '').trim())
+          .filter(Boolean),
+      ),
+    };
+  } catch {
+    return { known: false, ids: new Set() };
+  }
+}
+
 async function _readGatewayCatalog(entry, state = 'active', limit = 50) {
   const params = new URLSearchParams({ state, limit: String(limit), offset: '0' });
   try {
@@ -856,6 +872,7 @@ export async function loadMobileGatewaySessionPage({ limit = 20, offset = 0, sta
   // cache or an old "online" dot.
   const selected = await _loadOnlineSelectedGatewayEntries();
   const pages = await Promise.all(selected.map(async (entry) => {
+    const activeSessionIdsPromise = _loadGatewayActiveSessionIds(entry);
     try {
       const params = new URLSearchParams({ state, limit: String(limit), offset: String(offset) });
       let result;
@@ -865,6 +882,7 @@ export async function loadMobileGatewaySessionPage({ limit = 20, offset = 0, sta
         const legacyParams = new URLSearchParams({ scope: 'all', includeAutomated: '1', state, limit: String(limit), offset: String(offset) });
         result = await gatewayFetchJson(entry, `/api/sessions?${legacyParams.toString()}`);
       }
+      const activeRunStatus = await activeSessionIdsPromise;
       const sessions = Array.isArray(result?.sessions) ? result.sessions : [];
       return {
         ...result,
@@ -875,6 +893,8 @@ export async function loadMobileGatewaySessionPage({ limit = 20, offset = 0, sta
           gatewayId: entry.gatewayId,
           gatewayName: entry.name,
           id: targetNamespacedId(entry.gatewayId, session.id),
+          activeRun: session.activeRun === true || activeRunStatus.ids.has(String(session.id || '').trim()),
+          activeRunKnown: activeRunStatus.known,
         })),
       };
     } catch (error) {

@@ -59,6 +59,8 @@ export async function renderVoicePage(baseContext, page, ctx) {
   });
   if (!inlineMode) document.body?.classList.add('pm-mobile-voice-snap');
   if (inlineMode) {
+    // Begin with the orb centered and the transcript hidden. Dragging the orb
+    // down restores the live transcript and docks Voice above mobile chrome.
     document.body?.classList.add('pm-chat-voice-focus');
     document.body?.classList.remove('pm-chat-voice-docked');
   }
@@ -69,9 +71,7 @@ export async function renderVoicePage(baseContext, page, ctx) {
       <section class="${inlineMode ? '' : 'pm-voice-snap-section pm-voice-snap-primary'}">
       <div class="pm-voice-stage">
         <div id="pm-voice-preview-host" class="pm-voice-preview-host" aria-live="polite"></div>
-        ${inlineMode
-          ? '<button type="button" class="pm-voice-orb" id="pm-voice-orb" aria-label="Choose voice target"></button>'
-          : '<div class="pm-voice-overlay-anchor" aria-hidden="true"></div>'}
+        <div class="pm-voice-overlay-anchor" aria-hidden="true"></div>
         ${context._renderVoiceAgentTargetPickerHtml()}
         <div class="pm-voice-status-region" aria-live="polite">
           <div class="pm-voice-status" id="pm-voice-status">Ready</div>
@@ -272,7 +272,6 @@ export async function renderVoicePage(baseContext, page, ctx) {
   const hintEl     = page.querySelector('#pm-voice-hint');
   context.__pmVoice.statusEl = statusEl;
   context.__pmVoice.hintEl = hintEl;
-  const orbEl      = page.querySelector('#pm-voice-orb');
   const targetCard = page.querySelector('#pm-voice-target-card');
   const targetGrid = page.querySelector('#pm-voice-target-grid');
   const roomBtn    = page.querySelector('#pm-voice-room-toggle');
@@ -3239,7 +3238,7 @@ void main() {
 
   // ── Orb state ─────────────────────────────────────────────────────
   function _setOrbState(state) {
-    const target = orbEl || document.getElementById('pm-voice-orb');
+    const target = mic || document.getElementById('pm-voice-orb');
     const requestedState = context._mobileVoiceToolsAreActive() ? 'solving' : state;
     const visualState = requestedState === 'listening' ? 'listening' : requestedState === 'solving' ? 'solving' : 'thinking';
     mobileThinkingOrb?.setState(visualState);

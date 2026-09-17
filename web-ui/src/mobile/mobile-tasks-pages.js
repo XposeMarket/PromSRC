@@ -21,6 +21,8 @@ import {
   _formatDuration,
 } from './mobile-teams-pages.js';
 
+import { wsEventBus } from '../ws.js';
+
 /* ---------------- TASKS PAGE ---------------- */
 
 const TASK_PILL = {
@@ -81,6 +83,8 @@ async function _renderTasksPageOld(page, { navigate }) {
       const started = t.startedAt || t.createdAt;
       const dur = t.finishedAt && t.startedAt ? _formatDuration(t.finishedAt - t.startedAt) : (t.startedAt ? _formatDuration(Date.now() - t.startedAt) : '');
       const summary = t.title || t.prompt || t.summary || t.detail || '';
+      const brainLabel = _pmBrainTaskLabel(t);
+      const sourceLabel = brainLabel || t.actor || t.source || 'task';
       const progressItems = Array.isArray(t.runtimeProgress?.items) ? t.runtimeProgress.items : [];
       const currentStep = progressItems.find(it => String(it?.status) === 'in_progress')?.text || '';
       return `
@@ -150,6 +154,19 @@ function _pmTaskFilter(status) {
 function _pmTaskPill(status) {
   const normalized = _pmTaskStatus(status);
   return TASK_PILL[status] || TASK_PILL[normalized] || { label: normalized, cls: 'gray' };
+}
+
+function _pmBrainTaskLabel(task) {
+  const job = String(task?.brainJob || '').trim().toLowerCase();
+  if (job === 'thought') return 'Brain Thought';
+  if (job === 'dream_cleanup') return 'Brain Dream Cleanup';
+  if (job === 'dream') return 'Brain Dream';
+  return '';
+}
+
+function _pmIsBrainTask(task) {
+  return Boolean(_pmBrainTaskLabel(task))
+    || /^brain_(?:thought|dream)(?:_|$)/i.test(String(task?.sessionId || ''));
 }
 
 function _pmTaskProgressItems(task) {
@@ -275,6 +292,7 @@ function _pmRenderTaskPromptDisclosure(task) {
 }
 
 function _pmTaskAction(task) {
+  if (_pmIsBrainTask(task)) return null;
   const s = String(task?.status || '').toLowerCase();
   if (s === 'running') return { action: 'pause', label: 'Pause' };
   if (['paused', 'queued', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(s)) return { action: 'resume', label: 'Resume' };
@@ -304,6 +322,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let details = {};
   let evidence = {};
   let refreshTimer = null;
+  let eventRefreshTimer = null;
 
   function paint() {
     const bodyEl = page.querySelector('#pm-tasks-body');
@@ -333,6 +352,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     listEl.innerHTML = tasks.map(t => {
       const id = String(t.id || '');
       const pill = _pmTaskPill(String(t.status || ''));
+      const brainLabel = _pmBrainTaskLabel(t);
+      const sourceLabel = brainLabel || String(t.channel || t.source || t.actor || 'Background task');
       const started = t.startedAt || t.createdAt;
       const finishedAt = t.completedAt || t.finishedAt;
       const dur = finishedAt && t.startedAt ? _formatDuration(finishedAt - t.startedAt) : (t.startedAt ? _formatDuration(Date.now() - t.startedAt) : '');
@@ -349,9 +370,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
             <strong style="flex:1;font-size:13px;line-height:1.3;">${escapeHtml(String(summary).slice(0, 140))}${String(summary).length > 140 ? '...' : ''}</strong>
             <span class="pm-pill ${pill.cls}">${escapeHtml(pill.label)}</span>
           </div>
+          ${brainLabel ? `<div style="font-size:10px;color:#6d2d9e;font-weight:800;text-transform:uppercase;letter-spacing:.05em;margin:-1px 0 5px;">${escapeHtml(brainLabel)}${t.brainDate ? ` · ${escapeHtml(String(t.brainDate))}` : ''}</div>` : ''}
           ${currentStep ? `<div class="pm-card-body" style="font-size:12px;color:var(--pm-text-soft);margin-bottom:4px;"><span style="color:var(--pm-orange);font-weight:700;">&gt;</span> ${escapeHtml(String(currentStep).slice(0, 160))}</div>` : ''}
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--pm-muted);gap:10px;">
-            <span>${escapeHtml(t.actor || t.source || 'task')} - ${progressItems.length} step${progressItems.length === 1 ? '' : 's'}</span>
+            <span>${escapeHtml(sourceLabel)} - ${progressItems.length} step${progressItems.length === 1 ? '' : 's'}</span>
             <span>${started ? _formatTimeAgo(started) : ''}${dur ? ' - ' + dur : ''}</span>
           </div>
           ${isOpen ? `<div class="pm-task-expanded" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--pm-border);display:flex;flex-direction:column;gap:12px;cursor:default;">
@@ -360,6 +382,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
                 ${action ? `<button class="pm-btn ghost" data-task-action="${action.action}" data-task-id="${escapeHtml(id)}">${escapeHtml(action.label)}</button>` : ''}
                 ${['failed','complete'].includes(_pmTaskFilter(detail.status)) ? `<button class="pm-btn ghost danger" data-task-action="delete" data-task-id="${escapeHtml(id)}">${ICONS.trash} Remove</button>` : ''}
               </div>
+              ${brainLabel ? `<div style="background:#f8f5ff;border:1px solid #e9d8ff;border-radius:10px;padding:9px 11px;font-size:11px;color:#6d2d9e;line-height:1.5;"><strong>${escapeHtml(brainLabel)}</strong>${detail.brainDate ? ` · ${escapeHtml(String(detail.brainDate))}` : ''}${detail.brainRunId ? `<br><span style="opacity:.78">Run ${escapeHtml(String(detail.brainRunId))}</span>` : ''}${detail.brainArtifact ? `<br><span style="opacity:.78">Primary artifact: ${escapeHtml(String(detail.brainArtifact))}</span>` : ''}</div>` : ''}
               ${detail.finalSummary ? `<section><div class="pm-card-head">Final Response</div><div class="pm-card-body pm-task-final-response markdown-body pm-task-markdown">${_renderMobileMarkdown(detail.finalSummary)}</div></section>` : ''}
               ${['needs_assistance','awaiting_user_input','paused','stalled','failed'].includes(String(detail.status || '').toLowerCase()) ? `<section class="pm-task-recovery-panel">
                 <div class="pm-card-head pm-task-recovery-head">Needs You / Recovery</div>
@@ -507,6 +530,21 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }
   }
 
+  // Task-panel events are the fast path for live Brain and background-task
+  // updates. Keep the five-second poll as a recovery path for sleeping mobile
+  // tabs and reconnects, but do not make the user wait for it to see a tool,
+  // reasoning, or completion event.
+  const taskEventNames = ['task_running', 'task_panel_update', 'task_complete', 'task_failed'];
+  const onTaskEvent = (event = {}) => {
+    if (!page.isConnected || !event.taskId) return;
+    if (eventRefreshTimer) clearTimeout(eventRefreshTimer);
+    eventRefreshTimer = setTimeout(() => {
+      eventRefreshTimer = null;
+      load({ force: true }).catch(() => {});
+    }, 120);
+  };
+  taskEventNames.forEach((eventName) => wsEventBus.on(eventName, onTaskEvent));
+
   page.querySelector('#pm-tasks-refresh').addEventListener('click', () => { listEl.innerHTML = _tasksSkeleton(); load({ resetExpandedDetail: true, force: true }); });
   const cachedTasks = getCachedMobilePageData('tasks', 21_600_000);
   if (Array.isArray(cachedTasks)) {
@@ -516,7 +554,11 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     await load({ force: true });
   }
   refreshTimer = setInterval(() => load({ force: true }).catch(() => {}), 5000);
-  page._pmCleanup = () => { if (refreshTimer) clearInterval(refreshTimer); };
+  page._pmCleanup = () => {
+    if (refreshTimer) clearInterval(refreshTimer);
+    if (eventRefreshTimer) clearTimeout(eventRefreshTimer);
+    taskEventNames.forEach((eventName) => wsEventBus.off(eventName, onTaskEvent));
+  };
 }
 
 export function renderPlaceholderPage(page, { title, iconName = 'spark', subtitle, leftIcon = 'menu', onBack, navigate }) {

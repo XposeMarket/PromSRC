@@ -102,6 +102,12 @@ import {
   finishBrainProviderDiagnostics,
   shouldDeferAutomaticBrainJob,
 } from './brain-provider-diagnostics';
+import {
+  createBrainTask,
+  finishBrainTask,
+  mirrorBrainStreamEvent,
+  type BrainTaskMirror,
+} from '../tasks/brain-task-mirror.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -130,6 +136,7 @@ interface ActiveBrainRun {
   shutdownFinalized: boolean;
   usageFinished: boolean;
   modelBusyHeld: boolean;
+  taskMirror: BrainTaskMirror | null;
 }
 
 function hasActiveForegroundWork(): boolean {
@@ -749,6 +756,12 @@ export class BrainRunner {
       '',
       normalizedReason,
     );
+    finishBrainTask(active.taskMirror, {
+      success: false,
+      aborted: true,
+      error,
+      summary: 'The gateway stopped before the Brain run reached its normal completion boundary.',
+    });
     try {
       const state = loadLatestState();
       const attemptAt = new Date(active.startedAt).toISOString();
@@ -1127,6 +1140,15 @@ export class BrainRunner {
     const windowLabel = getWindowLabel(windowStart);
     const runId       = crypto.randomUUID();
     const sessionId   = `brain_thought_${dateStr}_${windowLabel}`;
+    const taskMirror = createBrainTask({
+      job: 'thought',
+      runId,
+      date: dateStr,
+      sessionId,
+      title: `🧠 Brain Thought — ${dateStr} · ${windowLabel}`,
+      prompt: `[Brain Thought ${thoughtNumber}] Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`,
+      broadcast: this.deps.broadcast,
+    });
     const usageHandle = beginBrainJobUsage({
       job: 'thought',
       runId,
@@ -1139,6 +1161,7 @@ export class BrainRunner {
       kind: 'brain_thought',
       label: `Brain thought - ${dateStr} ${windowLabel}`,
       sessionId,
+      taskId: taskMirror?.taskId,
       source: 'system',
       detail: `Window ${fmtUtc(windowStart)} -> ${fmtUtc(windowEnd)}`,
       abortSignal,
@@ -1152,6 +1175,7 @@ export class BrainRunner {
       startedAt: runStartedAt,
       usageHandle,
       abortSignal,
+      taskMirror,
     });
     const providerDiagnostics = createBrainProviderDiagnosticsContext({
       job: 'thought',
@@ -1258,6 +1282,7 @@ export class BrainRunner {
     const sendSSE = (event: string, data: any) => {
       if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
+      mirrorBrainStreamEvent(taskMirror, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_thought_sse', thoughtNumber, event, data });
       }
@@ -1441,6 +1466,16 @@ export class BrainRunner {
       activityPackageChars: builtActivityPackage.package.metrics.packageChars,
       resultTextChars: resultText.length,
     });
+    finishBrainTask(taskMirror, {
+      success,
+      summary: resultText,
+      error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
+      artifact: path.posix.join('Brain', outFile),
+      artifacts: [
+        capsuleFile,
+        builtActivityPackage.package.observability.packagePath,
+      ].filter((value): value is string => Boolean(value)),
+    });
 
     // Broadcast completion
     this.deps.broadcast({
@@ -1507,6 +1542,15 @@ export class BrainRunner {
     const now         = new Date();
     const dreamLabel  = getWindowLabel(now);
     const sessionId   = `brain_dream_${dateStr}`;
+    const taskMirror = createBrainTask({
+      job: 'dream',
+      runId,
+      date: dateStr,
+      sessionId,
+      title: `💤 Brain Dream — ${dateStr}`,
+      prompt: `[Brain Dream] Nightly synthesis for ${dateStr} — ${thoughtCount} thought(s)`,
+      broadcast: this.deps.broadcast,
+    });
     const usageHandle = beginBrainJobUsage({
       job: 'dream',
       runId,
@@ -1519,6 +1563,7 @@ export class BrainRunner {
       kind: 'brain_dream',
       label: `Brain dream - ${dateStr}`,
       sessionId,
+      taskId: taskMirror?.taskId,
       source: 'system',
       detail: `Nightly synthesis for ${dateStr}`,
       abortSignal,
@@ -1532,6 +1577,7 @@ export class BrainRunner {
       startedAt: runStartedAt,
       usageHandle,
       abortSignal,
+      taskMirror,
     });
     const providerDiagnostics = createBrainProviderDiagnosticsContext({
       job: 'dream',
@@ -1572,6 +1618,7 @@ export class BrainRunner {
     const sendSSE = (event: string, data: any) => {
       if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
+      mirrorBrainStreamEvent(taskMirror, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_sse', date: dateStr, event, data });
       }
@@ -1854,6 +1901,13 @@ export class BrainRunner {
       toolCount: toolResults.length,
       resultTextChars: resultText.length,
     });
+    finishBrainTask(taskMirror, {
+      success,
+      summary: `${artifactRecoveryNotes.length ? `[Recovered artifacts: ${artifactRecoveryNotes.join(' ')}]\n` : ''}${resultText}`,
+      error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
+      artifact: workspaceOutFile,
+      artifacts: [workspaceProposalsFile, carryDecisionFile, carryNotesFile],
+    });
 
     // Broadcast completion
     this.deps.broadcast({
@@ -1909,6 +1963,15 @@ export class BrainRunner {
     const now = new Date();
     const cleanupLabel = getWindowLabel(now);
     const sessionId = `brain_dream_cleanup_${dateStr}`;
+    const taskMirror = createBrainTask({
+      job: 'dream_cleanup',
+      runId,
+      date: dateStr,
+      sessionId,
+      title: `🧹 Brain Dream Cleanup — ${dateStr}`,
+      prompt: `[Brain Dream Cleanup] Memory solidifier for ${dateStr}`,
+      broadcast: this.deps.broadcast,
+    });
     const usageHandle = beginBrainJobUsage({
       job: 'dream_cleanup',
       runId,
@@ -1921,6 +1984,7 @@ export class BrainRunner {
       kind: 'brain_dream',
       label: `Brain dream cleanup - ${dateStr}`,
       sessionId,
+      taskId: taskMirror?.taskId,
       source: 'system',
       detail: `Second-pass memory solidifier for ${dateStr}`,
       abortSignal,
@@ -1934,6 +1998,7 @@ export class BrainRunner {
       startedAt: runStartedAt,
       usageHandle,
       abortSignal,
+      taskMirror,
     });
     const providerDiagnostics = createBrainProviderDiagnosticsContext({
       job: 'dream_cleanup',
@@ -1972,6 +2037,7 @@ export class BrainRunner {
     const sendSSE = (event: string, data: any) => {
       if (event === 'model_stream_event') captureBrainProviderEvent(providerDiagnostics, data?.event);
       checkpointBrainRuntime(runtimeId, event, data);
+      mirrorBrainStreamEvent(taskMirror, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_cleanup_sse', date: dateStr, event, data });
       }
@@ -2128,6 +2194,12 @@ export class BrainRunner {
       usage,
       toolCount: toolResults.length,
       resultTextChars: resultText.length,
+    });
+    finishBrainTask(taskMirror, {
+      success,
+      summary: resultText,
+      error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+      artifact: workspaceOutFile,
     });
 
     this.deps.broadcast({

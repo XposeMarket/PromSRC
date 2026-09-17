@@ -1231,6 +1231,8 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   mcp_server_tools: `MCP SERVER TOOLS: dynamic tools from connected MCP servers appear as mcp__serverId__toolName. Use mcp_server_manage(action:"list_tools") or integration_admin first when you need to inspect available MCP tools. Use only trusted connected servers.`,
 
+  parallelism: `TOOL CALL PARALLELISM: When several observations are independent, emit the read-only calls together in one assistant turn so the runtime can overlap them. Good candidates include read/list/grep/search/stat/file-tree calls and independent web_search/web_fetch calls. Keep dependent work serial: a read that depends on a prior write, any mutation, shell/process command, browser or desktop action, connector/external write, memory write, approval, or call that needs another result. Never parallelize calls that compete for the same mutable resource. Prefer a small useful batch (2–6 calls), and use the returned results in their original call order.`,
+
   creative_mode: `CREATIVE TOOLS: wrapper-first editable Creative editor tools. Use creative_project for mode/state/history/project/export, creative_scene for canvas/scene/element/style operations, creative_image_ops for image assets/generation/layers/icons, creative_video_ops for shots/audio/timeline/composition/rendering, creative_hyperframes_ops for HyperFrames/HTML Motion, and creative_quality_ops for QA/layout/frame/text checks. Use Creative/HyperFrames skills for workflow guidance. Workspace selection is editor state, not an assistant runtime mode. For one-shot AI media, activate media_generation and use media_generate; generate_image/generate_video remain compatibility tools.`,
 
   debug: isPublicDistributionBuild()
@@ -1540,7 +1542,7 @@ ${BG_AGENT_RUNTIME_HINT}`;
   const activeCategoryHint = activeCategoryList.length > 0
     ? `\n\n[ACTIVE_TOOL_CATEGORIES] Already active for this session: ${activeCategoryList.join(', ')}. Do not request these categories again; use their tools directly when relevant.`
     : '';
-  const baseMenu = `${menu}${activeCategoryHint}\n\n${TOOL_BLOCKS.skills}`;
+  const baseMenu = `${menu}${activeCategoryHint}\n\n${TOOL_BLOCKS.parallelism}\n\n${TOOL_BLOCKS.skills}`;
 
   if (activatedCategories.size === 0) return baseMenu;
 

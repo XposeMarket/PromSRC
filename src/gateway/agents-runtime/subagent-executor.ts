@@ -1668,6 +1668,7 @@ function normalizeAgentConversationBackgroundResult(result: any, agentId?: strin
     agentName: String(result?.agent_name || result?.agent_id || agentId || teamId || 'agent'),
     taskId: result?.task_id || result?.taskId,
     warning: result?.warning,
+    admissionCode: result?.admissionCode || result?.admission_code,
   };
 }
 
@@ -1683,7 +1684,9 @@ function startAgentConversationBackground(params: {
       const normalized = normalizeAgentConversationBackgroundResult(result, params.agentId, params.teamId);
       const entry = getBgAgentResults().get(taskId);
       if (entry) {
-        entry.status = normalized?.success === false ? 'failed' : 'complete';
+        entry.status = normalized?.admissionCode
+          ? 'capacity_limited'
+          : normalized?.success === false ? 'failed' : 'complete';
         entry.result = normalized;
       }
       return normalized;
@@ -6620,6 +6623,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
         if (team.manager?.paused === true) return { name, args, result: `ERROR: Team "${team.name}" is paused.`, error: true };
+        if (String(team.managerAgentId || '').trim() === agentId || (getAgentById(agentId) as any)?.isTeamManager === true) {
+          return {
+            name,
+            args,
+            result: `ERROR: Agent "${agentId}" is the manager for team "${team.name}". Use the team manager route (request_team_manager_turn or manager/trigger); managers are not dispatched as ordinary members.`,
+            error: true,
+          };
+        }
         if (!team.subagentIds.includes(agentId)) {
           return { name, args, result: `ERROR: Agent "${agentId}" is not a member of team "${team.name}".`, error: true };
         }
@@ -6697,7 +6708,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               publishTeamMemberRoomResult(result, taskId);
               const entry = getBgAgentResults().get(taskId);
               if (entry) {
-                entry.status = result.success ? 'complete' : 'failed';
+                entry.status = result.admissionCode
+                  ? 'capacity_limited'
+                  : result.success ? 'complete' : 'failed';
                 entry.result = result;
               }
               try {
@@ -6705,7 +6718,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                   role: 'agent',
                   content: result.success
                     ? String(result.result || '').trim() || 'Turn complete.'
-                    : `Turn failed: ${result.error || result.result || 'unknown error'}`,
+                    : result.admissionCode
+                      ? `Turn queued for retry: ${result.error || result.result || 'runtime capacity is temporarily full'}`
+                      : `Turn failed: ${result.error || result.result || 'unknown error'}`,
                   metadata: {
                     source: 'request_team_member_turn_background',
                     teamId,
@@ -6877,16 +6892,19 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const result = await deps.runTeamAgentViaChat(agentId, dispatchPrompt.effectiveTask, teamId);
           if (dispatchRecord) {
             updateTeamDispatchRecord(teamId, dispatchRecord.id, {
-              status: result.success ? 'completed' : 'failed',
+              status: result.success ? 'completed' : result.admissionCode ? 'capacity_limited' : 'failed',
               finishedAt: Date.now(),
               taskId: result.taskId,
               resultPreview: String(result.result || result.error || ''),
+              admissionCode: result.admissionCode,
             });
           }
           updateTeamMemberState(teamId, agentId, {
-            status: result.success ? 'ready' : 'blocked',
+            status: result.success ? 'ready' : result.admissionCode ? 'waiting_for_context' : 'blocked',
             currentTask: result.success ? '' : task,
-            blockedReason: result.success ? '' : String(result.error || result.result || 'Task failed').slice(0, 500),
+            blockedReason: result.success ? '' : result.admissionCode
+              ? `Capacity limited; retryable admission result (${result.admissionCode}). ${String(result.error || '').slice(0, 400)}`
+              : String(result.error || result.result || 'Task failed').slice(0, 500),
             lastResult: String(result.result || result.error || '').slice(0, 1000),
           });
           const resultChatMsg = appendTeamChat(teamId, {
@@ -6895,7 +6913,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             fromAgentId: agentId,
             content: result.success
               ? `Task complete: ${String(result.result || '')}`
-              : `Task failed: ${result.error || result.result || 'unknown error'}`,
+              : result.admissionCode
+                ? `Task queued for retry: ${result.error || result.result || 'runtime capacity is temporarily full'}`
+                : `Task failed: ${result.error || result.result || 'unknown error'}`,
             metadata: {
               agentId,
               runSuccess: result.success,
@@ -6905,6 +6925,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               thinking: result.thinking,
               processEntries: result.processEntries,
               liveTraceEntries: result.liveTraceEntries,
+              admissionCode: result.admissionCode,
             },
           });
           try {
@@ -6912,7 +6933,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               role: 'agent',
               content: result.success
                 ? String(result.result || '').trim() || 'Task complete.'
-                : `Task failed: ${result.error || result.result || 'unknown error'}`,
+                : result.admissionCode
+                  ? `Task queued for retry: ${result.error || result.result || 'runtime capacity is temporarily full'}`
+                  : `Task failed: ${result.error || result.result || 'unknown error'}`,
               metadata: {
                 source: background ? 'dispatch_team_agent_background' : 'dispatch_team_agent',
                 teamId,
@@ -6924,6 +6947,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 thinking: result.thinking,
                 processEntries: result.processEntries,
                 liveTraceEntries: result.liveTraceEntries,
+                admissionCode: result.admissionCode,
               },
             });
             deps.broadcastWS?.({ type: 'subagent_chat_message', agentId, message: subagentChatMsg });
@@ -6944,6 +6968,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             resultSummary: String(result.result || '').trim(),
             error: result.error,
             warning: result.warning,
+            admissionCode: result.admissionCode,
             taskId: result.taskId,
             dispatchId: dispatchRecord?.id,
             stepCount: result.stepCount,
@@ -6961,6 +6986,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             durationMs: result.durationMs,
             stepCount: result.stepCount,
             resultPreview: String(result.result || result.error || ''),
+            admissionCode: result.admissionCode,
           });
           return result;
         };
@@ -6971,7 +6997,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             .then((result) => {
               const entry = getBgAgentResults().get(taskId);
               if (entry) {
-                entry.status = result.success ? 'complete' : 'failed';
+                entry.status = result.admissionCode
+                  ? 'capacity_limited'
+                  : result.success ? 'complete' : 'failed';
                 entry.result = result;
               }
               return result;
@@ -7021,6 +7049,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             result: result.result,
             error: result.error,
             warning: result.warning,
+            admission_code: result.admissionCode,
           }, null, 2),
           error: result.success !== true,
         };
@@ -7034,14 +7063,34 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const entry = getBgAgentResults().get(taskId);
         if (!entry) return { name, args, result: `ERROR: Unknown background team task_id: ${taskId}`, error: true };
         if (!block || entry.status !== 'running') {
-          return { name, args, result: JSON.stringify({ success: entry.status === 'complete', status: entry.status, task_id: taskId, result: entry.result || null }, null, 2), error: entry.status === 'failed' };
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: entry.status === 'complete',
+              status: entry.status,
+              task_id: taskId,
+              result: entry.result || null,
+            }, null, 2),
+            error: entry.status === 'failed',
+          };
         }
         const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs));
         const completed = await Promise.race([entry.promise, timeout]);
         if (!completed) {
           return { name, args, result: JSON.stringify({ success: true, status: 'running', task_id: taskId, message: 'Still running.' }, null, 2), error: false };
         }
-        return { name, args, result: JSON.stringify({ success: completed.success, status: completed.success ? 'complete' : 'failed', task_id: taskId, result: completed }, null, 2), error: completed.success !== true };
+        return {
+          name,
+          args,
+          result: JSON.stringify({
+            success: completed.success && !completed.admissionCode,
+            status: completed.admissionCode ? 'capacity_limited' : completed.success ? 'complete' : 'failed',
+            task_id: taskId,
+            result: completed,
+          }, null, 2),
+          error: completed.success !== true || Boolean(completed.admissionCode),
+        };
       }
 
       case 'post_to_team_chat': {

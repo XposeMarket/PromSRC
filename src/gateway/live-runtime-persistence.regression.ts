@@ -11,6 +11,8 @@ async function main(): Promise<void> {
   try {
     const runtimeApi = await import('./live-runtime-registry');
     const recoveryApi = await import('./runtime-recovery');
+    const sessionApi = await import('./session');
+    const subagentChatStore = await import('./agents-runtime/subagent-chat-store');
     const ownerPolicy = await import('./chat/main-chat-execution-owner');
     const runtimeId = runtimeApi.registerLiveRuntime({
       kind: 'main_chat',
@@ -134,6 +136,47 @@ async function main(): Promise<void> {
       'interrupted',
       'a turn unwinding after shutdown must not erase its durable restart checkpoint',
     );
+
+    for (const kind of ['subagent', 'team_manager', 'team_member'] as const) {
+      const sessionId = `runtime_${kind}_continuity_regression`;
+      const continuityRuntimeId = runtimeApi.registerLiveRuntime({
+        kind,
+        label: `${kind} continuity recovery regression`,
+        sessionId,
+        agentId: `agent_${kind}`,
+        recoveryPolicy: 'mark_interrupted',
+      });
+      runtimeApi.updateLiveRuntimeCheckpoint(continuityRuntimeId, {
+        event: 'tool_result',
+        message: 'visible checkpoint before gateway interruption',
+        processEntries: [
+          { type: 'preamble', text: 'Visible planning commentary survived.', extra: { source: 'agent_thought', visibility: 'user' } },
+          { type: 'think', text: 'provider-private chain of thought must not be replayed', extra: { source: 'agent_thought', visibility: 'private' } },
+          { type: 'tool_result', toolName: 'read_source', text: 'source result survived' },
+        ],
+        commentaryContext: '[DURABLE_COMMENTARY]\nVisible planning commentary survived.\n[/DURABLE_COMMENTARY]',
+        visibleReasoningSummary: 'Visible planning commentary survived.',
+      });
+      const prepared = recoveryApi.prepareActiveRuntimesForGatewayShutdown(`manual_${kind}`);
+      assert.equal(
+        prepared.some((runtime) => runtime.id === continuityRuntimeId),
+        true,
+        `${kind} runtime must be captured at manual shutdown`,
+      );
+      const checkpoint = sessionApi.getHistory(sessionId, 8).find((message: any) => message.role === 'assistant');
+      assert.ok(checkpoint, `${kind} session must receive an interruption checkpoint`);
+      assert.match(String((checkpoint as any).commentaryContext || ''), /Visible planning commentary survived/);
+      assert.doesNotMatch(String((checkpoint as any).commentaryContext || ''), /private chain of thought/);
+      const mirrored = subagentChatStore.getSubagentChatHistory(`agent_${kind}`, 8)
+        .find((message: any) => message.metadata?.runtimeId === continuityRuntimeId);
+      assert.ok(mirrored, `${kind} checkpoint must also be visible in the durable agent chat store`);
+      runtimeApi.finishLiveRuntime(continuityRuntimeId);
+    }
+    await runtimeApi.flushLiveRuntimePersistence();
+    await sessionApi.flushPendingSessionWrites();
+    await sessionApi.flushPendingChatAuditWrites();
+    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    await sessionApi.flushPendingChatAuditWrites();
 
     const eventsPath = path.join(root, '.prometheus', 'runtimes', 'runtime-events.ndjson');
     const events = fs.readFileSync(eventsPath, 'utf-8').trim().split(/\r?\n/).map((line) => JSON.parse(line));

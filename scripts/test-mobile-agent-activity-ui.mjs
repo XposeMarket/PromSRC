@@ -28,8 +28,9 @@ assert.doesNotMatch(renderer, /details class="pm-trace-thought-group"/, 'thought
 assert.doesNotMatch(pages, /function _renderMobileGroupedTrace\(/, 'grouped trace rendering must stay in the lazy renderer');
 assert.match(pages, /_pmLiveActivityCompleted = true/, 'the renderer must know when a live turn crossed its final frame');
 assert.match(renderer, /visibleKinds = null, openThoughts = false/, 'trace rendering must support thought and tool filtering');
-assert.match(renderer, /const liveCompletionThoughts = m\._pmLiveActivityCompleted === true/, 'completed live turns must keep thoughts outside the hidden tool drawer');
-assert.match(renderer, /visibleKinds: \['thought', 'thought-summary'\][\s\S]*?openThoughts: true/, 'live-completion thoughts must be visible and closable');
+assert.match(renderer, /const completedTraceHtml = _renderMobileGroupedTrace\(completedTraceEntries, \{ streaming: false \}\)/, 'completed turns must render one unified trace payload');
+assert.match(renderer, /data-trace-completed="1">\$\{completedTraceHtml\}/, 'completed thoughts and tools must share the collapsed trace drawer');
+assert.doesNotMatch(renderer, /pm-trace-thoughts-visible|liveCompletionThoughts/, 'completed thoughts must not remain outside the collapsed trace drawer');
 assert.match(renderer, /group\.kind === 'thought' \|\| group\.kind === 'thought-summary'/, 'thought summaries and paragraph thoughts must render as distinct groups');
 assert.match(renderer, /const isSummaryThought = group\.kind === 'thought-summary'/, 'summary thought disclosure state must be explicit');
 assert.match(renderer, /const summaryMarkup = progressSummary\s*\?/, 'only live progress text may retain a thought summary row');
@@ -51,7 +52,7 @@ assert.match(pages, /message\._pmTraceThoughtProbe = \{[\s\S]{0,220}extra: probe
 assert.match(pages, /_pmAbortRequested = true/, 'expected user aborts must be marked before transport teardown');
 assert.match(pages, /_isMobileRuntimeAbortEvent/, 'late runtime abort frames must use the existing stopped turn');
 assert.match(pages, /_installMobileTimestampReveal\(sideThreadEl/, 'background detail threads must wire work-timer disclosure');
-assert.match(renderer, /liveCompletionTools \|\| _renderMobileGroupedTrace/, 'the tool stream must remain in its collapsible drawer');
+assert.match(renderer, /else if \(completedTraceHtml\)[\s\S]{0,220}data-trace-completed="1"/, 'the recovered agent trace must remain in its collapsible drawer');
 assert.match(renderer, /const enteredCompletedTraceLayout = !currentHasCompletedTraceLayout && nextHasCompletedTraceLayout/, 'completion must detect the live-to-collapsed trace layout boundary');
 assert.match(renderer, /if \(finalizedThisPatch \|\| enteredCompletedTraceLayout\)/, 'completion must close tool groups at the final-frame layout boundary');
 assert.match(renderer, /if \(!enteredCompletedTraceLayout[\s\S]{0,220}_patchMobileLiveTraceTimeline/, 'completion must not merge the old live timeline into the new thought timeline');
