@@ -27,6 +27,21 @@ export function createMobileChatRuntimeAdapter({
     normalizeSkillRefs,
     createId: () => `mq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
   });
+  const compatibilitySnapshots = new Map();
+
+  function rememberCompatibilitySnapshot(sessionId) {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return;
+    const thread = getState().threads?.[sid];
+    compatibilitySnapshots.set(sid, Array.isArray(thread) ? thread.slice() : []);
+  }
+
+  function compatibilityThreadChanged(sessionId, thread) {
+    const previous = compatibilitySnapshots.get(sessionId);
+    if (!previous) return true;
+    if (previous.length !== thread.length) return true;
+    return thread.some((message, index) => message !== previous[index]);
+  }
 
   function identity(sessionId) {
     const sid = String(sessionId || getState().activeSessionId || defaultSessionId).trim() || defaultSessionId;
@@ -151,20 +166,19 @@ export function createMobileChatRuntimeAdapter({
     const sid = String(sessionId || state.activeSessionId || defaultSessionId).trim() || defaultSessionId;
     const runtime = runtimeFor(sid);
     const compatibilityThread = Array.isArray(state.threads?.[sid]) ? state.threads[sid] : [];
-    const runtimeHistory = runtime.getSourceHistory();
     // Recovery, foreground freshness, and notification handlers still publish
     // through the compatibility transcript before painting. Do not let the
     // renderer alternate between that newer snapshot and a stale shared-runtime
     // snapshot. Reconcile only when row identity/length differs so ordinary
     // stream paints remain cheap and retain the live source objects.
-    const transcriptChanged = runtimeHistory.length !== compatibilityThread.length
-      || runtimeHistory.some((message, index) => message !== compatibilityThread[index]);
+    const transcriptChanged = compatibilityThreadChanged(sid, compatibilityThread);
     if (transcriptChanged) {
       runtime.replaceHistory(mobileRuntimeHistory(compatibilityThread), {
         source: 'mobile-render-reconciliation',
         pageInfo: runtime.snapshot.paging,
         initializeQuestionsFromHistory: runtime.snapshot.history.revision === 0,
       });
+      rememberCompatibilitySnapshot(sid);
     }
     return runtime.getTurns().map((turn, index) => Object.freeze({
       key: turn.key,
@@ -175,8 +189,12 @@ export function createMobileChatRuntimeAdapter({
   }
 
   function replaceTranscript(sessionId, history, options = {}) {
-    const runtime = runtimeFor(sessionId);
+    const sid = identity(sessionId).sessionId;
+    const runtime = runtimeFor(sid);
     runtime.replaceHistory(mobileRuntimeHistory(history), options);
+    // replaceTranscript is an explicit runtime write. The current compatibility
+    // rows are now a known snapshot, even though runtime stores detached copies.
+    rememberCompatibilitySnapshot(sid);
     return runtime;
   }
 
@@ -237,6 +255,7 @@ export function createMobileChatRuntimeAdapter({
         try { runtime.upsertBackground(record); } catch {}
       }
     });
+    rememberCompatibilitySnapshot(sid);
     return runtime;
   }
 

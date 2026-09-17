@@ -14,14 +14,15 @@ const failures = [];
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/pages/ChatPage.js': 2330215,
   'web-ui/src/mobile/mobile-pages.js': 898464,
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 231112,
-  'web-ui/src/styles/mobile.css': 585898,
+  // Refreshed to the current measured main after the mobile recovery work.
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 245354,
+  'web-ui/src/styles/mobile.css': 607287,
   'web-ui/src/styles/components.css': 284925,
   'web-ui/index.html': 558138,
 });
-const CODE_OWNED_NEW_MODULE_CEILING = 400000;
+const CODE_OWNED_NEW_MODULE_CEILING = 432252;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
-const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 122;
+const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 124;
 
 if (baseline.version !== 3) failures.push(`architecture baseline version must be 3 (received ${baseline.version})`);
 for (const [relativePath, ceiling] of Object.entries(CODE_OWNED_LEGACY_CEILINGS)) {

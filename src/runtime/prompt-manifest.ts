@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { inspectOperatingInstructions } from './operating-instructions';
 import path from 'path';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 import { estimateMessagesTokens, estimateTextTokens, estimateToolSchemaTokens } from '../providers/model-usage';
@@ -14,7 +15,7 @@ import {
 } from './instruction-intent-detector';
 import { getSkillRoutingReport, type SkillRoutingReport } from './skill-routing-resolver';
 
-export const RUNTIME_PROMPT_MANIFEST_VERSION = 5;
+export const RUNTIME_PROMPT_MANIFEST_VERSION = 6;
 
 export type RuntimePromptRole =
   | 'main'
@@ -91,6 +92,7 @@ export interface RuntimePromptManifest {
   promptVariant: string;
   capabilities: Record<string, string | number | boolean | null>;
   systemSegmentIds: string[];
+  operatingInstructions: Array<{ id: string; source: string; reason: string; chars: number; estimatedTokens: number; hash: string; duplicate: boolean }>;
   policyIds: string[];
   instructionResolution: InstructionResolutionReport;
   stage4InstructionRouting: Stage4InstructionRoutingReport;
@@ -213,6 +215,7 @@ function detectSystemSegmentIds(systemText: string, declared: string[] | undefin
   for (const marker of SEGMENT_MARKERS) {
     if (marker.pattern.test(systemText)) ids.add(marker.id);
   }
+  for (const block of inspectOperatingInstructions(systemText)) ids.add(block.id);
   if (callerContextPresent) ids.add('caller.context');
   if (systemText.trim() && ids.size === 0) ids.add('system.unclassified');
   return Array.from(ids).sort();
@@ -351,6 +354,9 @@ export function buildRuntimePromptManifest(input: RuntimePromptManifestInput): R
     instructionResolution,
     stage4InstructionRouting,
     skillRouting,
+    operatingInstructions: inspectOperatingInstructions(systemText).map(({ text, ...block }) => ({
+      ...block, estimatedTokens: estimateTextTokens(text), hash: sha256(text),
+    })),
     systemMessages: systemEntries,
     messageSurface: {
       count: messages.length,
