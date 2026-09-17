@@ -8642,6 +8642,7 @@ const mobileChatRendererContext = Object.freeze(Object.defineProperties({}, {
   "_isMobileVoiceAgentWorkerHandoff": { enumerable: true, get: () => _isMobileVoiceAgentWorkerHandoff },
   "_isMobileVoiceTraceTurn": { enumerable: true, get: () => _isMobileVoiceTraceTurn },
   "_mergeMobileMediaIntoMessage": { enumerable: true, get: () => _mergeMobileMediaIntoMessage },
+  "_mergeMobileProcessEntries": { enumerable: true, get: () => _mergeMobileProcessEntries },
   "_mergeMobileProductCarouselIntoMessage": { enumerable: true, get: () => _mergeMobileProductCarouselIntoMessage },
   "_mobileAssistantWorkStartedAt": { enumerable: true, get: () => _mobileAssistantWorkStartedAt },
   "_mobileFileExt": { enumerable: true, get: () => _mobileFileExt },

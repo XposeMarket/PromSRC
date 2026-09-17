@@ -39,6 +39,8 @@ assert.match(mobileChatRuntime, /loadMobileBackgroundStreamReplay\(cleanId, curr
 assert.match(mobileChatRuntime, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
 assert.match(mobileChatRuntime, /_mobileChatRendererInvoke\('backgroundDetailRecord'/, 'cold background detail records must use the chat renderer runtime');
 assert.match(mobileChatRenderer, /function _mobileBackgroundAgentDetailRecord[\s\S]{0,1400}buildMessage\(storedRecord\)/, 'cold background detail records must become renderable agent messages');
+assert.match(mobileChatRenderer, /_mergeMobileProcessEntries,/, 'the extracted renderer must receive the shared mobile process-entry merger');
+assert.match(mobile, /"_mergeMobileProcessEntries": \{ enumerable: true, get: \(\) => _mergeMobileProcessEntries \}/, 'mobile runtime context must wire the shared process-entry merger into the chat renderer');
 assert.match(mobileChatRuntime, /if \(!lane\) \{[\s\S]{0,600}_hydrateMobileBackgroundSpawnLane\(/, 'background detail refresh must rebuild a missing in-memory lane');
 assert.match(mobileChatRuntime, /if \(!session && refreshedLane\?\.bgSessionId\)/, 'background detail refresh must hydrate the durable session after status recovery');
 assert.match(mobileSubagent, /if \(!localSseActive\) liveMsg = null;/, 'WS history notifications must not erase an SSE-owned live subagent bubble');
@@ -88,6 +90,9 @@ assert.match(mobileChatRenderer, /data-pm-trace-user-toggle/, 'background trace 
 assert.match(mobileChatRenderer, /timed_out/, 'background timeout lanes must render as terminal failures');
 assert.match(mobileChatRenderer, /message\._pmFinalReceived = true/, 'background terminal events must mark the final frame');
 assert.match(mobileChatRenderer, /_applyMobileAgentStreamEvent\(lane\.message, evt/, 'background lanes must use the canonical mobile agent stream reducer');
+assert.match(mobileChatRenderer, /function _mobileBackgroundEmbeddedPayload[\s\S]{0,1100}function _mobileBackgroundText/, 'live and replay frames must normalize nested event/result envelopes');
+assert.match(mobileChatRenderer, /type: 'final',[\s\S]{0,180}text: resultFromDone/, 'background completion must reduce canonical text through the shared final-event path');
+assert.match(mobileChatRuntime, /Background task completed with no textual output\./, 'an empty terminal record must never render as a blank assistant bubble');
 assert.match(mobileChatRenderer, /mobileBackgroundPersistTimers/, 'background stream persistence must be cached and coalesced');
 assert.match(mobileChatRuntime, /handleMobileBackgroundAgentAction/, 'background action taps must be handled by the side-chat owner');
 assert.match(mobileChatRuntime, /handleMobileSideMessageAction/, 'side-chat action taps must use side-thread indices');

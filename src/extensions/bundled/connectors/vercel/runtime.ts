@@ -185,6 +185,13 @@ function withQuery(path: string, query: Record<string, unknown>): string {
   return `${url.pathname}${url.search}`;
 }
 
+function normalizeLimit(value: unknown, fallback: number, maximum: number): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const requested = Number(value);
+  if (!Number.isFinite(requested)) return fallback;
+  return Math.max(1, Math.min(Math.trunc(requested), maximum));
+}
+
 function validateApiPath(path: string): string | null {
   const normalized = pickString(path);
   const pathname = normalized.split('?')[0];
@@ -193,10 +200,17 @@ function validateApiPath(path: string): string | null {
   }
   if (normalized.length > MAX_API_PATH_CHARS) return `path must be ${MAX_API_PATH_CHARS} characters or fewer.`;
   if (normalized.includes('#')) return 'path may not contain a URL fragment.';
-  if (!/^\/v\d+(?:\/|$)/i.test(pathname)) return 'path must target a versioned Vercel REST endpoint such as /v9/projects.';
-  if (pathname.split('/').some((segment) => segment === '..')) {
-    return 'path may not contain parent-directory segments.';
+  let decodedPathname: string;
+  try {
+    const decodedSegments = pathname.split('/').map((segment) => decodeURIComponent(segment));
+    if (decodedSegments.some((segment) => segment === '.' || segment === '..' || /[\\/]/.test(segment))) {
+      return 'path may not contain dot-directory segments or encoded path separators.';
+    }
+    decodedPathname = decodedSegments.join('/');
+  } catch {
+    return 'path must contain valid percent-encoding.';
   }
+  if (!/^\/v\d+(?:\/|$)/i.test(decodedPathname)) return 'path must target a versioned Vercel REST endpoint such as /v9/projects.';
   return null;
 }
 
@@ -354,6 +368,23 @@ function summarizeDeployment(deployment: any): string {
   return `[${state}] ${deployment.uid || deployment.id}${project}${source} - ${url} - ${ts}`;
 }
 
+function formatEventTimestamp(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '';
+  let milliseconds: number;
+  if (typeof value === 'number') {
+    milliseconds = value;
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const numeric = Number(trimmed);
+    milliseconds = Number.isFinite(numeric) ? numeric : Date.parse(trimmed);
+  } else {
+    return '';
+  }
+  const date = new Date(milliseconds);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
 function copyAllowed(source: JsonRecord | undefined, keys: string[]): JsonRecord {
   const result: JsonRecord = {};
   if (!source) return result;
@@ -416,11 +447,13 @@ function normalizeGitSource(args: any): { source?: JsonRecord; error?: string } 
     return { error: 'gitSource.type must be github, gitlab, or bitbucket.' };
   }
   const source: JsonRecord = { type };
-  for (const key of ['org', 'repo', 'ref', 'sha', 'repoId', 'prId']) {
+  for (const key of ['org', 'repo', 'ref', 'sha', 'repoId', 'projectId', 'repoUuid', 'prId']) {
     const value = pickString(raw[key] ?? args?.[`git${key[0].toUpperCase()}${key.slice(1)}`]);
     if (value) source[key] = value;
   }
-  if (!source.repo && !source.repoId) return { error: 'A Git deployment requires gitSource.repo or gitSource.repoId.' };
+  if (!source.repo && !source.repoId && !source.projectId && !source.repoUuid) {
+    return { error: 'A Git deployment requires a repository identifier such as gitSource.repo, repoId, projectId, or repoUuid.' };
+  }
   if (!source.ref && !source.sha) return { error: 'A Git deployment requires gitSource.ref or gitSource.sha.' };
   return { source };
 }
@@ -469,7 +502,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
       connectorId: ID,
       capability: 'hosting',
       execute: async (args: any, context) => withAuth(context, async (auth) => {
-        const res = await vercelFetch(withQuery('/v2/teams', { limit: Math.min(Number(args?.limit) || 50, 100) }), auth, { teamId: '' });
+        const res = await vercelFetch(withQuery('/v2/teams', { limit: normalizeLimit(args?.limit, 50, 100) }), auth, { teamId: '' });
         if (!res.ok) return apiError('List Vercel teams', res);
         const teams = res.data?.teams || [];
         if (!teams.length) return ok('No teams found for this Vercel token.', { teams });
@@ -494,7 +527,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
       execute: async (args: any, context) => withAuth(context, async (auth) => {
         const teamId = resolveTeamId(args, auth);
         const res = await vercelFetch(withQuery('/v9/projects', {
-          limit: Math.min(Number(args?.limit) || 20, 100),
+          limit: normalizeLimit(args?.limit, 20, 100),
           search: pickString(args?.search),
         }), auth, { teamId });
         if (!res.ok) return apiError('List Vercel projects', res);
@@ -652,7 +685,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
         const projectId = resolveProjectId(args, auth);
         const projectIds = Array.isArray(args?.projectIds) ? args.projectIds.slice(0, 20).map(String) : undefined;
         const res = await vercelFetch(withQuery('/v7/deployments', {
-          limit: Math.min(Number(args?.limit) || 10, 100),
+          limit: normalizeLimit(args?.limit, 10, 100),
           projectId: projectIds?.length ? undefined : projectId,
           projectIds,
           target: pickString(args?.target),
@@ -704,13 +737,15 @@ const vercelExtension: PrometheusExtensionDefinition = {
           projectId: { type: 'string', description: 'Optional existing Vercel project ID or name.' },
           teamId: { type: 'string', description: 'Optional team ID.' },
           target: { type: 'string', description: 'Omit for Preview; use production, staging, or a custom environment.' },
-          gitSource: { type: 'object', description: 'Git source descriptor: type, org, repo or repoId, ref, sha, prId.' },
+          gitSource: { type: 'object', description: 'Git source descriptor: type, org, repo or repoId, GitLab projectId, Bitbucket repoUuid, ref, sha, prId.' },
           gitProvider: { type: 'string', enum: ['github', 'gitlab', 'bitbucket'] },
           gitOrg: { type: 'string' },
           gitRepo: { type: 'string' },
           gitRef: { type: 'string', description: 'Branch or tag ref.' },
           gitSha: { type: 'string', description: 'Commit SHA.' },
           gitRepoId: { type: 'string' },
+          gitProjectId: { type: 'string', description: 'GitLab project ID.' },
+          gitRepoUuid: { type: 'string', description: 'Bitbucket repository UUID.' },
           gitPrId: { type: 'string' },
           gitMetadata: { type: 'object', description: 'Optional provider metadata such as remoteUrl, commit message, or author.' },
           projectSettings: { type: 'object', description: 'Optional Vercel project settings for the deployment.' },
@@ -827,11 +862,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
       execute: async (args: any, context) => withAuth(context, async (auth) => {
         const deployment = pickString(args?.deployment);
         if (!deployment) return fail('deployment is required.');
-        const requestedLimit = args?.limit === undefined ? DEFAULT_EVENT_LIMIT : Number(args.limit);
-        if (!Number.isFinite(requestedLimit) || requestedLimit < 1) {
-          return fail(`limit must be a positive number between 1 and ${MAX_EVENT_LIMIT}.`);
-        }
-        const limit = Math.min(Math.trunc(requestedLimit), MAX_EVENT_LIMIT);
+        const limit = normalizeLimit(args?.limit, DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT);
         const res = await vercelFetch(withQuery(`/v3/deployments/${encodeURIComponent(deployment)}/events`, {
           limit,
           direction: pickString(args?.direction),
@@ -844,8 +875,8 @@ const vercelExtension: PrometheusExtensionDefinition = {
         const lines = events.map((event: any) => {
           const payload = event?.payload || event;
           const text = payload?.text || payload?.info?.step || payload?.info?.name || stringifyResult(payload);
-          const stamp = payload?.date || event?.created || '';
-          return `${stamp ? `${new Date(Number(stamp)).toISOString()} ` : ''}${text}`;
+          const stamp = formatEventTimestamp(payload?.date ?? event?.created);
+          return `${stamp ? `${stamp} ` : ''}${text}`;
         });
         return ok(lines.join('\n') || 'No deployment events returned.', { events });
       }),
@@ -924,7 +955,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
           projectId: pickString(args?.projectId),
           deploymentId: pickString(args?.deploymentId),
           domain: pickString(args?.domain),
-          limit: Math.min(Number(args?.limit) || 20, 100),
+          limit: normalizeLimit(args?.limit, 20, 100),
         }), auth, { teamId: resolveTeamId(args, auth) });
         if (!res.ok) return apiError('List Vercel aliases', res);
         const aliases = res.data?.aliases || [];
@@ -1042,8 +1073,8 @@ const vercelExtension: PrometheusExtensionDefinition = {
         const teamId = resolveTeamId(args, auth);
         const projectId = resolveProjectId(args, { ...auth, projectId: undefined });
         const path = projectId
-          ? withQuery(`/v9/projects/${encodeURIComponent(projectId)}/domains`, { limit: Math.min(Number(args?.limit) || 20, 100) })
-          : withQuery('/v5/domains', { limit: Math.min(Number(args?.limit) || 20, 100) });
+          ? withQuery(`/v9/projects/${encodeURIComponent(projectId)}/domains`, { limit: normalizeLimit(args?.limit, 20, 100) })
+          : withQuery('/v5/domains', { limit: normalizeLimit(args?.limit, 20, 100) });
         const res = await vercelFetch(path, auth, { teamId });
         if (!res.ok) return apiError('List Vercel domains', res);
         const domains = res.data?.domains || [];

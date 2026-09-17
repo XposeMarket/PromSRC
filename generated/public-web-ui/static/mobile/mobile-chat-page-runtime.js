@@ -4487,7 +4487,9 @@ void main() {
       ? 'Background agent timed out.'
       : status === 'failed'
         ? 'Background agent failed.'
-        : '';
+        : status === 'completed'
+          ? 'Background task completed with no textual output.'
+          : '';
     const finalText = String(record?.error || storedResult || terminalFallback).trim();
     const displayText = running
       ? responseText

@@ -239,6 +239,7 @@ export function createMobileChatRendererRuntime(context = {}) {
   _isMobileVoiceAgentWorkerHandoff,
   _isMobileVoiceTraceTurn,
   _mergeMobileMediaIntoMessage,
+  _mergeMobileProcessEntries,
   _mergeMobileProductCarouselIntoMessage,
   _mobileAssistantWorkStartedAt,
   _mobileFileExt,
@@ -3448,23 +3449,99 @@ function _mobileBackgroundSpawnClearedIds() {
   return __pmChat.backgroundSpawnClearedIds;
 }
 
+// Background frames have travelled through three transports over time: the
+// native WS event, the replay frame, and a few gateway/proxy envelopes. Keep
+// the envelope handling in one place so the live reducer and the cold replay
+// path consume the same payload instead of silently dropping terminal text.
+function _mobileBackgroundEmbeddedPayload(msg = {}) {
+  const merged = {};
+  const seen = new Set();
+  const visit = (value, depth = 0) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 3 || seen.has(value)) return;
+    seen.add(value);
+    if (value.data && typeof value.data === 'object' && !Array.isArray(value.data)) visit(value.data, depth + 1);
+    if (value.payload && typeof value.payload === 'object' && !Array.isArray(value.payload)) visit(value.payload, depth + 1);
+    Object.assign(merged, value);
+  };
+  visit(msg?.data);
+  visit(msg?.payload);
+  return merged;
+}
+
+function _mobileBackgroundField(msg = {}, name = '') {
+  const direct = msg?.[name];
+  if (direct !== undefined && direct !== null && direct !== '') return direct;
+  return _mobileBackgroundEmbeddedPayload(msg)[name];
+}
+
+function _mobileBackgroundText(...values) {
+  const seen = new Set();
+  const read = (value, depth = 0) => {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+    if (Array.isArray(value)) {
+      if (depth > 3 || seen.has(value)) return '';
+      seen.add(value);
+      return value.map((item) => read(item, depth + 1)).filter(Boolean).join('\n').trim();
+    }
+    if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return '';
+    seen.add(value);
+    for (const key of ['text', 'content', 'reply', 'output', 'result', 'answer', 'finalText', 'finalResult', 'message']) {
+      const nested = read(value[key], depth + 1);
+      if (nested) return nested;
+    }
+    return '';
+  };
+  for (const value of values) {
+    const text = read(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function _mobileBackgroundEventType(msg = {}) {
+  const embedded = _mobileBackgroundEmbeddedPayload(msg);
+  const direct = msg.eventType || msg.eventName || msg.event;
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  const nested = embedded.eventType || embedded.eventName || embedded.event;
+  if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  const directType = String(msg.type || '').trim();
+  if (directType && directType !== 'bg_agent_event') return directType;
+  const nestedType = String(embedded.type || '').trim();
+  return nestedType && nestedType !== 'bg_agent_event' ? nestedType : '';
+}
+
 function _mobileBackgroundSpawnId(msg = {}) {
-  return String(msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId || '').trim();
+  const embedded = _mobileBackgroundEmbeddedPayload(msg);
+  return String(
+    msg.bgId || msg.backgroundId || msg.serverAgentId || msg.agentId
+      || embedded.bgId || embedded.backgroundId || embedded.serverAgentId || embedded.agentId
+      || '',
+  ).trim();
 }
 
 function _mobileBackgroundSpawnPromptFromMessage(msg = {}, existing = {}) {
+  const embedded = _mobileBackgroundEmbeddedPayload(msg);
   const direct = String(
     msg.taskPrompt
       || msg.task_prompt
       || msg.browserTaskPrompt
       || msg.task
       || msg.prompt
+      || embedded.taskPrompt
+      || embedded.task_prompt
+      || embedded.browserTaskPrompt
+      || embedded.task
+      || embedded.prompt
       || ''
   ).trim();
   if (direct) return direct;
   const args = msg.args && typeof msg.args === 'object' ? msg.args
     : (msg.params && typeof msg.params === 'object' ? msg.params
-      : (msg.input && typeof msg.input === 'object' ? msg.input : null));
+      : (msg.input && typeof msg.input === 'object' ? msg.input
+        : (embedded.args && typeof embedded.args === 'object' ? embedded.args
+          : (embedded.params && typeof embedded.params === 'object' ? embedded.params
+            : (embedded.input && typeof embedded.input === 'object' ? embedded.input : null)))));
   const fromArgs = args ? String(args.task_prompt || args.taskPrompt || args.prompt || args.task || '').trim() : '';
   return fromArgs || String(existing.prompt || existing.task || '').trim();
 }
@@ -3554,18 +3631,22 @@ function _linkMobilePendingApprovalsToBackgroundLanes(sessionId = __pmChat.activ
 }
 
 function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmChat.activeSessionId) {
-  const status = _mobileParseBackgroundStatus(statusInput) || {};
+  const parsedStatus = _mobileParseBackgroundStatus(statusInput) || {};
+  const status = {
+    ..._mobileBackgroundEmbeddedPayload(parsedStatus),
+    ...parsedStatus,
+  };
   const id = _mobileBackgroundSpawnId(status) || String(status.id || '').trim();
   if (!id || _mobileBackgroundSpawnClearedIds()[id]) return false;
-  const sid = String(sessionId || status.spawnerSessionId || status.sessionId || __pmChat.activeSessionId || '').trim();
+  const sid = String(sessionId || _mobileBackgroundField(status, 'spawnerSessionId') || _mobileBackgroundField(status, 'sessionId') || __pmChat.activeSessionId || '').trim();
   const backgroundSessionId = String(
-    status.backgroundSessionId
-      || status.bgSessionId
+    _mobileBackgroundField(status, 'backgroundSessionId')
+      || _mobileBackgroundField(status, 'bgSessionId')
       || `background_${id}`,
   ).trim();
-  const rawState = String(status.state || status.status || 'running').toLowerCase();
+  const rawState = String(_mobileBackgroundField(status, 'state') || _mobileBackgroundField(status, 'status') || 'running').toLowerCase();
   const terminalState = rawState === 'completed' || rawState === 'failed' || rawState === 'timed_out';
-  const prompt = String(status.prompt || status.taskPrompt || status.promptPreview || '').trim();
+  const prompt = String(_mobileBackgroundField(status, 'prompt') || _mobileBackgroundField(status, 'taskPrompt') || _mobileBackgroundField(status, 'promptPreview') || '').trim();
   const msg = {
     ...status,
     bgId: id,
@@ -3577,7 +3658,7 @@ function _applyMobileBackgroundSpawnStatus(statusInput = {}, sessionId = __pmCha
     state: rawState,
     taskPrompt: prompt,
     prompt,
-    error: rawState === 'timed_out' ? (status.error || 'Background agent timed out.') : status.error,
+    error: rawState === 'timed_out' ? (_mobileBackgroundField(status, 'error') || 'Background agent timed out.') : _mobileBackgroundField(status, 'error'),
   };
   if (terminalState) {
     return _completeMobileBackgroundSpawnLane(msg, sid);
@@ -3643,9 +3724,18 @@ function _mobileBackgroundSpawnMatchesSession(msg = {}, sessionId = __pmChat.act
   if (id && _mobileBackgroundSpawnClearedIds()[id]) return false;
   const activeSid = String(sessionId || '').trim();
   const lane = id ? _mobileBackgroundSpawnLanes()[id] : null;
-  const parentSid = String(msg.spawnerSessionId || msg.parentSessionId || msg.mainSessionId || lane?.sessionId || '').trim();
+  const parentSid = String(
+    msg.spawnerSessionId
+      || msg.parentSessionId
+      || msg.mainSessionId
+      || _mobileBackgroundField(msg, 'spawnerSessionId')
+      || _mobileBackgroundField(msg, 'parentSessionId')
+      || _mobileBackgroundField(msg, 'mainSessionId')
+      || lane?.sessionId
+      || '',
+  ).trim();
   if (parentSid) return parentSid === activeSid;
-  const sid = String(msg.sessionId || '').trim();
+  const sid = String(msg.sessionId || _mobileBackgroundField(msg, 'sessionId') || '').trim();
   if (!sid) return true;
   const backgroundId = _mobileBackgroundSpawnIdFromSessionId(sid);
   if (backgroundId && lane?.sessionId) return lane.sessionId === activeSid;
@@ -3657,11 +3747,14 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   if (!id) return null;
   const lanes = _mobileBackgroundSpawnLanes();
   const existing = lanes[id] || {};
+  const embedded = _mobileBackgroundEmbeddedPayload(msg);
   const prompt = _mobileBackgroundSpawnPromptFromMessage(msg, existing);
-  const rawSessionId = String(msg.sessionId || '').trim();
+  const rawSessionId = String(msg.sessionId || embedded.sessionId || '').trim();
   const bgSessionId = String(
     msg.bgSessionId
       || msg.backgroundSessionId
+      || embedded.bgSessionId
+      || embedded.backgroundSessionId
       || (_mobileBackgroundSpawnIdFromSessionId(rawSessionId) ? rawSessionId : '')
       || existing.bgSessionId
       || ''
@@ -3670,6 +3763,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     msg.spawnerSessionId
       || msg.parentSessionId
       || msg.mainSessionId
+      || embedded.spawnerSessionId
+      || embedded.parentSessionId
+      || embedded.mainSessionId
       || existing.sessionId
       || (_mobileBackgroundSpawnIdFromSessionId(rawSessionId) ? '' : rawSessionId)
       || sessionId
@@ -3698,17 +3794,21 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   const storedStatus = String(stored?.status || '').toLowerCase();
   const storedTerminal = ['completed', 'failed', 'timed_out'].includes(storedStatus);
   const resolvedBgSessionId = bgSessionId || String(stored?.backgroundSessionId || '').trim();
-  const eventType = String(msg.eventType || msg.type || '').trim().toLowerCase();
+  const eventType = _mobileBackgroundEventType(msg).toLowerCase();
   // A background tool result is still only a timeline event. Treating it as
   // lane.result made mobile render the tool output as the agent's final answer
   // and hid the live tool stream until the sheet was reopened.
   const isFinalStreamEvent = eventType === 'final' || eventType === 'done';
   const streamedFinalResult = isFinalStreamEvent
-    ? String(msg.reply || msg.text || msg.result || msg.output || '').trim()
+    ? _mobileBackgroundText(msg.reply, msg.text, msg.result, msg.output, embedded.reply, embedded.text, embedded.result, embedded.output)
     : '';
   const storedAnswerText = storedTerminal
-    ? String(stored?.result || stored?.finalResult || stored?.reply || stored?.output || stored?.error || '')
-    : String(stored?.streamingText || '');
+    ? _mobileBackgroundText(stored?.result, stored?.finalResult, stored?.reply, stored?.output, stored?.error)
+    : _mobileBackgroundText(stored?.streamingText);
+  const incomingMessage = msg.message && typeof msg.message === 'object' ? msg.message : null;
+  const incomingState = msg.state || msg.status || embedded.state || embedded.status;
+  const incomingStreamId = msg.streamId || msg.stream?.streamId || embedded.streamId || embedded.stream?.streamId;
+  const incomingLastSeq = msg.lastSeq || msg.stream?.lastSeq || embedded.lastSeq || embedded.stream?.lastSeq;
   const lane = {
     id,
     sessionId: parentSessionId,
@@ -3718,12 +3818,12 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     agentColor: identity.color,
     task: prompt || stored?.task || '',
     prompt: prompt || stored?.task || '',
-    status: String(msg.state || existing.status || stored?.status || 'running').trim(),
+    status: String(incomingState || existing.status || stored?.status || 'running').trim(),
     expanded: existing.expanded === true,
     startedAt: Number(existing.startedAt || stored?.startedAt || msg.startedAt || Date.now()),
-    completedAt: Number(msg.completedAt || existing.completedAt || stored?.completedAt || 0) || null,
+    completedAt: Number(msg.completedAt || embedded.completedAt || existing.completedAt || stored?.completedAt || 0) || null,
     updatedAt: Date.now(),
-    message: existing.message || {
+    message: existing.message || incomingMessage || {
       role: 'ai',
       from: identity.name,
       content: storedAnswerText,
@@ -3734,26 +3834,31 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
       createdAt: Number(stored?.startedAt || Date.now()) || Date.now(),
       workStartedAt: Number(stored?.startedAt || Date.now()) || Date.now(),
     },
-    fileChanges: msg.fileChanges || existing.fileChanges || stored?.fileChanges || null,
+    fileChanges: msg.fileChanges || embedded.fileChanges || existing.fileChanges || stored?.fileChanges || null,
     plan: existing.plan || null,
-    result: streamedFinalResult || existing.result || stored?.result || stored?.finalResult || stored?.reply || stored?.output || '',
+    result: streamedFinalResult || existing.result || _mobileBackgroundText(
+      stored?.result,
+      stored?.finalResult,
+      stored?.reply,
+      stored?.output,
+    ),
     // Like result, a streamed error may describe one failed tool call rather
     // than the background run itself. The terminal bg_agent_done payload owns
     // the durable lane error.
-    error: existing.error || stored?.error || '',
+    error: existing.error || _mobileBackgroundText(stored?.error) || '',
     approvalRequest: existing.approvalRequest || null,
     steerMessages: Array.isArray(existing.steerMessages) && existing.steerMessages.length
       ? existing.steerMessages
       : (Array.isArray(stored?.steerMessages) ? stored.steerMessages : []),
-    streamId: String(msg.streamId || msg.stream?.streamId || existing.streamId || stored?.streamId || '').trim(),
-    lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || stored?.lastSeq || 0)) || 0),
+    streamId: String(incomingStreamId || existing.streamId || stored?.streamId || '').trim(),
+    lastSeq: Math.max(0, Math.floor(Number(msg.lastSeq || incomingLastSeq || existing.lastSeq || stored?.lastSeq || 0)) || 0),
   };
   lanes[id] = lane;
   if (lane.message) {
     lane.message.from = lane.agentName;
     if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
     lane.message.body.sender = lane.agentName;
-    if (!storedTerminal && storedAnswerText
+    if (storedAnswerText
       && !String(lane.message.content || lane.message.body.text || '').trim()) {
       lane.message.content = storedAnswerText;
       lane.message.text = storedAnswerText;
@@ -3813,6 +3918,13 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
   const liveTraceEntries = Array.isArray(lane.message?.liveTraceEntries) && lane.message.liveTraceEntries.length
     ? lane.message.liveTraceEntries.map(normalizeTrace).filter(Boolean)
     : (Array.isArray(stored?.liveTraceEntries) ? stored.liveTraceEntries : []);
+  const terminal = ['completed', 'failed', 'timed_out'].includes(String(lane.status || stored?.status || '').toLowerCase());
+  const rawMessageText = terminal
+    ? _mobileBackgroundText(lane.message?.content, lane.message?.body?.text, lane.message?.text)
+    : '';
+  const normalizedTask = String(lane.task || lane.prompt || stored?.task || stored?.prompt || '').replace(/\s+/g, ' ').trim();
+  const normalizedMessageText = rawMessageText.replace(/\s+/g, ' ').trim();
+  const messageText = normalizedTask && normalizedMessageText === normalizedTask ? '' : rawMessageText;
   return {
     id: lane.id,
     sessionId: lane.sessionId || requestedSession,
@@ -3824,15 +3936,15 @@ function _mobileBackgroundAgentDetailRecord(id, requestedSession, normalizeTrace
     startedAt: Number(lane.startedAt || stored?.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
     completedAt: Number(lane.completedAt || stored?.completedAt || lane.message?.workEndedAt || 0) || 0,
     updatedAt: Number(lane.updatedAt || stored?.updatedAt || Date.now()) || Date.now(),
-    result: String(
-      lane.result
-      || stored?.result
-      || stored?.finalResult
-      || stored?.reply
-      || stored?.output
-      || '',
-    ).trim(),
-    error: String(lane.error || stored?.error || '').trim(),
+    result: _mobileBackgroundText(
+      lane.result,
+      stored?.result,
+      stored?.finalResult,
+      stored?.reply,
+      stored?.output,
+      messageText,
+    ),
+    error: _mobileBackgroundText(lane.error, stored?.error),
     fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
     events: processEntries,
     liveTraceEntries,
@@ -3892,26 +4004,18 @@ function _mobileBackgroundSpawnWorkRecord(lane) {
 }
 
 function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
-  const payload = msg?.data && typeof msg.data === 'object' ? msg.data : {};
-  const wrapperType = typeof msg.type === 'string' && msg.type !== 'bg_agent_event' ? msg.type : '';
-  const eventType = String(
-    msg.eventType
-      || msg.eventName
-      || msg.event
-      || payload.eventType
-      || payload.eventName
-      || payload.event
-      || wrapperType
-      || '',
-  ).trim();
+  const payload = _mobileBackgroundEmbeddedPayload(msg);
+  const eventType = _mobileBackgroundEventType(msg);
   if (!eventType) return null;
   const source = { ...payload, ...msg };
+  const text = _mobileBackgroundText(source.text, source.content, source.message, source.reply, source.result, source.output);
   return {
     ...source,
     type: eventType,
-    streamId: String(source.streamId || '').trim(),
-    seq: Math.max(0, Math.floor(Number(source.seq || 0)) || 0),
-    at: Number(source.at || 0) || undefined,
+    streamId: String(source.streamId || payload.streamId || '').trim(),
+    seq: Math.max(0, Math.floor(Number(source.seq || payload.seq || 0)) || 0),
+    at: Number(source.at || payload.at || 0) || undefined,
+    ...(text ? { text, content: text } : {}),
     action: source.action || source.name || source.toolName || '',
     name: source.name || source.action || source.toolName || '',
     actor: source.actor || 'Background Agent',
@@ -3929,7 +4033,7 @@ function _extractMobileBackgroundPlanSteps(value) {
 
 function _updateMobileBackgroundSpawnPlan(lane, msg = {}) {
   if (!lane) return;
-  const eventType = String(msg.eventType || msg.type || '').trim();
+  const eventType = _mobileBackgroundEventType(msg);
   const action = String(msg.action || msg.name || msg.toolName || '').trim();
   if (eventType === 'tool_call' && action === 'bg_plan_declare') {
     const steps = _extractMobileBackgroundPlanSteps(msg.args || msg.params || msg.input || msg);
@@ -4035,6 +4139,9 @@ function _mobileBackgroundSpawnTraceEntries(lane) {
 
 function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSessionId) {
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
+  const laneId = _mobileBackgroundSpawnId(msg);
+  const previousLane = laneId ? _mobileBackgroundSpawnLanes()[laneId] : null;
+  const previousStatus = String(previousLane?.status || '').trim().toLowerCase();
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   const evt = _normalizeMobileBackgroundSpawnEvent(msg);
   if (!lane || !evt) return false;
@@ -4053,8 +4160,8 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   lane.status = ['completed', 'failed', 'timed_out'].includes(String(lane.status || '').toLowerCase())
     ? lane.status
     : (hasPendingApproval ? 'approval_required' : 'running');
-  if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
-  _updateMobileBackgroundSpawnPlan(lane, msg);
+  if (evt.fileChanges) lane.fileChanges = evt.fileChanges;
+  _updateMobileBackgroundSpawnPlan(lane, evt);
   let laneChanged = false;
   if (evt.type === 'approval_created') {
     const approval = _normalizeMobileApproval(evt.approval || evt, {
@@ -4129,19 +4236,44 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
   lane.updatedAt = Date.now();
   if (evt.streamId && evt.seq) lane.lastSeq = evt.seq;
+  if (evt.type === 'error') lane.status = 'failed';
+  else if (evt.type === 'final' || evt.type === 'done') lane.status = 'completed';
   _queueMobileBackgroundWorkPersistence(lane);
   if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
-  return changed || laneChanged;
+  const statusChanged = previousStatus !== String(lane.status || '').trim().toLowerCase();
+  return changed || laneChanged || !previousLane || statusChanged;
 }
 
 function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
+  const embedded = _mobileBackgroundEmbeddedPayload(msg);
+  const rawState = String(
+    msg.state
+      || msg.status
+      || embedded.state
+      || embedded.status
+      || '',
+  ).trim().toLowerCase();
+  const completedAt = Number(msg.completedAt || embedded.completedAt || Date.now()) || Date.now();
+  const resultFromDone = _mobileBackgroundText(
+    msg.result,
+    msg.finalResult,
+    msg.reply,
+    msg.output,
+    msg.text,
+    embedded.result,
+    embedded.finalResult,
+    embedded.reply,
+    embedded.output,
+    embedded.text,
+  );
+  const errorFromDone = _mobileBackgroundText(msg.error, embedded.error);
+  const fileChangesFromDone = msg.fileChanges || embedded.fileChanges || null;
   const clearedId = _mobileBackgroundSpawnId(msg);
-  const clearedSessionId = String(sessionId || msg.spawnerSessionId || msg.sessionId || __pmChat.activeSessionId || '').trim();
+  const clearedSessionId = String(sessionId || msg.spawnerSessionId || msg.sessionId || embedded.spawnerSessionId || embedded.sessionId || __pmChat.activeSessionId || '').trim();
   if (clearedId && _mobileBackgroundSpawnClearedIds()[clearedId]) {
     const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
-    const timedOut = String(msg.state || msg.status || '').trim().toLowerCase() === 'timed_out';
-    const failed = msg.state === 'failed' || timedOut || !!msg.error;
-    const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
+    const timedOut = rawState === 'timed_out';
+    const failed = rawState === 'failed' || timedOut || !!errorFromDone;
     const identity = resolveBackgroundAgentIdentity(clearedId, {
       existingName: existing.agentName,
       existingColor: existing.agentColor,
@@ -4157,9 +4289,9 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
       startedAt: existing.startedAt || msg.startedAt || completedAt,
       completedAt,
       updatedAt: Date.now(),
-      result: String(msg.result || msg.finalResult || msg.reply || msg.output || existing.result || '').trim(),
-      error: String(msg.error || existing.error || (timedOut ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : ''))).trim(),
-      fileChanges: msg.fileChanges || existing.fileChanges || null,
+      result: resultFromDone || _mobileBackgroundText(existing.result, existing.finalResult, existing.reply, existing.output),
+      error: errorFromDone || _mobileBackgroundText(existing.error) || (timedOut ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : '')),
+      fileChanges: fileChangesFromDone || existing.fileChanges || null,
       events: existing.events || [],
     }, { immediate: true });
     if (mobileSourceState.sessionId === clearedSessionId && !mobileSourceState.history) _renderMobileSourceList(document);
@@ -4168,36 +4300,49 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   if (!lane) return false;
-  const rawState = String(msg.state || msg.status || '').trim().toLowerCase();
   const timedOut = rawState === 'timed_out';
-  const failed = rawState === 'failed' || timedOut || !!msg.error;
+  const failed = rawState === 'failed' || timedOut || !!errorFromDone;
   lane.status = timedOut ? 'timed_out' : (failed ? 'failed' : 'completed');
-  lane.completedAt = Number(msg.completedAt || Date.now()) || Date.now();
-  lane.result = String(
-    msg.result
-    || msg.finalResult
-    || msg.reply
-    || msg.output
-    || lane.result
-    || lane.message?.content
-    || '',
-  ).trim();
-  lane.error = String(
-    msg.error
-      || lane.error
-      || (rawState === 'timed_out' ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : '')),
-  ).trim();
-  if (msg.fileChanges) {
-    lane.fileChanges = msg.fileChanges;
-    lane.message.fileChanges = msg.fileChanges;
+  lane.completedAt = completedAt;
+  const laneMessageText = _mobileBackgroundText(
+    lane.message?.content,
+    lane.message?.body?.text,
+    lane.message?.text,
+  );
+  const normalizedPrompt = String(lane.prompt || lane.task || '').replace(/\s+/g, ' ').trim();
+  const safeLaneMessageText = normalizedPrompt
+    && laneMessageText.replace(/\s+/g, ' ').trim() === normalizedPrompt
+    ? ''
+    : laneMessageText;
+  lane.result = resultFromDone || lane.result || _mobileBackgroundText(
+    safeLaneMessageText,
+  );
+  lane.error = errorFromDone || lane.error || (timedOut ? 'Background agent timed out.' : (failed ? 'Background agent failed.' : ''));
+  if (fileChangesFromDone) {
+    lane.fileChanges = fileChangesFromDone;
+    lane.message.fileChanges = fileChangesFromDone;
+  }
+  // Feed the terminal payload through the same reducer used by the regular
+  // agent stream. This keeps canonical final text, attachments, thinking,
+  // and work timing in one message shape instead of maintaining a second
+  // background-only completion renderer.
+  if (!failed && resultFromDone) {
+    _applyMobileAgentStreamEvent(lane.message, {
+      ...embedded,
+      ...msg,
+      type: 'final',
+      text: resultFromDone,
+      reply: resultFromDone,
+      result: resultFromDone,
+    }, lane.agentName || 'Background agent');
   }
   lane.message.streaming = false;
   lane.message._pmFinalReceived = true;
   lane.message._done = true;
-  lane.message.workEndedAt = Date.now();
+  lane.message.workEndedAt = completedAt;
   lane.message.workDurationMs = Math.max(0, lane.message.workEndedAt - Number(lane.message.workStartedAt || lane.message.createdAt || lane.message.workEndedAt));
   if (failed) {
-    _appendMobileProcess(lane.message, 'error', `${lane.agentName || 'Agent'} failed${msg.error ? `: ${String(msg.error).slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
+    _appendMobileProcess(lane.message, 'error', `${lane.agentName || 'Agent'} failed${errorFromDone ? `: ${errorFromDone.slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
   } else {
     const result = String(lane.result || '').trim();
     _appendMobileProcess(lane.message, 'final', `${lane.agentName || 'Agent'} complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
@@ -4546,7 +4691,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return true;
     }
     case 'final': {
-      const text = String(evt.text || evt.reply || '');
+      const text = _mobileBackgroundText(evt.text, evt.reply, evt.result, evt.output, evt.content);
       applyCompletedTurnPresentation();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
@@ -4567,7 +4712,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       return true;
     }
     case 'done': {
-      const text = String(evt.reply || evt.text || '');
+      const text = _mobileBackgroundText(evt.reply, evt.text, evt.result, evt.output, evt.content);
       applyCompletedTurnPresentation();
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;

@@ -108,6 +108,32 @@ function _pairCodeFromUrl() {
   } catch { return ''; }
 }
 
+// iOS can restore the document's previous scroll offset after a cold PWA
+// launch or while a route shell is being replaced. Mobile chat uses the
+// document as its scroller, so that offset makes the whole UI appear to jump
+// upward until the user drags it back down. Start each mobile route render at
+// a deterministic top position; chat history still uses its own explicit
+// latest-message anchor after it mounts.
+function _resetMobileDocumentScroll() {
+  if (!document.body?.classList?.contains('pm-mobile-document-scroll')) return;
+  try { history.scrollRestoration = 'manual'; } catch {}
+  const reset = () => {
+    try { window.scrollTo({ left: 0, top: 0, behavior: 'auto' }); } catch {
+      try { window.scrollTo(0, 0); } catch {}
+    }
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    if (scrollingElement && scrollingElement.scrollTop) scrollingElement.scrollTop = 0;
+    if (document.body && document.body.scrollTop) document.body.scrollTop = 0;
+  };
+  reset();
+  // Safari may apply its saved offset again after the new shell gets a layout
+  // box. Reassert the position over the next two frames without animation.
+  requestAnimationFrame(() => {
+    reset();
+    requestAnimationFrame(reset);
+  });
+}
+
 function normalizeMobileRouteParts(parts) {
   const clean = Array.isArray(parts) ? parts.map(p => String(p || '').trim()).filter(Boolean) : [];
   if (clean[0] === 'm') clean[0] = 'mobile';
@@ -284,6 +310,7 @@ function render() {
   }
 
   document.body.classList.add('pm-mobile-active', 'pm-mobile-document-scroll');
+  _resetMobileDocumentScroll();
   // Allow auth-pending body to still show mobile root.
   document.body.classList.remove('auth-pending');
 
