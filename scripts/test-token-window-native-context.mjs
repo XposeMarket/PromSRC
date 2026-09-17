@@ -41,7 +41,14 @@ assert.doesNotMatch(chat, /nonSystemMessages\.slice\(-18\)/,
   'token-triggered compaction must not summarize only the last 18 messages');
 assert.match(chat, /numCtx:\s*profile\.contextWindowTokens/,
   'the compactor should use the live model hard context window for summary input');
-assert.match(session, /contextSummaryUpdatedAt\s*=\s*Date\.now\(\);[\s\S]{0,260}contextTokenEstimate\s*=\s*estimateActiveContextTokens\(session\)/,
+const compactionStart = session.indexOf('export function recordSessionCompaction(');
+const compactionEnd = session.indexOf('\nexport function getMainChatGoal(', compactionStart);
+const compactionBody = compactionStart >= 0 && compactionEnd > compactionStart
+  ? session.slice(compactionStart, compactionEnd)
+  : '';
+const summaryUpdatedIndex = compactionBody.indexOf('session.contextSummaryUpdatedAt = Date.now();');
+const tokenEstimateIndex = compactionBody.indexOf('session.contextTokenEstimate = estimateActiveContextTokens(session);');
+assert.ok(summaryUpdatedIndex >= 0 && tokenEstimateIndex > summaryUpdatedIndex,
   'recording compaction must immediately recalculate persisted active-context pressure');
 
 // Context diagnostics are a complete active-prompt view, not a user-message

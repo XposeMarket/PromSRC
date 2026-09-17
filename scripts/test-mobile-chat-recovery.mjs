@@ -196,7 +196,11 @@ assert.match(mobileContextWindow, /resolveActiveContextTokens\(\{[\s\S]{0,220}pr
 assert.match(mobileContextWindow, /context-pressure`\)\.catch/, 'mobile context UI must fetch the agent active-context estimator instead of showing only the bounded call slice');
 assert.match(mobileContextWindow, /pressureTokens: pressure\?\.success !== false \? pressure\?\.pressureTokens/, 'mobile context UI must merge the authoritative thread pressure into its gauge payload');
 assert.match(mobileChatAdapter, /source: 'mobile-render-reconciliation'/, 'mobile paints must reconcile compatibility recovery state into the shared runtime');
-assert.match(mobileChatAdapter, /runtimeHistory\.some\(\(message, index\) => message !== compatibilityThread\[index\]\)/, 'mobile render reconciliation must detect same-length transcript replacements');
+assert.match(mobileChatAdapter,
+  /function compatibilityThreadChanged\(sessionId, thread\)[\s\S]{0,260}previous\.length !== thread\.length[\s\S]{0,120}message !== previous\[index\]/,
+  'mobile render reconciliation must detect same-length transcript replacements');
+assert.match(mobileChatAdapter, /compatibilityThreadChanged\(sid, compatibilityThread\)/,
+  'mobile render reconciliation must compare the compatibility snapshot against its last committed identities');
 assert.match(pages, /const maxRecoveredProcessEntries = 12_000/, 'mobile replay must retain the complete gateway replay window instead of truncating long turns to 120 rows');
 assert.match(pages, /String\(msg\?\.messageKind \|\| ''\)[\s\S]{0,80}=== 'delivery'[\s\S]{0,160}return ''/, 'delivery bubbles must not render fake zero-second work timers');
 assert.match(voiceRuntime, /turn\.streaming === true\)[\s\S]{0,120}\|\| matches\[matches\.length - 1\]/, 'active recovery must reclaim a request-owned row even when disconnect temporarily froze its streaming flag');
@@ -227,7 +231,12 @@ assert.match(durableTrace, /return entries\.length \? entries : undefined/, 'ord
 assert.match(durableTrace, /type: 'compaction'/, 'context compaction must have a dedicated durable trace type');
 assert.match(durableTrace, /previousStatus === 'compacting'/, 'durable recovery must merge compaction start and completion into one boundary');
 assert.match(durableTrace, /reasoning_summary_delta/, 'durable recovery must retain explicit user-visible reasoning summaries');
-assert.match(runtimeRecovery, /liveTraceEntries = buildDurableChatTraceFromProcessEntries/, 'restart checkpoints must persist the structured recovery trace');
+assert.match(runtimeRecovery,
+  /const liveTraceEntries = Array\.isArray\(runtime\.checkpoint\?\.liveTraceEntries\)[\s\S]{0,300}buildDurableChatTraceFromProcessEntries\(processEntries\)/,
+  'restart recovery must retain checkpoint traces or rebuild them from process entries');
+assert.match(runtimeRecovery,
+  /processEntries:\s*processEntries\.length \? processEntries : undefined,\s*liveTraceEntries,/,
+  'restart checkpoints must persist the structured recovery trace');
 assert.match(pages, /_normalizeMobileRecoveredTraceEntry/, 'mobile recovery must normalize legacy raw process rows before rendering');
 assert.match(pages, /const keyFor = \(item\) => \{/, 'recovery must define a stable activity merge key');
 assert.match(pages, /return `event:\$\{eventKey\}`/, 'recovery activity merge must prefer stream event identity');
