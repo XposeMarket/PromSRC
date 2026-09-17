@@ -1,0 +1,45 @@
+name: Mobile V2 complete app
+
+on:
+  pull_request:
+    paths:
+      - 'web-ui/mobile-v2.html'
+      - 'web-ui/src/mobile-v2/**'
+      - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/test-mobile-v2-integration.mjs'
+      - 'scripts/prepare-public-build.js'
+      - 'scripts/check-public-web-ui-sync.js'
+      - 'generated/public-web-ui/mobile-v2.html'
+      - 'generated/public-web-ui/static/mobile-v2/**'
+      - '.github/workflows/mobile-v2-foundation.yml'
+  push:
+    branches:
+      - mobile-v2-foundation
+    paths:
+      - 'web-ui/mobile-v2.html'
+      - 'web-ui/src/mobile-v2/**'
+      - 'scripts/test-mobile-v2-foundation.mjs'
+      - 'scripts/test-mobile-v2-integration.mjs'
+      - 'scripts/prepare-public-build.js'
+      - 'scripts/check-public-web-ui-sync.js'
+      - 'generated/public-web-ui/mobile-v2.html'
+      - 'generated/public-web-ui/static/mobile-v2/**'
+      - '.github/workflows/mobile-v2-foundation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check all Mobile V2 module syntax
+        run: find web-ui/src/mobile-v2 -name '*.js' -print0 | sort -z | xargs -0 -n1 node --check
+      - name: Verify complete V2 isolation and feature contract
+        run: node scripts/test-mobile-v2-foundation.mjs
+      - name: Verify mobile API integration contracts
+        run: node --experimental-default-type=module scripts/test-mobile-v2-integration.mjs

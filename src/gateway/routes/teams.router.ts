@@ -1830,6 +1830,7 @@ router.post('/api/schedules', (req: any, res: any) => {
       ...(selectedTeamId ? { team_id: selectedTeamId } : {}),
       assignmentTarget: selectedTeamId ? 'team' : (selectedSubagentId ? 'subagent' : 'main'),
       deliverToMainChannel: !selectedTeamId && !selectedSubagentId,
+      enabled: req.body?.enabled !== false,
       skillIds: normalizeScheduleSkillIds(req.body?.skillIds),
       context_refs: normalizeScheduleContextRefs(req.body?.context_refs || req.body?.contextReferences),
       previewOnly: req.body?.previewOnly === true || req.body?.preview_only === true,
@@ -1949,8 +1950,12 @@ router.put('/api/schedules/:id', (req: any, res: any) => {
         context_refs: hasContextRefs
           ? normalizeScheduleContextRefs(req.body.context_refs || req.body.contextReferences, existing?.context_refs || existing?.contextReferences)
           : undefined,
-        previewOnly: hasPreviewOnly ? (req.body.previewOnly === true || req.body.preview_only === true) : undefined,
+	      previewOnly: hasPreviewOnly ? (req.body.previewOnly === true || req.body.preview_only === true) : undefined,
 	    };
+	    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'enabled')) {
+	      updates.enabled = req.body.enabled === true;
+	      if (updates.enabled) updates.status = 'scheduled';
+	    }
 	    const job = _cronScheduler.updateJob(req.params.id, updates);
     
     res.json({ success: true, job });

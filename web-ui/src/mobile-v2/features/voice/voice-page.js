@@ -1,0 +1,40 @@
+import { escapeHtml, pageHeading, card, loading } from '../../ui/page-kit.js';
+
+const VOICE_SESSION_KEY='pm_mobile_v2_voice_session';
+function voiceSessionId(){try{return localStorage.getItem(VOICE_SESSION_KEY)||'mobile_v2_voice';}catch{return'mobile_v2_voice';}}
+function saveVoiceSession(id){try{localStorage.setItem(VOICE_SESSION_KEY,id);}catch{}}
+function blobToBase64(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=reject;reader.onload=()=>resolve(String(reader.result||'').split(',')[1]||'');reader.readAsDataURL(blob);});}
+
+export async function mountVoicePage({shell,features,gateways}){
+  shell.setActiveTab('voice');shell.setTitle('Voice');const page=shell.page;let disposed=false;let recognition=null;let recorder=null;let stream=null;let chunks=[];let aborter=null;let listening=false;let transcript='';let reply='';let speakReplies=true;
+  page.innerHTML=`<div class="pm-voice-body pm-voice-body--page pm-v2-voice"><section class="pm-voice-snap-section pm-voice-snap-primary"><div class="pm-voice-stage"><div class="pm-voice-status-region"><div class="pm-voice-status" data-voice-status>Ready</div><div class="pm-voice-hint" data-voice-hint>Tap and hold the orb to speak</div></div><button type="button" class="pm-voice-orb pm-voice-mic pm-voice-page-mic pm-voice-orb-mic pm-voice-particle-orb" data-voice-orb aria-label="Hold to talk"><span class="pm-v2-voice-core"></span></button><div class="pm-v2-voice-transcript" data-voice-transcript></div></div></section><section class="pm-v2-voice-controls">${card('Voice',`<div class="pm-v2-row-between"><span>Target</span><strong>${escapeHtml(gateways.activeEntry?.name||'This gateway')}</strong></div><label class="pm-v2-check"><input type="checkbox" data-speak-replies checked/><span>Speak Prometheus replies</span></label><div class="pm-v2-actions"><button class="pm-btn ghost" data-new-voice>New voice chat</button><button class="pm-btn ghost danger" data-stop-voice>Stop</button></div>`)}<div data-voice-status-card>${loading('Checking voice providers…')}</div></section></div>`;
+  const orb=page.querySelector('[data-voice-orb]');const status=page.querySelector('[data-voice-status]');const hint=page.querySelector('[data-voice-hint]');const transcriptEl=page.querySelector('[data-voice-transcript]');
+  const setStatus=(text,sub='')=>{status.textContent=text;hint.textContent=sub||'';};
+  const paintTranscript=()=>{transcriptEl.innerHTML=`${transcript?`<div class="pm-v2-voice-turn user">${escapeHtml(transcript)}</div>`:''}${reply?`<div class="pm-v2-voice-turn assistant">${escapeHtml(reply)}</div>`:''}`;};
+  features.voiceStatus().then((data)=>{if(disposed)return;const v=data.voice||{};const r=data.realtime||{};const speech=v.configured===true?'Ready':v.configured===false?'Needs setup':'Checked when first used';page.querySelector('[data-voice-status-card]').innerHTML=card('Providers',`<div class="pm-v2-event-list"><div><strong>Speech transcription</strong><span>${escapeHtml(speech)}</span></div><div><strong>Realtime</strong><span>${escapeHtml(r.configured?'Available':'Fallback voice mode')}</span></div></div>`);}).catch(()=>{});
+  page.querySelector('[data-speak-replies]')?.addEventListener('change',(e)=>{speakReplies=e.target.checked;});
+  page.querySelector('[data-new-voice]')?.addEventListener('click',()=>{const id=`mobile_voice_${Date.now().toString(36)}`;saveVoiceSession(id);transcript='';reply='';paintTranscript();shell.showNotice('New voice chat ready.');});
+  page.querySelector('[data-stop-voice]')?.addEventListener('click',()=>{aborter?.abort();try{recognition?.stop();}catch{}try{recorder?.stop();}catch{}speechSynthesis?.cancel?.();setStatus('Stopped','Hold the orb to speak again');});
+
+  async function sendTranscript(text){
+    const message=String(text||'').trim();if(!message)return;transcript=message;reply='';paintTranscript();setStatus('Thinking','Prometheus is working…');const id=voiceSessionId();const gateway=gateways.active;
+    try{await gateway.createSession({id,title:'Voice Chat'});}catch(error){if(Number(error?.status)!==409&&Number(error?.status)!==400){} }
+    aborter=new AbortController();let final='';
+    try{await gateway.streamChat({sessionId:id,message,clientRequestId:`voice_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,signal:aborter.signal,onEvent:(event)=>{if(event.type==='assistant.delta'){reply+=event.text||'';paintTranscript();}else if(event.type==='assistant.done'){if(event.text&&!reply)reply=event.text;final=reply||event.text||'';paintTranscript();}else if(event.type==='tool.activity'){setStatus('Working',event.name||'Using a tool…');}else if(event.type==='reasoning.summary.delta'){setStatus('Thinking',String(event.text||'').slice(-120));}}});final=reply||final;setStatus('Ready','Tap and hold the orb to speak');if(speakReplies&&final&&'speechSynthesis'in window){speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(final);utterance.rate=1;utterance.onstart=()=>setStatus('Speaking','Tap the orb to interrupt');utterance.onend=()=>setStatus('Ready','Tap and hold the orb to speak');speechSynthesis.speak(utterance);}}
+    catch(error){if(error?.name!=='AbortError'){reply=`Voice error: ${error?.message||error}`;paintTranscript();setStatus('Voice error','Try again.');}}finally{aborter=null;}
+  }
+
+  async function startListening(){
+    if(listening)return;listening=true;orb.classList.add('active');speechSynthesis?.cancel?.();setStatus('Listening','Release when you’re done');
+    const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(Recognition){recognition=new Recognition();recognition.continuous=true;recognition.interimResults=true;recognition.lang=navigator.language||'en-US';let finalText='';recognition.onresult=(event)=>{let interim='';for(let i=event.resultIndex;i<event.results.length;i++){const text=event.results[i][0]?.transcript||'';if(event.results[i].isFinal)finalText+=`${text} `;else interim+=text;}transcript=(finalText||interim).trim();paintTranscript();};recognition.onerror=()=>{};recognition.start();return;}
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:true});chunks=[];recorder=new MediaRecorder(stream);recorder.ondataavailable=(event)=>{if(event.data?.size)chunks.push(event.data);};recorder.start();}catch(error){listening=false;orb.classList.remove('active');setStatus('Microphone unavailable',error?.message||'Allow microphone access.');}
+  }
+  async function stopListening(){
+    if(!listening)return;listening=false;orb.classList.remove('active');
+    if(recognition){const current=recognition;recognition=null;try{current.stop();}catch{}await new Promise(r=>setTimeout(r,160));const text=transcript;setStatus('Processing','Sending your message…');if(text)sendTranscript(text);else setStatus('Ready','I didn’t catch that. Try again.');return;}
+    if(recorder){const current=recorder;recorder=null;const blob=await new Promise((resolve)=>{current.onstop=()=>resolve(new Blob(chunks,{type:current.mimeType||'audio/webm'}));try{current.stop();}catch{resolve(new Blob(chunks,{type:'audio/webm'}));}});stream?.getTracks?.().forEach(t=>t.stop());stream=null;setStatus('Transcribing','Turning speech into text…');try{const audioBase64=await blobToBase64(blob);const result=await features.transcribe({provider:'auto',audioBase64,mimeType:blob.type||'audio/webm',filename:'voice.webm'});const text=String(result?.text||result?.transcript||result?.result||'').trim();transcript=text;paintTranscript();if(text)sendTranscript(text);else setStatus('Ready','I didn’t catch that. Try again.');}catch(error){setStatus('Transcription failed',error?.message||'Try again.');}}
+  }
+  orb.addEventListener('pointerdown',(event)=>{event.preventDefault();orb.setPointerCapture?.(event.pointerId);startListening();});orb.addEventListener('pointerup',(event)=>{event.preventDefault();stopListening();});orb.addEventListener('pointercancel',stopListening);
+  return()=>{disposed=true;aborter?.abort();try{recognition?.stop();}catch{}try{recorder?.stop();}catch{}stream?.getTracks?.().forEach(t=>t.stop());};
+}
