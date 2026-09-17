@@ -1182,12 +1182,12 @@ const vercelExtension: PrometheusExtensionDefinition = {
 
     api.registerTool({
       name: 'connector_vercel_api_request',
-      description: '[Vercel] Call a provider-native Vercel REST API path not yet covered by a first-class tool. Paths are restricted to api.vercel.com; GET/HEAD are read-only, while other methods use the normal external-write approval gate.',
+      description: '[Vercel] Call a provider-native Vercel REST API path not yet covered by a first-class tool. Paths are restricted to api.vercel.com; pass query parameters through query (not in path). GET/HEAD are read-only, while other methods use the normal external-write approval gate.',
       parameters: {
         type: 'object',
         required: ['path'],
         properties: {
-          path: { type: 'string', description: 'Relative Vercel API path beginning with /, for example /v9/projects/my-project.' },
+          path: { type: 'string', description: 'Relative Vercel API pathname beginning with /, for example /v9/projects/my-project. Put query parameters in query.' },
           method: { type: 'string', enum: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method, default GET.' },
           query: { type: 'object', description: 'Optional query parameters. Values must be strings, numbers, booleans, or arrays of those.' },
           body: { type: 'object', description: 'Optional JSON request body for write methods.' },

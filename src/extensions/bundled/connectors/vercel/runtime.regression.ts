@@ -76,9 +76,14 @@ async function run() {
     assert.equal(rawQuery.error, true, 'raw query text must not bypass query validation');
     assert.equal(fetchCount, beforeTraversal, 'raw query text must not reach fetch');
 
-    const validRequest = await apiRequest.execute({ path: '/v9/projects' }, context);
+    const invalidStructuredQuery = await apiRequest.execute({ path: '/v9/projects', query: { limit: 'x'.repeat(1025) } }, context);
+    assert.equal(invalidStructuredQuery.error, true, 'structured query values must retain their length bound');
+    assert.equal(fetchCount, beforeTraversal, 'invalid structured query must not reach fetch');
+
+    const validRequest = await apiRequest.execute({ path: '/v9/projects', query: { limit: 10 } }, context);
     assert.equal(validRequest.error, false, 'valid versioned API paths should remain usable');
     assert.equal(lastUrl?.pathname, '/v9/projects');
+    assert.equal(lastUrl?.searchParams.get('limit'), '10', 'validated structured query must be preserved');
     console.log('vercel connector regression: ok');
   } finally {
     globalThis.fetch = originalFetch;
