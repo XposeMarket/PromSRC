@@ -28,6 +28,35 @@ function hashBackgroundAgent(value) {
   return Math.abs(hash);
 }
 
+// Older background gateways stored the terminal answer under result,
+// finalResult, reply, or output, and some replay adapters wrapped it in a
+// small object. Normalize those aliases once so a cold mobile open cannot
+// turn a valid completed run into an empty assistant bubble.
+function backgroundAgentText(...values) {
+  const seen = new Set();
+  const read = (value, depth = 0) => {
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+    if (Array.isArray(value)) {
+      if (depth > 3 || seen.has(value)) return '';
+      seen.add(value);
+      return value.map((item) => read(item, depth + 1)).filter(Boolean).join('\n').trim();
+    }
+    if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return '';
+    seen.add(value);
+    for (const key of ['text', 'content', 'reply', 'output', 'result', 'answer', 'finalText', 'finalResult', 'message']) {
+      const nested = read(value[key], depth + 1);
+      if (nested) return nested;
+    }
+    return '';
+  };
+  for (const value of values) {
+    const text = read(value);
+    if (text) return text;
+  }
+  return '';
+}
+
 function isGenericBackgroundAgentName(value) {
   return !String(value || '').trim()
     || /^(?:undefined|null|background\s*spawn|background\s*agent|agent|subagent)$/i.test(String(value || '').trim());
@@ -148,14 +177,14 @@ export function normalizeBackgroundAgentWork(record = {}) {
     backgroundSessionId: String(record.backgroundSessionId || record.bgSessionId || '').trim(),
     agentName: identity.name,
     agentColor: identity.color,
-    task: String(record.task || record.prompt || '').trim(),
+    task: backgroundAgentText(record.task, record.prompt),
     status,
     startedAt: Number(record.startedAt || record.workStartedAt || record.createdAt || 0) || 0,
     completedAt,
     updatedAt,
-    result: String(record.result || '').trim(),
-    streamingText: typeof record.streamingText === 'string' ? record.streamingText : '',
-    error: String(record.error || '').trim(),
+    result: backgroundAgentText(record.result, record.finalResult, record.reply, record.output),
+    streamingText: backgroundAgentText(record.streamingText),
+    error: backgroundAgentText(record.error),
     fileChanges: record.fileChanges || null,
     streamId: String(record.streamId || stream.streamId || '').trim(),
     lastSeq: Math.max(0, Math.floor(Number(record.lastSeq || stream.lastSeq || 0)) || 0),
@@ -387,8 +416,24 @@ export function backgroundAgentRecordToMessage(record = {}) {
     existingColor: record.agentColor || record.color,
   });
   const agentName = identity.name || 'Background agent';
-  const running = ['running', 'queued', 'in_progress'].includes(String(record.status || '').toLowerCase());
-  const result = String(record.result || record.error || (running ? record.streamingText : '') || '').trim();
+  const status = String(record.status || '').toLowerCase();
+  const running = ['running', 'queued', 'in_progress'].includes(status);
+  const terminalFallback = status === 'timed_out'
+    ? 'Background agent timed out.'
+    : status === 'failed'
+      ? backgroundAgentText(record.error) || 'Background agent failed.'
+      : status === 'completed'
+        ? 'Background task completed with no textual output.'
+        : '';
+  const result = backgroundAgentText(
+    record.result,
+    record.finalResult,
+    record.reply,
+    record.output,
+    record.error,
+    running ? record.streamingText : '',
+    terminalFallback,
+  );
   return {
     role: 'ai',
     from: agentName,

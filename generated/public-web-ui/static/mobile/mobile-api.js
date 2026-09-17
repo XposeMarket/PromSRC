@@ -1784,9 +1784,11 @@ export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, 
       .map((id) => String(id || '').trim())
       .filter(Boolean),
   );
+  const activeRunKnown = Array.isArray(runStatus?.activeSessionIds);
   page.sessions = page.sessions.map((session) => ({
     ...session,
     activeRun: session.activeRun === true || activeSessionIds.has(String(session.id || '')),
+    activeRunKnown,
   }));
   return page;
 }
@@ -1847,6 +1849,8 @@ export async function searchMobileChatSessions(query, { limit = 100, mode = 'con
     const raw = r.sessions[idx] || {};
     return {
       ...s,
+      activeRunKnown: raw.activeRun === true,
+      mobileUnreadKnown: Object.prototype.hasOwnProperty.call(raw, 'mobileUnread'),
       matchedRole: String(raw.matchedRole || ''),
       matchedContent: String(raw.matchedContent || ''),
       matchedIndex: Number.isFinite(Number(raw.matchedIndex)) ? Number(raw.matchedIndex) : -1,
