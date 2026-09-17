@@ -2,13 +2,13 @@
   "id": "vercel",
   "kind": "connector",
   "name": "Vercel",
-  "description": "Connect Vercel so Prometheus can detect projects, trigger deployments, and surface preview URLs.",
+  "description": "Connect Vercel so Prometheus can inspect project Git links, create source-aware deployments, diagnose builds, manage hosting resources, and call the provider API with approval-aware writes.",
   "category": "Dev",
   "enabledByDefault": true,
   "docsUrl": "https://vercel.com/account/tokens",
-  "tags": ["vercel", "deployments", "api key"],
+  "tags": ["vercel", "deployments", "git", "hosting", "api key"],
   "activation": {
-    "aliases": ["deploy", "deployment", "preview", "environment", "env", "project", "projects"]
+    "aliases": ["deploy", "deployment", "preview", "production", "environment", "env", "project", "projects", "vercel", "build logs", "git deployment"]
   },
   "runtime": {
     "binding": "integrations/connectors/vercel",
@@ -17,23 +17,37 @@
   "ui": {
     "color": "#111111",
     "permissions": [
-      { "icon": "^", "label": "Create and link Vercel projects" },
-      { "icon": "->", "label": "Trigger deployments from the canvas" },
-      { "icon": "?", "label": "Read deployment state and live URLs" }
+      { "icon": "^", "label": "Inspect and manage Vercel projects and Git-linked settings" },
+      { "icon": "->", "label": "Create deployments from a Git branch or commit and inspect build events" },
+      { "icon": "?", "label": "Read deployment state, logs, aliases, domains, and live URLs" },
+      { "icon": "!", "label": "Write operations require the normal Prometheus approval gate" }
     ]
   },
   "ownership": {
     "toolNamespaces": ["connector_vercel"],
-    "capabilities": ["deployments", "hosting", "projects", "environment"],
+    "capabilities": ["api", "deployments", "hosting", "projects", "git", "environment", "domains", "aliases"],
     "tools": [
       "connector_vercel_status",
       "connector_vercel_list_teams",
       "connector_vercel_list_projects",
+      "connector_vercel_get_project",
+      "connector_vercel_create_project",
+      "connector_vercel_update_project",
+      "connector_vercel_delete_project",
       "connector_vercel_list_deployments",
       "connector_vercel_get_deployment",
+      "connector_vercel_create_deployment",
       "connector_vercel_redeploy",
+      "connector_vercel_deployment_events",
+      "connector_vercel_cancel_deployment",
+      "connector_vercel_delete_deployment",
+      "connector_vercel_list_aliases",
+      "connector_vercel_assign_alias",
       "connector_vercel_env",
-      "connector_vercel_domains"
+      "connector_vercel_domains",
+      "connector_vercel_get_project_domain",
+      "connector_vercel_manage_project_domain",
+      "connector_vercel_api_request"
     ]
   },
   "setup": {
