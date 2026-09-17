@@ -6010,6 +6010,9 @@ export async function browserClick(
 ): Promise<string> {
   const recovery = await recoverInHouseSessionMapping(sessionId);
   if (recovery?.error) return recovery.error;
+  if (recovery?.recovered) {
+    return 'ERROR: Recovered the in-house browser mapping, but this action needs a fresh browser_observe first. No action was sent.';
+  }
   if (getInHouseSession(sessionId)) return browserClickInHouse(sessionId, target, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
@@ -6120,6 +6123,9 @@ export async function browserFill(
 ): Promise<string> {
   const recovery = await recoverInHouseSessionMapping(sessionId);
   if (recovery?.error) return recovery.error;
+  if (recovery?.recovered) {
+    return 'ERROR: Recovered the in-house browser mapping, but this action needs a fresh browser_observe first. No action was sent.';
+  }
   if (getInHouseSession(sessionId)) return browserFillInHouse(sessionId, target, text, options);
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
