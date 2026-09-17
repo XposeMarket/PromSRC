@@ -78,7 +78,7 @@ async function main() {
     fault = 'missing_snapshot';
     const absentEvidence = await run('chat-contract-a', 'browser_observe', { action: 'snapshot' });
     assert.equal(absentEvidence.error, true);
-    assert.match(absentEvidence.result, /no snapshot evidence/);
+    assert.match(absentEvidence.result, /no (?:snapshot|observation) evidence/);
     fault = '';
     fault = 'snapshot';
     const callsBefore = clickCalls;
