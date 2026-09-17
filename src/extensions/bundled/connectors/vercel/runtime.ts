@@ -703,7 +703,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
           name: { type: 'string', description: 'Vercel project/deployment name.' },
           projectId: { type: 'string', description: 'Optional existing Vercel project ID or name.' },
           teamId: { type: 'string', description: 'Optional team ID.' },
-          target: { type: 'string', description: 'Deployment target, typically production or preview.' },
+          target: { type: 'string', description: 'Omit for Preview; use production, staging, or a custom environment.' },
           gitSource: { type: 'object', description: 'Git source descriptor: type, org, repo or repoId, ref, sha, prId.' },
           gitProvider: { type: 'string', enum: ['github', 'gitlab', 'bitbucket'] },
           gitOrg: { type: 'string' },
@@ -727,10 +727,13 @@ const vercelExtension: PrometheusExtensionDefinition = {
         if (!name) return fail('name is required.');
         const git = normalizeGitSource(args);
         if (git.error) return fail(git.error);
+        const requestedTarget = pickString(args?.target);
         const body: JsonRecord = {
           name,
           project: resolveProjectId(args, { ...auth, projectId: undefined }) || undefined,
-          target: pickString(args?.target) || undefined,
+          // Vercel creates a Preview deployment when target is omitted. "preview"
+          // is a common conversational shorthand but is not a valid REST target.
+          target: requestedTarget === 'preview' ? undefined : requestedTarget || undefined,
           gitSource: git.source,
           customEnvironmentSlugOrId: pickString(args?.customEnvironmentSlugOrId) || undefined,
           gitMetadata: pickRecord(args?.gitMetadata),
@@ -759,7 +762,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
           projectId: { type: 'string', description: 'Project ID/name. Required when deploymentId is omitted unless a default project is configured.' },
           teamId: { type: 'string', description: 'Optional team ID.' },
           name: { type: 'string', description: 'Optional deployment/project name override.' },
-          target: { type: 'string', description: 'Deployment target, defaults to the existing target or production.' },
+          target: { type: 'string', description: 'Optional deployment target; omit to preserve the existing target, including Preview.' },
           withLatestCommit: { type: 'boolean', description: 'When redeploying a Git deployment, ask Vercel to use the latest commit.' },
         },
       },
@@ -792,7 +795,9 @@ const vercelExtension: PrometheusExtensionDefinition = {
           body: {
             deploymentId,
             name,
-            target: pickString(args?.target) || latest?.target || 'production',
+            // Preserve a Preview deployment's null target by omitting target from
+            // the redeploy request instead of silently changing it to production.
+            target: pickString(args?.target) || latest?.target || undefined,
             withLatestCommit: args?.withLatestCommit === true ? true : undefined,
           },
         });
@@ -975,7 +980,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
       },
       connectorId: ID,
       capability: 'environment',
-      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true },
+      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: true, credentialUse: true, known: true },
       execute: async (args: any, context) => withAuth(context, async (auth) => {
         const action = pickString(args?.action);
         const projectId = resolveProjectId(args, auth);
@@ -1091,7 +1096,7 @@ const vercelExtension: PrometheusExtensionDefinition = {
       },
       connectorId: ID,
       capability: 'domains',
-      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true },
+      sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: true, credentialUse: true, known: true },
       execute: async (args: any, context) => withAuth(context, async (auth) => {
         const action = pickString(args?.action);
         const projectId = resolveProjectId(args, { ...auth, projectId: undefined });

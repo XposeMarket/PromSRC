@@ -117,6 +117,10 @@ async function main(): Promise<void> {
   };
   const eventsTool = runtimeTools.get('connector_vercel_deployment_events');
   const apiTool = runtimeTools.get('connector_vercel_api_request');
+  const createDeploymentTool = runtimeTools.get('connector_vercel_create_deployment');
+  const redeployTool = runtimeTools.get('connector_vercel_redeploy');
+  assert.match(createDeploymentTool.parameters.properties.target.description, /Omit for Preview/);
+  assert.match(redeployTool.parameters.properties.target.description, /preserve the existing target/);
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
   try {
@@ -147,6 +151,44 @@ async function main(): Promise<void> {
     assert.equal(oversizedResponse.error, true);
     assert.match(oversizedResponse.result, /413/);
     assert.equal(fetchCalls, 1);
+
+    const requests: Array<{ url: string; method: string; body?: any }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      requests.push({ url, method, body });
+      if (method === 'GET' && url.includes('/v7/deployments')) {
+        return new Response(JSON.stringify({
+          deployments: [{ uid: 'dpl_preview', name: 'preview-app', target: null }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        uid: method === 'POST' ? 'dpl_redeploy' : 'dpl_unknown',
+        name: 'preview-app',
+        target: null,
+        readyState: 'QUEUED',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const previewRedeploy = await redeployTool.execute({ projectId: 'preview-app' }, vercelContext);
+    assert.equal(previewRedeploy.error, false);
+    const redeployRequest = requests.find((request) => request.method === 'POST');
+    assert.equal(redeployRequest?.body?.deploymentId, 'dpl_preview');
+    assert.equal(Object.prototype.hasOwnProperty.call(redeployRequest?.body || {}, 'target'), false);
+
+    const previewDeployment = await createDeploymentTool.execute({
+      name: 'preview-app',
+      target: 'preview',
+      gitProvider: 'github',
+      gitOrg: 'acme',
+      gitRepo: 'preview-app',
+      gitRef: 'feature/preview',
+    }, vercelContext);
+    assert.equal(previewDeployment.error, false);
+    const createRequest = requests.filter((request) => request.method === 'POST').at(-1);
+    assert.equal(createRequest?.body?.name, 'preview-app');
+    assert.equal(Object.prototype.hasOwnProperty.call(createRequest?.body || {}, 'target'), false);
   } finally {
     globalThis.fetch = originalFetch;
   }

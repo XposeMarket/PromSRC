@@ -40,6 +40,12 @@ assert.equal(declaredReadOnlyApi.readOnly, true);
 const vercelEnv = resolveToolCapabilityMetadata('connector_vercel_env', undefined, { action: 'list' });
 assert.equal(vercelEnv.known, true);
 assert.equal(vercelEnv.externalWrite, true, 'combined Vercel env tool must fail closed as an external write');
+assert.equal(vercelEnv.destructive, true, 'combined Vercel env tool must conservatively cover its delete action');
+
+const vercelProjectDomain = resolveToolCapabilityMetadata('connector_vercel_manage_project_domain', undefined, { action: 'add' });
+assert.equal(vercelProjectDomain.known, true);
+assert.equal(vercelProjectDomain.externalWrite, true);
+assert.equal(vercelProjectDomain.destructive, true, 'combined Vercel domain tool must conservatively cover its remove action');
 
 const vercelDeleteProject = resolveToolCapabilityMetadata('connector_vercel_delete_project');
 assert.equal(vercelDeleteProject.known, true);
