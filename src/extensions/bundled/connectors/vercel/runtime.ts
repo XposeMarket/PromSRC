@@ -194,21 +194,31 @@ function normalizeLimit(value: unknown, fallback: number, maximum: number): numb
 
 function validateApiPath(path: string): string | null {
   const normalized = pickString(path);
-  const pathname = normalized.split('?')[0];
   if (!normalized.startsWith('/') || normalized.startsWith('//') || normalized.includes('://')) {
     return 'path must be a relative Vercel API path beginning with /.';
   }
   if (normalized.length > MAX_API_PATH_CHARS) return `path must be ${MAX_API_PATH_CHARS} characters or fewer.`;
+  if (normalized.includes('?')) return 'path may not include query text; pass query parameters through the query field.';
   if (normalized.includes('#')) return 'path may not contain a URL fragment.';
+  const pathname = normalized;
   let decodedPathname: string;
   try {
-    const decodedSegments = pathname.split('/').map((segment) => decodeURIComponent(segment));
-    if (decodedSegments.some((segment) => segment === '.' || segment === '..' || /[\\/]/.test(segment))) {
-      return 'path may not contain dot-directory segments or encoded path separators.';
-    }
+    const decodedSegments = pathname.split('/').map((segment) => {
+      let decoded = segment;
+      for (let depth = 0; depth < 4; depth += 1) {
+        if (depth > 0 && !/%[0-9a-f]{2}/i.test(decoded)) break;
+        const next = decodeURIComponent(decoded);
+        if (next === '.' || next === '..' || /[\\/?#]/.test(next)) {
+          throw new Error('unsafe path segment');
+        }
+        if (next === decoded) break;
+        decoded = next;
+      }
+      return decoded;
+    });
     decodedPathname = decodedSegments.join('/');
   } catch {
-    return 'path must contain valid percent-encoding.';
+    return 'path must contain valid percent-encoding and may not contain encoded path, query, or dot-directory separators.';
   }
   if (!/^\/v\d+(?:\/|$)/i.test(decodedPathname)) return 'path must target a versioned Vercel REST endpoint such as /v9/projects.';
   return null;

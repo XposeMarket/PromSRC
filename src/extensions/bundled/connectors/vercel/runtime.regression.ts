@@ -68,6 +68,14 @@ async function run() {
     assert.equal(encodedSeparator.error, true, 'encoded path separators must be rejected');
     assert.equal(fetchCount, beforeTraversal, 'encoded-separator traversal must not reach fetch');
 
+    const doubleEncodedTraversal = await apiRequest.execute({ path: '/v9/%252e%252e/projects' }, context);
+    assert.equal(doubleEncodedTraversal.error, true, 'double-encoded parent-directory traversal must be rejected');
+    assert.equal(fetchCount, beforeTraversal, 'double-encoded traversal must not reach fetch');
+
+    const rawQuery = await apiRequest.execute({ path: '/v9/projects?limit=1000000' }, context);
+    assert.equal(rawQuery.error, true, 'raw query text must not bypass query validation');
+    assert.equal(fetchCount, beforeTraversal, 'raw query text must not reach fetch');
+
     const validRequest = await apiRequest.execute({ path: '/v9/projects' }, context);
     assert.equal(validRequest.error, false, 'valid versioned API paths should remain usable');
     assert.equal(lastUrl?.pathname, '/v9/projects');
