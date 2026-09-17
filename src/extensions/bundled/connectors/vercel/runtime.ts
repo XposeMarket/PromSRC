@@ -214,6 +214,7 @@ function validateApiPath(path: string): string | null {
         if (next === decoded) break;
         decoded = next;
       }
+      if (/%[0-9a-f]{2}/i.test(decoded)) throw new Error('path segment exceeds the decoding safety depth');
       return decoded;
     });
     decodedPathname = decodedSegments.join('/');

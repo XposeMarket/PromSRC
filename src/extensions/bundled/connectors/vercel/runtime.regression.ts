@@ -72,6 +72,10 @@ async function run() {
     assert.equal(doubleEncodedTraversal.error, true, 'double-encoded parent-directory traversal must be rejected');
     assert.equal(fetchCount, beforeTraversal, 'double-encoded traversal must not reach fetch');
 
+    const deeplyEncodedTraversal = await apiRequest.execute({ path: '/v9/%252525252e%252525252e/projects' }, context);
+    assert.equal(deeplyEncodedTraversal.error, true, 'parent-directory traversal beyond the decode depth must be rejected');
+    assert.equal(fetchCount, beforeTraversal, 'deeply encoded traversal must not reach fetch');
+
     const rawQuery = await apiRequest.execute({ path: '/v9/projects?limit=1000000' }, context);
     assert.equal(rawQuery.error, true, 'raw query text must not bypass query validation');
     assert.equal(fetchCount, beforeTraversal, 'raw query text must not reach fetch');
@@ -84,6 +88,10 @@ async function run() {
     assert.equal(validRequest.error, false, 'valid versioned API paths should remain usable');
     assert.equal(lastUrl?.pathname, '/v9/projects');
     assert.equal(lastUrl?.searchParams.get('limit'), '10', 'validated structured query must be preserved');
+
+    const encodedProjectId = await apiRequest.execute({ path: '/v9/projects/project%20name' }, context);
+    assert.equal(encodedProjectId.error, false, 'ordinary encoded project identifiers should remain usable');
+    assert.equal(lastUrl?.pathname, '/v9/projects/project%20name');
     console.log('vercel connector regression: ok');
   } finally {
     globalThis.fetch = originalFetch;
