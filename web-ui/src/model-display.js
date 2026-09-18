@@ -41,7 +41,7 @@ export function formatModelDisplayName(model, provider = '') {
 
   if (/^gpt\b/.test(value)) value = value.replace(/^gpt\b/i, 'GPT');
   else if (/^o\d\b/.test(value)) value = value.toUpperCase();
-  else if (providerId === 'anthropic' || /^(opus|sonnet|haiku)\b/.test(value)) value = value.replace(/^(opus|sonnet|haiku)\b/i, 'Claude $1');
+  else if (providerId === 'anthropic' || /^(opus|sonnet|haiku|fable|mythos)\b/.test(value)) value = value.replace(/^(opus|sonnet|haiku|fable|mythos)\b/i, 'Claude $1');
   else if (providerId === 'gemini' || /^gemini\b/.test(value)) value = value.replace(/^gemini\b/i, 'Gemini');
   else if (providerId === 'xai' || /^grok\b/.test(value)) value = value.replace(/^grok\b/i, 'Grok');
   else if (providerId === 'perplexity' || /^sonar\b/.test(value)) value = value.replace(/^sonar\b/i, 'Sonar');
@@ -49,7 +49,7 @@ export function formatModelDisplayName(model, provider = '') {
 
   return value
     .replace(/\bmini\b/gi, 'mini')
-    .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Deep|Research|Multi|Agent|Spark|Sol|Terra|Luna|Astra)\b/gi, titleWord)
+    .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Fable|Mythos|Deep|Research|Multi|Agent|Spark|Sol|Terra|Luna|Astra)\b/gi, titleWord)
     .replace(/\s+/g, ' ')
     .trim();
 }

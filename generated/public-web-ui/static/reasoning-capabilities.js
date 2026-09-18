@@ -31,12 +31,12 @@ export function reasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (id === 'anthropic') {
-    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
+    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
       return { efforts: [], thinkingMode: manual ? 'manual' : undefined };
     }
     const efforts = ['low','medium','high'];
-    if (/^claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
+    if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
   }
@@ -77,7 +77,8 @@ export function supportsFastSpeed(provider, model) {
   const id = String(provider || '').trim().toLowerCase();
   const raw = String(model || '').trim().toLowerCase();
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
-  if (id === 'anthropic') return /^claude-opus-4-(?:7|8)(?:-|$)/.test(name);
+  // Fast mode is Claude Opus 5 / Opus 4.8 only (removed on Opus 4.7).
+  if (id === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
   if (id === 'openai' || id === 'openai_codex') return /^(?:gpt-6-astra|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   return false;
 }

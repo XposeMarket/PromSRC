@@ -15,7 +15,7 @@ bootMobileV2Theme();
 const gateways = new GatewayManager();
 const features = new FeatureClient(gateways);
 const chatStore = new ChatStore();
-const shell = createMobileV2Shell({ root, gateways });
+const shell = createMobileV2Shell({ root, gateways, features });
 const router = createMobileV2Router({ shell, gateways, features, chatStore });
 shell.setNavigate((route) => router.navigate(route));
 const disposeDrawerParity = attachMobileV2DrawerBootstrap({ root, shell, gateways, router });

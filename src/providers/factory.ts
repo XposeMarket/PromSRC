@@ -26,7 +26,7 @@ import {
 const LEGACY_BLOCKED_MODELS = new Set(['codex-davinci-002']);
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 const DEFAULT_OPENAI_CODEX_MODEL = 'gpt-5.4';
-const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5';
 const DEFAULT_PERPLEXITY_MODEL = 'sonar-pro';
 const DEFAULT_GEMINI_MODEL = 'gemini-3.7-flash';
 const PROTECTED_CONNECTION_IDS = new Set(['openai', 'openai_codex', 'xai', 'anthropic']);

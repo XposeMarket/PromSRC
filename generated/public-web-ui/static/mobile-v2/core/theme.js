@@ -1,7 +1,7 @@
 const THEME_KEY = 'prometheus_theme';
 
 export const MOBILE_V2_THEMES = [
-  { id: 'dark', label: 'Prometheus One', base: 'light' },
+  { id: 'dark', label: 'Prometheus One', base: 'dark' },
   { id: 'gray', label: 'Ash & Ember', base: 'dark' },
   { id: 'blue', label: 'Olympian Blue', base: 'dark' },
   { id: 'purple', label: 'Aether Violet', base: 'dark' },

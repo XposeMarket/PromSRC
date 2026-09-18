@@ -2158,11 +2158,11 @@ function _documentedReasoningCapability(provider, model) {
     return { efforts: [] };
   }
   if (provider === 'anthropic') {
-    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
+    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
       return { efforts: [], thinkingMode: /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name) ? 'manual' : '' };
     }
     const efforts = ['low','medium','high'];
-    if (/^claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
+    if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
   }
@@ -2171,7 +2171,8 @@ function _documentedReasoningCapability(provider, model) {
 
 function _supportsFastSpeed(provider, model) {
   const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
-  if (provider === 'anthropic') return /^claude-opus-4-(?:7|8)(?:-|$)/.test(name);
+  // Fast mode is Claude Opus 5 / Opus 4.8 only (removed on Opus 4.7).
+  if (provider === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
   if (provider === 'openai' || provider === 'openai_codex') return /^(?:gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   return false;
 }
@@ -2215,7 +2216,7 @@ function _supportsAnthropicEffort(model) {
 }
 
 function _supportsAnthropicXHigh(model) {
-  return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(String(model || ''));
+  return _documentedReasoningCapability('anthropic', model).efforts.includes('xhigh');
 }
 
 function _effortLevelsForProvider(provider, model) {
@@ -3456,7 +3457,7 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };

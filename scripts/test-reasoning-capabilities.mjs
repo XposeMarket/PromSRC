@@ -30,11 +30,16 @@ assert.equal(normalizeReasoningEffort('openai', 'gpt-5', 'none'), 'low');
 assert.deepEqual(efforts('openai', 'gpt-4.1'), []);
 assert.deepEqual(efforts('openai', 'o3'), ['low', 'medium', 'high']);
 
+assert.deepEqual(efforts('anthropic', 'claude-opus-5'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(efforts('anthropic', 'claude-fable-5-1'), ['low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(efforts('anthropic', 'claude-fable-5'), ['low', 'medium', 'high', 'xhigh', 'max']);
 assert.deepEqual(efforts('anthropic', 'claude-opus-4-8'), ['low', 'medium', 'high', 'xhigh', 'max']);
 assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-6'), ['low', 'medium', 'high', 'max']);
 assert.deepEqual(efforts('anthropic', 'claude-opus-4-5'), ['low', 'medium', 'high']);
 assert.deepEqual(efforts('anthropic', 'claude-haiku-4-5-20251001'), []);
 assert.equal(getReasoningCapability('anthropic', 'claude-opus-4-8').thinkingMode, 'adaptive');
+assert.equal(getReasoningCapability('anthropic', 'claude-opus-5').thinkingMode, 'adaptive');
+assert.equal(getReasoningCapability('anthropic', 'claude-fable-5-1').thinkingMode, 'adaptive');
 assert.equal(getReasoningCapability('anthropic', 'claude-haiku-4-5-20251001').thinkingMode, 'manual');
 assert.deepEqual(efforts('perplexity', 'sonar-reasoning-pro'), ['low', 'medium', 'high']);
 assert.deepEqual(efforts('xai', 'grok-4.20-multi-agent'), ['low', 'medium', 'high', 'xhigh']);
@@ -50,7 +55,11 @@ for (const provider of ['openai', 'openai_codex', 'anthropic', 'perplexity', 'xa
 assert.equal(supportsFastSpeed('openai', 'gpt-5.5'), true);
 assert.equal(supportsFastSpeed('openai_codex', 'gpt-5.6-luna'), true);
 assert.equal(supportsFastSpeed('openai', 'gpt-5.4-nano'), false);
+assert.equal(supportsFastSpeed('anthropic', 'claude-opus-5'), true);
 assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-8'), true);
+// Fast mode was removed on Opus 4.7, and never existed on Fable.
+assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-7'), false);
+assert.equal(supportsFastSpeed('anthropic', 'claude-fable-5-1'), false);
 assert.equal(supportsFastSpeed('anthropic', 'claude-opus-4-6'), false);
 assert.equal(normalizeSpeed('openai', 'gpt-5.4-nano', 'fast'), 'standard');
 assert.equal(normalizeSpeed('openai_codex', 'gpt-5.6-luna', 'fast'), 'fast');

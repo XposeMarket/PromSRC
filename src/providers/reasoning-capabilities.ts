@@ -65,13 +65,13 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   }
 
   if (id === 'anthropic') {
-    const effortCapable = /^claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?:-|$)/.test(name);
+    const effortCapable = /^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name);
     if (!effortCapable) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
       return { efforts: [], thinkingMode: manual ? 'manual' : undefined };
     }
     const efforts = [...CLAUDE_BASE];
-    if (/^claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
+    if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
     const thinkingMode = /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive';
     return { efforts, defaultEffort: 'high', thinkingMode };
@@ -102,7 +102,9 @@ export function normalizeReasoningEffort(provider: string, model: string, value:
 export function supportsFastSpeed(provider: string, model: string): boolean {
   const id = String(provider || '').trim().toLowerCase();
   const name = slug(model);
-  if (id === 'anthropic') return /^claude-opus-4-(?:7|8)(?:-|$)/.test(name);
+  // Fast mode is Claude Opus 5 / Opus 4.8 only. It was removed on Opus 4.7 -
+  // sending speed: 'fast' there now errors - so 4.7 must not be listed here.
+  if (id === 'anthropic') return /^claude-opus-(?:5|4-8)(?:-|$)/.test(name);
   if (id === 'openai' || id === 'openai_codex') {
     return /^(?:gpt-6-astra|gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
   }

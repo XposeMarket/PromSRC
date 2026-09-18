@@ -19,7 +19,7 @@ import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js'
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
-import { effortOptions, validEffort, supportsFastSpeed } from '../reasoning-capabilities.js';
+import { effortOptions, validEffort, supportsFastSpeed, reasoningCapability } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
 
 // SettingsPage is an ES module, so an unqualified `addProcessEntry` lookup
@@ -1088,7 +1088,7 @@ const ACCOUNT_AWARE_PROVIDER_IDS = new Set(['openai', 'xai', 'openai_codex', 'an
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
   openai: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };
@@ -2825,14 +2825,11 @@ async function disconnectAnthropic() {
 }
 
 function isAnthropicAdaptiveThinkingModel(model) {
-  return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(String(model || ''))
-    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''));
+  return reasoningCapability('anthropic', model).thinkingMode === 'adaptive';
 }
 
 function supportsAnthropicEffort(model) {
-  return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(String(model || ''))
-    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''))
-    || /^claude-mythos-preview(?:\b|[-_])/.test(String(model || ''));
+  return reasoningCapability('anthropic', model).efforts.length > 0;
 }
 
 function syncAnthropicReasoningControls() {
@@ -2842,7 +2839,7 @@ function syncAnthropicReasoningControls() {
     effort.disabled = !!model && !supportsAnthropicEffort(model);
     const xhighOption = Array.from(effort.options || []).find((opt) => opt.value === 'xhigh');
     if (xhighOption) {
-      const supportsXHigh = /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
+      const supportsXHigh = reasoningCapability('anthropic', model).efforts.includes('xhigh');
       xhighOption.disabled = !!model && !supportsXHigh;
       if (xhighOption.disabled && effort.value === 'xhigh') effort.value = 'high';
     }
@@ -4589,7 +4586,7 @@ async function loadAgentModelOptions(preserveSelected = false) {
   const STATIC_MODEL_FALLBACKS = {
     openai:       ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
     openai_codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-    anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
   };
@@ -6010,7 +6007,7 @@ const AMD_SLOTS = {
 const AMD_STATIC_MODELS = {
   openai:       ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
-  anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
 };

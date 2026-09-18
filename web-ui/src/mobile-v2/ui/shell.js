@@ -1,5 +1,6 @@
 import { ICONS } from './icons.js';
 import { attachMobileV2HapticGestureSurface, mobileV2Haptic } from './haptics.js';
+import { attachMobileV2ModelBadge } from './model-badge.js';
 import { sessionRef } from '../core/gateway-manager.js';
 
 const ACTIVE_TAB_KEY = 'pm_mobile_v2_active_tab';
@@ -251,12 +252,14 @@ function wireLiquidTabbar(tabbar, { navigate, getActiveTab }) {
   return disposeHaptic;
 }
 
-export function createMobileV2Shell({ root, gateways }) {
+export function createMobileV2Shell({ root, gateways, features }) {
   let navigate = () => {};
   let drawerOpen = false;
   let activeTab = readLastTab() || 'chat';
   let sessions = [];
   let disposed = false;
+  let currentModelLabel = 'Online';
+  let modelBadgeController = null;
 
   root.innerHTML = `<div class="pm-app pm-v2-app" id="pm-v2-app">
     <section class="pm-drawer pm-v2-drawer" id="pm-v2-drawer" aria-hidden="true">
@@ -268,18 +271,59 @@ export function createMobileV2Shell({ root, gateways }) {
       <div class="pm-v2-drawer-label pm-v2-nav-label">Prometheus</div>
       <nav class="pm-drawer-list pm-v2-drawer-nav" aria-label="Prometheus sections">${DRAWER_ITEMS.map((item) => `<button class="pm-drawer-item pm-v2-drawer-item" type="button" data-drawer-route="${item.id}"><span class="pm-flex"><span class="pm-v2-drawer-icon">${ICONS[item.icon]}</span><span>${item.label}</span></span><span class="pm-v2-session-chevron">${ICONS.chevron}</span></button>`).join('')}</nav>
     </section>
-    <div class="pm-page pm-v2-page" id="pm-v2-page"><header class="pm-header pm-v2-header"><button class="pm-icon-btn pm-v2-menu" type="button" aria-label="Open menu">${ICONS.menu}</button><div class="pm-v2-header-center"><div class="pm-v2-brand">Prometheus</div></div><button class="pm-online pm-v2-status" id="pm-v2-status" type="button"><span class="pm-v2-status-dot"></span><span>Checking</span></button></header><main class="pm-body pm-v2-body" id="pm-v2-page-slot"></main></div>
+    <div class="pm-page pm-v2-page" id="pm-v2-page"><div class="pm-v2-header-slot" id="pm-v2-header-slot"></div><main class="pm-body pm-v2-body" id="pm-v2-page-slot"></main></div>
     <nav class="pm-tabbar pm-v2-tabbar" id="pm-v2-tabbar" role="tablist" aria-label="Primary navigation"><span class="pm-tabbar-sheen" aria-hidden="true"></span><span class="pm-glass-lens" aria-hidden="true"></span><span class="pm-glass-border" aria-hidden="true"></span><span class="pm-tab-indicator" aria-hidden="true"></span>${TABS.map((tab) => `<button class="pm-tab${tab.id === activeTab ? ' active' : ''}" type="button" data-tab="${tab.id}" role="tab" aria-label="${tab.label}" aria-selected="${String(tab.id === activeTab)}">${ICONS[tab.icon]}<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1"></button>`).join('')}<div class="pm-tab-magnify" aria-hidden="true">${TABS.map((tab) => `<div class="pm-tab-magnify-cell">${ICONS[tab.icon]}</div>`).join('')}</div></nav>
     <div class="pm-v2-notice" id="pm-v2-notice" hidden></div>
   </div>`;
 
   const page = root.querySelector('#pm-v2-page-slot');
+  const headerSlot = root.querySelector('#pm-v2-header-slot');
   const drawer = root.querySelector('#pm-v2-drawer');
   const list = root.querySelector('#pm-v2-session-list');
   const tabbar = root.querySelector('#pm-v2-tabbar');
-  const status = root.querySelector('#pm-v2-status');
+  let status = null;
   const notice = root.querySelector('#pm-v2-notice');
   const gatewayStrip = root.querySelector('[data-v2-gateway-strip]');
+
+  function renderHeader(options = {}) {
+    const { leftIcon = 'menu', rightActions = '', backRoute = 'chat', showStatus = true } = options;
+    if (typeof options.modelLabel === 'string' && options.modelLabel.trim()) currentModelLabel = options.modelLabel.trim();
+    const leftAction = leftIcon === 'back' ? 'back' : 'menu';
+    const leftLabel = leftAction === 'back' ? 'Back' : 'Menu';
+    const leftSvg = leftAction === 'back' ? ICONS.back : ICONS.menu;
+    const settingsButton = `<button class="pm-icon-btn" type="button" data-action="settings" aria-label="More">${ICONS.dots}</button>`;
+    const extras = String(rightActions || '').trim();
+    const actions = extras
+      ? `<span class="pm-header-action-cluster">${extras}${settingsButton}</span>`
+      : settingsButton;
+    headerSlot.innerHTML = `<header class="pm-header pm-v2-header">
+      <button class="pm-icon-btn" type="button" data-v2-header-left="${leftAction}" data-v2-back-route="${escapeHtml(backRoute)}" aria-label="${leftLabel}">${leftSvg}</button>
+      ${showStatus ? `<button class="pm-online pm-model-badge pm-v2-status" id="pm-v2-status" type="button" aria-label="Current model — tap for reasoning, hold to switch model">
+        <span class="pm-v2-status-dot" aria-hidden="true"></span><span class="pm-model-speed-icon" data-model-fast aria-label="Fast mode" title="Fast mode" hidden>⚡</span><span data-model-label>${escapeHtml(currentModelLabel)}</span><input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+      </button>` : ''}
+      <div class="pm-header-actions">${actions}</div>
+    </header>`;
+    modelBadgeController?.dispose();
+    status = headerSlot.querySelector('#pm-v2-status');
+    modelBadgeController = status ? attachMobileV2ModelBadge({
+      badge: status,
+      gateways,
+      sessionRef: readActiveSessionRef,
+      onModelLabel: setModelLabel,
+    }) : null;
+    headerSlot.querySelector('[data-v2-header-left]')?.addEventListener('click', (event) => {
+      const button = event.currentTarget;
+      if (button.dataset.v2HeaderLeft === 'back') navigate(button.dataset.v2BackRoute || 'chat');
+      else setDrawer(true);
+    });
+    headerSlot.querySelector('[data-action="settings"]')?.addEventListener('click', () => navigate('settings'));
+    headerSlot.querySelector('[data-action="new-chat"]')?.addEventListener('click', () => newChat());
+    headerSlot.querySelectorAll('[data-v2-header-route]').forEach((button) => {
+      button.addEventListener('click', () => navigate(button.dataset.v2HeaderRoute));
+    });
+  }
+
+  renderHeader();
 
   const disposeSlider = wireLiquidTabbar(tabbar, {
     navigate: (route) => navigate(route),
@@ -344,6 +388,7 @@ export function createMobileV2Shell({ root, gateways }) {
     const id = `mobile_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     try {
       await gateway.createSession({ id, title: 'New Chat' });
+      await modelBadgeController?.applyDraftToSession?.(gateway, id).catch(() => {});
       const ref = gateways.bindSession(id, gateway.id) || sessionRef(gateway.id, id);
       try { localStorage.setItem(ACTIVE_SESSION_KEY, ref); } catch {}
       setDrawer(false);
@@ -357,9 +402,29 @@ export function createMobileV2Shell({ root, gateways }) {
   async function refreshStatus() {
     const entry = await gateways.probe(gateways.activeId);
     if (disposed || !entry) return;
-    status.classList.toggle('offline', entry.status !== 'online');
-    status.lastElementChild.textContent = entry.status === 'online' ? entry.name : (entry.status === 'revoked' ? 'Reconnect' : 'Offline');
+    if (status) {
+      status.classList.toggle('offline', entry.status !== 'online');
+      const label = status.querySelector('[data-model-label]');
+      if (label) label.textContent = entry.status === 'online' ? currentModelLabel : (entry.status === 'revoked' ? 'Reconnect' : 'Offline');
+    }
     refreshGatewayStrip();
+  }
+
+  async function refreshModelLabel() {
+    if (typeof features?.status !== 'function') return;
+    try {
+      const payload = await features.status();
+      if (disposed) return;
+      const next = String(payload?.actualModel || payload?.currentModel || payload?.configuredModel || '').trim();
+      if (next) setModelLabel(next);
+    } catch {}
+  }
+
+  function setModelLabel(value) {
+    currentModelLabel = String(value || '').trim() || 'Online';
+    const label = status?.querySelector('[data-model-label]');
+    const entry = gateways.activeEntry;
+    if (label && entry?.status !== 'offline' && entry?.status !== 'revoked') label.textContent = currentModelLabel;
   }
 
   function showNotice(message) {
@@ -370,11 +435,9 @@ export function createMobileV2Shell({ root, gateways }) {
     }, 6000);
   }
 
-  root.querySelector('.pm-v2-menu')?.addEventListener('click', () => setDrawer(true));
   root.querySelector('.pm-v2-drawer-close')?.addEventListener('click', () => setDrawer(false));
   root.querySelector('.pm-v2-new-chat')?.addEventListener('click', newChat);
   root.querySelector('[data-v2-connections]')?.addEventListener('click', () => { setDrawer(false); navigate('gateways'); });
-  status?.addEventListener('click', () => navigate('gateways'));
   list?.addEventListener('click', (event) => {
     const row = event.target.closest('[data-session-ref]');
     if (!row) return;
@@ -410,6 +473,7 @@ export function createMobileV2Shell({ root, gateways }) {
     positionTabIndicator(tabbar, activeTab, { animate: false });
   });
   refreshStatus();
+  refreshModelLabel();
 
   return {
     page,
@@ -420,13 +484,20 @@ export function createMobileV2Shell({ root, gateways }) {
     setDrawer,
     refreshSessions,
     refreshStatus,
+    setModelLabel,
     showNotice,
     setTitle(title) {
-      const brand = root.querySelector('.pm-v2-brand');
-      if (brand) brand.textContent = title || 'Prometheus';
+      if (title) root.dataset.routeTitle = String(title);
+    },
+    renderHeader,
+    setPageMode(mode) {
+      page.classList.toggle('is-v2-chat', mode === 'chat');
+      page.classList.toggle('is-v2-voice', mode === 'voice');
+      page.classList.toggle('pm-chat-body', mode === 'chat');
     },
     dispose() {
       disposed = true;
+      modelBadgeController?.dispose();
       disposeSlider?.();
       gateways.removeEventListener('change', refreshStatus);
     },

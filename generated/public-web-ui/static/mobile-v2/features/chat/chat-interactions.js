@@ -56,8 +56,8 @@ function answerFor(question, itemId) {
   return (Array.isArray(question.answers) ? question.answers : []).find((answer) => String(answer?.id || '') === String(itemId || '')) || {};
 }
 
-function questionItemMarkup(question, item, cardDisabled) {
-  const answer = answerFor(question, item.id);
+function questionItemMarkup(question, item, cardDisabled, answerOverride = null) {
+  const answer = answerOverride || answerFor(question, item.id);
   const selected = new Set(Array.isArray(answer.selected) ? answer.selected.map(String) : []);
   const base = `${question.id}:${item.id}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   const disabled = cardDisabled ? ' disabled' : '';
@@ -95,10 +95,58 @@ function questionMarkup(input) {
   </section>`;
 }
 
+export function questionDraftStorageKey(gatewayId, sessionId, questionId) {
+  return `pm_mobile_v2_question_draft:${encodeURIComponent(String(gatewayId || ''))}:${encodeURIComponent(String(sessionId || ''))}:${encodeURIComponent(String(questionId || ''))}`;
+}
+
+function readQuestionDraft(question, storageKey) {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); } catch {}
+  const answers = Array.isArray(saved?.answers) ? saved.answers : question.answers;
+  const payload = buildQuestionAnswerPayload(question, { answers, generalOther: saved?.generalOther ?? question.generalOther });
+  const requested = Number(saved?.index ?? question.currentIndex ?? 0);
+  const index = Math.max(0, Math.min(question.questions.length - 1, Number.isFinite(requested) ? Math.floor(requested) : 0));
+  return { index, answers: payload.answers, generalOther: payload.generalOther };
+}
+
+function questionStepMarkup(question, draft, disabled = false) {
+  if (!question.id || !question.questions.length) return '';
+  const index = Math.max(0, Math.min(question.questions.length - 1, Number(draft.index) || 0));
+  const item = question.questions[index];
+  const answer = draft.answers.find((candidate) => candidate.id === item.id) || {};
+  const fieldset = questionItemMarkup(question, item, disabled, answer);
+  const actions = index < question.questions.length - 1
+    ? `<button type="button" data-v2-question-action="next"${disabled ? ' disabled' : ''}>Next question</button>`
+    : `<button type="button" class="primary" data-v2-question-action="submit"${disabled ? ' disabled' : ''}>Submit answer</button>`;
+  return `<section class="pm-v2-interaction-card pm-v2-question-card pm-v2-question-step" data-v2-question-id="${escapeHtml(question.id)}" data-v2-question-step="${index}">
+    <div class="pm-v2-question-progress"><span>Question ${index + 1} of ${question.questions.length}</span><span>${Math.round(((index + 1) / question.questions.length) * 100)}%</span></div>
+    <div class="pm-v2-question-progress-track" aria-hidden="true"><span style="width:${((index + 1) / question.questions.length) * 100}%"></span></div>
+    <strong class="pm-v2-interaction-title">${escapeHtml(question.title || 'Prometheus question')}</strong>
+    ${question.prompt ? `<div class="pm-v2-interaction-detail">${escapeHtml(question.prompt)}</div>` : ''}
+    ${question.context ? `<div class="pm-v2-question-context">${escapeHtml(question.context)}</div>` : ''}
+    <div class="pm-v2-question-items">${fieldset}</div>
+    ${question.allowGeneralOther ? `<textarea rows="2" class="pm-v2-question-general" data-v2-question-general placeholder="Anything else? (optional)"${disabled ? ' disabled' : ''}>${escapeHtml(draft.generalOther || '')}</textarea>` : ''}
+    <div class="pm-v2-interaction-actions"><button type="button" data-v2-question-action="cancel"${disabled ? ' disabled' : ''}>Cancel</button>${actions}</div>
+  </section>`;
+}
+
+export function pendingQuestionFromMessages(messages = []) {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const questions = Array.isArray(messages[messageIndex]?.questions) ? messages[messageIndex].questions : [];
+    for (let questionIndex = questions.length - 1; questionIndex >= 0; questionIndex -= 1) {
+      const question = normalizeQuestionRecord(questions[questionIndex]);
+      if (question.id && !questionTerminal(question.status) && question.questions.length) return question;
+    }
+  }
+  return null;
+}
+
 export function renderChatInteractions(message) {
   if (!message || message.role === 'user') return '';
   const approvals = (Array.isArray(message.approvals) ? message.approvals : []).map(approvalMarkup).join('');
-  const questions = (Array.isArray(message.questions) ? message.questions : []).map(questionMarkup).join('');
+  const questions = (Array.isArray(message.questions) ? message.questions : [])
+    .filter((question) => questionTerminal(question?.status))
+    .map(questionMarkup).join('');
   if (!approvals && !questions) return '';
   return `<div class="pm-v2-chat-interactions">${approvals}${questions}</div>`;
 }
@@ -128,29 +176,43 @@ function setCardBusy(card, busy) {
   card?.querySelectorAll('button,input,textarea').forEach((control) => { control.disabled = !!busy; });
 }
 
-function collectQuestionPayload(card, rawQuestion) {
-  const question = normalizeQuestionRecord(rawQuestion || {});
-  const answers = question.questions.map((item) => {
-    const field = [...card.querySelectorAll('[data-v2-question-item-id]')]
-      .find((node) => node.dataset.v2QuestionItemId === item.id);
-    const selected = field
+function captureCurrentQuestionAnswer(card, question, previousDraft) {
+  const index = Math.max(0, Math.min(question.questions.length - 1, Number(card?.dataset.v2QuestionStep) || 0));
+  const item = question.questions[index];
+  const field = [...(card?.querySelectorAll('[data-v2-question-item-id]') || [])]
+    .find((node) => node.dataset.v2QuestionItemId === item?.id);
+  const answers = buildQuestionAnswerPayload(question, { answers: previousDraft.answers }).answers;
+  const answer = answers.find((candidate) => candidate.id === item?.id);
+  if (answer) {
+    answer.selected = field
       ? [...field.querySelectorAll('[data-v2-question-choice]:checked')].map((input) => String(input.value || '').trim()).filter(Boolean)
-      : [];
-    return {
-      id: item.id,
-      selected,
-      text: String(field?.querySelector('[data-v2-question-text]')?.value || '').trim(),
-      other: String(field?.querySelector('[data-v2-question-other]')?.value || '').trim(),
-    };
-  });
-  return buildQuestionAnswerPayload(question, {
+      : answer.selected;
+    answer.text = String(field?.querySelector('[data-v2-question-text]')?.value || answer.text || '').trim();
+    answer.other = String(field?.querySelector('[data-v2-question-other]')?.value || answer.other || '').trim();
+  }
+  return {
+    index,
     answers,
-    generalOther: String(card.querySelector('[data-v2-question-general]')?.value || '').trim(),
-  });
+    generalOther: String(card?.querySelector('[data-v2-question-general]')?.value ?? previousDraft.generalOther ?? '').trim(),
+  };
+}
+
+function saveQuestionDraft(question, storageKey, draft) {
+  try { sessionStorage.setItem(storageKey, JSON.stringify(draft)); } catch {}
+  return draft;
+}
+
+function questionAnswerIsMissing(item, answer) {
+  if (item?.required === false) return false;
+  return !(Array.isArray(answer?.selected) && answer.selected.length)
+    && !String(answer?.text || '').trim()
+    && !String(answer?.other || '').trim();
 }
 
 export function attachChatInteractionHandlers({
   thread,
+  questionHost,
+  questionStorageKey,
   gateway,
   chatStore,
   gatewayId,
@@ -160,6 +222,25 @@ export function attachChatInteractionHandlers({
 }) {
   if (!thread) return () => {};
   let disposed = false;
+
+  function syncQuestionHost() {
+    if (!questionHost) return;
+    const question = pendingQuestionFromMessages(chatStore.get(gatewayId, sessionId).messages);
+    if (!question) {
+      questionHost.hidden = true;
+      questionHost.innerHTML = '';
+      questionHost.removeAttribute('data-question-id');
+      return;
+    }
+    const storageKey = questionStorageKey?.(question.id) || questionDraftStorageKey(gatewayId, sessionId, question.id);
+    const draft = readQuestionDraft(question, storageKey);
+    if (questionHost.dataset.questionId === question.id
+      && Number(questionHost.dataset.questionStep) === draft.index) return;
+    questionHost.innerHTML = questionStepMarkup(question, draft);
+    questionHost.hidden = false;
+    questionHost.dataset.questionId = question.id;
+    questionHost.dataset.questionStep = String(draft.index);
+  }
 
   async function handleApproval(button) {
     const card = button.closest('[data-v2-approval-id]');
@@ -189,6 +270,26 @@ export function attachChatInteractionHandlers({
     if (!id || !card || !action) return;
     const raw = findInteraction(chatStore, gatewayId, sessionId, 'question', id);
     if (!raw) return;
+    const question = normalizeQuestionRecord(raw);
+    const storageKey = questionStorageKey?.(id) || questionDraftStorageKey(gatewayId, sessionId, id);
+    const draft = captureCurrentQuestionAnswer(card, question, readQuestionDraft(question, storageKey));
+    saveQuestionDraft(question, storageKey, draft);
+    if (action === 'next') {
+      const item = question.questions[draft.index];
+      const answer = draft.answers.find((candidate) => candidate.id === item?.id);
+      if (questionAnswerIsMissing(item, answer)) {
+        showNotice?.(`Please answer: ${item?.label || 'this question'}`);
+        return;
+      }
+      draft.index = Math.min(question.questions.length - 1, draft.index + 1);
+      saveQuestionDraft(question, storageKey, draft);
+      questionHost.innerHTML = questionStepMarkup(question, draft);
+      questionHost.hidden = false;
+      questionHost.dataset.questionId = question.id;
+      questionHost.dataset.questionStep = String(draft.index);
+      requestAnimationFrame(() => questionHost.querySelector('[data-v2-question-choice], [data-v2-question-text], [data-v2-question-other]')?.focus({ preventScroll: true }));
+      return;
+    }
     setCardBusy(card, true);
     try {
       if (action === 'cancel') {
@@ -197,15 +298,20 @@ export function attachChatInteractionHandlers({
           ...(result?.question || {}),
           status: result?.question?.status || 'cancelled',
         });
+        try { sessionStorage.removeItem(storageKey); } catch {}
         showNotice?.('Question cancelled.');
         return;
       }
 
-      const question = normalizeQuestionRecord(raw);
-      const payload = collectQuestionPayload(card, question);
+      const payload = buildQuestionAnswerPayload(question, draft);
       const missing = getMissingQuestionAnswers(question, payload);
       if (missing.length) {
-        setCardBusy(card, false);
+        draft.index = Math.max(0, question.questions.findIndex((item) => item.id === missing[0].id));
+        saveQuestionDraft(question, storageKey, draft);
+        questionHost.innerHTML = questionStepMarkup(question, draft);
+        questionHost.hidden = false;
+        questionHost.dataset.questionId = question.id;
+        questionHost.dataset.questionStep = String(draft.index);
         showNotice?.(`Please answer: ${missing.map((item) => item.label).join('; ')}`);
         return;
       }
@@ -217,8 +323,9 @@ export function attachChatInteractionHandlers({
         ...(result?.question || {}),
         answers: payload.answers,
         generalOther: payload.generalOther,
-        status: result?.question?.status || 'answered',
+        status: questionTerminal(result?.question?.status) ? result.question.status : 'answered',
       });
+      try { sessionStorage.removeItem(storageKey); } catch {}
       showNotice?.('Answer submitted.');
       if (result?.resumePrompt) await onResumePrompt?.(String(result.resumePrompt));
     } catch (error) {
@@ -242,9 +349,30 @@ export function attachChatInteractionHandlers({
     }
   };
 
+  const onQuestionEdit = (event) => {
+    if (disposed || !questionHost) return;
+    const card = event.target.closest('[data-v2-question-id]');
+    if (!card) return;
+    const id = String(card.dataset.v2QuestionId || '');
+    const raw = findInteraction(chatStore, gatewayId, sessionId, 'question', id);
+    if (!raw) return;
+    const question = normalizeQuestionRecord(raw);
+    const storageKey = questionStorageKey?.(id) || questionDraftStorageKey(gatewayId, sessionId, id);
+    saveQuestionDraft(question, storageKey, captureCurrentQuestionAnswer(card, question, readQuestionDraft(question, storageKey)));
+  };
+
   thread.addEventListener('click', onClick);
+  questionHost?.addEventListener('click', onClick);
+  questionHost?.addEventListener('input', onQuestionEdit);
+  questionHost?.addEventListener('change', onQuestionEdit);
+  const unsubscribe = chatStore.subscribe(gatewayId, sessionId, syncQuestionHost);
+  syncQuestionHost();
   return () => {
     disposed = true;
     thread.removeEventListener('click', onClick);
+    questionHost?.removeEventListener('click', onClick);
+    questionHost?.removeEventListener('input', onQuestionEdit);
+    questionHost?.removeEventListener('change', onQuestionEdit);
+    unsubscribe();
   };
 }

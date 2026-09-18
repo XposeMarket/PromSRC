@@ -159,7 +159,7 @@ assert.match(html, /manifest-v2\.webmanifest/);
 assert.match(pwa, /service-worker-v2\.js/);
 assert.match(pwa, /scope:\s*['"]\/mobile-v2\//);
 assert.match(theme, /Prometheus One/);
-assert.match(theme, /base:\s*['"]light['"]/);
+assert.match(theme, /id:\s*['"]dark['"],\s*label:\s*['"]Prometheus One['"],\s*base:\s*['"]dark['"]/);
 assert.match(haptics, /input\.setAttribute\(['"]switch['"]/);
 assert.match(manifestV2, /"id"\s*:\s*"\/mobile-v2\/"/);
 assert.match(manifestV2, /"start_url"\s*:\s*"\/mobile-v2\/chat"/);

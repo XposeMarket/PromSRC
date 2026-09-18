@@ -35,7 +35,9 @@ const ANTHROPIC_MIN_CACHE_CHARS = 3500;
 
 // Models available via Anthropic
 export const ANTHROPIC_MODELS = [
+  'claude-fable-5-1',
   'claude-fable-5',
+  'claude-opus-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-opus-4-6',
@@ -80,24 +82,29 @@ export class AnthropicAdapter implements LLMProvider {
 
   private isAdaptiveThinkingCapableModel(model: string): boolean {
     return /^claude-fable-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-5(?:\b|[-_])/.test(model)
       || /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model)
       || /^claude-sonnet-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model);
   }
 
   private supportsXHighEffort(model: string): boolean {
-    return /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model);
+    return /^claude-fable-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-4-(7|8)(?:\b|[-_])/.test(model)
+      || /^claude-sonnet-5(?:\b|[-_])/.test(model);
   }
 
   // Claude Fast Mode (Messages API `speed: 'fast'`) — faster output on the same
-  // model, no intelligence downgrade. Supported on Opus 4.6/4.7/4.8 only; sending
-  // it to other models 400s, so gate strictly.
+  // model, no intelligence downgrade. Supported on Opus 5 and Opus 4.8 only
+  // (it was removed on Opus 4.7); sending it elsewhere errors, so gate strictly.
   private isFastModeCapableModel(model: string): boolean {
     return supportsFastSpeed('anthropic', model);
   }
 
   private supportsEffort(model: string): boolean {
     return /^claude-fable-5(?:\b|[-_])/.test(model)
+      || /^claude-opus-5(?:\b|[-_])/.test(model)
       || /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(model)
       || /^claude-sonnet-5(?:\b|[-_])/.test(model)
       || /^claude-sonnet-4-6(?:\b|[-_])/.test(model)
@@ -109,7 +116,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
-    if (/^(claude-fable-5|claude-opus-4-(?:6|7|8)|claude-sonnet-(?:5|4-6))(?:\b|[-_])/.test(name)) {
+    if (/^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6))(?:\b|[-_])/.test(name)) {
       return {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 128_000,
@@ -744,6 +751,8 @@ export class AnthropicAdapter implements LLMProvider {
     let outputTokens = 0;
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
+    let stopReason: unknown;
+    let stopDetails: any;
     // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
@@ -769,6 +778,11 @@ export class AnthropicAdapter implements LLMProvider {
               inputTokens = Number(usage.input_tokens || inputTokens || 0);
               cacheReadTokens = Number(usage.cache_read_input_tokens || cacheReadTokens || 0);
               cacheWriteTokens = Number(usage.cache_creation_input_tokens || cacheWriteTokens || 0);
+            }
+
+            if (type === 'message_delta' && event.delta && 'stop_reason' in event.delta) {
+              stopReason = event.delta.stop_reason;
+              stopDetails = event.delta.stop_details;
             }
 
             if (type === 'message_delta' && event.usage) {
@@ -848,9 +862,12 @@ export class AnthropicAdapter implements LLMProvider {
       reader.releaseLock();
     }
 
+    const refusal = this.refusalText(stopReason, stopDetails);
+    if (refusal && !textContent) options.onToken?.(refusal);
+
     const message: ChatMessage = {
       role:       'assistant',
-      content:    textContent || null,
+      content:    textContent || refusal || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
     return {
@@ -871,6 +888,21 @@ export class AnthropicAdapter implements LLMProvider {
       totalTokens,
       source: 'provider',
     };
+  }
+
+  // Claude Opus 4.7+ (and every 5-series model) can end a turn with
+  // stop_reason: 'refusal' — HTTP 200, but no content. Without this the caller
+  // sees a silently empty assistant turn instead of an explanation.
+  // stop_details is populated ONLY for refusals, so guard before reading it.
+  private refusalText(stopReason: unknown, stopDetails: any): string | undefined {
+    if (String(stopReason || '') !== 'refusal') return undefined;
+    const category = String(stopDetails?.category || '').trim();
+    const explanation = String(stopDetails?.explanation || '').trim();
+    return [
+      'Claude declined this request for safety reasons.',
+      category ? `Category: ${category}.` : '',
+      explanation,
+    ].filter(Boolean).join(' ');
   }
 
   // ─── Parse Anthropic response → ChatResult ──────────────────────────────────
@@ -897,9 +929,11 @@ export class AnthropicAdapter implements LLMProvider {
       }
     }
 
+    const refusal = this.refusalText(data.stop_reason, data.stop_details);
+
     const message: ChatMessage = {
       role:       'assistant',
-      content:    textContent || null,
+      content:    textContent || refusal || null,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 

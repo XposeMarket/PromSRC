@@ -5,6 +5,8 @@ function sessionKey(gatewayId, sessionId) {
 function textFromRecord(record) {
   if (typeof record?.content === 'string') return record.content;
   if (typeof record?.text === 'string') return record.text;
+  if (typeof record?.body?.text === 'string') return record.body.text;
+  if (typeof record?.body?.content === 'string') return record.body.content;
   if (Array.isArray(record?.content)) {
     return record.content.map((part) => typeof part === 'string' ? part : (part?.text || '')).join('');
   }
@@ -42,18 +44,87 @@ function upsertInteraction(list, record, kind) {
   return index >= 0 ? list[index] : list[list.length - 1];
 }
 
+function mergeHistoryInteractions(target, incoming) {
+  for (const approval of incoming.approvals || []) upsertInteraction(target.approvals, approval, 'approval');
+  for (const question of incoming.questions || []) upsertInteraction(target.questions, question, 'question');
+  for (const key of [
+    'body', 'attachmentPreviews', 'files', 'generatedImages', 'generated_images',
+    'generatedVideos', 'generated_videos', 'richArtifacts', 'artifacts', 'tools',
+    'reasoning', 'liveTraceEntries', 'processEntries', 'voiceWorkgroup',
+    'goalCompletionReport', 'fileChanges', 'backgroundWork', 'backgroundAgents',
+  ]) {
+    if (incoming[key] !== undefined) target[key] = incoming[key];
+  }
+}
+
+function dedupeAssistantHistory(messages) {
+  const result = [];
+  const byId = new Map();
+  const assistantTextByTurn = new Map();
+  let turn = 0;
+
+  for (const message of messages) {
+    const identity = `${message.role}:${message.id}`;
+    const sameId = byId.get(identity);
+    if (sameId) {
+      mergeHistoryInteractions(sameId, message);
+      continue;
+    }
+
+    if (message.role === 'user') {
+      turn += 1;
+      result.push(message);
+      byId.set(identity, message);
+      continue;
+    }
+
+    const contentKey = String(message.text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const duplicate = contentKey ? assistantTextByTurn.get(`${turn}:${contentKey}`) : null;
+    if (duplicate) {
+      mergeHistoryInteractions(duplicate, message);
+      continue;
+    }
+
+    result.push(message);
+    byId.set(identity, message);
+    if (contentKey) assistantTextByTurn.set(`${turn}:${contentKey}`, message);
+  }
+
+  return result;
+}
+
 function normalizeHistory(history = []) {
-  return (Array.isArray(history) ? history : []).map((record, index) => ({
-    id: String(record?.id || record?.messageId || record?.turnId || `history-${index}`),
-    role: record?.role === 'user' ? 'user' : 'assistant',
-    text: textFromRecord(record),
-    createdAt: Number(record?.createdAt || record?.timestamp || Date.now()),
-    status: 'done',
-    reasoning: '',
-    tools: [],
-    approvals: normalizeInteractionList(record?.approvals, 'approval'),
-    questions: normalizeInteractionList(record?.questions, 'question'),
-  })).filter((message) => message.text || message.role === 'assistant' || message.approvals.length || message.questions.length);
+  const messages = (Array.isArray(history) ? history : []).flatMap((record, index) => {
+    const text = textFromRecord(record);
+    const role = record?.role === 'user' ? 'user' : 'assistant';
+    const label = String(record?.channelLabel || record?.channel || record?.source || '').trim().toLowerCase();
+    const messageKind = String(record?.messageKind || '').trim().toLowerCase();
+    const internalRestartPacket = /^Restart Context Packet\b/i.test(text) && !Array.isArray(record?.fileChanges?.files);
+    const internalRestartCheckpoint = role === 'assistant' && (
+      messageKind === 'restart_checkpoint'
+      || /^\[Hot restart checkpoint: planned by this chat\]/i.test(text)
+    );
+    if (record?.sideChatBoundary === true || label === 'internal_watch' || /^\[Internal watch\b/i.test(text) || internalRestartPacket || internalRestartCheckpoint) return [];
+
+    return [{
+      ...record,
+      id: String(record?.id || record?.messageId || record?.turnId || `history-${index}`),
+      role,
+      text,
+      body: {
+        ...(record?.body && typeof record.body === 'object' ? record.body : {}),
+        text: String(record?.body?.text || text),
+      },
+      createdAt: Number(record?.createdAt || record?.timestamp || Date.now()),
+      status: 'done',
+      reasoning: String(record?.reasoning || ''),
+      tools: Array.isArray(record?.tools) ? record.tools : [],
+      approvals: normalizeInteractionList(record?.approvals || record?.pendingApprovals, 'approval'),
+      questions: normalizeInteractionList(record?.questions || record?.pendingQuestions, 'question'),
+    }];
+  }).filter((message) => message.text || message.role === 'assistant' || message.approvals.length || message.questions.length);
+
+  return dedupeAssistantHistory(messages);
 }
 
 function freshState(gatewayId, sessionId) {
@@ -124,17 +195,22 @@ export class ChatStore {
     return this.mutate(gatewayId, sessionId, (state) => {
       const older = normalizeHistory(page?.items || []);
       const existing = new Set(state.messages.map((message) => message.id));
-      state.messages = [...older.filter((message) => !existing.has(message.id)), ...state.messages];
+      state.messages = dedupeAssistantHistory([...older.filter((message) => !existing.has(message.id)), ...state.messages]);
       const pageInfo = page?.pageInfo || page;
       state.olderCursor = pageInfo?.olderCursor || null;
       state.hasOlder = pageInfo?.hasOlder === true;
     });
   }
 
-  appendUser(gatewayId, sessionId, { id, text }) {
+  appendUser(gatewayId, sessionId, { id, text, attachments = [] }) {
     return this.mutate(gatewayId, sessionId, (state) => {
       state.error = '';
-      state.messages.push({ id, role: 'user', text, createdAt: Date.now(), status: 'done', reasoning: '', tools: [], approvals: [], questions: [] });
+      state.messages.push({
+        id, role: 'user', text,
+        body: { text, attachments: Array.isArray(attachments) ? attachments.map((item) => ({ ...item })) : [] },
+        attachments: Array.isArray(attachments) ? attachments.map((item) => ({ ...item })) : [],
+        createdAt: Date.now(), status: 'done', reasoning: '', tools: [], approvals: [], questions: [],
+      });
     });
   }
 
@@ -196,12 +272,47 @@ export class ChatStore {
       if (!message) return;
       if (!Array.isArray(message.approvals)) message.approvals = [];
       if (!Array.isArray(message.questions)) message.questions = [];
+      if (!Array.isArray(message.events)) message.events = [];
+      const raw = event.raw && typeof event.raw === 'object' ? event.raw : null;
+      const capturePayload = (source) => {
+        if (!source || typeof source !== 'object') return;
+        for (const key of [
+          'richArtifacts', 'artifacts', 'files', 'generatedImages', 'generated_images',
+          'generatedVideos', 'generated_videos', 'voiceWorkgroup', 'voice_workgroup',
+          'goalCompletionReport', 'goal_completion_report', 'fileChanges', 'file_changes',
+          'browseState', 'browse_state', 'actions', 'backgroundWork', 'backgroundAgents',
+          'productCarousel', 'attachmentPreviews', 'attachment_previews', 'image',
+        ]) {
+          if (source[key] !== undefined) message[key] = source[key];
+        }
+      };
+      capturePayload(raw);
+      capturePayload(raw?.extra);
+      let resultPayload = raw?.result;
+      if (typeof resultPayload === 'string') {
+        try { resultPayload = JSON.parse(resultPayload); } catch {}
+      }
+      capturePayload(resultPayload);
+      if (raw && event.type !== 'assistant.delta') {
+        message.events.push({ type: raw.type || event.type, raw });
+        if (message.events.length > 160) message.events.splice(0, message.events.length - 160);
+      }
       if (event.type === 'assistant.delta') message.text += event.text || '';
-      if (event.type === 'reasoning.summary.delta') message.reasoning += event.text || '';
+      if (event.type === 'reasoning.summary.delta') {
+        message.reasoning += event.text || '';
+        if (raw) {
+          if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+          message.liveTraceEntries.push({ type: raw.type || 'reasoning_summary', ...raw });
+          if (message.liveTraceEntries.length > 160) message.liveTraceEntries.splice(0, message.liveTraceEntries.length - 160);
+        }
+      }
       if (event.type === 'tool.activity') {
         const last = message.tools[message.tools.length - 1];
-        if (last && last.name === event.name) Object.assign(last, event);
-        else message.tools.push({ ...event });
+        if (last && last.name === event.name && last.phase === event.phase) Object.assign(last, event);
+        else message.tools.push({ ...event, raw });
+        if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+        message.liveTraceEntries.push({ type: raw?.type || event.phase || 'tool_activity', activity: { kind: 'operation', name: event.name, ...raw }, ...raw });
+        if (message.liveTraceEntries.length > 160) message.liveTraceEntries.splice(0, message.liveTraceEntries.length - 160);
       }
       if (event.type === 'approval.required') {
         upsertInteraction(message.approvals, event.approval || event.raw?.approval || event.raw || {}, 'approval');
@@ -209,6 +320,7 @@ export class ChatStore {
       if (event.type === 'question.required') {
         upsertInteraction(message.questions, event.question || event.raw?.question || event.raw || {}, 'question');
       }
+      if (event.type === 'status' && event.text) message.statusText = String(event.text);
       if (event.type === 'assistant.done') {
         if (event.text && !message.text) message.text = event.text;
         message.status = 'done';
