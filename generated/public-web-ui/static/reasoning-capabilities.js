@@ -33,7 +33,10 @@ export function reasoningCapability(provider, model) {
   if (id === 'anthropic') {
     if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
-      return { efforts: [], thinkingMode: manual ? 'manual' : undefined };
+      // Manual-budget models accept low/medium/high as a thinking-budget hint
+      // (mirrors src/providers/reasoning-capabilities.ts).
+      if (manual) return { efforts: ['low','medium','high'], defaultEffort: 'medium', thinkingMode: 'manual' };
+      return { efforts: [] };
     }
     const efforts = ['low','medium','high'];
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
