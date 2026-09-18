@@ -68,7 +68,15 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
     const effortCapable = /^claude-(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:5|6|7|8))|sonnet-(?:5|4-6))(?:-|$)/.test(name);
     if (!effortCapable) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
-      return { efforts: [], thinkingMode: manual ? 'manual' : undefined };
+      if (manual) {
+        // Manual-budget models have no native `effort` knob, but callers
+        // (background_spawn, task-runner, settings) still pass low/medium/high
+        // as a thinking hint. Accept the base levels so a Sonnet 4.5 / Haiku
+        // 4.5 spawn on "medium" is not rejected outright; the adapter maps
+        // them onto a thinking budget instead of `output_config.effort`.
+        return { efforts: [...CLAUDE_BASE], defaultEffort: 'medium', thinkingMode: 'manual' };
+      }
+      return { efforts: [] };
     }
     const efforts = [...CLAUDE_BASE];
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');

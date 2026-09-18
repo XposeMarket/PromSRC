@@ -43,7 +43,7 @@ export const ANTHROPIC_MODELS = [
   'claude-opus-4-6',
   'claude-sonnet-5',
   'claude-sonnet-4-6',
-  'claude-sonnet-4-5-20250514',
+  'claude-sonnet-4-5-20250929',
   'claude-haiku-4-5-20251001',
   'claude-sonnet-4-20250514',
 ];
@@ -669,7 +669,12 @@ export class AnthropicAdapter implements LLMProvider {
       body.system = [claudeCodePreamble];
     }
 
-    if (effort) {
+    // Only adaptive-thinking models understand `output_config.effort`.
+    // Manual-budget models (Sonnet 4.5, Haiku 4.5, Opus 4.0/4.1) reject it,
+    // so for those we translate effort into a thinking budget below instead.
+    const capability = getReasoningCapability('anthropic', model);
+    const manualThinking = capability.thinkingMode === 'manual';
+    if (effort && !manualThinking) {
       body.output_config = { ...(body.output_config || {}), effort };
     }
 
@@ -683,10 +688,13 @@ export class AnthropicAdapter implements LLMProvider {
     // Claude Opus 4.7+ rejects manual budgets; Claude Opus/Sonnet 4.6 support
     // adaptive thinking and deprecate manual budgets, so prefer adaptive there too.
     if (extendedThinkingEnabled) {
-      if (getReasoningCapability('anthropic', model).thinkingMode === 'adaptive') {
+      if (capability.thinkingMode === 'adaptive') {
         body.thinking = { type: 'adaptive', display: 'summarized' };
       } else {
-        const budget = typeof anthropicCfg.thinking_budget === 'number' ? anthropicCfg.thinking_budget : 10000;
+        const MANUAL_EFFORT_BUDGETS: Record<string, number> = { low: 4000, medium: 10000, high: 24000 };
+        const budget = typeof anthropicCfg.thinking_budget === 'number'
+          ? anthropicCfg.thinking_budget
+          : (manualThinking && effort && MANUAL_EFFORT_BUDGETS[effort]) || 10000;
         body.thinking = { type: 'enabled', budget_tokens: budget };
         body.max_tokens = Math.max(body.max_tokens, budget + 8192);
       }

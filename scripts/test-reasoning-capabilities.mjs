@@ -36,7 +36,17 @@ assert.deepEqual(efforts('anthropic', 'claude-fable-5'), ['low', 'medium', 'high
 assert.deepEqual(efforts('anthropic', 'claude-opus-4-8'), ['low', 'medium', 'high', 'xhigh', 'max']);
 assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-6'), ['low', 'medium', 'high', 'max']);
 assert.deepEqual(efforts('anthropic', 'claude-opus-4-5'), ['low', 'medium', 'high']);
-assert.deepEqual(efforts('anthropic', 'claude-haiku-4-5-20251001'), []);
+// Manual-budget models accept the base levels as a thinking-budget hint so
+// background_spawn / task-runner do not reject "medium" on Sonnet 4.5 / Haiku 4.5.
+assert.deepEqual(efforts('anthropic', 'claude-haiku-4-5-20251001'), ['low', 'medium', 'high']);
+assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-5-20250929'), ['low', 'medium', 'high']);
+assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-5'), ['low', 'medium', 'high']);
+assert.equal(normalizeReasoningEffort('anthropic', 'claude-sonnet-4-5-20250929', 'medium'), 'medium');
+assert.equal(normalizeReasoningEffort('anthropic', 'claude-sonnet-4-5-20250929', 'xhigh'), undefined);
+assert.equal(getReasoningCapability('anthropic', 'claude-sonnet-4-5-20250929').thinkingMode, 'manual');
+assert.deepEqual(reasoningCapability('anthropic', 'claude-sonnet-4-5-20250929'), getReasoningCapability('anthropic', 'claude-sonnet-4-5-20250929'));
+// Sonnet 4 (no 4.5) has neither effort nor manual thinking policy.
+assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-20250514'), []);
 assert.equal(getReasoningCapability('anthropic', 'claude-opus-4-8').thinkingMode, 'adaptive');
 assert.equal(getReasoningCapability('anthropic', 'claude-opus-5').thinkingMode, 'adaptive');
 assert.equal(getReasoningCapability('anthropic', 'claude-fable-5-1').thinkingMode, 'adaptive');
