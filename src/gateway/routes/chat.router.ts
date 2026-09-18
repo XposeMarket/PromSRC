@@ -3579,6 +3579,12 @@ async function handleChat(
   let preflightReasonForTurn = '';
   let continuationNudges = 0;
   const MAX_CONTINUATION_NUDGES = 4;
+  // When the model stops calling tools but also emits an empty/near-empty final
+  // (typically after many rounds of heavy tool-result context), give it one
+  // tools-free retry to write its answer from what it already gathered instead
+  // of surfacing "No final response was generated. Please retry." to the user.
+  let emptyFinalSalvageAttempts = 0;
+  const MAX_EMPTY_FINAL_SALVAGE = 1;
   let setupFinalizationGuard = 0;
   const MAX_SETUP_FINALIZATION_GUARD = 3;
   let planFinalizationGuard = 0;
@@ -8414,7 +8420,47 @@ RULES:
         // user's larger request remains incomplete, and truncated JSON is not a
         // user-facing answer. The provider adapter already retries incomplete
         // Codex streams once; after that, report the missing final explicitly.
-        finalText = 'No final response was generated. Please retry.';
+        if (allToolResults.length > 0 && emptyFinalSalvageAttempts < MAX_EMPTY_FINAL_SALVAGE && !abortSignal?.aborted) {
+          emptyFinalSalvageAttempts += 1;
+          const recentToolSummary = allToolResults
+            .slice(-12)
+            .map((r) => {
+              const status = r.error ? '✗' : '✓';
+              const preview = String(r.result || '').replace(/\s+/g, ' ').slice(0, 160);
+              return `  ${status} ${String(r.name || 'tool')}${preview ? ` — ${preview}` : ''}`;
+            })
+            .join('\n');
+          console.log(
+            `[v2] EMPTY FINAL SALVAGE: model returned an empty final after ${allToolResults.length} tool result(s); requesting a tools-free answer (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE})`,
+          );
+          sendSSE('info', {
+            message: `Post-check: the model finished tool work without writing a reply; asking it to summarize its findings (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE}).`,
+          });
+          messages.push({
+            role: 'user',
+            content: [
+              'Your previous assistant message was empty after completing tool work.',
+              'Do not call any more tools. Write the user-facing reply now using only what you already gathered.',
+              'If the task is unfinished, say concretely what was completed, what remains, and what you would do next.',
+              '',
+              `Tool work this turn (${allToolResults.length} result(s), most recent last):`,
+              recentToolSummary,
+            ].join('\n'),
+          });
+          continue;
+        }
+        if (allToolResults.length > 0) {
+          const okCount = allToolResults.filter((r) => r && !r.error).length;
+          const errCount = allToolResults.length - okCount;
+          const touched = Array.from(new Set(allToolResults.map((r) => String(r?.name || 'tool')))).slice(0, 8).join(', ');
+          finalText = [
+            'I ran out of room to write a full reply this turn, but the work is not lost.',
+            `Completed ${allToolResults.length} tool call(s) this turn (${okCount} ok, ${errCount} error${errCount === 1 ? '' : 's'}) across: ${touched}.`,
+            'Send "continue" and I will pick up from that state and give you the summary.',
+          ].join(' ');
+        } else {
+          finalText = 'No final response was generated. Please retry.';
+        }
       }
       if (greetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();

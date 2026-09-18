@@ -5606,7 +5606,14 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
     coordinateScale: { x: scaleX, y: scaleY },
     normalized,
   };
-  if (!out.base64) return null;
+  if (!out.base64 || imgW <= 0 || imgH <= 0) {
+    // A live session that returns an empty/0x0 image means Electron capturePage had
+    // nothing to paint (view detached, canvas closed, or tab hidden). Do not collapse
+    // this into `null`, which the executor reports as "No browser session".
+    throw new Error(
+      `Browser screenshot returned an empty image (${imgW}x${imgH}). The in-house browser view is likely hidden or detached; open the browser panel / select the tab and retry, or use browser_observe(action:"snapshot") for DOM state.`,
+    );
+  }
   setLastBrowserScreenshot(resolved, out);
   return out;
 }

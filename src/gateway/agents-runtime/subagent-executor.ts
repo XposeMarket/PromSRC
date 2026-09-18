@@ -2366,7 +2366,26 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, workspacePath
       return { name: 'read_files_batch', args: readArgs };
     }
     if (action === 'grep') {
-      if (pathArg) return { name: 'grep_file', args: compactWorkspaceGrepArgs(args, pathArg) };
+      if (pathArg) {
+        // grep_file only accepts a single file. When the caller passes a directory
+        // (workspace_read grep on "src/gateway"), route to search_files with that
+        // directory instead of returning `"<dir>" is not a file`.
+        let isDirectory = false;
+        try {
+          const candidate = path.isAbsolute(String(pathArg))
+            ? String(pathArg)
+            : path.resolve(workspacePath || '.', String(pathArg));
+          isDirectory = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory();
+        } catch { /* fall through to grep_file */ }
+        if (!isDirectory) return { name: 'grep_file', args: compactWorkspaceGrepArgs(args, pathArg) };
+        const searchArgs = normalizeSearchArgs();
+        searchArgs.directory = String(pathArg);
+        delete searchArgs.path;
+        delete searchArgs.filename;
+        delete searchArgs.file;
+        delete searchArgs.name;
+        return { name: 'search_files', args: searchArgs };
+      }
       return { name: 'search_files', args: normalizeSearchArgs() };
     }
     if (action === 'search') {
@@ -16707,7 +16726,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 
       // Vision fallback tools (Component 3)
       case 'browser_vision_screenshot': {
-        const vshot = await browserVisionScreenshot(sessionId);
+        let vshot: Awaited<ReturnType<typeof browserVisionScreenshot>> = null;
+        try {
+          vshot = await browserVisionScreenshot(sessionId);
+        } catch (err: any) {
+          // Distinguish a real capture failure (session exists, image empty/errored) from
+          // "no session" so the model does not needlessly re-open the browser.
+          return { name, args, result: `ERROR: Browser screenshot failed: ${err?.message || err}`, error: true };
+        }
         if (!vshot) return { name, args, result: 'ERROR: No browser session. Use browser_open first.', error: true };
         await broadcastBrowserStatus('browser_vision_screenshot');
         // Return metadata text; chat.router injects the cached PNG as a user image

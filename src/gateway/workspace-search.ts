@@ -101,8 +101,62 @@ export async function runBoundedWorkspaceSearch(
 
   const yieldToGateway = async (): Promise<void> => {
     filesystemOps += 1;
-    if (filesystemOps % 16 === 0) {
+    if (filesystemOps % 32 === 0) {
       await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+
+  // Files within a directory are stat+read with bounded concurrency instead of
+  // one-at-a-time. The old fully serial walker (await stat, await readFile per
+  // file) starved whenever the gateway event loop was busy: the same src/ query
+  // took 31.7s for 2 files under load vs 0.46s for 827 files idle. Results are
+  // still collected in directory order so limits stay deterministic.
+  const FILE_CONCURRENCY = 12;
+
+  type FileProbe =
+    | { kind: 'skip_large'; rel: string; bytes: number }
+    | { kind: 'skip_error' }
+    | { kind: 'content'; rel: string; content: string };
+
+  const probeFile = async (abs: string, rel: string): Promise<FileProbe> => {
+    let fileSize = 0;
+    try {
+      fileSize = (await fs.promises.stat(abs)).size;
+    } catch {
+      return { kind: 'skip_error' };
+    }
+    if (fileSize > options.maxFileBytes) return { kind: 'skip_large', rel, bytes: fileSize };
+    try {
+      const content = await fs.promises.readFile(abs, 'utf-8');
+      return { kind: 'content', rel, content };
+    } catch {
+      return { kind: 'skip_error' };
+    }
+  };
+
+  const consumeProbe = (probe: FileProbe, fallbackName: string): void => {
+    if (probe.kind === 'skip_error') return;
+    if (probe.kind === 'skip_large') {
+      filesSkipped += 1;
+      filesSkippedTooLarge += 1;
+      if (skippedLargeSamples.length < 12) {
+        skippedLargeSamples.push({ path: probe.rel || fallbackName, bytes: probe.bytes });
+      }
+      return;
+    }
+    filesSearched += 1;
+    const grep = collectGrepMatchesInText(probe.rel || fallbackName, probe.content, options.matcher, {
+      maxResults: Math.max(1, options.storeLimit - matches.length),
+      contextLines: options.contextLines,
+      before: options.before,
+      after: options.after,
+      charBefore: options.charBefore,
+      charAfter: options.charAfter,
+      charWindow: options.charWindow,
+    });
+    totalMatchesObserved += grep.totalMatches;
+    if (matches.length < options.storeLimit) {
+      matches.push(...grep.matches.slice(0, Math.max(0, options.storeLimit - matches.length)));
     }
   };
 
@@ -114,8 +168,10 @@ export async function runBoundedWorkspaceSearch(
     } catch {
       return;
     }
+    const subdirs: string[] = [];
+    const pendingFiles: Array<{ abs: string; rel: string; name: string }> = [];
+
     for (const entry of entries) {
-      await yieldToGateway();
       if (shouldStop()) return;
       const abs = path.join(dir, entry.name);
       const relForIgnore = path.relative(options.searchDir, abs).replace(/\\/g, '/');
@@ -133,8 +189,7 @@ export async function runBoundedWorkspaceSearch(
           filesSkipped += 1;
           continue;
         }
-        await walk(abs, depth + 1);
-        if (shouldStop()) return;
+        subdirs.push(abs);
         continue;
       }
       if (!entry.isFile()) continue;
@@ -158,44 +213,28 @@ export async function runBoundedWorkspaceSearch(
         }
         continue;
       }
-      let fileSize = 0;
-      try {
-        fileSize = (await fs.promises.stat(abs)).size;
-      } catch {
-        continue;
+      pendingFiles.push({ abs, rel, name: entry.name });
+    }
+
+    for (let i = 0; i < pendingFiles.length; i += FILE_CONCURRENCY) {
+      if (shouldStop()) return;
+      const chunk = pendingFiles.slice(i, i + FILE_CONCURRENCY);
+      const probes = await Promise.all(chunk.map((f) => probeFile(f.abs, f.rel)));
+      for (let j = 0; j < probes.length; j++) {
+        if (shouldStop()) return;
+        consumeProbe(probes[j], chunk[j].name);
       }
-      if (fileSize > options.maxFileBytes) {
-        filesSkipped += 1;
-        filesSkippedTooLarge += 1;
-        if (skippedLargeSamples.length < 12) {
-          skippedLargeSamples.push({ path: rel || entry.name, bytes: fileSize });
-        }
-        continue;
-      }
-      let content = '';
-      try {
-        content = await fs.promises.readFile(abs, 'utf-8');
-      } catch {
-        continue;
-      }
-      filesSearched += 1;
-      const grep = collectGrepMatchesInText(rel || entry.name, content, options.matcher, {
-        maxResults: Math.max(1, options.storeLimit - matches.length),
-        contextLines: options.contextLines,
-        before: options.before,
-        after: options.after,
-        charBefore: options.charBefore,
-        charAfter: options.charAfter,
-        charWindow: options.charWindow,
-      });
-      totalMatchesObserved += grep.totalMatches;
-      if (matches.length < options.storeLimit) {
-        matches.push(...grep.matches.slice(0, Math.max(0, options.storeLimit - matches.length)));
-      }
+      await yieldToGateway();
+    }
+
+    for (const sub of subdirs) {
+      if (shouldStop()) return;
+      await walk(sub, depth + 1);
     }
   };
 
   await walk(options.searchDir, 0);
+
   if (stopReason === 'completed' && maxDepthReached) stopReason = 'depth_limit';
   const truncated = stopReason !== 'completed';
   return {

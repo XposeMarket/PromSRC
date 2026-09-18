@@ -65,6 +65,57 @@ async function jsonFetch(url: string): Promise<any> {
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Open-Meteo geocoding does not understand US state abbreviations ("Frederick, MD"
+// returns no results while "Frederick, Maryland" works). Expand them before lookup.
+const US_STATE_NAMES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado',
+  CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky',
+  LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota',
+  MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire',
+  NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota',
+  OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina',
+  SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia',
+  WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', PR: 'Puerto Rico',
+};
+
+/**
+ * Build geocoding query candidates for a free-form location label.
+ * "Frederick, MD" -> ["Frederick, Maryland", "Frederick, MD", "Frederick"]; other labels
+ * pass through, with the bare city as a fallback when the API rejects a compound label.
+ */
+export function geocodeQueryCandidates(label: string): string[] {
+  const trimmed = label.trim();
+  if (!trimmed) return [];
+  const parts = trimmed.split(',').map((p) => p.trim()).filter(Boolean);
+  const out: string[] = [];
+  if (parts.length >= 2) {
+    const stateName = US_STATE_NAMES[parts[1].toUpperCase()];
+    if (stateName) out.push(`${parts[0]}, ${stateName}`);
+  }
+  out.push(trimmed);
+  if (parts.length >= 2 && parts[0]) out.push(parts[0]);
+  return Array.from(new Set(out));
+}
+
+async function geocodeLabel(label: string): Promise<any | null> {
+  const parts = label.split(',').map((p) => p.trim()).filter(Boolean);
+  const wantedState = parts.length >= 2 ? (US_STATE_NAMES[parts[1].toUpperCase()] || parts[1]) : '';
+  for (const candidate of geocodeQueryCandidates(label)) {
+    const geo = await jsonFetch(`${GEO_BASE}?name=${encodeURIComponent(candidate)}&count=5`);
+    const results = Array.isArray(geo?.results) ? geo.results : [];
+    if (!results.length) continue;
+    // Prefer a hit in the requested state so "Frederick, MD" does not resolve to
+    // Frederick, Colorado just because it ranked first in the bare-city fallback.
+    const preferred = wantedState
+      ? results.find((r: any) => String(r?.admin1 || '').toLowerCase() === wantedState.toLowerCase())
+      : null;
+    return preferred || results[0];
+  }
+  return null;
+}
+
+
 export async function executeWeatherLookup(args: WeatherArgs): Promise<WeatherResult> {
   const unitF = String(args.unit || 'F').toUpperCase() !== 'C';
   const tempUnit = unitF ? 'fahrenheit' : 'celsius';
@@ -77,8 +128,7 @@ export async function executeWeatherLookup(args: WeatherArgs): Promise<WeatherRe
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     if (!label) return { success: false, error: 'show_weather requires a location (e.g. "Frederick, MD") or latitude/longitude.' };
     try {
-      const geo = await jsonFetch(`${GEO_BASE}?name=${encodeURIComponent(label)}&count=1`);
-      const hit = Array.isArray(geo?.results) ? geo.results[0] : null;
+      const hit = await geocodeLabel(label);
       if (!hit) return { success: false, error: `Could not find location: ${label}` };
       lat = hit.latitude; lon = hit.longitude;
       label = [hit.name, hit.admin1, hit.country_code].filter(Boolean).join(', ');
