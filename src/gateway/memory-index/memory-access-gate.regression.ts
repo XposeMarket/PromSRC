@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { acquireMemoryAccess, getMemoryAccessGateState } from './memory-access-gate';
+import { acquireMemoryAccess, getMemoryAccessGateState, MEMORY_MAINTENANCE_AGING_MS, setMemoryMaintenanceAgingMsForTests } from './memory-access-gate';
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -77,6 +77,37 @@ async function runCases(): Promise<void> {
       (err: Error) => /timed out after 20ms while queued behind maintenance/.test(err.message),
     );
     releaseMaint();
+  }
+
+  // 5. Writer aging: an aged maintenance waiter stops new searches from
+  //    joining on the fast path, so overlapping searches cannot starve it.
+  //    The aging window is forced to 0 for this case so any queued
+  //    maintenance counts as aged immediately.
+  {
+    assert.equal(MEMORY_MAINTENANCE_AGING_MS, 5000, 'default aging window');
+    setMemoryMaintenanceAgingMsForTests(0);
+    const holder = await acquireMemoryAccess('search');
+    const maintP = acquireMemoryAccess('maintenance', { timeoutMs: 5000 });
+    await tick();
+    assert.deepEqual(getMemoryAccessGateState().pending, ['maintenance']);
+    // A new search must now QUEUE (not fast-path join) because maintenance aged out.
+    let newSearchGranted = false;
+    const lateSearchP = acquireMemoryAccess('search', { timeoutMs: 5000 }).then((rel) => { newSearchGranted = true; return rel; });
+    await tick();
+    assert.equal(newSearchGranted, false, 'late search must not bypass an aged maintenance waiter');
+    assert.equal(getMemoryAccessGateState().activeCount, 1);
+    assert.deepEqual(getMemoryAccessGateState().pending, ['maintenance', 'search']);
+    // Release the holder: maintenance runs next, then the late search.
+    holder();
+    const releaseMaint = await maintP;
+    assert.equal(getMemoryAccessGateState().activeKind, 'maintenance');
+    assert.equal(newSearchGranted, false);
+    releaseMaint();
+    const releaseLate = await lateSearchP;
+    assert.equal(newSearchGranted, true);
+    assert.equal(getMemoryAccessGateState().activeKind, 'search');
+    releaseLate();
+    assert.equal(getMemoryAccessGateState().activeKind, null);
   }
 
   console.log('memory-access-gate regression: OK');

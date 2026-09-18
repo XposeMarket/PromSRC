@@ -12,6 +12,20 @@ interface PendingAccess {
   signal?: AbortSignal;
   abortListener?: () => void;
   timeoutHandle?: NodeJS.Timeout;
+  queuedAt: number;
+}
+
+// Writer aging: searches are preferred over queued maintenance, but not
+// forever. Once a maintenance waiter has been queued longer than this, new
+// searches stop taking the shared fast path and queue behind it instead, so a
+// continuous stream of overlapping searches cannot starve maintenance
+// indefinitely. Searches already holding the gate are never interrupted.
+export const MEMORY_MAINTENANCE_AGING_MS = 5000;
+let maintenanceAgingMs = MEMORY_MAINTENANCE_AGING_MS;
+
+/** Test hook: override the writer-aging window (ms). Pass undefined to reset. */
+export function setMemoryMaintenanceAgingMsForTests(ms?: number): void {
+  maintenanceAgingMs = Number.isFinite(ms as number) && (ms as number) >= 0 ? (ms as number) : MEMORY_MAINTENANCE_AGING_MS;
 }
 
 // The query and maintenance workers are separate child processes, but they
@@ -73,11 +87,21 @@ function grantWaiter(waiter: PendingAccess): void {
   waiter.resolve(makeRelease(waiter.kind));
 }
 
+function agedMaintenanceQueued(now = Date.now()): boolean {
+  return pending.some((w) => w.kind === 'maintenance' && now - w.queuedAt >= maintenanceAgingMs);
+}
+
 function grantNext(): void {
-  // Grant every queued search that can share the current read lock first.
+  // Grant every queued search that can share the current read lock first,
+  // unless a maintenance waiter has aged out: then searches wait for it so it
+  // can run as soon as the current readers drain.
+  // (When maintenance has aged out, no queued search is granted here: if
+  // readers are active the search waits for them to drain; if the gate is
+  // idle, the maintenance waiter below runs first.)
+  const maintenanceAged = agedMaintenanceQueued();
   for (let i = 0; i < pending.length;) {
     const waiter = pending[i];
-    if (waiter.kind === 'search' && canGrant('search')) {
+    if (waiter.kind === 'search' && canGrant('search') && !maintenanceAged) {
       pending.splice(i, 1);
       grantWaiter(waiter);
       continue;
@@ -108,14 +132,18 @@ export function acquireMemoryAccess(
   // Maintenance never takes the fast path while searches are queued so it
   // cannot starve them.
   const maintenanceQueued = pending.some((w) => w.kind === 'maintenance');
-  if (canGrant(kind) && (kind === 'search' || (!maintenanceQueued && pending.length === 0))) {
+  // A search may join running searches on the fast path unless a maintenance
+  // waiter has aged out; then it queues so the writer can run once current
+  // readers drain (writer aging, see MEMORY_MAINTENANCE_AGING_MS).
+  const searchFastPath = kind === 'search' && !(activeKind === 'search' && agedMaintenanceQueued());
+  if (canGrant(kind) && (searchFastPath || (kind === 'maintenance' && !maintenanceQueued && pending.length === 0))) {
     activeKind = kind;
     activeCount += 1;
     return Promise.resolve(makeRelease(kind));
   }
 
   return new Promise<() => void>((resolve, reject) => {
-    const waiter: PendingAccess = { kind, resolve, reject, signal: options.signal };
+    const waiter: PendingAccess = { kind, resolve, reject, signal: options.signal, queuedAt: Date.now() };
     const onAbort = () => {
       removePending(waiter);
       clearWaiter(waiter);

@@ -7096,6 +7096,10 @@ RULES:
 
   for (let round = 0; ; round++) {
     currentProviderCallIteration = round;
+    // During an empty-final salvage round the model must not be offered tools:
+    // the salvage prompt asks for a tools-free reply, and offering tools would
+    // let extra tool rounds bypass the MAX_EMPTY_FINAL_SALVAGE cap.
+    const salvageRound = emptyFinalSalvageAttempts > 0;
 
     if (abortSignal?.aborted) {
       console.log(`[v2] Aborted at round ${round} — client disconnected`);
@@ -7553,7 +7557,7 @@ RULES:
       }
 
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
-        tools,
+        tools: salvageRound ? [] : tools,
         temperature: 0.3,
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
         num_predict: grokGreetingLikeTurn ? 256 : 4096,
@@ -7812,8 +7816,16 @@ RULES:
 
     let toolCalls = response.tool_calls;
 
+    // Salvage rounds are tools-free by contract. If the provider still returns
+    // tool calls (or the text-recovery path below would synthesize one), drop
+    // them so the salvage round terminates in a final reply.
+    if (salvageRound && toolCalls && toolCalls.length > 0) {
+      console.log(`[v2] EMPTY FINAL SALVAGE: dropping ${toolCalls.length} tool call(s) returned during the tools-free salvage round`);
+      toolCalls = [];
+    }
+
     // Auto-recover: if model wrote a tool call as text instead of using the tool mechanism
-    if ((!toolCalls || toolCalls.length === 0) && response.content) {
+    if (!salvageRound && (!toolCalls || toolCalls.length === 0) && response.content) {
       const textToolMatch = response.content.match(/"action"\s*:\s*"(\w+)"\s*,\s*"action_input"\s*:\s*(\{[^}]+\})/s)
         || response.content.match(/"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})/s);
       if (textToolMatch) {

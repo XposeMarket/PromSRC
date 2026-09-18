@@ -172,7 +172,14 @@ export async function runBoundedWorkspaceSearch(
     const pendingFiles: Array<{ abs: string; rel: string; name: string }> = [];
 
     for (const entry of entries) {
-      if (shouldStop()) return;
+      // Enumeration stops on abort/time/result limits but NOT on the file
+      // limit: files admitted here are drained below before the file limit is
+      // re-checked, so a directory that lands exactly on maxFiles still gets
+      // searched instead of being enumerated and then discarded.
+      if (stopReason !== 'completed') return;
+      if (options.signal?.aborted) { stopReason = 'aborted'; return; }
+      if (Date.now() - startedAt >= options.maxDurationMs) { stopReason = 'time_limit'; return; }
+      if (filesVisited >= options.maxFiles) break;
       const abs = path.join(dir, entry.name);
       const relForIgnore = path.relative(options.searchDir, abs).replace(/\\/g, '/');
       const rel = path.join(options.displayRoot === '.' ? '' : options.displayRoot, relForIgnore).replace(/\\/g, '/');
@@ -216,16 +223,31 @@ export async function runBoundedWorkspaceSearch(
       pendingFiles.push({ abs, rel, name: entry.name });
     }
 
+    // Files admitted during enumeration above are always drained, even if the
+    // enumeration pass itself pushed filesVisited to maxFiles. Only abort,
+    // time, and result limits interrupt the drain; the file limit is re-checked
+    // once the directory's admitted files are consumed. Otherwise a directory
+    // that exactly fills the file budget would enumerate and then search zero
+    // of its files.
+    const shouldStopDrain = (): boolean => {
+      if (stopReason !== 'completed') return true;
+      if (options.signal?.aborted) { stopReason = 'aborted'; return true; }
+      if (Date.now() - startedAt >= options.maxDurationMs) { stopReason = 'time_limit'; return true; }
+      const collected = options.pathOnly ? pathMatches.length : matches.length;
+      if (collected >= options.storeLimit) { stopReason = 'result_limit'; return true; }
+      return false;
+    };
     for (let i = 0; i < pendingFiles.length; i += FILE_CONCURRENCY) {
-      if (shouldStop()) return;
+      if (shouldStopDrain()) return;
       const chunk = pendingFiles.slice(i, i + FILE_CONCURRENCY);
       const probes = await Promise.all(chunk.map((f) => probeFile(f.abs, f.rel)));
       for (let j = 0; j < probes.length; j++) {
-        if (shouldStop()) return;
+        if (shouldStopDrain()) return;
         consumeProbe(probes[j], chunk[j].name);
       }
       await yieldToGateway();
     }
+    if (shouldStop()) return;
 
     for (const sub of subdirs) {
       if (shouldStop()) return;

@@ -71,6 +71,34 @@ async function main(): Promise<void> {
     });
     assert.equal(fileLimited.stopReason, 'file_limit');
     assert.equal(fileLimited.filesVisited, 17);
+    // Files admitted during enumeration must be drained even when the file
+    // budget is hit mid-directory; the limit must not zero out the last
+    // directory's search results (Astra review of PR #370).
+    assert.equal(fileLimited.filesSearched, 17, 'admitted files must be searched before the file limit stops the walk');
+
+    const exactBudget = await runBoundedWorkspaceSearch({
+      searchDir: root,
+      displayRoot: '.',
+      matcher: createSearchMatcher('ordinary', {}),
+      globs: [],
+      excludes: new Set(DEFAULT_FILE_TOOL_EXCLUDES),
+      gitignoreRules: [],
+      maxResults: 500,
+      storeLimit: 500,
+      maxFileBytes: 1024,
+      maxFiles: 30, // exactly one directory's worth
+      maxDurationMs: 5_000,
+      maxDepth: 8,
+      contextLines: 0,
+      before: 20,
+      after: 20,
+      includeLockfiles: false,
+      pathOnly: false,
+    });
+    assert.equal(exactBudget.stopReason, 'file_limit');
+    assert.equal(exactBudget.filesVisited, 30);
+    assert.equal(exactBudget.filesSearched, 30, 'a directory that exactly fills the budget must still be searched');
+    assert.equal(exactBudget.matches.length, 29, '29 of 30 files in the first folder contain "ordinary"');
 
     const pathOnly = await runBoundedWorkspaceSearch({
       searchDir: root,
