@@ -35,13 +35,13 @@ export function reasoningCapability(provider, model) {
       const manual = /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name);
       // Manual-budget models accept low/medium/high as a thinking-budget hint
       // (mirrors src/providers/reasoning-capabilities.ts).
-      if (manual) return { efforts: ['low','medium','high'], defaultEffort: 'medium', thinkingMode: 'manual' };
-      return { efforts: [] };
+      if (manual) return { efforts: ['low','medium','high'], defaultEffort: 'medium', thinkingMode: 'manual', nativeEffort: false };
+      return { efforts: [], nativeEffort: false };
     }
     const efforts = ['low','medium','high'];
     if (/^claude-(?:fable-5|mythos-5|opus-(?:5|4-(?:7|8))|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
     if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
-    return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
+    return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
   }
   if (id === 'perplexity') return { efforts: ['low','medium','high'] };
   if (id === 'xai') return { efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'] };

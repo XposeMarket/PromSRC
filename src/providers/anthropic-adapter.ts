@@ -669,12 +669,14 @@ export class AnthropicAdapter implements LLMProvider {
       body.system = [claudeCodePreamble];
     }
 
-    // Only adaptive-thinking models understand `output_config.effort`.
-    // Manual-budget models (Sonnet 4.5, Haiku 4.5, Opus 4.0/4.1) reject it,
-    // so for those we translate effort into a thinking budget below instead.
+    // `output_config.effort` only goes to models that accept it natively
+    // (nativeEffort). Manual-thinking-only models (Sonnet 4.5, Haiku 4.5,
+    // Opus 4.0/4.1) reject it, so their effort becomes a thinking budget
+    // below. Opus 4.5 is manual-thinking AND effort-native, so it gets both.
     const capability = getReasoningCapability('anthropic', model);
     const manualThinking = capability.thinkingMode === 'manual';
-    if (effort && !manualThinking) {
+    const effortNative = capability.nativeEffort === true;
+    if (effort && effortNative) {
       body.output_config = { ...(body.output_config || {}), effort };
     }
 
@@ -694,7 +696,7 @@ export class AnthropicAdapter implements LLMProvider {
         const MANUAL_EFFORT_BUDGETS: Record<string, number> = { low: 4000, medium: 10000, high: 24000 };
         const budget = typeof anthropicCfg.thinking_budget === 'number'
           ? anthropicCfg.thinking_budget
-          : (manualThinking && effort && MANUAL_EFFORT_BUDGETS[effort]) || 10000;
+          : (manualThinking && !effortNative && effort && MANUAL_EFFORT_BUDGETS[effort]) || 10000;
         body.thinking = { type: 'enabled', budget_tokens: budget };
         body.max_tokens = Math.max(body.max_tokens, budget + 8192);
       }

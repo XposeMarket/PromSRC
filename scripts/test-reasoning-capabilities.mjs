@@ -47,6 +47,15 @@ assert.equal(getReasoningCapability('anthropic', 'claude-sonnet-4-5-20250929').t
 assert.deepEqual(reasoningCapability('anthropic', 'claude-sonnet-4-5-20250929'), getReasoningCapability('anthropic', 'claude-sonnet-4-5-20250929'));
 // Sonnet 4 (no 4.5) has neither effort nor manual thinking policy.
 assert.deepEqual(efforts('anthropic', 'claude-sonnet-4-20250514'), []);
+// nativeEffort is independent of thinkingMode: Opus 4.5 is manual-thinking
+// but still takes output_config.effort; Sonnet 4.5 / Haiku 4.5 do not.
+assert.equal(getReasoningCapability('anthropic', 'claude-opus-4-5').nativeEffort, true);
+assert.equal(getReasoningCapability('anthropic', 'claude-opus-4-5').thinkingMode, 'manual');
+assert.equal(getReasoningCapability('anthropic', 'claude-fable-5-1').nativeEffort, true);
+assert.equal(getReasoningCapability('anthropic', 'claude-sonnet-4-5-20250929').nativeEffort, false);
+assert.equal(getReasoningCapability('anthropic', 'claude-haiku-4-5-20251001').nativeEffort, false);
+assert.equal(getReasoningCapability('anthropic', 'claude-sonnet-4-20250514').nativeEffort, false);
+assert.deepEqual(reasoningCapability('anthropic', 'claude-opus-4-5'), getReasoningCapability('anthropic', 'claude-opus-4-5'));
 assert.equal(getReasoningCapability('anthropic', 'claude-opus-4-8').thinkingMode, 'adaptive');
 assert.equal(getReasoningCapability('anthropic', 'claude-opus-5').thinkingMode, 'adaptive');
 assert.equal(getReasoningCapability('anthropic', 'claude-fable-5-1').thinkingMode, 'adaptive');
