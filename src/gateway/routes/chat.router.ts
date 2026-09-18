@@ -8415,23 +8415,20 @@ RULES:
       if (isGrokGeneration) {
         finalText = trimGrokRunawayRepetition(finalText);
       }
+      // Precompute a tool-work digest for the empty-final salvage path. Only
+      // counts, tool names, and short status previews are used: the digest is
+      // fed back to the MODEL so it can write the reply itself; the user-facing
+      // fallback below never synthesizes prose from tool payloads.
+      const emptyFinalToolDigest = summarizeToolWorkForEmptyFinal(allToolResults);
       if (!finalText || finalText.length < 5) {
         // Never infer completion from tool payloads. A tool can succeed while the
         // user's larger request remains incomplete, and truncated JSON is not a
         // user-facing answer. The provider adapter already retries incomplete
         // Codex streams once; after that, report the missing final explicitly.
-        if (allToolResults.length > 0 && emptyFinalSalvageAttempts < MAX_EMPTY_FINAL_SALVAGE && !abortSignal?.aborted) {
+        if (emptyFinalToolDigest.count > 0 && emptyFinalSalvageAttempts < MAX_EMPTY_FINAL_SALVAGE && !abortSignal?.aborted) {
           emptyFinalSalvageAttempts += 1;
-          const recentToolSummary = allToolResults
-            .slice(-12)
-            .map((r) => {
-              const status = r.error ? '✗' : '✓';
-              const preview = String(r.result || '').replace(/\s+/g, ' ').slice(0, 160);
-              return `  ${status} ${String(r.name || 'tool')}${preview ? ` — ${preview}` : ''}`;
-            })
-            .join('\n');
           console.log(
-            `[v2] EMPTY FINAL SALVAGE: model returned an empty final after ${allToolResults.length} tool result(s); requesting a tools-free answer (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE})`,
+            `[v2] EMPTY FINAL SALVAGE: model returned an empty final after ${emptyFinalToolDigest.count} tool result(s); requesting a tools-free answer (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE})`,
           );
           sendSSE('info', {
             message: `Post-check: the model finished tool work without writing a reply; asking it to summarize its findings (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE}).`,
@@ -8443,19 +8440,16 @@ RULES:
               'Do not call any more tools. Write the user-facing reply now using only what you already gathered.',
               'If the task is unfinished, say concretely what was completed, what remains, and what you would do next.',
               '',
-              `Tool work this turn (${allToolResults.length} result(s), most recent last):`,
-              recentToolSummary,
+              `Tool work this turn (${emptyFinalToolDigest.count} result(s), most recent last):`,
+              emptyFinalToolDigest.recentLines,
             ].join('\n'),
           });
           continue;
         }
-        if (allToolResults.length > 0) {
-          const okCount = allToolResults.filter((r) => r && !r.error).length;
-          const errCount = allToolResults.length - okCount;
-          const touched = Array.from(new Set(allToolResults.map((r) => String(r?.name || 'tool')))).slice(0, 8).join(', ');
+        if (emptyFinalToolDigest.count > 0) {
           finalText = [
             'I ran out of room to write a full reply this turn, but the work is not lost.',
-            `Completed ${allToolResults.length} tool call(s) this turn (${okCount} ok, ${errCount} error${errCount === 1 ? '' : 's'}) across: ${touched}.`,
+            `Completed ${emptyFinalToolDigest.count} tool call(s) this turn (${emptyFinalToolDigest.okCount} ok, ${emptyFinalToolDigest.errCount} error${emptyFinalToolDigest.errCount === 1 ? '' : 's'}) across: ${emptyFinalToolDigest.touched}.`,
             'Send "continue" and I will pick up from that state and give you the summary.',
           ].join(' ');
         } else {
@@ -10155,6 +10149,31 @@ function isGrokGreetingLikeMessage(text: string): boolean {
   if (isGreetingLikeMessage(raw)) return true;
   return /^(?:hi|hello|hey|yo|sup|howdy)(?:[!.?\s,]+(?:hi|hello|hey|yo|sup|howdy)){0,3}(?:[!.?\s,]+(?:prom|prometheus|claw))?[!.?\s]*$/i.test(raw);
 }
+
+/**
+ * Digest of this turn's tool work for the empty-final salvage path. Returns
+ * counts, touched tool names, and short per-call status lines. The status
+ * preview is deliberately clipped and is only handed back to the model as a
+ * reminder of what it already did; it is never used to compose a user-facing
+ * reply directly (the missing-final fallback stays a fixed explanation).
+ */
+function summarizeToolWorkForEmptyFinal(
+  toolResults: Array<{ name?: string; error?: boolean; result?: unknown }>,
+): { count: number; okCount: number; errCount: number; touched: string; recentLines: string } {
+  const list = Array.isArray(toolResults) ? toolResults : [];
+  const okCount = list.filter((r) => r && !r.error).length;
+  const touched = Array.from(new Set(list.map((r) => String(r?.name || 'tool')))).slice(0, 8).join(', ');
+  const recentLines = list
+    .slice(-12)
+    .map((r) => {
+      const status = r?.error ? '✗' : '✓';
+      const preview = String((r as any)?.result ?? '').replace(/\s+/g, ' ').slice(0, 160);
+      return `  ${status} ${String(r?.name || 'tool')}${preview ? ` — ${preview}` : ''}`;
+    })
+    .join('\n');
+  return { count: list.length, okCount, errCount: list.length - okCount, touched, recentLines };
+}
+
 
 function trimGrokRunawayRepetition(text: string): string {
   const raw = String(text || '').replace(/\r\n/g, '\n').trim();
