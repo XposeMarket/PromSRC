@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { clearMobileRecoveryPlaceholder, MOBILE_CONNECTION_RECOVERY_PLACEHOLDER } from '../web-ui/src/mobile/mobile-chat-recovery-state.js';
+import { canRecoverMobileStreamingTurn } from '../web-ui/src/mobile/mobile-chat-page-runtime.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +9,10 @@ import { createTimelineEntries, createWeightedTimelineController } from '../web-
 import { reconcileKeyedTimelineRows } from '../web-ui/src/features/chat/timeline/keyed-dom.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'prior' }, 'current'), false,
+  'recovery must not replay a new request into the prior answer');
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'current' }, 'current'), true);
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'prior', _pmAdmissionPending: true }, 'current'), true);
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
@@ -288,7 +293,7 @@ assert.equal(readyTrace.find((entry) => entry.activity?.kind === 'result')?.acti
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
 assert.match(router, /router\.post\('\/api\/mobile\/chat\/reconcile\/:sessionId'/, 'mobile must have an explicit server reconciliation action');
 assert.match(router, /mergeHistoryWithExistingMessageMetadata\(existingHistory, rawHistory, \{[\s\S]{0,100}preserveAllExisting: isMobileHistorySyncRequest\(req\)/, 'mobile history sync must merge into durable server history rather than replacing it');
-assert.match(historyReconciliation, /options\.preserveAllExisting \|\| serverOnly/, 'truncated mobile history must preserve ordinary server messages as well as system metadata');
+assert.match(historyReconciliation, /const result = preserve \? \[\.\.\.base\] : \[\.\.\.mergedIncoming\]/, 'truncated mobile history must keep the durable server transcript as its ordering spine');
 assert.match(historyReconciliation, /incomingByKey/, 'reconnect retries must dedupe stable client message identities');
 assert.match(router, /MAIN_CHAT_ORPHAN_GRACE_MS/, 'ownerless stream/lease state must expire instead of blocking indefinitely');
 assert.match(router, /mainChatTurnCoordinator\.discard\(sid\)/, 'reconciliation must discard both a stale lease and queued stale work');
@@ -405,17 +410,17 @@ assert.match(
 );
 assert.match(pages, /if \(requestIndex >= 0 && _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)/, 'request-id dedupe must also verify compatible assistant content');
 assert.match(pages, /Request ids identify a transport run[\s\S]{0,360}aText\.startsWith\(bText\)/, 'transport request identity must not collapse distinct durable rows');
-assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true \}\)/, 'painted transcript order must remain the hydration continuity spine');
-assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,180}candidateTimestamp <= primaryLatestTimestamp/, 'stale unmatched hydration rows must not be appended as fake new messages');
+assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true, serverAuthoritativeText: true \}\)/, 'painted transcript order must remain the hydration continuity spine while completed server text stays authoritative');
+assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,300}const nextAnchor = incoming\.slice\(incomingIndex \+ 1\)/, 'unmatched hydration rows must be placed next to matching transcript anchors');
 assert.doesNotMatch(pages, /_mergeMobileHistoryRecords\(mapped, durableLocal, \{ sortByTimestamp: true \}\)/, 'mixed-clock hydration must never reorder the transcript by timestamp');
 assert.match(
   pages,
-  /const separatedByUser = list\.slice\(prevIndex \+ 1, i\)[\s\S]{0,420}Math\.abs\(currentAt - previousAt\) < 30_000/,
-  'recent identical responses from duplicate admissions must collapse even when recovery placed the user turn between them',
+  /if \(separatedByUser \|\| !\(sameDurableId \|\| sameRequest \|\| sameTimestamp\)\)/,
+  'a user turn must keep a later identical assistant response as a distinct turn',
 );
 assert.match(
   pages,
-  /restore user -> assistant ordering[\s\S]{0,620}list\.splice\(assistantIndex, 0, user\)/,
+  /const \[reply\] = list\.splice\(assistantIndex, 1\);[\s\S]{0,100}list\.splice\(list\.indexOf\(user\) \+ 1, 0, reply\)/,
   'recovery must restore a request-owned user turn before its assistant response',
 );
 assert.match(

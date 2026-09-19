@@ -241,7 +241,7 @@ export function createWeightedTimelineController(defaults = {}) {
     const id = String(key || 'chat');
     const state = stateFor(id);
     const list = Array.isArray(entries) ? entries : [];
-    if (options.followTail === true) {
+    if (options.followTail === true && !(defaults.surface === 'mobile' && state.mode === 'accumulate')) {
       state.mode = 'tail';
       state.accumulatedStartKey = '';
     }
@@ -326,6 +326,7 @@ export function createWeightedTimelineController(defaults = {}) {
       paintEntries: Object.freeze(paintEntries),
       materializedWeight: Number(materializedEntries.reduce((sum, entry) => sum + entry.weight, 0).toFixed(2)),
       paintWeight: Number(paintEntries.reduce((sum, entry) => sum + entry.weight, 0).toFixed(2)),
+      firstPaintKey: paintBase[0]?.key || '',
       firstPaintIndex,
       lastPaintIndex,
       omittedBefore: Math.max(0, firstPaintIndex),
@@ -382,13 +383,23 @@ export function createWeightedTimelineController(defaults = {}) {
     const clean = String(value || '').trim();
     if (!clean) return false;
     const state = stateFor(key);
-    if (state.mode !== 'accumulate') state.mode = 'anchor';
+    if (state.mode !== 'accumulate') {
+      if (defaults.surface === 'mobile' && state.last?.firstPaintIndex >= 0) {
+        // Scroll intent must keep the currently painted tail. Moving to a
+        // bounded anchor window made newer messages vanish on the next paint.
+        state.mode = 'accumulate';
+        state.accumulatedStartKey = state.last.firstPaintKey;
+      } else {
+        state.mode = 'anchor';
+      }
+    }
     state.anchorKey = clean;
     return true;
   }
 
   function followTail(key) {
     const state = stateFor(key);
+    if (defaults.surface === 'mobile' && state.mode === 'accumulate') return;
     state.mode = 'tail';
     state.anchorKey = '';
     state.anchorIndex = -1;

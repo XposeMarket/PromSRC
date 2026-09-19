@@ -1911,7 +1911,12 @@ function _mobileMessageStableFingerprint(msg) {
     .filter(Boolean)
     .sort()
     .join(',');
-  return `${role}|${text}|${attachments}`;
+  const messageId = String(msg.messageId || '').trim();
+  if (messageId && !messageId.startsWith('mobile-request:')) return `${role}|id:${messageId}`;
+  const requestId = String(msg._clientRequestId || msg.clientRequestId || '').trim();
+  const timestamp = Number(msg.timestamp || 0) || 0;
+  if (!timestamp) return '';
+  return `${role}|${requestId ? `request:${requestId}` : 'unidentified'}|${timestamp}|${text}|${attachments}`;
 }
 
 function _pruneMobileRoleGroupedDuplicateTail(thread) {
@@ -1956,12 +1961,9 @@ function _reconcileMobileThreadOrder(thread) {
   // A recovery refresh can briefly return the completed assistant before the
   // matching user record. Stable request identity makes the intended pair
   // unambiguous, so restore user -> assistant ordering before rendering.
-  // This repair is deliberately conservative: it only moves a user row back
-  // past its own assistant when no other durable row sits between them. The
-  // previous unconditional splice fought the server's ordering and dragged
-  // user rows across unrelated turns, which reads as random reordering. It
-  // also advanced the loop counter past the row shifted into place, so a
-  // second out-of-order pair in the same page could be skipped entirely.
+  // Older history syncs stored several completed replies before the prompts
+  // they answered. Move only an exact request-ID reply, leaving user turns in
+  // their durable order and avoiding a timestamp-based reshuffle.
   for (let userIndex = 0; userIndex < list.length; userIndex += 1) {
     const user = list[userIndex];
     if (user?.role !== 'user') continue;
@@ -1971,17 +1973,8 @@ function _reconcileMobileThreadOrder(thread) {
       && _isMobileAssistantMessage(message)
       && String(message._clientRequestId || '').trim() === requestId);
     if (assistantIndex < 0) continue;
-    let blocked = false;
-    for (let between = assistantIndex + 1; between < userIndex; between += 1) {
-      const row = list[between];
-      if (row?.role === 'user' || _isMobileAssistantMessage(row)) { blocked = true; break; }
-    }
-    if (blocked) continue;
-    list.splice(userIndex, 1);
-    list.splice(assistantIndex, 0, user);
-    // The rotated span is now ordered; resume scanning just after it so a
-    // later mispaired row in the same page is still repaired.
-    userIndex = assistantIndex;
+    const [reply] = list.splice(assistantIndex, 1);
+    list.splice(list.indexOf(user) + 1, 0, reply);
   }
   _repairMobileRealtimeExchangeOrder(list);
   _reindexMobileThread(list);
@@ -2184,6 +2177,9 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
     .filter((msg) => !msg._isRestartNotification)
     .map((msg) => {
       const clone = _cloneMobileMessageForBranch(msg) || {};
+      // Runtime-created IDs identify a transport row, not a durable turn. The
+      // gateway's canonical user row shares its request ID but has no such ID.
+      if (/^mobile-request:[^:]+:(?:user|assistant|ai)$/.test(String(clone.messageId || ''))) delete clone.messageId;
       const content = _mobileMessageCopyText(msg);
       const attachmentPreviews = Array.isArray(msg.attachmentPreviews)
         ? msg.attachmentPreviews.map(_sanitizeMobileAttachmentPreviewForServer)
@@ -2600,8 +2596,11 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   const text = String(message || '').trim();
   const thread = sid ? __pmChat.threads?.[sid] : null;
   if (!sid || !text || !Array.isArray(thread)) return false;
+  const durableMessageId = String(data?.messageId || '').trim();
+  if (durableMessageId && thread.some((turn) => String(turn?.messageId || '') === durableMessageId)) return true;
   const latestAi = _findLatestAssistantTurn(thread);
-  const workflowGroupId = `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const workflowGroupId = String(data?.workflowGroupId || '').trim()
+    || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   if (latestAi) {
     _appendMobileProcess(latestAi, 'info', `Chat steer: ${text.slice(0, 180)}`, {
       actor: 'Chat Steer',
@@ -2629,8 +2628,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   }
   thread.push({
     role: 'user',
+    messageId: durableMessageId || undefined,
     time: _nowTime(),
-    timestamp: Date.now(),
+    timestamp: Number(data?.timestamp || 0) || Date.now(),
     body: { text, source: 'mobile_queue_steer' },
     content: text,
     workflowGroupId,
@@ -2658,6 +2658,7 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     thread.push(continuationTurn);
     _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
   }
+  _saveMobileThreadCache(sid, thread);
   void _persistMobileChatSteerSnapshot(sid);
   const threadEl = document.getElementById('pm-chat-thread');
   const bodyEl = document.getElementById('pm-chat-body');
@@ -2702,6 +2703,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
       body: JSON.stringify({
         sessionId: sid,
         message: steerMessage,
+        displayMessage: message,
+        clientSteerId: String(item.id || '').trim() || undefined,
         attachmentPreviews: files.map(_sanitizeMobileAttachmentPreviewForServer),
         source: 'mobile_queue_button',
       }),
@@ -2925,11 +2928,16 @@ function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
     list[best].streaming = false;
     return list;
   }
+  // The pin only bridges the gap before this answer reaches durable history.
+  // Once another prompt has arrived, appending the missing pin would move an
+  // old answer after the new turn and then persist that false tail in cache.
+  if (list.some((message) => message?.role === 'user'
+    && Number(message.timestamp || 0) > Number(pin.at || 0))) return list;
   list.push(pinned);
   return list;
 }
 
-function _mergeMobileAssistantTurnDetails(target, source) {
+function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText = false } = {}) {
   if (!target || !source || target === source) return target;
   // Old clients persisted the reconnect sentence as assistant body text. Clear
   // it before reconciliation so the recovered durable answer can take over.
@@ -3023,7 +3031,7 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     && !!sourceText
     && sourceText.length > targetText.length
     && sourceText.startsWith(targetText);
-  if ((!targetText
+  if (!preserveTargetText && (!targetText
     || /^attached file\(s\)$/i.test(targetText)
     || /^please review the attached file\(s\)\.?$/i.test(targetText)
     || sourceExtendsTarget)
@@ -3282,18 +3290,16 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     }
     const previous = list[prevIndex];
     const separatedByUser = list.slice(prevIndex + 1, i).some((turn) => turn?.role === 'user');
-    if (separatedByUser) {
-      const previousAt = Number(previous?.workEndedAt || previous?.timestamp || 0) || 0;
-      const currentAt = Number(msg?.workEndedAt || msg?.timestamp || 0) || 0;
-      const isRecentDuplicate = previous?.streaming !== true
-        && msg?.streaming !== true
-        && previousAt > 0
-        && currentAt > 0
-        && Math.abs(currentAt - previousAt) < 30_000;
-      if (!isRecentDuplicate) {
-        seen.set(key, i);
-        continue;
-      }
+    const previousRequestId = String(previous?._clientRequestId || '').trim();
+    const previousId = String(previous?.messageId || '').trim();
+    const currentId = String(msg?.messageId || '').trim();
+    const sameDurableId = previousId && currentId && previousId === currentId;
+    const sameRequest = requestId && previousRequestId && requestId === previousRequestId;
+    const sameTimestamp = Number(previous?.timestamp || 0) > 0
+      && Number(previous?.timestamp || 0) === Number(msg?.timestamp || 0);
+    if (separatedByUser || !(sameDurableId || sameRequest || sameTimestamp)) {
+      seen.set(key, i);
+      continue;
     }
     const keepCurrent = _mobileAssistantRichnessScore(msg) > _mobileAssistantRichnessScore(previous);
     const keepIndex = keepCurrent ? i : prevIndex;
@@ -5520,11 +5526,14 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   const bRequest = String(b._clientRequestId || '').trim();
   const aMessageId = String(a.messageId || '').trim();
   const bMessageId = String(b.messageId || '').trim();
+  if (aMessageId && bMessageId && aMessageId === bMessageId) return true;
   const requestIdentityMatches = !!aRequest && !!bRequest && aRequest === bRequest;
   // The cached optimistic row often has no messageId while the hydrated row
   // does. Do not reject a matching request identity just because the server
   // assigned a new id during reconnect.
-  if (aMessageId && bMessageId && aMessageId !== bMessageId && !requestIdentityMatches) return false;
+  if (aMessageId && bMessageId && aMessageId !== bMessageId
+    && (!requestIdentityMatches || (!aMessageId.startsWith('mobile-request:')
+      && !bMessageId.startsWith('mobile-request:')))) return false;
   const aWorkflowPart = String(a.workflowPart || '').trim();
   const bWorkflowPart = String(b.workflowPart || '').trim();
   const aWorkflowGroup = String(a.workflowGroupId || '').trim();
@@ -5550,10 +5559,13 @@ function _mobileMessagesRepresentSameTurn(a, b) {
     }
     return true;
   }
-  if (aText && bText && aText === bText) return true;
-  const aSource = Number(a.sourceIndex);
-  const bSource = Number(b.sourceIndex);
-  return Number.isFinite(aSource) && aSource >= 0 && aSource === bSource;
+  // sourceIndex is only an offset within one gateway page. Two different
+  // pages both start at zero, so matching it replaced the newer transcript
+  // with unrelated earlier messages during pagination.
+  const aAt = Number(a.timestamp || 0);
+  const bAt = Number(b.timestamp || 0);
+  return !!aText && aText === bText
+    && aAt > 0 && bAt > 0 && aAt === bAt;
 }
 
 function _mobileUserAttachmentSignature(msg) {
@@ -5617,7 +5629,10 @@ function _mobileUserTurnsRepresentSameSend(a, b) {
   if (aRequest && bRequest && aRequest !== bRequest) return false;
   if (!aText || aText !== bText) return false;
   if (_mobileUserAttachmentSignature(a) !== _mobileUserAttachmentSignature(b)) return false;
-  return Math.abs(Number(a.timestamp || 0) - Number(b.timestamp || 0)) < 15_000;
+  const aAt = Number(a.timestamp || 0);
+  const bAt = Number(b.timestamp || 0);
+  return aAt > 0 && bAt > 0
+    && (aRequest && bRequest ? Math.abs(aAt - bAt) < 15_000 : aAt === bAt);
 }
 
 function _dedupeMobileUserTurns(thread) {
@@ -5652,7 +5667,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     if (!msg || msg.role !== 'ai') return;
     const localCandidate = local.find((candidate) => candidate?.role === 'ai' && _mobileMessagesRepresentSameTurn(msg, candidate));
     if (localCandidate) {
-      _mergeMobileAssistantTurnDetails(msg, localCandidate);
+      _mergeMobileAssistantTurnDetails(msg, localCandidate, { preserveTargetText: msg.streaming !== true });
       _mergeMobileMediaIntoMessage(msg, _collectMessageMedia(localCandidate));
       _mergeMobileProductCarouselIntoMessage(msg, localCandidate.productCarousel);
     }
@@ -5660,7 +5675,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const localLatest = _findLatestAssistantTurn(local);
   const nextLatest = _findLatestAssistantTurn(next);
   if (localLatest && nextLatest && _mobileMessagesRepresentSameTurn(nextLatest, localLatest)) {
-    _mergeMobileAssistantTurnDetails(nextLatest, localLatest);
+    _mergeMobileAssistantTurnDetails(nextLatest, localLatest, { preserveTargetText: nextLatest.streaming !== true });
     _mergeMobileMediaIntoMessage(nextLatest, _collectMessageMedia(localLatest));
     _mergeMobileProductCarouselIntoMessage(nextLatest, localLatest.productCarousel);
   }
@@ -5710,8 +5725,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
       if (clientRequestId && String(msg._clientRequestId || '').trim() === clientRequestId) {
         return _mobileMessagesRepresentSameTurn(msg, candidate);
       }
-      const msgText = _mobileMessageCopyText(msg).replace(/\s+/g, ' ').trim();
-      return !!text && !!msgText && msgText === text;
+      return _mobileHistoryTurnsRepresentSameTurn(msg, candidate);
     });
   };
   const insertForegroundWorkerAfterHandoff = (candidate) => {
@@ -5780,36 +5794,35 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
   const aId = String(a.messageId || a.turnId || a.id || '').trim();
   const bId = String(b.messageId || b.turnId || b.id || '').trim();
   if (aId && bId && aId !== bId) return false;
+  if (aId && bId && aId === bId) return true;
   const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
   const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
-  return !!aText && aText === bText;
+  const aAt = Number(a.timestamp || 0);
+  const bAt = Number(b.timestamp || 0);
+  return !!aText && aText === bText
+    && aAt > 0 && bAt > 0 && aAt === bAt;
 }
 
-function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false } = {}) {
+function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false, serverAuthoritativeText = false } = {}) {
   const next = [];
-  const primaryLatestTimestamp = Math.max(0, ...(Array.isArray(primary) ? primary : []).map((message) => Number(message?.timestamp || 0) || 0));
-  const append = (candidate, preferIncoming = false) => {
+  const incoming = Array.isArray(secondary) ? secondary : [];
+  const append = (candidate, preferIncoming = false, incomingIndex = -1) => {
     if (!candidate || typeof candidate !== 'object') return;
     const existingIndex = next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, candidate));
     if (existingIndex < 0) {
-      // A late hydration response may represent an older durable branch. Once
-      // the local continuity spine is populated, unmatched historical rows
-      // must not be appended after the current conversation and masquerade as
-      // new assistant/user messages.
-      const candidateTimestamp = Number(candidate?.timestamp || 0) || 0;
-      // An older durable row must not masquerade as a new message at the tail,
-      // but discarding it outright silently deleted real messages whenever the
-      // server clock trailed the optimistic mobile clock. Server and mobile
-      // timestamps are not a shared clock, so instead of dropping the row we
-      // insert it at its correct chronological position and let it render.
-      if (preferIncoming && appendOnlyNewer && next.length
-        && primaryLatestTimestamp > 0 && candidateTimestamp <= primaryLatestTimestamp) {
-        let insertAt = next.length;
-        while (insertAt > 0) {
-          const priorTimestamp = Number(next[insertAt - 1]?.timestamp || 0) || 0;
-          if (priorTimestamp && priorTimestamp <= candidateTimestamp) break;
-          insertAt -= 1;
-        }
+      // Keep the painted transcript as the spine. A server page may use a
+      // different clock, so place unmatched rows next to matched neighbors in
+      // that page instead of inserting by timestamp.
+      if (preferIncoming && appendOnlyNewer && next.length) {
+        const nextAnchor = incoming.slice(incomingIndex + 1)
+          .find((row) => next.some((item) => _mobileHistoryTurnsRepresentSameTurn(item, row)));
+        const previousAnchor = incoming.slice(0, incomingIndex).reverse()
+          .find((row) => next.some((item) => _mobileHistoryTurnsRepresentSameTurn(item, row)));
+        const insertAt = nextAnchor
+          ? next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, nextAnchor))
+          : previousAnchor
+            ? next.findIndex((item) => _mobileHistoryTurnsRepresentSameTurn(item, previousAnchor)) + 1
+            : next.length;
         next.splice(insertAt, 0, candidate);
         return;
       }
@@ -5820,6 +5833,14 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
     const target = existing;
     const source = preferIncoming ? candidate : existing;
     if (target.role === 'ai') {
+      if (serverAuthoritativeText && preferIncoming && target.streaming !== true && candidate.streaming !== true) {
+        const canonicalText = _mobileMessageCopyText(candidate);
+        if (canonicalText) {
+          if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
+          target.body.text = canonicalText;
+          target.content = canonicalText;
+        }
+      }
       _mergeMobileAssistantTurnDetails(target, source);
       _mergeMobileMediaIntoMessage(target, _collectMessageMedia(source));
       _mergeMobileProductCarouselIntoMessage(target, source.productCarousel);
@@ -5829,7 +5850,7 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
     if (preferIncoming && candidate.streaming === true && target.streaming !== false) target.streaming = true;
   };
   (Array.isArray(primary) ? primary : []).forEach((message) => append(message));
-  (Array.isArray(secondary) ? secondary : []).forEach((message) => append(message, true));
+  incoming.forEach((message, index) => append(message, true, index));
   if (sortByTimestamp) {
     const originalOrder = new Map(next.map((message, index) => [message, index]));
     next.sort((a, b) => {
@@ -5923,7 +5944,7 @@ function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThrea
   // like consecutive assistant messages after hydration. Enrich the painted
   // rows from the server and append genuinely new durable rows monotonically.
   const base = preserveLocalHistory
-    ? _mergeMobileHistoryRecords(durableLocal, mapped, { appendOnlyNewer: true })
+    ? _mergeMobileHistoryRecords(durableLocal, mapped, { appendOnlyNewer: true, serverAuthoritativeText: true })
     : mapped;
   const merged = _mergeMobileThreadLocalArtifacts(base, local);
   _dedupeMobileUserTurns(merged);

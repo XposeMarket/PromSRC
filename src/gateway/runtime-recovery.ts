@@ -553,7 +553,9 @@ function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot, sin
   // belongs to this restart epoch (else it's a stale/older checkpoint).
   const recovery = String(runtime.recoveryData?.recovery || '').trim();
   if (recovery !== 'chat_checkpointed') return false;
-  if (sinceEpoch <= 0) return true;
+  // No interrupted runtime from this shutdown means there is no restart
+  // recovery epoch. An older checkpoint must not manufacture BOOT work.
+  if (sinceEpoch <= 0) return false;
   return runtimeRestartEpoch(runtime) >= sinceEpoch;
 }
 

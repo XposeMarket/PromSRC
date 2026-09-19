@@ -544,6 +544,19 @@ export async function runBootMd(
         && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
         && !!targetRestartCheckpoint
         && /restart|prom_apply_dev_changes/i.test(`${targetGoal.pausedReason || ''} ${targetRestartCheckpoint.reason || ''}`);
+      // The previous session is included as a routing hint even for a restart
+      // requested after its chat turn finished. That alone must not launch a
+      // new BOOT model turn or append an unsolicited reply to the transcript.
+      if (!target.recoveryRuntimeIds.length && !goalOwnedRestart && !target.devEdit) {
+        return {
+          finalText: '',
+          targetSessionId: target.sessionId,
+          notificationId: undefined,
+          goalOwnedRestart: false,
+          foregroundPlannedRestart: false,
+          recoveryRuntimeIds: [],
+        };
+      }
       // A plain manual restart is already complete once this replacement
       // gateway has booted.  Limit this shortcut to the session that issued
       // the restart so unrelated runtimes interrupted by the same process

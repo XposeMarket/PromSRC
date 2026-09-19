@@ -21379,6 +21379,19 @@ router.post('/api/chat/steer', (req, res) => {
       res.status(400).json({ ok: false, success: false, error: 'Message or attachment required' });
       return;
     }
+    const mobileQueueSteer = String(body.source || '').trim() === 'mobile_queue_button';
+    const clientSteerId = mobileQueueSteer ? String(body.clientSteerId || '').trim().slice(0, 160) : '';
+    // A response can be lost after the gateway accepted the steer. Retrying the
+    // same queued item must not inject or display it a second time.
+    const priorSteer = clientSteerId
+      ? getSession(sessionId).history.find((entry: any) => entry?.role === 'user' && entry?.clientSteerId === clientSteerId)
+      : null;
+    if (priorSteer) {
+      res.json({ ok: true, success: true, eventId: (priorSteer as any).steerEventId,
+        messageId: priorSteer.messageId, timestamp: priorSteer.timestamp,
+        workflowGroupId: (priorSteer as any).workflowGroupId, alreadyAccepted: true });
+      return;
+    }
     const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
     const activeRuntime = listLiveRuntimes()
       .filter((runtime) => (
@@ -21402,6 +21415,23 @@ router.post('/api/chat/steer', (req, res) => {
     if (!steer.ok || !steer.event) {
       res.status(409).json({ ok: false, success: false, error: steer.error || 'Could not queue steer event.' });
       return;
+    }
+    let durableSteer: any = null;
+    if (mobileQueueSteer) {
+      const timestamp = Date.now();
+      const displayMessage = String(body.displayMessage || message).trim() || message;
+      durableSteer = {
+        role: 'user', content: displayMessage, timestamp,
+        messageId: `chat-steer:${steer.event.id}`,
+        steerEventId: steer.event.id,
+        clientSteerId: clientSteerId || undefined,
+        channel: 'mobile', channelLabel: 'steer',
+        workflowGroupId: `chat_steer_${steer.event.id}`,
+        workflowPart: 'interruption', workflowLabel: 'Message sent as steer',
+        ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
+      };
+      addMessage(sessionId, durableSteer, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+      flushSession(sessionId);
     }
     const injectedContextText = buildChatSteerContextBlock(steer.event);
     updateLiveRuntimeCheckpoint(activeRuntime.id, {
@@ -21449,6 +21479,11 @@ router.post('/api/chat/steer', (req, res) => {
       runtimeId: activeRuntime.id,
       injectedContextText,
       activeRun: summarizeMobileRuntime(activeRuntime),
+      ...(durableSteer ? {
+        messageId: durableSteer.messageId,
+        timestamp: durableSteer.timestamp,
+        workflowGroupId: durableSteer.workflowGroupId,
+      } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -22702,6 +22737,7 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
     const existingHistory = Array.isArray(getSession(id).history) ? getSession(id).history : [];
     const history = mergeHistoryWithExistingMessageMetadata(existingHistory, rawHistory, {
       preserveAllExisting: isMobileHistorySyncRequest(req),
+      preferIncomingContent: req.body?.repairTranscriptText === true && !isMobileHistorySyncRequest(req),
     });
     replaceHistory(id, history as any, {
       resetCompaction: req.body?.resetCompaction === true,

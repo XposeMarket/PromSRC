@@ -32,3 +32,55 @@ assert.equal(merged[3]._clientRequestId, requestId);
 assert.equal(merged[3].processEntries?.length, 1, 'mobile process metadata must survive canonical reconciliation');
 
 console.log('history reconciliation mobile assistant echo regression passed');
+
+const groupedReplies = [
+  { role: 'user', content: 'First', timestamp: 100, clientRequestId: 'one', messageId: 'mobile-request:one:user' },
+  { role: 'user', content: 'First', timestamp: 100, clientRequestId: 'one' },
+  { role: 'assistant', content: 'First answer', timestamp: 300, clientRequestId: 'one' },
+  { role: 'assistant', content: 'Second answer', timestamp: 300, clientRequestId: 'two' },
+  { role: 'assistant', content: 'Third answer', timestamp: 300, clientRequestId: 'three' },
+  { role: 'user', content: 'Second', timestamp: 200, clientRequestId: 'two', messageId: 'mobile-request:two:user' },
+  { role: 'user', content: 'Second', timestamp: 200, clientRequestId: 'two' },
+  { role: 'user', content: 'Third', timestamp: 201, clientRequestId: 'three' },
+];
+const repaired = mergeHistoryWithExistingMessageMetadata(groupedReplies, [
+  { role: 'user', content: 'Second', timestamp: 900, _clientRequestId: 'two' },
+], { preserveAllExisting: true });
+assert.deepEqual(repaired.map((row) => `${row.role}:${row.content}`), [
+  'user:First', 'assistant:First answer',
+  'user:Second', 'assistant:Second answer',
+  'user:Third', 'assistant:Third answer',
+]);
+assert.equal(repaired[2].timestamp, 200, 'mobile clock must not replace canonical server time');
+assert.equal(repaired[2].messageId, undefined, 'temporary runtime ID must not replace canonical identity');
+const canonicalUser = mergeHistoryWithExistingMessageMetadata(
+  [{ role: 'user', content: 'Prompt', timestamp: 50, clientRequestId: 'canonical' }],
+  [{ role: 'user', content: 'Prompt', timestamp: 55, clientRequestId: 'canonical', messageId: 'mobile-request:canonical:user' }],
+  { preserveAllExisting: true },
+);
+assert.equal(canonicalUser.length, 1);
+assert.equal(canonicalUser[0].messageId, undefined, 'a temporary mobile runtime ID must never become durable');
+
+const repeated = mergeHistoryWithExistingMessageMetadata([
+  { role: 'user', content: 'Yes', timestamp: 1000 },
+  { role: 'user', content: 'Yes', timestamp: 2000 },
+], [{ role: 'user', content: 'Yes', timestamp: 3000 }], { preserveAllExisting: true });
+assert.equal(repeated.length, 3, 'identical text sent at different times represents distinct turns');
+const corrected = mergeHistoryWithExistingMessageMetadata(
+  [{ role: 'assistant', messageId: 'mobile-request:repair:assistant', content: 'New answer\n\nOld answer', body: { text: 'New answer\n\nOld answer' } }],
+  [{ role: 'assistant', messageId: 'mobile-request:repair:assistant', content: 'New answer', body: { text: 'New answer' } }],
+  { preferIncomingContent: true },
+);
+assert.equal(corrected.length, 1);
+assert.equal(corrected[0].content, 'New answer', 'explicit transcript repair must replace corrupted durable text');
+assert.equal(corrected[0].body.text, 'New answer');
+const duplicateRepair = mergeHistoryWithExistingMessageMetadata([
+  { role: 'assistant', _clientRequestId: 'repair', workEndedAt: 500, content: 'New answer', processEntries: [{ type: 'info' }] },
+  { role: 'assistant', _clientRequestId: 'repair', workEndedAt: 500, content: 'New answer\n\nOld answer', processEntries: [{ type: 'info' }, { type: 'tool' }] },
+], [
+  { role: 'assistant', _clientRequestId: 'repair', workEndedAt: 500, content: 'New answer', body: { text: 'New answer' } },
+], { preferIncomingContent: true });
+assert.equal(duplicateRepair.length, 1, 'repair must not append the old corrupted row as a server-only artifact');
+assert.equal(duplicateRepair[0].content, 'New answer');
+assert.equal(duplicateRepair[0].processEntries?.length, 2, 'repair must retain the richer saved trace');
+console.log('history reconciliation order, dedupe, and repeat regressions passed');
