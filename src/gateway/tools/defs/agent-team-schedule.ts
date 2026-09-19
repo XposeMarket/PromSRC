@@ -1455,6 +1455,11 @@ export function getAgentTeamScheduleTools(): any[] {
             model: { type: 'string', description: 'Optional explicit spawn model override; otherwise background_task routing is used.' },
             provider: { type: 'string', description: 'Optional explicit provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional provider/model-aware reasoning override for this spawn.' },
+            tool_categories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'For spawn: tool categories the worker starts with (e.g. ["workspace_write"], ["browser_automation"]). Workers get core tools only plus these; the task prompt is NOT keyword-scanned for categories, so declare what the job needs. The worker can still call request_tool_category.',
+            },
           },
         },
       },
