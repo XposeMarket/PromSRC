@@ -96,6 +96,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             modelOverride: args.model ? String(args.model) : undefined,
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
+            toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
