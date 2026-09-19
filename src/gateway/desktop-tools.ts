@@ -760,6 +760,12 @@ export interface DesktopContextGathered {
   virtualScreen: { left: number; top: number; width: number; height: number };
   windows: DesktopWindowInfo[];
   activeWindow: DesktopWindowInfo | null;
+  /**
+   * Set when the PowerShell desktop probe returned no parseable JSON (timeout,
+   * host busy, or PowerShell error). The zeroed monitors/virtualScreen values
+   * are placeholders, not a real "0 displays" reading.
+   */
+  probeFailed?: { reason: string; outputBytes: number };
 }
 
 function normalizeMonitors(raw: any): DesktopMonitorInfo[] {
@@ -979,11 +985,18 @@ if ($hFg -ne [IntPtr]::Zero) {
   });
   const parsed = parseJsonMaybe(raw);
   if (!parsed) {
-    const empty = {
+    const trimmedRaw = String(raw || '').trim();
+    const empty: DesktopContextGathered = {
       monitors: [],
       virtualScreen: { left: 0, top: 0, width: 0, height: 0 },
       windows: [],
       activeWindow: null,
+      probeFailed: {
+        reason: trimmedRaw
+          ? `desktop probe output was not JSON (${trimmedRaw.slice(0, 160)}${trimmedRaw.length > 160 ? '…' : ''})`
+          : 'desktop probe returned no output (PowerShell timed out or the host was busy)',
+        outputBytes: Buffer.byteLength(raw, 'utf8'),
+      },
     };
     markDesktopPerformance(observer, 'context_done', {
       includeWindows,
@@ -1096,8 +1109,14 @@ export async function desktopDoctor(
       includeWindows: deep,
       onPerformanceStage: observer,
     });
-    ok('Monitor/DPI context', `${ctx.monitors.length || 0} monitor(s), virtual ${ctx.virtualScreen.width}x${ctx.virtualScreen.height} at (${ctx.virtualScreen.left},${ctx.virtualScreen.top})`);
-    if (!ctx.monitors.length) warn('Monitor/DPI context', 'no monitor records returned by Windows Forms');
+    if (ctx.probeFailed) {
+      // Zeroed monitors/virtualScreen here are placeholders from a failed probe,
+      // not a real reading. Report the probe failure instead of "0 monitors PASS".
+      warn('Monitor/DPI context', `desktop probe failed: ${ctx.probeFailed.reason}. Monitor and virtual-screen values are unknown; retry doctor when the host is idle.`);
+    } else {
+      ok('Monitor/DPI context', `${ctx.monitors.length || 0} monitor(s), virtual ${ctx.virtualScreen.width}x${ctx.virtualScreen.height} at (${ctx.virtualScreen.left},${ctx.virtualScreen.top})`);
+      if (!ctx.monitors.length) warn('Monitor/DPI context', 'no monitor records returned by Windows Forms');
+    }
     const bad = ctx.monitors.filter((m) => m.width < 1 || m.height < 1);
     if (bad.length) fail('Monitor bounds', `${bad.length} monitor(s) have invalid dimensions`);
     else ok('Monitor bounds', 'all monitor dimensions are positive');
