@@ -35,6 +35,19 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'save_site_shortcut',
 ]);
 
+export function normalizeWebFetchBatchUrls(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const url = String(item ?? '').trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
 function extractXStatusId(raw: any): string | null {
   const text = String(raw || '').trim();
   const match = text.match(/\/status\/(\d+)/i);
@@ -141,7 +154,30 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
       }
 
       case 'web_fetch': {
-        const url = args.url || '';
+        // `urls` (batch) is advertised in the web_fetch schema, but this
+        // executor used to read only `url`, so every batch call failed with
+        // "url is required". Route batch shapes to the batch fetcher first.
+        const batchUrls = normalizeWebFetchBatchUrls(args.urls);
+        if (batchUrls.length > 0) {
+          const batchResult = await executeWebFetchBatch({
+            urls: batchUrls,
+            max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
+            concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
+            include_media: args.include_media === true,
+            include_thread: args.include_thread === true,
+          });
+          return {
+            name,
+            args,
+            result: batchResult.stdout || batchResult.error || 'Batch fetch completed without output.',
+            error: batchResult.success !== true,
+            data: batchResult.data,
+          };
+        }
+        const url = String(args.url || '').trim();
+        if (!url) {
+          return { name, args, result: 'url is required (or pass urls: string[] for a batch fetch)', error: true };
+        }
         let extractionAction = 'Extracting Media';
         let analysisAction = 'Analyzing Media';
         const normalizePhaseAction = (message: string, fallback: string): string => {
@@ -211,7 +247,7 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
 
       case 'web_fetch_batch': {
         const toolResult = await executeWebFetchBatch({
-          urls: Array.isArray(args.urls) ? args.urls.map((url: any) => String(url)) : [],
+          urls: normalizeWebFetchBatchUrls(args.urls),
           max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
           concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
         });
