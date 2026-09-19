@@ -44,6 +44,22 @@ let _eventLoopStallRestartScheduled = false;
 let _memoryPressureRestartScheduled = false;
 let _memoryPressureConsecutiveSamples = 0;
 let _lastHeartbeatCpuUsage = process.cpuUsage();
+// Warm handoff: once this gateway is draining, the replacement owns the
+// supervisor-facing status file, the auto-restart triggers, and the WebSocket
+// clients. Broadcasts are relayed to it instead.
+let _gatewayDraining = false;
+let _drainBroadcastRelay: ((data: object) => void) | null = null;
+
+export function isGatewayDraining(): boolean { return _gatewayDraining; }
+
+export function enterGatewayDrainMode(relay: ((data: object) => void) | null): void {
+  _gatewayDraining = true;
+  _drainBroadcastRelay = relay;
+  if (_runtimeHeartbeatTimer) {
+    clearInterval(_runtimeHeartbeatTimer);
+    _runtimeHeartbeatTimer = null;
+  }
+}
 const _nodeRuntime = getNodeRuntimeSnapshot();
 const _eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 _eventLoopDelayMonitor.enable();
@@ -166,6 +182,7 @@ function appendEventLoopStallDiagnostic(
 // stall is a process-health failure, so the normal lifecycle restart must own
 // interruption and recovery for every active runtime, including Thought/Dream.
 function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: number): void {
+  if (_gatewayDraining) return;
   if (!EVENT_LOOP_STALL_AUTORESTART_ENABLED) return;
   if (EVENT_LOOP_STALL_RESTART_MS <= 0) return;
   if (heartbeatDriftMs < EVENT_LOOP_STALL_RESTART_MS) return;
@@ -226,6 +243,7 @@ export function shouldScheduleGatewayMemoryRecovery(
 }
 
 function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: number): void {
+  if (_gatewayDraining) return;
   if (MEMORY_RESTART_RSS_BYTES <= 0 || memory.rss < MEMORY_RESTART_RSS_BYTES) {
     _memoryPressureConsecutiveSamples = 0;
     return;
@@ -268,6 +286,9 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
         originChannel: _lastMainSessionId.startsWith('mobile_') || _lastMainSessionId === 'mobile_default' ? 'mobile' : 'web',
         title: 'Gateway memory-pressure recovery',
         summary: `Gateway RSS remained above the safe ${Math.round(MEMORY_RESTART_RSS_BYTES / (1024 * 1024 * 1024) * 100) / 100} GB boundary, so Prometheus checkpointed active work and recycled the gateway before paging could stall it.`,
+        // The whole point is to release this process's memory; keeping it
+        // alive to drain would double the footprint instead.
+        handoffPolicy: 'never',
       });
     } catch (err: any) {
       console.error('[GatewayRuntime] Memory-pressure recovery restart failed:', err?.message || err);
@@ -278,6 +299,7 @@ function maybeScheduleMemoryPressureRecovery(memory: NodeJS.MemoryUsage, now: nu
 }
 
 function writeRuntimeStatus(reason = 'heartbeat'): void {
+  if (_gatewayDraining) return;
   try {
     const now = Date.now();
     const expectedIntervalMs = 5000;
@@ -445,6 +467,9 @@ export function getWebSocketClientCount(): number {
 }
 
 export function broadcastWS(data: object): void {
+  if (_drainBroadcastRelay) {
+    try { _drainBroadcastRelay(data); } catch {}
+  }
   const msg = JSON.stringify(data);
   wssInstances.forEach((server) => {
     server.clients.forEach((client: any) => {

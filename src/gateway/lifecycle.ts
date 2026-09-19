@@ -23,10 +23,18 @@ import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../config/gateway-p
 import { getConfig } from '../config/config.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
-import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
-import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goals';
+import { prepareActiveRuntimesForGatewayShutdown, prepareInitiatingRuntimesForGatewayHandoff } from './runtime-recovery';
+import { recordActiveMainChatGoalsInterruptedForRestart, recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
 import { desktopBackgroundShutdown } from './desktop-background';
+import { listLocalRunningRuntimes, type LiveRuntimeSnapshot } from './live-runtime-registry';
+import { flushSession } from './session';
+import {
+  beginGatewayHandoffHost,
+  completeGatewayHandoffHost,
+  waitForGatewayHandoffDrain,
+} from './runtime/gateway-handoff-bridge';
+import { GATEWAY_HANDOFF_IPC_MESSAGE_TYPE, type GatewayHandoffLauncherNotice } from './runtime/gateway-handoff-protocol';
 import type { DevSourceEditContinuation } from './dev-source-approvals';
 import { listCoordinatedRestartBlockers } from './dev-edit-coordinator';
 import {
@@ -56,6 +64,18 @@ export interface RestartContext {
   taskInitiatedTool?: 'gateway_restart' | 'prom_apply_dev_changes';
   /** Explicit no-build/manual restart. This bypasses stale-session model continuation. */
   quickRestart?: boolean;
+  /**
+   * Warm handoff preference. `prefer` (default) keeps this process alive to
+   * finish the runtimes it owns while the replacement serves new work;
+   * `never` forces the legacy interrupt-and-exit restart.
+   */
+  handoffPolicy?: 'prefer' | 'never';
+  /** Filled in by gracefulRestart when the restart became a warm handoff. */
+  handoff?: {
+    hostPid: number;
+    socketPath: string;
+    carriedRuntimeIds: string[];
+  };
   suppressStandaloneRestartMessage?: boolean;
   originChannel?: 'web' | 'mobile' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
   respondToTelegram?: boolean;
@@ -448,6 +468,10 @@ interface ShutdownHooks {
   closeHttpServer?: () => Promise<void>;
   closeWebSocket?: () => void;
   flushSessions?: () => void | Promise<void>;
+  /** Warm handoff: stop pollers/schedulers but keep in-flight runtimes alive. */
+  stopSchedulersForHandoff?: () => void | Promise<void>;
+  /** Warm handoff: release the listeners without destroying active SSE responses. */
+  closeListenersForHandoff?: () => Promise<void>;
 }
 
 let _shutdownHooks: ShutdownHooks = {};
@@ -637,6 +661,220 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   shutdownMark('shutdown complete');
 }
 
+// ─── Warm Handoff ─────────────────────────────────────────────────────────────
+// A planned restart no longer has to kill every running turn. When this
+// process can hand its listeners to a replacement, it interrupts only the
+// runtime(s) that asked for the restart (they must continue on the new code),
+// then keeps running everything else until it finishes on its own.
+
+type HandoffLauncher = 'supervisor_ipc' | 'self_spawn';
+
+let _handoffDraining = false;
+
+export function isGatewayHandoffDraining(): boolean {
+  return _handoffDraining;
+}
+
+function handoffMaxDrainMs(): number {
+  const raw = Number(process.env.PROMETHEUS_GATEWAY_HANDOFF_MAX_DRAIN_MS);
+  if (Number.isFinite(raw) && raw > 0) return Math.max(60_000, Math.floor(raw));
+  return 12 * 60 * 60 * 1000;
+}
+
+/** The runtime that owns the restart request must not keep running on the old code. */
+export function isRestartInitiatingRuntime(runtime: LiveRuntimeSnapshot, ctx: RestartContext): boolean {
+  const toolName = String(runtime.checkpoint?.toolName || '').trim();
+  if (toolName === 'gateway_restart' || toolName === 'prom_apply_dev_changes') return true;
+  if (ctx.taskId && runtime.taskId && runtime.taskId === ctx.taskId) return true;
+  const ownedSessions = new Set<string>();
+  if (ctx.devEditContinuation?.sessionId) ownedSessions.add(String(ctx.devEditContinuation.sessionId));
+  for (const sessionId of ctx.devApplyBatch?.memberSessionIds || []) ownedSessions.add(String(sessionId));
+  for (const member of ctx.devApplyBatch?.members || []) {
+    if (member?.sessionId) ownedSessions.add(String(member.sessionId));
+  }
+  return !!runtime.sessionId && ownedSessions.has(String(runtime.sessionId));
+}
+
+export interface GatewayHandoffPlan {
+  eligible: boolean;
+  reason: string;
+  launcher?: HandoffLauncher;
+  carried: LiveRuntimeSnapshot[];
+}
+
+export function planGatewayHandoff(ctx: RestartContext): GatewayHandoffPlan {
+  const none = (reason: string): GatewayHandoffPlan => ({ eligible: false, reason, carried: [] });
+  if (process.env.PROMETHEUS_GATEWAY_HANDOFF === '0') return none('disabled_by_env');
+  if (ctx.handoffPolicy === 'never') return none('policy_never');
+  if (ctx.electronManaged || ctx.restartLauncher === 'electron') return none('electron_managed');
+  if (ctx.restartScope === 'supervisor') return none('supervisor_replacement');
+  let launcher: HandoffLauncher;
+  if (ctx.restartLauncher === 'external_supervisor') {
+    if (typeof process.send !== 'function' || !process.connected) return none('supervisor_without_ipc');
+    launcher = 'supervisor_ipc';
+  } else {
+    launcher = 'self_spawn';
+  }
+  const carried = listLocalRunningRuntimes().filter((runtime) => !isRestartInitiatingRuntime(runtime, ctx));
+  if (!carried.length) return none('no_runtimes_to_carry');
+  return { eligible: true, reason: 'carrying_live_runtimes', launcher, carried };
+}
+
+function spawnDetachedReplacementGateway(root: string): { entry?: string } {
+  const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
+  delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
+  // A restart is a replacement of this exact instance, never a request for
+  // the auto-instance allocator. Pin the replacement to the current port so
+  // a stale inherited launcher flag cannot move it to the next free port and
+  // leave the original gateway tree running beside it.
+  delete replacementEnv.PROMETHEUS_AUTO_INSTANCE;
+  delete replacementEnv.PROMETHEUS_NEW_INSTANCE;
+  replacementEnv.PROMETHEUS_GATEWAY_PORT = String(
+    getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
+  );
+  const launch = resolveDirectGatewayLaunch(root);
+  const child = launch
+    ? spawn(process.execPath, launch.args, {
+      cwd: root,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: replacementEnv,
+    })
+    : spawn('prom', ['gateway', 'start'], {
+      cwd: root,
+      detached: true,
+      stdio: 'ignore',
+      shell: true,
+      env: replacementEnv,
+    });
+  child.unref();
+  return { entry: launch?.entry };
+}
+
+async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHandoffPlan): Promise<void> {
+  _handoffDraining = true;
+  const trigger = (
+    restartCtx.devEditContinuation
+    || restartCtx.devApplyBatch
+    || restartCtx.devReload
+    || restartCtx.reason === 'build_deploy'
+  )
+    ? 'prom_apply_dev_changes'
+    : 'gateway_restart';
+  const label = restartCtx.summary || restartCtx.title || restartCtx.reason;
+  console.log(`[lifecycle] ═══ Warm handoff: ${plan.carried.length} runtime(s) keep running here while the replacement starts (${plan.launcher}) ═══`);
+
+  // 1. The restart-owning turn(s) checkpoint exactly like a legacy restart so
+  //    BOOT on the replacement resumes them on the new code.
+  let initiating: LiveRuntimeSnapshot[] = [];
+  try {
+    initiating = prepareInitiatingRuntimesForGatewayHandoff(trigger, (runtime) => isRestartInitiatingRuntime(runtime, restartCtx));
+  } catch (e: any) {
+    console.warn('[lifecycle] Handoff initiating-runtime checkpoint error:', e.message);
+  }
+  const initiatingSessions = new Set<string>();
+  for (const runtime of initiating) {
+    if (runtime.sessionId) initiatingSessions.add(String(runtime.sessionId));
+  }
+  if (restartCtx.devEditContinuation?.sessionId) initiatingSessions.add(String(restartCtx.devEditContinuation.sessionId));
+  for (const sessionId of restartCtx.devApplyBatch?.memberSessionIds || []) initiatingSessions.add(String(sessionId));
+  for (const sessionId of initiatingSessions) {
+    try {
+      const goal = recordMainChatGoalInterruptedForRestart(sessionId, trigger);
+      if (goal?.status === 'restarting') console.log(`[lifecycle] Preserved main-chat goal for ${sessionId} across handoff.`);
+    } catch (e: any) {
+      console.warn('[lifecycle] Handoff goal checkpoint error:', e.message);
+    }
+    try { flushSession(sessionId); } catch {}
+  }
+  if (initiating.length) console.log(`[lifecycle] Checkpointed ${initiating.length} restart-initiating runtime(s) for the replacement.`);
+
+  // 2. Open the handoff channel; from here on the replacement owns the
+  //    ledger, the status/lease files, and the WebSocket clients.
+  const host = await beginGatewayHandoffHost({ reason: label, restartTimestamp: restartCtx.timestamp });
+  const carriedRuntimeIds = plan.carried.map((runtime) => runtime.id);
+  writeRestartContext({
+    ...restartCtx,
+    handoff: { hostPid: process.pid, socketPath: host.socketPath, carriedRuntimeIds },
+  });
+
+  // 3. Stop everything that would start *new* work here.
+  try { await _shutdownHooks.stopSchedulersForHandoff?.(); } catch (e: any) {
+    console.warn('[lifecycle] Handoff scheduler stop error:', e.message);
+  }
+  // 4. Release the port. Active SSE responses stay open on their sockets.
+  try { await _shutdownHooks.closeListenersForHandoff?.(); } catch (e: any) {
+    console.warn('[lifecycle] Handoff listener close error:', e.message);
+  }
+
+  // 5. Start the replacement.
+  const notice: GatewayHandoffLauncherNotice = {
+    type: GATEWAY_HANDOFF_IPC_MESSAGE_TYPE,
+    hostPid: process.pid,
+    socketPath: host.socketPath,
+    reason: label,
+    runtimeCount: carriedRuntimeIds.length,
+  };
+  if (plan.launcher === 'supervisor_ipc') {
+    process.send!(notice, (error: Error | null) => {
+      if (error) console.error(`[lifecycle] Handoff notice to supervisor failed: ${error.message}`);
+    });
+    console.log('[lifecycle] Handoff notice sent to the supervisor; it will launch the replacement.');
+  } else {
+    try {
+      const spawned = spawnDetachedReplacementGateway(getProjectRoot());
+      console.log(`[lifecycle] Replacement gateway spawned${spawned.entry ? ` (${spawned.entry})` : ''}; draining ${carriedRuntimeIds.length} runtime(s).`);
+    } catch (err: any) {
+      console.error(`[lifecycle] Failed to spawn the replacement gateway: ${err.message}`);
+    }
+  }
+
+  // 6. Drain in the background. Callers (the restart tool, /restart routes)
+  //    must return promptly; the process exits on its own when done.
+  void runGatewayHandoffDrain(host, carriedRuntimeIds.length);
+}
+
+async function runGatewayHandoffDrain(host: { waitForClient(ms: number): Promise<boolean>; status(): { connected: boolean } }, carriedCount: number): Promise<void> {
+  const maxMs = handoffMaxDrainMs();
+  const connected = await host.waitForClient(90_000);
+  if (!connected) console.warn('[lifecycle] Replacement gateway has not connected to the handoff channel yet; continuing to drain.');
+  let lastLogAt = 0;
+  const drain = await waitForGatewayHandoffDrain({
+    maxMs,
+    onTick: (running, waitedMs) => {
+      if (Date.now() - lastLogAt < 60_000) return;
+      lastLogAt = Date.now();
+      console.log(`[lifecycle] Handoff drain: ${running} runtime(s) still running after ${Math.round(waitedMs / 1000)}s${host.status().connected ? '' : ' (replacement not connected)'}.`);
+    },
+  });
+  let interruptedIds: string[] = [];
+  if (drain.timedOut) {
+    console.warn(`[lifecycle] Handoff drain deadline (${Math.round(maxMs / 60_000)} min) reached; checkpointing remaining runtimes for recovery.`);
+    try {
+      interruptedIds = prepareActiveRuntimesForGatewayShutdown('handoff_drain_timeout').map((runtime) => runtime.id);
+    } catch (e: any) {
+      console.warn('[lifecycle] Handoff timeout checkpoint error:', e.message);
+    }
+  } else {
+    console.log(`[lifecycle] Handoff drain complete: all ${carriedCount} carried runtime(s) finished in ${Math.round(drain.waitedMs / 1000)}s.`);
+  }
+  try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
+    console.warn('[lifecycle] Handoff worker stop error:', e.message);
+  }
+  try { await desktopBackgroundShutdown(); } catch (e: any) {
+    console.warn('[lifecycle] Handoff desktop stop error:', e.message);
+  }
+  try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
+    console.warn('[lifecycle] Handoff session flush error:', e.message);
+  }
+  try { await completeGatewayHandoffHost(interruptedIds); } catch (e: any) {
+    console.warn('[lifecycle] Handoff completion error:', e.message);
+  }
+  console.log('[lifecycle] Drained gateway exiting.');
+  setTimeout(() => process.exit(0), 250);
+}
+
 // ─── Graceful Restart ─────────────────────────────────────────────────────────
 
 /**
@@ -650,6 +888,12 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
  * The new process will pick up the restart-context.json on boot.
  */
 export async function gracefulRestart(ctx: RestartContext): Promise<void> {
+  if (_handoffDraining) {
+    throw new Error(
+      'This gateway is already handing off to a replacement and only finishing the work it owns. '
+      + 'Further restarts must be requested from the replacement gateway once it is online.',
+    );
+  }
   if (!ctx.devApplyBatch) {
     const blockers = listCoordinatedRestartBlockers();
     if (blockers.length) {
@@ -671,6 +915,13 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     electronManaged,
   };
   console.log(`[lifecycle] Launcher: ${restartCtx.restartLauncher}`);
+
+  const handoffPlan = planGatewayHandoff(restartCtx);
+  if (handoffPlan.eligible) {
+    await beginGatewayHandoff(restartCtx, handoffPlan);
+    return;
+  }
+  console.log(`[lifecycle] Warm handoff not used (${handoffPlan.reason}); performing a full restart.`);
 
   console.log(`[lifecycle] ═══ Graceful restart initiated: ${ctx.reason} ═══`);
   console.log(`[lifecycle] Title: ${ctx.title || '(none)'}`);
@@ -746,35 +997,8 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // could re-enter the supervisor. Prefer a compiled entry when it is newer
   // than the source tree; otherwise preserve source-mode TSX execution.
   try {
-    const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
-    delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
-    // A restart is a replacement of this exact instance, never a request for
-    // the auto-instance allocator. Pin the replacement to the current port so
-    // a stale inherited launcher flag cannot move it to the next free port and
-    // leave the original gateway tree running beside it.
-    delete replacementEnv.PROMETHEUS_AUTO_INSTANCE;
-    delete replacementEnv.PROMETHEUS_NEW_INSTANCE;
-    replacementEnv.PROMETHEUS_GATEWAY_PORT = String(
-      getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
-    );
-    const launch = resolveDirectGatewayLaunch(root);
-    const child = launch
-      ? spawn(process.execPath, launch.args, {
-        cwd: root,
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: replacementEnv,
-      })
-      : spawn('prom', ['gateway', 'start'], {
-        cwd: root,
-        detached: true,
-        stdio: 'ignore',
-        shell: true,
-        env: replacementEnv,
-      });
-    child.unref();
-    console.log(`[lifecycle] New gateway process spawned${launch ? ` (${launch.entry})` : ''}. Exiting old process...`);
+    const spawned = spawnDetachedReplacementGateway(root);
+    console.log(`[lifecycle] New gateway process spawned${spawned.entry ? ` (${spawned.entry})` : ''}. Exiting old process...`);
   } catch (err: any) {
     console.error(`[lifecycle] Failed to spawn new process: ${err.message}`);
     console.error('[lifecycle] The gateway will NOT restart automatically. Manual restart required.');

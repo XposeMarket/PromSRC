@@ -346,15 +346,30 @@ function getProductionStore(): RuntimeProgressLeaseStore {
   return productionStore;
 }
 
+// A draining gateway (warm handoff) must stop advertising itself as the live
+// gateway: the replacement owns the supervisor-facing lease file from then on.
+let progressLeaseWritesSuspended = false;
+
+export function suspendRuntimeProgressLeaseWrites(): void {
+  progressLeaseWritesSuspended = true;
+}
+
+export function areRuntimeProgressLeaseWritesSuspended(): boolean {
+  return progressLeaseWritesSuspended;
+}
+
 export function registerRuntimeProgressLease(input: RuntimeProgressLeaseRegistration): GatewayProgressLease | null {
+  if (progressLeaseWritesSuspended) return null;
   return getProductionStore().register(input);
 }
 
 export function renewRuntimeProgressLease(runtimeId: string, input: RuntimeProgressLeaseRenewal = {}): GatewayProgressLease | null {
+  if (progressLeaseWritesSuspended) return null;
   return getProductionStore().renew(runtimeId, input);
 }
 
 export function finishRuntimeProgressLease(runtimeId: string): void {
+  if (progressLeaseWritesSuspended) return;
   getProductionStore().finish(runtimeId);
 }
 

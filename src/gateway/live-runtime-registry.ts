@@ -96,6 +96,11 @@ export interface LiveRuntimeSnapshot {
   interruptedAt?: number;
   interruptReason?: string;
   pid?: number;
+  /**
+   * Set on a mirror of a runtime that a draining previous gateway still owns.
+   * `pid` is that host's pid; control requests are forwarded to it.
+   */
+  remoteHostPid?: number;
 }
 
 export interface RuntimeSteerEvent {
@@ -190,6 +195,73 @@ interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
 
 const activeRuntimes = new Map<string, LiveRuntimeRecord>();
 
+// ─── Warm handoff hooks ───────────────────────────────────────────────────────
+// While a gateway drains after a planned restart, the replacement gateway is
+// the only ledger writer. The draining process routes its durable writes
+// through this sink instead of rewriting the shared ledger file underneath
+// the replacement. The replacement mirrors those runtimes as remote records.
+
+export interface LiveRuntimePersistenceSink {
+  upsert(runtime: LiveRuntimeSnapshot, eventType: string, extra?: Record<string, any>): void;
+  delete(runtimeId: string, eventType: string, runtime?: LiveRuntimeSnapshot, extra?: Record<string, any>): void;
+}
+
+export type RemoteRuntimeControlOp = 'runtime_abort' | 'runtime_steer' | 'task_pause' | 'task_cancel';
+export type RemoteRuntimeControlForwarder = (
+  hostPid: number,
+  op: RemoteRuntimeControlOp,
+  args: Record<string, unknown>,
+) => Promise<{ ok: boolean; error?: string }>;
+
+let livePersistenceSink: LiveRuntimePersistenceSink | null = null;
+let remoteRuntimeControlForwarder: RemoteRuntimeControlForwarder | null = null;
+// Once a sink is installed this process must never rewrite the shared ledger
+// file again: the replacement gateway owns it for the rest of this process's
+// life, including the final shutdown flush.
+let ledgerWritesFrozen = false;
+
+export function setLiveRuntimePersistenceSink(sink: LiveRuntimePersistenceSink | null): void {
+  livePersistenceSink = sink;
+  if (sink) ledgerWritesFrozen = true;
+}
+
+export function areLedgerWritesFrozen(): boolean {
+  return ledgerWritesFrozen;
+}
+
+/** Forward a control request for a mirrored runtime to the gateway that owns it. */
+export function requestRemoteRuntimeControl(
+  runtime: Pick<LiveRuntimeSnapshot, 'id' | 'remoteHostPid'>,
+  op: RemoteRuntimeControlOp,
+  args: Record<string, unknown>,
+): boolean {
+  const record = activeRuntimes.get(String(runtime.id || ''));
+  if (!record || !isRemoteRecord(record)) return false;
+  forwardRemoteControl(record, op, args);
+  return true;
+}
+
+export function setRemoteRuntimeControlForwarder(forwarder: RemoteRuntimeControlForwarder | null): void {
+  remoteRuntimeControlForwarder = forwarder;
+}
+
+function isRemoteRecord(record: LiveRuntimeRecord | undefined | null): boolean {
+  return !!record && Number(record.remoteHostPid || 0) > 0;
+}
+
+function forwardRemoteControl(record: LiveRuntimeRecord, op: RemoteRuntimeControlOp, args: Record<string, unknown>): void {
+  const hostPid = Number(record.remoteHostPid || 0);
+  if (!hostPid || !remoteRuntimeControlForwarder) {
+    console.warn(`[live-runtime] no handoff forwarder for remote runtime ${record.id} (${op})`);
+    return;
+  }
+  remoteRuntimeControlForwarder(hostPid, op, args).then((result) => {
+    if (!result.ok) console.warn(`[live-runtime] remote ${op} for runtime ${record.id} on host ${hostPid} failed: ${result.error || 'unknown'}`);
+  }).catch((error: any) => {
+    console.warn(`[live-runtime] remote ${op} for runtime ${record.id} on host ${hostPid} threw: ${error?.message || error}`);
+  });
+}
+
 interface RuntimeLedger {
   version: 1;
   updatedAt: number;
@@ -233,6 +305,10 @@ function readLedger(): RuntimeLedger {
 }
 
 function writeLedgerSync(ledger: RuntimeLedger): void {
+  if (ledgerWritesFrozen) {
+    runtimeLedgerCache = ledger;
+    return;
+  }
   const filePath = getRuntimeLedgerPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
@@ -335,6 +411,13 @@ function resolveRuntimePersistenceIdleWaiters(): void {
 
 async function drainRuntimePersistence(): Promise<void> {
   if (runtimePersistenceActive) return;
+  if (ledgerWritesFrozen) {
+    // Handoff drain: the replacement gateway is the ledger writer now.
+    pendingRuntimeEvents.splice(0);
+    runtimeLedgerDirty = false;
+    resolveRuntimePersistenceIdleWaiters();
+    return;
+  }
   runtimePersistenceActive = true;
   try {
     while (runtimeLedgerDirty || pendingRuntimeEvents.length) {
@@ -444,6 +527,12 @@ function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
 }
 
 function persistRuntime(runtime: LiveRuntimeSnapshot, eventType: string, extra?: Record<string, any>, opts?: { full?: boolean }): void {
+  if (livePersistenceSink && !runtime.remoteHostPid) {
+    try { livePersistenceSink.upsert(opts?.full ? runtime : toDurableSnapshot(runtime), eventType, extra); } catch (err: any) {
+      console.warn('[live-runtime] Handoff persistence sink upsert failed:', err?.message || err);
+    }
+    return;
+  }
   try {
     const ledger = readLedger();
     // `full` keeps the heavy checkpoint (process log) on disk — only used on
@@ -458,6 +547,12 @@ function persistRuntime(runtime: LiveRuntimeSnapshot, eventType: string, extra?:
 // Remove a runtime from the durable ledger entirely (terminal runtimes do not
 // need to survive a restart). Still appends a one-line audit event.
 function deleteDurableRuntime(id: string, eventType: string, snapshotForEvent?: LiveRuntimeSnapshot, extra?: Record<string, any>): void {
+  if (livePersistenceSink && !snapshotForEvent?.remoteHostPid) {
+    try { livePersistenceSink.delete(id, eventType, snapshotForEvent ? toDurableSnapshot(snapshotForEvent) : undefined, extra); } catch (err: any) {
+      console.warn('[live-runtime] Handoff persistence sink delete failed:', err?.message || err);
+    }
+    return;
+  }
   try {
     const ledger = readLedger();
     if (ledger.runtimes[id]) {
@@ -498,7 +593,243 @@ function toSnapshot(record: LiveRuntimeRecord): LiveRuntimeSnapshot {
     interruptedAt: record.interruptedAt,
     interruptReason: record.interruptReason,
     pid: record.pid,
+    ...(record.remoteHostPid ? { remoteHostPid: record.remoteHostPid } : {}),
   };
+}
+
+/** Compact, transport-safe form of a snapshot (no raw process log). */
+export function toDurableLiveRuntimeSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
+  return toDurableSnapshot(snapshot);
+}
+
+// ─── Remote (handoff-hosted) runtime mirrors ─────────────────────────────────
+
+function normalizeRemoteSnapshot(hostPid: number, input: Record<string, any>): LiveRuntimeSnapshot | null {
+  const id = String(input?.id || '').trim();
+  const kind = String(input?.kind || '').trim() as LiveRuntimeKind;
+  if (!id || !kind) return null;
+  const { abortSignal: _abortSignal, onAbort: _onAbort, pendingSteers: _pendingSteers, ...rest } = input as any;
+  return {
+    ...rest,
+    id,
+    kind,
+    label: String(input.label || kind),
+    startedAt: Number(input.startedAt) || Date.now(),
+    abortable: input.abortable !== false,
+    status: input.status || 'running',
+    pid: hostPid,
+    remoteHostPid: hostPid,
+    deferTerminalCleanup: false,
+  };
+}
+
+/**
+ * Mirror a runtime still owned by a draining gateway. The replacement keeps the
+ * durable ledger entry (under the host's pid) so a further restart can adopt
+ * the same host again, and so admission/UI code sees the session as busy.
+ */
+export function upsertRemoteLiveRuntime(
+  hostPid: number,
+  input: Record<string, any>,
+  eventType = 'remote_mirror',
+  extra?: Record<string, any>,
+): LiveRuntimeSnapshot | null {
+  const snapshot = normalizeRemoteSnapshot(hostPid, input);
+  if (!snapshot) return null;
+  const existing = activeRuntimes.get(snapshot.id);
+  if (existing && !isRemoteRecord(existing)) {
+    // Never let a mirror shadow a runtime this process owns.
+    return toSnapshot(existing);
+  }
+  const record: LiveRuntimeRecord = {
+    ...(existing || {}),
+    ...snapshot,
+    updatedAt: Number(snapshot.updatedAt) || Date.now(),
+  };
+  const terminal = snapshot.status === 'completed' || snapshot.status === 'aborted';
+  if (terminal) {
+    activeRuntimes.delete(snapshot.id);
+    deleteDurableRuntime(snapshot.id, eventType, snapshot, { ...(extra || {}), hostPid });
+    return snapshot;
+  }
+  if (snapshot.status === 'interrupted') {
+    // The host interrupted this runtime (restart-initiating turn or drain
+    // timeout). It is not live anywhere any more; keep only the durable
+    // record so crash/planned recovery can pick it up.
+    activeRuntimes.delete(snapshot.id);
+    const ledger = readLedger();
+    ledger.runtimes[snapshot.id] = snapshot;
+    queueRuntimePersistence(makeRuntimePersistenceEvent(eventType, snapshot, { ...(extra || {}), hostPid }));
+    return snapshot;
+  }
+  activeRuntimes.set(snapshot.id, record);
+  try {
+    const ledger = readLedger();
+    ledger.runtimes[snapshot.id] = toDurableSnapshot(snapshot);
+    queueRuntimePersistence(makeRuntimePersistenceEvent(eventType, snapshot, { ...(extra || {}), hostPid }));
+  } catch (err: any) {
+    console.warn('[live-runtime] Failed to persist remote runtime mirror:', err?.message || err);
+  }
+  return toSnapshot(record);
+}
+
+export function removeRemoteLiveRuntime(
+  hostPid: number,
+  runtimeId: string,
+  eventType = 'remote_finished',
+  runtime?: Record<string, any>,
+  extra?: Record<string, any>,
+): LiveRuntimeSnapshot | null {
+  const key = String(runtimeId || '');
+  const record = activeRuntimes.get(key);
+  if (record && !isRemoteRecord(record)) return toSnapshot(record);
+  if (record) activeRuntimes.delete(key);
+  const snapshot = runtime ? normalizeRemoteSnapshot(hostPid, runtime) : record ? toSnapshot(record) : null;
+  try {
+    const ledger = readLedger();
+    if (ledger.runtimes[key]) delete ledger.runtimes[key];
+    queueRuntimePersistence(snapshot ? makeRuntimePersistenceEvent(eventType, snapshot, { ...(extra || {}), hostPid }) : undefined);
+  } catch (err: any) {
+    console.warn('[live-runtime] Failed to remove remote runtime mirror:', err?.message || err);
+  }
+  return snapshot;
+}
+
+/**
+ * Apply the host's authoritative running set. Ledger entries recorded under
+ * that host pid that are still `running` but absent from the set finished
+ * before the replacement connected, so they are dropped. Interrupted entries
+ * are left for recovery.
+ */
+export function syncRemoteLiveRuntimes(hostPid: number, runtimes: Array<Record<string, any>>): { mirrored: string[]; dropped: string[] } {
+  const seen = new Set<string>();
+  const mirrored: string[] = [];
+  for (const input of runtimes) {
+    const snapshot = upsertRemoteLiveRuntime(hostPid, input, 'remote_sync');
+    if (!snapshot) continue;
+    seen.add(snapshot.id);
+    // A local runtime with the same id is never a mirror.
+    if (snapshot.status === 'running' && Number(snapshot.remoteHostPid) === hostPid) mirrored.push(snapshot.id);
+  }
+  const dropped: string[] = [];
+  for (const [id, record] of activeRuntimes.entries()) {
+    if (isRemoteRecord(record) && Number(record.remoteHostPid) === hostPid && !seen.has(id)) {
+      activeRuntimes.delete(id);
+      dropped.push(id);
+    }
+  }
+  const ledger = readLedger();
+  for (const [id, entry] of Object.entries(ledger.runtimes || {})) {
+    if (Number(entry?.pid || 0) !== hostPid || seen.has(id)) continue;
+    if (entry.status !== 'running') continue;
+    delete ledger.runtimes[id];
+    if (!dropped.includes(id)) dropped.push(id);
+  }
+  if (dropped.length) queueRuntimePersistence();
+  return { mirrored, dropped };
+}
+
+/** Forget every mirror for a host (drained or lost) without touching the ledger. */
+export function dropRemoteLiveRuntimesForHost(hostPid: number): LiveRuntimeSnapshot[] {
+  const dropped: LiveRuntimeSnapshot[] = [];
+  for (const [id, record] of activeRuntimes.entries()) {
+    if (!isRemoteRecord(record) || Number(record.remoteHostPid) !== hostPid) continue;
+    activeRuntimes.delete(id);
+    dropped.push(toSnapshot(record));
+  }
+  return dropped;
+}
+
+/**
+ * A host died mid-drain. Its ledger entries still say `running`; stamp them as
+ * interrupted (with a restart epoch) so the standard crash-recovery pass
+ * handles them exactly like a gateway crash would.
+ */
+export function markRemoteHostRuntimesInterrupted(hostPid: number, reason: string): LiveRuntimeSnapshot[] {
+  const epoch = Date.now();
+  const interrupted: LiveRuntimeSnapshot[] = [];
+  dropRemoteLiveRuntimesForHost(hostPid);
+  const ledger = readLedger();
+  for (const entry of Object.values(ledger.runtimes || {})) {
+    if (Number(entry?.pid || 0) !== hostPid || entry.status !== 'running') continue;
+    entry.status = 'interrupted';
+    entry.interruptedAt = epoch;
+    entry.interruptReason = reason;
+    entry.updatedAt = epoch;
+    entry.recoveryData = { ...(entry.recoveryData || {}), restartEpoch: epoch, interruptReason: reason };
+    delete entry.remoteHostPid;
+    interrupted.push({ ...entry });
+    queueRuntimePersistence(makeRuntimePersistenceEvent('interrupted', entry, { reason, hostPid }));
+  }
+  if (interrupted.length) queueRuntimePersistence();
+  return interrupted;
+}
+
+export function listRemoteHandoffHostPids(): number[] {
+  const pids = new Set<number>();
+  for (const record of activeRuntimes.values()) {
+    if (isRemoteRecord(record)) pids.add(Number(record.remoteHostPid));
+  }
+  return Array.from(pids);
+}
+
+export function findRemoteLiveRuntimeForTask(taskId: string): LiveRuntimeSnapshot | null {
+  const tid = String(taskId || '').trim();
+  if (!tid) return null;
+  for (const record of activeRuntimes.values()) {
+    if (isRemoteRecord(record) && record.status === 'running' && String(record.taskId || '') === tid) return toSnapshot(record);
+  }
+  return null;
+}
+
+export function listLocalRunningRuntimes(): LiveRuntimeSnapshot[] {
+  return Array.from(activeRuntimes.values())
+    .filter((record) => !isRemoteRecord(record) && record.status === 'running')
+    .map(toSnapshot);
+}
+
+export function countLocalRunningRuntimes(): number {
+  let count = 0;
+  for (const record of activeRuntimes.values()) {
+    if (!isRemoteRecord(record) && record.status === 'running') count += 1;
+  }
+  return count;
+}
+
+/**
+ * Interrupt only the local runtimes a predicate selects (the turn that asked
+ * for the restart) while the rest keep running through the handoff drain.
+ */
+export function markLocalRuntimesInterruptedForHandoff(
+  reason: string,
+  predicate: (runtime: LiveRuntimeSnapshot) => boolean,
+): LiveRuntimeSnapshot[] {
+  const interrupted: LiveRuntimeSnapshot[] = [];
+  const restartEpoch = Date.now();
+  let stamped = false;
+  for (const record of activeRuntimes.values()) {
+    if (isRemoteRecord(record) || record.status !== 'running') continue;
+    if (!predicate(toSnapshot(record))) continue;
+    if (!isRuntimeRecoverableAfterRestart(record)) continue;
+    if (!stamped) {
+      _restartInterruptEpoch = restartEpoch;
+      stamped = true;
+    }
+    record.status = 'interrupted';
+    record.interruptedAt = restartEpoch;
+    record.interruptReason = reason;
+    record.updatedAt = Date.now();
+    finishRuntimeProgressLease(record.id);
+    record.recoveryData = { ...(record.recoveryData || {}), restartEpoch, interruptReason: reason };
+    if (record.abortSignal) {
+      record.abortSignal.aborted = true;
+      record.abortSignal.reason = reason;
+    }
+    const snapshot = toSnapshot(record);
+    interrupted.push(snapshot);
+    persistRuntime(snapshot, 'interrupted', { reason }, { full: true });
+  }
+  return interrupted;
 }
 
 export function registerLiveRuntime(registration: LiveRuntimeRegistration): string {
@@ -544,6 +875,9 @@ export function finishLiveRuntime(id: string): void {
   finishRuntimeProgressLease(key);
   const record = activeRuntimes.get(key);
   if (record) {
+    // A draining previous gateway owns this runtime; only its own lifecycle
+    // events may retire the mirror.
+    if (isRemoteRecord(record)) return;
     // During gateway shutdown, prepareActiveRuntimesForGatewayShutdown() has
     // already persisted this runtime as interrupted and marked its abort
     // signal. The unwinding turn will still reach its normal finally block and
@@ -632,6 +966,11 @@ export function abortLiveRuntime(id: string, reason = 'operator_abort', options:
   record.abortReason = String(reason || 'operator_abort').slice(0, 160);
   record.abortSource = String(options.source || '').trim().slice(0, 120) || undefined;
   record.updatedAt = Date.now();
+  if (isRemoteRecord(record)) {
+    // The owning gateway performs the real abort and mirrors the outcome back.
+    forwardRemoteControl(record, 'runtime_abort', { runtimeId: record.id, reason: record.abortReason, source: record.abortSource });
+    return { ok: true, runtime: toSnapshot(record) };
+  }
   if (record.abortSignal) {
     record.abortSignal.aborted = true;
     record.abortSignal.reason = String(reason || 'operator_abort').slice(0, 160);
@@ -714,6 +1053,17 @@ export function addPendingRuntimeSteer(
 ): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
   const record = activeRuntimes.get(String(id || ''));
   if (!record) return { ok: false, error: 'Runtime not found.' };
+  if (isRemoteRecord(record)) {
+    const remoteEvent: RuntimeSteerEvent = {
+      ...(input as RuntimeSteerEvent),
+      id: String(input.id || crypto.randomUUID()),
+      sessionId: String(input.sessionId || record.sessionId || '').trim(),
+      message: String(input.message || '').trim(),
+      createdAt: Number(input.createdAt || Date.now()),
+    };
+    forwardRemoteControl(record, 'runtime_steer', { runtimeId: record.id, input: remoteEvent });
+    return { ok: true, runtime: toSnapshot(record), event: remoteEvent };
+  }
   const isTaskTargetedSteer = isSteerableTaskRuntimeKind(record.kind)
     && !!record.taskId
     && String(input.sessionId || '') === `task_${record.taskId}`;
@@ -872,7 +1222,7 @@ export function updateLiveRuntimeCheckpoint(
   options: { persist?: boolean } = {},
 ): void {
   const record = activeRuntimes.get(String(id || ''));
-  if (!record || record.abortRequestedAt || record.status !== 'running') return;
+  if (!record || record.abortRequestedAt || record.status !== 'running' || isRemoteRecord(record)) return;
   record.checkpoint = {
     ...(record.checkpoint || {}),
     ...checkpoint,
@@ -913,7 +1263,7 @@ export function addPendingRuntimeSteerForTask(
 /** Record observed model/tool activity without expanding the durable checkpoint ledger. */
 export function markLiveRuntimeProgress(id: string, progress: RuntimeProgressLeaseRenewal = {}): void {
   const record = activeRuntimes.get(String(id || ''));
-  if (!record || record.status !== 'running' || record.abortRequestedAt) return;
+  if (!record || record.status !== 'running' || record.abortRequestedAt || isRemoteRecord(record)) return;
   renewRuntimeProgressLease(record.id, { ...progress, checkpoint: false });
 }
 
@@ -926,6 +1276,7 @@ export function interruptLiveRuntimeForRecovery(id: string, reason = 'runtime_ow
   const key = String(id || '');
   const record = activeRuntimes.get(key);
   if (!record) return { ok: false, error: 'Runtime not found.' };
+  if (isRemoteRecord(record)) return { ok: false, runtime: toSnapshot(record), error: 'Runtime is owned by a draining gateway.' };
   record.status = 'interrupted';
   record.interruptedAt = Date.now();
   record.interruptReason = String(reason || 'runtime_owner_watchdog').slice(0, 200);
@@ -949,6 +1300,9 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
   const restartEpoch = Date.now();
   _restartInterruptEpoch = restartEpoch;
   for (const record of activeRuntimes.values()) {
+    // Mirrors of a draining gateway's runtimes are not ours to interrupt; the
+    // ledger keeps them under the host pid so the next gateway re-adopts them.
+    if (isRemoteRecord(record)) continue;
     if (!isRuntimeRecoverableAfterRestart(record)) {
       if (record.status === 'running') {
         record.status = hasTerminalRuntimeCheckpoint(record) ? 'completed' : 'aborted';
@@ -1095,7 +1449,7 @@ export function compactRuntimeStateOnStartup(): { ledgerRemoved: number; ledgerK
 }
 
 export function flushLiveRuntimePersistence(): Promise<void> {
-  if (runtimePersistenceBlocked) return Promise.resolve();
+  if (runtimePersistenceBlocked || ledgerWritesFrozen) return Promise.resolve();
   if (!runtimePersistenceActive && !runtimePersistenceScheduled && !runtimeLedgerDirty && pendingRuntimeEvents.length === 0) {
     return Promise.resolve();
   }

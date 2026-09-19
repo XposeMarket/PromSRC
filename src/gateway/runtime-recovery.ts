@@ -4,6 +4,7 @@ import {
   listDurableRuntimes,
   listInterruptedRuntimes,
   markActiveRuntimesInterrupted,
+  markLocalRuntimesInterruptedForHandoff,
   markDurableRuntimeRecovered,
   type LiveRuntimeSnapshot,
 } from './live-runtime-registry';
@@ -480,7 +481,22 @@ function pauseTaskForRestart(task: TaskRecord, runtime: LiveRuntimeSnapshot, rea
 }
 
 export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
-  const interrupted = markActiveRuntimesInterrupted(reason);
+  return finalizeInterruptedRuntimesForRestart(markActiveRuntimesInterrupted(reason), reason);
+}
+
+/**
+ * Warm handoff: interrupt only the runtimes that asked for this restart (they
+ * must resume on the replacement's new code) and leave every other runtime
+ * running in this process until it finishes on its own.
+ */
+export function prepareInitiatingRuntimesForGatewayHandoff(
+  reason: string,
+  isInitiating: (runtime: LiveRuntimeSnapshot) => boolean,
+): LiveRuntimeSnapshot[] {
+  return finalizeInterruptedRuntimesForRestart(markLocalRuntimesInterruptedForHandoff(reason, isInitiating), reason);
+}
+
+function finalizeInterruptedRuntimesForRestart(interrupted: LiveRuntimeSnapshot[], reason: string): LiveRuntimeSnapshot[] {
   for (const runtime of interrupted) {
     try {
       if (isTaskRuntime(runtime) && runtime.taskId) {
@@ -774,6 +790,8 @@ export function recoverInterruptedRuntimes(opts: {
   retriggerInterruptedMainChat?: (runtime: LiveRuntimeSnapshot) => boolean;
   /** Keep foreground model turns out of the pre-listener startup window. */
   deferMainChatRetrigger?: boolean;
+  /** Warm handoff: a live previous gateway still runs this runtime; do not recover it. */
+  isHostedElsewhere?: (runtime: LiveRuntimeSnapshot) => boolean;
   notify?: (message: string) => void;
 } = {}): {
   inspected: number;
@@ -784,7 +802,8 @@ export function recoverInterruptedRuntimes(opts: {
   crashRecoveredGoalSessionIds: string[];
 } {
   const runtimes = listInterruptedRuntimes()
-    .filter((runtime) => Number(runtime.pid || 0) !== process.pid);
+    .filter((runtime) => Number(runtime.pid || 0) !== process.pid)
+    .filter((runtime) => !(opts.isHostedElsewhere?.(runtime) === true));
   const resumedTasks: string[] = [];
   const retriggeredChats: string[] = [];
   const interruptedChats: string[] = [];

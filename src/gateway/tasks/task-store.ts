@@ -450,6 +450,18 @@ let taskIndexCache: TaskIndex | null = null;
 let taskIndexWriteCounter = 0;
 let taskSessionIndexCache: Map<string, string> | null = null;
 let taskSessionLookupRevision = 0;
+
+/**
+ * Forget the cached index so the next read reloads from disk. A draining
+ * previous gateway (warm handoff) keeps writing task files and the index for
+ * the tasks it still runs; once it reports a task finished this process must
+ * not serve or rewrite a stale copy.
+ */
+export function invalidateTaskIndexCaches(): void {
+  taskIndexCache = null;
+  taskSessionIndexCache = null;
+  taskSessionLookupRevision += 1;
+}
 let lastTaskIndexLookupStats: TaskIndexLookupStats = {
   kind: 'owner_session', indexEntries: 0, candidateCount: 0, loadedCount: 0,
 };

@@ -73,6 +73,7 @@ import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
+import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
@@ -1067,6 +1068,57 @@ setShutdownHooks({
       flushLiveRuntimePersistence(),
     ]);
   },
+  // Warm handoff: this process keeps its in-flight runtimes (and the model /
+  // context workers they depend on) but must not start anything new. The
+  // replacement gateway owns polling, scheduling, and supervision from here.
+  stopSchedulersForHandoff: () => {
+    draining = true;
+    try { telegramChannel.stop(); } catch {}
+    try { telegramPersonaBots.stop().catch(() => {}); } catch {}
+    try { cronScheduler.stop(); } catch {}
+    try { stopAutoSettleScheduler(); } catch {}
+    try { mainChatTimerRunner.stop(); } catch {}
+    try { internalWatchRunner.stop(); } catch {}
+    try { heartbeatRunner.stop(); } catch {}
+    try { brainRunner.suspendScheduling(); } catch {}
+    try { stopThreadSupervisionRunner(); } catch {}
+    try { shutdownCodexRealtimeBridge(); } catch {}
+  },
+  // Release the listeners so the replacement can bind, but leave established
+  // connections (in-flight chat SSE responses) alone: they end when their turn
+  // ends. WebSocket clients are terminated so they reconnect to the replacement.
+  closeListenersForHandoff: () => new Promise<void>((resolve) => {
+    const terminateClients = (socketServer: any): void => {
+      try {
+        socketServer?.clients?.forEach((client: any) => {
+          try { client.terminate(); } catch {}
+        });
+      } catch {}
+      try { socketServer?.close(); } catch {}
+    };
+    terminateClients(wss);
+    terminateClients(secureBundle?.wss);
+    try { xaiVoiceStreaming.close(); } catch {}
+    try { secureXaiVoiceStreaming?.close(); } catch {}
+    try { openAiRealtimeProxy.close(); } catch {}
+    try { secureOpenAiRealtimeProxy?.close(); } catch {}
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    try {
+      try { (server as any).closeIdleConnections?.(); } catch {}
+      try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
+      // server.close() only stops the listener; its callback waits for every
+      // connection, which is exactly what we do not want to wait for here.
+      server.close();
+      try { secureBundle?.server.close(); } catch {}
+      server.once('close', done);
+      setTimeout(done, 1_000);
+    } catch { done(); }
+  }),
 });
 
 // ─── Initialize Advanced Error Response Systems ────────────────────────────────
@@ -1104,6 +1156,17 @@ try {
 
 async function startGatewayListeners(): Promise<void> {
   let deferredMainChatRecoveries: LiveRuntimeSnapshot[] = [];
+  // A previous gateway may still be draining runtimes it owns (warm handoff).
+  // Adopt it before runtime recovery so that work is mirrored, not "crashed".
+  try {
+    const adoption = await adoptGatewayHandoffHostsAtBoot();
+    if (adoption.hosts || adoption.staleManifests || adoption.unreachable) {
+      console.log(`[gateway-handoff] Adopted ${adoption.hosts} draining gateway(s)${adoption.staleManifests ? `, cleared ${adoption.staleManifests} stale manifest(s)` : ''}${adoption.unreachable ? `, ${adoption.unreachable} unreachable` : ''}.`);
+    }
+    startupMark('handoff hosts adopted');
+  } catch (err: any) {
+    console.warn('[gateway-handoff] Adoption failed:', err?.message || err);
+  }
   try {
     const atomCount = warmMemoryAtomSnapshot(getConfig().getWorkspacePath());
     console.log(`[memory-atoms] Preloaded ${atomCount} durable MEMORY.md atoms.`);
@@ -1171,6 +1234,7 @@ async function startGatewayListeners(): Promise<void> {
   server.listen(PORT, HOST, () => {
     startupMark('server listen callback');
     const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
+    try { startHandoffSyntheticRuntimeFixture(); } catch {}
     // Foreground recovery checkpoints are durable before the listener binds,
     // but their model turns are deliberately drained only after readiness.
     // Start one at a time and wait for the shared model-busy guard to clear so
@@ -1186,7 +1250,7 @@ async function startGatewayListeners(): Promise<void> {
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
       };
       const drainRecoveryQueue = (): void => {
-        if (shuttingDown || recoveryQueue.length === 0) return;
+        if (shuttingDown || draining || recoveryQueue.length === 0) return;
         if (isModelBusy()) {
           scheduleRecoveryDrain(recoveryPollMs);
           return;
@@ -1205,14 +1269,14 @@ async function startGatewayListeners(): Promise<void> {
     // session state synchronously. Bind the listener first and give health and
     // restart clients a short scheduling window before starting that watcher.
     const delayedInternalWatchStart = setTimeout(() => {
-      if (shuttingDown) return;
+      if (shuttingDown || draining) return;
       startupMark('internal watch callback entered');
       internalWatchRunner.start();
       startupMark('internal watch runner started after listen');
     }, 250);
     if (typeof (delayedInternalWatchStart as any).unref === 'function') (delayedInternalWatchStart as any).unref();
     const delayedThreadSupervisionStart = setTimeout(() => {
-      if (shuttingDown) return;
+      if (shuttingDown || draining) return;
       startupMark('thread supervision callback entered');
       const supervisionStartAt = Date.now();
       stopThreadSupervisionRunner = activeThreadSupervisionController.start();
@@ -1299,6 +1363,9 @@ void startGatewayListeners();
 startupMark('gateway listener startup scheduled after readiness warmup');
 
 let shuttingDown = false;
+// Warm handoff drain: deferred post-listen starters must not fire in a
+// process that has already given its listeners to a replacement.
+let draining = false;
 let electronParentWatchdog: NodeJS.Timeout | null = null;
 async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   if (shuttingDown) return;

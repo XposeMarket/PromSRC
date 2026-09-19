@@ -31,6 +31,7 @@ import {
   takeSupervisorRestartRequest,
   type SupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request.js';
+import { isGatewayHandoffLauncherNotice } from '../gateway/runtime/gateway-handoff-protocol.js';
 import {
   readCanonicalUpdateStatus,
 } from '../update/canonical-updater';
@@ -655,6 +656,10 @@ async function runSupervisedGateway(): Promise<void> {
   let child: ChildProcess | null = null;
   let activeGatewayProcessStartedAt: number | null = null;
   let launchInFlight = false;
+  // Warm handoff: a gateway that released its listeners but is still finishing
+  // the turns it owns. It is no longer the supervised child; it exits on its
+  // own and must never trigger a relaunch or be killed as "stale".
+  const drainingChildren = new Map<number, ChildProcess>();
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
   // The parent-provided value is only a seed for this supervisor. Each child
@@ -751,16 +756,31 @@ async function runSupervisedGateway(): Promise<void> {
         PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(launchedGatewayProcessStartedAt),
         ...(explicitQuickRestart ? { PROMETHEUS_HOT_RESTART: '1' } : {}),
       },
-      stdio: 'inherit',
+      // The IPC channel carries the warm-handoff notice; everything else the
+      // gateway prints still goes to this terminal.
+      stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
       // A failed child may be relaunched several times while the supervisor
       // resolves ownership. Never surface each attempt as a new console on Windows.
       windowsHide: true,
     });
     child = launched;
     activeGatewayProcessStartedAt = launchedGatewayProcessStartedAt;
+    launched.on('message', (message) => {
+      if (!isGatewayHandoffLauncherNotice(message) || child !== launched || stopping) return;
+      const pid = Number(launched.pid || message.hostPid);
+      drainingChildren.set(pid, launched);
+      child = null;
+      activeGatewayProcessStartedAt = null;
+      console.error(`[GatewaySupervisor] Gateway ${pid} is handing off (${message.reason}); it keeps ${message.runtimeCount} runtime(s) running while the replacement starts.`);
+      scheduleLaunch(true);
+    });
     launched.once('exit', (code, signal) => {
       void (async () => {
       if (stopping) return;
+      if (launched.pid && drainingChildren.delete(launched.pid)) {
+        console.error(`[GatewaySupervisor] Drained gateway ${launched.pid} exited (${signal || (code ?? 'unknown')}).`);
+        return;
+      }
       if (child === launched) {
         child = null;
         activeGatewayProcessStartedAt = null;
@@ -854,6 +874,8 @@ async function runSupervisedGateway(): Promise<void> {
       restartTimer = null;
     }
     if (child) killGatewayChild(child);
+    for (const draining of drainingChildren.values()) killGatewayChild(draining);
+    drainingChildren.clear();
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);

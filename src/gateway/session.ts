@@ -592,6 +592,26 @@ function deleteCachedSession(sessionId: string): void {
   if (sessionCacheEstimatedBytes < 0) sessionCacheEstimatedBytes = 0;
 }
 
+/**
+ * Drop a session from the in-memory cache without writing it. Used when a
+ * draining previous gateway (warm handoff) owned the session's turn and has
+ * just flushed its newer copy to disk: any debounced save this process still
+ * held for it would clobber that copy, so the pending save is discarded too.
+ */
+export function evictSessionFromCache(id: string): boolean {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return false;
+  const timer = sessionSaveTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    sessionSaveTimers.delete(sessionId);
+  }
+  pendingSessionSnapshots.delete(sessionId);
+  const existed = sessions.has(sessionId);
+  deleteCachedSession(sessionId);
+  return existed;
+}
+
 function pruneSessionCache(): void {
   const countPressure = sessions.size > SESSION_CACHE_MAX_ENTRIES;
   const bytePressure = sessionCacheEstimatedBytes > SESSION_CACHE_MAX_BYTES;
@@ -3617,6 +3637,7 @@ async function drainSessionSnapshots(): Promise<void> {
         if (sessionIndexRevision === indexWriteRevision) {
           await fs.promises.rename(indexTempPath, indexPath);
         }
+        notifySessionWritten(id);
       } catch (err) {
         console.warn(`[session] Failed to save session ${id}:`, err);
       } finally {
@@ -3672,9 +3693,23 @@ export function flushSession(id: string): void {
   try {
     fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));
     upsertSessionSummary(session);
+    notifySessionWritten(id);
   } catch (err) {
     console.warn(`[session] Failed to flush session ${id}:`, err);
   }
+}
+
+// Warm handoff: a draining gateway tells the replacement which session files
+// it just rewrote so the replacement drops any cached copy of them.
+let sessionWriteObserver: ((sessionId: string) => void) | null = null;
+
+export function setSessionWriteObserver(observer: ((sessionId: string) => void) | null): void {
+  sessionWriteObserver = observer;
+}
+
+function notifySessionWritten(id: string): void {
+  if (!sessionWriteObserver) return;
+  try { sessionWriteObserver(id); } catch {}
 }
 
 export function getWorkspace(id: string): string {
