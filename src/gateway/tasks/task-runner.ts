@@ -19,6 +19,7 @@ import { registerBrowserSessionMetadata } from '../browser-tools';
 import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
+import { normalizeToolCategory } from '../tool-builder';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -103,6 +104,8 @@ export interface EphemeralBackgroundStatus {
   reasoningEffort?: string;
   /** Stable snake_case field exposed to tool callers and benchmark runners. */
   executor_reasoning_effort?: string;
+  /** Explicit tool categories the worker starts with (core tools are always present). */
+  toolCategories?: string[];
   stream?: Record<string, any> | null;
   startedAt: number;
   completedAt?: number;
@@ -455,6 +458,13 @@ export interface EphemeralBackgroundSpawnInput {
   modelOverride?: string;
   providerOverride?: string;
   reasoningEffort?: string;
+  /**
+   * Explicit tool categories for the worker. Background spawns never run the
+   * keyword auto-activation pass over their task prompt (it would provision
+   * every category the prompt merely mentions), so the spawner declares what
+   * the worker needs up front. The worker can still call request_tool_category.
+   */
+  toolCategories?: string[];
 }
 
 export interface EphemeralBackgroundJoinResult {
@@ -498,6 +508,25 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
+const BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8;
+
+/**
+ * Normalize the spawner-declared tool categories for a background worker.
+ * Unknown ids are dropped (the worker can still request_tool_category later),
+ * duplicates collapse, and the list is capped so a spawn cannot re-create the
+ * full-surface bloat this field exists to prevent.
+ */
+export function normalizeBackgroundSpawnToolCategories(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const normalized = normalizeToolCategory(entry);
+    if (!normalized || out.includes(normalized)) continue;
+    out.push(normalized);
+    if (out.length >= BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES) break;
+  }
+  return out;
+}
 const _ephemeralBackgroundRuns = new Map<string, EphemeralBackgroundRecord>();
 
 function backgroundVoiceWorkgroupId(record: Pick<EphemeralBackgroundStatus, 'tags'>): string {
@@ -563,7 +592,7 @@ type BgHandleChat = (
   reasoningOptions?: any,
   providerOverride?: string,
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { admissionLease?: RuntimeAdmissionLease },
+  runtimeOptions?: { admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean },
 ) => Promise<string>;
 
 interface EphemeralBgDeps {
@@ -828,7 +857,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         // Background agents get a fresh tool surface. They should not inherit
         // every category the foreground chat has opened during the session,
         // because that bloats native tool schemas for the entire background run.
-        setActivatedToolCategories(sessionId, []);
+        // Only the categories the spawner explicitly declared are pre-activated;
+        // handleChat runs with skipAutomaticToolCategoryActivation so the task
+        // prompt text cannot keyword-provision the rest of the catalog.
+        setActivatedToolCategories(sessionId, Array.isArray(record.toolCategories) ? record.toolCategories.slice() : []);
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
@@ -966,7 +998,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
             : undefined,
           record.providerId,
           undefined,
-          { admissionLease: runtimeAdmissionLease || undefined },
+          { admissionLease: runtimeAdmissionLease || undefined, skipAutomaticToolCategoryActivation: true },
         );
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
@@ -1080,6 +1112,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     model: resolvedRouting.model,
     modelSource: resolvedRouting.source,
     reasoningEffort: resolvedRouting.reasoningEffort,
+    toolCategories: normalizeBackgroundSpawnToolCategories(input?.toolCategories),
     backgroundStream: createBackgroundAgentStream(),
   };
 
