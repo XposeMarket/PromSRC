@@ -34,10 +34,14 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   'haiku-4-5': 'claude-haiku-4-5-20251001',
   'claude-haiku-4.5': 'claude-haiku-4-5-20251001',
   'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
-  'sonnet-4.5': 'claude-sonnet-4-5-20250514',
-  'sonnet-4-5': 'claude-sonnet-4-5-20250514',
-  'claude-sonnet-4.5': 'claude-sonnet-4-5-20250514',
-  'claude-sonnet-4-5': 'claude-sonnet-4-5-20250514',
+  // Sonnet 4.5 shipped 2025-09-29; the "-20250514" suffix was a Sonnet 4 date
+  // that Anthropic 404s when combined with the 4.5 slug. Use the dated
+  // snapshot Anthropic actually publishes.
+  'sonnet-4.5': 'claude-sonnet-4-5-20250929',
+  'sonnet-4-5': 'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4.5': 'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4-5': 'claude-sonnet-4-5-20250929',
+  'claude-sonnet-4-5-20250514': 'claude-sonnet-4-5-20250929',
 };
 
 export function normalizeProviderModel(providerId: string, model: string): string {

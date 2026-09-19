@@ -1449,17 +1449,35 @@ function normalizeWorkspacePatchOp(value: unknown): WorkspacePatchEdit['op'] | s
   return aliases[op] || op;
 }
 
+export function inferWorkspacePatchOp(edit: any): string | undefined {
+  // Callers frequently omit `op` and let the field shape imply it. Infer the
+  // obvious cases so a patchset that clearly says "find X, replace with Y"
+  // does not bounce with "filename and op are required".
+  if (!edit || typeof edit !== 'object') return undefined;
+  const has = (k: string) => edit[k] !== undefined && edit[k] !== null;
+  if (has('find') || has('old_text') || has('oldText')) return 'find_replace';
+  if (has('after_line') || has('afterLine')) return 'insert_after';
+  if ((has('start_line') || has('startLine')) && (has('new_content') || has('content'))) return 'replace_lines';
+  if (has('start_line') || has('startLine')) return 'delete_lines';
+  return undefined;
+}
+
 export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs): Promise<ToolResult> {
   if (!Array.isArray(args.edits) || !args.edits.length) {
     return { success: false, error: 'edits array is required and must not be empty' };
   }
   const results: Array<{ filename: string; op: string; ok: boolean; result?: string; error?: string }> = [];
   const snapshots: Array<ReturnType<typeof snapshotBeforeMutation>> = [];
+  const sharedFilename = (args as any).filename ?? (args as any).path ?? (args as any).file ?? (args as any).name;
   for (const rawEdit of args.edits) {
     const edit: any = rawEdit && typeof rawEdit === 'object' ? rawEdit : {};
-    const filename = edit?.filename ?? edit?.path ?? edit?.file ?? edit?.name;
-    const op = normalizeWorkspacePatchOp(edit?.op ?? edit?.action ?? edit?.type);
-    if (!filename || !op) { results.push({ filename: String(filename || ''), op, ok: false, error: 'filename and op are required' }); continue; }
+    const filename = edit?.filename ?? edit?.path ?? edit?.file ?? edit?.name ?? sharedFilename;
+    const op = normalizeWorkspacePatchOp(edit?.op ?? edit?.action ?? edit?.type ?? inferWorkspacePatchOp(edit));
+    if (!filename || !op) {
+      const missing = [!filename ? 'filename' : '', !op ? 'op' : ''].filter(Boolean).join(' and ');
+      results.push({ filename: String(filename || ''), op, ok: false, error: `${missing} required (got keys: ${Object.keys(edit).join(', ') || 'none'}). Each edit needs filename/path plus op (find_replace|replace_lines|insert_after|delete_lines|write_file|create_file), or a top-level path shared by all edits.` });
+      continue;
+    }
     try {
       const absPath = resolveWorkspacePath(String(filename));
       const pathCheck = isPathAllowed(absPath);
