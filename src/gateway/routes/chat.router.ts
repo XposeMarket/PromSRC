@@ -2559,6 +2559,21 @@ async function maybeRunMidWorkflowCompaction(input: {
       },
     });
     if (!compactorResult.compacted || !compactorResult.summaryText) {
+      if (input.abortSignal?.aborted) return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
+      input.sendSSE('tool_result', {
+        action: CONTEXT_COMPACTION_TOOL_NAME,
+        result: 'Context compaction was not applied. The active transcript remains available for a later attempt.',
+        error: false,
+        synthetic: true,
+        actor: 'system',
+        extra: {
+          phase: 'result',
+          status: 'failed',
+          mode: 'mid_workflow',
+          projected_tokens: projectedTokens,
+          input_budget_tokens: budget.inputBudgetTokens,
+        },
+      });
       return { compacted: false, projectedTokens, triggerTokens: budget.compactionTriggerTokens };
     }
     const boundedSummary = compactorResult.summaryText;
@@ -2604,7 +2619,7 @@ async function maybeRunMidWorkflowCompaction(input: {
     console.warn('[v2] Mid-workflow compaction failed:', err?.message || err);
     input.sendSSE('tool_result', {
       action: CONTEXT_COMPACTION_TOOL_NAME,
-      result: `Thread compaction failed; continuing with bounded context. ${String(err?.message || err || '').slice(0, 300)}`,
+      result: `Thread compaction failed; the active transcript remains available. ${String(err?.message || err || '').slice(0, 300)}`,
       error: false,
       synthetic: true,
       actor: 'system',
