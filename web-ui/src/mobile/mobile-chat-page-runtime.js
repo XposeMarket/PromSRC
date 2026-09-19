@@ -36,6 +36,13 @@ function mobileCompactionStatusFromText(value) {
   return '';
 }
 
+export function canRecoverMobileStreamingTurn(turn, clientRequestId) {
+  if (turn?.streaming !== true) return false;
+  const expected = String(clientRequestId || '').trim();
+  const owned = String(turn._clientRequestId || '').trim();
+  return !expected || !owned || expected === owned || turn._pmAdmissionPending === true;
+}
+
 /**
  * Owns the mobile chat route renderer and its route-local orchestration.
  *
@@ -3349,8 +3356,9 @@ void main() {
         || remembered?.clientRequestId
         || '',
       ).trim();
+      const recoveryFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestAssistantTurn, recoveryClientRequestId);
       let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, recoveryClientRequestId)
-        || (latestAssistantTurn?.streaming === true ? latestAssistantTurn : null);
+        || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null);
       // A successful status request proves that the mobile client is connected
       // again, whether the run is still active or has already completed.
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
@@ -3742,8 +3750,10 @@ void main() {
         || remembered?.clientRequestId
         || '',
       ).trim();
+      const latestLocalAssistant = _findLatestAssistantTurn(localThread);
+      const inactiveFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestLocalAssistant, inactiveRecoveryClientRequestId);
       let localAiTurn = _findMobileRecoverableAssistantTurn(localThread, inactiveRecoveryClientRequestId)
-        || (_findLatestAssistantTurn(localThread)?.streaming === true ? _findLatestAssistantTurn(localThread) : null);
+        || (inactiveFallbackMatchesRequest ? latestLocalAssistant : null);
       const replayStillActive = replay?.active === true || replay?.stream?.active === true;
       if (!isCurrentRecoveryTarget()) return;
       if (localAiTurn && replayEvents.length) {
@@ -6553,6 +6563,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   function applyMobileChatStreamEvent(aiTurn, evt) {
     aiTurn = _mobileStreamTargetTurn(aiTurn);
     if (!aiTurn || !evt?.type) return '';
+    const eventRequestId = String(evt.clientRequestId || '').trim();
+    const turnRequestId = String(aiTurn._clientRequestId || '').trim();
+    // Replayed frames must never append to a cached answer owned by another
+    // request. Sequence receipts alone cannot protect this after reconnect.
+    if (eventRequestId && turnRequestId && eventRequestId !== turnRequestId
+      && aiTurn._pmAdmissionPending !== true && aiTurn._pmRejectedAdmission !== true) return 'duplicate';
     const isTerminalStreamEvent = ['final', 'done', 'error'].includes(String(evt.type || '').trim());
     const sequenceAccepted = noteChatStreamSeq(evt);
     const terminalStreamMatchesTurn = !evt.streamId

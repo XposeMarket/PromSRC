@@ -53,6 +53,16 @@ function messages(count, { rich = false } = {}) {
   const mobileTail = mobile.select('mobile', entries, { followTail: true });
   assert.equal(mobileTail.paintEntries.length, 52, 'mobile DOM must retain fewer rows than desktop');
   assert.equal(mobileTail.materializedEntries.length, 92, 'mobile materialization and paint budgets must be distinct');
+  mobile.anchorKey('mobile', mobileTail.paintEntries[0].key);
+  const mobileScrolled = mobile.select('mobile', entries);
+  assert.equal(mobileScrolled.omittedAfter, 0, 'upward scrolling must retain the newer mobile messages');
+  assert.ok(mobileScrolled.paintEntries.some((entry) => entry.key === mobileTail.paintEntries.at(-1).key));
+  mobile.stepEarlier('mobile', entries);
+  const mobileExpanded = mobile.select('mobile', entries, { followTail: true });
+  assert.ok(mobileExpanded.paintEntries.length > mobileTail.paintEntries.length, 'earlier mobile messages must add to the transcript');
+  mobile.followTail('mobile');
+  assert.equal(mobile.select('mobile', entries).paintEntries.length, mobileExpanded.paintEntries.length,
+    'scrolling back to the bottom must keep unlocked mobile history');
 
   const hidden = desktop.select('hidden', entries, { followTail: true, hidden: true });
   assert.equal(hidden.paintEntries.length, 26, 'hidden transcripts must use the reduced paint budget');
@@ -84,7 +94,8 @@ function messages(count, { rich = false } = {}) {
   desktop.focusIndex('desktop', entries, 500);
   const focused = desktop.select('desktop', entries);
   assert.ok(focused.paintEntries.some((entry) => entry.key === entries[500].key), 'search/navigation focus must materialize the requested row');
-  assert.ok(focused.omittedBefore > 0 && focused.omittedAfter > 0, 'focused rows should receive before/after slack');
+  assert.ok(focused.omittedBefore > 0, 'focused rows should retain earlier slack');
+  assert.equal(focused.lastPaintIndex, entries.length - 1, 'the newest row should stay pinned during focus');
 
   const paneBudgets = allocateTimelinePaneBudgets([{ key: 'main' }, { key: 'side' }], {
     surface: 'desktop', focusedKey: 'main',

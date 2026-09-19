@@ -20,7 +20,9 @@ const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/styles/components.css': 284925,
   'web-ui/index.html': 558138,
 });
-const CODE_OWNED_NEW_MODULE_CEILING = 432252;
+// Refreshed to the measured main after the 2026-09-19 mobile weighted-timeline
+// reorder fixes landed in mobile-chat-page-runtime.js (433668 LF bytes).
+const CODE_OWNED_NEW_MODULE_CEILING = 433668;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
 const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 124;
 
