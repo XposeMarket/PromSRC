@@ -49,7 +49,15 @@ export function chatTurnKey(message, index = 0, occurrence = 0) {
   // Keeping the role in the fallback key prevents the keyed timeline from
   // reusing the assistant DOM node for the optimistic user message while the
   // mobile runtime is still synchronizing its role-scoped message ids.
-  if (clientRequestId) return `request:${role}:${clientRequestId}`;
+  if (clientRequestId) {
+    const segment = role === 'assistant'
+      ? cleanId(message?.voiceInterruptionEventId || message?.workflowGroupId)
+      : '';
+    const segmentPart = cleanId(message?.workflowPart || message?.messageKind);
+    return segment && segmentPart
+      ? `request:${role}:${clientRequestId}:segment:${encodeURIComponent(`${segment}:${segmentPart}`)}`
+      : `request:${role}:${clientRequestId}`;
+  }
   const timestamp = Number(message?.timestamp || message?.createdAt || message?.timeMs || 0) || 0;
   const source = cleanId(message?.source || message?.channel || message?.messageKind);
   // Content is deliberately excluded from the fallback identity. A streaming

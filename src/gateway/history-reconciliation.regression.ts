@@ -83,4 +83,33 @@ const duplicateRepair = mergeHistoryWithExistingMessageMetadata([
 assert.equal(duplicateRepair.length, 1, 'repair must not append the old corrupted row as a server-only artifact');
 assert.equal(duplicateRepair[0].content, 'New answer');
 assert.equal(duplicateRepair[0].processEntries?.length, 2, 'repair must retain the richer saved trace');
+const traceRepair = mergeHistoryWithExistingMessageMetadata(
+  [{ role: 'assistant', messageId: 'trace-row', content: 'Answer', processEntries: [{ id: 'own' }, { id: 'foreign' }], liveTraceEntries: [{ id: 'foreign-live' }] }],
+  [{ role: 'assistant', messageId: 'trace-row', content: 'Answer', processEntries: [{ id: 'own' }], liveTraceEntries: [] }],
+  { preferIncomingContent: true, preferIncomingTrace: true },
+);
+assert.deepEqual(traceRepair[0].processEntries, [{ id: 'own' }], 'explicit trace repair must remove copied tools');
+assert.deepEqual(traceRepair[0].liveTraceEntries, []);
+const ownershipRepair = mergeHistoryWithExistingMessageMetadata([
+  { role: 'user', content: 'First prompt', timestamp: 1 },
+  { role: 'assistant', content: 'First answer', timestamp: 2, _clientRequestId: 'first', processEntries: [{ id: 'first-tool' }] },
+  { role: 'user', content: 'Second prompt', timestamp: 3 },
+  {
+    role: 'assistant', content: 'Second answer', timestamp: 4, _clientRequestId: 'second',
+    processEntries: [{ id: 'first-tool' }, { id: 'second-tool' }],
+    liveTraceEntries: [{ id: 'first-tool' }, { id: 'second-live' }],
+  },
+], [
+  { role: 'user', content: 'First prompt', timestamp: 1 },
+  { role: 'assistant', content: 'First answer', timestamp: 2, _clientRequestId: 'first', processEntries: [{ id: 'first-tool' }] },
+  { role: 'user', content: 'Second prompt', timestamp: 3 },
+  {
+    role: 'assistant', content: 'Second answer', timestamp: 4, _clientRequestId: 'second',
+    processEntries: [{ id: 'first-tool' }, { id: 'second-tool' }],
+    liveTraceEntries: [{ id: 'first-tool' }, { id: 'second-live' }],
+  },
+], { preserveAllExisting: true });
+assert.deepEqual(ownershipRepair[3].processEntries?.map((entry: any) => entry.id), ['second-tool'],
+  'a stale mobile sync must not attach an earlier turn’s tool to the next answer');
+assert.deepEqual(ownershipRepair[3].liveTraceEntries?.map((entry: any) => entry.id), ['second-live']);
 console.log('history reconciliation order, dedupe, and repeat regressions passed');

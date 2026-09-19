@@ -62,6 +62,40 @@ function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   return next;
 }
 
+function pruneCrossTurnTraceCopies(history: any[]): any[] {
+  const firstOwner = new Map<string, { userGeneration: number; requestId: string }>();
+  let userGeneration = 0;
+  return history.map((message) => {
+    if (message?.role === 'user') {
+      userGeneration += 1;
+      return message;
+    }
+    if (message?.role !== 'assistant' && message?.role !== 'ai') return message;
+    const requestId = String(message.clientRequestId || message._clientRequestId || '').trim();
+    const checkpoint = String(message.messageKind || '').trim() === 'restart_checkpoint'
+      || String(message.content || '').startsWith('[Hot restart checkpoint: planned by this chat]');
+    let next = message;
+    for (const field of ['processEntries', 'liveTraceEntries']) {
+      if (!Array.isArray(message[field])) continue;
+      const filtered = message[field].filter((entry: any) => {
+        const entryRequestId = String(
+          entry?.clientRequestId || entry?.extra?.clientRequestId || entry?.extra?.activeRequestId || '',
+        ).trim();
+        const eventId = String(entry?.id || entry?.eventKey || entry?.extra?.eventKey || '').trim();
+        const prior = eventId ? firstOwner.get(eventId) : undefined;
+        const wrongRequest = !!requestId && !!entryRequestId && requestId !== entryRequestId;
+        const copiedAfterUser = !!prior && prior.userGeneration < userGeneration
+          && (!requestId || !prior.requestId || requestId !== prior.requestId);
+        if (!checkpoint && (wrongRequest || copiedAfterUser)) return false;
+        if (eventId && !prior) firstOwner.set(eventId, { userGeneration, requestId });
+        return true;
+      });
+      if (filtered.length !== message[field].length) next = { ...next, [field]: filtered };
+    }
+    return next;
+  });
+}
+
 /**
  * Merge a client snapshot with durable server history. Mobile snapshots may be
  * truncated, so preserve every omitted server message while accepting genuine
@@ -70,7 +104,7 @@ function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
 export function mergeHistoryWithExistingMessageMetadata(
   existingHistory: any[],
   incomingHistory: any[],
-  options: { preserveAllExisting?: boolean; preferIncomingContent?: boolean } = {},
+  options: { preserveAllExisting?: boolean; preferIncomingContent?: boolean; preferIncomingTrace?: boolean } = {},
 ): any[] {
   const incoming = Array.isArray(incomingHistory) ? incomingHistory : [];
   const existing = Array.isArray(existingHistory) ? existingHistory : [];
@@ -132,12 +166,16 @@ export function mergeHistoryWithExistingMessageMetadata(
       }
     }
     merged = merged && typeof merged === 'object'
-      ? options.preferIncomingContent ? {
+      ? (options.preferIncomingContent || options.preferIncomingTrace) ? {
           ...merged,
-          content: raw.content,
-          body: raw.body && typeof raw.body === 'object'
+          content: options.preferIncomingContent ? raw.content : merged.content || raw.content,
+          body: options.preferIncomingContent && raw.body && typeof raw.body === 'object'
             ? { ...(merged.body && typeof merged.body === 'object' ? merged.body : {}), text: String(raw.body.text ?? raw.content ?? '') }
             : merged.body,
+          ...(options.preferIncomingTrace ? {
+            processEntries: Array.isArray(raw.processEntries) ? raw.processEntries : [],
+            liveTraceEntries: Array.isArray(raw.liveTraceEntries) ? raw.liveTraceEntries : [],
+          } : {}),
         } : {
           ...mergeHistoryMetadataFromPrior(raw, merged),
           content: merged.content || raw.content,
@@ -199,5 +237,5 @@ export function mergeHistoryWithExistingMessageMetadata(
     const userPosition = result.indexOf(user);
     result.splice(userPosition + 1, 0, reply);
   }
-  return result;
+  return pruneCrossTurnTraceCopies(result);
 }

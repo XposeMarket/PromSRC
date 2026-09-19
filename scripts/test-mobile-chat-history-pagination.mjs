@@ -70,6 +70,17 @@ const repaired = legacy.mergeHistory([cachedAnswer], [canonicalAnswer], { server
 assert.equal(repaired[0].content, 'Current answer',
   'a completed server answer must correct stale cached text for the same request');
 assert.equal(repaired[0].body.text, 'Current answer');
+const cachedTrace = {
+  role: 'ai', _clientRequestId: 'current-request', messageId: 'mobile-request:current-request:assistant',
+  content: 'Current answer', processEntries: [{ id: 'foreign-tool' }],
+};
+const canonicalTrace = {
+  role: 'ai', _clientRequestId: 'current-request', messageId: 'mobile-request:current-request:assistant',
+  content: 'Current answer', processEntries: [{ id: 'current-tool' }],
+};
+const traceHydrated = legacy.mergeHistory([cachedTrace], [canonicalTrace], { serverAuthoritativeText: true });
+assert.deepEqual(Array.from(traceHydrated[0].processEntries, (entry) => entry.id), ['current-tool'],
+  'completed server trace must replace stale cached tool ownership');
 const liveAnswer = { ...cachedAnswer, content: 'Current answer\n\nOld answer', body: { text: 'Current answer\n\nOld answer' }, streaming: true };
 const keptLive = legacy.mergeHistory([liveAnswer], [canonicalAnswer], { serverAuthoritativeText: true });
 assert.equal(keptLive[0].content, 'Current answer\n\nOld answer',
@@ -92,6 +103,43 @@ const canonicalTarget = { role: 'ai', content: 'Current answer', body: { text: '
 artifactMerge.mergeDetails(canonicalTarget, { role: 'ai', content: 'Current answer\n\nOld answer', timestamp: 1000 }, { preserveTargetText: true });
 assert.equal(canonicalTarget.content, 'Current answer',
   'local visual metadata must not reattach stale cached text to a completed server answer');
+const ownedTarget = { role: 'ai', _clientRequestId: 'new', content: 'Done', processEntries: [{ id: 'new-tool' }] };
+artifactMerge.mergeDetails(ownedTarget, { role: 'ai', _clientRequestId: 'old', content: 'Done', processEntries: [{ id: 'old-tool' }] });
+assert.deepEqual(Array.from(ownedTarget.processEntries, (entry) => entry.id), ['new-tool'],
+  'tool entries from a different request must not merge into this assistant');
+artifactMerge.mergeDetails(ownedTarget, {
+  role: 'ai', _clientRequestId: 'new', content: 'Done', processEntries: [{ id: 'stale-local-tool' }],
+}, { preserveTargetTrace: true });
+assert.deepEqual(Array.from(ownedTarget.processEntries, (entry) => entry.id), ['new-tool'],
+  'stale local cache must not replace a completed server tool stream');
+const mapping = {
+  _isMobileInternalServerMessage: () => false,
+  _mapServerMessageToMobile: (message) => ({ ...message }),
+  _isMobileGatewayRestartCheckpointMessage: (message) => message?.messageKind === 'restart_checkpoint',
+  _mergeMobileAssistantTurnDetails: (target, source) => {
+    target.processEntries = [...(target.processEntries || []), ...(source.processEntries || [])];
+  },
+};
+runInNewContext([
+  section('_mapServerHistoryToMobile', '_mapServerMessageToMobile'),
+  'globalThis.mapServer = _mapServerHistoryToMobile;',
+].join('\n'), mapping);
+const restartMapped = mapping.mapServer([
+  { role: 'ai', messageKind: 'restart_checkpoint', timestamp: 1000, processEntries: [{ id: 'restart-tool' }] },
+  { role: 'ai', timestamp: 1200, content: 'Gateway is back', processEntries: [] },
+  { role: 'user', timestamp: 2000, content: 'New question' },
+  { role: 'ai', timestamp: 2100, _clientRequestId: 'new-request', content: 'New answer', processEntries: [{ id: 'new-tool' }] },
+]);
+assert.deepEqual(Array.from(restartMapped[0].processEntries, (entry) => entry.id), ['restart-tool']);
+assert.deepEqual(Array.from(restartMapped[2].processEntries, (entry) => entry.id), ['new-tool'],
+  'an old restart checkpoint must not attach its tools to a later answer');
+const noBootReply = mapping.mapServer([
+  { role: 'ai', messageKind: 'restart_checkpoint', timestamp: 1000, processEntries: [{ id: 'restart-tool' }] },
+  { role: 'user', timestamp: 2000, content: 'New question' },
+  { role: 'ai', timestamp: 2100, _clientRequestId: 'new-request', content: 'New answer', processEntries: [] },
+]);
+assert.equal(noBootReply[1].processEntries.length, 0,
+  'a checkpoint without a boot reply must stay out of future tool streams');
 assert.equal(legacy.sameTurn(
   { role: 'user', content: 'yes', timestamp: 10_000 },
   { role: 'user', content: 'yes', timestamp: 11_000 },
@@ -112,6 +160,14 @@ const repeatedReply = [
 ];
 assert.equal(legacy.dedupeAssistant(repeatedReply).length, 3,
   'an identical reply to a later user message must remain visible');
+assert.equal(legacy.dedupeAssistant([
+  { role: 'ai', content: 'Done', timestamp: 10_000, _clientRequestId: 'first' },
+  { role: 'ai', content: 'Done', timestamp: 10_000, _clientRequestId: 'second' },
+]).length, 2, 'an inherited timestamp cannot coalesce two request-owned tool streams');
+assert.equal(legacy.sameTurn(
+  { role: 'ai', content: 'Done', goalTurnId: 'shared', _clientRequestId: 'first' },
+  { role: 'ai', content: 'Done', goalTurnId: 'shared', _clientRequestId: 'second' },
+), false, 'a shared goal marker cannot override conflicting request ownership');
 
 const painted = [
   { role: 'user', messageId: 'first', timestamp: 500, content: 'first' },

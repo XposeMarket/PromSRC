@@ -4788,9 +4788,13 @@ export function createMobileVoiceRuntime(context = {}) {
       });
     }
     if (latestAi && !shouldAbort) {
+      const continuationRequestId = String(latestAi._clientRequestId || result?.clientRequestId || '').trim();
       const continuationTurn = {
         role: 'ai',
         messageKind: 'steer_continuation',
+        messageId: continuationRequestId
+          ? `mobile-request:${continuationRequestId}:assistant:segment:${encodeURIComponent(`${workflowGroupId}:interruption_response`)}`
+          : undefined,
         time: '',
         timestamp: Date.now(),
         streaming: true,
@@ -4799,7 +4803,7 @@ export function createMobileVoiceRuntime(context = {}) {
         content: '',
         processEntries: [],
         liveTraceEntries: [],
-        _clientRequestId: latestAi._clientRequestId || result?.clientRequestId || '',
+        _clientRequestId: continuationRequestId,
         workflowGroupId,
         workflowPart: 'interruption_response',
         workflowLabel: asSteer ? 'Response after steer' : 'Interruption response',

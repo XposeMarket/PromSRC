@@ -22734,6 +22734,7 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
     const history = mergeHistoryWithExistingMessageMetadata(existingHistory, rawHistory, {
       preserveAllExisting: isMobileHistorySyncRequest(req),
       preferIncomingContent: req.body?.repairTranscriptText === true && !isMobileHistorySyncRequest(req),
+      preferIncomingTrace: req.body?.repairTranscriptTrace === true && !isMobileHistorySyncRequest(req),
     });
     replaceHistory(id, history as any, {
       resetCompaction: req.body?.resetCompaction === true,

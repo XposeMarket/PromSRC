@@ -1721,23 +1721,32 @@ function _mapServerHistoryToMobile(history) {
     .filter((msg) => !_isMobileInternalServerMessage(msg))
     .map((msg, index) => _mapServerMessageToMobile(msg, index))
     .filter(Boolean);
-  const restartCheckpoints = mapped.filter(_isMobileGatewayRestartCheckpointMessage);
   const visible = mapped.filter((message) => !_isMobileGatewayRestartCheckpointMessage(message));
-  // Keep the lifecycle checkpoint's durable tool trace on the terminal
-  // acknowledgement, but do not expose the checkpoint's implementation text as
-  // a second assistant bubble after the gateway reconnects.
-  if (restartCheckpoints.length) {
-    const terminalTurn = [...visible].reverse().find((message) => (
-      message?.role === 'ai' && String(message?.body?.text || message?.content || '').trim()
-    ));
-    if (terminalTurn) {
-      Object.defineProperty(terminalTurn, '_pmGatewayRestartTerminal', {
+  // A restart checkpoint may only enrich the nearby boot reply before the
+  // next user prompt. Selecting the latest assistant in the whole session
+  // copied old tool streams into each newly hydrated turn.
+  mapped.forEach((checkpoint, index) => {
+    if (!_isMobileGatewayRestartCheckpointMessage(checkpoint)) return;
+    const checkpointAt = Number(checkpoint.timestamp || 0) || 0;
+    for (let next = index + 1; next < mapped.length; next += 1) {
+      const candidate = mapped[next];
+      if (candidate?.role === 'user') break;
+      if (_isMobileGatewayRestartCheckpointMessage(candidate)) continue;
+      if (candidate?.role !== 'ai') break;
+      const candidateAt = Number(candidate.timestamp || 0) || 0;
+      if (checkpointAt && candidateAt
+        && (candidateAt < checkpointAt || candidateAt - checkpointAt > 10 * 60_000)) break;
+      const checkpointRequest = String(checkpoint._clientRequestId || '').trim();
+      const candidateRequest = String(candidate._clientRequestId || '').trim();
+      if (candidateRequest && candidateRequest !== checkpointRequest) break;
+      _mergeMobileAssistantTurnDetails(candidate, checkpoint, { preserveTargetText: true });
+      Object.defineProperty(candidate, '_pmGatewayRestartTerminal', {
         configurable: true,
         value: true,
       });
-      restartCheckpoints.forEach((checkpoint) => _mergeMobileAssistantTurnDetails(terminalTurn, checkpoint));
+      break;
     }
-  }
+  });
   for (let index = 0; index < visible.length; index += 1) {
     const message = visible[index];
     if (!message) continue;
@@ -2937,8 +2946,11 @@ function _mergeMobilePinnedCompletedTurn(sessionId, nextThread) {
   return list;
 }
 
-function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText = false } = {}) {
+function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText = false, preserveTargetTrace = false } = {}) {
   if (!target || !source || target === source) return target;
+  const targetRequest = String(target._clientRequestId || '').trim();
+  const sourceRequest = String(source._clientRequestId || '').trim();
+  if (targetRequest && sourceRequest && targetRequest !== sourceRequest) return target;
   // Old clients persisted the reconnect sentence as assistant body text. Clear
   // it before reconciliation so the recovered durable answer can take over.
   _clearRecoveredMobileChatError(target);
@@ -2982,6 +2994,8 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
       if (itemKey && !positions.has(itemKey)) positions.set(itemKey, index);
     });
     incoming.forEach((item) => {
+      const itemRequest = String(item?.clientRequestId || item?.extra?.clientRequestId || item?.extra?.activeRequestId || '').trim();
+      if (targetRequest && itemRequest && itemRequest !== targetRequest) return;
       const itemKey = keyFor(item);
       const existingIndex = itemKey ? positions.get(itemKey) : undefined;
       if (existingIndex !== undefined) {
@@ -3000,8 +3014,10 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
       }
     });
   };
-  mergeList('processEntries');
-  mergeList('liveTraceEntries');
+  if (!preserveTargetTrace) {
+    mergeList('processEntries');
+    mergeList('liveTraceEntries');
+  }
   mergeList('generatedImages');
   mergeList('generatedVideos');
   mergeList('files');
@@ -3122,6 +3138,7 @@ function _mergeMobileGatewayRestartContinuity(mapped, local) {
     }
   }
   if (terminalIndex < 0) return false;
+  if (serverRows.slice(terminalIndex + 1).some((message) => message?.role === 'user')) return false;
 
   let latestUserIndex = -1;
   for (let i = localRows.length - 1; i >= 0; i -= 1) {
@@ -3141,6 +3158,13 @@ function _mergeMobileGatewayRestartContinuity(mapped, local) {
 
   const candidate = localRows[candidateIndex];
   const terminal = serverRows[terminalIndex];
+  const candidateAt = Number(candidate.timestamp || candidate.workStartedAt || 0) || 0;
+  const terminalAt = Number(terminal.timestamp || 0) || 0;
+  if (candidateAt && terminalAt
+    && (candidateAt > terminalAt + 30_000 || terminalAt - candidateAt > 30 * 60_000)) return false;
+  const candidateRequest = String(candidate._clientRequestId || '').trim();
+  const terminalRequest = String(terminal._clientRequestId || '').trim();
+  if (candidateRequest && terminalRequest && candidateRequest !== terminalRequest) return false;
   const candidateText = _mobileMessageCopyText(candidate);
   const terminalText = _mobileMessageCopyText(terminal);
   // Merge the server row into the already-painted row so local process order
@@ -3297,7 +3321,10 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     const sameRequest = requestId && previousRequestId && requestId === previousRequestId;
     const sameTimestamp = Number(previous?.timestamp || 0) > 0
       && Number(previous?.timestamp || 0) === Number(msg?.timestamp || 0);
-    if (separatedByUser || !(sameDurableId || sameRequest || sameTimestamp)) {
+    if (separatedByUser
+      || (requestId && previousRequestId && requestId !== previousRequestId)
+      || (previousId && currentId && previousId !== currentId)
+      || !(sameDurableId || sameRequest || sameTimestamp)) {
       seen.set(key, i);
       continue;
     }
@@ -5519,11 +5546,12 @@ function _mergeMobileProductCarouselIntoMessage(message, carousel) {
 
 function _mobileMessagesRepresentSameTurn(a, b) {
   if (!a || !b || String(a.role || '') !== String(b.role || '')) return false;
+  const aRequest = String(a._clientRequestId || '').trim();
+  const bRequest = String(b._clientRequestId || '').trim();
+  if (aRequest && bRequest && aRequest !== bRequest) return false;
   const aGoalTurn = String(a.goalTurnId || '').trim();
   const bGoalTurn = String(b.goalTurnId || '').trim();
   if (aGoalTurn && bGoalTurn) return aGoalTurn === bGoalTurn;
-  const aRequest = String(a._clientRequestId || '').trim();
-  const bRequest = String(b._clientRequestId || '').trim();
   const aMessageId = String(a.messageId || '').trim();
   const bMessageId = String(b.messageId || '').trim();
   if (aMessageId && bMessageId && aMessageId === bMessageId) return true;
@@ -5667,7 +5695,12 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
     if (!msg || msg.role !== 'ai') return;
     const localCandidate = local.find((candidate) => candidate?.role === 'ai' && _mobileMessagesRepresentSameTurn(msg, candidate));
     if (localCandidate) {
-      _mergeMobileAssistantTurnDetails(msg, localCandidate, { preserveTargetText: msg.streaming !== true });
+      _mergeMobileAssistantTurnDetails(msg, localCandidate, {
+        preserveTargetText: msg.streaming !== true,
+        preserveTargetTrace: msg.streaming !== true
+          && ((Array.isArray(msg.processEntries) && msg.processEntries.length > 0)
+            || (Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length > 0)),
+      });
       _mergeMobileMediaIntoMessage(msg, _collectMessageMedia(localCandidate));
       _mergeMobileProductCarouselIntoMessage(msg, localCandidate.productCarousel);
     }
@@ -5675,7 +5708,12 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const localLatest = _findLatestAssistantTurn(local);
   const nextLatest = _findLatestAssistantTurn(next);
   if (localLatest && nextLatest && _mobileMessagesRepresentSameTurn(nextLatest, localLatest)) {
-    _mergeMobileAssistantTurnDetails(nextLatest, localLatest, { preserveTargetText: nextLatest.streaming !== true });
+    _mergeMobileAssistantTurnDetails(nextLatest, localLatest, {
+      preserveTargetText: nextLatest.streaming !== true,
+      preserveTargetTrace: nextLatest.streaming !== true
+        && ((Array.isArray(nextLatest.processEntries) && nextLatest.processEntries.length > 0)
+          || (Array.isArray(nextLatest.liveTraceEntries) && nextLatest.liveTraceEntries.length > 0)),
+    });
     _mergeMobileMediaIntoMessage(nextLatest, _collectMessageMedia(localLatest));
     _mergeMobileProductCarouselIntoMessage(nextLatest, localLatest.productCarousel);
   }
@@ -5840,8 +5878,17 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
           target.body.text = canonicalText;
           target.content = canonicalText;
         }
+        if ((Array.isArray(candidate.processEntries) && candidate.processEntries.length > 0)
+          || (Array.isArray(candidate.liveTraceEntries) && candidate.liveTraceEntries.length > 0)) {
+          target.processEntries = Array.isArray(candidate.processEntries) ? candidate.processEntries.slice() : [];
+          target.liveTraceEntries = Array.isArray(candidate.liveTraceEntries) ? candidate.liveTraceEntries.slice() : [];
+        }
       }
-      _mergeMobileAssistantTurnDetails(target, source);
+      _mergeMobileAssistantTurnDetails(target, source, {
+        preserveTargetTrace: serverAuthoritativeText && preferIncoming && candidate.streaming !== true
+          && ((Array.isArray(candidate.processEntries) && candidate.processEntries.length > 0)
+            || (Array.isArray(candidate.liveTraceEntries) && candidate.liveTraceEntries.length > 0)),
+      });
       _mergeMobileMediaIntoMessage(target, _collectMessageMedia(source));
       _mergeMobileProductCarouselIntoMessage(target, source.productCarousel);
     } else if (target.role === 'user') {

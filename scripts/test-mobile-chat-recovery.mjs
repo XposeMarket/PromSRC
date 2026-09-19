@@ -92,8 +92,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /const restartCheckpoints = mapped\.filter\(_isMobileGatewayRestartCheckpointMessage\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails\(terminalTurn, checkpoint\)/,
-  'mobile history must fold restart checkpoint activity into the terminal acknowledgement row',
+  /mapped\.forEach\(\(checkpoint, index\) =>[\s\S]{0,700}if \(candidate\?\.role === 'user'\) break;[\s\S]{0,800}_mergeMobileAssistantTurnDetails\(candidate, checkpoint, \{ preserveTargetText: true \}\)/,
+  'mobile history may fold restart checkpoint activity only into the nearby boot reply before another user turn',
 );
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
@@ -415,8 +415,8 @@ assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,300}const nextAnc
 assert.doesNotMatch(pages, /_mergeMobileHistoryRecords\(mapped, durableLocal, \{ sortByTimestamp: true \}\)/, 'mixed-clock hydration must never reorder the transcript by timestamp');
 assert.match(
   pages,
-  /if \(separatedByUser \|\| !\(sameDurableId \|\| sameRequest \|\| sameTimestamp\)\)/,
-  'a user turn must keep a later identical assistant response as a distinct turn',
+  /if \(separatedByUser[\s\S]{0,240}requestId !== previousRequestId[\s\S]{0,180}!\(sameDurableId \|\| sameRequest \|\| sameTimestamp\)\)/,
+  'a user turn or conflicting request must keep a later identical assistant response distinct',
 );
 assert.match(
   pages,
@@ -607,8 +607,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,2200}serverRows\.splice\(terminalIndex, 1\)/,
-  'planned gateway restart recovery must coalesce the local restart row with the durable acknowledgement',
+  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,600}serverRows\.slice\(terminalIndex \+ 1\)\.some\(\(message\) => message\?\.role === 'user'\)[\s\S]{0,2600}serverRows\.splice\(terminalIndex, 1\)/,
+  'planned gateway restart recovery may coalesce only before a later user turn',
 );
 assert.match(
   pages,
@@ -656,7 +656,7 @@ assert.match(
 );
 assert.match(
   voiceRuntime,
-  /messageKind: 'steer_continuation'[\s\S]{0,360}_clientRequestId: latestAi\._clientRequestId/,
+  /messageKind: 'steer_continuation'[\s\S]{0,500}messageId: continuationRequestId[\s\S]{0,500}_clientRequestId: continuationRequestId/,
   'a steer must create a durable request-owned continuation turn',
 );
 const sameTurnStart = pages.indexOf('function _mobileMessagesRepresentSameTurn');

@@ -78,9 +78,20 @@ export function createMobileChatRuntimeAdapter({
 
   function mobileRuntimeTurnId(message, event = null, fallbackRole = '') {
     const explicit = String(message?.messageId || message?.turnId || message?.id || '').trim();
-    if (explicit) return explicit;
     const requestId = mobileRuntimeRequestId(message, event);
     const role = mobileRuntimeRole(message) || String(fallbackRole || '').trim().toLowerCase();
+    const segment = role === 'assistant' && requestId
+      ? String(message?.voiceInterruptionEventId || message?.workflowGroupId || '').trim()
+      : '';
+    const segmentPart = String(message?.workflowPart || message?.messageKind || '').trim();
+    if (segment && segmentPart) {
+      const base = `mobile-request:${requestId}:assistant`;
+      // Older snapshots gave both sides of a steer the same synthetic id.
+      // Give the continuation its own stable stream key while retaining a
+      // genuine server-assigned message id when one exists.
+      if (!explicit || explicit === base) return `${base}:segment:${encodeURIComponent(`${segment}:${segmentPart}`)}`;
+    }
+    if (explicit) return explicit;
     if (!requestId || !['user', 'assistant'].includes(role)) return '';
     // clientRequestId identifies one request, not one transcript row. Mobile
     // intentionally gives the optimistic user row and speculative assistant
@@ -112,9 +123,8 @@ export function createMobileChatRuntimeAdapter({
     return (Array.isArray(thread) ? thread : []).map((message) => {
       if (!message || typeof message !== 'object') return message;
       const next = cloneRuntimeValue(message);
-      if (next.messageId || next.turnId || next.id) return next;
       const turnId = mobileRuntimeTurnId(next);
-      return turnId ? { ...next, messageId: turnId } : next;
+      return turnId && turnId !== next.messageId ? { ...next, messageId: turnId } : next;
     });
   }
 
