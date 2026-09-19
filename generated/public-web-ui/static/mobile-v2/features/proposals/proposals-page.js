@@ -250,6 +250,12 @@ export async function mountProposalsPage({ shell, features, route }) {
       page.querySelector('[data-open-task]')?.addEventListener('click', (event) => {
         shell.navigate?.(`tasks/${encodeURIComponent(event.currentTarget.dataset.openTask)}`);
       });
+      // Non-pending proposals render a "Back to proposals" button instead of
+      // approve/deny. It had no handler, which stranded the user on the detail
+      // view with no in-page way back to the list.
+      page.querySelector('[data-proposal-back]')?.addEventListener('click', () => {
+        list();
+      });
     } catch (error) {
       if (disposed) return;
       page.innerHTML = `<div class="pm-v2-page-heading pm-proposal-detail-heading"><div><h1>Proposal Review</h1></div></div>${errorState(error)}`;

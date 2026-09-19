@@ -153,23 +153,32 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
             <button type="button" class="pm-voice-orb pm-voice-mic pm-voice-page-mic pm-voice-orb-mic pm-voice-particle-orb" data-voice-orb aria-label="Hold to talk">
               <span class="pm-thinking-orb-host" aria-hidden="true"></span>
             </button>
+            <button type="button" class="pm-voice-snap-arrow pm-voice-snap-arrow-down" data-voice-snap-down aria-label="Swipe down to voice controls">
+              <span aria-hidden="true">&#8595;</span>
+              <small>Swipe down</small>
+            </button>
           </div>
         </div>
       </section>
 
-      <div class="pm-v2-voice-home-content">
-          <div class="pm-v2-voice-provider-banner" data-voice-provider-banner aria-live="polite">Checking voice providers…</div>
-          <div class="pm-v2-voice-session-target" data-voice-session-target aria-label="Current voice chat target">Target: <strong>Mobile — New Chat</strong></div>
-          <button type="button" class="pm-voice-session-target" data-agent-target-toggle aria-expanded="false" style="margin-top:8px;border:1px solid var(--pm-border);background:var(--pm-bg-soft);color:var(--pm-text-soft);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Voice target: <span data-agent-target-name>Main Agent</span></button>
-          <div class="pm-v2-voice-quick-settings" aria-label="Voice input and output">
-            <label>Input<select data-input-mode><option value="automatic">Automatic</option><option value="browser">Browser speech recognition</option><option value="record_transcribe">Record and transcribe</option></select></label>
-            <label>Output<select data-voice-mode data-output-mode><option value="openai_realtime">OpenAI voice</option><option value="xai">xAI / Grok</option></select></label>
-            <label>Listening<select data-listen-mode><option value="push_to_speak">Push to Speak</option><option value="always_listening">Always listening</option></select></label>
-          </div>
-          <div class="pm-v2-voice-provider-details" data-voice-provider-details aria-live="polite">Input and output status will appear here.</div>
+      <section class="pm-voice-snap-section pm-voice-snap-secondary">
+        <button type="button" class="pm-voice-snap-arrow pm-voice-snap-arrow-up" data-voice-snap-up aria-label="Return to main voice screen">
+          <span aria-hidden="true">&#8593;</span>
+          <small>Voice</small>
+        </button>
+        <div class="pm-voice-secondary-content pm-v2-voice-home-content">
+          <div class="pm-v2-voice-provider-banner" data-voice-provider-banner aria-live="polite" style="margin-top:14px;font-size:12px;color:var(--pm-muted);">Input: Automatic - Output: Device voice - Push to Speak</div>
+          <button class="pm-v2-voice-session-target" data-voice-session-target type="button" aria-label="Current voice chat target">Target: <strong>Mobile - New Chat</strong></button>
 
           <div class="pm-voice-settings-panel" data-voice-settings-panel hidden style="display:none;margin-top:10px;width:min(100%,430px);box-sizing:border-box;text-align:left;background:var(--pm-bg-soft);border:1px solid var(--pm-border);border-radius:12px;padding:10px;">
             <div class="pm-voice-settings-heading" style="font-size:12px;font-weight:850;color:var(--pm-text);margin:1px 0 8px;">Prometheus</div>
+            <button type="button" class="pm-voice-session-target" data-agent-target-toggle aria-expanded="false" style="margin:0 0 10px;border:1px solid var(--pm-border);background:var(--pm-bg-soft);color:var(--pm-text-soft);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Voice target: <span data-agent-target-name>Main Agent</span></button>
+            <div class="pm-v2-voice-quick-settings" aria-label="Voice input and output">
+              <label>Input<select data-input-mode><option value="automatic">Automatic</option><option value="browser">Browser speech recognition</option><option value="record_transcribe">Record and transcribe</option></select></label>
+              <label>Output<select data-voice-mode data-output-mode><option value="openai_realtime">OpenAI voice</option><option value="xai">xAI / Grok</option></select></label>
+              <label>Listening<select data-listen-mode><option value="push_to_speak">Push to Speak</option><option value="always_listening">Always listening</option></select></label>
+            </div>
+            <div class="pm-v2-voice-provider-details" data-voice-provider-details aria-live="polite" style="margin-top:8px;color:var(--pm-muted);font-size:11px;line-height:1.4;"></div>
             <label class="pm-voice-settings-check" style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--pm-text);"><input type="checkbox" data-speak-replies checked><span>Speak Prometheus replies</span></label>
             <div class="pm-v2-voice-settings-grid">
               <label>Gateway<select data-gateway-preference><option value="active">Current gateway</option></select></label>
@@ -199,23 +208,23 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
           <section class="pm-voice-controls" aria-label="Voice controls">
             ${sessionId.startsWith('voice_room_') ? `<button type="button" class="pm-voice-control-btn pm-voice-transcript-btn" data-voice-transcript aria-label="View Voice Room transcript">${ICONS.chat}<span>View transcript</span></button>` : ''}
             <button type="button" class="pm-voice-control-btn pm-voice-repeat-btn" data-voice-repeat aria-label="Repeat last response" title="Repeat last response" disabled>${ICONS.refresh}<span>Repeat last response</span></button>
-            <button class="pm-voice-control-btn" type="button" data-voice-stop aria-label="Stop voice activity" title="Stop voice activity"><span>Stop</span></button>
             <button class="pm-voice-control-btn pm-voice-settings-icon" type="button" data-voice-settings-toggle aria-label="Voice settings" title="Voice settings">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z"/><path d="m19.4 13.5 1.1.9-1.2 2.1-1.4-.5a7.8 7.8 0 0 1-1.5.9l-.2 1.5h-2.4l-.3-1.5a7.6 7.6 0 0 1-1.6-.7l-1.3.7-1.3-2 1-1.1a7.2 7.2 0 0 1 0-1.8l-1-1 1.2-2.1 1.4.5a7.8 7.8 0 0 1 1.5-.9l.2-1.5h2.4l.3 1.5a7.6 7.6 0 0 1 1.6.7l1.3-.7 1.3 2-1 1.1a7.2 7.2 0 0 1 0 1.8Z"/></svg>
             </button>
+            <div class="pm-voice-mode-toggle" role="group" aria-label="Voice narration mode">
+              <button type="button" data-narration-mode="quiet" aria-pressed="false">Quiet</button>
+              <button type="button" data-narration-mode="milestone" aria-pressed="false">Milestone</button>
+            </div>
           </section>
 
           <div data-voice-attachments hidden style="width:min(100%,430px);margin:0 auto 10px"></div>
-          <div class="pm-voice-mode-toggle" role="group" aria-label="Voice narration mode" style="display:flex;justify-content:center;gap:6px;margin:8px auto">
-            <button type="button" data-narration-mode="quiet" aria-pressed="false">Quiet</button>
-            <button type="button" data-narration-mode="milestone" aria-pressed="false">Milestone</button>
-          </div>
 
           <section class="pm-recent" aria-label="Recent voice commands">
             <div class="pm-recent-head"><h3>Recent Commands &amp; Tasks</h3><a href="#" data-voice-clear>Clear</a></div>
-            <div class="pm-recent-list" data-voice-recent><div class="pm-v2-voice-empty-recent">Your voice commands and tasks will appear here.</div></div>
+            <div class="pm-recent-list" data-voice-recent><div class="pm-v2-voice-empty-recent">No commands yet. Hold the orb to start.</div></div>
           </section>
-      </div>
+        </div>
+      </section>
     </div>
     <div data-voice-camera-capture hidden style="position:fixed;inset:0;z-index:10020;background:#000;display:none;align-items:center;justify-content:center;flex-direction:column">
       <video data-voice-camera-video autoplay muted playsinline style="width:100%;height:100%;object-fit:cover"></video>
@@ -239,7 +248,8 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
   const settingsToggle = page.querySelector('[data-voice-settings-toggle]');
   const providerBanner = page.querySelector('[data-voice-provider-banner]');
   const providerDetails = page.querySelector('[data-voice-provider-details]');
-  const sessionTargetLabel = page.querySelector('[data-voice-session-target] strong');
+  const sessionTargetButton = page.querySelector('[data-voice-session-target]');
+  const sessionTargetLabel = sessionTargetButton?.querySelector('strong');
   const agentTargetButton = page.querySelector('[data-agent-target-toggle]');
   const agentTargetName = page.querySelector('[data-agent-target-name]');
   const agentTargetMenu = page.querySelector('[data-agent-target-menu]');
@@ -471,7 +481,6 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
   }
 
   function updateVoiceRoutingDetails() {
-    if (!providerDetails) return;
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const inputMode = ['automatic', 'browser', 'record_transcribe'].includes(voiceSettings.inputMode) ? voiceSettings.inputMode : 'automatic';
     const inputLabel = inputMode === 'browser'
@@ -489,7 +498,13 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
       : providerReady
         ? `${outputMode === 'xai' ? 'xAI / Grok' : 'OpenAI'} voice, with device speech available as fallback`
         : `Device speech fallback (${outputMode === 'xai' ? 'xAI / Grok' : 'OpenAI'} voice is not connected)`;
-    providerDetails.textContent = `Input: ${inputLabel}. Output: ${outputLabel}.`;
+    if (providerDetails) providerDetails.textContent = `Input: ${inputLabel}. Output: ${outputLabel}.`;
+    if (providerBanner) {
+      const shortInput = inputMode === 'browser' || (inputMode === 'automatic' && Recognition) ? 'Browser' : inputMode === 'record_transcribe' ? 'Record and transcribe' : 'Automatic';
+      const shortOutput = !speakReplies || !providerReady ? 'Device voice' : outputMode === 'xai' ? 'xAI / Grok' : 'OpenAI voice';
+      const listenLabel = voiceSettings.listenMode === 'always_listening' ? 'Always listening' : 'Push to Speak';
+      providerBanner.textContent = `Input: ${shortInput} - Output: ${shortOutput} - ${listenLabel}`;
+    }
   }
 
   function setOrbState(state = 'thinking') {
@@ -521,7 +536,7 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
 
   function paintRecent() {
     if (!recent.length) {
-      recentList.innerHTML = '<div class="pm-v2-voice-empty-recent">Your voice commands and tasks will appear here.</div>';
+      recentList.innerHTML = '<div class="pm-v2-voice-empty-recent">No commands yet. Hold the orb to start.</div>';
       return;
     }
     recentList.innerHTML = recent.map((item) => `
@@ -758,14 +773,11 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
       voiceAgents = Array.isArray(agents) ? agents : Array.isArray(agents?.agents) ? agents.agents : [];
       paintAgentTarget();
       paintVoiceSettings();
-      const openAiLabel = openAiConfigured ? 'OpenAI voice ready' : 'OpenAI voice not connected';
-      const xaiLabel = xaiConfigured ? 'xAI / Grok ready' : 'xAI / Grok not connected';
-      providerBanner.textContent = `${openAiLabel} · ${xaiLabel}`;
       updateVoiceRoutingDetails();
     } catch (error) {
       if (disposed || generation !== loadStatusGeneration) return;
-      providerBanner.textContent = 'Voice provider status is unavailable';
       providerDetails.textContent = error?.message || 'Voice status could not be checked.';
+      updateVoiceRoutingDetails();
     }
   }
   void refreshVoiceStatus();
@@ -873,6 +885,7 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
   };
   page.querySelector('[data-new-voice]')?.addEventListener('click', startNewVoiceChat);
   document.querySelector('#pm-v2-header-slot [data-action="new-voice"]')?.addEventListener('click', startNewVoiceChat);
+  sessionTargetButton?.addEventListener('click', () => shell.setDrawer(true));
   page.querySelector('[data-voice-stop]')?.addEventListener('click', () => {
     alwaysListeningEnabled = false;
     clearTimeout(recognitionSilenceTimer);
@@ -906,11 +919,17 @@ export async function mountVoicePage({ shell, features, gateways, route }) {
     recent.splice(0);
     paintRecent();
   });
+  const scrollToVoiceSection = (selector) => {
+    const section = scroller.querySelector(selector);
+    if (!section) return;
+    const top = section.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTo({ top, behavior: 'smooth' });
+  };
   page.querySelector('[data-voice-snap-down]')?.addEventListener('click', () => {
-    scroller.scrollTo({ top: scroller.clientHeight, behavior: 'smooth' });
+    scrollToVoiceSection('.pm-voice-snap-secondary');
   });
   page.querySelector('[data-voice-snap-up]')?.addEventListener('click', () => {
-    scroller.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToVoiceSection('.pm-voice-snap-primary');
   });
 
   async function sendTranscript(text) {

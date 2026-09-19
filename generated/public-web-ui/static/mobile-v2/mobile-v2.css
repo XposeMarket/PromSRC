@@ -38,10 +38,13 @@ body.pm-mobile-v2 .pm-v2-chat-thread .pm-msg.from-ai { align-self:stretch; align
 body.pm-mobile-v2 .pm-v2-chat-thread .pm-msg.from-ai > .pm-bubble { width:100%; max-width:100%; padding:4px 2px 0 0; border:0; border-radius:0; background:transparent; box-shadow:none; }
 body.pm-mobile-v2 .pm-v2-chat-thread .pm-msg.from-user { max-width:min(86%,calc(100vw - 28px)); }
 body.pm-mobile-v2 .pm-v2-chat-thread .pm-msg.from-ai > .pm-bubble > .markdown-body { display:block; width:100%; min-width:0; }
-body.pm-mobile-v2 .pm-v2-voice-screen .pm-voice-controls { display:flex; flex-wrap:wrap; justify-content:center; gap:7px; }
-body.pm-mobile-v2 .pm-v2-voice-screen .pm-voice-mode-toggle { display:flex; justify-content:center; }
 body.pm-mobile-v2 .pm-v2-voice-screen .pm-v2-voice-media-actions .pm-btn { min-height:36px; border-radius:999px; }
-.pm-v2-voice-session-target { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:32px; max-width:100%; margin-top:12px; padding:6px 12px; overflow:hidden; border:1px solid var(--pm-border); border-radius:999px; background:var(--pm-bg-soft,var(--pm-surface)); color:var(--pm-text-soft); font-size:12px; line-height:1.2; text-overflow:ellipsis; white-space:nowrap; }
+/* Match V1's full-viewport voice scroller. The shell header is a floating
+   overlay and the tab bar is fixed, so the snap panels must use the viewport
+   height rather than the body's remaining flex height. */
+body.pm-mobile-v2 .pm-v2-body.is-v2-voice > .pm-v2-voice-screen { flex:0 0 100dvh; height:100dvh !important; min-height:0; }
+body.pm-mobile-v2 .pm-v2-voice-screen .pm-voice-snap-section { height:100dvh; min-height:100dvh; max-height:100dvh; }
+.pm-v2-voice-session-target { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-height:28px; max-width:100%; margin-top:8px; padding:6px 12px; overflow:hidden; border:1px solid var(--pm-border); border-radius:999px; background:var(--pm-bg-soft,var(--pm-surface)); color:var(--pm-text-soft); font-size:12px; line-height:1.2; text-overflow:ellipsis; white-space:nowrap; }
 .pm-v2-voice-session-target strong { overflow:hidden; color:var(--pm-text); font-weight:750; text-overflow:ellipsis; }
 .pm-v2-voice-screen .pm-v2-voice-settings-grid > label { display:block; min-width:0; color:var(--pm-muted); font-size:10px; font-weight:800; text-transform:uppercase; }
 .pm-v2-voice-screen .pm-v2-voice-settings-grid > label select { display:block; width:100%; margin-top:4px; border:1px solid var(--pm-border); border-radius:8px; padding:7px; background:var(--pm-surface-strong); color:var(--pm-text); color-scheme:light dark; font:inherit; font-size:12px; text-transform:none; }
@@ -339,7 +342,103 @@ body.pm-mobile-v2 .pm-v2-voice-screen .pm-v2-voice-media-actions .pm-btn { min-h
 }
 
 @media (min-width:700px) {
-  body.pm-mobile-v2 #mobile-v2-root { max-width:520px; margin:0 auto; position:relative; border-inline:1px solid var(--pm-border); }
-  .pm-v2-drawer { left:50% !important; right:auto !important; width:min(520px,100vw) !important; transform:translateX(calc(-50% - 102vw)); }
+  body.pm-mobile-v2 #mobile-v2-root { max-width:480px; margin:0 auto; position:relative; border-inline:1px solid var(--pm-border); }
+  .pm-v2-drawer { left:50% !important; right:auto !important; width:min(480px,100vw) !important; transform:translateX(calc(-50% - 102vw)); }
   .pm-v2-drawer.open { transform:translateX(-50%); }
+}
+
+
+/* ---------------------------------------------------------------------------
+   V2-only layout classes.
+
+   These class names are emitted by mobile-v2 feature pages but had no rule in
+   any v2 stylesheet or in the inherited ../styles/*.css sheets, so the affected
+   panels rendered as unstyled stacked blocks. Rules below use the existing
+   --pm-* token vocabulary so they track the active theme.
+   --------------------------------------------------------------------------- */
+
+/* Voice — secondary panel (provider banner + quick settings grid) */
+.pm-v2-voice-home-content { display:flex; flex-direction:column; gap:14px; padding:0 4px; }
+.pm-v2-voice-provider-banner {
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:10px 12px; border:1px solid var(--pm-border); border-radius:12px;
+  background:var(--pm-surface); color:var(--pm-text-soft); font-size:13px; line-height:1.4;
+}
+.pm-v2-voice-quick-settings {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px;
+}
+.pm-v2-voice-quick-settings label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--pm-muted); }
+.pm-v2-voice-quick-settings select,
+.pm-v2-voice-quick-settings input {
+  width:100%; padding:9px 10px; border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-surface); color:var(--pm-text); font-size:14px;
+}
+
+/* Subagents — action row, preview fields, dispatch form */
+.pm-subagent-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.pm-subagent-actions .pm-btn { flex:1 1 auto; min-width:96px; }
+.pm-subagent-preview-description { margin:6px 0 0; color:var(--pm-text-soft); font-size:14px; line-height:1.5; }
+.pm-subagent-preview-value { color:var(--pm-text); font-size:14px; word-break:break-word; }
+.pm-subagent-dispatch {
+  margin-top:14px; padding:12px; border:1px solid var(--pm-border);
+  border-radius:12px; background:var(--pm-surface);
+}
+.pm-subagent-dispatch-form { display:flex; flex-direction:column; gap:10px; }
+.pm-subagent-dispatch-form textarea {
+  width:100%; min-height:96px; resize:vertical; padding:10px;
+  border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-bg-soft); color:var(--pm-text); font-size:14px; line-height:1.45;
+}
+.pm-v2-agent-model-fields {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:8px;
+}
+
+/* Teams — detail header, context, workspace, runs */
+.pm-team-detail-summary { margin:4px 0 0; color:var(--pm-text-soft); font-size:14px; line-height:1.5; }
+.pm-team-detail-stats { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.pm-team-member-list { display:flex; flex-direction:column; gap:8px; }
+.pm-team-context-hint { margin:0 0 8px; color:var(--pm-muted); font-size:12px; line-height:1.45; }
+.pm-team-context-form { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+.pm-team-context-form input,
+.pm-team-context-form textarea {
+  width:100%; padding:10px; border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-surface); color:var(--pm-text); font-size:14px;
+}
+.pm-team-context-list { display:flex; flex-direction:column; gap:8px; }
+.pm-team-context-empty { padding:14px; text-align:center; color:var(--pm-muted); font-size:13px; }
+.pm-team-workspace-list { display:flex; flex-direction:column; gap:6px; }
+.pm-team-workspace-file {
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  width:100%; padding:10px 12px; text-align:left;
+  border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-surface); color:var(--pm-text); font-size:14px;
+}
+.pm-team-file-content {
+  margin-top:10px; padding:12px; max-height:52vh; overflow:auto;
+  border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-bg-soft); color:var(--pm-text);
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5;
+  white-space:pre-wrap; word-break:break-word;
+}
+.pm-team-runs { display:flex; flex-direction:column; gap:8px; }
+.pm-team-run-summary {
+  padding:10px 12px; border:1px solid var(--pm-border); border-radius:10px;
+  background:var(--pm-surface); color:var(--pm-text-soft); font-size:13px; line-height:1.45;
+}
+
+/* Schedule — loading skeleton */
+.pm-v2-schedule-skeleton { display:flex; flex-direction:column; gap:10px; padding:4px 0; }
+.pm-v2-schedule-skeleton > * {
+  height:72px; border-radius:12px; border:1px solid var(--pm-border);
+  background:linear-gradient(90deg,var(--pm-surface) 25%,var(--pm-bg-soft) 50%,var(--pm-surface) 75%);
+  background-size:200% 100%; animation:pm-v2-skeleton-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes pm-v2-skeleton-shimmer { from { background-position:200% 0; } to { background-position:-200% 0; } }
+
+/* Proposals — heading spacing modifiers */
+.pm-proposals-heading { margin-bottom:6px; }
+.pm-proposal-detail-heading { margin-bottom:10px; }
+
+@media (prefers-reduced-motion:reduce) {
+  .pm-v2-schedule-skeleton > * { animation:none; }
 }

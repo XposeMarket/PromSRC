@@ -4280,8 +4280,14 @@ void main() {
     lastHistoryScrollTop = scrollTop;
     const timelineKey = `mobile:main:${requestedSession}`;
     const keyedScroll = captureKeyedScrollState(threadEl, _mobileChatScrollTarget(body));
-    if (keyedScroll.nearBottom && !(mobileTimelineController.peek(timelineKey)?.omittedAfter > 0)) mobileTimelineController.followTail(timelineKey);
-    else if (keyedScroll.anchorKey) mobileTimelineController.anchorKey(timelineKey, keyedScroll.anchorKey);
+    // Reaching the bottom must always restore tail mode. The previous
+    // omittedAfter guard refused to follow the tail in exactly the stuck state
+    // it was meant to protect, so a dropped newest message could not recover by
+    // scrolling down. Re-anchor only on a genuine upward scroll so downward and
+    // programmatic layout scrolls cannot pin the window to an older row.
+    if (keyedScroll.nearBottom) mobileTimelineController.followTail(timelineKey);
+    else if (isUpwardScroll && keyedScroll.anchorKey) mobileTimelineController.anchorKey(timelineKey, keyedScroll.anchorKey);
+
     if (isUpwardScroll && scrollTop <= 80) loadOlderMobileMessages();
   };
   const composerModeScrollTarget = _mobileChatScrollTarget(body);
