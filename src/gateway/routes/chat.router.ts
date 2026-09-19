@@ -2801,7 +2801,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2864,6 +2864,10 @@ async function handleChat(
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
   const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
+  // Background spawns declare their tool categories explicitly; running the
+  // keyword planner over a task prompt would provision every category the
+  // prompt merely mentions (observed: 8 categories / 162 tools for a recon task).
+  const skipAutomaticToolCategoryActivation = runtimeOptions?.skipAutomaticToolCategoryActivation === true;
   let supervisionNoToolNudges = 0;
   let supervisionExpectedAction: 'review_decision' | 'supervision_wait' = 'review_decision';
   let supervisionWaitAfterEventId = '';
@@ -3044,7 +3048,7 @@ async function handleChat(
   } catch (error: any) {
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
-  const automaticallyActivatedCategories = !isSupervisionLoop
+  const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
     ? autoActivateToolCategories(sessionId, message, history.length)
     : [];
   const stage4InstructionIntents = detectStage4InstructionIntents({
