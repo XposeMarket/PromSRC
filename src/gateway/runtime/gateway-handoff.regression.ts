@@ -265,12 +265,34 @@ async function main(): Promise<void> {
     const plan = lifecycle.planGatewayHandoff({ ...base, handoffPolicy: 'never' });
     assert.equal(plan.eligible, false);
     assert.equal(plan.reason, 'policy_never');
-    assert.equal(lifecycle.planGatewayHandoff({ ...base, electronManaged: true }).reason, 'electron_managed');
+    assert.equal(lifecycle.planGatewayHandoff({ ...base, electronManaged: true }).reason, 'electron_without_ipc', 'an Electron main without the IPC channel keeps the code-42 restart');
     assert.equal(lifecycle.planGatewayHandoff({ ...base, restartScope: 'supervisor' }).reason, 'supervisor_replacement');
     assert.equal(lifecycle.planGatewayHandoff({ ...base, restartLauncher: 'external_supervisor' }).reason, 'supervisor_without_ipc', 'no IPC channel means no handoff under a supervisor');
+    // With a launcher IPC channel present, both Electron and the supervisor
+    // hand off; a live non-initiating runtime is what makes it eligible.
+    const originalSend = (process as any).send;
+    const originalConnected = (process as any).connected;
+    (process as any).send = () => true;
+    try { Object.defineProperty(process, 'connected', { value: true, configurable: true, writable: true }); } catch {}
+    try {
+      const registry = await import('../live-runtime-registry');
+      const carried = registry.registerLiveRuntime({ kind: 'background_task', label: 'carried', abortSignal: { aborted: false } });
+      const electronPlan = lifecycle.planGatewayHandoff({ ...base, electronManaged: true, restartLauncher: 'electron' });
+      assert.equal(electronPlan.eligible, true, `electron plan: ${electronPlan.reason}`);
+      assert.equal(electronPlan.launcher, 'electron_ipc');
+      assert.ok(electronPlan.carried.some((r) => r.id === carried));
+      const supervisorPlan = lifecycle.planGatewayHandoff({ ...base, restartLauncher: 'external_supervisor' });
+      assert.equal(supervisorPlan.launcher, 'supervisor_ipc');
+      registry.finishLiveRuntime(carried);
+      assert.equal(lifecycle.planGatewayHandoff({ ...base, restartLauncher: 'external_supervisor' }).reason, 'no_runtimes_to_carry');
+    } finally {
+      (process as any).send = originalSend;
+      try { Object.defineProperty(process, 'connected', { value: originalConnected, configurable: true, writable: true }); } catch {}
+    }
   }
 
   console.log('gateway handoff regression: ok');
+  try { await (await import('../gateway-progress-lease')).flushRuntimeProgressLease(); } catch {}
   fs.rmSync(root, { recursive: true, force: true });
 }
 

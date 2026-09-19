@@ -667,7 +667,11 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
 // runtime(s) that asked for the restart (they must continue on the new code),
 // then keeps running everything else until it finishes on its own.
 
-type HandoffLauncher = 'supervisor_ipc' | 'self_spawn';
+type HandoffLauncher = 'supervisor_ipc' | 'electron_ipc' | 'self_spawn';
+
+function hasLauncherIpcChannel(): boolean {
+  return typeof process.send === 'function' && process.connected === true;
+}
 
 let _handoffDraining = false;
 
@@ -706,11 +710,16 @@ export function planGatewayHandoff(ctx: RestartContext): GatewayHandoffPlan {
   const none = (reason: string): GatewayHandoffPlan => ({ eligible: false, reason, carried: [] });
   if (process.env.PROMETHEUS_GATEWAY_HANDOFF === '0') return none('disabled_by_env');
   if (ctx.handoffPolicy === 'never') return none('policy_never');
-  if (ctx.electronManaged || ctx.restartLauncher === 'electron') return none('electron_managed');
   if (ctx.restartScope === 'supervisor') return none('supervisor_replacement');
   let launcher: HandoffLauncher;
-  if (ctx.restartLauncher === 'external_supervisor') {
-    if (typeof process.send !== 'function' || !process.connected) return none('supervisor_without_ipc');
+  if (ctx.electronManaged || ctx.restartLauncher === 'electron') {
+    // Electron spawns the gateway with an IPC channel and starts the
+    // replacement itself; an older Electron main without the channel falls
+    // back to the code-42 restart it already understands.
+    if (!hasLauncherIpcChannel()) return none('electron_without_ipc');
+    launcher = 'electron_ipc';
+  } else if (ctx.restartLauncher === 'external_supervisor') {
+    if (!hasLauncherIpcChannel()) return none('supervisor_without_ipc');
     launcher = 'supervisor_ipc';
   } else {
     launcher = 'self_spawn';
@@ -816,11 +825,12 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
     reason: label,
     runtimeCount: carriedRuntimeIds.length,
   };
-  if (plan.launcher === 'supervisor_ipc') {
+  if (plan.launcher === 'supervisor_ipc' || plan.launcher === 'electron_ipc') {
+    const launcherName = plan.launcher === 'electron_ipc' ? 'Electron' : 'the supervisor';
     process.send!(notice, (error: Error | null) => {
-      if (error) console.error(`[lifecycle] Handoff notice to supervisor failed: ${error.message}`);
+      if (error) console.error(`[lifecycle] Handoff notice to ${launcherName} failed: ${error.message}`);
     });
-    console.log('[lifecycle] Handoff notice sent to the supervisor; it will launch the replacement.');
+    console.log(`[lifecycle] Handoff notice sent to ${launcherName}; it will launch the replacement.`);
   } else {
     try {
       const spawned = spawnDetachedReplacementGateway(getProjectRoot());

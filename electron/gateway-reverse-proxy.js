@@ -124,16 +124,29 @@ function createGatewayReverseProxy({
     }
   }
 
-  function setState(nextState) {
+  function setState(nextState, { abortUpstreams = true } = {}) {
     if (!RELAY_STATES.has(nextState)) throw new Error('Unknown gateway relay state: ' + nextState);
     state = nextState;
-    if (state !== 'ready') abortActiveUpstreams();
+    if (state !== 'ready' && abortUpstreams) abortActiveUpstreams();
     return state;
   }
 
   function beginRestart(reason = 'gateway backend replacement') {
     log('[relay] Entering restarting state: ' + String(reason).slice(0, 160) + '\n');
     return setState('restarting');
+  }
+
+  // Warm handoff: the old backend keeps serving the streams it already owns
+  // (chat SSE responses, tool output) while the replacement boots. Only NEW
+  // requests see the restarting state; established upstream pipes are left
+  // alone so a running turn keeps streaming to the desktop UI.
+  function beginHandoff(reason = 'gateway warm handoff') {
+    log('[relay] Entering handoff state (keeping active streams): ' + String(reason).slice(0, 160) + '\n');
+    return setState('restarting', { abortUpstreams: false });
+  }
+
+  function activeStreamCount() {
+    return activeHttp.size + activeUpgrades.size;
   }
 
   const server = http.createServer((req, res) => {
@@ -318,6 +331,8 @@ function createGatewayReverseProxy({
     getState: relayState,
     setState,
     beginRestart,
+    beginHandoff,
+    activeStreamCount,
     close() {
       setState('closed');
       abortActiveUpstreams();

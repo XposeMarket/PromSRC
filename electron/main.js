@@ -402,6 +402,27 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
 // ─── State ─────────────────────────────────────────────────────────────────
 let mainWindow          = null;
 let gatewayProcess      = null;
+// Warm handoff: gateways that released the backend port but are still
+// finishing the turns they own. They are no longer the managed child; they
+// exit on their own and must never be treated as a crash or be port-cleaned.
+const drainingGatewayProcesses = new Map();
+
+function isGatewayHandoffNotice(message) {
+  return !!message
+    && typeof message === 'object'
+    && message.type === 'gateway_handoff'
+    && Number.isInteger(message.hostPid)
+    && message.hostPid > 0
+    && typeof message.socketPath === 'string';
+}
+
+function killDrainingGatewayProcesses(reason) {
+  for (const [pid, child] of drainingGatewayProcesses) {
+    writeGatewayLog(`[main] Terminating draining gateway ${pid} (${reason})\n`);
+    try { killManagedGatewayProcessTree(child); } catch {}
+  }
+  drainingGatewayProcesses.clear();
+}
 let nativeBrowserRpcServer = null;
 let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
@@ -1441,6 +1462,7 @@ function readGatewayProgressLease() {
 // Make the final process boundary synchronous so a managed gateway cannot be
 // left behind holding the desktop port.
 process.on('exit', () => {
+  killDrainingGatewayProcesses('electron exit');
   if (!gatewayProcess || !gatewayProcess.pid) return;
   if (gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
   killManagedGatewayProcessTree(gatewayProcess);
@@ -2001,6 +2023,9 @@ async function startGateway() {
         ...gatewayEnv,
         ELECTRON_RUN_AS_NODE: '1',
       },
+      // stdin carries the vault key; the IPC channel carries the warm-handoff
+      // notice a restarting gateway sends before it starts draining.
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
@@ -2018,9 +2043,12 @@ async function startGateway() {
     }
     const sourceGatewayNode = resolveSourceGatewayNode();
     writeGatewayLog(`[main] Source gateway runtime: ${sourceGatewayNode}\n`);
+    // tsx relays the IPC channel to the real gateway child, so the handoff
+    // notice still reaches Electron through the wrapper.
     gatewayProcess = spawn(sourceGatewayNode, [tsxCli, getGatewayEntryPath()], {
       cwd:   getGatewayWorkingDirectory(),
       env:   { ...gatewayEnv },
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
@@ -2028,6 +2056,12 @@ async function startGateway() {
 
   const spawnedGatewayProcess = gatewayProcess;
   writeGatewayLog(`[main] Gateway spawned (pid=${spawnedGatewayProcess.pid}, backend=${gatewayBackendPort})\n`);
+  spawnedGatewayProcess.on('message', (message) => {
+    if (!isGatewayHandoffNotice(message)) return;
+    handoffGatewayFromElectron(spawnedGatewayProcess, message).catch((error) => {
+      writeGatewayLog('[main] Gateway warm handoff failed: ' + (error?.message || error) + '\n');
+    });
+  });
 
   // Hand off the master key (or an empty sentinel) as the first stdin line. The
   // child's vault-key-bootstrap reads exactly one line, then stdin is left open.
@@ -2052,6 +2086,12 @@ async function startGateway() {
   });
 
   spawnedGatewayProcess.on('exit', (code, signal) => {
+    if (spawnedGatewayProcess.pid && drainingGatewayProcesses.delete(spawnedGatewayProcess.pid)) {
+      // The replacement already owns the backend port and the runtime status
+      // file; a port cleanup here would target the live gateway.
+      writeGatewayLog(`[main] Drained gateway ${spawnedGatewayProcess.pid} exited (code=${code}, signal=${signal})\n`);
+      return;
+    }
     writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
     // A timed-out restart may have terminated the gateway before its worker
     // descendants released the listener. Clean only the old Electron-owned
@@ -2082,6 +2122,57 @@ async function startGateway() {
       app.quit();
     }
   });
+}
+
+// Warm handoff: the gateway has already checkpointed the restart-owning turn,
+// released the backend port, and keeps running everything else. Start the
+// replacement beside it, switch the relay when the replacement is healthy,
+// and leave the old process alone until it exits on its own.
+async function handoffGatewayFromElectron(hostProcess, notice) {
+  if (isQuitting) return false;
+  if (gatewayProcess !== hostProcess) {
+    writeGatewayLog(`[main] Ignoring handoff notice from non-current gateway ${notice.hostPid}\n`);
+    return false;
+  }
+  if (isGatewayRestarting) {
+    writeGatewayLog(`[main] Ignoring handoff notice from gateway ${notice.hostPid}: a restart is already in progress\n`);
+    return false;
+  }
+  isGatewayRestarting = true;
+  const reason = String(notice.reason || 'gateway warm handoff');
+  writeGatewayLog(`[main] Gateway ${notice.hostPid} is handing off (${reason}); it keeps ${Number(notice.runtimeCount) || 0} runtime(s) running while the replacement starts\n`);
+  drainingGatewayProcesses.set(hostProcess.pid, hostProcess);
+  gatewayProcess = null;
+  gatewayHealthFailures = 0;
+  invalidateGatewayRecoverySchedule();
+  gatewayRelay?.beginHandoff(reason);
+  try {
+    // The host closes its listener just before sending the notice; the
+    // backend port can take a moment to actually free up.
+    await waitForGatewayPortRelease(10_000);
+    await startGateway();
+    await waitForGateway();
+    gatewayRelay?.setState('ready');
+    gatewayRecoveryAttempts.length = 0;
+    writeGatewayLog(`[main] Warm handoff complete: replacement gateway is serving; ${notice.hostPid} continues draining\n`);
+    return true;
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    writeGatewayLog(`[main] Warm handoff replacement failed: ${message}\n`);
+    gatewayRelay?.setState('failed');
+    gatewayProcess = null;
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('gateway-degraded', {
+          reason: message.slice(0, 240),
+          retryAfterMs: GATEWAY_RECOVERY_WINDOW_MS,
+        });
+      }
+    } catch {}
+    return false;
+  } finally {
+    isGatewayRestarting = false;
+  }
 }
 
 async function restartGatewayFromElectron(options = {}) {
@@ -4246,6 +4337,7 @@ app.on('before-quit', (event) => {
     clearInterval(gatewayHealthTimer);
     gatewayHealthTimer = null;
   }
+  killDrainingGatewayProcesses('app quit');
 
   // A safe update has already completed this handshake and cleared
   // gatewayProcess before quitAndInstall. For a normal quit, give the gateway

@@ -39,8 +39,26 @@ function request(port, pathname = '/', headers = {}) {
 
 async function startBackend(port, name) {
   let requests = 0;
+  const streams = new Set();
   const backend = http.createServer((req, res) => {
     requests += 1;
+    if (req.url === '/stream') {
+      // Stands in for a chat SSE response: headers now, chunks until told to stop.
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'X-Backend': name });
+      res.write(': connected\n\n');
+      let tick = 0;
+      const timer = setInterval(() => {
+        tick += 1;
+        try { res.write(`data: ${name}-${tick}\n\n`); } catch {}
+      }, 50);
+      const entry = { res, timer };
+      streams.add(entry);
+      res.once('close', () => {
+        clearInterval(timer);
+        streams.delete(entry);
+      });
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json', 'X-Backend': name });
     res.end(JSON.stringify({ ok: true, name, path: req.url }));
   });
@@ -57,8 +75,36 @@ async function startBackend(port, name) {
       resolve();
     });
   });
-  return { backend, wss, get requests() { return requests; } };
+  return {
+    backend,
+    wss,
+    get requests() { return requests; },
+    endStreams() {
+      for (const entry of streams) {
+        clearInterval(entry.timer);
+        try { entry.res.end(); } catch {}
+      }
+      streams.clear();
+    },
+  };
 }
+
+// Open a streaming response through the relay and count the chunks it delivers.
+function openStream(port) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/stream' }, (res) => {
+      const state = { status: res.statusCode, chunks: 0, ended: false, res };
+      res.on('data', () => { state.chunks += 1; });
+      res.once('end', () => { state.ended = true; });
+      res.once('close', () => { state.ended = true; });
+      resolve(state);
+    });
+    req.once('error', reject);
+    req.end();
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function closeBackend(bundle) {
   return new Promise((resolve, reject) => {
@@ -133,6 +179,42 @@ async function run() {
     const replacement = await request(publicPort, '/api/status');
     assert.equal(replacement.status, 200);
     assert.equal(replacement.headers['x-backend'], 'replacement');
+
+    // Warm handoff: an in-flight stream from the old backend must keep
+    // flowing while new requests wait for the next backend.
+    const stream = await openStream(publicPort);
+    assert.equal(stream.status, 200);
+    await sleep(200);
+    const chunksBeforeHandoff = stream.chunks;
+    assert.ok(chunksBeforeHandoff > 0, 'stream delivers chunks through the relay');
+    relay.beginHandoff('relay regression handoff');
+    const duringHandoff = await request(publicPort, '/api/health');
+    assert.equal(duringHandoff.status, 503, 'new requests wait during a handoff');
+    assert.equal(duringHandoff.headers['x-prometheus-gateway-state'], 'restarting');
+    await sleep(200);
+    assert.ok(stream.chunks > chunksBeforeHandoff, 'beginHandoff must not abort the established stream');
+    assert.equal(stream.ended, false, 'established stream stays open across the handoff');
+    assert.equal(relay.activeStreamCount(), 1);
+    // The old backend stops listening (as a draining gateway does) but keeps
+    // its established response alive; the next backend takes the port.
+    const drainingBackend = backend;
+    // server.close() only stops the listener; its callback would wait for the
+    // stream to end, which is exactly what a draining gateway does not do.
+    drainingBackend.backend.close();
+    await sleep(50);
+    backend = await startBackend(backendPort, 'third');
+    relay.setState('ready');
+    const afterHandoff = await request(publicPort, '/api/status');
+    assert.equal(afterHandoff.headers['x-backend'], 'third', 'new requests reach the replacement once ready');
+    await sleep(150);
+    assert.equal(stream.ended, false, 'the draining backend still owns its stream after the switch');
+    const chunksAfterSwitch = stream.chunks;
+    await sleep(150);
+    assert.ok(stream.chunks > chunksAfterSwitch, 'stream keeps flowing from the draining backend');
+    drainingBackend.endStreams();
+    await sleep(100);
+    assert.equal(stream.ended, true, 'stream ends only when the draining backend finishes it');
+    drainingBackend.wss.close();
   } finally {
     if (backend) await closeBackend(backend);
     await relay.close();
