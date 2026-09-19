@@ -16,7 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
-import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
+import { loadTokens, getValidToken, refreshTokens, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { isRetryableAccountFailure } from '../auth/provider-account-pool';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
@@ -337,6 +337,13 @@ export class OpenAICodexAdapter implements LLMProvider {
     const input = this.buildInput(messages);
 
     const configuredModel = String(model || '').trim();
+    // Account indexes for which a forced token refresh has already been
+    // attempted after a 401. A stored access token can be revoked server-side
+    // (plan change, re-login from another Codex client) while its local
+    // expires_at is still in the future, so getValidToken() happily reuses it
+    // and every request 401s until the user manually reconnects. Refresh once
+    // and retry before surfacing the error.
+    const forcedRefreshAttempted = new Set<number>();
     const runRequest = async (
       requestedModel: string,
       allowFallback: boolean,
@@ -434,6 +441,26 @@ export class OpenAICodexAdapter implements LLMProvider {
 
         if (!response.ok) {
           const text = await response.text().catch(() => '');
+          if (response.status === 401 && !forcedRefreshAttempted.has(accountIndex)) {
+            forcedRefreshAttempted.add(accountIndex);
+            clearTimers();
+            options?.abortSignal?.removeEventListener?.('abort', onExternalAbort);
+            try {
+              await refreshTokens(this.configDir, activeAccountId);
+              console.warn('[openai_codex] Request returned 401 with a non-expired stored token; refreshed the token and retrying once.');
+              return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, allowIncompleteStreamRetry, accountIndex);
+            } catch (refreshError: any) {
+              console.warn(`[openai_codex] Token refresh after 401 failed: ${String(refreshError?.message || refreshError).slice(0, 200)}`);
+              if (accountIndex + 1 >= accountCandidates.length) {
+                writeCodexModelRuntimeStatus({ configuredModel, requestedModel, ok: false, error: 'HTTP_401_REAUTH_REQUIRED' });
+                const reauthError = new Error('openai_codex API error 401: stored Codex session was rejected and could not be refreshed. Reconnect OpenAI Codex in Settings → Models.') as Error & { code?: string; status?: number };
+                reauthError.name = 'CodexProviderHttpError';
+                reauthError.code = 'CODEX_REAUTH_REQUIRED';
+                reauthError.status = 401;
+                throw reauthError;
+              }
+            }
+          }
           if (isRetryableAccountFailure(response.status, text) && accountIndex + 1 < accountCandidates.length) {
             console.warn(`[openai_codex] Account request failed (${response.status}); trying the next configured account.`);
             return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, allowIncompleteStreamRetry, accountIndex + 1);
