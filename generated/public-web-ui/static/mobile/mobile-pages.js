@@ -1956,6 +1956,12 @@ function _reconcileMobileThreadOrder(thread) {
   // A recovery refresh can briefly return the completed assistant before the
   // matching user record. Stable request identity makes the intended pair
   // unambiguous, so restore user -> assistant ordering before rendering.
+  // This repair is deliberately conservative: it only moves a user row back
+  // past its own assistant when no other durable row sits between them. The
+  // previous unconditional splice fought the server's ordering and dragged
+  // user rows across unrelated turns, which reads as random reordering. It
+  // also advanced the loop counter past the row shifted into place, so a
+  // second out-of-order pair in the same page could be skipped entirely.
   for (let userIndex = 0; userIndex < list.length; userIndex += 1) {
     const user = list[userIndex];
     if (user?.role !== 'user') continue;
@@ -1965,8 +1971,17 @@ function _reconcileMobileThreadOrder(thread) {
       && _isMobileAssistantMessage(message)
       && String(message._clientRequestId || '').trim() === requestId);
     if (assistantIndex < 0) continue;
+    let blocked = false;
+    for (let between = assistantIndex + 1; between < userIndex; between += 1) {
+      const row = list[between];
+      if (row?.role === 'user' || _isMobileAssistantMessage(row)) { blocked = true; break; }
+    }
+    if (blocked) continue;
     list.splice(userIndex, 1);
     list.splice(assistantIndex, 0, user);
+    // The rotated span is now ordered; resume scanning just after it so a
+    // later mispaired row in the same page is still repaired.
+    userIndex = assistantIndex;
   }
   _repairMobileRealtimeExchangeOrder(list);
   _reindexMobileThread(list);
@@ -5782,8 +5797,22 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
       // must not be appended after the current conversation and masquerade as
       // new assistant/user messages.
       const candidateTimestamp = Number(candidate?.timestamp || 0) || 0;
+      // An older durable row must not masquerade as a new message at the tail,
+      // but discarding it outright silently deleted real messages whenever the
+      // server clock trailed the optimistic mobile clock. Server and mobile
+      // timestamps are not a shared clock, so instead of dropping the row we
+      // insert it at its correct chronological position and let it render.
       if (preferIncoming && appendOnlyNewer && next.length
-        && primaryLatestTimestamp > 0 && candidateTimestamp <= primaryLatestTimestamp) return;
+        && primaryLatestTimestamp > 0 && candidateTimestamp <= primaryLatestTimestamp) {
+        let insertAt = next.length;
+        while (insertAt > 0) {
+          const priorTimestamp = Number(next[insertAt - 1]?.timestamp || 0) || 0;
+          if (priorTimestamp && priorTimestamp <= candidateTimestamp) break;
+          insertAt -= 1;
+        }
+        next.splice(insertAt, 0, candidate);
+        return;
+      }
       next.push(candidate);
       return;
     }

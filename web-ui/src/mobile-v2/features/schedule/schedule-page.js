@@ -402,7 +402,14 @@ export async function mountSchedulePage({ shell, features, route }) {
       page.querySelectorAll('[data-schedule-card]').forEach((card) => {
         const openChat = () => {
           const sessionId = String(card.dataset.sessionId || '').trim();
-          if (sessionId) shell.navigate?.(`chat/${encodeURIComponent(sessionId)}`);
+          if (sessionId) { shell.navigate?.(`chat/${encodeURIComponent(sessionId)}`); return; }
+          // A schedule with no linked chat session previously dead-ended on a
+          // notice, leaving the editor reachable only through a 480ms
+          // long-press. Fall back to opening the editor so every card has a
+          // working tap target.
+          const scheduleId = String(card.dataset.scheduleCard || '').trim();
+          const item = rows.find((row) => String(row.id) === scheduleId);
+          if (item) editor(item);
           else shell.showNotice('No chat session available for this schedule.');
         };
         card.addEventListener('click', (event) => {

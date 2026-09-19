@@ -296,12 +296,27 @@ export function createWeightedTimelineController(defaults = {}) {
       ? { start: 0, end: materializedBase.length }
       : rangeByWeight(materializedBase, localAnchor, budgets.paintWeight, state.mode === 'tail');
     const paintBase = materializedBase.slice(paintRange.start, paintRange.end);
-    const materializedEntries = includePinned(list, materializedBase, options.pinnedKeys).map(materializeEntry);
+    // The newest turn must never fall outside the painted window. In anchor or
+    // accumulate mode a few heavy turns (tool traces, images, file changes) can
+    // consume the entire paint budget around an older anchor, which silently
+    // drops the live/latest message out of the DOM until the user backfills
+    // earlier history and forces a full repaint. Pin the tail entry so the most
+    // recent row always materializes and paints regardless of mode or budget.
+    const effectivePinnedKeys = new Set(options.pinnedKeys || []);
+    const tailEntry = list.length ? list[list.length - 1] : null;
+    const tailAlreadyPainted = !!tailEntry && paintBase.length > 0
+      && paintBase[paintBase.length - 1]?.key === tailEntry.key;
+    const tailPinned = !!tailEntry && !!tailEntry.key && !tailAlreadyPainted;
+    if (tailPinned) effectivePinnedKeys.add(tailEntry.key);
+    const materializedEntries = includePinned(list, materializedBase, effectivePinnedKeys).map(materializeEntry);
     const materializedByKey = new Map(materializedEntries.map((entry) => [entry.key, entry]));
-    const paintEntries = includePinned(list, paintBase, options.pinnedKeys)
+    const paintEntries = includePinned(list, paintBase, effectivePinnedKeys)
       .map((entry) => materializedByKey.get(entry.key) || materializeEntry(entry));
     const firstPaintIndex = paintBase.length ? list.indexOf(paintBase[0]) : 0;
-    const lastPaintIndex = paintBase.length ? list.indexOf(paintBase[paintBase.length - 1]) : -1;
+    const lastPaintIndex = tailPinned
+      ? list.length - 1
+      : (paintBase.length ? list.indexOf(paintBase[paintBase.length - 1]) : -1);
+
     const result = Object.freeze({
       key: id,
       mode: state.mode,

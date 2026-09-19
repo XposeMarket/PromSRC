@@ -51,9 +51,15 @@ export function chatTurnKey(message, index = 0, occurrence = 0) {
   // mobile runtime is still synchronizing its role-scoped message ids.
   if (clientRequestId) return `request:${role}:${clientRequestId}`;
   const timestamp = Number(message?.timestamp || message?.createdAt || message?.timeMs || 0) || 0;
-  const content = String(message?.content ?? message?.body?.text ?? '');
   const source = cleanId(message?.source || message?.channel || message?.messageKind);
-  const base = `anon:${hashText(`${role}\u0000${timestamp}\u0000${source}\u0000${content}`)}`;
+  // Content is deliberately excluded from the fallback identity. A streaming
+  // assistant row mutates its text on every frame, and hashing that text made
+  // the row's key change mid-stream: the keyed reconciler then treated each
+  // frame as a brand new node, destroyed the live DOM, and let occurrence
+  // suffixes swap between colliding rows, which is visible as reordering.
+  // Role + timestamp + source is stable for the lifetime of a row, and the
+  // positional occurrence counter disambiguates genuine collisions.
+  const base = `anon:${hashText(`${role}\u0000${timestamp}\u0000${source}`)}`;
   return occurrence > 0 ? `${base}:${occurrence}` : base;
 }
 
