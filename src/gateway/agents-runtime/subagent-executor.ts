@@ -2212,15 +2212,31 @@ function compactWorkspaceEditArgs(args: Record<string, any>, pathArg: any, actio
   return out;
 }
 
+function inferWorkspacePatchOp(edit: any): string | undefined {
+  // Callers frequently omit `op` and let the field shape imply it. Infer the
+  // obvious cases so a patchset that clearly says "find X, replace with Y"
+  // does not bounce with "filename and op are required".
+  if (!edit || typeof edit !== 'object') return undefined;
+  const has = (k: string) => edit[k] !== undefined && edit[k] !== null;
+  if (has('find') || has('old_text') || has('oldText')) return 'find_replace';
+  if (has('after_line') || has('afterLine')) return 'insert_after';
+  if ((has('start_line') || has('startLine')) && (has('new_content') || has('content'))) return 'replace_lines';
+  if (has('start_line') || has('startLine')) return 'delete_lines';
+  return undefined;
+}
+
 function normalizeWorkspacePatchsetArgs(rawArgs: any): any {
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
   const rawEdits = Array.isArray(args.edits) ? args.edits : [];
+  // A single-file patchset may carry the target once at the top level
+  // (`path`/`filename`/`file`) instead of repeating it per edit.
+  const sharedFilename = args.filename ?? args.path ?? args.file ?? args.name;
   return {
     ...args,
     edits: rawEdits.map((entry: any) => {
       const edit = entry && typeof entry === 'object' ? { ...entry } : {};
-      const op = normalizeWorkspacePatchOp(edit.op ?? edit.action ?? edit.type);
-      const filename = edit.filename ?? edit.path ?? edit.file ?? edit.name;
+      const op = normalizeWorkspacePatchOp(edit.op ?? edit.action ?? edit.type ?? inferWorkspacePatchOp(edit));
+      const filename = edit.filename ?? edit.path ?? edit.file ?? edit.name ?? sharedFilename;
       if (op === 'find_replace') {
         return {
           filename,
@@ -8471,9 +8487,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const patchSnapshots: Array<ReturnType<typeof snapshotPreMutation>> = [];
         const patchEvidenceFiles: CodeEvidenceFile[] = [];
         for (const edit of patchEdits) {
-          const pFilename = edit?.filename;
-          const pOp = normalizeWorkspacePatchOp(edit?.op);
-          if (!pFilename || !pOp) { patchResults.push({ filename: String(pFilename || ''), op: pOp, ok: false, error: 'filename and op are required' }); continue; }
+          const pFilename = edit?.filename ?? edit?.path ?? edit?.file ?? args.filename ?? args.path ?? args.file;
+          const pOp = normalizeWorkspacePatchOp(edit?.op ?? edit?.action ?? edit?.type ?? inferWorkspacePatchOp(edit));
+          if (!pFilename || !pOp) {
+            const missing = [!pFilename ? 'filename' : '', !pOp ? 'op' : ''].filter(Boolean).join(' and ');
+            patchResults.push({ filename: String(pFilename || ''), op: pOp, ok: false, error: `${missing} required (got keys: ${Object.keys(edit || {}).join(', ') || 'none'}). Each edit needs filename/path plus op (find_replace|replace_lines|insert_after|delete_lines|write_file|create_file), or a top-level path shared by all edits.` });
+            continue;
+          }
           try {
             const supportedPatchOps = new Set(['find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write_file', 'create_file', 'rename_file']);
             if (!supportedPatchOps.has(pOp)) {
