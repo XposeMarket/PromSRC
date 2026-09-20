@@ -216,7 +216,13 @@ assert.match(channelsRouter, /Workspace path escapes the agent workspace/);
 assert.match(channelsRouter, /processEntries:\s*buildDurableChatTraceFromFrames\(options\?\.traceFrames/, 'direct subagent replies must persist their retained stream trace');
 assert.match(channelsRouter, /const SUBAGENT_CHAT_STREAM_MAX_EVENTS = 12_000/, 'direct subagent recovery must retain the full main-chat-sized event window');
 assert.match(backgroundTrace, /eventType === 'token_narration_boundary'[\s\S]{0,260}type: 'preamble'/, 'spawned/background agents must retain commentary preambles');
-assert.match(backgroundTrace, /if \(isReasoningSummary \|\| explicitlyPrivateReasoning\) return null/, 'spawned/background agents must not persist summary packets as commentary');
+// Private reasoning is still dropped outright. Provider summary packets are
+// retained on their own channel (type 'think', source 'reasoning_summary',
+// visibility 'summary') so recovery can show them without letting them
+// masquerade as commentary, which stays type 'preamble' / source
+// 'agent_thought' below.
+assert.match(backgroundTrace, /if \(explicitlyPrivateReasoning\) return null/, 'spawned/background agents must drop explicitly private reasoning');
+assert.match(backgroundTrace, /if \(isReasoningSummary\)[\s\S]{0,320}source: 'reasoning_summary',\s*visibility: 'summary'/, 'summary packets must stay on the distinct summary channel, never commentary');
 assert.match(backgroundRunner, /event === 'token_narration_boundary'[\s\S]{0,420}appendJournal\(taskId,[\s\S]{0,120}type: 'reasoning'/, 'task agents must journal actual commentary boundaries for recovery');
 assert.match(teamCoordinator, /event === 'token_narration_boundary'[\s\S]{0,300}'preamble'/, 'team managers must persist commentary preambles');
 assert.match(teamMemberRoom, /event === 'token_narration_boundary'[\s\S]{0,300}'preamble'/, 'team members must persist commentary preambles');
