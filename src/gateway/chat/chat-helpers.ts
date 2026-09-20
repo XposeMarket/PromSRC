@@ -339,7 +339,34 @@ export function isAllowedShellCommand(rawCmd: string): boolean {
   return segments.length > 0 && segments.every(isAllowedShellSegment);
 }
 
-const BLOCKED_PATTERNS = ['format', 'shutdown', 'restart'];
+/**
+ * Destructive commands that must never run from a shell tool.
+ *
+ * These are matched as whole tokens against the command, so bare English words
+ * blocked legitimate work: a `git commit -m "...grep compaction, output
+ * format..."` message and a `Select-String -Pattern "compact|format"` probe
+ * were both rejected because they contained the word "format". "restart" hit
+ * anything mentioning a gateway restart.
+ *
+ * Each entry is a command invocation, not a vocabulary word. Entries with a
+ * space are matched as an ordered token sequence, so `format c:` still blocks
+ * `format c:` and `format /fs:ntfs c:` without blocking prose.
+ */
+const BLOCKED_PATTERNS = [
+  'format c:',
+  'format d:',
+  'format /q',
+  'format /fs',
+  'mkfs',
+  'diskpart',
+  'shutdown /s',
+  'shutdown /r',
+  'shutdown -h',
+  'shutdown -r',
+  'shutdown now',
+  'stop-computer',
+  'restart-computer',
+];
 
 async function runCommandCaptured(
   command: string,
