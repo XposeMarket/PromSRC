@@ -233,6 +233,7 @@ export class ProcessSupervisor {
     let forcedReason: ProcessTerminationReason | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    let forcedCloseTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
 
     const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update', extra: Record<string, unknown> = {}) => {
@@ -323,12 +324,14 @@ export class ProcessSupervisor {
       }
     };
 
-    const waitPromise = new Promise<ProcessRunExit>((resolve) => {
-      child.on('close', (code, signal) => {
+    let resolveWait: (exit: ProcessRunExit) => void = () => {};
+    const waitPromise = new Promise<ProcessRunExit>((resolve) => { resolveWait = resolve; });
+    const finishRun = (code: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (noOutputTimer) clearTimeout(noOutputTimer);
+        if (forcedCloseTimer) clearTimeout(forcedCloseTimer);
         const reason: ProcessTerminationReason = forcedReason || (signal ? 'signal' : 'exit');
         const exit: ProcessRunExit = {
           runId,
@@ -381,9 +384,9 @@ export class ProcessSupervisor {
         }
         this.active.delete(runId);
         this.lastOutputRecordPersistAt.delete(runId);
-        resolve(exit);
-      });
-    });
+        resolveWait(exit);
+    };
+    child.on('close', finishRun);
 
     const managed: ManagedProcessRun = {
       runId,
@@ -395,6 +398,17 @@ export class ProcessSupervisor {
         forcedReason = reason;
         updateRecord({ state: 'exiting', terminationReason: reason });
         killProcessTree(child);
+        // A detached child can keep stdout/stderr pipe handles open after the
+        // shell is killed. Node then never emits `close`, so a 30-second tool
+        // timeout can hold the chat turn until its 10-minute watchdog fires.
+        // Settle the captured run after a short drain window in that case.
+        if (!forcedCloseTimer) {
+          forcedCloseTimer = setTimeout(() => {
+            try { child.stdout.destroy(); } catch {}
+            try { child.stderr.destroy(); } catch {}
+            finishRun(child.exitCode, child.signalCode);
+          }, 3_000);
+        }
       },
       write: (data: string) => {
         if (!child.stdin || child.stdin.destroyed) return false;

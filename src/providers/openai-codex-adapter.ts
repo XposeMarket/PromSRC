@@ -863,12 +863,15 @@ export class OpenAICodexAdapter implements LLMProvider {
     return CODEX_MODELS.map(name => ({ name }));
   }
 
-	  async testConnection(): Promise<boolean> {
-	    try {
-	      const token = await getValidToken(this.configDir);
-	      return !!String(token || '').trim();
-	    } catch {
-	      return false;
-	    }
-	  }
+  async testConnection(): Promise<boolean> {
+    for (const accountId of this.getAccountCandidates()) {
+      try {
+        const token = await getValidToken(this.configDir, accountId);
+        if (String(token || '').trim()) return true;
+      } catch {
+        // Another configured account may still be connected.
+      }
+    }
+    return false;
+  }
 }

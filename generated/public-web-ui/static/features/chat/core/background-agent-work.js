@@ -32,10 +32,13 @@ function hashBackgroundAgent(value) {
 // finalResult, reply, or output, and some replay adapters wrapped it in a
 // small object. Normalize those aliases once so a cold mobile open cannot
 // turn a valid completed run into an empty assistant bubble.
-function backgroundAgentText(...values) {
+export function backgroundAgentText(...values) {
   const seen = new Set();
   const read = (value, depth = 0) => {
-    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'string') {
+      const text = value.trim();
+      return /^(?:undefined|null|nan|\[object object\])$/i.test(text) ? '' : text;
+    }
     if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
     if (Array.isArray(value)) {
       if (depth > 3 || seen.has(value)) return '';

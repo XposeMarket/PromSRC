@@ -3018,6 +3018,15 @@ export function getHistoryForApiCall(
 
   const includeCommentaryContext = options?.includeCommentaryContext !== false;
   return messages.map((msg) => {
+    // These are transport/recovery records, not assistant conversation. The
+    // interrupted-turn checkpoint may carry a long prior model summary; replaying
+    // it as an assistant utterance can make a harmless follow-up look like a
+    // request for another model's internal reasoning. Refusal notices likewise
+    // describe a prior provider decision rather than useful task context.
+    if (msg.role === 'assistant' && (
+      /^Restart Context Packet\b/i.test(String(msg.content || '').trim())
+      || /^Claude declined this request for safety reasons\.\s*Category:\s*reasoning_extraction\b/i.test(String(msg.content || '').trim())
+    )) return null;
     const cleaned = msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content)
       : String(msg.content || '');

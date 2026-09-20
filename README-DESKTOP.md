@@ -44,6 +44,16 @@ the regular terminal/web gateway without Electron.
 
 Use this to test before building the installer.
 
+## Claude connection diagnostics
+
+The Claude account shown as connected in Settings means Prometheus has a saved credential. It does not confirm that the selected model can answer with that credential. Use **Settings → Models → Anthropic → Test connection** to make a short request to the model selected there; the result reports Anthropic's message and request ID when available. Test the same model selected in the affected chat.
+
+Prometheus stores its Claude setup token separately from the local Claude CLI login. A successful `claude auth status` or `claude -p` call therefore does not prove that Prometheus is using the same credential or usage path. A failed request saying “out of extra usage” should be diagnosed against the selected Prometheus account and model before concluding that the interactive Claude plan is exhausted. Matched skill text is appended after the Claude Code identity block in setup-token requests.
+
+For a rejected request, the gateway writes a prompt-free record to `<config-dir>/logs/anthropic-request-errors.ndjson` with the model, selected account ID, request ID, request size, and whether the first system block was present. Share the request ID with Anthropic support if the short connection test succeeds but a full chat still fails.
+
+Claude's 5-hour and weekly limits require a separate usage-tracking browser login in **Settings → Models → Anthropic**. If its refresh credential expires, Prometheus keeps the Claude account visible on desktop and mobile, labels the live limits unavailable, and offers reconnection in Settings. This does not disconnect Claude chat. Concurrent usage reads share one refresh attempt so a rotating refresh token is not redeemed twice.
+
 ---
 
 ## Build the Windows Installer

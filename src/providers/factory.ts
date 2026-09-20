@@ -15,8 +15,9 @@ import { AnthropicAdapter } from './anthropic-adapter';
 import { PerplexityAdapter } from './perplexity-adapter';
 import { GeminiAdapter } from './gemini-adapter';
 import { getValidXAIToken, isXAIConnected } from '../auth/xai-oauth';
+import { isConnected as isCodexConnected } from '../auth/openai-oauth';
 import { getXaiAuthCandidates } from '../auth/xai-account-pool';
-import { orderProviderAccountIds } from '../auth/provider-account-pool';
+import { orderProviderAccountIds, preferConnectedAccountId } from '../auth/provider-account-pool';
 import {
   getProviderDefaultConfig,
   getProviderDescriptor,
@@ -67,6 +68,11 @@ function readAccountId(id: string, providers: any, requestedAccountId?: string):
     ? providerCfg.accounts
     : {};
   const requested = String(requestedAccountId || '').trim();
+  if (id === 'openai_codex' && Object.keys(accounts).length) {
+    const preferred = requested && accounts[requested] ? requested : String(providerCfg?.defaultAccountId || '').trim();
+    const usable = preferConnectedAccountId(accounts, preferred, accountId => isCodexConnected(getConfigDir(), accountId));
+    if (usable && accounts[usable]) return usable;
+  }
   if (requested && accounts[requested]) return requested;
   const providerDefault = String(providerCfg?.defaultAccountId || '').trim();
   if (providerDefault && accounts[providerDefault]) return providerDefault;

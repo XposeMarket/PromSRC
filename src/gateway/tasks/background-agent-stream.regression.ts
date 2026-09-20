@@ -137,10 +137,25 @@ function testVisibleAgentThoughtTrace(): void {
   assert.equal(privateEntry, null);
 }
 
+function testStartupDiagnosticsStayOutOfActivity(): void {
+  for (const [event, data] of [
+    ['ui_preflight', { message: 'Selecting model route...' }],
+    ['ui_preflight', { message: 'Loading tool schemas...' }],
+    ['progress_state', { reason: 'reset' }],
+    ['model_stream_event', { event: { type: 'tool_call_start', name: 'workspace_read' } }],
+    ['info', { message: 'Latency: context_build_start at 1169ms' }],
+    ['info', { message: 'undefined' }],
+  ] as const) {
+    assert.equal(backgroundProcessEntryFromSseEvent(event, data), null, `${event} is not agent activity`);
+  }
+  assert.equal(backgroundProcessEntryFromSseEvent('tool_call', { name: 'workspace_read' })?.type, 'tool');
+}
+
 testPersistentAccumulationAndReplay();
 testDirectSteerDelivery();
 testStructuredToolResultTrace();
 testReasoningSummaryTrace();
 testNarrationBoundaryTrace();
 testVisibleAgentThoughtTrace();
+testStartupDiagnosticsStayOutOfActivity();
 console.log('background-agent-stream regression: ok');

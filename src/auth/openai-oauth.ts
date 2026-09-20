@@ -164,11 +164,9 @@ export function loadTokens(configDir: string, accountId?: string): OAuthTokens |
   let secret = vault.get(requestedKey, 'oauth:load');
 
   // Before provider accounts were introduced, the Codex OAuth token lived at
-  // the unscoped key. Treat that entry as the legacy default when the current
-  // provider is asking for an account-scoped token. This also repairs a stale
-  // scoped entry left behind by a different desktop vault key: the valid
-  // legacy token is copied into the requested account slot below.
-  if (!secret && normalizedAccountId) {
+  // the unscoped key. Only the default account may inherit that token; a newly
+  // added account must complete its own OAuth flow.
+  if (!secret && normalizedAccountId === 'default') {
     storedKey = VAULT_KEY;
     secret = vault.get(VAULT_KEY, 'oauth:load_legacy_fallback');
   }
@@ -304,6 +302,9 @@ export interface OAuthFlowResult {
 export async function startOAuthFlow(configDir: string, accountId?: string): Promise<OAuthFlowResult> {
   const existing = getFlow(configDir);
   if (existing) {
+    if (existing.accountId !== (String(accountId || '').trim() || undefined)) {
+      return { success: false, error: 'Another Codex account is already connecting. Finish that sign-in before starting a different account.' };
+    }
     return { success: false, needsManualPaste: true, authUrl: existing.authUrl,
       error: 'OAuth already in progress — finish the existing browser tab.' };
   }
@@ -421,6 +422,9 @@ let _bgResult: BgOAuthResult = { done: false };
 export function startOAuthFlowBackground(configDir: string, accountId?: string): { authUrl: string } | { error: string } {
   const existing = getFlow(configDir);
   if (existing) {
+    if (existing.accountId !== (String(accountId || '').trim() || undefined)) {
+      return { error: 'Another Codex account is already connecting. Finish that sign-in before starting a different account.' };
+    }
     _bgResult = { done: false }; // reset so poll works
     return { authUrl: existing.authUrl };
   }
@@ -579,20 +583,20 @@ export async function exchangeManualCodeFromPending(
 
     const apiKey    = await tryExchangeForApiKey(idToken);
     const claims    = decodeJwtClaims(idToken);
-    const accountId = claims.chatgpt_account_id || claims.sub || undefined;
+    const oauthAccountId = claims.chatgpt_account_id || claims.sub || undefined;
 
     const tokens: OAuthTokens = {
       access_token:  td.access_token,
       api_key:       apiKey ?? undefined,
       refresh_token: td.refresh_token,
       expires_at:    Date.now() + (td.expires_in || 3600) * 1000,
-      account_id:    accountId,
+      account_id:    oauthAccountId,
       id_token:      idToken,
     };
 
-    saveTokens(configDir, tokens, accountId || flow.accountId);
+    saveTokens(configDir, tokens, flow.accountId || accountId);
     clearFlow(configDir);
-    return { success: true, account_id: accountId };
+    return { success: true, account_id: oauthAccountId };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

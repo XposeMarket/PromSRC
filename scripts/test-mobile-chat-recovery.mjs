@@ -55,6 +55,17 @@ const auditMaterializer = read('src/gateway/audit/materializer.ts');
 const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
 
+assert.match(router, /const foregroundActivity = createForegroundToolActivityTracker\(\)/,
+  'main chat must track open tool calls independently of visible SSE output');
+assert.match(router, /payload\.message = foregroundConnectionMessage\(activity, idleMs, now\)/,
+  'heartbeats must describe the open tool instead of claiming generic work during silence');
+assert.match(pages, /case 'heartbeat':[\s\S]{0,180}evt\.message && !wsReconnectPending[\s\S]{0,100}setChatConnectionStatus\(true, String\(evt\.message\), \{ mode: 'activity' \}\)/,
+  'mobile chat must display tool-aware heartbeat status separately from reconnect status');
+assert.match(pages, /status\?\.run\?\.checkpoint\?\.connectionMessage/,
+  'recovery must restore the active tool status before the next heartbeat arrives');
+assert.match(pages, /if \(!aiTurn\._pmRecoveryReplay && \[[\s\S]{0,300}'tool_result'[\s\S]{0,150}\]\.includes\(evt\.type\)\) clearToolActivityStatus\(\)/,
+  'a completed tool or fresh visible event must clear an obsolete waiting banner');
+
 const legacyRecoveryTurn = {
   role: 'ai',
   body: { sender: '', text: MOBILE_CONNECTION_RECOVERY_PLACEHOLDER },
@@ -82,8 +93,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,700}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
-  'cold mobile history must omit internal planned-restart checkpoint bubbles',
+  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,2200}checkpoint\.messageKind = 'restart_status';[\s\S]{0,400}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
+  'cold mobile history must show a successful restart when it is the only durable completion and omit internal checkpoints',
 );
 assert.match(
   pages,
@@ -596,7 +607,7 @@ const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requeste
 assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
 assert.match(
   pages,
-  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn\)\)/,
+  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn && !gatewayRestartContinuity\)\)/,
   'an inactive or recovered read must preserve the visible turn until durable completion is proven',
 );
 assert.match(pages, /const localThreadBeforeClear = localThread\.slice\(\)/, 'inactive recovery must snapshot the live array before destructive cleanup');
@@ -607,8 +618,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,600}serverRows\.slice\(terminalIndex \+ 1\)\.some\(\(message\) => message\?\.role === 'user'\)[\s\S]{0,2600}serverRows\.splice\(terminalIndex, 1\)/,
-  'planned gateway restart recovery may coalesce only before a later user turn',
+  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,1900}nextUserAt[\s\S]{0,1300}serverRows\.splice\(terminalIndex, 1\)/,
+  'planned gateway restart recovery must coalesce the matching earlier row even after a later user turn',
 );
 assert.match(
   pages,

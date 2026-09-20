@@ -27,7 +27,10 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     || eventType === 'reasoning_delta'
     || source === 'reasoning_summary';
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
-    || eventType === 'thinking_delta') return null;
+    || eventType === 'thinking_delta'
+    // These packets describe provider setup and timing. The background agent
+    // stream is already represented by its tool calls, results, and thoughts.
+    || ['ui_preflight', 'progress_state', 'model_stream_event', 'latency'].includes(eventType)) return null;
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
   const baseExtra = {
     source: source || 'background_sse',
@@ -72,27 +75,14 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
       },
     };
   }
-  if (eventType === 'model_stream_event') {
-    const modelEvent = data?.event && typeof data.event === 'object' ? data.event : {};
-    const modelType = String(modelEvent.type || '').trim().toLowerCase();
-    if (!/^tool_call_(?:start|done)$/.test(modelType)) return null;
-    const modelAction = String(modelEvent.name || modelEvent.toolName || action || 'tool').trim();
-    return { type: 'info', actor: 'Prom', text: `${modelType.endsWith('start') ? 'Preparing' : 'Prepared'} ${modelAction}`, extra: { ...baseExtra, source: 'model_stream_event', modelType, toolName: modelAction } };
-  }
-  if (eventType === 'progress_state') {
-    const items = Array.isArray(data?.items)
-      ? data.items.map((item: any) => String(item?.label || item?.text || item?.title || '').trim()).filter(Boolean).slice(-8)
-      : [];
-    const content = [String(data?.reason || '').trim(), items.length ? items.join(' | ') : ''].filter(Boolean).join(': ');
-    return content ? { type: 'info', actor: 'Prom', text: `Progress: ${content}`, extra: baseExtra } : null;
-  }
   if (eventType === 'thinking' || eventType === 'agent_thought') {
     if (visibility === 'private' || visibility === 'internal') return null;
     const text = backgroundTraceText(data?.thinking || data?.text || data?.message);
     return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, visibility: visibility || 'user' } } : null;
   }
   const text = backgroundTraceText(data?.message || data?.text || data?.result || data?.summary, 2_000);
-  if (!text) return null;
+  if (!text || /^(?:undefined|null|nan|\[object object\])$/i.test(text)
+    || /^latency:\s*[a-z0-9_]+(?:\s+at\b.*)?$/i.test(text)) return null;
   return { type: eventType === 'error' ? 'error' : eventType === 'warn' ? 'warn' : 'info', actor: 'Prom', text, extra: baseExtra };
 }
 

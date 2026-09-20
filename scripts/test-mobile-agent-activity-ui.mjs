@@ -28,8 +28,9 @@ assert.doesNotMatch(renderer, /details class="pm-trace-thought-group"/, 'thought
 assert.doesNotMatch(pages, /function _renderMobileGroupedTrace\(/, 'grouped trace rendering must stay in the lazy renderer');
 assert.match(pages, /_pmLiveActivityCompleted = true/, 'the renderer must know when a live turn crossed its final frame');
 assert.match(renderer, /visibleKinds = null, openThoughts = false/, 'trace rendering must support thought and tool filtering');
-assert.match(renderer, /const completedTraceHtml = _renderMobileGroupedTrace\(completedTraceEntries, \{ streaming: false \}\)/, 'completed turns must render one unified trace payload');
-assert.match(renderer, /data-trace-completed="1">\$\{completedTraceHtml\}/, 'completed thoughts and tools must share the collapsed trace drawer');
+assert.match(renderer, /const completedTraceHtml = hasCompletedTrace && renderCompletedTraceNow[\s\S]{0,120}_renderMobileGroupedTrace\(completedTraceEntries, \{ streaming: false \}\)/, 'completed turns must render one unified trace payload on demand');
+assert.match(renderer, /data-trace-completed="1"\$\{renderCompletedTraceNow[\s\S]{0,100}\$\{completedTraceHtml\}/, 'completed thoughts and tools must share the lazy collapsed trace drawer');
+assert.match(renderer, /function _materializeMobileCompletedTrace\(drawer\)/, 'completed trace disclosure must materialize its content when opened');
 assert.doesNotMatch(renderer, /pm-trace-thoughts-visible|liveCompletionThoughts/, 'completed thoughts must not remain outside the collapsed trace drawer');
 assert.match(renderer, /group\.kind === 'thought' \|\| group\.kind === 'thought-summary'/, 'thought summaries and paragraph thoughts must render as distinct groups');
 assert.match(renderer, /const isSummaryThought = group\.kind === 'thought-summary'/, 'summary thought disclosure state must be explicit');

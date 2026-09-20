@@ -20903,6 +20903,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           }
 
           const question = questionQueue.create(payload);
+          // Register the suspension before broadcasting the card or awaiting
+          // Telegram delivery. A fast web answer during that delivery gap
+          // otherwise sees no waiter and queues a second chat resume even
+          // though this tool invocation is still alive.
+          const waitForAnswer = new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>((resolve) => {
+            let settled = false;
+            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+            };
+            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
+            questionQueue.onCancel(question.id, () => safeResolve({ cancelled: true }));
+          });
           try {
             appendAuditEntry({
               timestamp: new Date().toISOString(),
@@ -20951,16 +20965,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           // model continue the tool loop and emit a follow-up assistant message.
           // The record remains durable, so after a gateway restart the submit
           // endpoint can still resume a question that no longer has this waiter.
-          const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>((resolve) => {
-            let settled = false;
-            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }) => {
-              if (settled) return;
-              settled = true;
-              resolve(value);
-            };
-            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
-            questionQueue.onCancel(question.id, () => safeResolve({ cancelled: true }));
-          });
+          const waitResult = await waitForAnswer;
 
           const wasCancelled = 'cancelled' in waitResult;
           if (activeTaskId) {

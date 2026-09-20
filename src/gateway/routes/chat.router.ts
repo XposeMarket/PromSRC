@@ -17,6 +17,9 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
+import { ModelResponseRecovery } from '../chat/model-response-recovery';
+import { presentProviderCallFailure } from '../chat/provider-error-presentation';
+import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
@@ -3583,12 +3586,7 @@ async function handleChat(
   let preflightReasonForTurn = '';
   let continuationNudges = 0;
   const MAX_CONTINUATION_NUDGES = 4;
-  // When the model stops calling tools but also emits an empty/near-empty final
-  // (typically after many rounds of heavy tool-result context), give it one
-  // tools-free retry to write its answer from what it already gathered instead
-  // of surfacing "No final response was generated. Please retry." to the user.
-  let emptyFinalSalvageAttempts = 0;
-  const MAX_EMPTY_FINAL_SALVAGE = 1;
+  const modelResponseRecovery = new ModelResponseRecovery();
   let setupFinalizationGuard = 0;
   const MAX_SETUP_FINALIZATION_GUARD = 3;
   let planFinalizationGuard = 0;
@@ -7047,10 +7045,6 @@ RULES:
   const injectPendingChatSteers = async (): Promise<number> => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 16);
     if (!steers.length) return 0;
-    const cfg = getConfig().getConfig() as any;
-    const _steerActiveProvider = String(cfg?.llm?.provider || '').trim().toLowerCase();
-    const _steerProviderId = String(providerOverride || _steerActiveProvider || '').trim().toLowerCase();
-    const _steerIsAnthropic = _steerProviderId === 'anthropic';
     for (const steer of steers) {
       await appendSteerEventToMessages(steer);
       if (steer.kind === 'internal_watch_result' && steer.internalWatchId && steer.internalWatchActionPolicy) {
@@ -7065,11 +7059,8 @@ RULES:
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         backgroundResultInjectedIds.add(steer.backgroundAgentId);
       }
-      // Anthropic does not support assistant prefill — skip trailing assistant ack for that provider
-      const isRuntimeCompletionEvent = steer.kind === 'background_agent_result' || steer.kind === 'internal_watch_result';
-      if (!_steerIsAnthropic && !isRuntimeCompletionEvent) {
-        messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
-      }
+      // The steer is already a user message. A synthetic assistant acknowledgement
+      // can become unsupported prefill when the active route changes providers.
       sendSSE(
         steer.kind === 'background_agent_result'
           ? 'background_result_applied'
@@ -7100,11 +7091,6 @@ RULES:
 
   for (let round = 0; ; round++) {
     currentProviderCallIteration = round;
-    // During an empty-final salvage round the model must not be offered tools:
-    // the salvage prompt asks for a tools-free reply, and offering tools would
-    // let extra tool rounds bypass the MAX_EMPTY_FINAL_SALVAGE cap.
-    const salvageRound = emptyFinalSalvageAttempts > 0;
-
     if (abortSignal?.aborted) {
       console.log(`[v2] Aborted at round ${round} — client disconnected`);
       const partial = allToolResults.length > 0
@@ -7321,6 +7307,7 @@ RULES:
     }
 
     let response: any;
+    let responseStopReason: string | undefined;
     let isGrokGeneration = false;
     let grokGreetingLikeTurn = false;
     try {
@@ -7561,10 +7548,10 @@ RULES:
       }
 
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
-        tools: salvageRound ? [] : tools,
+        tools,
         temperature: 0.3,
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
-        num_predict: grokGreetingLikeTurn ? 256 : 4096,
+        num_predict: grokGreetingLikeTurn ? 256 : modelResponseRecovery.outputBudget(generationOverride.providerId || '', generationOverride.model || ''),
 	        think: primaryThinkMode,
 	        speed: activeGenerationRouteSnapshot?.speed,
 	        model: generationOverride.model,
@@ -7759,6 +7746,7 @@ RULES:
             firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
           });
 	        response = result.message;
+          responseStopReason = result.stopReason;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7777,6 +7765,7 @@ RULES:
           firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
         });
 	        response = result.message;
+          responseStopReason = result.stopReason;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7811,7 +7800,7 @@ RULES:
       }
       return {
         type: 'chat',
-        text: `Error: ${err.message}`,
+        text: presentProviderCallFailure(err),
         thinking: preservedThinking,
         reasoningSummary: preservedReasoningSummary,
         toolResults: preservedToolResults,
@@ -7820,16 +7809,27 @@ RULES:
 
     let toolCalls = response.tool_calls;
 
-    // Salvage rounds are tools-free by contract. If the provider still returns
-    // tool calls (or the text-recovery path below would synthesize one), drop
-    // them so the salvage round terminates in a final reply.
-    if (salvageRound && toolCalls && toolCalls.length > 0) {
-      console.log(`[v2] EMPTY FINAL SALVAGE: dropping ${toolCalls.length} tool call(s) returned during the tools-free salvage round`);
-      toolCalls = [];
+    const recovery = modelResponseRecovery.inspect(response, responseStopReason, abortSignal?.aborted);
+    if (recovery.action === 'retry') {
+      console.log(`[v2] MODEL RESPONSE RECOVERY: reason=${recovery.reason} attempt=${recovery.attempt}; retaining tools`);
+      sendSSE('info', { message: `The model returned an incomplete response (${recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
+      // Keep partial visible text, but never insert an empty assistant turn or
+      // fabricate a tool result for a call that was not executed.
+      if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: recovery.prompt });
+      continue;
+    }
+    if (recovery.action === 'exhausted') {
+      return {
+        type: 'execute',
+        text: 'The model repeatedly returned an empty or incomplete response after automatic recovery. The task is unfinished; completed tool results have been saved.',
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length ? allToolResults : undefined,
+      };
     }
 
     // Auto-recover: if model wrote a tool call as text instead of using the tool mechanism
-    if (!salvageRound && (!toolCalls || toolCalls.length === 0) && response.content) {
+    if ((!toolCalls || toolCalls.length === 0) && response.content) {
       const textToolMatch = response.content.match(/"action"\s*:\s*"(\w+)"\s*,\s*"action_input"\s*:\s*(\{[^}]+\})/s)
         || response.content.match(/"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})/s);
       if (textToolMatch) {
@@ -8431,46 +8431,8 @@ RULES:
       if (isGrokGeneration) {
         finalText = trimGrokRunawayRepetition(finalText);
       }
-      // Precompute a tool-work digest for the empty-final salvage path. Only
-      // counts, tool names, and short status previews are used: the digest is
-      // fed back to the MODEL so it can write the reply itself; the user-facing
-      // fallback below never synthesizes prose from tool payloads.
-      const emptyFinalToolDigest = summarizeToolWorkForEmptyFinal(allToolResults);
-      if (!finalText || finalText.length < 5) {
-        // Never infer completion from tool payloads. A tool can succeed while the
-        // user's larger request remains incomplete, and truncated JSON is not a
-        // user-facing answer. The provider adapter already retries incomplete
-        // Codex streams once; after that, report the missing final explicitly.
-        if (emptyFinalToolDigest.count > 0 && emptyFinalSalvageAttempts < MAX_EMPTY_FINAL_SALVAGE && !abortSignal?.aborted) {
-          emptyFinalSalvageAttempts += 1;
-          console.log(
-            `[v2] EMPTY FINAL SALVAGE: model returned an empty final after ${emptyFinalToolDigest.count} tool result(s); requesting a tools-free answer (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE})`,
-          );
-          sendSSE('info', {
-            message: `Post-check: the model finished tool work without writing a reply; asking it to summarize its findings (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE}).`,
-          });
-          messages.push({
-            role: 'user',
-            content: [
-              'Your previous assistant message was empty after completing tool work.',
-              'Do not call any more tools. Write the user-facing reply now using only what you already gathered.',
-              'If the task is unfinished, say concretely what was completed, what remains, and what you would do next.',
-              '',
-              `Tool work this turn (${emptyFinalToolDigest.count} result(s), most recent last):`,
-              emptyFinalToolDigest.recentLines,
-            ].join('\n'),
-          });
-          continue;
-        }
-        if (emptyFinalToolDigest.count > 0) {
-          finalText = [
-            'I ran out of room to write a full reply this turn, but the work is not lost.',
-            `Completed ${emptyFinalToolDigest.count} tool call(s) this turn (${emptyFinalToolDigest.okCount} ok, ${emptyFinalToolDigest.errCount} error${emptyFinalToolDigest.errCount === 1 ? '' : 's'}) across: ${emptyFinalToolDigest.touched}.`,
-            'Send "continue" and I will pick up from that state and give you the summary.',
-          ].join(' ');
-        } else {
-          finalText = 'No final response was generated. Please retry.';
-        }
+      if (!finalText.trim()) {
+        finalText = 'No final response was generated. The task may still be unfinished; completed tool results have been saved.';
       }
       if (greetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
@@ -10165,31 +10127,6 @@ function isGrokGreetingLikeMessage(text: string): boolean {
   if (isGreetingLikeMessage(raw)) return true;
   return /^(?:hi|hello|hey|yo|sup|howdy)(?:[!.?\s,]+(?:hi|hello|hey|yo|sup|howdy)){0,3}(?:[!.?\s,]+(?:prom|prometheus|claw))?[!.?\s]*$/i.test(raw);
 }
-
-/**
- * Digest of this turn's tool work for the empty-final salvage path. Returns
- * counts, touched tool names, and short per-call status lines. The status
- * preview is deliberately clipped and is only handed back to the model as a
- * reminder of what it already did; it is never used to compose a user-facing
- * reply directly (the missing-final fallback stays a fixed explanation).
- */
-function summarizeToolWorkForEmptyFinal(
-  toolResults: Array<{ name?: string; error?: boolean; result?: unknown }>,
-): { count: number; okCount: number; errCount: number; touched: string; recentLines: string } {
-  const list = Array.isArray(toolResults) ? toolResults : [];
-  const okCount = list.filter((r) => r && !r.error).length;
-  const touched = Array.from(new Set(list.map((r) => String(r?.name || 'tool')))).slice(0, 8).join(', ');
-  const recentLines = list
-    .slice(-12)
-    .map((r) => {
-      const status = r?.error ? '✗' : '✓';
-      const preview = String((r as any)?.result ?? '').replace(/\s+/g, ' ').slice(0, 160);
-      return `  ${status} ${String(r?.name || 'tool')}${preview ? ` — ${preview}` : ''}`;
-    })
-    .join('\n');
-  return { count: list.length, okCount, errCount: list.length - okCount, touched, recentLines };
-}
-
 
 function trimGrokRunawayRepetition(text: string): string {
   const raw = String(text || '').replace(/\r\n/g, '\n').trim();
@@ -12276,6 +12213,17 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
   const checkpoint = runtime?.checkpoint && typeof runtime.checkpoint === 'object'
     ? runtime.checkpoint
     : null;
+  const rawActiveTool = checkpoint?.activeTool;
+  const activeTool: ForegroundToolActivity | null = rawActiveTool && typeof rawActiveTool === 'object'
+    && Number(rawActiveTool.startedAt) > 0
+    ? {
+        name: String(rawActiveTool.name || '').slice(0, 120),
+        kind: ['terminal', 'background', 'tool'].includes(rawActiveTool.kind) ? rawActiveTool.kind : 'tool',
+        startedAt: Number(rawActiveTool.startedAt),
+        lastUpdateAt: Number(rawActiveTool.lastUpdateAt || rawActiveTool.startedAt),
+        openCalls: Math.max(1, Number(rawActiveTool.openCalls || 1)),
+      }
+    : null;
   const checkpointProcessEntries = Array.isArray(checkpoint?.processEntries)
     ? checkpoint.processEntries
       .slice(-500)
@@ -12301,6 +12249,8 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
       at: Number(checkpoint.at || 0) || null,
       toolName: String(checkpoint.toolName || ''),
       message: truncateRuntimeProcessText(checkpoint.message || '', 4000),
+      activeTool,
+      ...(activeTool ? { connectionMessage: foregroundConnectionMessage(activeTool, Date.now() - activeTool.lastUpdateAt) } : {}),
       processEntries: checkpointProcessEntries,
     } : null,
   };
@@ -21898,15 +21848,15 @@ router.post('/api/chat', async (req, res) => {
   sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
   let lastNonHeartbeatSseAt = Date.now();
   let lastVisibleHeartbeatAt = 0;
+  const foregroundActivity = createForegroundToolActivityTracker();
   const heartbeat = setInterval(() => {
     const now = Date.now();
     const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
-    const payload: Record<string, any> = { state: 'processing', idleMs };
+    const activity = foregroundActivity.current();
+    const payload: Record<string, any> = { state: 'processing', idleMs, activeTool: activity };
     if (idleMs >= 12_000 && now - lastVisibleHeartbeatAt >= 15_000) {
       lastVisibleHeartbeatAt = now;
-      payload.message = idleMs >= 30_000
-        ? `Still connected. Prometheus is working (${Math.round(idleMs / 1000)}s since the last visible update).`
-        : 'Still connected. Prometheus is working...';
+      payload.message = foregroundConnectionMessage(activity, idleMs, now);
     }
     try {
       if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
@@ -22000,6 +21950,7 @@ router.post('/api/chat', async (req, res) => {
   let lastRuntimeNarrationCheckpointAt = 0;
   sendSSE = (event, data) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
+    foregroundActivity.record(event, data);
     rawSendSSE(event, data);
     // Skip per-token checkpointing — token/thinking_delta are high-frequency streaming
     // events that don't need durable persistence. 3 sync fs ops per token was killing
@@ -22050,6 +22001,7 @@ router.post('/api/chat', async (req, res) => {
     if (event === 'ui_preflight') __turnTimingLog(`preflight: ${String(data?.message || '').slice(0, 60)}`);
     else if (event === 'thinking' || event === 'tool_call' || event === 'tool_result' || event === 'progress_state') __turnTimingLog(`${event}: ${String(data?.message || data?.name || data?.action || '').slice(0, 60)}`);
     const checkpoint: Record<string, any> = { event, at: Date.now() };
+    checkpoint.activeTool = foregroundActivity.current();
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;

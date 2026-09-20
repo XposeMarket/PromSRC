@@ -41,6 +41,7 @@
     "test:external-import-sidebar": "node scripts/test-external-import-sidebar.mjs",
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:main-chat-stream": "tsx src/gateway/chat/main-chat-stream.regression.ts",
+    "test:anthropic-continuation": "tsx src/providers/anthropic-adapter.regression.ts && tsx src/gateway/chat/model-response-recovery.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",
     "test:thread-handoff": "tsx src/gateway/threads/thread-handoff.regression.ts",
     "test:thread-ops-model-route": "tsx src/gateway/threads/thread-ops-model-route.regression.ts",

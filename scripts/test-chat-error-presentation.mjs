@@ -32,6 +32,13 @@ const retryA = presentChatError({ httpStatus: 409, rawBody: JSON.stringify({ cod
 const retryB = presentChatError({ httpStatus: 409, rawBody: JSON.stringify({ code: 'SESSION_TURN_ACTIVE' }) });
 assert.equal(retryA.key, retryB.key, 'retries must have one stable coalescing key');
 
+const stalledTool = presentChatError({
+  payload: { code: 'MAIN_CHAT_RUNTIME_ABORTED', reason: 'semantic_progress_stall' },
+  message: 'The active Chat turn was aborted before normal completion.',
+});
+assert.equal(stalledTool.title, 'This turn stopped after a tool stalled');
+assert.match(stalledTool.summary, /check the activity before retrying/i);
+
 const stoppedGoal = presentGoalAction('done', { goal: { id: 'goal-1', turnsUsed: 0, lastVerdict: 'stopped' } });
 assert.equal(stoppedGoal.title, 'Goal stopped');
 assert.equal(stoppedGoal.severity, 'info');

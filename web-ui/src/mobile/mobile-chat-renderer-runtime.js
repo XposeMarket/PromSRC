@@ -722,6 +722,13 @@ export function createMobileChatRendererRuntime(context = {}) {
     );
   }
 
+  function _mobileHasCompletedTrace(entries) {
+    return _mobileTraceGroups(entries).some((group) =>
+      ['tools', 'compaction', 'thought', 'thought-summary', 'vision'].includes(group.kind)
+        && group.entries.length > 0
+    );
+  }
+
   function _mobileTraceToolLabel(text) {
     return String(text || '')
       .replace(/\s+/g, ' ')
@@ -1141,6 +1148,7 @@ export function createMobileChatRendererRuntime(context = {}) {
     _isMobileVoiceAgentWorkerHandoff,
     _isMobileVoiceTraceTurn,
     _mobileTraceHasToolGroup,
+    _mobileHasCompletedTrace,
     _mobileWorkflowTraceEntriesForMessage,
     _mobileWorkflowTransitionLabel,
     _normalizeMobileMedia,
@@ -1908,6 +1916,20 @@ export function createMobileChatRendererRuntime(context = {}) {
     const sid = String(key || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
     return sid === String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
   }
+
+  function _materializeMobileCompletedTrace(drawer) {
+    if (!drawer || drawer.dataset.pmTraceLazy !== '1') return;
+    const rawIndex = drawer.closest('[data-msg-index]')?.getAttribute('data-msg-index');
+    if (rawIndex == null) return;
+    const index = Number(rawIndex);
+    const message = Number.isInteger(index) ? __pmChat.thread?.[index] : null;
+    if (!message) return;
+    const html = _renderMobileGroupedTrace(_mobileWorkflowTraceEntriesForMessage(message), { streaming: false });
+    if (!html) return;
+    drawer.innerHTML = html;
+    delete drawer.dataset.pmTraceLazy;
+    message._pmTraceExpanded = true;
+  }
   
   function _renderThread(threadEl, sessionKey = '') {
     const sid = _mobileSessionIdForRenderKey(sessionKey);
@@ -2023,7 +2045,9 @@ export function createMobileChatRendererRuntime(context = {}) {
       threadEl.querySelectorAll('[data-msg-index]').forEach((msgEl) => {
         const idx = msgEl.getAttribute('data-msg-index');
         if (!openTraceDrawers.has(idx)) return;
-        msgEl.querySelector('.pm-trace-drawer')?.classList.add('open');
+        const drawer = msgEl.querySelector('.pm-trace-drawer');
+        _materializeMobileCompletedTrace(drawer);
+        drawer?.classList.add('open');
         msgEl.querySelector('[data-expandable="trace"]')?.classList.add('expanded');
       });
       threadEl.querySelectorAll('details.pm-trace-tool-group, details.pm-trace-thought-group, details.pm-trace-compaction').forEach((d, detailIndex) => {
@@ -2668,12 +2692,21 @@ export function createMobileChatRendererRuntime(context = {}) {
       if (!drawer) return;
       const isExpanded = timerEl.classList.contains('expanded');
       const nextExpanded = !isExpanded;
+      if (nextExpanded) _materializeMobileCompletedTrace(drawer);
       timerEl.setAttribute('data-pm-trace-user-toggle', '1');
       timerEl.classList.toggle('expanded', nextExpanded);
       timerEl.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
       drawer.classList.toggle('open', nextExpanded);
       if (isExpanded) {
         drawer.querySelectorAll('details.pm-trace-tool-group, details.pm-trace-thought-group').forEach((detail) => detail.removeAttribute('open'));
+        if (drawer.dataset.traceCompleted === '1') {
+          const rawIndex = timerEl.closest('[data-msg-index]')?.getAttribute('data-msg-index');
+          const index = rawIndex == null ? NaN : Number(rawIndex);
+          const message = Number.isInteger(index) ? __pmChat.thread?.[index] : null;
+          if (message) message._pmTraceExpanded = false;
+          drawer.innerHTML = '';
+          drawer.dataset.pmTraceLazy = '1';
+        }
       }
       event.stopPropagation();
     });
@@ -3133,6 +3166,26 @@ function _normalizeCollapsedAgentMarkdown(text) {
   }).join('');
 }
 
+function _mobileBackgroundDisplayTraceEntries(entries) {
+  // Background sessions persist provider startup and timing packets alongside
+  // real activity. The detail sheet and compact dock share this one visible
+  // trace, so those packets must not become a second "TOOL" stream.
+  const visibleTypes = new Set([
+    'tool', 'result', 'error', 'warn', 'vision', 'compaction',
+    'preamble', 'assistant', 'think', 'thinking', 'thought', 'agent_thought',
+  ]);
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const text = String(entry.text || entry.content || entry.message || '').trim();
+    if (/^(?:undefined|null|nan|\[object object\])$/i.test(text)) return false;
+    const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    const event = String(extra.event || extra.eventType || entry.event || '').toLowerCase();
+    if (['ui_preflight', 'progress_state', 'model_stream_event', 'latency'].includes(event)) return false;
+    const type = String(entry.type || entry.kind || '').toLowerCase();
+    return visibleTypes.has(type) || !!entry.activity;
+  });
+}
+
 function _renderMobileAgentChatBubble(message, options = {}) {
   const role = String(message?.role || message?.from || options.role || 'agent').toLowerCase();
   const fromUser = role === 'user' || role === 'you' || role === 'human';
@@ -3191,11 +3244,16 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     // Background-agent details are a live work surface: keep their tool
     // timeline visible while an answer starts streaming instead of replacing
     // the timeline with the first response token.
-    const liveTraceHtml = streaming && Array.isArray(traceMessage.liveTraceEntries)
-      ? _renderMobileGroupedTrace(traceMessage.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
+    const liveTraceEntries = options.backgroundAgentId
+      ? _mobileBackgroundDisplayTraceEntries(traceMessage.liveTraceEntries)
+      : traceMessage.liveTraceEntries;
+    const liveTraceHtml = streaming && Array.isArray(liveTraceEntries)
+      ? _renderMobileGroupedTrace(liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
       : '';
     const hasLiveTrace = !!liveTraceHtml;
-    const completedTraceEntries = !streaming ? _mobileWorkflowTraceEntriesForMessage(traceMessage) : [];
+    const completedTraceEntries = !streaming
+      ? _mobileBackgroundDisplayTraceEntries(_mobileWorkflowTraceEntriesForMessage(traceMessage))
+      : [];
     const completedTraceHtml = !streaming
       ? _renderMobileGroupedTrace(completedTraceEntries, { streaming: false })
       : '';
@@ -3477,7 +3535,10 @@ function _mobileBackgroundField(msg = {}, name = '') {
 function _mobileBackgroundText(...values) {
   const seen = new Set();
   const read = (value, depth = 0) => {
-    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'string') {
+      const text = value.trim();
+      return /^(?:undefined|null|nan|\[object object\])$/i.test(text) ? '' : text;
+    }
     if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
     if (Array.isArray(value)) {
       if (depth > 3 || seen.has(value)) return '';
@@ -4127,8 +4188,8 @@ function _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml) {
 
 function _mobileBackgroundSpawnTraceEntries(lane) {
   const message = lane?.message && typeof lane.message === 'object' ? lane.message : {};
-  const liveEntries = Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : [];
-  const recoveredEntries = _mobileWorkflowTraceEntriesForMessage(message);
+  const liveEntries = _mobileBackgroundDisplayTraceEntries(message.liveTraceEntries);
+  const recoveredEntries = _mobileBackgroundDisplayTraceEntries(_mobileWorkflowTraceEntriesForMessage(message));
   // During a live stream, keep the native trace as the source of truth. If
   // it has not received a tool activity yet, use the durable process log so
   // a recovered background lane still gets the same grouped UI as chat.
@@ -4364,9 +4425,9 @@ function _reconcileMobileBackgroundSpawnDockMarkup(host, markup) {
   if (!host) return;
   reconcileKeyedTimelineRows(host, markup, {
     scroller: host,
-    setContents: (current, next) => {
+    setContents: (current, markup) => {
       const detailsState = _captureMobileTraceDetailsState(current);
-      current.innerHTML = next.innerHTML;
+      current.innerHTML = markup;
       _restoreMobileTraceDetailsState(current, detailsState);
     },
   });
@@ -4449,11 +4510,9 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
         ? _mobileTraceCurrentToolLabel(entries)
         : _mobileTraceToolSummary(entries)))
       : '';
-    const latestText = String(
-      pendingApproval
-        ? `Approval needed: ${_pmApprovalTitle(lane.approvalRequest)}`
-        : (finalText || errorText || traceSummary || lane.task || 'Working in parallel...')
-    ).trim();
+    const latestText = pendingApproval
+      ? `Approval needed: ${_pmApprovalTitle(lane.approvalRequest)}`
+      : _mobileBackgroundText(finalText, errorText, traceSummary, lane.task) || 'Working in parallel...';
     const isRunning = !['completed', 'failed', 'timed_out'].includes(status);
     const processHtml = entries.length
       ? `<div class="pm-trace-drawer pm-background-spawn-trace" data-trace-live="1">${_renderMobileGroupedTrace(entries, { streaming: isRunning, openLiveCurrent: isRunning })}</div>`

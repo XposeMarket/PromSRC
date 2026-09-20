@@ -890,6 +890,8 @@ export function renderProviderUsageCard(p) {
   } else if (p.budget && p.budget.limit_tokens > 0) {
     body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
       + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;
+  } else if (p.error) {
+    body = `<div class="usage-provider-note">Live limits unavailable</div>`;
   } else {
     body = `<div class="usage-provider-note">No limit data — tracking tokens only</div>`;
   }

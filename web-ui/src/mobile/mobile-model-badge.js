@@ -330,6 +330,14 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     });
     surfaceStateObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   }
+  const onViewportResize = () => {
+    if (!disposed && pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
+  };
+  if (isTabbarGestureSurface) {
+    window.addEventListener('resize', onViewportResize, { passive: true });
+    window.visualViewport?.addEventListener('resize', onViewportResize, { passive: true });
+    window.visualViewport?.addEventListener('scroll', onViewportResize, { passive: true });
+  }
 
   const dispose = () => {
     cancelGesture();
@@ -341,6 +349,11 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     window.removeEventListener('blur', onWindowBlur);
     window.removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onVisibilityChange);
+    if (isTabbarGestureSurface) {
+      window.removeEventListener('resize', onViewportResize);
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
+      window.visualViewport?.removeEventListener('scroll', onViewportResize);
+    }
     proxy.remove();
     if (surface.dataset) delete surface.dataset.pmHapticGestureSurface;
     _hapticGestureDisposers.delete(dispose);

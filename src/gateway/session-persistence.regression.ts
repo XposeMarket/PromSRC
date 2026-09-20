@@ -92,6 +92,25 @@ async function main(): Promise<void> {
       ['active work after boundary', 'active response after boundary'],
       'task and agent resume stores must persist only the active transcript after compaction',
     );
+    const refusalSessionId = 'session_provider_refusal_context';
+    sessionApi.addMessage(refusalSessionId, { role: 'user', content: 'Improve the Vita bridge', timestamp: Date.now() + 20 });
+    sessionApi.addMessage(refusalSessionId, {
+      role: 'assistant',
+      content: 'Restart Context Packet\nInterrupted turn state',
+      visibleReasoningSummary: 'Prior model internal planning text',
+      timestamp: Date.now() + 21,
+    });
+    sessionApi.addMessage(refusalSessionId, {
+      role: 'assistant',
+      content: 'Claude declined this request for safety reasons. Category: reasoning_extraction. Provider details.',
+      timestamp: Date.now() + 22,
+    });
+    sessionApi.addMessage(refusalSessionId, { role: 'user', content: 'Continue the bridge work', timestamp: Date.now() + 23 });
+    assert.deepEqual(
+      sessionApi.getActiveHistoryForApiCall(refusalSessionId).map((message: any) => message.content),
+      ['Improve the Vita bridge', 'Continue the bridge work'],
+      'provider requests must omit synthetic restart context and old refusal text without deleting visible history',
+    );
     console.log('session persistence regression passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

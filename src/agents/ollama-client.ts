@@ -51,6 +51,7 @@ export interface GenerateOutput {
 export interface ChatOutput {
   message: any;
   thinking?: string;
+  stopReason?: string;
 }
 
 export class OllamaClient {
@@ -293,7 +294,7 @@ export class OllamaClient {
       activeToolCategories: promptManifest.toolSurface.activeCategories,
       durationMs: Date.now() - startedAt,
     });
-    return { message: result.message, thinking: result.thinking };
+    return { message: result.message, thinking: result.thinking, stopReason: result.stopReason };
   }
 
   // ─── Generate ───────────────────────────────────────────────────────────────

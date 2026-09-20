@@ -1,4 +1,5 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
+import { backgroundAgentText } from '../features/chat/core/background-agent-work.js';
 
 export function resolveMobileKeyboardComposerTop({
   layoutHeight,
@@ -2980,6 +2981,35 @@ void main() {
   _scrollChat(body);
   renderPendingAttachments();
 
+  let questionRecoveryInFlight = null;
+  let questionRecoveryRetryTimer = null;
+  function refreshMobileQuestionRecovery(retry = 0) {
+    if (!isMobileRecoveryOwner() || __pmChat.activeSessionId !== requestedSession) return Promise.resolve();
+    if (questionRecoveryInFlight) return questionRecoveryInFlight;
+    if (questionRecoveryRetryTimer) {
+      clearTimeout(questionRecoveryRetryTimer);
+      questionRecoveryRetryTimer = null;
+    }
+    questionRecoveryInFlight = loadMobileQuestions('all', requestedSession)
+      .then((records) => {
+        if (!isMobileRecoveryOwner() || __pmChat.activeSessionId !== requestedSession) return;
+        (Array.isArray(records) ? records : []).forEach((record) => {
+          _upsertMobileQuestion(_normalizeMobileQuestion(record));
+        });
+      })
+      .catch(() => {
+        // Question recovery is independent of run-status and history. Retry a
+        // busy gateway so an unanswered card does not vanish on a cold reopen.
+        if (retry >= 5 || !isMobileRecoveryOwner()) return;
+        questionRecoveryRetryTimer = setTimeout(() => {
+          questionRecoveryRetryTimer = null;
+          void refreshMobileQuestionRecovery(retry + 1);
+        }, Math.min(12_000, 2_000 * (retry + 1)));
+      })
+      .finally(() => { questionRecoveryInFlight = null; });
+    return questionRecoveryInFlight;
+  }
+
   function scheduleMobileRunRecovery(delay = 2500, { force = false, fullRefresh = false } = {}) {
     // A page that has been replaced can still finish an old promise and call
     // this helper. It must not cancel or replace the current page's recovery
@@ -3048,6 +3078,7 @@ void main() {
       connectionStatus.hidden = !visible;
       connectionStatus.classList.toggle('visible', !!visible);
       connectionStatus.classList.toggle('success', visible && mode === 'success');
+      connectionStatus.classList.toggle('activity', visible && mode === 'activity');
       page?.classList.toggle('pm-chat-status-priority-active', !!visible);
       updateChatComposerSpace();
     };
@@ -3062,11 +3093,18 @@ void main() {
     apply();
   }
 
+  const clearToolActivityStatus = () => {
+    if (connectionStatus?.classList.contains('activity')) setChatConnectionStatus(false);
+  };
+
+  let wsReconnectPending = false;
   const showReconnectingStatus = (msg = {}) => {
+    wsReconnectPending = true;
     const waitingForNetwork = String(msg?.type || '') === 'ws:waiting_for_network';
     setChatConnectionStatus(true, waitingForNetwork ? 'Waiting for network' : 'Reconnecting to Prometheus');
   };
   const hideReconnectingStatus = () => {
+    if (wsReconnectPending) return;
     if (connectionStatus && !connectionStatus.hidden && connectionStatus.classList.contains('visible')) {
       setChatConnectionStatus(true, 'Prometheus Reconnected', { mode: 'success' });
       connectionStatusSuccessTimer = setTimeout(() => {
@@ -3084,7 +3122,11 @@ void main() {
   wsEventBus?.on?.('ws:waiting_for_network', showReconnectingStatus);
   wsEventBus?.on?.('ws:timeout', showReconnectingStatus);
   wsEventBus?.on?.('ws:error', showReconnectingStatus);
-  wsEventBus?.on?.('ws:open', hideReconnectingStatus);
+  const onWsOpen = () => {
+    wsReconnectPending = false;
+    hideReconnectingStatus();
+  };
+  wsEventBus?.on?.('ws:open', onWsOpen);
 
   let chatLoadRetryTimer = null;
   const clearChatLoadRetryTimer = () => {
@@ -3323,11 +3365,9 @@ void main() {
           });
           _activeMobileThread();
         }
-        // ── Parallel batch 2: approvals + questions (independent) ────────────────
-        const [pendingApprovals, pendingQuestions] = await Promise.all([
-          _reconcileMobilePendingApprovals({ retry: true }).catch(() => []),
-          loadMobileQuestions('pending').catch(() => []),
-        ]);
+        // Questions reconnect separately from run-status, which can stall
+        // while the gateway is busy with a long-running tool call.
+        const pendingApprovals = await _reconcileMobilePendingApprovals({ retry: true }).catch(() => []);
         if (!isCurrentRecoveryTarget()) return;
         (Array.isArray(pendingApprovals) ? pendingApprovals : [])
           .filter((approval) => {
@@ -3335,12 +3375,6 @@ void main() {
             return !sid || sid === requestedSession || !!_mobileBackgroundSpawnIdFromSessionId(sid);
           })
           .forEach((approval) => _upsertMobilePendingApproval(approval));
-        (Array.isArray(pendingQuestions) ? pendingQuestions : [])
-          .filter((q) => {
-            const sid = String(q?.sessionId || q?.sourceSessionId || '').trim();
-            return !sid || sid === requestedSession;
-          })
-          .forEach((q) => _upsertMobileQuestion(_normalizeMobileQuestion(q, { status: 'pending' })));
       }
 
       const activeThread = _activeMobileThread();
@@ -3706,6 +3740,8 @@ void main() {
           _appendMobileProcess(aiTurn, 'info', 'Live run is connected. Waiting for the next update.');
         }
         hideReconnectingStatus();
+        const activeToolMessage = String(status?.run?.checkpoint?.connectionMessage || '').trim();
+        if (activeToolMessage && !wsReconnectPending) setChatConnectionStatus(true, activeToolMessage, { mode: 'activity' });
         _rememberMobileActiveRun(requestedSession, {
           startedAt: status.run?.startedAt || remembered?.startedAt,
           disconnected: false,
@@ -3806,7 +3842,7 @@ void main() {
       const completedDurableTurn = recoveryStartedAt > 0
         && _mobileHistoryHasCompletedTurnSince(history, recoveryStartedAt, {});
       const gatewayRestartContinuity = _mobileHistoryHasGatewayRestartContinuity(history, recoveryStartedAt);
-      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn)) {
+      if (replayStillActive || (localAiTurn?.streaming && !completedDurableTurn && !gatewayRestartContinuity)) {
         if (!isCurrentRecoveryTarget()) return;
         _adoptMobileActiveRunState(requestedSession, {
           run: status?.run || status?.activeRun || null,
@@ -3877,6 +3913,7 @@ void main() {
 
   // A cold session load starts recovery after hydration. Do not race it with a
   // second full refresh that can replace a complete replay with a partial tail.
+  void refreshMobileQuestionRecovery();
   if (!initialSessionLoadPending) {
     refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
   }
@@ -4403,14 +4440,14 @@ void main() {
       .map((entry) => ({
         ...entry,
         type: String(entry?.type || 'info'),
-        text: String(entry?.text || entry?.content || entry?.message || '').trim(),
+        text: backgroundAgentText(entry?.text, entry?.content, entry?.message),
         actor: String(entry?.actor || name).trim() || name,
       }))
       .filter((entry) => entry.text);
   }
 
   function _mobileBackgroundAgentDetailPrompt(record) {
-    return String(record?.task || record?.prompt || '').trim();
+    return backgroundAgentText(record?.task, record?.prompt);
   }
 
   function _appendMobileBackgroundSnapshotTrace(message, entry) {
@@ -4472,13 +4509,12 @@ void main() {
       liveTraceEntries.push(normalized);
     });
     if (liveTraceEntries.length > 500) liveTraceEntries.splice(0, liveTraceEntries.length - 500);
-    const sourceText = String(
-      source?.body?.text
-      || source?.content
-      || source?.text
-      || (running ? record?.streamingText : '')
-      || '',
-    ).trim();
+    const sourceText = backgroundAgentText(
+      source?.body?.text,
+      source?.content,
+      source?.text,
+      running ? record?.streamingText : '',
+    );
     const normalizedPrompt = promptText.replace(/\s+/g, ' ').trim();
     const normalizedSourceText = sourceText.replace(/\s+/g, ' ').trim();
     // A cold lane can carry the original task in its cached message body. It
@@ -4491,14 +4527,13 @@ void main() {
     // lane. Accept the alternate terminal field names used by older gateways
     // so a completed agent cannot render as a blank answer just because the
     // live done frame was missed.
-    const storedResult = String(
-      record?.result
-      || record?.finalResult
-      || record?.reply
-      || record?.output
-      || record?.text
-      || '',
-    ).trim();
+    const storedResult = backgroundAgentText(
+      record?.result,
+      record?.finalResult,
+      record?.reply,
+      record?.output,
+      record?.text,
+    );
     const terminalFallback = status === 'timed_out'
       ? 'Background agent timed out.'
       : status === 'failed'
@@ -6604,6 +6639,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (evt.type !== 'error') _clearRecoveredMobileChatError(aiTurn);
     _maybeFlushMobileThinkingBeforeEvent(aiTurn, evt);
     const sharedRuntime = mobileChatRuntimeAdapter.observeStreamEvent(requestedSession, aiTurn, evt);
+    if (!aiTurn._pmRecoveryReplay && [
+      'token', 'thinking', 'agent_thought', 'reasoning_summary_delta', 'reasoning_summary',
+      'info', 'ui_preflight', 'tool_call', 'tool_result', 'tool_progress',
+      'final', 'done', 'error',
+    ].includes(evt.type)) clearToolActivityStatus();
     try {
       switch (evt.type) {
       case 'final_response_start':
@@ -6677,7 +6717,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         return 'streaming';
       case 'heartbeat':
-        if (evt.message) setChatConnectionStatus(true, String(evt.message));
+        if (evt.message && !wsReconnectPending) setChatConnectionStatus(true, String(evt.message), { mode: 'activity' });
         return 'streaming';
       case 'progress_state':
         _applyMobileMainPlanProgress(evt, requestedSession);
@@ -7897,6 +7937,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   let lastForegroundRecoveryAt = 0;
   const runRecoveryOnReturn = () => {
+    void refreshMobileQuestionRecovery();
     const now = Date.now();
     if (now - lastForegroundRecoveryAt < 5000) return;
     lastForegroundRecoveryAt = now;
@@ -8346,6 +8387,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       window.clearTimeout(composerModeTransitionTimer);
       composerModeTransitionTimer = 0;
     }
+    if (questionRecoveryRetryTimer) {
+      clearTimeout(questionRecoveryRetryTimer);
+      questionRecoveryRetryTimer = null;
+    }
     threadEl?.removeEventListener('click', onLoadOlderClick);
     scrollLatestBtn?.removeEventListener('click', jumpToLatest);
     window.removeEventListener('pagehide', onAppHide, { capture: true });
@@ -8359,7 +8404,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     wsEventBus?.off?.('ws:waiting_for_network', showReconnectingStatus);
     wsEventBus?.off?.('ws:timeout', showReconnectingStatus);
     wsEventBus?.off?.('ws:error', showReconnectingStatus);
-    wsEventBus?.off?.('ws:open', hideReconnectingStatus);
+    wsEventBus?.off?.('ws:open', onWsOpen);
     if (connectionStatusHideTimer) {
       clearTimeout(connectionStatusHideTimer);
       connectionStatusHideTimer = null;

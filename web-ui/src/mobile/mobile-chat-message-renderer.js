@@ -14,6 +14,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       _hasPendingImageGeneration,
       _isMobileVoiceAgentWorkerHandoff,
       _isMobileVoiceTraceTurn,
+      _mobileHasCompletedTrace,
       _mobileWorkflowTraceEntriesForMessage,
       _mobileWorkflowTransitionLabel,
       _normalizeMobileMedia,
@@ -108,8 +109,11 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
     // disclosure. Thoughts and tool groups must share the same collapsed
     // surface; keeping thoughts beside it makes the disclosure look broken
     // after a reconnect even though the turn itself is complete.
-    const completedTraceHtml = _renderMobileGroupedTrace(completedTraceEntries, { streaming: false });
-    const hasCompletedTrace = !!completedTraceHtml;
+    const hasCompletedTrace = _mobileHasCompletedTrace(completedTraceEntries);
+    const renderCompletedTraceNow = traceFrozenForSteer || m._pmTraceExpanded === true;
+    const completedTraceHtml = hasCompletedTrace && renderCompletedTraceNow
+      ? _renderMobileGroupedTrace(completedTraceEntries, { streaming: false })
+      : '';
     const hasPendingImageGeneration = _hasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
     if (hasLiveTrace) {
       inner += liveTraceHtml;
@@ -122,7 +126,7 @@ export function createMobileChatMessageRenderer(resolveContext = () => ({})) {
       // Completed thoughts and tools belong to one collapsed drawer. The
       // timer is its only disclosure control, including for turns recovered
       // from cache after the transport has already finished.
-      inner += `<div class="pm-trace-drawer" data-trace-completed="1">${completedTraceHtml}</div>`;
+      inner += `<div class="pm-trace-drawer" data-trace-completed="1"${renderCompletedTraceNow ? '' : ' data-pm-trace-lazy="1"'}>${completedTraceHtml}</div>`;
     } else if (messageIsLive && !answerStarted && !hasPendingImageGeneration) {
       inner += '<div class="pm-thinking-dots"><span></span><span></span><span></span></div>';
     }

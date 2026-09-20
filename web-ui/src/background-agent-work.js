@@ -5,6 +5,7 @@ export {
   BACKGROUND_AGENT_NAMES,
   backgroundAgentAgeLabel,
   backgroundAgentPreview,
+  backgroundAgentText,
   backgroundAgentRecordToMessage,
   backgroundAgentWorkForSession,
   findBackgroundAgentWork,

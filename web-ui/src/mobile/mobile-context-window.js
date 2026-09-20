@@ -366,7 +366,8 @@ function _renderPlan() {
       html += `<div class="pm-ctx-plan-tokens">Codex Spark usage is currently unavailable.</div>`;
     } else {
       const t = prov.tokens || {};
-      html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
+      if (prov.error) html += `<div class="pm-ctx-plan-tokens">${escapeHtml(prov.error)}</div>`;
+      if (Number(t.calls || 0) > 0) html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
     }
   }
   body.innerHTML = html;

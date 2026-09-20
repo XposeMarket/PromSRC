@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { backgroundAgentText } from '../web-ui/src/features/chat/core/background-agent-work.js';
 
 const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 const desktop = read('web-ui/src/pages/ChatPage.js');
@@ -15,6 +16,9 @@ const mobileStyles = read('web-ui/src/styles/mobile.css');
 const router = read('src/gateway/routes/chat.router.ts');
 const taskRunner = read('src/gateway/tasks/task-runner.ts');
 const startup = read('src/gateway/core/startup.ts');
+
+assert.equal(backgroundAgentText('undefined', 'Ares is working'), 'Ares is working');
+assert.equal(backgroundAgentText({ text: 'null' }, 'Ready'), 'Ready');
 
 assert.match(desktopWork, /sameStream && normalizedLastSeq > previousLastSeq/);
 assert.match(desktopWork, /mergeBackgroundAgentEvents\(previousEvents, normalized\.events\)/);

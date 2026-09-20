@@ -19,6 +19,17 @@ export function orderProviderAccountIds(
   return ordered;
 }
 
+/** Keep an unfinished account from displacing one with saved credentials. */
+export function preferConnectedAccountId(
+  accounts: Record<string, unknown>,
+  requestedAccountId: string,
+  connected: (accountId: string) => boolean,
+): string {
+  const requested = String(requestedAccountId || '').trim();
+  if (requested && accounts[requested] && connected(requested)) return requested;
+  return Object.keys(accounts).find(id => accounts[id] && connected(id)) || requested;
+}
+
 /**
  * Only retry another account when the failure plausibly belongs to that
  * account: credentials, billing/quota, rate limits, or a transient upstream

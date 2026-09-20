@@ -6234,7 +6234,8 @@ html.pm-session-context-open * {
 .pm-chat-connection-status {
   gap: 8px;
   width: fit-content;
-  max-width: calc(100% - 48px);
+  max-width: calc(100% - 20px);
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 8px 12px;
   min-height: 34px;
@@ -6256,7 +6257,12 @@ html.pm-session-context-open * {
   font-size: 12px;
   font-weight: 850;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: left;
+}
+.pm-chat-connection-status .pm-chat-connection-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .pm-chat-connection-spinner {
   width: 13px;
@@ -6266,6 +6272,11 @@ html.pm-session-context-open * {
   border: 2px solid color-mix(in srgb, var(--pm-orange) 22%, transparent);
   border-top-color: var(--pm-orange);
   animation: pm-spin .85s linear infinite;
+}
+.pm-chat-connection-status.activity .pm-chat-connection-spinner {
+  border-color: color-mix(in srgb, var(--pm-orange) 65%, transparent);
+  background: color-mix(in srgb, var(--pm-orange) 18%, transparent);
+  animation: none;
 }
 .pm-chat-connection-status.success {
   color: var(--pm-green);
@@ -9456,6 +9467,21 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   scroll-padding-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 34px);
   padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
   scroll-padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
+}
+/* Keep scrolled messages legible as they pass beneath the floating controls. */
+.pm-body.pm-chat-body:not(.pm-chat-voice-occluded) {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) - 12px),
+    #000 calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 18px)
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) - 12px),
+    #000 calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 18px)
+  );
 }
 .pm-body.pm-chat-body.pm-chat-voice-occluded {
   /* Soft crossfade (not a hard cut) so the chat melts into the glass panel

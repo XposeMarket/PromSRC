@@ -450,9 +450,12 @@ export async function loadMobileApprovals(status = 'pending') {
   return Array.isArray(r?.approvals) ? r.approvals : [];
 }
 
-export async function loadMobileQuestions(status = 'pending') {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : '';
-  const r = await mfetch(`/api/questions${qs}`);
+export async function loadMobileQuestions(status = 'pending', sessionId = '') {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (sessionId) params.set('sessionId', String(sessionId));
+  const qs = params.toString();
+  const r = await mfetch(`/api/questions${qs ? `?${qs}` : ''}`);
   return Array.isArray(r?.questions) ? r.questions : [];
 }
 
