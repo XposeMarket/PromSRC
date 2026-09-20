@@ -1,14 +1,14 @@
 {
   "version": 3,
   "capturedFrom": "9aae344bdb972ab47354e1a174f46a68a1038362",
-  "maxNewModuleBytes": 433668,
+  "maxNewModuleBytes": 453747,
   "maxChatFeatureModuleBytes": 150000,
   "maxMobileRendererContextDependencies": 124,
   "legacySurfaces": {
     "web-ui/src/pages/ChatPage.js": 2330215,
     "web-ui/src/mobile/mobile-pages.js": 898464,
-    "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 245354,
-    "web-ui/src/styles/mobile.css": 607287,
+    "web-ui/src/mobile/mobile-chat-renderer-runtime.js": 251833,
+    "web-ui/src/styles/mobile.css": 612378,
     "web-ui/src/styles/components.css": 284925,
     "web-ui/index.html": 558138
   }

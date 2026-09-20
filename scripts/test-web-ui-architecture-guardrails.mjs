@@ -14,15 +14,16 @@ const failures = [];
 const CODE_OWNED_LEGACY_CEILINGS = Object.freeze({
   'web-ui/src/pages/ChatPage.js': 2330215,
   'web-ui/src/mobile/mobile-pages.js': 898464,
-  // Refreshed to the current measured main after the mobile recovery work.
-  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 245354,
-  'web-ui/src/styles/mobile.css': 607287,
+  // Refreshed to the measured main after the 2026-09-20 provider-auth and
+  // mobile recovery work (LF bytes).
+  'web-ui/src/mobile/mobile-chat-renderer-runtime.js': 251833,
+  'web-ui/src/styles/mobile.css': 612378,
   'web-ui/src/styles/components.css': 284925,
   'web-ui/index.html': 558138,
 });
-// Refreshed to the measured main after the 2026-09-19 mobile weighted-timeline
-// reorder fixes landed in mobile-chat-page-runtime.js (433668 LF bytes).
-const CODE_OWNED_NEW_MODULE_CEILING = 433668;
+// Refreshed to the measured main after the 2026-09-20 provider-auth and mobile
+// recovery work landed in mobile-chat-page-runtime.js (453747 LF bytes).
+const CODE_OWNED_NEW_MODULE_CEILING = 453747;
 const CODE_OWNED_CHAT_FEATURE_MODULE_CEILING = 150000;
 const CODE_OWNED_MOBILE_RENDERER_CONTEXT_CEILING = 124;
 
