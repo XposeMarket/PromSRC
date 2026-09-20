@@ -589,14 +589,33 @@ export interface ExecuteToolDeps {
 
 
 
+/**
+ * Match a blocked command invocation, not a vocabulary word.
+ *
+ * Patterns previously had their whitespace stripped, so a multi-token entry
+ * could never match and the list had to use bare words like "format". That
+ * rejected legitimate work whenever the word appeared in a commit message,
+ * a -Pattern argument, or ordinary prose. A multi-word entry is now matched as
+ * an ordered token sequence, so "format c:" blocks `format c:` and
+ * `format /fs:ntfs c:` while leaving "output format" alone.
+ */
 function commandContainsBlockedPattern(command: string, blockedPatterns: string[] | undefined): string | null {
   const cmd = String(command || '').toLowerCase();
+  const boundary = '(?:^|[\\s;&|()])';
+  const endBoundary = '(?:$|[\\s;&|()])';
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const rawBlocked of blockedPatterns || []) {
     const blocked = String(rawBlocked || '').trim().toLowerCase();
-    const token = blocked.replace(/\s+/g, '');
-    if (!token) continue;
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(^|[\\s;&|()])${escaped}($|[\\s;&|()])`, 'i').test(cmd)) {
+    if (!blocked) continue;
+    const parts = blocked.split(/\s+/).filter(Boolean);
+    if (!parts.length) continue;
+    // Allow intervening flags between tokens: "format /fs:ntfs c:" still hits
+    // the "format c:" entry, while unrelated prose does not.
+    const sequence = parts.map(escape).join('(?:[\\s]+[^\\s;&|()]+){0,3}?[\\s]+');
+    const pattern = parts.length === 1
+      ? `${boundary}${sequence}${endBoundary}`
+      : `${boundary}${sequence}`;
+    if (new RegExp(pattern, 'i').test(cmd)) {
       return blocked;
     }
   }
