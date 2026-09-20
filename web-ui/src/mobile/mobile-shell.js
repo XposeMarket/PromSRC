@@ -33,6 +33,7 @@ const PM_PINNED_PROJECTS_KEY = 'pm_mobile_pinned_projects';
 let _pinnedSessionMigrationPromise = null;
 let _drawerPinnedSessions = null;
 let _drawerProjects = [];
+let _drawerDefaultModel = null;
 const _drawerExpandedProjectIds = new Set();
 
 function _getPinnedSessionIds() {
@@ -1849,6 +1850,18 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     apply();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
   };
+  try {
+    const settings = await mobileGatewayFetch('/api/settings/provider');
+    const llm = settings?.llm || {};
+    const provider = String(llm.provider || '').trim();
+    _drawerDefaultModel = {
+      provider,
+      model: String(llm.providers?.[provider]?.model || '').trim(),
+    };
+  } catch (err) {
+    console.warn('[mobile drawer] Could not load the default model logo', err);
+  }
+  if (!isCurrent()) return;
   if (_drawerSearch) {
     const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
     if (pinnedEl) pinnedEl.innerHTML = '';
@@ -2387,6 +2400,18 @@ function _projectSessionRows(project) {
   return '<div class="pm-project-chat-list">' + rows.map((session) => _sessionButtonHtml(session, { projectChild: true })).join('') + '</div>';
 }
 
+function _mobileSessionModelLogo(session) {
+  const route = session?.chatModelRoute?.effective || session?.chatModelRoute?.override || {};
+  const provider = String(route.providerId || route.provider || session?.chatModelRoute?.providerId || session?.modelProvider || _drawerDefaultModel?.provider || '').toLowerCase();
+  const model = String(route.model || session?.chatModelRoute?.model || session?.model || _drawerDefaultModel?.model || '').toLowerCase();
+  const brand = provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
+    : provider === 'openai_codex' || model.includes('codex') ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
+    : provider === 'openai' || model.startsWith('gpt-') ? MOBILE_IMPORTED_SOURCE_BRANDS.chatgpt
+    : provider === 'xai' || model.includes('grok') ? { label: 'xAI', asset: '/static/assets/import-sources/xai.svg', key: 'xai' }
+    : null;
+  return brand ? `<img class="pm-session-model-logo pm-session-model-logo--${brand.key}" src="${brand.asset}" alt="${brand.label} model" width="14" height="14" decoding="async">` : '';
+}
+
 function _projectButtonHtml(project) {
   const id = String(project?.id || '');
   const title = String(project?.name || 'Project');
@@ -2418,7 +2443,7 @@ function _sessionButtonHtml(session, options = {}) {
   const state = _sessionStateMeta(session);
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
-  const sourceLogo = _mobileImportedSourceLogo(session);
+  const sourceLogo = _mobileSessionModelLogo(session) || _mobileImportedSourceLogo(session);
   const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
@@ -2449,7 +2474,7 @@ function _searchResultButtonHtml(session, query) {
   const state = _sessionStateMeta(session);
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
-  const sourceLogo = _mobileImportedSourceLogo(session);
+  const sourceLogo = _mobileSessionModelLogo(session) || _mobileImportedSourceLogo(session);
   const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
@@ -2922,10 +2947,10 @@ export function closeDrawer() {
   setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
 }
 
-export function renderMobileHeader({ title, online = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
+export function renderMobileHeader({ title, online = true, showModelBadge = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
   const settingsButton = `<button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>`;
-  const modelBadge = online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
-          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}>⚡</span>
+  const modelBadge = online && showModelBadge ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.4 2 4.5 13h6.7L10.6 22l8.9-11h-6.7L13.4 2Z"/></svg></span>
           <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
           <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>` : '';

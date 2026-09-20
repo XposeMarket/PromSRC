@@ -77,6 +77,8 @@ let _wsConnecting = false;
 let _wsGeneration = 0;
 let _wsLastResumeProbeAt = 0;
 let _wsLastMessageAt = 0;
+let _wsResumeGraceUntil = 0;
+let _wsResumeGraceTimer = null;
 
 function _wsNextDelay() {
   const d = _WS_BACKOFF_DELAYS[Math.min(_wsBackoffIdx, _WS_BACKOFF_DELAYS.length - 1)];
@@ -161,6 +163,7 @@ export function connectWS(options = {}) {
   ws.onmessage = (e) => {
     if (!_isCurrentWs(ws, generation)) return;
     _wsLastMessageAt = Date.now();
+    _wsResumeGraceUntil = 0;
     try {
       const msg = JSON.parse(e.data);
       wsEventBus._dispatch(msg);
@@ -220,8 +223,19 @@ function probeWsOnResume() {
     return;
   }
   if (current && current.readyState === WebSocket.OPEN) {
-    wsEventBus._dispatch({ type: 'ws:stale', timestamp: now, inboundAgeMs, source: 'resume' });
-    connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 });
+    // iOS suspends page timers in the background. A live socket can therefore
+    // look stale on the first foreground tick, before its queued heartbeat is
+    // delivered. Give it one short heartbeat window instead of creating a
+    // visible reconnect on every ordinary app resume.
+    _wsResumeGraceUntil = now + 2500;
+    if (_wsResumeGraceTimer) clearTimeout(_wsResumeGraceTimer);
+    _wsResumeGraceTimer = setTimeout(() => {
+      _wsResumeGraceTimer = null;
+      if (window.ws !== current || current.readyState !== WebSocket.OPEN) return;
+      if (_wsLastMessageAt > now) return;
+      wsEventBus._dispatch({ type: 'ws:stale', timestamp: Date.now(), inboundAgeMs: Date.now() - _wsLastMessageAt, source: 'resume' });
+      connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 });
+    }, 2500);
     return;
   }
   ensureWSConnected({ timeoutMs: 6000 });
@@ -236,6 +250,7 @@ const _wsLivenessTimer = setInterval(() => {
   const current = window.ws;
   if (!current || current.readyState !== WebSocket.OPEN || _wsLastMessageAt <= 0) return;
   const now = Date.now();
+  if (now < _wsResumeGraceUntil) return;
   const inboundAgeMs = now - _wsLastMessageAt;
   if (inboundAgeMs <= _WS_STALE_AFTER_MS) return;
   wsEventBus._dispatch({ type: 'ws:stale', timestamp: now, inboundAgeMs, source: 'watchdog' });

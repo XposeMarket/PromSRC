@@ -84,8 +84,9 @@ function pruneCrossTurnTraceCopies(history: any[]): any[] {
         const eventId = String(entry?.id || entry?.eventKey || entry?.extra?.eventKey || '').trim();
         const prior = eventId ? firstOwner.get(eventId) : undefined;
         const wrongRequest = !!requestId && !!entryRequestId && requestId !== entryRequestId;
-        const copiedAfterUser = !!prior && prior.userGeneration < userGeneration
-          && (!requestId || !prior.requestId || requestId !== prior.requestId);
+        // A steer can split one transport request into two assistant rows.
+        // Reusing the request ID does not make a pre-steer event new work.
+        const copiedAfterUser = !!prior && prior.userGeneration < userGeneration;
         if (!checkpoint && (wrongRequest || copiedAfterUser)) return false;
         if (eventId && !prior) firstOwner.set(eventId, { userGeneration, requestId });
         return true;

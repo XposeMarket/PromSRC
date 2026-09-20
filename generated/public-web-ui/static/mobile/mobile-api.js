@@ -1686,6 +1686,7 @@ function _normalizeSessionSummary(s) {
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
+    chatModelRoute: s?.chatModelRoute && typeof s.chatModelRoute === 'object' ? s.chatModelRoute : null,
     lastOrigin: s?.lastOrigin && typeof s.lastOrigin === 'object' ? {
       channel: String(s.lastOrigin.channel || '').trim(),
       surface: String(s.lastOrigin.surface || '').trim() || undefined,
@@ -2383,6 +2384,7 @@ export async function requestMobileUpdate({ action = 'check', confirm = false, s
  *   - onInfo(message)     — progress info line
  *   - onFinal(text)       — final assistant text (single string)
  *   - onError(err)        — fatal error
+ *   - onAccepted()        — server accepted the chat request
  *   - onDone()            — turn complete
  *
  * Returns an { abort } controller.
@@ -2484,6 +2486,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       }
     }
 
+    cb('onAccepted');
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buf = '';

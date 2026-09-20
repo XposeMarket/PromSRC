@@ -98,7 +98,7 @@ Everyone routed through `handleChat` gets `buildBaseSystemPrompt()` unless on th
 
 - **`background_agent`:** `bg_plan_declare` / `bg_plan_advance` — not `declare_plan`
 - **`proposal_execution`:** fixed task plan; `step_complete` only
-- **Default (incl. main chat):** do not `declare_plan` unless user asks for a plan
+- **Default (incl. main chat):** call `declare_plan` FIRST for meaningful 2–6 phase work or when the user asks for a visible plan; use direct execution for quick linear or single-phase work
 
 ---
 

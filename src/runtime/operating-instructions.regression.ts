@@ -31,4 +31,6 @@ for (const input of [
 }
 const duplicate = buildOperatingInstructions({ executionMode: 'interactive' });
 assert.equal(inspectOperatingInstructions(duplicate + '\n' + duplicate).filter((block) => block.duplicate).length, 4);
+assert.match(duplicate, /Call declare_plan FIRST when the task has meaningful phases/);
+assert.match(duplicate, /or when the user explicitly asks for a plan/);
 console.log('operating instructions: role matrix, authority, personality preservation, and emitted provenance passed');

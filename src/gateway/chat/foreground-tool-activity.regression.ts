@@ -13,6 +13,8 @@ assert.match(foregroundConnectionMessage(tracker.current(), 143_000, start + 143
 
 tracker.record('tool_progress', { toolCallId: 'command-1', output: 'building' }, start + 130_000);
 assert.match(foregroundConnectionMessage(tracker.current(), 13_000, start + 143_000), /13s since last tool update/);
+tracker.record('process_run_output', { toolCallId: 'command-1', chunk: 'built' }, start + 140_000);
+assert.match(foregroundConnectionMessage(tracker.current(), 3_000, start + 143_000), /3s since last tool update/);
 
 tracker.record('tool_call', { action: 'background_ops', toolCallId: 'background-1', stepNum: 2 }, start + 140_000);
 assert.equal(tracker.current()?.openCalls, 2);

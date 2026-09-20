@@ -287,7 +287,11 @@ function _pmAppendProcessTerminalChunk(runId, chunk, stream = 'stdout') {
   const tab = card.getAttribute('data-pm-process-tab') || 'combined';
   if (tab !== 'combined' && tab !== stream) return;
   const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  el.textContent = `${el.textContent === 'No output yet.' ? '' : el.textContent}${chunk}`;
+  const previous = el.textContent === 'No output yet.' ? '' : el.textContent;
+  const next = `${previous}${chunk}`;
+  el.textContent = next.length > 128 * 1024
+    ? `[Older live output hidden; open the saved log for more.]\n${next.slice(-128 * 1024)}`
+    : next;
   if (wasNearBottom) el.scrollTop = el.scrollHeight;
 }
 

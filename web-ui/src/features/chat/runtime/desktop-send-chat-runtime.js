@@ -41,6 +41,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
         chatProgressVisibility,
         clearBackgroundSpawnDockForSession,
         clearChatComposerAfterSend,
+        restoreDesktopComposerAfterFailedSend,
         clearDesignMultiSelection,
         clearDesktopActiveChatRun,
         createEmptyChatSession,
@@ -277,7 +278,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
           setPendingChatFiles(pendingChatFiles);
           renderChatFilePills();
         }
-        clearChatComposerAfterSend(input);
+        clearChatComposerAfterSend(input, thisSessionId);
         persistSession(thisSessionId);
         renderChatMessages();
         releaseChatSendLock(sendLock);
@@ -441,7 +442,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       if (!queuedTurn && isActiveMainGoalRunning(thisSessionId) && !pendingChatFiles.length) {
         const steered = await steerActiveGoalRunFromComposer(message);
         if (steered) {
-          clearChatComposerAfterSend(input);
+          clearChatComposerAfterSend(input, thisSessionId);
           releaseChatSendLock(sendLock);
           forgetLocalMainChatRequest(thisSessionId, clientRequestId);
           return;
@@ -450,7 +451,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       if (!queuedTurn && realtimeVoicePendingInterruptContext) {
         const handled = await handleRealtimeVoiceInterruptionOnly(message);
         if (handled) {
-          clearChatComposerAfterSend(input);
+          clearChatComposerAfterSend(input, thisSessionId);
           releaseChatSendLock(sendLock);
           forgetLocalMainChatRequest(thisSessionId, clientRequestId);
           return;
@@ -480,7 +481,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       }
       if (window.activeChatSessionId === thisSessionId) window.queuedPrompts = sessionQueue;
       addProcessEntry('info', `Queued prompt #${sessionQueue.length}${queuedFiles.length ? ` with ${queuedFiles.length} file(s)` : ''}. It will run automatically next.`);
-      clearChatComposerAfterSend(input);
+      clearChatComposerAfterSend(input, thisSessionId);
       updateQueuedPromptUI();
       releaseChatSendLock(sendLock);
       forgetLocalMainChatRequest(thisSessionId, clientRequestId);
@@ -613,7 +614,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       startedAt: Date.now(),
     });
     if (!queuedTurn) {
-      clearChatComposerAfterSend(input);
+      clearChatComposerAfterSend(input, thisSessionId);
     }
     window.chatMessagesUserScrolledUp = false;
     if (window.activeChatSessionId === thisSessionId) syncActiveSessionRunState();
@@ -860,6 +861,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 	  let finalAssistantTurnCommitted = false;
 	  let finalFrameShouldStopReader = false;
 	  let desktopStreamRecoveryPending = false;
+	  let chatRequestAccepted = false;
 	  let interruptedTurnSaved = false;
 	  const commitFinalAssistantTurn = async () => {
 	    if (finalAssistantTurnCommitted || !finalReply) return false;
@@ -964,6 +966,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
+      chatRequestAccepted = true;
 
       streamTraceId = String(res.headers.get('x-prometheus-trace-id') || '').trim().slice(0, 160);
       markChatPerformance('chat_request_accepted', { traceId: streamTraceId });
@@ -1791,6 +1794,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       }
 
     } catch (err) {
+      if (!chatRequestAccepted && !queuedTurn) restoreDesktopComposerAfterFailedSend(thisSessionId, message);
       persistTurnThinkingToProcess();
       const pageLifecycleDisconnected = window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId] === true;
       const wasAborted = !pageLifecycleDisconnected && (err?.name === 'AbortError'

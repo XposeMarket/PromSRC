@@ -46,7 +46,7 @@ export function createForegroundToolActivityTracker() {
         const call = identity(data);
         if (!call.name) return;
         open.push({ ...call, kind: toolKind(call.name), startedAt: at, lastUpdateAt: at });
-      } else if (event === 'tool_progress') {
+      } else if (event === 'tool_progress' || event === 'process_run_output') {
         const index = matchingIndex(data);
         if (index >= 0) open[index].lastUpdateAt = at;
         else if (open.length) open[open.length - 1].lastUpdateAt = at;

@@ -287,6 +287,20 @@ class PrometheusQuestionQueue {
     return this.callbacks.has(id);
   }
 
+  /**
+   * Detach an in-process waiter without resolving or cancelling the durable
+   * question.  A foreground turn can be aborted by the owner watchdog or a
+   * gateway restart while its question card is still pending.  Leaving the
+   * callback installed makes the next answer resolve the dead turn and hides
+   * the restart-resume path, so callers must detach it when their owner goes
+   * away.
+   */
+  clearWaiters(id: string): void {
+    this.callbacks.delete(id);
+    this.cancelCallbacks.delete(id);
+    this.steerCallbacks.delete(id);
+  }
+
   onResolve(id: string, callback: (answers: { answers: PrometheusQuestionAnswer[]; generalOther?: string }) => void): void {
     const record = this.records.get(id);
     if (record && record.status === 'answered') {

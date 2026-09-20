@@ -24,7 +24,7 @@ import {
   supportsFastSpeed,
   validEffort,
 } from '../reasoning-capabilities.js';
-import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
+import { formatModelDisplayName, formatModelWithReasoning, formatReasoningDisplayName } from '../model-display.js';
 import { renderReasoningSelector } from '../components/reasoning-selector.js';
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
@@ -309,7 +309,10 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   document.addEventListener('visibilitychange', onVisibilityChange);
   // The native input is only a gesture sensor. Keep its real click behavior
   // intact for iOS haptics, but do not forward it to delegated app handlers.
-  proxy.addEventListener('click', (event) => event.stopPropagation(), true);
+  proxy.addEventListener('click', (event) => {
+    event.stopPropagation();
+    handlers.onClick?.(event);
+  }, true);
   document.body?.appendChild(proxy);
   positionSurface({ clientX: 0, clientY: 0 }, false);
 
@@ -333,11 +336,9 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   const onViewportResize = () => {
     if (!disposed && pointerId == null) positionSurface({ clientX: 0, clientY: 0 }, false);
   };
-  if (isTabbarGestureSurface) {
-    window.addEventListener('resize', onViewportResize, { passive: true });
-    window.visualViewport?.addEventListener('resize', onViewportResize, { passive: true });
-    window.visualViewport?.addEventListener('scroll', onViewportResize, { passive: true });
-  }
+  window.addEventListener('resize', onViewportResize, { passive: true });
+  window.visualViewport?.addEventListener('resize', onViewportResize, { passive: true });
+  window.visualViewport?.addEventListener('scroll', onViewportResize, { passive: true });
 
   const dispose = () => {
     cancelGesture();
@@ -349,11 +350,9 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
     window.removeEventListener('blur', onWindowBlur);
     window.removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onVisibilityChange);
-    if (isTabbarGestureSurface) {
-      window.removeEventListener('resize', onViewportResize);
-      window.visualViewport?.removeEventListener('resize', onViewportResize);
-      window.visualViewport?.removeEventListener('scroll', onViewportResize);
-    }
+    window.removeEventListener('resize', onViewportResize);
+    window.visualViewport?.removeEventListener('resize', onViewportResize);
+    window.visualViewport?.removeEventListener('scroll', onViewportResize);
     proxy.remove();
     if (surface.dataset) delete surface.dataset.pmHapticGestureSurface;
     _hapticGestureDisposers.delete(dispose);
@@ -538,9 +537,40 @@ function _setBadgeLabel(label) {
   window.__pmModelBadgeLabel = safe;
   document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
     if (_isSubagentModelBadge(el)) return;
-    el.textContent = safe;
+    const badge = el.closest('.pm-composer-model-badge');
+    if (badge) {
+      const model = String(window.__pmModelBadgeModelLabel || safe).trim();
+      const effort = String(window.__pmModelBadgeReasoningLabel || '').trim();
+      const modelNode = document.createElement('strong');
+      modelNode.className = 'pm-composer-model-name';
+      modelNode.textContent = model;
+      const nodes = [modelNode];
+      if (effort) {
+        const effortNode = document.createElement('span');
+        effortNode.className = 'pm-composer-reasoning-name';
+        effortNode.textContent = effort;
+        nodes.push(effortNode);
+      }
+      el.replaceChildren(...nodes);
+    } else el.textContent = safe;
   });
   return safe;
+}
+
+function _setComposerModelIdentity(provider, model, effort) {
+  window.__pmModelBadgeModelLabel = formatModelDisplayName(model, provider);
+  window.__pmModelBadgeReasoningLabel = formatReasoningDisplayName(effort);
+  const key = String(provider || '').toLowerCase();
+  const name = String(model || '').toLowerCase();
+  const asset = key === 'anthropic' || name.includes('claude') ? 'claude'
+    : key === 'openai_codex' || name.includes('codex') ? 'openai'
+    : key === 'openai' || name.startsWith('gpt-') ? 'chatgpt'
+    : key === 'xai' || name.includes('grok') ? 'xai' : '';
+  document.querySelectorAll('.pm-composer-model-logo').forEach((logo) => {
+    logo.hidden = !asset;
+    if (asset) logo.src = `/static/assets/import-sources/${asset}.svg`;
+    logo.dataset.pmBrand = asset;
+  });
 }
 
 function _setBadgeFast(fast) {
@@ -577,6 +607,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
       eventModel.model,
       modelChangeDetail?.reasoningEffort || modelChangeDetail?.reasoning_effort || eventCfg.reasoning_effort,
     );
+    _setComposerModelIdentity(eventModel.provider, eventModel.model, eventEffort);
     const label = _setBadgeLabel(formatModelWithReasoning(eventModel.model, eventModel.provider, eventEffort));
     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
     // keep the streamed active-model label instead of overwriting it from config.
@@ -604,6 +635,7 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
     _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
   }
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
+  _setComposerModelIdentity(provider, model, cfg.reasoning_effort);
   return _setBadgeLabel(formatModelWithReasoning(model, provider, cfg.reasoning_effort));
 }
 
@@ -621,10 +653,14 @@ function _closeSheet() {
   if (scrim) scrim.classList.remove('open');
   if (sheet) sheet.classList.remove('open');
   document.body.classList.remove('pm-mobile-overlay-open');
+  if (restoreFocus?.id === 'pm-composer-input' && restoreFocus.isConnected && document.activeElement !== restoreFocus) {
+    try { restoreFocus.focus({ preventScroll: true }); } catch { restoreFocus.focus(); }
+  }
+  window.dispatchEvent(new Event('pm-mobile-model-sheet-closed'));
   setTimeout(() => {
     if (scrim) scrim.remove();
     if (sheet) sheet.remove();
-    if (!document.getElementById('pm-msheet') && restoreFocus?.isConnected && typeof restoreFocus.focus === 'function') {
+    if (!document.getElementById('pm-msheet') && restoreFocus?.isConnected && document.activeElement !== restoreFocus && typeof restoreFocus.focus === 'function') {
       restoreFocus.focus({ preventScroll: true });
     }
   }, 220);
@@ -669,14 +705,33 @@ function _openSheet(titleHtml, bodyHtml) {
   `;
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
+  if (previousFocus?.id === 'pm-composer-input') sheet.classList.add('has-composer-keyboard');
   const positionSheet = () => {
-    if (sheet.classList.contains('is-reasoning') || sheet.classList.contains('is-model-switch')) return;
+    if (sheet.classList.contains('is-reasoning') || sheet.classList.contains('is-model-switch')) {
+      // Follow the chat keyboard controller's stable offset. Reading the
+      // visual viewport here made the modal chase Safari's page panning and
+      // left the composer at a stale position when the modal closed.
+      const app = document.querySelector('.pm-app');
+      const offset = sheet.classList.contains('has-composer-keyboard') && app?.classList.contains('pm-keyboard-open')
+        ? Math.max(0, Number.parseFloat(app.style.getPropertyValue('--pm-keyboard-offset')) || 0)
+        : 0;
+      sheet.style.setProperty('bottom', `${offset}px`, 'important');
+      return;
+    }
     _positionSheetNearBadge(sheet);
   };
   positionSheet();
-  const reposition = positionSheet;
-  requestAnimationFrame(() => { scrim.classList.add('open'); sheet.classList.add('open'); });
+  let positionRaf = 0;
+  const reposition = () => {
+    if (positionRaf) return;
+    positionRaf = requestAnimationFrame(() => {
+      positionRaf = 0;
+      if (sheet.isConnected) positionSheet();
+    });
+  };
+  requestAnimationFrame(() => { scrim.classList.add('open'); sheet.classList.add('open'); positionSheet(); });
   scrim.addEventListener('click', _closeSheet);
+  scrim.addEventListener('touchmove', (event) => event.preventDefault(), { passive: false });
   sheet.querySelector('.pm-msheet-close')?.addEventListener('click', _closeSheet);
   sheet.addEventListener('selectstart', (event) => {
     event.preventDefault();
@@ -696,6 +751,8 @@ function _openSheet(titleHtml, bodyHtml) {
   window.addEventListener('resize', reposition, { passive: true });
   window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
   sheet.__pmModelSheetCleanup = () => {
+    if (positionRaf) cancelAnimationFrame(positionRaf);
+    sheet.__pmReasoningGestureDispose?.();
     window.removeEventListener('resize', reposition);
     window.visualViewport?.removeEventListener?.('resize', reposition);
     document.removeEventListener('keydown', onKeyDown, true);
@@ -760,7 +817,6 @@ async function _openReasoningSheet() {
   const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
-  sheet?.removeAttribute('style');
   await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
   await refreshMobileModelBadge(true);
   const { provider } = _activeModel(_llmCache);
@@ -774,6 +830,9 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
   const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
   _setSheetTitle('');
+  const sheet = document.getElementById('pm-msheet');
+  sheet?.__pmReasoningGestureDispose?.();
+  if (sheet) sheet.__pmReasoningGestureDispose = null;
   const body = _setSheetBody(renderReasoningSelector({
     provider,
     model: cfg.model,
@@ -793,6 +852,10 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
 
   const control = document.getElementById('pm-reasoning-control');
   if (control && options) {
+    if (document.getElementById('pm-msheet')?.__pmModelSheetRestoreFocus?.id === 'pm-composer-input') {
+      // Slider gestures must not move focus off the textarea on iOS.
+      control.addEventListener('pointerdown', (event) => event.preventDefault(), true);
+    }
     control.setAttribute('aria-label', 'Reasoning level. Swipe left or right to adjust.');
     control.setAttribute('aria-orientation', 'horizontal');
     let lastIndex = selectedIndex;
@@ -835,7 +898,11 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     const progressFromEvent = (event) => {
       const rect = control.getBoundingClientRect();
       if (!rect.width) return 0;
-      return (Number(event.clientX || 0) - rect.left) / rect.width;
+      const pointerPosition = (Number(event.clientX || 0) - rect.left) / rect.width;
+      // The first thumb center starts one segment into the track. Map finger
+      // position to those actual thumb endpoints so dragging follows the touch.
+      const firstCenter = 1 / options.length;
+      return (pointerPosition - firstCenter) / (1 - firstCenter);
     };
     const indexFromProgress = (progress) => {
       return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
@@ -852,41 +919,60 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         commitIndex(segment.getAttribute('data-index'), true);
       });
     });
-    const pointerHandlers = {
-      onPointerDown: (event, gesture) => {
-        if (event.pointerType === 'mouse' && event.button !== 0) return;
-        requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
-        control.classList.add('is-dragging');
-        updateFromPointer(event);
-      },
-      onPointerMove: (event, gesture) => {
-        if (!control.classList.contains('is-dragging')) return;
-        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
-        updateFromPointer(event);
-      },
-      onPointerUp: (event, gesture) => {
-        if (!control.classList.contains('is-dragging')) return;
-        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
-        try {
-          control.classList.remove('is-dragging');
-          updateFromPointer(event, true);
-        } finally {
-          requestGestureNativeHaptic = null;
-        }
-      },
-      onPointerCancel: (event, gesture) => {
-        if (!control.classList.contains('is-dragging')) return;
-        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
-        try {
-          control.classList.remove('is-dragging');
-          updateFromPointer(event, true);
-        } finally {
-          requestGestureNativeHaptic = null;
-        }
-      },
-      nativeHapticsOnMove: false,
+    // Both the visible control and the short-lived native switch sensor use
+    // these handlers. The sensor produces real iOS ticks at level boundaries;
+    // disposing it with the sheet prevents an old invisible hit target from
+    // blocking the next opening.
+    let activePointerId = null;
+    const onPointerDown = (event, gesture) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
+      if (!gesture) event.preventDefault();
+      activePointerId = event.pointerId;
+      if (!gesture) { try { control.setPointerCapture?.(event.pointerId); } catch {} }
+      control.classList.add('is-dragging');
+      updateFromPointer(event);
+      const restoreFocus = sheet?.__pmModelSheetRestoreFocus;
+      if (restoreFocus?.id === 'pm-composer-input') {
+        queueMicrotask(() => {
+          if (restoreFocus.isConnected && document.activeElement !== restoreFocus) {
+            try { restoreFocus.focus({ preventScroll: true }); } catch {}
+          }
+        });
+      }
     };
-    attachMobileHapticGestureSurface(control, pointerHandlers);
+    const onPointerMove = (event, gesture) => {
+      if (event.pointerId !== activePointerId) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+      updateFromPointer(event);
+    };
+    const finishPointer = (event) => {
+      if (event.pointerId !== activePointerId) return;
+      activePointerId = null;
+      control.classList.remove('is-dragging');
+      if (Number.isFinite(event.clientX)) updateFromPointer(event, true);
+      else commitIndex(lastIndex, true);
+      requestGestureNativeHaptic = null;
+    };
+    control.addEventListener('pointerdown', onPointerDown);
+    control.addEventListener('pointermove', onPointerMove);
+    control.addEventListener('pointerup', finishPointer);
+    control.addEventListener('pointercancel', finishPointer);
+    if (sheet) {
+      sheet.__pmReasoningGestureDispose = attachMobileHapticGestureSurface(control, {
+        onPointerDown,
+        onPointerMove,
+        onPointerUp: finishPointer,
+        onPointerCancel: finishPointer,
+        onClick: () => {
+          const restoreFocus = sheet.__pmModelSheetRestoreFocus;
+          if (restoreFocus?.id === 'pm-composer-input' && restoreFocus.isConnected && document.activeElement !== restoreFocus) {
+            try { restoreFocus.focus({ preventScroll: true }); } catch {}
+          }
+        },
+        nativeHapticsOnMove: false,
+      });
+    }
     control.addEventListener('keydown', (event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -945,6 +1031,7 @@ function _queueReasoningSave(provider, patch, immediate = false) {
     else delete merged.reasoning_effort;
   }
   if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+  _setComposerModelIdentity(provider, model, merged.reasoning_effort);
   _setBadgeLabel(formatModelWithReasoning(model, provider, merged.reasoning_effort));
   clearTimeout(_reasoningSaveTimer);
   const commit = () => {
@@ -1168,6 +1255,14 @@ export function initMobileModelBadge() {
     if (!badge) return;
     event.preventDefault();
     event.stopPropagation();
+    if (badge.classList.contains('pm-composer-model-badge')) {
+      const keepKeyboard = badge.dataset.pmKeepKeyboard === '1';
+      delete badge.dataset.pmKeepKeyboard;
+      if (keepKeyboard) {
+        const input = document.getElementById('pm-composer-input');
+        try { input?.focus({ preventScroll: true }); } catch { input?.focus(); }
+      }
+    }
     if (_isSubagentModelBadge(badge)) {
       _openSubagentReasoningSheet();
       return;

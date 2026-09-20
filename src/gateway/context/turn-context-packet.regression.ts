@@ -25,6 +25,21 @@ assert.match(formatTurnContextPacketsForPrompt([base]), /Reasoning\/decision sum
 assert.match(formatTurnContextPacketsForPrompt([base]), /Verify the interrupted boundary/);
 assert.equal((base as any).thinking, undefined, 'private thinking must not be persisted in a working packet');
 
+const shellActivity = buildTurnContextPacket({
+  turnId: 'turn-shell',
+  sessionId: 'session-shell',
+  status: 'aborted',
+  request: 'Update the issue log.',
+  completedActions: [
+    'tool (workspace_run): Add-Content -Path ISSUES.md -Value @"\nfull PowerShell body\n"@',
+  ],
+  toolState: 'workspace_run: powershell -Command "Get-Content src/gateway/session.ts"',
+  continueFromHere: 'Resume from the recorded tool boundary.',
+});
+const shellActivityPrompt = formatTurnContextPacketsForPrompt([shellActivity]);
+assert.doesNotMatch(shellActivityPrompt, /Add-Content|Get-Content|full PowerShell body/);
+assert.match(shellActivityPrompt, /shell command omitted/);
+
 const completed = buildTurnContextPacket({
   ...base,
   status: 'completed',

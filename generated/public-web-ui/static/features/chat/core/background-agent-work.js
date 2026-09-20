@@ -139,19 +139,47 @@ function normalizeBackgroundAgentTrace(entry = {}) {
 }
 
 function normalizeBackgroundAgentSteer(message = {}) {
-  const content = String(message.content || message.text || message.message || '').replace(/\s+/g, ' ').trim();
+  const content = String(message.content || message.text || message.message || '').trim();
   if (!content) return null;
   const timestamp = Number(message.timestamp || message.createdAt || Date.now()) || Date.now();
   const id = String(message.id || `background_steer_${timestamp}_${hashBackgroundAgent(content)}`).trim();
+  const source = String(message.source || '').trim();
+  const actor = String(message.actor || (/^(?:background_ops|agent_run_ops|task_|internal_)/i.test(source) ? 'Prometheus' : 'User')).trim();
+  const groupId = String(message.workflowGroupId || '').trim();
   return {
     id,
     role: 'user',
     content,
     timestamp,
+    streamId: String(message.streamId || '').trim(),
+    seq: Math.max(0, Math.floor(Number(message.seq || 0) || 0)),
+    source,
+    actor,
     channelLabel: 'steer',
-    workflowGroupId: String(message.workflowGroupId || `chat_steer_background_${timestamp}`).trim(),
+    workflowGroupId: /^chat_steer_background_/i.test(groupId) || !groupId ? `background_steer_${id}` : groupId,
     workflowPart: 'interruption',
+    workflowLabel: actor === 'Prometheus' ? 'Prometheus steered agent' : 'Message sent as steer',
   };
+}
+
+export function mergeBackgroundAgentSteerMessages(existing = [], incoming = []) {
+  const merged = [];
+  for (const raw of [...existing, ...incoming]) {
+    const steer = normalizeBackgroundAgentSteer(raw);
+    if (!steer) continue;
+    const priorIndex = merged.findIndex((item) => item.id === steer.id
+      || ((!item.seq || !steer.seq)
+        && item.content === steer.content
+        && Math.abs(item.timestamp - steer.timestamp) < 10_000));
+    if (priorIndex < 0) merged.push(steer);
+    else merged[priorIndex] = {
+      ...merged[priorIndex], ...steer,
+      id: steer.seq ? steer.id : merged[priorIndex].id,
+      seq: steer.seq || merged[priorIndex].seq,
+      streamId: steer.streamId || merged[priorIndex].streamId,
+    };
+  }
+  return merged.sort((a, b) => a.timestamp - b.timestamp).slice(-80);
 }
 
 export function normalizeBackgroundAgentWork(record = {}) {
@@ -181,6 +209,10 @@ export function normalizeBackgroundAgentWork(record = {}) {
     agentName: identity.name,
     agentColor: identity.color,
     task: backgroundAgentText(record.task, record.prompt),
+    model: String(record.model || record.executor_model || '').trim(),
+    providerId: String(record.providerId || record.provider || '').trim(),
+    reasoningEffort: String(record.reasoningEffort || record.executor_reasoning_effort || record.reasoning_effort || '').trim(),
+    plan: record.plan && typeof record.plan === 'object' ? record.plan : null,
     status,
     startedAt: Number(record.startedAt || record.workStartedAt || record.createdAt || 0) || 0,
     completedAt,
@@ -193,10 +225,7 @@ export function normalizeBackgroundAgentWork(record = {}) {
     lastSeq: Math.max(0, Math.floor(Number(record.lastSeq || stream.lastSeq || 0)) || 0),
     events: mergeBackgroundAgentEvents([], events),
     liveTraceEntries,
-    steerMessages: (Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : [])
-      .map(normalizeBackgroundAgentSteer)
-      .filter(Boolean)
-      .slice(-80),
+    steerMessages: mergeBackgroundAgentSteerMessages([], Array.isArray(record.steerMessages) ? record.steerMessages : Array.isArray(record.steers) ? record.steers : []),
   };
 }
 
@@ -364,8 +393,12 @@ export function persistBackgroundAgentWork(record = {}, options = {}) {
         ? normalized.events.slice(-1200)
         : mergeBackgroundAgentEvents(previousEvents, normalized.events),
       liveTraceEntries: mergeBackgroundAgentTraceEntries(previous.liveTraceEntries, normalized.liveTraceEntries),
-      steerMessages: normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages,
+      steerMessages: mergeBackgroundAgentSteerMessages(previous.steerMessages, normalized.steerMessages),
       backgroundSessionId: normalized.backgroundSessionId || previous.backgroundSessionId,
+      model: normalized.model || previous.model,
+      providerId: normalized.providerId || previous.providerId,
+      reasoningEffort: normalized.reasoningEffort || previous.reasoningEffort,
+      plan: normalized.plan || previous.plan,
       streamId: normalized.streamId || previous.streamId,
       lastSeq: Math.max(previousLastSeq, normalizedLastSeq),
       streamingText: normalized.streamingText || previous.streamingText || '',

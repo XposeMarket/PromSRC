@@ -1,5 +1,22 @@
 import { createAdaptiveStreamScheduler } from '../features/chat/timeline/adaptive-stream-scheduler.js';
-import { backgroundAgentText } from '../features/chat/core/background-agent-work.js';
+import { backgroundAgentText, mergeBackgroundAgentSteerMessages } from '../features/chat/core/background-agent-work.js';
+import { formatModelWithReasoning } from '../model-display.js';
+import { splitBackgroundAgentTimeline } from '../features/chat/core/background-agent-timeline.js';
+import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
+
+export function mobileReplayFrameAfterSteer(frame, steer, replayStreamId = '') {
+  if (!steer) return true;
+  const boundaryStreamId = String(steer.workflowStreamId || '').trim();
+  const frameStreamId = String(frame?.streamId || replayStreamId || '').trim();
+  const boundarySeq = Math.max(0, Math.floor(Number(steer.workflowBoundarySeq || 0) || 0));
+  const frameSeq = Math.max(0, Math.floor(Number(frame?.seq || 0) || 0));
+  if (boundaryStreamId && frameStreamId === boundaryStreamId && boundarySeq > 0 && frameSeq > 0) {
+    return frameSeq > boundarySeq;
+  }
+  const frameAt = Number(frame?.at || 0) || 0;
+  const steerAt = Number(steer.timestamp || 0) || 0;
+  return !frameAt || !steerAt || frameAt > steerAt;
+}
 
 export function resolveMobileKeyboardComposerTop({
   layoutHeight,
@@ -631,6 +648,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const header = renderMobileHeader({
     title: requestedSession === MOBILE_CHAT_SESSION_ID ? 'New Chat' : 'Chat',
     online: true,
+    showModelBadge: false,
     hideTitle: true,
     hideBrand: true,
     rightActions: `<button class="pm-icon-btn" data-action="new-chat" aria-label="New chat">${ICONS.compose}</button>`,
@@ -715,6 +733,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           <div class="pm-composer-rich-preview" id="pm-composer-rich-preview" aria-hidden="true" hidden></div>
           <textarea class="pm-composer-input" id="pm-composer-input" rows="1" placeholder="${escapeHtml(requestedSession === MOBILE_CHAT_SESSION_ID ? 'Send Prometheus a message' : `Work on ${gatewayTarget?.name || 'this computer'}`)}" aria-label="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="enter"></textarea>
         </div>
+        <button type="button" class="pm-model-badge pm-composer-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <img class="pm-composer-model-logo" alt="" hidden>
+          <span class="pm-model-badge-label">${escapeHtml(window.__pmModelBadgeLabel || 'Model')}</span>
+          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.4 2 4.5 13h6.7L10.6 22l8.9-11h-6.7L13.4 2Z"/></svg></span>
+        </button>
         <button type="button" class="pm-icon-btn" id="pm-chat-mic-btn" aria-label="Voice input">${ICONS.micSmall}</button>
         <button type="submit" class="pm-send" id="pm-send-btn" aria-label="Send">${ICONS.send}</button>
       </div>
@@ -778,6 +801,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
           </div>
         </header>
         <div class="pm-mobile-side-thread" id="pm-mobile-side-thread"></div>
+        <div class="pm-mobile-side-plan" id="pm-mobile-side-plan" hidden></div>
         <form class="pm-composer pm-mobile-side-composer" id="pm-mobile-side-composer">
           <span class="pm-glass-lens" aria-hidden="true"></span>
           <span class="pm-glass-border" aria-hidden="true"></span>
@@ -864,6 +888,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const goalStrip = page.querySelector('#pm-mobile-goal-strip');
   const input    = page.querySelector('#pm-composer-input');
+  const draftKeyFor = (session = requestedSession) => composerDraftKey('mobile', session, gatewayTarget?.gatewayId || '');
+  if (input) input.value = readComposerDraft(draftKeyFor());
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
   const targetChip = page.querySelector('#pm-chat-target-chip');
@@ -917,6 +943,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     thread: [],
     backgroundAgentId: '',
     backgroundTraceExpanded: null,
+    backgroundTraceExpandedBySegment: {},
     busy: false,
     abort: null,
     sideThreadRendered: false,
@@ -1562,6 +1589,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       });
     }
     input.value = card.prompt;
+    saveComposerDraft(draftKeyFor(), input.value);
     resizeComposerInput();
     _pmUpdateComposerRichPreview(page, input);
     _pmClearActiveSlashCommand(page, input, { focus: false });
@@ -1653,6 +1681,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const resetComposerInput = () => {
     if (!input) return;
     input.value = '';
+    saveComposerDraft(draftKeyFor(), '');
     resetChatDictationComposerState();
     input.style.height = '';
     input.style.overflowY = 'hidden';
@@ -1667,15 +1696,71 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   let composerModeOpen = isVoiceRoomTranscript;
   let composerModeTransitionTimer = 0;
   let composerModeScrollLockTop = null;
-  let composerModeScrollIgnoreUntil = 0;
-  let composerModeScrollIntentUntil = 0;
-  let composerModeLastScrollTop = Number(_mobileChatScrollTarget(body)?.scrollTop || 0);
   let attachSheetTarget = 'chat';
   let pendingFileInputTarget = 'chat';
   let attachSheetPositionCleanup = null;
   let attachSheetOpenToken = 0;
   let composerControlHold = '';
   let composerControlRestoreFocus = false;
+  let attachmentPickerCleanup = null;
+
+  function focusComposerAfterNativeUi({ releaseHold = '' } = {}) {
+    if (!composerModeOpen || !input?.isConnected) return;
+    if (document.visibilityState !== 'visible') {
+      const onVisible = () => {
+        if (document.visibilityState !== 'visible') return;
+        document.removeEventListener('visibilitychange', onVisible);
+        focusComposerAfterNativeUi({ releaseHold });
+      };
+      document.addEventListener('visibilitychange', onVisible);
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (!composerModeOpen || !input?.isConnected) return;
+      try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+      if (composerControlHold === releaseHold) clearComposerControlHold();
+      updateComposerExpandedState();
+    });
+  }
+
+  function restoreComposerAfterAttachmentPicker() {
+    const restoreFocus = !!attachmentPickerCleanup?.restoreFocus;
+    attachmentPickerCleanup?.();
+    attachmentPickerCleanup = null;
+    if (restoreFocus) focusComposerAfterNativeUi({ releaseHold: 'picker' });
+    else {
+      if (composerControlHold === 'picker') clearComposerControlHold();
+      updateComposerExpandedState();
+    }
+  }
+
+  function beginAttachmentPicker(sourceInput, { restoreFocus = false } = {}) {
+    attachmentPickerCleanup?.();
+    holdComposerOpenForControl('picker', { restoreFocus });
+    let timer = 0;
+    let fallbackTimer = 0;
+    const scheduleReturn = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(restoreComposerAfterAttachmentPicker, 350);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') scheduleReturn();
+    };
+    window.addEventListener('focus', scheduleReturn);
+    document.addEventListener('visibilitychange', onVisible);
+    sourceInput?.addEventListener('cancel', scheduleReturn);
+    fallbackTimer = setTimeout(restoreComposerAfterAttachmentPicker, 30000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(fallbackTimer);
+      window.removeEventListener('focus', scheduleReturn);
+      document.removeEventListener('visibilitychange', onVisible);
+      sourceInput?.removeEventListener('cancel', scheduleReturn);
+    };
+    cleanup.restoreFocus = restoreFocus;
+    attachmentPickerCleanup = cleanup;
+    sourceInput?.click();
+  }
 
   const composerControlIsExpanded = () => !!form && (
     form.classList.contains('is-focused')
@@ -1728,17 +1813,11 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       composerModeTransitionTimer = 0;
     }
     if (animate) {
-      // The native keyboard can reveal a focused input well after the first
-      // visualViewport event. Keep those layout shifts out of the auto-hide
-      // path for the complete keyboard hand-off window.
-      const transitionIgnoreMs = reason === 'keyboard' ? 1800 : 420;
-      composerModeScrollIgnoreUntil = (window.performance?.now?.() || 0) + transitionIgnoreMs;
       composerModeTransitionTimer = window.setTimeout(() => {
         composerModeTransitionTimer = 0;
         modeLauncher.classList.remove('is-transitioning');
       }, 360);
     } else {
-      composerModeScrollIgnoreUntil = (window.performance?.now?.() || 0) + 180;
       modeLauncher.classList.remove('is-transitioning');
     }
     modeLauncher.dataset.pmChatModeReason = reason;
@@ -1829,8 +1908,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     holdComposerOpenForControl('attach', { restoreFocus: document.activeElement === input });
     if (!attachSheet) {
       pendingFileInputTarget = attachSheetTarget;
-      clearComposerControlHold();
-      fileInput?.click();
+      beginAttachmentPicker(fileInput, { restoreFocus: composerControlRestoreFocus });
       return;
     }
     // The new-chat direction controls should not compete with the radial
@@ -1839,6 +1917,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     closeTargetPopover?.();
     contextDock?.classList.add('pm-attach-popover-open');
     attachSheet.dataset.pmAttachTarget = attachSheetTarget;
+    document.body.classList.add('pm-chat-attachment-open');
     attachSheet.classList.toggle('voice', attachSheetTarget === 'voice');
     attachSheet.hidden = false;
     attachBtn?.setAttribute('aria-expanded', 'true');
@@ -1864,8 +1943,8 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       // keyboard changes the composer position, so derive the vertical orbit
       // from the measured owner instead of using a fixed screen coordinate.
       const aboveComposer = Math.max(0, Math.round(anchorPageY - owner.top));
-      const lowerOrbitY = -Math.max(74, aboveComposer + 40);
-      const upperOrbitY = lowerOrbitY - 46;
+      const lowerOrbitY = -Math.max(52, aboveComposer + 18);
+      const upperOrbitY = lowerOrbitY - 22;
       // The main composer trigger is close to the left edge. A symmetric fan
       // would put the left item outside the phone, so open into the available
       // space. Mirror the same fan on the right edge and use a balanced fan in
@@ -1873,10 +1952,10 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
       const nearLeft = anchorPageX < 118;
       const nearRight = anchorPageX > viewportWidth - 118;
       const orbit = nearLeft
-        ? { files: [38, upperOrbitY], camera: [82, lowerOrbitY] }
+        ? { files: [24, upperOrbitY], camera: [91, lowerOrbitY] }
         : nearRight
-          ? { files: [-82, lowerOrbitY], camera: [-38, upperOrbitY] }
-          : { files: [-48, upperOrbitY], camera: [48, lowerOrbitY] };
+          ? { files: [-91, lowerOrbitY], camera: [-24, upperOrbitY] }
+          : { files: [-45, upperOrbitY], camera: [45, lowerOrbitY] };
       const setOrbit = (name, [x, y]) => {
         const angle = Math.atan2(y, x) * 180 / Math.PI;
         const length = Math.hypot(x, y);
@@ -1931,6 +2010,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   }
 
   function closeAttachSheet() {
+    document.body.classList.remove('pm-chat-attachment-open');
     if (!attachSheet) {
       if (composerControlHold === 'attach') clearComposerControlHold();
       return;
@@ -1973,6 +2053,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   });
 
   let cameraStream = null;
+  let cameraRestoreComposerFocus = false;
   let cameraFacingMode = 'environment';
   let cameraTorchEnabled = false;
   let cameraOpening = false;
@@ -2445,7 +2526,9 @@ void main() {
     }
   }
 
-  function stopCameraCapture() {
+  function stopCameraCapture({ restoreComposerFocus = true } = {}) {
+    const shouldRestoreComposer = restoreComposerFocus && cameraRestoreComposerFocus;
+    if (restoreComposerFocus) cameraRestoreComposerFocus = false;
     if (cameraPairScanTimer) cancelAnimationFrame(cameraPairScanTimer);
     cameraPairScanTimer = null;
     cameraPairScanDetector = null;
@@ -2487,17 +2570,26 @@ void main() {
     cameraShutter?.removeAttribute('disabled');
     stopCameraRealtimeOrb();
     stopVoiceCameraFrameCache();
+    if (shouldRestoreComposer) {
+      setTimeout(() => {
+        focusComposerAfterNativeUi({ releaseHold: 'camera' });
+      }, 200);
+    }
   }
 
   async function openCameraCapture(options = {}) {
     const target = String(options.target || 'chat').trim() || 'chat';
+    const restoreComposerFocus = target === 'chat'
+      && (document.activeElement === input || composerControlRestoreFocus || cameraRestoreComposerFocus);
     closeAttachSheet();
     if (!navigator.mediaDevices?.getUserMedia) {
       pmToast('Camera preview is not available in this browser.', 'error');
       return;
     }
     if (!cameraCapture || !cameraVideo) return;
-    stopCameraCapture();
+    stopCameraCapture({ restoreComposerFocus: false });
+    cameraRestoreComposerFocus = restoreComposerFocus;
+    if (restoreComposerFocus) holdComposerOpenForControl('camera', { restoreFocus: true });
     cameraCaptureOptions = {
       target,
       onCapture: typeof options.onCapture === 'function' ? options.onCapture : null,
@@ -3393,6 +3485,47 @@ void main() {
       const recoveryFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestAssistantTurn, recoveryClientRequestId);
       let aiTurn = _findMobileRecoverableAssistantTurn(activeThread, recoveryClientRequestId)
         || (recoveryFallbackMatchesRequest ? latestAssistantTurn : null);
+      // The source/continuation link is deliberately non-enumerable and is
+      // lost by cache serialization. Restore it from durable workflow rows
+      // before any checkpoint or replay frame can target the frozen source.
+      const latestSteerIndex = [...activeThread].findLastIndex((turn) => turn?.role === 'user'
+        && String(turn.workflowPart || '') === 'interruption'
+        && /^chat_steer_/i.test(String(turn.workflowGroupId || '')));
+      let recoverySteerBoundary = null;
+      if (status?.active && latestSteerIndex >= 0) {
+        const steerUser = activeThread[latestSteerIndex];
+        const groupId = String(steerUser.workflowGroupId || '');
+        const source = [...activeThread.slice(0, latestSteerIndex)].reverse().find((turn) => turn?.role === 'ai'
+          && String(turn.workflowGroupId || '') === groupId
+          && String(turn.workflowPart || '') === 'before_interruption');
+        let continuation = activeThread.slice(latestSteerIndex + 1).find((turn) => turn?.role === 'ai'
+          && String(turn.workflowGroupId || '') === groupId
+          && String(turn.workflowPart || '') === 'interruption_response');
+        const hasCompletedReply = activeThread.slice(latestSteerIndex + 1).some((turn) => turn?.role === 'ai'
+          && turn.streaming !== true && _mobileAssistantHasVisibleAnswer(turn));
+        if (source && !continuation && !hasCompletedReply) {
+          continuation = {
+            role: 'ai', messageId: `${groupId}:continuation`, streaming: true,
+            timestamp: Number(steerUser.timestamp || Date.now()) || Date.now(),
+            workStartedAt: Number(steerUser.timestamp || Date.now()) || Date.now(),
+            body: { sender: 'Prometheus', text: '' }, content: '',
+            processEntries: [], liveTraceEntries: [], suppressWorkTimer: true,
+            workflowGroupId: groupId, workflowPart: 'interruption_response',
+            workflowLabel: 'Response after steer',
+            workflowBoundarySeq: steerUser.workflowBoundarySeq,
+            workflowStreamId: steerUser.workflowStreamId,
+            _clientRequestId: source._clientRequestId || recoveryClientRequestId,
+          };
+          activeThread.splice(latestSteerIndex + 1, 0, continuation);
+        }
+        const steerRequestId = String(source?._clientRequestId || continuation?._clientRequestId || '').trim();
+        if (source && continuation && (!recoveryClientRequestId
+          || !steerRequestId || steerRequestId === recoveryClientRequestId)) {
+          _setMobileChatSteerContinuationTurn(source, continuation);
+          aiTurn = continuation;
+          recoverySteerBoundary = steerUser;
+        }
+      }
       // A successful status request proves that the mobile client is connected
       // again, whether the run is still active or has already completed.
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
@@ -3641,7 +3774,7 @@ void main() {
         const checkpointProcessLog = Array.isArray(status?.run?.checkpoint?.processEntries)
           ? status.run.checkpoint.processEntries
           : [];
-        const activeRunProcessLog = [
+        const activeRunProcessLog = recoverySteerBoundary ? [] : [
           ...checkpointProcessLog,
           ..._filterMobileProcessEntriesForActiveRun(recoveredSessionProcessLog, aiTurn, status, remembered),
         ];
@@ -3719,6 +3852,7 @@ void main() {
         try {
           for (const frame of events) {
             if (!isCurrentRecoveryTarget()) return;
+            if (!mobileReplayFrameAfterSteer(frame, recoverySteerBoundary, replayStreamId)) continue;
             const applied = applyMobileChatStreamEvent(aiTurn, replayFrameToEvent(frame));
             if (applied === 'final' || applied === 'done' || applied === 'error') {
               terminal = applied;
@@ -3790,6 +3924,11 @@ void main() {
       const inactiveFallbackMatchesRequest = canRecoverMobileStreamingTurn(latestLocalAssistant, inactiveRecoveryClientRequestId);
       let localAiTurn = _findMobileRecoverableAssistantTurn(localThread, inactiveRecoveryClientRequestId)
         || (inactiveFallbackMatchesRequest ? latestLocalAssistant : null);
+      const inactiveSteerUser = localAiTurn?.workflowPart === 'interruption_response'
+        ? [...localThread].reverse().find((turn) => turn?.role === 'user'
+          && String(turn.workflowGroupId || '') === String(localAiTurn.workflowGroupId || '')
+          && String(turn.workflowPart || '') === 'interruption')
+        : null;
       const replayStillActive = replay?.active === true || replay?.stream?.active === true;
       if (!isCurrentRecoveryTarget()) return;
       if (localAiTurn && replayEvents.length) {
@@ -3803,6 +3942,7 @@ void main() {
         try {
           for (const frame of replayEvents) {
             if (!isCurrentRecoveryTarget()) return;
+            if (!mobileReplayFrameAfterSteer(frame, inactiveSteerUser, replay?.stream?.streamId)) continue;
             const applied = applyMobileChatStreamEvent(localAiTurn, replayFrameToEvent(frame));
             if (applied === 'final' || applied === 'done' || applied === 'error') {
               terminal = applied;
@@ -4337,43 +4477,39 @@ void main() {
 
     if (isUpwardScroll && scrollTop <= 80) loadOlderMobileMessages();
   };
-  const composerModeScrollTarget = _mobileChatScrollTarget(body);
-  const composerModeCanAutoHide = () => {
-    if (!composerModeOpen || !form || form.classList.contains('is-voice-active')) return false;
-    const keyboardOpen = document.body?.classList?.contains('pm-keyboard-open')
-      || page.querySelector('.pm-app')?.classList?.contains('pm-keyboard-open');
-    const keyboardFocusHandoff = _pmKbFocusActive
-      || document.activeElement === input
-      || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
-    // A delayed iOS focus/viewport pass can briefly remove the CSS keyboard
-    // marker. Focus ownership is the stronger signal and must also suppress
-    // auto-hide, otherwise that layout shift closes the composer underneath
-    // the keyboard.
-    if (keyboardOpen || keyboardFocusHandoff) return false;
-    return !form.classList.contains('has-text')
-      && !form.classList.contains('has-attachments')
-      && !form.classList.contains('has-pending-question');
+  let historyTouchStart = null;
+  const composerHasDraftContent = () => !!(
+    String(_pmGetComposerValue(input) || '').trim()
+    || getPendingAttachments().length
+    || pmSelectedComposerSkillIds?.length
+    || pmSelectedComposerSkillIds?.size
+    || pmSelectedComposerSkills?.length
+    || pmSelectedComposerSkills?.size
+    || form?.classList.contains('has-pending-question')
+  );
+  const onHistoryTouchStart = (event) => {
+    const touch = event.touches?.[0];
+    historyTouchStart = touch && composerModeOpen
+      ? { x: touch.clientX, y: touch.clientY }
+      : null;
   };
-  const onComposerModeScrollIntent = () => {
-    // Opening the composer on iOS can move the document by a few pixels while
-    // Safari reveals the focused field. That is layout work, not a user's
-    // upward scroll. Require a recent gesture before allowing auto-hide.
-    composerModeScrollIntentUntil = (window.performance?.now?.() || 0) + 900;
+  const onHistoryTouchMove = (event) => {
+    if (!historyTouchStart || !composerModeOpen) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    const dx = touch.clientX - historyTouchStart.x;
+    const dy = touch.clientY - historyTouchStart.y;
+    if (dy < 48 || Math.abs(dx) > Math.abs(dy) * .7) return;
+    historyTouchStart = null;
+    if (composerHasDraftContent()
+      || attachSheet?.classList.contains('open')
+      || ['pm-mobile-overlay-open', 'pm-chat-voice-active', 'pm-camera-open']
+        .some((name) => document.body.classList.contains(name))) return;
+    input?.blur();
+    setChatComposerMode(false, { reason: 'history-scroll' });
+    _releaseComposerKeyboard();
   };
-  const onComposerModeScroll = () => {
-    const scrollTop = Number(composerModeScrollTarget?.scrollTop || 0);
-    const delta = scrollTop - composerModeLastScrollTop;
-    composerModeLastScrollTop = scrollTop;
-    if (delta >= -2) return;
-    if ((window.performance?.now?.() || 0) < composerModeScrollIgnoreUntil) return;
-    if ((window.performance?.now?.() || 0) > composerModeScrollIntentUntil) return;
-    if (!composerModeCanAutoHide()) return;
-    setChatComposerMode(false, {
-      animate: true,
-      preserveScroll: true,
-      reason: 'scroll',
-    });
-  };
+  const onHistoryTouchEnd = () => { historyTouchStart = null; };
   const onLoadOlderClick = (event) => {
     const button = event.target?.closest?.('[data-pm-load-older]');
     if (!button) return;
@@ -4403,24 +4539,23 @@ void main() {
   window.addEventListener('scroll', syncBackgroundDockOnScroll, { passive: true });
   body?.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
   document.addEventListener('scroll', maybeLoadOlderOnScroll, { passive: true });
-  const composerModeScrollIntentOptions = { passive: true };
-  for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
-    composerModeScrollTarget?.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-    if (composerModeScrollTarget !== body) document.addEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-  }
-  composerModeScrollTarget?.addEventListener('scroll', onComposerModeScroll, { passive: true });
-  if (composerModeScrollTarget !== body) document.addEventListener('scroll', onComposerModeScroll, { passive: true });
+  body?.addEventListener('touchstart', onHistoryTouchStart, { passive: true });
+  body?.addEventListener('touchmove', onHistoryTouchMove, { passive: true });
+  body?.addEventListener('touchend', onHistoryTouchEnd, { passive: true });
+  body?.addEventListener('touchcancel', onHistoryTouchEnd, { passive: true });
   threadEl?.addEventListener('click', onLoadOlderClick);
   scrollLatestBtn?.addEventListener('click', jumpToLatest);
   requestAnimationFrame(updateScrollLatestButton);
 
   function resizeSideInput() {
     if (!sideInput) return;
+    sideComposer?.classList.toggle('has-text', !!String(sideInput.value || '').trim());
     const maxHeight = Number(sideInput.dataset.maxHeight || 148);
     sideInput.style.height = 'auto';
     const nextHeight = Math.min(sideInput.scrollHeight || 0, maxHeight);
     sideInput.style.height = `${Math.max(0, nextHeight)}px`;
     sideInput.style.overflowY = sideInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    requestAnimationFrame(syncMobileSideSheetViewport);
   }
 
   function _mobileBackgroundAgentDetailRecord(id) {
@@ -4458,6 +4593,12 @@ void main() {
     const rawType = String(entry.type || entry.kind || '').trim().toLowerCase();
     const type = String(normalizedEntry.type || normalizedEntry.kind || rawType).trim().toLowerCase();
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : {};
+    if (type === 'vision' && (normalizedEntry.preview || extra.preview)) {
+      const preview = normalizedEntry.preview || extra.preview;
+      if (message.liveTraceEntries?.some(item => item.type === 'vision' && item.preview?.dataUrl === preview.dataUrl && item.text === text)) return false;
+      _appendMobileVisionTrace(message, { ...extra, label: text, preview, previewTitle: normalizedEntry.previewTitle });
+      return true;
+    }
     if (_isMobileReasoningSummaryTraceEntry(entry) || _isMobileReasoningSummaryTraceEntry(normalizedEntry)) {
       return _setMobileLiveProgressNarration(message, text);
     }
@@ -4635,16 +4776,37 @@ void main() {
 
   function _mergeMobileBackgroundAgentSessionSnapshot(lane, session) {
     if (!lane?.message || !session || typeof session !== 'object') return false;
+    const durableSteers = (Array.isArray(session.history) ? session.history : [])
+      .filter((turn) => turn?.role === 'user'
+        && String(turn?.messageKind || '') === 'background_agent_steer'
+        && String(turn?.backgroundAgentId || lane.id) === String(lane.id))
+      .map((turn) => ({
+        id: String(turn.messageId || turn.id || '').replace(/^background_steer_/, ''),
+        content: String(turn.content || ''),
+        timestamp: Number(turn.timestamp || 0) || Date.now(),
+        streamId: String(turn.streamId || '').trim(),
+        seq: Number(turn.seq || 0) || 0,
+        source: String(turn.source || '').trim(),
+        actor: String(turn.actor || '').trim(),
+      }));
+    const priorSteerCount = Array.isArray(lane.steerMessages) ? lane.steerMessages.length : 0;
+    lane.steerMessages = mergeBackgroundAgentSteerMessages(lane.steerMessages, durableSteers);
     const entries = (Array.isArray(session.processLog) ? session.processLog : [])
       .map(_normalizeMobileProcessEntry)
       .filter(Boolean);
-    let changed = false;
+    let changed = lane.steerMessages.length !== priorSteerCount;
     for (const entry of entries) {
       const type = String(entry?.type || 'info').trim() || 'info';
       const text = String(entry?.text || entry?.content || entry?.message || '').trim();
       if (!text) continue;
       const before = Array.isArray(lane.message.processEntries) ? lane.message.processEntries.length : 0;
       const extra = entry.extra || entry;
+      if (extra.event === 'progress_state' && extra.source === 'declared' && Array.isArray(extra.items)) {
+        // Replay the explicit plan from a durable checkpoint after reconnect.
+        lane.plan = { steps: extra.items.map(item => ({ text: String(item.text || item.label || ''), status: item.status || 'pending' })), activeIndex: Number(extra.activeIndex ?? -1) };
+        changed = true;
+        continue;
+      }
       const isReasoningSummary = _isMobileReasoningSummaryTraceEntry(entry);
       const processType = isReasoningSummary ? 'think' : type;
       const processExtra = isReasoningSummary
@@ -4767,6 +4929,7 @@ void main() {
     if (!cleanId || !record) return;
     sideState.backgroundAgentId = cleanId;
     sideState.backgroundTraceExpanded = null;
+    sideState.backgroundPlanOpen = false;
     sideState.link = null;
     sideState.thread = [];
     sideState.sideThreadRendered = false;
@@ -4775,7 +4938,9 @@ void main() {
     if (sideSubtitleEl) {
       const status = String(record.status || 'running').toLowerCase();
       const statusLabel = status === 'in_progress' ? 'running' : status === 'timed_out' ? 'timed out' : status;
-      sideSubtitleEl.textContent = `Background work · ${statusLabel}`;
+      sideSubtitleEl.textContent = record.model
+        ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort)
+        : `Model loading · ${statusLabel}`;
     }
     const detailStatus = String(record.status || 'running').toLowerCase();
     const detailRunning = ['queued', 'running', 'in_progress'].includes(detailStatus);
@@ -4791,29 +4956,62 @@ void main() {
     resizeSideInput();
   }
 
+  function syncMobileSideSheetViewport() {
+    if (!sideSheet?.classList.contains('open')) return;
+    const bounds = sideSheet.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const visibleTop = Number(viewport?.offsetTop || 0);
+    const visibleBottom = visibleTop + Number(viewport?.height || window.innerHeight);
+    const headerBottom = page.querySelector('.pm-header')?.getBoundingClientRect().bottom || visibleTop + 64;
+    const keyboardVisible = typeof document !== 'undefined' && document.activeElement === sideInput
+      && Number(window.innerHeight || 0) - Number(viewport?.height || window.innerHeight) > 90;
+    sideSheet.style.setProperty('--pm-side-top', `${Math.max(0, headerBottom + 8 - bounds.top)}px`);
+    sideSheet.style.setProperty('--pm-side-bottom', `${keyboardVisible ? Math.max(0, bounds.bottom - visibleBottom) : 0}px`);
+    sideSheet.style.setProperty('--pm-side-composer-height', `${Math.max(54, Math.round(sideComposer?.getBoundingClientRect().height || 54))}px`);
+  }
+
+  function renderMobileSideSheetPlan(record) {
+    const host = page.querySelector('#pm-mobile-side-plan');
+    if (!host) return;
+    const steps = Array.isArray(record?.plan?.steps) ? record.plan.steps : [];
+    host.hidden = !steps.length;
+    if (!steps.length) { host.innerHTML = ''; return; }
+    const done = steps.filter(step => ['done', 'completed', 'skipped'].includes(step.status)).length;
+    const open = sideState.backgroundPlanOpen === true;
+    host.innerHTML = `${open ? `<div class="pm-main-plan-popover" role="region" aria-label="Plan steps"><div class="pm-main-plan-steps">${steps.map((step, index) => `<div class="pm-main-plan-step ${escapeHtml(step.status || 'pending')}"><span>${['done', 'completed', 'skipped'].includes(step.status) ? '&#10003;' : index + 1}</span><p>${escapeHtml(step.text)}</p></div>`).join('')}</div></div>` : ''}
+      <button type="button" class="pm-main-plan-pill" aria-expanded="${open}" aria-label="${done} of ${steps.length} plan steps"><span class="pm-main-plan-ring" style="--pm-plan-progress:${Math.round(done / steps.length * 100)}%" aria-hidden="true"><i></i></span><strong>${done} of ${steps.length}</strong></button>`;
+    host.querySelector('button').onclick = () => { sideState.backgroundPlanOpen = !open; renderMobileSideSheetPlan(record); };
+  }
+
   function renderMobileSideSheet() {
+    syncMobileSideSheetViewport();
     if (!sideThreadEl) return;
     const openBackgroundId = String(sideState.backgroundAgentId || '').trim();
     if (openBackgroundId && sideState.sideThreadRendered) {
-      const renderedBackgroundMessage = sideThreadEl.querySelector('.pm-agent-chat-msg[data-pm-background-agent-message]');
-      if (renderedBackgroundMessage
-        && String(renderedBackgroundMessage.getAttribute('data-pm-background-agent-message') || '').trim() === openBackgroundId) {
+      const renderedBackgroundMessages = sideThreadEl.querySelectorAll('.pm-agent-chat-msg[data-pm-background-agent-message]');
+      renderedBackgroundMessages.forEach((renderedBackgroundMessage) => {
+        if (String(renderedBackgroundMessage.getAttribute('data-pm-background-agent-message') || '').trim() !== openBackgroundId) return;
         const renderedTimer = renderedBackgroundMessage.querySelector('[data-expandable="trace"]');
         // A live background trace starts open by default so the user can see
         // the agent work. Only carry that choice into the completed answer if
         // the user explicitly toggled the disclosure; otherwise completion
         // should collapse the activity drawer like the main chat does.
         if (renderedTimer && renderedTimer.getAttribute('data-pm-trace-user-toggle') === '1') {
-          sideState.backgroundTraceExpanded = renderedTimer.classList.contains('expanded');
+          const expanded = renderedTimer.classList.contains('expanded');
+          const segmentKey = String(renderedBackgroundMessage.getAttribute('data-pm-background-segment') || 'main');
+          sideState.backgroundTraceExpandedBySegment[segmentKey] = expanded;
+          sideState.backgroundTraceExpanded = expanded;
         }
-      }
+      });
     }
     const shouldFollowTail = !sideState.sideThreadRendered || _mobileSideThreadNearBottom(sideThreadEl);
     const backgroundRecord = sideState.backgroundAgentId
       ? _mobileBackgroundAgentDetailRecord(sideState.backgroundAgentId)
       : null;
+    renderMobileSideSheetPlan(backgroundRecord);
     sideSheet?.classList.toggle('background-agent-detail-mode', !!backgroundRecord);
     if (backgroundRecord) {
+      if (sideSubtitleEl && backgroundRecord.model) sideSubtitleEl.textContent = formatModelWithReasoning(backgroundRecord.model, backgroundRecord.providerId, backgroundRecord.reasoningEffort);
       const status = String(backgroundRecord.status || 'running').toLowerCase();
       const running = ['queued', 'running', 'in_progress'].includes(status);
       const agentName = String(backgroundRecord.agentName || 'Background agent');
@@ -4835,7 +5033,15 @@ void main() {
             content,
             body: { ...(steer?.body || {}), text: content },
             timestamp: Number(steer?.timestamp || Date.now()) || Date.now(),
+            seq: Number(steer?.seq || 0) || 0,
+            streamId: String(steer?.streamId || '').trim(),
+            actor: String(steer?.actor || 'User').trim(),
+            source: String(steer?.source || '').trim(),
             channelLabel: 'steer',
+            workflowGroupId: String(steer?.workflowGroupId || `background_steer_${steer?.id || index}`),
+            workflowPart: 'interruption',
+            workflowLabel: String(steer?.workflowLabel || '').trim()
+              || (steer?.actor === 'Prometheus' ? 'Prometheus steered agent' : 'Message sent as steer'),
             _backgroundSteerRowKey: `background:${backgroundRecord.id}:steer:${String(steer?.id || index)}`,
           };
         })
@@ -4848,18 +5054,33 @@ void main() {
             `background-prompt:${backgroundRecord.id}`,
           )
         : '';
-      const historyHtml = steerHistory.map((steer, index) => _renderChatMessageHtml(
-        steer,
-        index,
-        steer._backgroundSteerRowKey,
-        `background-steer:${backgroundRecord.id}:${String(steer._backgroundSteerRowKey || index)}`,
-      )).join('');
-      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${promptHtml}${historyHtml}${_renderMobileAgentChatBubble(message, {
-        sender: agentName,
-        live: running,
-        keepLiveTraceVisible: true,
-        backgroundAgentId: backgroundRecord.id,
-      })}`);
+      const timeline = splitBackgroundAgentTimeline(message, steerHistory, backgroundRecord.streamId);
+      const timelineHtml = timeline.segments.map((segment, index) => {
+        const segmentKey = index === timeline.steers.length ? 'latest' : `before:${timeline.steers[index]?._backgroundSteerRowKey || index}`;
+        const hasActivity = segment.processEntries.length || segment.liveTraceEntries.length
+          || String(segment.content || '').trim();
+        const segmentHtml = (hasActivity || index === timeline.steers.length)
+          ? _renderMobileAgentChatBubble({
+              ...segment,
+              traceExpanded: sideState.backgroundTraceExpandedBySegment[segmentKey]
+                ?? (index === timeline.steers.length ? sideState.backgroundTraceExpanded : false),
+            }, {
+              sender: agentName,
+              live: running && index === timeline.steers.length,
+              keepLiveTraceVisible: true,
+              backgroundAgentId: backgroundRecord.id,
+              backgroundSegmentKey: segmentKey,
+              backgroundActions: index === timeline.steers.length,
+            })
+          : '';
+        const steer = timeline.steers[index];
+        const steerHtml = steer ? _renderChatMessageHtml(
+          steer, index, steer._backgroundSteerRowKey,
+          `background-steer:${backgroundRecord.id}:${String(steer._backgroundSteerRowKey || index)}`,
+        ) : '';
+        return `${segmentHtml}${steerHtml}`;
+      }).join('');
+      _reconcileMobileBackgroundAgentSideThread(sideThreadEl, `${promptHtml}${timelineHtml}`);
     } else {
       const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
         .map((msg, index) => ({ msg, index }))
@@ -4873,7 +5094,7 @@ void main() {
     _wireMobileChatEnhancements(sideThreadEl);
     // Background details use a separate reconciled thread, so install the
     // delegated work-timer disclosure listener here as well as on main chat.
-    _installMobileTimestampReveal(sideThreadEl, () => {});
+    _installMobileTimestampReveal(sideThreadEl, handleMobileSideMessageAction);
     if (shouldFollowTail) requestAnimationFrame(() => {
       if (sideThreadEl) sideThreadEl.scrollTop = sideThreadEl.scrollHeight;
     });
@@ -5163,19 +5384,26 @@ void main() {
       if (sideState.busy) return;
       setMobileSideBusy(true);
       try {
-        await sendMobileBackgroundSteer(backgroundId, msg);
+        const steerResult = await sendMobileBackgroundSteer(backgroundId, msg);
         const steer = {
-          id: `background_steer_${backgroundId}_${Date.now()}`,
+          id: String(steerResult?.eventId || `background_steer_${backgroundId}_${Date.now()}`),
           role: 'user',
           content: msg,
-          timestamp: Date.now(),
+          timestamp: Number(steerResult?.timestamp || Date.now()) || Date.now(),
+          streamId: String(steerResult?.streamId || '').trim(),
+          seq: Number(steerResult?.seq || 0) || 0,
+          source: 'web_background_agent_chat',
+          actor: 'User',
           channelLabel: 'steer',
-          workflowGroupId: `chat_steer_background_${backgroundId}`,
+          workflowGroupId: `background_steer_${String(steerResult?.eventId || backgroundId)}`,
           workflowPart: 'interruption',
+          workflowLabel: 'Message sent as steer',
         };
         const lane = _mobileBackgroundSpawnLanes()[backgroundId];
         if (lane) {
-          if (!lane.steerMessages.some((item) => item.content === msg && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000)) {
+          if (!lane.steerMessages.some((item) => item.id === steer.id
+            || ((!item.seq || !steer.seq) && item.content === msg
+              && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000))) {
             lane.steerMessages.push(steer);
             lane.steerMessages = lane.steerMessages.slice(-80);
             lane.updatedAt = Date.now();
@@ -5337,6 +5565,11 @@ void main() {
   function _pmKbSetComposerViewportStyles(bottomPx) {
     const composer = _pmKbActiveComposer();
     if (!composer) return;
+    if (sideSheet?.classList.contains('open')) {
+      _pmKbComposerViewportProperties.forEach(property => composer.style.removeProperty(property));
+      syncMobileSideSheetViewport();
+      return;
+    }
     const layoutHeight = Math.max(
       Number(window.innerHeight || 0),
       Number(document.documentElement?.clientHeight || 0),
@@ -5375,6 +5608,7 @@ void main() {
   }
   let _pmKbComposerRepairRaf = 0;
   function _pmKbScheduleComposerPositionRepair() {
+    if (sideSheet?.classList.contains('open')) { syncMobileSideSheetViewport(); return; }
     if (_pmKbComposerRepairRaf || !_pmKbFocusActive || !_pmKbViewportMode) return;
     _pmKbComposerRepairRaf = requestAnimationFrame(() => {
       _pmKbComposerRepairRaf = 0;
@@ -5411,7 +5645,7 @@ void main() {
     });
   }
   function _pmKbActiveComposer() {
-    const sideFocused = sideSheet?.classList?.contains('open') && document.activeElement === sideInput;
+    const sideFocused = sideSheet?.classList?.contains('open');
     return sideFocused ? (sideInput?.closest?.('.pm-composer') || form) : form;
   }
   function _pmKbPinScroll() {
@@ -5428,6 +5662,7 @@ void main() {
     } catch {}
   }
   function _applyKeyboardOffset() {
+    syncMobileSideSheetViewport();
     _pmKbRaf = 0;
     const vv = window.visualViewport;
     if (!_pmKbApp) return;
@@ -6284,6 +6519,16 @@ void main() {
     const index = Number(button?.getAttribute?.('data-msg-index'));
     if (!action || !Number.isFinite(index)) return;
     _pressMobileSideAction(button);
+    if (sideState.backgroundAgentId) {
+      const record = _mobileBackgroundAgentDetailRecord(sideState.backgroundAgentId);
+      const steer = index >= 0 && Array.isArray(record?.steerMessages)
+        ? record.steerMessages[index]
+        : null;
+      if (action === 'copy' && steer) {
+        return copyMobileTextValue(String(steer.content || ''), 'Steer message copied');
+      }
+      return;
+    }
     if (action === 'copy') return copyMobileTextValue(_mobileMessageCopyText(sideState.thread?.[index]));
     if (action === 'speak') return speakMobileSideMessage(index);
     if (action === 'fork') return forkMobileSideConversationFromMessage(index);
@@ -7439,7 +7684,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // message through a stale composer state. Probe failures update the
     // target status and remain fail-closed below.
     try {
-      selectedGateway = await probeGateway(selectedGateway);
+      selectedGateway = await probeGateway(selectedGateway, { retryTransient: true });
     } catch {
       selectedGateway = getGateway(selectedGateway.gatewayId) || selectedGateway;
     }
@@ -7544,6 +7789,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       const routedActualSessionId = targetNamespacedId(selectedGateway?.gatewayId, actualSessionId) || actualSessionId;
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(routedActualSessionId)}`); } catch {}
       requestedSession = actualSessionId;
+      saveComposerDraft(draftKeyFor(MOBILE_CHAT_SESSION_ID), '');
       __pmVoice.targetSessionId = actualSessionId;
       __pmVoice.targetSessionLabel = _currentChatVoiceSessionLabel();
       __pmVoice.targetSessionChannel = 'mobile';
@@ -7563,6 +7809,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
+    if (!fromQueue && String(input?.value || '').trim() === msg) resetComposerInput();
     const activeTurnStartedAt = Date.now();
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
     __pmChat.sentClientRequestIds[actualSessionId] = clientRequestId;
@@ -7823,6 +8070,18 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       renderThreadNow();
     };
 
+    let requestAccepted = false;
+    const restoreRejectedMessage = () => {
+      if (requestAccepted || fromQueue || !msg) return;
+      const key = draftKeyFor(actualSessionId);
+      if (readComposerDraft(key)) return;
+      saveComposerDraft(key, msg);
+      if (requestedSession !== actualSessionId || !input || input.value.trim()) return;
+      input.value = msg;
+      resizeComposerInput();
+      _pmUpdateComposerRichPreview(page, input);
+      updateComposerSubmitState();
+    };
     const stream = streamChat({
       message: messageForApi,
       sessionId: actualSessionId,
@@ -7832,6 +8091,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       excludedSkillIds: excludedSkillIds.length ? excludedSkillIds : undefined,
       selectedSkillIds: selectedSkillIds.length ? selectedSkillIds : undefined,
     }, {
+      onAccepted: () => { requestAccepted = true; },
       onEvent: (evt) => {
         hideReconnectingStatus();
         window.__pmMobileContextStreamEvent?.(evt, { sessionId: actualSessionId });
@@ -7840,6 +8100,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       },
       onError: (err) => {
         if (stoppedByUser || err?.name === 'AbortError') return;
+        // A 409 is queued behind the server's already-active turn below, so
+        // restoring it as a draft would offer the same message twice.
+        if (err?.chatPresentation?.key !== 'session-turn-active') restoreRejectedMessage();
         const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
         const message = err?.message || 'Chat error';
         _finishMobileVisualStreamText(targetAiTurn);
@@ -8346,6 +8609,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   };
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
+    if (input) saveComposerDraft(draftKeyFor(), input.value);
+    attachmentPickerCleanup?.();
+    attachmentPickerCleanup = null;
     previousCleanup?.();
     releaseActiveChatRuntime();
     mobilePageDisposed = true;
@@ -8375,13 +8641,12 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     window.removeEventListener('scroll', syncBackgroundDockOnScroll);
     body?.removeEventListener('scroll', maybeLoadOlderOnScroll);
     document.removeEventListener('scroll', maybeLoadOlderOnScroll);
-    composerModeScrollTarget?.removeEventListener('scroll', onComposerModeScroll);
-    if (composerModeScrollTarget !== body) document.removeEventListener('scroll', onComposerModeScroll);
-    for (const eventName of ['touchstart', 'pointerdown', 'wheel']) {
-      composerModeScrollTarget?.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-      if (composerModeScrollTarget !== body) document.removeEventListener(eventName, onComposerModeScrollIntent, composerModeScrollIntentOptions);
-    }
+    body?.removeEventListener('touchstart', onHistoryTouchStart);
+    body?.removeEventListener('touchmove', onHistoryTouchMove);
+    body?.removeEventListener('touchend', onHistoryTouchEnd);
+    body?.removeEventListener('touchcancel', onHistoryTouchEnd);
     modeKeyboardButton?.removeEventListener('click', onChatModeKeyboardClick);
+    window.removeEventListener('pm-mobile-model-sheet-closed', onModelSheetClosed);
     modeVoiceButton?.removeEventListener('click', onChatModeVoiceClick);
     if (composerModeTransitionTimer) {
       window.clearTimeout(composerModeTransitionTimer);
@@ -8556,10 +8821,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     const selectedSkillIds = _pmNormalizeSelectedSkillIds(pmSelectedComposerSkillIds);
     const selectedSkillRefs = _pmNormalizeSelectedComposerSkillRefs(pmSelectedComposerSkills);
-    resetComposerInput();
     _pmClearActiveSlashCommand(page, input, { focus: false });
     updateComposerSubmitState();
-    sendMessage(text, { selectedSkillIds, selectedSkillRefs });
+    sendMessage(text, { selectedSkillIds, selectedSkillRefs }).catch((err) => {
+      const key = draftKeyFor();
+      if (!readComposerDraft(key)) saveComposerDraft(key, text);
+      if (input && !input.value.trim()) input.value = text;
+      resizeComposerInput();
+      updateComposerSubmitState();
+      pmToast(`Message could not be sent: ${err?.message || err}`, 'error');
+    });
   });
 
   // Haptic feedback on the orange send / voice-mode / abort button and the mic
@@ -8683,6 +8954,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   });
 
   input?.addEventListener('input', () => {
+    saveComposerDraft(draftKeyFor(), input.value);
     resizeComposerInput();
     _pmHandleSlashInput(page, input);
     _pmRenderSkillTriggerPill(page, input);
@@ -8693,6 +8965,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // composer instead of being left behind at their collapsed position.
     updateComposerExpandedState();
   });
+  if (input?.value) input.dispatchEvent(new Event('input', { bubbles: true }));
   input?.addEventListener('focus', updateComposerExpandedState);
   input?.addEventListener('blur', () => setTimeout(updateComposerExpandedState, 0));
   input?.addEventListener('scroll', () => _pmUpdateComposerRichPreview(page, input));
@@ -8786,7 +9059,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   });
   sideInput?.addEventListener('input', () => {
     resizeSideInput();
+    sideComposer?.classList.toggle('has-text', !!String(sideInput.value || '').trim());
     setMobileSideBusy(sideState.busy);
+  });
+  sideInput?.addEventListener('focus', () => {
+    sideComposer?.classList.add('is-focused');
+    resizeSideInput();
+    syncMobileSideSheetViewport();
+  });
+  sideInput?.addEventListener('blur', () => {
+    sideComposer?.classList.remove('is-focused');
+    syncMobileSideSheetViewport();
   });
   sideInput?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -8850,6 +9133,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   });
   attachSheetScrim?.addEventListener('click', closeAttachSheet);
   attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
+    btn.addEventListener('pointerdown', (event) => {
+      if (document.activeElement === input) event.preventDefault();
+    });
     btn.addEventListener('click', () => {
       const action = String(btn.getAttribute('data-pm-attach-action') || '');
       const target = String(attachSheetTarget || attachSheet?.dataset?.pmAttachTarget || 'chat');
@@ -8858,8 +9144,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         else openCameraCapture();
       } else if (action === 'files-photos') {
         pendingFileInputTarget = target === 'voice' ? 'voice' : 'chat';
+        const restoreFocus = target === 'chat' && (document.activeElement === input || composerControlRestoreFocus);
         closeAttachSheet();
-        fileInput?.click();
+        beginAttachmentPicker(fileInput, { restoreFocus });
       }
     });
   });
@@ -8906,6 +9193,32 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   };
   preserveComposerFocusOnPointer(attachBtn, 'attach');
   preserveComposerFocusOnPointer(micBtn, 'dictation');
+  const composerModelBadge = page.querySelector('.pm-composer-model-badge');
+  composerModelBadge?.addEventListener('pointerdown', (event) => {
+    if (document.activeElement === input) {
+      composerModelBadge.dataset.pmKeepKeyboard = '1';
+      holdComposerOpenForControl('model', { restoreFocus: true });
+      event.preventDefault();
+    }
+  });
+  composerModelBadge?.addEventListener('touchstart', () => {
+    if (document.activeElement === input) {
+      composerModelBadge.dataset.pmKeepKeyboard = '1';
+      holdComposerOpenForControl('model', { restoreFocus: true });
+    }
+  }, { passive: true });
+  const onModelSheetClosed = () => {
+    if (composerControlHold !== 'model') return;
+    clearComposerControlHold();
+    updateComposerExpandedState();
+    requestAnimationFrame(() => {
+      _scheduleKeyboardOffset();
+      _pmKbScheduleComposerPositionRepair();
+      updateChatComposerSpace();
+    });
+  };
+  window.addEventListener('pm-mobile-model-sheet-closed', onModelSheetClosed);
+  import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => refreshMobileModelBadge(false)).catch(() => {});
   attachSheet?.querySelectorAll('[data-pm-attach-action]').forEach((btn) => {
     btn.addEventListener('pointerdown', () => { try { pmHaptic?.(10); } catch {} });
   });
@@ -8995,10 +9308,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   window.addEventListener('pagehide', stopCameraCapture, { once: true });
   if (__pmChat.cameraVisibilityHandler) document.removeEventListener('visibilitychange', __pmChat.cameraVisibilityHandler);
   __pmChat.cameraVisibilityHandler = () => {
-    if (document.visibilityState === 'hidden') stopCameraCapture();
+    if (document.visibilityState === 'hidden' && !cameraOpening) stopCameraCapture();
   };
   document.addEventListener('visibilitychange', __pmChat.cameraVisibilityHandler);
   async function handleMobileAttachmentInputChange(sourceInput) {
+    if (attachmentPickerCleanup) restoreComposerAfterAttachmentPicker();
     const files = Array.from(sourceInput?.files || []).slice(0, 8);
     const target = String(pendingFileInputTarget || 'chat');
     pendingFileInputTarget = 'chat';

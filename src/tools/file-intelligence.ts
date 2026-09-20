@@ -60,6 +60,30 @@ export type GrepMatchRecord = {
   };
 };
 
+/** Large grep results default to a readable, bounded line listing. */
+export function formatGrepToolResult(
+  payload: { matches?: GrepMatchRecord[]; path_matches?: unknown[]; match_count?: number; match_count_observed?: number; returned_count?: number; truncated_count?: number; truncated_count_observed?: number; no_match_hints?: string[] },
+  requestedFormat?: unknown,
+): string {
+  const format = String(requestedFormat || 'auto').toLowerCase();
+  const matches = Array.isArray(payload.matches) ? payload.matches : [];
+  if (format === 'json' || (format !== 'compact' && matches.length < 8) || (payload.path_matches?.length && matches.length === 0)) {
+    return JSON.stringify(payload, null, 2);
+  }
+  const total = Number(payload.match_count ?? payload.match_count_observed ?? matches.length);
+  const truncated = Number(payload.truncated_count ?? payload.truncated_count_observed ?? Math.max(0, total - matches.length));
+  const lines = [`${matches.length} of ${total} matches${truncated > 0 ? ` (${truncated} omitted)` : ''}. Use format:"json" for detailed read hints.`];
+  for (const match of matches) {
+    const path = String(match.path || match.file || '').replace(/\r?\n/g, ' ');
+    const line = Number(match.line_number || match.line || 0);
+    const column = Number(match.column || 0);
+    const preview = String(match.text || match.match || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+    lines.push(`${path}:${line}${column > 0 ? `:${column}` : ''}: ${preview}`);
+  }
+  if (matches.length === 0 && payload.no_match_hints?.length) lines.push(...payload.no_match_hints.slice(0, 3));
+  return lines.join('\n');
+}
+
 export type FileIntelligence = {
   file: string;
   language: string;

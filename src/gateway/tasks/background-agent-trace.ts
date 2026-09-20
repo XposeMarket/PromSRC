@@ -26,6 +26,12 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     || eventType === 'reasoning_summary'
     || eventType === 'reasoning_delta'
     || source === 'reasoning_summary';
+  if (eventType === 'progress_state' && data?.source === 'declared' && Array.isArray(data.items)) {
+    return { type: 'info', actor: 'Prom', text: 'Plan updated', extra: { event: eventType, source: 'declared', items: data.items, activeIndex: data.activeIndex, total: data.total } };
+  }
+  if (eventType === 'vision_injected' && data?.preview?.dataUrl) {
+    return { type: 'vision', actor: 'Prom', text: String(data.label || 'Image preview'), preview: data.preview, previewTitle: data.previewTitle || data.preview.title, extra: { event: eventType, source, tool: data.tool, preview: data.preview } };
+  }
   if (!eventType || eventType === 'heartbeat' || eventType === 'token'
     || eventType === 'thinking_delta'
     // These packets describe provider setup and timing. The background agent
@@ -40,9 +46,12 @@ export function backgroundProcessEntryFromSseEvent(event: string, data: any): Re
     ...(data?.toolCallId || data?.tool_call_id ? { toolCallId: data.toolCallId || data.tool_call_id } : {}),
     ...(data?.error ? { error: true } : {}),
   };
-  // Match main-chat recovery: provider reasoning summaries are mutable status
-  // packets, not the actual user-visible commentary timeline.
-  if (isReasoningSummary || explicitlyPrivateReasoning) return null;
+  if (explicitlyPrivateReasoning) return null;
+  // Keep the public summary channel distinct from commentary during recovery.
+  if (isReasoningSummary) {
+    const text = backgroundTraceText(data?.text || data?.summary || data?.thinking);
+    return text ? { type: 'think', actor: 'Prom', text, extra: { ...baseExtra, source: 'reasoning_summary', visibility: 'summary', reasoningKind: 'summary' } } : null;
+  }
   if (eventType === 'token_narration_boundary') {
     const text = backgroundTraceText(data?.text || data?.message || data?.narration);
     return text ? {
@@ -117,13 +126,17 @@ export function appendBackgroundSseTrace(
     ...(streamId ? { streamId } : {}),
     ...(seq ? { seq } : {}),
     extra: raw.extra,
+    ...(raw.preview ? { preview: raw.preview, previewTitle: raw.previewTitle } : {}),
   };
   const previous = liveTraceEntries[liveTraceEntries.length - 1];
   if ((raw.type === 'think' || raw.type === 'preamble')
     && previous?.type === raw.type
+    && previous?.streamId === streamId
+    && Number(previous?.seq || 0) === seq - 1
     && String(previous.extra?.source || '').toLowerCase() === String(raw.extra?.source || '').toLowerCase()) {
     previous.text = `${String(previous.text || '')}${String(raw.text || '')}`.slice(-12_000);
     previous.time = at;
+    previous.seq = seq;
   } else {
     liveTraceEntries.push(trace);
     if (liveTraceEntries.length > 12_000) liveTraceEntries.splice(0, liveTraceEntries.length - 12_000);

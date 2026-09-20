@@ -14,6 +14,7 @@ const append = (type: string, data: Record<string, unknown> = {}) => {
 
 append('thinking_delta', { delta: 'private thought' });
 append('token', { delta: 'hello' });
+append('process_run_output', { runId: 'run_1', chunk: 'build progress' });
 append('model_stream_event', { event: { type: 'reasoning_delta', delta: 'detail' } });
 append('model_stream_event', { event: { type: 'tool_call_start', name: 'read_source' } });
 append('final', { text: 'done' });
@@ -21,12 +22,14 @@ append('final', { text: 'done' });
 assert.deepEqual(liveForConnectedClients.map((frame) => frame.type), [
   'thinking_delta',
   'token',
+  'process_run_output',
   'model_stream_event',
   'final',
 ]);
 assert.deepEqual(replay.map((frame) => frame.type), ['model_stream_event', 'final']);
 assert.equal(replay[0].data.event && (replay[0].data.event as any).type, 'tool_call_start');
 assert.equal(replay.some((frame) => frame.type === 'token'), false);
+assert.equal(replay.some((frame) => frame.type === 'process_run_output'), false);
 assert.equal(replay.some((frame) => frame.type === 'thinking_delta'), false);
 
 console.log('main-chat stream live-delivery regression: ok');

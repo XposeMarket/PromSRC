@@ -148,13 +148,17 @@ async function runProcessSupervisorCase(): Promise<void> {
   const storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prometheus-terminal-supervisor-store-'));
   try {
     const supervisor = new ProcessSupervisor(new ProcessRunStore(storeRoot));
-    const foreground = await supervisor.spawn({
+    let spawnResolved = false;
+    const foregroundPromise = supervisor.spawn({
       command: nodeCommand("require('fs').writeFileSync('foreground.txt','foreground')"),
       cwd: root,
       mode: 'foreground',
       workspacePath: root,
       trackWorkspaceChanges: true,
-    });
+    }).then((run) => { spawnResolved = true; return run; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(spawnResolved, false, 'workspace baseline must yield the gateway event loop before the shell starts');
+    const foreground = await foregroundPromise;
     const foregroundExit = await foreground.wait();
     assert.equal(foregroundExit.exitCode, 0, JSON.stringify(foregroundExit));
     assert.equal(foregroundExit.workspaceChanges?.[0]?.displayPath, 'foreground.txt');
@@ -170,6 +174,30 @@ async function runProcessSupervisorCase(): Promise<void> {
     assert.equal(backgroundExit.exitCode, 0, JSON.stringify(backgroundExit));
     assert.equal(backgroundExit.workspaceChanges?.[0]?.displayPath, 'background.txt');
     assert.equal(supervisor.get(background.runId)?.workspaceChanges?.[0]?.displayPath, 'background.txt');
+
+    let timerTicks = 0;
+    let worstTimerGapMs = 0;
+    let lastTimerAt = Date.now();
+    const timer = setInterval(() => {
+      const now = Date.now();
+      worstTimerGapMs = Math.max(worstTimerGapMs, now - lastTimerAt);
+      lastTimerAt = now;
+      timerTicks += 1;
+    }, 20);
+    const noisy = await supervisor.spawn({
+      command: nodeCommand("for (let i=0;i<1024;i++) process.stdout.write('x'.repeat(4096)); process.stdout.write('TAIL')"),
+      cwd: root,
+      mode: 'foreground',
+      trackWorkspaceChanges: false,
+    });
+    const noisyExit = await noisy.wait();
+    clearInterval(timer);
+    assert.equal(noisyExit.exitCode, 0, JSON.stringify(noisyExit));
+    assert.equal(noisyExit.stdoutTruncated, true, 'captured output should remain bounded');
+    assert.ok(noisyExit.stdout.endsWith('TAIL'), 'the captured tail must contain the latest output');
+    assert.ok(timerTicks > 0 && worstTimerGapMs < 1500,
+      `gateway timers should keep running during noisy terminal output (ticks=${timerTicks}, gap=${worstTimerGapMs}ms)`);
+    console.log(`[terminal-change-tracker] noisy output: ${timerTicks} gateway timer ticks, ${worstTimerGapMs}ms worst gap`);
 
     const failed = await supervisor.spawn({
       command: nodeCommand("require('fs').writeFileSync('failed-after-edit.txt','partial'); process.exit(7)"),

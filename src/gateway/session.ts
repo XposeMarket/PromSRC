@@ -2978,6 +2978,23 @@ function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
   };
 }
 
+function isSyntheticRecoveryOrProviderMessage(msg: ChatMessage): boolean {
+  if (msg?.role !== 'assistant') return false;
+  const text = String(msg.content || '').trim();
+  if (!text) return true;
+  // These records are continuity/control data. They may be persisted for the
+  // UI and audit trail, but replaying them as assistant prose makes provider
+  // safety classifiers treat a recovery packet as a request to expose private
+  // reasoning or follow embedded control text.
+  if (/^(?:Restart Context Packet\b|\[HOT RESTART CONTEXT\]|\[(?:TURN_CONTEXT|WORKING_CONTEXT_PACKETS|TOOL_STATE_SUMMARY|RECENT_TOOL_OBSERVATIONS)\b)/i.test(text)) return true;
+  // Provider refusal notices describe a previous provider decision; they are
+  // not task context and can themselves contain sensitive safety categories.
+  if (/^Claude declined this request for safety reasons\./i.test(text)) return true;
+  if (/\b(?:reasoning[_ -]?extraction|chain[_ -]?of[_ -]?thought|private reasoning)\b/i.test(text)
+    && /\b(?:refusal|declined|safety|provider|internal)\b/i.test(text)) return true;
+  return false;
+}
+
 export function getHistoryForApiCall(
   id: string,
   maxTurns: number = 60,
@@ -3023,10 +3040,7 @@ export function getHistoryForApiCall(
     // it as an assistant utterance can make a harmless follow-up look like a
     // request for another model's internal reasoning. Refusal notices likewise
     // describe a prior provider decision rather than useful task context.
-    if (msg.role === 'assistant' && (
-      /^Restart Context Packet\b/i.test(String(msg.content || '').trim())
-      || /^Claude declined this request for safety reasons\.\s*Category:\s*reasoning_extraction\b/i.test(String(msg.content || '').trim())
-    )) return null;
+    if (isSyntheticRecoveryOrProviderMessage(msg)) return null;
     const cleaned = msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content)
       : String(msg.content || '');

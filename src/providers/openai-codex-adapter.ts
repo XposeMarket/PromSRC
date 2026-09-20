@@ -99,6 +99,23 @@ function isUnsupportedChatgptAccountCodexModel(status: number, bodyText: string)
   return status === 400 && /not supported when using Codex with a ChatGPT account/i.test(String(bodyText || ''));
 }
 
+/** Only expose the structured provider message, never an arbitrary response body. */
+export function codexHttpErrorDetail(bodyText: string): string {
+  try {
+    const parsed = JSON.parse(bodyText);
+    const message = parsed?.error?.message;
+    if (typeof message !== 'string') return '';
+    return message
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+      .replace(/\bsk-[A-Za-z0-9_-]+\b/g, '[redacted]')
+      .trim()
+      .slice(0, 300);
+  } catch {
+    return '';
+  }
+}
+
 function writeCodexModelRuntimeStatus(status: {
   configuredModel: string;
   requestedModel: string;
@@ -481,7 +498,8 @@ export class OpenAICodexAdapter implements LLMProvider {
             ok: false,
             error: `HTTP_${response.status}`,
           });
-          const providerError = new Error(`openai_codex API error ${response.status}`) as Error & { code?: string; status?: number };
+          const detail = codexHttpErrorDetail(text);
+          const providerError = new Error(`openai_codex API error ${response.status}${detail ? `: ${detail}` : ''}`) as Error & { code?: string; status?: number };
           providerError.name = 'CodexProviderHttpError';
           providerError.code = 'CODEX_HTTP_ERROR';
           providerError.status = response.status;

@@ -122,7 +122,8 @@ try {
   assert.match(goalRunner, /workflowPart \|\| ''\)\.trim\(\)\.toLowerCase\(\) !== 'interruption'/, 'steer workflow history must not mutate goal continuation state');
 
   const desktopSource = fs.readFileSync(path.join(root, 'web-ui/src/pages/ChatPage.js'), 'utf8');
-  assert.match(desktopSource, /isActiveMainGoalRunning\(thisSessionId\)/, 'the desktop goal composer must retain its live-steer path');
+  const desktopSendRuntime = fs.readFileSync(path.join(root, 'web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js'), 'utf8');
+  assert.match(desktopSendRuntime, /isActiveMainGoalRunning\(thisSessionId\)/, 'the desktop goal composer must retain its live-steer path');
   assert.match(desktopSource, /source: 'web_goal_composer'/, 'desktop goal steers must remain identifiable in history');
 
   const taskRouterSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-router.ts'), 'utf8');

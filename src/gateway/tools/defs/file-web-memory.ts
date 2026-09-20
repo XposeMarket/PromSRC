@@ -35,6 +35,7 @@ export function getFileWebMemoryTools(): any[] {
               },
             },
             pattern: { type: 'string', description: 'Pattern for grep/search.' },
+            format: { type: 'string', enum: ['auto', 'compact', 'json'], description: 'Grep/search result format. Auto uses compact file:line:text rows for 8 or more matches; json preserves detailed per-match read hints.' },
             glob: { type: 'string', description: 'Optional glob filter for tree/search.' },
             file_glob: { type: 'string', description: 'Optional file glob filter for search.' },
             start_line: { type: 'number' },
@@ -54,8 +55,8 @@ export function getFileWebMemoryTools(): any[] {
             full: { type: 'boolean' },
             max_files: { type: 'number', description: 'For batch_read. Default 2, hard cap 8.' },
             max_lines_per_file: { type: 'number', description: 'For batch_read. Default 80, hard cap 240 unless full:true is used intentionally.' },
-            content: { type: 'boolean', description: 'For batch_read. false/omitted returns summaries unless exact line windows are provided; true returns capped content.' },
-            mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. summary returns metadata/read hints; content returns capped content.' },
+            content: { type: 'boolean', description: 'For batch_read. Omitted/true returns capped content; false returns metadata/read hints.' },
+            mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. content is the default and returns capped content; summary returns metadata/read hints.' },
             inline: { type: 'boolean', description: 'Allow large results to remain inline instead of being saved to a temp artifact. Use sparingly.' },
             max_depth: { type: 'number', description: 'For tree/list. Default tree depth 2; list depth 1.' },
             max_entries: { type: 'number', description: 'For tree/list. Default tree entries 180; list entries 250.' },
@@ -80,18 +81,18 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'workspace_edit',
-        description: 'Unified workspace mutation wrapper. Use this for create/write/surgical edits, deletes, mkdir, copy/move, patchsets, or unified patches. For large apps/games/pages, create a small runnable scaffold first, verify it exists, then add features incrementally with patchset/insert_after/replace_lines instead of trying one huge write. If exact file+old text/line range is already known, edit directly; tools verify targets and return post-edit context. Native file tools remain the expected route for workspace edits.',
+        description: 'Unified workspace mutation wrapper. Use append to add log or note text without reading the last line; also supports create/write/surgical edits, deletes, mkdir, copy/move, patchsets, and unified patches. For large apps/games/pages, create a small runnable scaffold first, verify it exists, then add features incrementally with patchset/insert_after/replace_lines instead of trying one huge write. Native file tools remain the expected route for workspace edits.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['create', 'write', 'find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'delete_file', 'mkdir', 'move', 'copy', 'move_directory', 'copy_directory', 'patchset', 'preview_patch', 'apply_patch'], description: 'Mutation action to perform.' },
+            action: { type: 'string', enum: ['create', 'write', 'append', 'find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'delete_file', 'mkdir', 'move', 'copy', 'move_directory', 'copy_directory', 'patchset', 'preview_patch', 'apply_patch'], description: 'Mutation action to perform.' },
             path: { type: 'string', description: 'Target file or directory path.' },
             file: { type: 'string', description: 'Alias for path when targeting one file.' },
             filename: { type: 'string', description: 'Alias for path when targeting one file.' },
             source: { type: 'string', description: 'Source path for copy/move actions.' },
             destination: { type: 'string', description: 'Destination path for copy/move actions.' },
-            content: { type: 'string', description: 'Content for create/write/insert_after. For large generated files, prefer an initial scaffold plus follow-up patchset edits.' },
+            content: { type: 'string', description: 'Content for create/write/append/insert_after. Append writes the supplied text verbatim at end of file; include a newline if needed.' },
             find: { type: 'string', description: 'Exact text to find for find_replace.' },
             replace: { type: 'string', description: 'Replacement text for find_replace.' },
             replace_all: { type: 'boolean' },
@@ -121,6 +122,8 @@ export function getFileWebMemoryTools(): any[] {
           properties: {
             action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck', 'telemetry', 'benchmark_summary'], description: 'Command/process/check/telemetry action.' },
             command: { type: 'string', description: 'Command to run, or explicit check command.' },
+            parallel_safe: { type: 'boolean', description: 'For independent, non-elevated run/start calls only. Set true with a distinct parallel_key when the command does not depend on another result or compete for the same mutable resource.' },
+            parallel_key: { type: 'string', description: 'Logical resource touched by an independent run/start call, such as repo-a or service-b. Calls with the same key stay serial.' },
             cwd: { type: 'string', description: 'Working directory relative to the workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
             elevated: { type: 'boolean', description: 'Windows only. Run this bounded command through the administrator broker. Always requires a fresh one-shot user approval; Lite mode, goals, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not. Not supported with action=start.' },
@@ -296,6 +299,7 @@ export function getFileWebMemoryTools(): any[] {
             char_after: { type: 'number', description: 'Characters after each match in the returned match-local window.' },
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match (default false)' },
             max_results: { type: 'number', description: 'Max matches to return (default 50, hard cap 80)' },
+            format: { type: 'string', enum: ['auto', 'compact', 'json'], description: 'Auto compacts 8 or more matches; json includes detailed read hints.' },
           },
         },
       },
@@ -324,6 +328,7 @@ export function getFileWebMemoryTools(): any[] {
             exclude: { type: 'string', description: 'Comma-separated names to exclude in addition to defaults.' },
             max_file_bytes: { type: 'number', description: 'Maximum size of each file searched. Default 5 MiB, hard cap 25 MiB. Larger files are reported as skipped; narrow to a file and use file_stats/read_file instead of broadly scanning giant indexes/logs.' },
             max_results: { type: 'number', description: 'Max total matches to return (default 50, hard cap 80). Narrow directory/glob/pattern instead of requesting huge result sets.' },
+            format: { type: 'string', enum: ['auto', 'compact', 'json'], description: 'Auto compacts 8 or more matches; json includes detailed read hints.' },
             max_files: { type: 'number', description: 'Maximum files visited. Default 5000, hard cap 25000.' },
             timeout_ms: { type: 'number', description: 'Wall-clock search budget. Default 10000ms, hard cap 30000ms. Partial observed results are returned when reached.' },
             max_depth: { type: 'number', description: 'Maximum directory depth. Default 24, hard cap 64.' },
@@ -464,7 +469,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'read_files_batch',
-        description: 'Read multiple files cheaply. Summary-first by default: entries without start_line/num_lines return metadata/read hints, not content. For content, pass exact line windows or content:true. Defaults to first 80 lines per content file and first 2 files. Large combined output is saved to a temp artifact unless inline:true is set. Use full:true only when truly needed. Also accepts src/... and web-ui/... paths.',
+        description: 'Read multiple files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. Defaults to first 80 lines per file and first 2 files. Large combined output is saved to a temp artifact unless inline:true is set. Use full:true only when truly needed. Also accepts src/... and web-ui/... paths.',
 
         parameters: {
           type: 'object', required: ['files'],
@@ -486,8 +491,8 @@ export function getFileWebMemoryTools(): any[] {
             max_files: { type: 'number', description: 'Maximum files to read in this call. Default 2, max 8.' },
             max_lines_per_file: { type: 'number', description: 'Default per-file content line cap. Default 80, max 240.' },
             query: { type: 'string', description: 'Optional query used in summary mode to include likely matching lines and suggested read windows.' },
-            content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default false/summary-only.' },
-            mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content.' },
+            content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default true when omitted; set false for summary-only output.' },
+            mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content (the default).' },
             inline: { type: 'boolean', description: 'Keep large combined output inline instead of saving it to a temp artifact. Use sparingly.' },
             max_result_tokens: { type: 'number', description: 'Soft inline result budget; overflow is saved as an artifact.' },
           },
@@ -624,8 +629,8 @@ export function getFileWebMemoryTools(): any[] {
             max_lines: { type: 'number' },
             max_files: { type: 'number', description: 'For batch_read. Default 2, hard cap 8.' },
             max_lines_per_file: { type: 'number', description: 'For batch_read content mode. Default 80, hard cap 240.' },
-            content: { type: 'boolean', description: 'For batch_read. false/omitted returns summaries unless exact line windows are provided; true returns capped content.' },
-            mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. summary returns metadata/read hints; content returns capped content.' },
+            content: { type: 'boolean', description: 'For batch_read. Omitted/true returns capped content; false returns metadata/read hints.' },
+            mode: { type: 'string', enum: ['summary', 'content'], description: 'For batch_read. content returns capped content (the default); summary returns metadata/read hints.' },
             inline: { type: 'boolean', description: 'Allow large results to remain inline instead of being saved to a temp artifact. Use sparingly.' },
             full: { type: 'boolean' },
             head: { type: 'number' },
@@ -729,8 +734,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'read_dev_sources',
         description:
-          'Read multiple Prometheus dev source files cheaply. Summary-first by default: entries without start_line/num_lines/head/tail return metadata/read hints, not content. ' +
-          'For content, pass exact line windows or content:true. Defaults to first 80 lines per content file and first 2 files. Large combined output is saved to a temp artifact unless inline:true is set. Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching. Use full:true per file only when truly needed.',
+          'Read multiple Prometheus dev source files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. ' +
+          'Defaults to first 80 lines per file and first 2 files. Large combined output is saved to a temp artifact unless inline:true is set. Accepts src/..., web-ui/..., or src-relative paths, and supports line windows plus around/anchor matching. Use full:true per file only when truly needed.',
         parameters: {
           type: 'object', required: ['files'],
           properties: {
@@ -756,8 +761,8 @@ export function getFileWebMemoryTools(): any[] {
             max_files: { type: 'number', description: 'Maximum files to read in this call. Default 2, max 8.' },
             max_lines_per_file: { type: 'number', description: 'Default per-file content line cap. Default 80, max 240.' },
             query: { type: 'string', description: 'Optional query used in summary mode to include likely matching lines and suggested read windows.' },
-            content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default false/summary-only.' },
-            mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content.' },
+            content: { type: 'boolean', description: 'Return capped content for entries without explicit line windows. Default true when omitted; set false for summary-only output.' },
+            mode: { type: 'string', enum: ['summary', 'content'], description: 'summary returns metadata/read hints; content returns capped content (the default).' },
             inline: { type: 'boolean', description: 'Keep large combined output inline instead of saving it to a temp artifact. Use sparingly.' },
             max_result_tokens: { type: 'number', description: 'Soft inline result budget; overflow is saved as an artifact.' },
           },
@@ -2174,12 +2179,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'analyze_image',
-        description: 'Analyze a local image file and describe what is visible using the active vision-capable model. Use this after downloading or generating an image when you want Prometheus to actually inspect it.',
+        description: 'Inspect a local image or screenshot. Vision-capable chat turns receive the image directly, avoiding a separate analysis call. Prefer this for screenshot/action loops. Use response_mode="report" for a separate written analysis. Other runtimes retain report behavior.',
         parameters: {
           type: 'object', required: ['file_path'],
           properties: {
             file_path: { type: 'string', description: 'Workspace-relative or absolute path to the image file' },
             prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
+            response_mode: { type: 'string', enum: ['view', 'report'], description: 'view uses direct visual context in supported chat turns (default); report requests a separate vision analysis.' },
           },
         },
       },
@@ -2188,12 +2194,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'analyze_video',
-        description: 'Analyze a local video with Python/FFmpeg. Use analysis_mode="quick" for a contact-sheet overview, "detail" for budgeted chronological frame batches, or "both" when the user needs both broad and detailed review.',
+        description: 'Inspect a local video with Python/FFmpeg. Vision-capable chat turns receive sampled visuals directly, avoiding a second analysis call. Use analysis_mode="quick" for a contact sheet, "detail" for chronological batches, or "both". For visual-only checks set extract_audio=false and transcribe=false. Use response_mode="report" for a separate written analysis.',
         parameters: {
           type: 'object', required: ['file_path'],
           properties: {
             file_path: { type: 'string', description: 'Workspace-relative or absolute path to the video file' },
             prompt: { type: 'string', description: 'Optional analysis prompt or focus instruction' },
+            response_mode: { type: 'string', enum: ['view', 'report'], description: 'view uses direct visual context in supported chat turns (default); report requests a separate vision analysis.' },
             analysis_mode: { type: 'string', enum: ['quick', 'detail', 'both'], description: 'quick creates one overview contact sheet; detail creates duration-aware chronological batches; both does both. Default quick.' },
             sample_count: { type: 'number', description: 'Backward-compatible quick sample count (default 6, max 24)' },
             quick_sample_count: { type: 'number', description: 'Frames for the quick contact sheet (default 16, max 24)' },

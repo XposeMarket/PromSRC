@@ -12,6 +12,8 @@ const sourcePageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
 // The chat route spans the thin page facade and its extracted route runtime.
 const sourcePages = `${sourcePagesFile}\n${sourcePageRuntime}`;
 const sourceShell = read('web-ui/src/mobile/mobile-shell.js');
+const sourceApi = read('web-ui/src/mobile/mobile-api.js');
+const sourceModelBadge = read('web-ui/src/mobile/mobile-model-badge.js');
 const sourceCssFile = read('web-ui/src/styles/mobile.css');
 const sourceShellCss = read('web-ui/src/styles/mobile-shell.css');
 const sourceCss = `${sourceCssFile}\n${sourceShellCss}`;
@@ -52,14 +54,19 @@ for (const id of ['pm-chat-mode-launcher', 'pm-chat-mode-voice', 'pm-chat-mode-k
   assert.match(sourcePages, new RegExp(`id="${id}"`), `chat markup must include ${id}`);
 }
 assert.match(sourceShell, /keyboard:\s*'<svg/, 'mobile shell must provide the keyboard icon');
+assert.match(sourceApi, /chatModelRoute: s\?\.chatModelRoute/, 'mobile session summaries must retain per-chat model routing');
+assert.match(sourceShell, /_drawerDefaultModel[\s\S]*_mobileSessionModelLogo/, 'drawer logos must support chats inheriting the default model');
+assert.match(sourceModelBadge, /sheet\.__pmReasoningGestureDispose\?\.\(\)/, 'reasoning haptic sensor must be removed with its sheet');
 assert.match(sourcePages, /form class="pm-composer[\s\S]*pm-composer-mode-hidden[\s\S]*aria-hidden="true" inert/, 'chat composer must start behind the mode launcher');
 assert.match(sourcePages, /function setChatComposerMode\(open,/, 'chat must have an explicit composer mode state transition');
-assert.match(sourcePages, /setChatComposerMode\(false, \{[\s\S]*reason: 'scroll'/, 'upward scroll must close an idle composer');
-assert.match(sourcePages, /const keyboardOpen = document\.body\?\.classList\?\.contains\('pm-keyboard-open'\)/, 'scroll close must respect the keyboard-open state');
-assert.match(sourcePages, /const onComposerModeScrollIntent = \(\) => \{[\s\S]*composerModeScrollIntentUntil/, 'composer auto-hide must require a real scroll gesture');
-assert.match(sourcePages, /if \(\(window\.performance\?\.now\?\.\(\) \|\| 0\) > composerModeScrollIntentUntil\) return;/, 'layout-induced scroll must not close the composer');
-assert.match(sourcePages, /const transitionIgnoreMs = reason === 'keyboard' \? 1800 : 420/, 'keyboard open must ignore delayed iOS layout scroll');
-assert.match(sourcePages, /const keyboardFocusHandoff = _pmKbFocusActive[\s\S]*document\.activeElement === input/, 'composer auto-hide must respect keyboard focus ownership');
+assert.match(sourcePages, /const composerHasDraftContent = \(\) => !!\([\s\S]*_pmGetComposerValue\(input\)[\s\S]*getPendingAttachments\(\)\.length/, 'scroll dismissal must protect text and attachments');
+assert.match(sourcePages, /if \(composerHasDraftContent\(\)[\s\S]*setChatComposerMode\(false, \{ reason: 'history-scroll' \}\)/, 'a history swipe may close only an empty composer');
+assert.match(sourcePages, /pm-model-speed-icon[^>]*><svg viewBox="0 0 24 24"/, 'composer fast mode must use a vector lightning icon');
+assert.match(sourceShell, /pm-model-speed-icon[^>]*><svg viewBox="0 0 24 24"/, 'header fast mode must use a vector lightning icon');
+assert.match(sourcePages, /composerModelBadge\?\.addEventListener\('pointerdown'/, 'model picker must preserve composer focus');
+assert.match(sourcePages, /holdComposerOpenForControl\('model', \{ restoreFocus: true \}\)/, 'model sheet must retain the expanded composer');
+assert.match(sourceCss, /#pm-composer:not\(\.is-focused\) \.pm-composer-model-badge\s*\{\s*display: none;/, 'compact composer must hide its model control');
+assert.doesNotMatch(sourceCss, /pm-chat-attachment-open::before/, 'attachment menu must not paint a full-screen dark layer');
 assert.match(sourcePages, /const focusChatComposerInput = \(\) => \{[\s\S]*input\.focus\(\{ preventScroll: true \}\)/, 'keyboard mode must focus the composer without moving the scroll anchor');
 assert.match(sourcePages, /reason: 'keyboard',[\s\S]{0,220}focusChatComposerInput\(\)/, 'keyboard launcher must open the native keyboard');
 assert.match(sourcePages, /const lockedScrollTop = composerModeScrollLockTop/, 'composer mode transitions must preserve the exact scroll position');

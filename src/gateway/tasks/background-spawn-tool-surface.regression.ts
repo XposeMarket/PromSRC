@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildTools } from '../tool-builder';
-import { normalizeBackgroundSpawnToolCategories } from './task-runner';
+import { normalizeBackgroundSpawnToolCategories, resolveBackgroundAgentModelRouting } from './task-runner';
+
+assert.deepEqual(resolveBackgroundAgentModelRouting({ providerId: 'openai_codex', model: 'sol', reasoningEffort: 'medium' }), {
+  providerId: 'openai_codex', model: 'gpt-5.6-sol', reasoningEffort: 'medium', source: 'background_spawn.override',
+});
+assert.equal(resolveBackgroundAgentModelRouting({ providerId: 'openai_codex', model: 'luna' }).model, 'gpt-5.6-luna');
+assert.equal(resolveBackgroundAgentModelRouting({ providerId: 'anthropic', model: 'opus-4.8' }).model, 'claude-opus-4-8');
 
 // Regression for the background_spawn tool-surface leak observed 2026-09-19:
 // a read-only recon spawn had 8 categories / 162 tools provisioned because

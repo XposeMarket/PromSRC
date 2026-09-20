@@ -93,6 +93,8 @@ export interface ProcessSpawnInput {
   captureOutput?: boolean;
   workspacePath?: string;
   trackWorkspaceChanges?: boolean;
+  /** Live output is advisory; the supervisor's saved log remains authoritative. */
+  onOutput?: (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => void;
 }
 
 export interface ProcessLogResult {

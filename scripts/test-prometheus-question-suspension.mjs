@@ -103,6 +103,12 @@ try {
   assert.ok(createStart >= 0 && registerWaiter > createStart && broadcastCard > registerWaiter
     && telegramDelivery > broadcastCard && hardWaitStart > telegramDelivery && answeredResult > hardWaitStart,
   'ask_prometheus_questions must register its waiter before exposing the card, then await the answer before returning');
+  assert.ok(executorSource.includes('questionQueue.clearWaiters(question.id)'),
+    'ask_prometheus_questions must detach its in-process waiter when the owning turn aborts');
+  assert.ok(executorSource.includes('questionAbortSignal?.addEventListener?.'),
+    'ask_prometheus_questions must observe owner aborts while its card is pending');
+  assert.ok(executorSource.includes('questionAbortSignal?.removeEventListener?.'),
+    'ask_prometheus_questions must remove its abort listener after the card resolves');
   assert.equal(executorSource.includes('End this turn now; the submitted answer will resume'), false, 'the old advisory-only yield must not return');
 
   console.log('Prometheus question suspension regression checks passed.');

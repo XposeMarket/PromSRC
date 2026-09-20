@@ -17,10 +17,10 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const RELEASE_VERSION = 'pm-v313-2026-09-16-background-side-stream';
+const RELEASE_VERSION = 'pm-v314-2026-09-20-mobile-reconnect';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '7efcede6c74aeb49';
+const ASSET_BUILD_ID = '61322f7d8ec5c851';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -42,24 +42,24 @@ const SOURCE_PRECACHE = [
 const BUILD_PRECACHE = [
   "/asset-manifest.json",
   "/assets/Prometheus.png",
-  "/build/chunks/chunk-2BW5OQQR.js",
-  "/build/chunks/chunk-4LARJXKL.js",
-  "/build/chunks/chunk-4YVFMCGQ.js",
   "/build/chunks/chunk-5RLMNBA7.js",
+  "/build/chunks/chunk-APJ3YBXZ.js",
   "/build/chunks/chunk-CP4XDM65.js",
   "/build/chunks/chunk-EPSJJCWL.js",
-  "/build/chunks/chunk-GBLBNUG2.js",
+  "/build/chunks/chunk-FE2DGIO6.js",
+  "/build/chunks/chunk-GRAK6S3F.js",
   "/build/chunks/chunk-JF4LWGNM.js",
-  "/build/chunks/chunk-K6UKS5KP.js",
+  "/build/chunks/chunk-KJCBL7CI.js",
+  "/build/chunks/chunk-LLABDDEK.js",
   "/build/chunks/chunk-M5JONE3D.js",
-  "/build/chunks/chunk-S3WOOEPV.js",
-  "/build/chunks/chunk-T4MQ3XMI.js",
+  "/build/chunks/chunk-MSYOJG2Q.js",
+  "/build/chunks/chunk-X4KG3ICV.js",
   "/build/chunks/chunk-YMT6MSCC.js",
-  "/build/chunks/mobile-router-X7LV6RV2.js",
-  "/build/entries/mobile-YB2XCQ33.js",
+  "/build/chunks/mobile-router-GRJWTTNL.js",
+  "/build/entries/mobile-KKRI7RL5.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
-  "/build/inline/mobile-inline-02-15e2b97b7b1e.js",
-  "/build/styles/mobile-6EF3UEXR.css",
+  "/build/inline/mobile-inline-02-0030786ff2fb.js",
+  "/build/styles/mobile-ZQRCIKD5.css",
   "/mobile.html",
   "/mobile/chat",
 ];

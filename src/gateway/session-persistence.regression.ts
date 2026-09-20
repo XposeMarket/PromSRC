@@ -105,6 +105,16 @@ async function main(): Promise<void> {
       content: 'Claude declined this request for safety reasons. Category: reasoning_extraction. Provider details.',
       timestamp: Date.now() + 22,
     });
+    sessionApi.addMessage(refusalSessionId, {
+      role: 'assistant',
+      content: '[WORKING_CONTEXT_PACKETS newest->oldest]\n[TOOL_STATE_SUMMARY]\npaths_touched: Add-Content -Path ISSUES.md -Value @"full script"@',
+      timestamp: Date.now() + 22.5,
+    });
+    sessionApi.addMessage(refusalSessionId, {
+      role: 'assistant',
+      content: 'Claude declined this request for safety reasons. Category: another_provider_policy. Details.',
+      timestamp: Date.now() + 22.75,
+    });
     sessionApi.addMessage(refusalSessionId, { role: 'user', content: 'Continue the bridge work', timestamp: Date.now() + 23 });
     assert.deepEqual(
       sessionApi.getActiveHistoryForApiCall(refusalSessionId).map((message: any) => message.content),

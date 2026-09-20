@@ -36,6 +36,26 @@ async function main(): Promise<void> {
     const secondRead = observations.readAllToolObservations(100);
     assert.deepEqual(secondRead, firstRead, 'repeat reads should reuse the same snapshot contents');
 
+    const shellObservation = observations.createToolObservation({
+      sessionId: 'session-shell',
+      turnId: 'turn-shell',
+      stepNum: 1,
+      toolName: 'workspace_run',
+      args: {
+        action: 'run',
+        path: 'ISSUES.md',
+        command: 'Add-Content -Path ISSUES.md -Value @"\nfull PowerShell body\n"@',
+      },
+      result: 'append complete',
+    });
+    assert.deepEqual(shellObservation.pathsTouched, ['ISSUES.md'], 'paths_touched must contain explicit path fields only');
+    const shellSummary = observations.formatToolStateSummaryForContext([shellObservation]);
+    assert.match(shellSummary, /paths_touched: ISSUES\.md/);
+    assert.doesNotMatch(shellSummary, /Add-Content|full PowerShell body/);
+    const shellObservations = observations.formatToolObservationsForContext([shellObservation]);
+    assert.doesNotMatch(shellObservations, /Add-Content|full PowerShell body/);
+    assert.match(shellObservations, /shell command omitted/);
+
     const firstSessionSnapshot = observations.readToolObservationSnapshot('session-1', 1, 'heuristic');
     assert.equal(firstSessionSnapshot.observations.length, 1);
     assert.equal(firstSessionSnapshot.usage.calls, 1, 'session snapshots must expose lifetime call totals');

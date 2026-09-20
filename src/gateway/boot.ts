@@ -128,6 +128,38 @@ function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
   return false;
 }
 
+export function selectRestartConversationEvidence(history: ChatMessage[]): {
+  excerpt: string;
+  lastUserRequest: string;
+  lastAssistantResponse: string;
+} {
+  // Recovery turns run with a system caller context. Replaying assistant prose
+  // (especially durable reasoning summaries or provider refusal text) inside
+  // that context can look like a request to extract private reasoning. User
+  // requests, recovery status, and the separate bounded tool log are enough to
+  // resume the work, so keep assistant transcript rows out of this packet.
+  const userMessages = (Array.isArray(history) ? history : [])
+    .filter((msg) => msg?.role === 'user' && !isInternalRestartHistoryMessage(msg))
+    .slice(-12);
+  const compact = (value: unknown, maxChars: number): string => String(value || '')
+    .replace(/\r/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxChars);
+  const excerpt = userMessages
+    .map((msg) => `USER: ${compact(msg.content, 900)}`)
+    .filter((line) => line !== 'USER:')
+    .join('\n');
+  const lastUserRequest = compact(userMessages.at(-1)?.content, 220);
+  return {
+    excerpt: excerpt || '(No recent user request was available.)',
+    lastUserRequest,
+    // Kept in the return shape for callers that use the fallback formatter;
+    // assistant transcript text is intentionally never replayed into recovery.
+    lastAssistantResponse: '',
+  };
+}
+
 function getRecentConversationForRestart(previousSessionId?: string): {
   excerpt: string;
   lastUserRequest: string;
@@ -145,7 +177,7 @@ function getRecentConversationForRestart(previousSessionId?: string): {
   }
 
   try {
-    const history = getHistoryForApiCall(sid, 12, { maxMessages: 24 })
+    const history = getHistoryForApiCall(sid, 12, { maxMessages: 24, includeCommentaryContext: false })
       .filter((msg) => !isInternalRestartHistoryMessage(msg));
     const recentToolLog = getRecentToolObservationsForContext(sid, 3, 3000);
 
@@ -158,28 +190,7 @@ function getRecentConversationForRestart(previousSessionId?: string): {
       };
     }
 
-    const excerpt = history.map((msg) => {
-      const role = msg.role === 'assistant' ? 'ASSISTANT' : 'USER';
-      const content = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 900);
-      return `${role}: ${content}`;
-    }).join('\n');
-
-    const lastUserRequest = [...history]
-      .reverse()
-      .find((msg) => msg.role === 'user' && !isInternalRestartHistoryMessage(msg))
-      ?.content
-      ?.replace(/\s+/g, ' ')
-      ?.trim()
-      ?.slice(0, 220) || '';
-    const lastAssistantResponse = [...history]
-      .reverse()
-      .find((msg) => msg.role === 'assistant' && !isInternalRestartHistoryMessage(msg))
-      ?.content
-      ?.replace(/\s+/g, ' ')
-      ?.trim()
-      ?.slice(0, 320) || '';
-
-    return { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog };
+    return { ...selectRestartConversationEvidence(history), recentToolLog };
   } catch (err: any) {
     return {
       excerpt: `(Could not load recent conversation history for ${sid}: ${String(err?.message || err || 'unknown error')})`,

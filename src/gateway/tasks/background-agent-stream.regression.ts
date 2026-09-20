@@ -12,7 +12,7 @@ import {
   finishLiveRuntime,
   registerLiveRuntime,
 } from '../live-runtime-registry';
-import { backgroundProcessEntryFromSseEvent } from './background-agent-trace';
+import { appendBackgroundSseTrace, backgroundProcessEntryFromSseEvent } from './background-agent-trace';
 
 function testPersistentAccumulationAndReplay(): void {
   const stream = createBackgroundAgentStream(1000);
@@ -88,13 +88,13 @@ function testReasoningSummaryTrace(): void {
     source: 'reasoning_summary',
     visibility: 'user',
   });
-  assert.equal(deltaEntry, null, 'summary packets must not replace actual commentary');
+  assert.equal(deltaEntry?.extra?.source, 'reasoning_summary', 'public summary retains its distinct recovery channel');
 
   const alternateEntry = backgroundProcessEntryFromSseEvent('reasoning_delta', {
     summary: 'I am comparing the captured results.',
     visibility: 'user',
   });
-  assert.equal(alternateEntry, null, 'alternate summary packets must not replace actual commentary');
+  assert.equal(alternateEntry?.extra?.reasoningKind, 'summary', 'summary packets must not become full commentary');
 
   assert.equal(backgroundProcessEntryFromSseEvent('reasoning_summary', {
     text: 'private summary must stay hidden',
@@ -137,6 +137,19 @@ function testVisibleAgentThoughtTrace(): void {
   assert.equal(privateEntry, null);
 }
 
+function testSteerSplitsAdjacentThoughtTrace(): void {
+  const stream = createBackgroundAgentStream(1000);
+  const processEntries: Record<string, any>[] = [];
+  const liveTraceEntries: Record<string, any>[] = [];
+  const before = appendBackgroundAgentStreamEvent(stream, 'agent_thought', { text: 'Before steer.' }, 1100);
+  appendBackgroundSseTrace(processEntries, liveTraceEntries, 'agent_thought', { text: 'Before steer.' }, before);
+  appendBackgroundAgentStreamEvent(stream, 'user_message', { message: 'Change direction.' }, 1200);
+  const after = appendBackgroundAgentStreamEvent(stream, 'agent_thought', { text: 'After steer.' }, 1300);
+  appendBackgroundSseTrace(processEntries, liveTraceEntries, 'agent_thought', { text: 'After steer.' }, after);
+  assert.deepEqual(liveTraceEntries.map((entry) => entry.text), ['Before steer.', 'After steer.']);
+  assert.deepEqual(liveTraceEntries.map((entry) => entry.seq), [before.seq, after.seq]);
+}
+
 function testStartupDiagnosticsStayOutOfActivity(): void {
   for (const [event, data] of [
     ['ui_preflight', { message: 'Selecting model route...' }],
@@ -157,5 +170,15 @@ testStructuredToolResultTrace();
 testReasoningSummaryTrace();
 testNarrationBoundaryTrace();
 testVisibleAgentThoughtTrace();
+testSteerSplitsAdjacentThoughtTrace();
 testStartupDiagnosticsStayOutOfActivity();
+{
+  const preview = { dataUrl: '/api/canvas/inline?path=frozen.png', artifactKind: 'contact_sheet', title: 'Video contact sheet' };
+  const visual = backgroundProcessEntryFromSseEvent('vision_injected', { source: 'media_analysis', preview });
+  assert.equal(visual?.type, 'vision');
+  assert.deepEqual(visual?.preview, preview, 'background checkpoints preserve the exact analyzed visual');
+  const plan = backgroundProcessEntryFromSseEvent('progress_state', { source: 'declared', items: [{ text: 'Inspect frame', status: 'in_progress' }], activeIndex: 0 });
+  assert.equal(plan?.extra?.items[0].text, 'Inspect frame');
+  assert.equal(plan?.extra?.activeIndex, 0, 'the first active plan step is retained');
+}
 console.log('background-agent-stream regression: ok');

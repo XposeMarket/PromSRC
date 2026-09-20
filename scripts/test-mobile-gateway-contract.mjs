@@ -105,7 +105,7 @@ function assertContractFiles() {
   assert.match(pages, /requestedSession === MOBILE_CHAT_SESSION_ID \? `/, 'gateway selector must be limited to the new-chat draft');
   assert.match(pages, /requestedSession !== MOBILE_CHAT_SESSION_ID \|\| !targetChip/, 'existing chats must not open the gateway selector');
   assert.match(pages, /selectedGateway\.status !== MOBILE_GATEWAY_STATUS\.ONLINE/, 'chat sends must fail closed for every non-online target state');
-  assert.match(pages, /probeGateway\(selectedGateway\)/, 'chat sends must verify target liveness before admission');
+  assert.match(pages, /probeGateway\(selectedGateway, \{ retryTransient: true \}\)/, 'chat sends must retry a transient liveness failure before admission');
   assert.match(pages, /gatewayExecutionRefresh\.then\(\(\) => loadMobileChatSession/, 'opening a stale remote chat must refresh execution metadata before loading history');
   assert.match(voicePage, /refreshedVoiceGateway/, 'selecting a stale remote chat as a Voice target must refresh execution metadata first');
   assert.match(pages, /targetNamespacedId\(selectedGateway\?\.gatewayId, actualSessionId\)/, 'new remote chats must keep their gateway in the route after the first send');
@@ -346,6 +346,24 @@ async function run() {
   const recoveredPage = await c.loadMobileGatewaySessionPage({ limit: 20, offset: 0, state: 'active' });
   assert.deepEqual(new Set(Array.from(recoveredPage.sessions, (session) => session.id)), new Set(['gw-mac::same-session', 'gw-desktop::same-session']), 'sessions reappear after the target recovers');
   assert.equal(c.getGateway(desktop.gatewayId).status, 'online', 'recovery probe restores online state');
+
+  const normalFetch = ctx.fetch;
+  let transientProbeCalls = 0;
+  ctx.fetch = async (url, options) => {
+    if (new URL(url).pathname !== '/api/gateway/descriptor') return normalFetch(url, options);
+    transientProbeCalls += 1;
+    if (transientProbeCalls === 1) throw new TypeError('Network handoff');
+    assert.equal(c.getGateway(desktop.gatewayId).status, 'online', 'one transient failure must not mark the gateway suspect');
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ gateway: { gatewayId: desktop.gatewayId, name: desktop.name, platform: 'win32', version: '1.0.9' } }),
+    };
+  };
+  const afterHandoff = await ctx.probeGateway(desktop, { retryTransient: true });
+  assert.equal(transientProbeCalls, 2, 'send-time liveness should retry one transient failure');
+  assert.equal(afterHandoff.status, 'online');
+  ctx.fetch = normalFetch;
 
   c.updateGatewayStatus(desktop.gatewayId, { status: 'offline' });
   await assert.rejects(() => c.gatewayFetchJson(desktop.gatewayId, '/api/mobile/gateway/catalog'), (error) => error.code === 'GATEWAY_OFFLINE');

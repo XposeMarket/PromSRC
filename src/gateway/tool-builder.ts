@@ -1195,6 +1195,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
           properties: {
             action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'], description: 'Default run; mode=background also means start.' },
             command: { type: 'string', description: 'Command to run.' },
+            parallel_safe: { type: 'boolean', description: 'For independent, non-elevated run/start calls only. Requires a distinct parallel_key and no shared mutable resource.' },
+            parallel_key: { type: 'string', description: 'Logical resource touched by this independent run/start call. The same key is not run concurrently.' },
             cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'Legacy alias: background maps to action=start.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use.' },
@@ -1216,7 +1218,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'run_command',
-        description: 'Run shell commands or open apps. Dev CLI commands (git, npm, node, python, etc.) run CAPTURED by default — output is returned inline, no new window. Pass visible:true only when the user explicitly asks to watch a command in a terminal; the temporary window closes when the command exits. For GUI apps (notepad, code, explorer) a visible window opens automatically. NEVER use for Chrome/Edge — use browser_open instead. **GIT BEST PRACTICES FOR PROMETHEUS**: (1) For submodule (workspace/xposemarket-site), ALWAYS use full path: `git -C workspace/xposemarket-site status` NOT `cd xposemarket-site` which fails with "path not found". (2) Use `git -C <path>` pattern for reliable automation. (3) Initialize submodules: `git submodule update --init --recursive`.',
+        description: 'Run shell commands or open apps. Captured commands stream output live and yield control after 10 seconds by default if still running, returning a runId; use process_status/process_log/process_wait to follow them. Choose start_process for servers, watchers, or deliberately long jobs. Pass visible:true only when the user explicitly asks to watch a command in a terminal. For GUI apps (notepad, code, explorer) a visible window opens automatically. NEVER use for Chrome/Edge — use browser_open instead. For submodules use `git -C <path>` and initialize with `git submodule update --init --recursive`.',
         parameters: {
           type: 'object', required: ['command'],
           properties: {
@@ -1226,6 +1228,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             elevated: { type: 'boolean', description: 'Windows only. Run through the administrator broker after a mandatory fresh one-shot approval. Goals, Lite mode, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Default 120000.' },
+            yieldTimeMs: { type: 'number', description: 'Return control if still running after this many milliseconds, 1000–30000. Default 10000. The supervised process keeps running and can be checked by runId.' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
           },
         },
@@ -1284,12 +1287,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'process_wait',
-        description: 'Wait for a running supervised process to exit and return its captured output.',
+        description: 'Wait up to 10 seconds by default for a supervised process. If still running, return its current status and recent output so work can continue. Maximum wait per call is 30 seconds.',
         parameters: {
           type: 'object',
           required: ['runId'],
           properties: {
             runId: { type: 'string', description: 'Process run id.' },
+            timeoutMs: { type: 'number', description: 'Maximum wait in milliseconds, 1000–30000. Default 10000.' },
           },
         },
       },

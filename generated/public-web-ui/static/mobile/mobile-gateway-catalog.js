@@ -762,18 +762,32 @@ function _descriptorFromResponse(response, entry) {
   return normalizeGatewayDescriptor({ ...entry, ...(raw || {}), gatewayId: raw?.gatewayId || raw?.id || entry.gatewayId, origin: entry.origin });
 }
 
-export async function probeGateway(entryOrId, { persist = true } = {}) {
+export async function probeGateway(entryOrId, { persist = true, retryTransient = false } = {}) {
   const entry = typeof entryOrId === 'string' ? getGateway(entryOrId) : entryOrId;
   if (!entry) throw new Error('Unknown gateway target.');
   try {
     let response;
-    try {
-      response = await gatewayFetchJson(entry, '/api/gateway/descriptor', { timeoutMs: STATUS_PROBE_TIMEOUT_MS, allowProbe: true });
-    } catch (firstError) {
-      // Compatibility with a gateway from before the descriptor route. The
-      // status response is still read-only; it simply lacks stable identity.
-      if (firstError?.status !== 404) throw firstError;
-      response = await gatewayFetchJson(entry, '/api/status', { timeoutMs: STATUS_PROBE_TIMEOUT_MS, allowProbe: true });
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        try {
+          response = await gatewayFetchJson(entry, '/api/gateway/descriptor', { timeoutMs: STATUS_PROBE_TIMEOUT_MS, allowProbe: true });
+        } catch (firstError) {
+          // Older gateways expose status but not the identity descriptor.
+          if (firstError?.status !== 404) throw firstError;
+          response = await gatewayFetchJson(entry, '/api/status', { timeoutMs: STATUS_PROBE_TIMEOUT_MS, allowProbe: true });
+        }
+        break;
+      } catch (error) {
+        // A brief radio/Tailscale handoff should not make an otherwise paired
+        // gateway suspect on the first failure. Identity/auth failures stay
+        // fail-closed and are never retried against a different gateway.
+        const transient = error?.code === 'GATEWAY_TIMEOUT'
+          || error?.code === 'GATEWAY_RESTARTING'
+          || error?.code === 'GATEWAY_REQUEST_FAILED'
+          || error?.name === 'TypeError';
+        if (!retryTransient || attempt > 0 || !transient) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
     }
     const next = _descriptorFromResponse(response, entry);
     next.status = MOBILE_GATEWAY_STATUS.ONLINE;

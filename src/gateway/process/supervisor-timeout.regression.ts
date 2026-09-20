@@ -31,6 +31,18 @@ child.unref();
     assert.ok(Date.now() - started < 5_500,
       'a timed-out shell must settle even when a detached child holds its output pipes open');
     assert.equal(supervisor.get(run.runId)?.state, 'exited');
+    const outputScript = path.join(root, 'output.cjs');
+    fs.writeFileSync(outputScript, 'process.stdout.write("first\\n"); setTimeout(() => process.stderr.write("second\\n"), 80);\n');
+    const liveOutput: string[] = [];
+    const outputRun = await supervisor.spawn({
+      command: `node "${outputScript}"`,
+      cwd: root,
+      mode: 'foreground',
+      onOutput: (event) => liveOutput.push(event.chunk),
+    });
+    const outputExit = await outputRun.wait();
+    assert.equal(outputExit.exitCode, 0);
+    assert.match(liveOutput.join(''), /first\n[\s\S]*second\n/, 'live output callback receives both streams before process exit');
     console.log('process supervisor timeout regression passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

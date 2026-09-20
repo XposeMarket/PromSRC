@@ -142,12 +142,11 @@ function resolveAgentProvider(agent: any, agentType?: string): ResolvedProvider 
   });
   const modelRef = String(routing.model || '').trim();
   const parsedProviderRef = parseProviderModelRef(modelRef);
-  const parsed = parseAgentModelString(modelRef)
-    || (routing.providerId && modelRef
-      ? { provider: routing.providerId, model: modelRef }
-      : parsedProviderRef
-        ? { provider: parsedProviderRef.providerId, model: parsedProviderRef.model }
-        : null);
+  const parsed = parsedProviderRef
+    ? { provider: parsedProviderRef.providerId, model: parsedProviderRef.model }
+    : routing.providerId && routing.modelName
+      ? { provider: routing.providerId, model: routing.modelName }
+      : parseAgentModelString(modelRef);
 
   if (!parsed) {
     throw new Error(

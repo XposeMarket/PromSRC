@@ -1224,6 +1224,8 @@ function _compactMobileThreadCacheMessage(m) {
     workflowGroupId: String(m?.workflowGroupId || '').trim() || undefined,
     workflowPart: String(m?.workflowPart || '').trim() || undefined,
     workflowLabel: String(m?.workflowLabel || '').trim() || undefined,
+    workflowBoundarySeq: Number.isFinite(Number(m?.workflowBoundarySeq)) ? Number(m.workflowBoundarySeq) : undefined,
+    workflowStreamId: String(m?.workflowStreamId || '').trim() || undefined,
     voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true || undefined,
     voiceWorkgroup: _compactMobileThreadCacheWorkgroup(m?.voiceWorkgroup),
     generatedImages: _compactMobileThreadCacheMedia(m?.generatedImages),
@@ -1883,6 +1885,8 @@ function _mapServerMessageToMobile(m, index = -1) {
     workflowGroupId: String(m?.workflowGroupId || '').trim() || undefined,
     workflowPart: String(m?.workflowPart || '').trim() || undefined,
     workflowLabel: String(m?.workflowLabel || ''),
+    workflowBoundarySeq: Number.isFinite(Number(m?.workflowBoundarySeq)) ? Number(m.workflowBoundarySeq) : undefined,
+    workflowStreamId: String(m?.workflowStreamId || '').trim() || undefined,
     voiceInterruptionEventId: String(m?.voiceInterruptionEventId || '').trim() || undefined,
     processEntries: Array.isArray(m?.processEntries)
       ? _mobileDurableReasoningEntries(m.processEntries.map(_normalizeMobileProcessEntry).filter(Boolean))
@@ -2062,81 +2066,10 @@ function _clearMobileChatSteerPresentation(message) {
   if (String(message.messageKind || '') === 'steer_continuation') delete message.messageKind;
 }
 
-// A chat steer temporarily splits the in-flight response so the user can see
-// its tool stream and the injected message separately. Once answer generation
-// starts, that split has served its purpose: the durable conversation should
-// read as two ordinary user messages followed by one assistant response.
+// Keep the visible steer boundary through finalization and reconnect. The
+// source trace, user steer, and continuation are three durable timeline rows.
 function _settleMobileChatSteerWorkflow(thread, finalTurn) {
-  const list = Array.isArray(thread) ? thread : [];
-  const groupId = String(finalTurn?.workflowGroupId || '').trim();
-  if (!list.length || !_isMobileChatSteerWorkflowGroup(groupId)) return false;
-
-  let changed = false;
-  const sourceTurns = new Set();
-  let sourceTurn = finalTurn?._steerSourceTurn || null;
-  while (sourceTurn && !sourceTurns.has(sourceTurn)) {
-    sourceTurns.add(sourceTurn);
-    sourceTurn = sourceTurn._steerSourceTurn || null;
-  }
-  const groupStart = list.findIndex((message) => String(message?.workflowGroupId || '') === groupId);
-  const clientRequestId = String(finalTurn?._clientRequestId || '').trim();
-  if (!sourceTurns.size && groupStart > 0 && clientRequestId) {
-    for (let index = groupStart - 1; index >= 0; index -= 1) {
-      const candidate = list[index];
-      if (candidate?.role !== 'ai') continue;
-      if (String(candidate._clientRequestId || '').trim() === clientRequestId) {
-        sourceTurns.add(candidate);
-        break;
-      }
-    }
-  }
-
-  const groupIds = new Set([groupId]);
-  sourceTurns.forEach((turn) => {
-    const sourceGroupId = String(turn?.workflowGroupId || '').trim();
-    if (_isMobileChatSteerWorkflowGroup(sourceGroupId)) groupIds.add(sourceGroupId);
-  });
-  const steerUser = list.find((message) => (
-    message?.role === 'user'
-    && groupIds.has(String(message.workflowGroupId || ''))
-    && String(message.workflowPart || '') === 'interruption'
-    // Voice interruptions keep their own dedicated timeline presentation.
-    && !String(message.voiceInterruptionEventId || '').trim()
-  ));
-  if (!steerUser) return false;
-
-  // The first split turn owns the one visible work timer. Carry that original
-  // start time onto the eventual final response before removing the split.
-  const timerAnchor = finalTurn?._steerTimerAnchorTurn
-    || [...sourceTurns].find((turn) => turn?._steerTimerAnchor === true)
-    || [...sourceTurns].at(-1)
-    || null;
-  const sourceStartedAt = _mobileAssistantWorkStartedAt(timerAnchor);
-  const finalStartedAt = _mobileAssistantWorkStartedAt(finalTurn);
-  if (sourceStartedAt > 0 && (!finalStartedAt || sourceStartedAt < finalStartedAt)) {
-    finalTurn.workStartedAt = sourceStartedAt;
-    const endedAt = Number(finalTurn.workEndedAt || 0);
-    if (endedAt > 0) finalTurn.workDurationMs = Math.max(0, endedAt - sourceStartedAt);
-    changed = true;
-  }
-
-  for (let index = list.length - 1; index >= 0; index -= 1) {
-    const message = list[index];
-    const isTemporaryTrace = message?.role === 'ai'
-      && groupIds.has(String(message.workflowGroupId || ''))
-      && String(message.workflowPart || '') === 'before_interruption';
-    if (sourceTurns.has(message) || isTemporaryTrace) {
-      list.splice(index, 1);
-      changed = true;
-    }
-  }
-
-  for (const message of list) {
-    if (!groupIds.has(String(message?.workflowGroupId || ''))) continue;
-    _clearMobileChatSteerPresentation(message);
-    changed = true;
-  }
-  return changed;
+  return false;
 }
 
 function _isMobileVoiceAgentWorkerHandoff(msg) {
@@ -2224,6 +2157,7 @@ function _isMobileHiddenTranscriptMessage(msg, index = -1) {
 function _isMobileMessagePersistable(msg) {
   if (!msg || (msg.role !== 'user' && msg.role !== 'ai')) return false;
   if (msg.role !== 'ai') return true;
+  if (_isMobileChatSteerWorkflowGroup(msg.workflowGroupId)) return true;
   if (msg.streaming !== true) return true;
   const hasAnswer = _mobileAssistantHasVisibleAnswer(msg);
   const hasEnded = Number(msg.workEndedAt || 0) > 0 || Number.isFinite(Number(msg.workDurationMs));
@@ -2276,7 +2210,9 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
     })
     // A realtime Voice show_ui card can intentionally have no text bubble.
     // It is still a durable chat turn and must survive history replacement.
-    .filter((msg) => msg.content.trim() || (Array.isArray(msg.richArtifacts) && msg.richArtifacts.length))
+    .filter((msg) => msg.content.trim()
+      || (Array.isArray(msg.richArtifacts) && msg.richArtifacts.length)
+      || (_isMobileChatSteerWorkflowGroup(msg.workflowGroupId) && msg.role === 'assistant'))
     .map((msg, index) => ({ ...msg, sourceIndex: index }));
 }
 
@@ -2666,6 +2602,8 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
   const latestAi = _findLatestAssistantTurn(thread);
   const workflowGroupId = String(data?.workflowGroupId || '').trim()
     || `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const workflowBoundarySeq = Math.max(0, Math.floor(Number(data?.workflowBoundarySeq || 0) || 0));
+  const workflowStreamId = String(data?.workflowStreamId || '').trim();
   if (latestAi) {
     _appendMobileProcess(latestAi, 'info', `Chat steer: ${text.slice(0, 180)}`, {
       actor: 'Chat Steer',
@@ -2682,7 +2620,10 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     latestAi.workflowGroupId = workflowGroupId;
     latestAi.workflowPart = 'before_interruption';
     latestAi.workflowLabel = 'Tool stream before steer';
-    if (latestAi !== timerAnchor && latestAi.streaming) {
+    latestAi.workflowBoundarySeq = workflowBoundarySeq;
+    latestAi.workflowStreamId = workflowStreamId;
+    if (!String(latestAi.messageId || '').trim()) latestAi.messageId = `${workflowGroupId}:before`;
+    if (latestAi.streaming) {
       latestAi.streaming = false;
       latestAi.workEndedAt = Number(latestAi.workEndedAt || Date.now()) || Date.now();
       latestAi.workDurationMs = Math.max(0, latestAi.workEndedAt - _mobileAssistantWorkStartedAt(latestAi));
@@ -2701,6 +2642,8 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     workflowGroupId,
     workflowPart: 'interruption',
     workflowLabel: 'Message sent as steer',
+    workflowBoundarySeq,
+    workflowStreamId,
   });
   if (latestAi) {
     const continuationTurn = {
@@ -2719,6 +2662,9 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
       workflowGroupId,
       workflowPart: 'interruption_response',
       workflowLabel: 'Response after steer',
+      workflowBoundarySeq,
+      workflowStreamId,
+      messageId: `${workflowGroupId}:continuation`,
     };
     thread.push(continuationTurn);
     _setMobileChatSteerContinuationTurn(latestAi, continuationTurn);
@@ -2763,6 +2709,8 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
     const files = Array.isArray(item.files) ? item.files : [];
     const uploadResults = files.length ? await _uploadMobileChatAttachments(files) : [];
     const steerMessage = `${message}${_buildMobileFileContextNote(uploadResults)}`;
+    const workflowBoundarySeq = Math.max(0, Math.floor(Number(__pmChat.activeRuns?.[sid]?.lastSeq || localRun?.lastSeq || 0) || 0));
+    const workflowStreamId = String(__pmChat.activeRuns?.[sid]?.streamId || localRun?.streamId || '').trim();
     const result = await mobileGatewayFetch('/api/chat/steer', {
       method: 'POST',
       body: JSON.stringify({
@@ -2772,11 +2720,13 @@ async function _steerMobileQueuedPrompt(sessionId, index) {
         clientSteerId: String(item.id || '').trim() || undefined,
         attachmentPreviews: files.map(_sanitizeMobileAttachmentPreviewForServer),
         source: 'mobile_queue_button',
+        workflowBoundarySeq,
+        workflowStreamId,
       }),
     });
     queue.splice(index, 1);
     _renderMobileQueuedPromptsPanel(sid);
-    _appendMobileQueuedSteerTurn(sid, message, result || {});
+    _appendMobileQueuedSteerTurn(sid, message, { ...(result || {}), workflowBoundarySeq, workflowStreamId });
     pmToast(files.length ? 'Queued steer sent with files.' : 'Queued steer sent.', 'success');
   } catch (err) {
     const errorText = String(err?.message || err || '');

@@ -40,6 +40,8 @@ export class ProcessRunStore {
   readonly rootDir: string;
   readonly recordsDir: string;
   readonly logsDir: string;
+  private readonly recordCache = new Map<string, ProcessRunRecord>();
+  private primePromise: Promise<void> | null = null;
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
@@ -72,6 +74,7 @@ export class ProcessRunStore {
     try {
       fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8');
       renameWithRetries(tmp, target);
+      this.recordCache.set(record.runId, record);
     } finally {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
     }
@@ -108,27 +111,44 @@ export class ProcessRunStore {
   }
 
   loadRecord(runId: string): ProcessRunRecord | null {
+    const cached = this.recordCache.get(runId);
+    if (cached) return cached;
     try {
       const p = this.recordPath(runId);
       if (!fs.existsSync(p)) return null;
-      return JSON.parse(fs.readFileSync(p, 'utf-8')) as ProcessRunRecord;
+      const record = JSON.parse(fs.readFileSync(p, 'utf-8')) as ProcessRunRecord;
+      this.recordCache.set(record.runId, record);
+      return record;
     } catch {
       return null;
     }
   }
 
-  listRecords(limit = 100): ProcessRunRecord[] {
-    ensureDir(this.recordsDir);
-    return fs.readdirSync(this.recordsDir)
-      .filter((name) => name.endsWith('.json'))
-      .map((name) => {
-        try {
-          return JSON.parse(fs.readFileSync(path.join(this.recordsDir, name), 'utf-8')) as ProcessRunRecord;
-        } catch {
-          return null;
+  /** Read historical records without blocking the gateway event loop. */
+  prime(): Promise<void> {
+    if (this.primePromise) return this.primePromise;
+    this.primePromise = (async () => {
+      const names = (await fs.promises.readdir(this.recordsDir)).filter((name) => name.endsWith('.json'));
+      // Small batches let health, chat, and WebSocket callbacks run between
+      // parses even when the store has accumulated thousands of terminal runs.
+      for (let offset = 0; offset < names.length; offset += 32) {
+        const batch = await Promise.all(names.slice(offset, offset + 32).map(async (name) => {
+          try {
+            return JSON.parse(await fs.promises.readFile(path.join(this.recordsDir, name), 'utf-8')) as ProcessRunRecord;
+          } catch {
+            return null;
+          }
+        }));
+        for (const record of batch) {
+          if (record?.runId && !this.recordCache.has(record.runId)) this.recordCache.set(record.runId, record);
         }
-      })
-      .filter((record): record is ProcessRunRecord => Boolean(record))
+      }
+    })();
+    return this.primePromise;
+  }
+
+  listRecords(limit = 100): ProcessRunRecord[] {
+    return Array.from(this.recordCache.values())
       .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
       .slice(0, Math.max(1, Math.min(500, limit)));
   }

@@ -118,15 +118,29 @@ export const processLogTool = {
 
 export const processWaitTool = {
   name: 'process_wait',
-  description: 'Wait for a running supervised process to exit',
+  description: 'Wait briefly for a supervised process; return its current status and recent output if still running',
   schema: {
     runId: 'string (required) - Process run id',
+    timeoutMs: 'number (optional) - Wait limit in milliseconds, 1000-30000; default 10000',
   },
   execute: async (args: any): Promise<ToolResult> => {
     const runId = String(args.runId || args.run_id || '').trim();
     if (!runId) return { success: false, error: 'runId is required' };
-    const exit = await getProcessSupervisor().wait(runId);
-    if (!exit) return { success: false, error: `No active process with runId ${runId}` };
+    const supervisor = getProcessSupervisor();
+    if (!supervisor.get(runId)) return { success: false, error: `No process with runId ${runId}` };
+    const requestedWaitMs = Number(args.timeoutMs ?? args.timeout_ms ?? 10_000);
+    const waitMs = Number.isFinite(requestedWaitMs) ? Math.max(1_000, Math.min(30_000, requestedWaitMs)) : 10_000;
+    let timer: NodeJS.Timeout | null = null;
+    const exit = await Promise.race([
+      supervisor.wait(runId),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), waitMs); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!exit) {
+      const run = supervisor.get(runId);
+      const log = supervisor.log(runId, 4000);
+      return ok({ run, stillRunning: true, log }, `${runId} is ${run?.state || 'running'} after ${Math.round(waitMs / 1000)}s.\n${log.combined || '(no output yet)'}`);
+    }
     return {
       success: exit.exitCode === 0,
       stdout: [exit.stdout, exit.stderr].filter(Boolean).join('\n'),

@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadTokens, saveTokens } from '../auth/openai-oauth';
-import { CodexIncompleteStreamError, OpenAICodexAdapter } from './openai-codex-adapter';
+import { CodexIncompleteStreamError, OpenAICodexAdapter, codexHttpErrorDetail } from './openai-codex-adapter';
+
+assert.equal(codexHttpErrorDetail('{"error":{"message":"Unsupported model sol"}}'), 'Unsupported model sol');
+assert.equal(codexHttpErrorDetail('not JSON'), '');
+assert.equal(codexHttpErrorDetail('{"error":{"message":"Bearer secret123 sk-examplekey"}}'), 'Bearer [redacted] [redacted]');
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();

@@ -1,4 +1,4 @@
-import pty from 'node-pty';
+import * as pty from 'node-pty';
 import os from 'os';
 
 // Singleton PTY session for the gateway

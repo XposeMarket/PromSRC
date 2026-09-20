@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 import { animateThinkingTextSwap, escHtml, renderMd, renderThinkingState, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
-import { formatModelDisplayName } from '../model-display.js';
+import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { createDormantSceneDocument, loadCreativeSceneGraph } from '../features/chat/optional/creative-scene-runtime.js';
 import { loadCodingDiffRenderer, loadProcessRunCards, loadSourcePanelEnvironment } from '../features/chat/optional/chat-detail-runtime.js';
@@ -19,6 +19,7 @@ import {
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { createDesktopChatRuntimeAdapter } from '../features/chat/runtime/desktop-chat-adapter.js';
 import { createDesktopSendChatRuntime } from '../features/chat/runtime/desktop-send-chat-runtime.js';
+import { composerDraftKey, readComposerDraft, saveComposerDraft } from '../features/chat/composer-drafts.js';
 import { createChatPerformanceRuntime } from '../features/chat/runtime/chat-performance-runtime.js';
 import {
   normalizeQuestionRecord,
@@ -53,6 +54,7 @@ import {
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
   mergeBackgroundAgentTraceEntries,
+  mergeBackgroundAgentSteerMessages,
   normalizeBackgroundAgentWork,
   readBackgroundAgentWork,
   resolveBackgroundAgentIdentity,
@@ -65,6 +67,7 @@ const desktopStreamRenderScheduler = createAdaptiveStreamScheduler({ floorMs: 33
 const { appendBackgroundAgentEvent, persistBackgroundAgentWork } = createDesktopBackgroundAgentWork({
   mergeBackgroundAgentEvents,
   mergeBackgroundAgentTraceEntries,
+  mergeBackgroundAgentSteerMessages,
   normalizeBackgroundAgentWork,
   readBackgroundAgentWork,
   writeBackgroundAgentWork,
@@ -7253,6 +7256,7 @@ function ensureActiveChatSessionExists() {
 function setDraftChatSession(id = generateSessionId()) {
   const nextId = String(id || '').trim() || generateSessionId();
   window.activeChatSessionId = nextId;
+  syncDesktopComposerDraft();
   setAgentSessionId(nextId);
   emptyChatBrainCardIconOrder = [];
   // A draft is a new browser scope as well as a new message scope. Clear the
@@ -8367,7 +8371,40 @@ async function mainGoalAction(action) {
   }
 }
 
+let desktopComposerDraftSessionId = '';
+function syncDesktopComposerDraft() {
+  const nextId = String(window.activeChatSessionId || '').trim();
+  if (!nextId || desktopComposerDraftSessionId === nextId) return;
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  if (desktopComposerDraftSessionId && input) {
+    saveComposerDraft(composerDraftKey('desktop', desktopComposerDraftSessionId), input.value);
+  }
+  desktopComposerDraftSessionId = nextId;
+  if (input) {
+    input.value = readComposerDraft(composerDraftKey('desktop', nextId));
+    resizeChatInput(input);
+    updateDesktopComposerRichPreview(input);
+    updateDesktopComposerSendButton();
+  }
+}
+
+function restoreDesktopComposerAfterFailedSend(sessionId, message) {
+  const key = composerDraftKey('desktop', sessionId);
+  // A newer draft takes precedence over an older failed request.
+  if (readComposerDraft(key)) return;
+  saveComposerDraft(key, message);
+  if (window.activeChatSessionId !== sessionId) return;
+  const input = document.getElementById('chat-input');
+  if (!input || input.value.trim()) return;
+  input.value = message;
+  resizeChatInput(input);
+  updateDesktopComposerRichPreview(input);
+  updateDesktopComposerSendButton();
+}
+
 function syncActiveChat() {
+  syncDesktopComposerDraft();
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
   activateDesktopChatRuntime(sess);
   const visibleSideLink = window.sideChatSplitOpen ? getActiveSideChatLink() : null;
@@ -8713,6 +8750,7 @@ async function deleteChatSession(id, ev) {
 
   saveChatSessions();
   syncActiveChat();
+  saveComposerDraft(composerDraftKey('desktop', id), '');
   if (typeof window.loadProjects === 'function') window.loadProjects();
   if (typeof window.renderChannelsList === 'function') window.renderChannelsList();
 }
@@ -12677,7 +12715,7 @@ function renderLiveTracePreview(entry) {
   const height = Number(preview?.height || entry?.height || 0);
   const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
   return `<button type="button" class="live-turn-vision-preview" title="${escHtml(title + dims)}" onclick="openImgPreview(this.querySelector('img')?.src || '', ${encodeInlineJsString(title)})">
-    <img src="${escHtml(dataUrl)}" alt="${escHtml(title)}" loading="lazy">
+    <img src="${escHtml(dataUrl)}" alt="${escHtml(title)}" loading="eager" decoding="async">
   </button>`;
 }
 
@@ -13417,7 +13455,11 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
     }
     if (group.kind === 'vision') {
-      return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
+      const previews = group.entries.map(renderLiveTracePreview).join('');
+      const carousel = group.entries.length > 1 && group.entries.every(entry => entry?.preview?.artifactKind === 'sample_frame');
+      return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${carousel
+        ? `<div class="live-turn-vision-carousel" role="group" aria-label="Video sample frames">${previews}</div><small>${group.entries.length} frames · Scroll to browse</small>`
+        : previews}</div>`;
     }
     const isLiveCurrent = streaming && index === latestToolGroupIndex && index === groups.length - 1;
     // Resolve progress only inside this tool group. This preserves earlier
@@ -14704,7 +14746,7 @@ function renderBackgroundAgentSidePaneHtml(record, timelineBudget = null) {
     <section class="side-chat-pane background-agent-side-pane" data-chat-pane-key="side:${escHtml(sideSessionId)}" aria-label="${escHtml(identity.name)} background work" style="--background-agent-color:${escHtml(identity.color)}">
       <div class="side-chat-header">
         <div class="side-chat-title-wrap">
-          <div class="side-chat-kicker">Background work · ${escHtml(statusLabel)}</div>
+          <div class="side-chat-kicker">${escHtml(record.model ? formatModelWithReasoning(record.model, record.providerId, record.reasoningEffort) : statusLabel)}</div>
           <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
         </div>
         <button class="side-chat-close" type="button" onclick="closeBackgroundAgentDetail()" title="Close background work" aria-label="Close background work">×</button>
@@ -17705,12 +17747,13 @@ function handleSlashCommandInput(input) {
   updateDesktopComposerRichPreview(input);
 }
 
-function clearChatComposerAfterSend(input) {
-  if (input) {
+function clearChatComposerAfterSend(input, sessionId = window.activeChatSessionId) {
+  if (input && window.activeChatSessionId === sessionId) {
     input.value = '';
     input.style.height = 'auto';
     updateDesktopComposerRichPreview(input);
   }
+  saveComposerDraft(composerDraftKey('desktop', sessionId), '');
   clearActiveSlashCommand({ focus: false });
   clearSkillTriggerExclusions();
   clearSelectedComposerSkills();
@@ -17817,6 +17860,7 @@ const desktopSendChatRuntime = createDesktopSendChatRuntime(() => ({
   chatProgressVisibility,
   clearBackgroundSpawnDockForSession,
   clearChatComposerAfterSend,
+  restoreDesktopComposerAfterFailedSend,
   clearDesignMultiSelection,
   clearDesktopActiveChatRun,
   createEmptyChatSession,
@@ -18076,6 +18120,10 @@ function backgroundSpawnWorkRecord(lane) {
     agentName: identity.name,
     agentColor: identity.color,
     task: lane.task,
+    model: lane.model,
+    providerId: lane.providerId,
+    reasoningEffort: lane.reasoningEffort,
+    plan: lane.plan,
     status: lane.status,
     startedAt: lane.startedAt,
     completedAt: lane.completedAt || (['completed', 'failed'].includes(String(lane.status || '').toLowerCase()) ? lane.updatedAt : 0),
@@ -18144,6 +18192,9 @@ function upsertBackgroundSpawnLane(msg = {}) {
     agentName: identity.name,
     agentColor: identity.color,
     task: String(msg.task || msg.prompt || existing.task || '').trim(),
+    model: msg.model || existing.model || '',
+    providerId: msg.providerId || existing.providerId || '',
+    reasoningEffort: msg.reasoningEffort || msg.executor_reasoning_effort || existing.reasoningEffort || '',
     status: String(msg.state || existing.status || 'running').trim(),
     events: Array.isArray(existing.events) ? existing.events : [],
     liveTraceEntries: Array.isArray(existing.liveTraceEntries) ? existing.liveTraceEntries : [],
@@ -18156,7 +18207,7 @@ function upsertBackgroundSpawnLane(msg = {}) {
     fileChanges: msg.fileChanges || existing.fileChanges || null,
     plan: existing.plan || null,
     steerMessages: Array.isArray(existing.steerMessages) ? existing.steerMessages : [],
-    streamId: String(msg.streamId || msg.data?.streamId || existing.streamId || '').trim(),
+    streamId: String(existing.streamId || msg.streamId || msg.data?.streamId || '').trim(),
     lastSeq: Math.max(0, Math.floor(Number(existing.lastSeq || 0)) || 0),
   };
   lanes.set(id, lane);
@@ -18222,6 +18273,16 @@ function backgroundAgentEventsToLiveTraceEntries(events = []) {
     const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : entry;
     const eventType = String(extra.eventType || extra.event || entry.eventType || entry.type || '').trim().toLowerCase();
     const action = String(extra.action || extra.name || extra.toolName || '').trim();
+    if (eventType === 'vision_injected' || entry.type === 'vision') {
+      const preview = extra.preview || entry.preview;
+      if (preview?.dataUrl) trace.push({ id: entry.id || `background_trace_${index}`, type: 'vision', text: extra.label || entry.content || 'Image preview', preview, previewTitle: extra.previewTitle || preview.title, extra });
+      return;
+    }
+    if (eventType === 'token_narration_boundary' || entry.type === 'preamble') {
+      const text = String(extra.text || extra.narration || entry.content || '').trim();
+      if (text) trace.push({ id: entry.id || `background_trace_${index}`, type: 'preamble', text, extra: { ...extra, source: 'agent_thought', visibility: 'user' } });
+      return;
+    }
     const payload = {
       ...extra,
       action,
@@ -18321,6 +18382,10 @@ function backgroundSpawnProcessEntryFromEventLegacy(msg = {}) {
   const extra = { ...msg, event: eventType };
   const label = backgroundSpawnToolLabel({ ...msg, eventType: action || eventType });
   switch (eventType) {
+    case 'vision_injected':
+      return msg.preview?.dataUrl ? { ts, type: 'vision', actor: 'Background Agent', content: msg.label || 'Image preview', extra } : null;
+    case 'token_narration_boundary':
+      return msg.text ? { ts, type: 'preamble', actor: 'Background Agent', content: msg.text, extra } : null;
     case 'tool_call': {
       const args = msg.args || msg.params || msg.input;
       const content = action
@@ -18414,6 +18479,10 @@ function updateBackgroundSpawnPlanFromEvent(lane, msg = {}) {
   if (!lane) return;
   const eventType = String(msg.eventType || msg.type || '').trim();
   const action = String(msg.action || msg.name || msg.toolName || '').trim();
+  if (eventType === 'progress_state' && msg.source === 'declared' && Array.isArray(msg.items)) {
+    lane.plan = { steps: msg.items.map(item => ({ text: String(item.text || item.label || ''), status: item.status || 'pending' })), activeIndex: Number(msg.activeIndex ?? -1) };
+    return;
+  }
   if (eventType === 'tool_call' && action === 'bg_plan_declare') {
     const steps = extractBackgroundPlanSteps(msg.args || msg.params || msg.input || msg);
     if (steps.length) {
@@ -18832,6 +18901,7 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
 
 // Auto-resize textarea
 document.getElementById('chat-input').addEventListener('input', function() {
+  saveComposerDraft(composerDraftKey('desktop', window.activeChatSessionId), this.value);
   resizeChatInput(this);
   handleSlashCommandInput(this);
   handleSkillTriggerInput(this);
@@ -20389,7 +20459,7 @@ wsEventBus.on('workspace_history_restored', (event = {}) => {
   wsEventBus.on(eventName, () => scheduleSourcePanelWorkRefresh());
 });
 
-['process_run_started', 'process_run_update', 'process_run_output', 'process_run_exited'].forEach((eventName) => {
+['process_run_started', 'process_run_update', 'process_run_exited'].forEach((eventName) => {
   wsEventBus.on(eventName, () => scheduleSourcePanelProcessRefresh());
 });
 

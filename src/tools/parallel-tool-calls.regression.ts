@@ -17,6 +17,54 @@ async function main(): Promise<void> {
     { id: 'web-1', name: 'web_search', args: { query: 'parallel tool calls' } },
   ];
   assert.equal(canExecuteToolCallsInParallel(independentReads), true);
+  assert.equal(canExecuteToolCallsInParallel([
+    { name: 'workspace_read', args: { action: 'grep', path: 'a.ts', pattern: 'TODO' } },
+    { name: 'workspace_read', args: { action: 'stats', path: 'b.ts' } },
+  ]), true, 'read-only workspace wrappers should overlap');
+  const independentStarts = [
+    { name: 'workspace_run', args: { action: 'start', command: 'npm run build', cwd: 'repo-a', parallel_safe: true, parallel_key: 'repo-a' } },
+    { name: 'workspace_run', args: { action: 'start', command: 'npm run build', cwd: 'repo-b', parallel_safe: true, parallel_key: 'repo-b' } },
+  ];
+  assert.equal(canExecuteToolCallsInParallel(independentStarts), true, 'independent process starts should overlap');
+  assert.equal(canExecuteToolCallsInParallel([
+    { name: 'workspace_run', args: { action: 'run', command: 'git status', parallel_safe: true, parallel_key: 'repo-a' } },
+    { name: 'workspace_run', args: { action: 'run', command: 'git status', parallel_safe: true, parallel_key: 'repo-b' } },
+  ]), true, 'independent terminal probes should overlap');
+  assert.equal(canExecuteToolCallsInParallel([
+    { name: 'workspace_run', args: { action: 'wait', runId: 'run-a' } },
+    { name: 'workspace_run', args: { action: 'wait', runId: 'run-b' } },
+  ]), true, 'waits for distinct existing processes should overlap');
+  assert.equal(canExecuteToolCallsInParallel([
+    independentStarts[0],
+    { name: 'workspace_run', args: { action: 'wait', runId: 'run-b' } },
+  ]), false, 'start and wait should use separate tool-call rounds');
+  assert.equal(canExecuteToolCallsInParallel([
+    independentStarts[0],
+    { name: 'workspace_read', args: { action: 'read', path: 'repo-a/output.txt' } },
+  ]), false, 'a shell start must not race a separate file read');
+  assert.equal(canExecuteToolCallsInParallel([
+    independentStarts[0],
+    { name: 'workspace_run', args: { action: 'start', command: 'npm test', parallel_safe: true, parallel_key: 'repo-a' } },
+  ]), false, 'same mutable resource must remain serial');
+  assert.equal(canExecuteToolCallsInParallel([
+    independentStarts[0],
+    { name: 'workspace_run', args: { action: 'start', command: 'npm test', parallel_key: 'repo-b' } },
+  ]), false, 'shell parallelism must be explicitly marked');
+  assert.equal(canExecuteToolCallsInParallel([
+    independentStarts[0],
+    { name: 'workspace_run', args: { action: 'start', command: 'npm test', parallel_safe: true, parallel_key: 'repo-b', elevated: true } },
+  ]), false, 'elevated commands stay serial');
+  let activeStarts = 0;
+  let peakStarts = 0;
+  const startedRuns = await executeToolCallsInParallel(independentStarts, async (_call, index) => {
+    activeStarts += 1;
+    peakStarts = Math.max(peakStarts, activeStarts);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    activeStarts -= 1;
+    return `run-${index}`;
+  });
+  assert.equal(peakStarts, 2, 'admitted process starts must actually dispatch concurrently');
+  assert.deepEqual(startedRuns.map((outcome) => outcome.result), ['run-0', 'run-1']);
   assert.equal(
     canExecuteToolCallsInParallel([
       ...independentReads,

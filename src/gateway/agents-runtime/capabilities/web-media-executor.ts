@@ -456,6 +456,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
         const toolResult = await executeAnalyzeImage({
           file_path: String(args.file_path || ''),
           prompt: args.prompt != null ? String(args.prompt) : undefined,
+          response_mode: args.response_mode === 'report' ? 'report' : 'view',
+          direct_observation: deps.supportsDirectMediaObservation === true,
         });
         return {
           name,
@@ -464,6 +466,7 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
             ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'analyze_image complete' }, null, 2)
             : `ERROR: ${toolResult.error || 'analyze_image failed'}`,
           error: toolResult.success !== true,
+          data: toolResult.success === true ? toolResult.data : undefined,
         };
       }
 
@@ -472,6 +475,8 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
         const toolResult = await executeAnalyzeVideo({
           file_path: String(args.file_path || ''),
           prompt: args.prompt != null ? String(args.prompt) : undefined,
+          response_mode: args.response_mode === 'report' ? 'report' : 'view',
+          direct_observation: deps.supportsDirectMediaObservation === true,
           analysis_mode: args.analysis_mode != null ? String(args.analysis_mode) as 'quick' | 'detail' | 'both' : undefined,
           sample_count: args.sample_count != null ? Number(args.sample_count) : undefined,
           quick_sample_count: args.quick_sample_count != null ? Number(args.quick_sample_count) : undefined,
@@ -496,6 +501,7 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
             ? JSON.stringify(toolResult.data || { message: toolResult.stdout || `${name} complete` }, null, 2)
             : `ERROR: ${toolResult.error || `${name} failed`}`,
           error: toolResult.success !== true,
+          data: toolResult.success === true ? toolResult.data : undefined,
         };
       }
 

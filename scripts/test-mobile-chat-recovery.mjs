@@ -298,7 +298,7 @@ assert.equal(coldMixedTrace[0]?.type, 'think', 'cold recovery must leave model s
 assert.equal(coldMixedTrace[0]?.text, 'Activating required tool categories', 'cold recovery must preserve the model summary text');
 await recoveryRuntime.loadToolActivityFeature();
 const readyTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
-assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'ready recovery must use the live operation renderer');
+assert.ok(!readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'completed recovery calls must use one visible row');
 assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'result'), 'ready recovery must use the live result renderer');
 assert.equal(readyTrace.find((entry) => entry.activity?.kind === 'result')?.activity?.action, 'browser_scroll_collect', 'unnamed recovered results must attach to the preceding operation');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
@@ -398,7 +398,7 @@ assert.match(
 assert.match(pages, /reconcileMobileChatTurn\(busySessionId\)/, 'composer gating must consult authoritative server state before queueing behind local cache');
 assert.ok(
   pages.indexOf('__pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };')
-    < pages.indexOf('selectedGateway = await probeGateway(selectedGateway);'),
+    < pages.indexOf('selectedGateway = await probeGateway(selectedGateway, { retryTransient: true });'),
   'mobile send admission must be claimed before the awaited gateway probe',
 );
 assert.match(pages, /const sendAttemptKey = `\$\{msg\}\|\$\{files\.map/, 'duplicate-send admission must remain stable while a draft session is promoted');

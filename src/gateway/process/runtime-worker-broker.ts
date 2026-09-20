@@ -698,10 +698,23 @@ export class RuntimeWorkerBroker {
    * process alive. Active broker requests remain referenced by their pending
    * IPC/timer handles; long-lived gateways already have their server handles.
    */
+  ref(): void {
+    const child = this.child;
+    if (!child) return;
+    try { child.ref(); } catch {}
+    try { child.channel?.ref?.(); } catch {}
+    try { (child.stdout as any)?.ref?.(); } catch {}
+    try { (child.stderr as any)?.ref?.(); } catch {}
+  }
+
   unref(): void {
     const child = this.child;
     if (!child) return;
     try { child.unref(); } catch {}
     try { child.channel?.unref?.(); } catch {}
+    // The broker also keeps stdout/stderr pipes open for diagnostics. Their
+    // handles otherwise keep a short-lived caller alive after its last job.
+    try { (child.stdout as any)?.unref?.(); } catch {}
+    try { (child.stderr as any)?.unref?.(); } catch {}
   }
 }

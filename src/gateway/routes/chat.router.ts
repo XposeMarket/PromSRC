@@ -10,12 +10,14 @@
 
 
 import express from 'express';
+import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../media-analysis-preview';
 // cors and http moved to core/app.ts + core/server.ts (B3)
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { goalReminderForTool } from '../chat/goal-reminder';
 import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
 import { ModelResponseRecovery } from '../chat/model-response-recovery';
 import { presentProviderCallFailure } from '../chat/provider-error-presentation';
@@ -416,56 +418,6 @@ function buildCapturedScreenshotPreviewPayload(
     width: Number(screenshot?.width || 0) || undefined,
     height: Number(screenshot?.height || 0) || undefined,
   };
-}
-
-function inferAnalysisPreviewMimeType(filePath: string): string {
-  const ext = path.extname(String(filePath || '')).toLowerCase();
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  if (ext === '.webp') return 'image/webp';
-  if (ext === '.gif') return 'image/gif';
-  if (ext === '.bmp') return 'image/bmp';
-  if (ext === '.svg') return 'image/svg+xml';
-  return 'image/png';
-}
-
-function buildMediaAnalysisPreviewPayloads(
-  toolName: string,
-  toolResult?: { error?: boolean; data?: any },
-): Record<string, any>[] {
-  if (toolResult?.error || !['analyze_image', 'analyze_video'].includes(String(toolName || ''))) return [];
-  const data = toolResult?.data && typeof toolResult.data === 'object' ? toolResult.data : {};
-  const previews: Record<string, any>[] = [];
-  const seen = new Set<string>();
-  const add = (candidate: unknown, title: string, artifactKind: string): void => {
-    const raw = String(candidate || '').trim();
-    if (!raw) return;
-    const workspacePath = raw.replace(/\\/g, '/');
-    const key = workspacePath.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    previews.push({
-      dataUrl: `/api/canvas/inline?path=${encodeURIComponent(workspacePath)}`,
-      workspacePath,
-      mimeType: inferAnalysisPreviewMimeType(workspacePath),
-      title,
-      artifactKind,
-    });
-  };
-
-  if (toolName === 'analyze_image') {
-    add(data.rel_path || data.file_path, path.basename(String(data.rel_path || data.file_path || 'analyzed image')), 'analyzed_image');
-    return previews;
-  }
-
-  const sheets = Array.isArray(data.contact_sheets) ? data.contact_sheets : [];
-  sheets.slice(0, 8).forEach((sheet: any, index: number) => {
-    add(sheet?.rel_path || sheet?.path, `Contact sheet ${index + 1}`, 'contact_sheet');
-  });
-  if (!previews.length) {
-    const frames = Array.isArray(data.sample_frames) ? data.sample_frames : [];
-    frames.slice(0, 8).forEach((frame: any, index: number) => add(frame, `Sample frame ${index + 1}`, 'sample_frame'));
-  }
-  return previews;
 }
 
 function inferImageGenerationPresentationMode(userMessage: string, toolName: string, toolArgs: any): 'foreground' | 'background' {
@@ -2990,6 +2942,7 @@ async function handleChat(
     makeBroadcastForTask,
     sendSSE,
     toolCallId: String(toolCallId || '').trim() || undefined,
+    supportsDirectMediaObservation: currentModelCapabilities.hasVision,
     executionPolicy: handleChatGoalExecutionPolicy,
     abortSignal,
     threadOpsOwnerSessionId: runtimeOptions?.supervisionOwnerSessionId,
@@ -4847,7 +4800,7 @@ async function handleChat(
         }
       }
       sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 500), error: toolResult.error, stepNum: allToolResults.length, synthetic: true, actor: 'secondary' });
-      const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+      const goalReminder = goalReminderForTool(message, allToolResults.length);
       const isBrowserTool = isBrowserToolName(toolName);
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
@@ -5468,6 +5421,32 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult?: { error?: boolean; data?: any; name?: string; args?: Record<string, any> },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
+    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+      let injected = toolResult?.data?.observation_mode !== 'direct';
+      if (!toolResult?.error && toolResult?.data?.observation_mode === 'direct') {
+        try {
+          if (!currentModelCapabilities.hasVision) throw new Error('The current model does not support vision.');
+          const observation = await buildDirectMediaObservationMessage(toolName, toolResult || {}, toolInput?.prompt);
+          if (observation) {
+            messages.push(observation);
+            injected = true;
+          }
+        } catch (error: any) {
+          messages.push({ role: 'user', content: `[MEDIA_OBSERVATION_UNAVAILABLE] The image inputs could not be attached: ${String(error?.message || error)}. Do not claim to have inspected them. Retry the analysis or use response_mode="report".` });
+          sendSSE('info', { message: 'Media preview is available, but model image attachment failed.' });
+        }
+      }
+      const analysisPreviews = buildMediaAnalysisPreviewPayloads(toolName, toolResult);
+      analysisPreviews.forEach((preview, index) => {
+        const isVideo = toolName !== 'analyze_image';
+        sendSSE('vision_injected', {
+          source: 'media_analysis', tool: toolName, preview,
+          previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
+          label: isVideo ? `Video sample ${index + 1}` : 'Image preview', injected,
+        });
+      });
+      return;
+    }
     if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
       if (toolResult?.error || !currentModelCapabilities.hasVision) return;
       const rawFrames = Array.isArray(toolResult?.data?.snapshots)
@@ -5749,6 +5728,10 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult: ToolResult,
     decision: PostActionObservationDecision,
   ): Promise<void> => {
+    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+      return;
+    }
     if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
@@ -5788,18 +5771,6 @@ Do not produce prose. Use the canonical thread tool now.` });
     const executedToolArgs = toolResult?.args && typeof toolResult.args === 'object'
       ? toolResult.args
       : toolArgs;
-    const analysisPreviews = buildMediaAnalysisPreviewPayloads(executedToolName, toolResult);
-    analysisPreviews.forEach((preview, index) => {
-      const isVideo = executedToolName === 'analyze_video';
-      sendSSE('vision_injected', {
-        source: 'media_analysis',
-        tool: executedToolName,
-        preview,
-        previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
-        label: isVideo ? `Analyzed video visual ${index + 1}` : 'Analyzed image',
-        injected: true,
-      });
-    });
     const { decision, browserAfterPacket } = await buildObservationDecisionForTool(
       executedToolName,
       executedToolArgs,
@@ -7151,7 +7122,7 @@ RULES:
         );
         sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 300), error: toolResult.error, stepNum: allToolResults.length, synthetic: true });
 
-        const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+        const goalReminder = goalReminderForTool(message, allToolResults.length);
         const isBrowserTool = isBrowserToolName(toolName);
         const isDesktopTool = isDesktopToolName(toolName);
         // Screenshot always delivers full data (image for OpenAI, rich OCR text for local).
@@ -8645,10 +8616,10 @@ RULES:
 
     messages.push(response);
 
-    // Providers can return several tool calls in one assistant message. Keep
-    // the rollout intentionally conservative: only a whole batch of unique,
-    // independent read-only calls is started early. Mixed batches stay on the
-    // existing ordered path so a read can never race a write or browser action.
+    // Providers can return several tool calls in one assistant message. Only
+    // a whole batch admitted by the shared parallel policy starts early:
+    // read-only calls or explicitly marked independent shell operations.
+    // Mixed/dependent batches retain the ordered path.
     const parallelToolResults = new Map<any, ToolResult>();
     type ParallelCallEntry = {
       sourceCall: any;
@@ -8676,7 +8647,6 @@ RULES:
       && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
       && !isBootStartupTurn
       && !isHotRestartTurn
-      && !fileOpV2Active
       && !isSupervisionLoop
       && !isBrainThoughtRuntime
       && canExecuteToolCallsInParallel(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall));
@@ -9812,7 +9782,7 @@ RULES:
         }
       }
 
-      const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+      const goalReminder = goalReminderForTool(message, allToolResults.length);
       // ── Multi-agent browser interception ────────────────────────────────────
       // Screenshot: OpenAI gets actual image, local model gets rich OCR+window text.
       // All other desktop tools: pass real result text so AI always knows the outcome.
@@ -11236,6 +11206,20 @@ async function runInteractiveTurn(
   if (packet) {
     recordWorkingContextPacket(sessionId, packet, { flush: packet.status === 'aborted' });
   }
+  const latestChatSteer = [...getHistory(sessionId, 80)].reverse().find((entry: any) =>
+    entry?.role === 'user'
+    && String(entry.workflowPart || '') === 'interruption'
+    && /^chat_steer_/i.test(String(entry.workflowGroupId || ''))
+    && Number(entry.timestamp || 0) >= turnTiming.startedAt - 2_000,
+  ) as any;
+  const chatSteerContinuationIdentity = latestChatSteer ? {
+    messageId: `${String(latestChatSteer.workflowGroupId)}:continuation`,
+    workflowGroupId: String(latestChatSteer.workflowGroupId),
+    workflowPart: 'interruption_response',
+    workflowLabel: 'Response after steer',
+    workflowBoundarySeq: latestChatSteer.workflowBoundarySeq,
+    workflowStreamId: latestChatSteer.workflowStreamId,
+  } : {};
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
@@ -11283,6 +11267,7 @@ async function runInteractiveTurn(
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
+      ...chatSteerContinuationIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
@@ -11344,6 +11329,7 @@ async function runInteractiveTurn(
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
+      ...chatSteerContinuationIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: result.text,
@@ -21378,6 +21364,8 @@ router.post('/api/chat/steer', (req, res) => {
         channel: 'mobile', channelLabel: 'steer',
         workflowGroupId: `chat_steer_${steer.event.id}`,
         workflowPart: 'interruption', workflowLabel: 'Message sent as steer',
+        workflowBoundarySeq: Math.max(0, Math.floor(Number(body.workflowBoundarySeq || 0) || 0)),
+        workflowStreamId: String(body.workflowStreamId || '').trim() || undefined,
         ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
       };
       addMessage(sessionId, durableSteer, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
@@ -21853,8 +21841,15 @@ router.post('/api/chat', async (req, res) => {
     const now = Date.now();
     const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
     const activity = foregroundActivity.current();
+    // An open tool call is execution activity even when a long build has not
+    // produced a new output chunk. Its own timeout and the absolute turn age
+    // limit still bound a tool that never returns.
+    if (activity) {
+      chatStream.lastSemanticProgressAt = now;
+      chatStream.lastSemanticEvent = 'active_tool_wait';
+    }
     const payload: Record<string, any> = { state: 'processing', idleMs, activeTool: activity };
-    if (idleMs >= 12_000 && now - lastVisibleHeartbeatAt >= 15_000) {
+    if (idleMs >= 45_000 && now - lastVisibleHeartbeatAt >= 45_000) {
       lastVisibleHeartbeatAt = now;
       payload.message = foregroundConnectionMessage(activity, idleMs, now);
     }

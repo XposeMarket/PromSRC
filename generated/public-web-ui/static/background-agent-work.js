@@ -11,6 +11,7 @@ export {
   findBackgroundAgentWork,
   mergeBackgroundAgentEvents,
   mergeBackgroundAgentTraceEntries,
+  mergeBackgroundAgentSteerMessages,
   normalizeBackgroundAgentWork,
   persistBackgroundAgentWork,
   readBackgroundAgentWork,
