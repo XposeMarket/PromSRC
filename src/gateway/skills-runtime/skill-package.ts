@@ -66,6 +66,24 @@ const GENERIC_SINGLE_WORD_TRIGGERS = new Set([
   'task', 'tool', 'video', 'web', 'workflow', 'write', 'writing',
 ]);
 
+/**
+ * Generic single words that must never carry an anyOf match on their own.
+ *
+ * anyOf accumulates score per matched term, so a list of ordinary verbs scores
+ * on nearly every request. GENERIC_SINGLE_WORD_TRIGGERS covers generic nouns
+ * for trigger validation; prompt signals additionally need the common verbs.
+ * Kept separate so existing trigger validation behavior is unchanged.
+ */
+const GENERIC_PROMPT_SIGNAL_TERMS = new Set([
+  ...GENERIC_SINGLE_WORD_TRIGGERS,
+  'add', 'build', 'change', 'check', 'clean', 'close', 'commit', 'confirm', 'continue', 'create',
+  'debug', 'delete', 'deploy', 'download', 'error', 'errors', 'execute', 'find', 'finish', 'fix',
+  'generate', 'install', 'issue', 'issues', 'launch', 'list', 'load', 'look', 'make', 'move',
+  'open', 'output', 'proceed', 'push', 'read', 'remove', 'rename', 'report', 'restart', 'review',
+  'run', 'save', 'search', 'send', 'setup', 'show', 'start', 'status', 'stop', 'test',
+  'tests', 'update', 'upload', 'verify', 'version', 'view', 'work',
+]);
+
 export interface SkillTriggerValidation {
   triggers: string[];
   rejected: Array<{ trigger: string; reason: string }>;
@@ -180,7 +198,17 @@ export function validateSkillPromptSignals(value: unknown): SkillPromptSignalVal
   const rejected: SkillPromptSignalValidation['rejected'] = [];
   const phrases = normalizePromptSignalList(source.phrases, MAX_PROMPT_SIGNAL_PHRASES, 'phrases', rejected);
   const allOf = normalizePromptSignalGroups(source.allOf || source.all_of, rejected);
-  const anyOf = normalizePromptSignalList(source.anyOf || source.any_of, MAX_PROMPT_SIGNAL_ANYOF, 'anyOf', rejected);
+  const anyOfRaw = normalizePromptSignalList(source.anyOf || source.any_of, MAX_PROMPT_SIGNAL_ANYOF, 'anyOf', rejected);
+  // anyOf terms accumulate score on their own, so a list of generic words like
+  // "file, code, check, build, update" could outrank purpose-built skills on
+  // almost any request. Apply the same quality floor validateSkillTriggers uses.
+  const anyOf = anyOfRaw.filter((term) => {
+    const words = term.split(/\s+/).filter(Boolean);
+    if (words.length > 1) return true;
+    if (words[0] && words[0].length >= 5 && !GENERIC_PROMPT_SIGNAL_TERMS.has(words[0])) return true;
+    rejected.push({ signal: term, reason: 'anyOf_generic_or_short_single_word' });
+    return false;
+  });
   const noneOf = normalizePromptSignalList(source.noneOf || source.none_of, MAX_PROMPT_SIGNAL_NONEOF, 'noneOf', rejected);
   const rawMinScore = Number(source.minScore ?? source.min_score ?? 4);
   const minScore = Number.isFinite(rawMinScore)

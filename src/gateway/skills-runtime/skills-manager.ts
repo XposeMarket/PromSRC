@@ -147,6 +147,29 @@ function normalizeSkillIdSet(value: unknown): Set<string> {
   return ids;
 }
 
+/**
+ * Normalize a categories/requiredTools input into a deduped string list.
+ *
+ * Callers reach createSkill with either a CSV string or an array, so the
+ * manager normalizes here rather than trusting one specific tool layer.
+ */
+function normalizeSkillStringList(value: unknown, maxItems = 12, maxLength = 64): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (item: unknown) => {
+    const text = String(item ?? '').trim();
+    if (!text || text.length > maxLength) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (out.length < maxItems) out.push(text);
+  };
+  if (typeof value === 'string') value.split(',').forEach(add);
+  else if (Array.isArray(value)) value.forEach(add);
+  return out;
+}
+
+
 function normalizeSkillMatchText(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -857,6 +880,8 @@ export class SkillsManager {
     promptSignals?: unknown;
     triggerPositivePrompts?: string[];
     triggerNegativePrompts?: string[];
+    categories?: string[];
+    requiredTools?: string[];
     implicitInvocation?: boolean;
     instructions: string;
   }): Skill {
@@ -866,6 +891,10 @@ export class SkillsManager {
     if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
     const promptSignalValidation = validateSkillPromptSignals(data.promptSignals);
     if (promptSignalValidation.rejected.length) throw new Error('Invalid skill prompt signals.');
+    // createSkill previously hardcoded these to [], so a caller that supplied
+    // categories/requiredTools lost them with no error. Normalize and persist.
+    const createCategories = normalizeSkillStringList(data.categories);
+    const createRequiredTools = normalizeSkillStringList(data.requiredTools);
     if (triggerValidation.triggers.length || promptSignalValidation.signals) {
       const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
       const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
@@ -876,8 +905,8 @@ export class SkillsManager {
         description: data.description,
         triggers: triggerValidation.triggers,
         promptSignals: promptSignalValidation.signals,
-        categories: [],
-        requiredTools: [],
+        categories: createCategories,
+        requiredTools: createRequiredTools,
         implicitInvocation: data.implicitInvocation !== false,
         executionEnabled: true,
         status: 'ready',
@@ -917,8 +946,8 @@ export class SkillsManager {
       entrypoint: 'SKILL.md',
       triggers: triggerValidation.triggers,
       promptSignals: promptSignalValidation.signals,
-      categories: [],
-      requiredTools: [],
+      categories: createCategories,
+      requiredTools: createRequiredTools,
       resources: [],
     };
     // Omission is intentional: the loader applies its existing broad/manual/
