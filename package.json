@@ -17,6 +17,7 @@
     "build:web": "npm run check:web-ui",
     "check:web-ui": "node scripts/check-public-web-ui-sync.js",
     "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
+    "test:static-compression": "node scripts/test-static-compression.mjs",
     "test:chat-question-controller": "node scripts/test-chat-question-controller.mjs",
     "test:desktop-question-composer": "node scripts/test-desktop-question-composer-contract.mjs",
     "test:desktop-reasoning-trace": "node scripts/test-desktop-reasoning-trace-segments.mjs",
