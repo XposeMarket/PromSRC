@@ -1,5 +1,6 @@
 import {
   isInterruptedByRestart,
+  isPlannedRestartCheckpointAwaitingBoot,
   getRestartInterruptEpoch,
   listDurableRuntimes,
   listInterruptedRuntimes,
@@ -620,7 +621,12 @@ function resolveActiveRestartEpoch(): number {
   let max = 0;
   for (const runtime of listDurableRuntimes()) {
     const rd = runtime.recoveryData || {};
-    if (rd.recoveredAt || rd.recovery) continue;
+    // A planned-restart checkpoint is marked 'chat_checkpointed' by startup
+    // runtime-recovery BEFORE BOOT runs, precisely because BOOT owns resuming it.
+    // Skipping it here would make this scan return 0 for the exact restart we are
+    // recovering from, and `isMainChatHotRestartRecoveryCandidate()` would then
+    // reject every candidate on `sinceEpoch <= 0` - silently dropping the turn.
+    if ((rd.recoveredAt || rd.recovery) && !isPlannedRestartCheckpointAwaitingBoot(runtime)) continue;
     const epoch = runtimeRestartEpoch(runtime);
     if (epoch > max) max = epoch;
   }
@@ -820,6 +826,45 @@ export function resumePlannedRestartMainChats(
     }
   }
   return Array.from(new Set(resumed));
+}
+
+/**
+ * Consume planned-restart checkpoints that BOOT resolved WITHOUT resuming a
+ * foreground turn.
+ *
+ * A plain "restart the gateway" request is already complete once the replacement
+ * gateway is up: BOOT answers it deterministically and deliberately does not
+ * replay the original turn, because that turn's only intended action was the
+ * restart itself. That outcome still has to dispose of the checkpoint. Otherwise
+ * the record keeps `recovery: 'chat_checkpointed'` forever, and retention - which
+ * must treat an unclaimed planned checkpoint as live work so BOOT can find it -
+ * would pin that entry in the durable ledger indefinitely.
+ *
+ * Every BOOT outcome therefore has an explicit disposition: resumed turns are
+ * stamped 'chat_planned_restart_retriggered' by resumePlannedRestartMainChats(),
+ * and acknowledgement-only restarts are stamped here.
+ */
+export function acknowledgePlannedRestartMainChats(runtimeIds: string[]): string[] {
+  const requested = new Set((runtimeIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  if (!requested.size) return [];
+
+  const acknowledged: string[] = [];
+  for (const runtime of listDurableRuntimes()) {
+    if (!requested.has(String(runtime.id || '').trim())) continue;
+    if (runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') continue;
+    if (String(runtime.recoveryData?.recovery || '') !== 'chat_checkpointed') continue;
+    try {
+      markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+        recovery: 'chat_planned_restart_acknowledged',
+        sessionId: runtime.sessionId,
+        recoveredAt: Date.now(),
+      });
+      acknowledged.push(String(runtime.id));
+    } catch (err: any) {
+      console.warn('[runtime-recovery] Planned restart acknowledgement failed:', runtime.id, err?.message || err);
+    }
+  }
+  return acknowledged;
 }
 
 /**
