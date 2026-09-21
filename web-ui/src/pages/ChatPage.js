@@ -7721,7 +7721,19 @@ function foldDesktopGatewayRestartCheckpoints(history) {
         break;
       }
     }
-    if (target) mergeChatMessageMetadata(target, checkpoint);
+    if (target) {
+      mergeChatMessageMetadata(target, checkpoint);
+      continue;
+    }
+    // Folding is only safe once the checkpoint has actually been attached to the
+    // turn it belongs to. With no assistant row to carry it, dropping it here
+    // would erase the only visible evidence that anything happened: an
+    // unexpected crash whose answer never arrived renders as a user message
+    // followed by silence. Keep the row so a planned suspension and a real
+    // interruption stay distinguishable, including for a client that loads
+    // during the gap before a resumed answer exists.
+    out.push(checkpoint);
+
   }
   return out;
 }
