@@ -174,3 +174,5 @@ jobs:
         run: node scripts/test-desktop-reasoning-summary-stream.mjs
       - name: Verify chat artifact lifecycle
         run: npm run test:chat-artifact-lifecycle
+      - name: Verify stale tool-result elision
+        run: npm run test:tool-result-elision
