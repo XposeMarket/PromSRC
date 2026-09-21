@@ -1,3 +1,4 @@
+import { buildToolOutputArtifactPreview } from '../tool-result-model-context';
 // src/gateway/subagent-executor.ts
 // Tool execution engine — extracted from server-v2.ts (Step 14.1, Phase 3).
 // Restored and adapted for dep-injected execution.
@@ -3883,10 +3884,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     if (!relPath) {
       return `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`;
     }
-    return [
-      opts.summary || `${toolName} output was ${text.length} chars, which exceeds the ${inlineLimit} char inline budget.`,
-      `[TOOL_RESULT_ARTIFACT] Full output saved to ${relPath}. Read targeted ranges from that artifact only if needed.`,
-    ].join('\n');
+    return buildToolOutputArtifactPreview({
+      toolName,
+      text,
+      inlineLimit,
+      artifactPath: relPath,
+      summary: opts.summary,
+    });
   }
 	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = FILE_TOOL_DEFAULT_READ_LINES): string {
     const exactLine = resolvePositiveLineArg(argsObj.line ?? argsObj.line_number ?? argsObj.lineNumber ?? argsObj.physical_line);
