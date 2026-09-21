@@ -19,6 +19,7 @@ const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = [
   read('web-ui/src/mobile/mobile-pages.js'),
   read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+  read('web-ui/src/mobile/mobile-restart-continuity.js'),
 ].join('\n');
 const renderer = [
   read('web-ui/src/mobile/mobile-chat-renderer-runtime.js'),
@@ -59,7 +60,7 @@ assert.match(router, /const foregroundActivity = createForegroundToolActivityTra
   'main chat must track open tool calls independently of visible SSE output');
 assert.match(router, /payload\.message = foregroundConnectionMessage\(activity, idleMs, now\)/,
   'heartbeats must describe the open tool instead of claiming generic work during silence');
-assert.match(pages, /case 'heartbeat':[\s\S]{0,180}evt\.message && !wsReconnectPending[\s\S]{0,100}setChatConnectionStatus\(true, String\(evt\.message\), \{ mode: 'activity' \}\)/,
+assert.match(pages, /case 'heartbeat':[\s\S]{0,180}evt\.message && !reconnectStatus\.isReconnectPending\(\)[\s\S]{0,100}setChatConnectionStatus\(true, String\(evt\.message\), \{ mode: 'activity' \}\)/,
   'mobile chat must display tool-aware heartbeat status separately from reconnect status');
 assert.match(pages, /status\?\.run\?\.checkpoint\?\.connectionMessage/,
   'recovery must restore the active tool status before the next heartbeat arrives');
@@ -93,8 +94,13 @@ assert.match(
 );
 assert.match(
   pages,
-  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,2200}checkpoint\.messageKind = 'restart_status';[\s\S]{0,400}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
-  'cold mobile history must show a successful restart when it is the only durable completion and omit internal checkpoints',
+  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,600}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
+  'cold mobile history must omit internal restart checkpoints from the visible thread',
+);
+assert.match(
+  pages,
+  /if \(target\) _mergeMobileAssistantTurnDetails\(target, checkpoint, \{ preserveTargetText: true \}\)/,
+  'a planned restart checkpoint must fold its durable trace into the resumed assistant turn instead of rendering a separate bubble',
 );
 assert.match(
   pages,
@@ -103,8 +109,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /mapped\.forEach\(\(checkpoint, index\) =>[\s\S]{0,700}if \(candidate\?\.role === 'user'\) break;[\s\S]{0,800}_mergeMobileAssistantTurnDetails\(candidate, checkpoint, \{ preserveTargetText: true \}\)/,
-  'mobile history may fold restart checkpoint activity only into the nearby boot reply before another user turn',
+  /mapped\.forEach\(\(checkpoint, index\) =>[\s\S]{0,600}if \(candidate\?\.role === 'user'\) break;[\s\S]{0,1400}if \(target\) _mergeMobileAssistantTurnDetails\(target, checkpoint, \{ preserveTargetText: true \}\)/,
+  'mobile history may fold restart checkpoint activity only into the nearby assistant turn before another user turn',
 );
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
@@ -607,13 +613,18 @@ const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requeste
 assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
 assert.match(
   pages,
-  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn && !gatewayRestartContinuity\)\)/,
+  /export function shouldHoldStreamingTurn\([\s\S]{0,400}return replayStillActive\s*\|\|\s*\(localTurnStreaming && !completedDurableTurn && !gatewayRestartContinuity\)/,
   'an inactive or recovered read must preserve the visible turn until durable completion is proven',
+);
+assert.match(
+  pages,
+  /if \(holdStreamingTurn\(\{ replayStillActive, localTurnStreaming: localAiTurn\?\.streaming, completedDurableTurn, gatewayRestartContinuity \}\)\)/,
+  'mobile recovery must route the hold decision through the shared restart-continuity policy',
 );
 assert.match(pages, /const localThreadBeforeClear = localThread\.slice\(\)/, 'inactive recovery must snapshot the live array before destructive cleanup');
 assert.match(
   pages,
-  /const localThreadForMerge = completedDurableTurn && !gatewayRestartContinuity\s*\?\s*localThread\s*:\s*localThreadBeforeClear/,
+  /const merge = resolveRestartMerge\(\{[\s\S]{0,320}completedDurableTurn,[\s\S]{0,320}gatewayRestartContinuity,/,
   'inactive recovery must merge the pre-clear snapshot for planned gateway restart continuity',
 );
 assert.match(

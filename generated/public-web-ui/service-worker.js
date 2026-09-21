@@ -22,7 +22,7 @@
 const RELEASE_VERSION = 'pm-v315-2026-09-20-mobile-load-speed';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = '8b5b122abe2849aa';
+const ASSET_BUILD_ID = 'b726eed6da14875e';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -57,8 +57,8 @@ const BUILD_PRECACHE = [
   "/build/chunks/chunk-MSYOJG2Q.js",
   "/build/chunks/chunk-X4KG3ICV.js",
   "/build/chunks/chunk-YMT6MSCC.js",
-  "/build/chunks/mobile-router-YHB25IHD.js",
-  "/build/entries/mobile-XD3HTLCL.js",
+  "/build/chunks/mobile-router-O3W4VZSR.js",
+  "/build/entries/mobile-4Q7PFY5X.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-0030786ff2fb.js",
   "/build/styles/mobile-ZQRCIKD5.css",
