@@ -72,6 +72,7 @@
     "test:subagent-context": "npm run build:backend && node scripts/test-subagent-context-isolation.mjs",
     "test:context-window": "tsx src/gateway/context/context-window-usage.regression.ts && tsx src/gateway/context/compaction-safety.regression.ts && node scripts/test-context-window-ui.mjs",
     "test:turn-context": "tsx src/gateway/context/turn-context-packet.regression.ts",
+    "test:native-file-tool-bypass": "tsx src/gateway/agents-runtime/native-file-tool-bypass.regression.ts",
     "test:agent-identity-memory": "npm run build:backend && node scripts/test-agent-identity-memory.mjs",
     "test:codex-spark-usage": "npm run build:backend && node scripts/test-codex-spark-usage.mjs",
     "test:untrusted-content-boundary": "npm run build && node scripts/test-untrusted-content-boundary.mjs",
