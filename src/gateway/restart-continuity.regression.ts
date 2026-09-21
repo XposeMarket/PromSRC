@@ -98,6 +98,56 @@ async function main(): Promise<void> {
   assert.equal(crashCheckpoint.restartContinuity, undefined);
 
   runtimes.finishLiveRuntime(crashRuntimeId);
+
+  // ── Planned restarts must be classified for a fast resume ──────────────────
+  // server-v2 keys the startup recovery delay off this predicate. A planned
+  // mid-turn restart previously inherited the 60s hot-restart cool-down, which
+  // left the user staring at a frozen streaming turn. Pin the classification so
+  // that regression cannot return.
+  const delaySessionId = 'restart_continuity_delay';
+  const plannedDelayRuntimeId = runtimes.registerLiveRuntime({
+    kind: 'main_chat',
+    label: 'planned restart resume delay',
+    sessionId: delaySessionId,
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: { message: 'Restart and continue.' },
+  });
+  runtimes.updateLiveRuntimeCheckpoint(plannedDelayRuntimeId, {
+    event: 'tool_call',
+    toolName: 'gateway_restart',
+  });
+  const plannedDelaySnapshot = runtimes.listLiveRuntimes()
+    .find((runtime: any) => runtime.id === plannedDelayRuntimeId);
+  assert.ok(plannedDelaySnapshot, 'the planned runtime must be discoverable for classification');
+  assert.equal(
+    recovery.isPlannedMainChatRestartRuntime(plannedDelaySnapshot),
+    true,
+    'a gateway_restart main-chat runtime must resume on the fast planned path',
+  );
+
+  const crashDelaySessionId = 'restart_continuity_delay_crash';
+  const crashDelayRuntimeId = runtimes.registerLiveRuntime({
+    kind: 'main_chat',
+    label: 'crash resume delay',
+    sessionId: crashDelaySessionId,
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: { message: 'Read the file.' },
+  });
+  runtimes.updateLiveRuntimeCheckpoint(crashDelayRuntimeId, {
+    event: 'tool_call',
+    toolName: 'workspace_read',
+  });
+  const crashDelaySnapshot = runtimes.listLiveRuntimes()
+    .find((runtime: any) => runtime.id === crashDelayRuntimeId);
+  assert.ok(crashDelaySnapshot, 'the crash runtime must be discoverable for classification');
+  assert.equal(
+    recovery.isPlannedMainChatRestartRuntime(crashDelaySnapshot),
+    false,
+    'a crash must keep the conservative recovery cool-down',
+  );
+
+  runtimes.finishLiveRuntime(plannedDelayRuntimeId);
+  runtimes.finishLiveRuntime(crashDelayRuntimeId);
   recovery.registerRestartContinuityEmitter(undefined);
 
   console.log('restart-continuity regression: all checks passed');

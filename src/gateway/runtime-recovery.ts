@@ -138,6 +138,10 @@ function mirrorSessionCheckpointToAgentChat(runtime: LiveRuntimeSnapshot): void 
   });
 }
 
+export function isPlannedMainChatRestartRuntime(runtime: LiveRuntimeSnapshot): boolean {
+  return runtime?.kind === 'main_chat' && !!plannedRestartToolName(runtime);
+}
+
 function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
   const candidates = [
     runtime.checkpoint?.toolName,

@@ -1851,7 +1851,7 @@ import { router as connectionsRouter } from './connections.router';
 import { router as canvasRouter, initCanvasRouter } from './canvas.router';
 import { addCanvasFile, getCanvasContextBlock } from './canvas-state';
 import { getMCPManager } from '../mcp-manager';
-import { resumePlannedRestartMainChats } from '../runtime-recovery';
+import { resumePlannedRestartMainChats, registerRestartContinuityEmitter } from '../runtime-recovery';
 import {
   // Core exports
   buildTools,
@@ -11454,6 +11454,29 @@ type InterruptedMainChatRuntime = {
  * disappeared. The original user message is already durable in session history,
  * so this path deliberately suppresses a second user-message write while still
  * giving the model the exact original request and preserved checkpoint context.
+ */
+
+/**
+ * Mirror a pre-shutdown suspension notice into the session's still-open stream.
+ * runtime-recovery cannot import this module (circular), so it calls us through
+ * this registered bridge. Without it, a client replaying the stream from seq 0
+ * after reconnecting never learns the turn was suspended rather than dropped.
+ */
+registerRestartContinuityEmitter((payload: Record<string, any>) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) return;
+  const stream = getMainChatStream(sessionId);
+  if (!stream) return;
+  try {
+    appendMainChatStreamEvent(sessionId, stream.streamId, 'restart_continuity', {
+      ...payload,
+      priorStreamId: stream.streamId,
+    });
+  } catch {}
+});
+/**
+ * Resume an interrupted main-chat turn on the replacement gateway. The original
+ * user message is not re-appended; the preserved checkpoint context is replayed.
  */
 export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
   const sessionId = String(runtime?.sessionId || '').trim();

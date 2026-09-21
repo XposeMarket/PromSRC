@@ -75,7 +75,7 @@ import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
-import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime } from './runtime-recovery';
+import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, registerRestartContinuityEmitter } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import { assertSupportedNodeRuntime } from './runtime/node-runtime';
 import {
@@ -1240,11 +1240,20 @@ async function startGatewayListeners(): Promise<void> {
     // Start one at a time and wait for the shared model-busy guard to clear so
     // a restart cannot immediately recreate a CPU-bound context backlog.
     if (deferredMainChatRecoveries.length > 0) {
-      const recoveryDelayMs = isHotRestartBoot
-        ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
-        : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+      // A self-triggered mid-turn restart is a suspension of a turn the user is
+      // actively watching, so it must resume promptly. Only crash recovery pays
+      // the long cool-down that exists to avoid recreating a CPU-bound backlog.
+      const hasPlannedContinuation = deferredMainChatRecoveries.some(isPlannedMainChatRestartRuntime);
+      const recoveryDelayMs = hasPlannedContinuation
+        ? Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 1_500))
+        : isHotRestartBoot
+          ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
+          : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+      // Planned continuations also must not sit behind the model-busy poll for
+      // a full cycle; keep their retry cadence tight.
       const recoveryQueue = [...deferredMainChatRecoveries];
-      const recoveryPollMs = 5_000;
+
+      const recoveryPollMs = hasPlannedContinuation ? 750 : 5_000;
       const scheduleRecoveryDrain = (delayMs: number): void => {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
