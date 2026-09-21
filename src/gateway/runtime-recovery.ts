@@ -139,9 +139,19 @@ function mirrorSessionCheckpointToAgentChat(runtime: LiveRuntimeSnapshot): void 
   });
 }
 
+// True only for a main-chat turn that EXPLICITLY owns its restart, i.e. the turn
+// itself called gateway_restart / prom_apply_dev_changes.
+//
+// This must use the same ownership test as deferred-queue admission. The broader
+// `plannedRestartToolName()` also accepts a bare `interruptReason`, but startup
+// recovery defaults that field to 'gateway_restart' for ANY runtime it finds
+// interrupted - including supervisor crash recovery, where nothing was planned.
+// Classifying those as planned would hand crash recovery the short planned-restart
+// cooldown, which exists precisely to avoid recreating a CPU-bound backlog.
 export function isPlannedMainChatRestartRuntime(runtime: LiveRuntimeSnapshot): boolean {
-  return runtime?.kind === 'main_chat' && !!plannedRestartToolName(runtime);
+  return runtime?.kind === 'main_chat' && !!explicitlyOwnedMainChatRestartToolName(runtime);
 }
+
 
 function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
   const candidates = [

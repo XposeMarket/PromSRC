@@ -1243,17 +1243,35 @@ async function startGatewayListeners(): Promise<void> {
       // A self-triggered mid-turn restart is a suspension of a turn the user is
       // actively watching, so it must resume promptly. Only crash recovery pays
       // the long cool-down that exists to avoid recreating a CPU-bound backlog.
-      const hasPlannedContinuation = deferredMainChatRecoveries.some(isPlannedMainChatRestartRuntime);
-      const recoveryDelayMs = hasPlannedContinuation
-        ? Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 1_500))
-        : isHotRestartBoot
-          ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
-          : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+      //
+      // The cadence is chosen PER RUNTIME rather than for the whole queue. A
+      // queue-wide `.some()` let a single planned continuation pull every
+      // crash-recovered turn into the fast lane with it, which is exactly the
+      // backlog the cool-down is meant to prevent.
+      //
+      // Note that a turn which explicitly owns its restart normally resumes
+      // through BOOT (resumableForegroundRuntimeIds -> resumePlannedRestartMainChats),
+      // not through this queue: startup recovery deliberately excludes planned
+      // boundaries from the deferred queue so the tool-owning turn is not replayed
+      // twice. That ownership rule is intentional and is left intact here. The fast
+      // lane stays for the runtimes that legitimately reach this queue, and the
+      // corrected classifier is what stops crash recovery from claiming it.
+      const plannedDelayMs = Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 1_500));
+      const crashDelayMs = isHotRestartBoot
+        ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
+        : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+      const recoveryQueue = [...deferredMainChatRecoveries];
+      // Planned continuations resume first; they are the turns a user is watching.
+      recoveryQueue.sort((a, b) => Number(isPlannedMainChatRestartRuntime(b)) - Number(isPlannedMainChatRestartRuntime(a)));
+
+      const delayForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
+        runtime && isPlannedMainChatRestartRuntime(runtime) ? plannedDelayMs : crashDelayMs
+      );
       // Planned continuations also must not sit behind the model-busy poll for
       // a full cycle; keep their retry cadence tight.
-      const recoveryQueue = [...deferredMainChatRecoveries];
-
-      const recoveryPollMs = hasPlannedContinuation ? 750 : 5_000;
+      const pollForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
+        runtime && isPlannedMainChatRestartRuntime(runtime) ? 750 : 5_000
+      );
       const scheduleRecoveryDrain = (delayMs: number): void => {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
         if (typeof (timer as any).unref === 'function') (timer as any).unref();
@@ -1261,7 +1279,7 @@ async function startGatewayListeners(): Promise<void> {
       const drainRecoveryQueue = (): void => {
         if (shuttingDown || draining || recoveryQueue.length === 0) return;
         if (isModelBusy()) {
-          scheduleRecoveryDrain(recoveryPollMs);
+          scheduleRecoveryDrain(pollForRuntime(recoveryQueue[0]));
           return;
         }
         const runtime = recoveryQueue.shift();
@@ -1269,10 +1287,12 @@ async function startGatewayListeners(): Promise<void> {
         if (!retriggerDeferredMainChatRuntime(runtime, retriggerInterruptedMainChat)) {
           recoveryQueue.push(runtime);
         }
-        scheduleRecoveryDrain(recoveryPollMs);
+        scheduleRecoveryDrain(pollForRuntime(recoveryQueue[0]));
       };
-      scheduleRecoveryDrain(recoveryDelayMs);
-      startupMark(`foreground recovery deferred ${recoveryDelayMs}ms (${recoveryQueue.length} turn(s))`);
+      const firstDelayMs = delayForRuntime(recoveryQueue[0]);
+      scheduleRecoveryDrain(firstDelayMs);
+      startupMark(`foreground recovery deferred ${firstDelayMs}ms (${recoveryQueue.length} turn(s))`);
+
     }
     // Internal watches are durable, but their first scan can inspect task and
     // session state synchronously. Bind the listener first and give health and
