@@ -50,7 +50,9 @@ function normalizeModelSlug(modelName: string): string {
 }
 
 function xaiModelSupportsXHighReasoningEffort(modelName: string): boolean {
-  return /^grok-4\.20-multi-agent(?:-|$)/i.test(normalizeModelSlug(modelName));
+  const name = normalizeModelSlug(modelName);
+  return /^grok-4\.7(?:-|$)/i.test(name)
+    || /^grok-4\.20-multi-agent(?:-|$)/i.test(name);
 }
 
 function xaiModelSupportsReasoningEffort(modelName: string): boolean {
@@ -59,6 +61,7 @@ function xaiModelSupportsReasoningEffort(modelName: string): boolean {
     || /^grok-4\.3(?:-|$)/i.test(name)
     || /^grok-4\.5(?:-|$)/i.test(name)
     || /^grok-4\.6(?:-|$)/i.test(name)
+    || /^grok-4\.7(?:-|$)/i.test(name)
     || /^grok-4\.20-multi-agent(?:-|$)/i.test(name)
     || /^grok-3-mini(?:-|$)/i.test(name);
 }
@@ -116,6 +119,9 @@ function getKnownProviderModelInfo(providerId: string, modelName: string): Parti
       return { contextWindowTokens: 500_000, tokenizer: 'openai' };
     }
     if (/^grok-4\.6(?:-latest)?$/i.test(name)) {
+      return { contextWindowTokens: 500_000, tokenizer: 'openai' };
+    }
+    if (/^grok-4\.7(?:-latest)?$/i.test(name)) {
       return { contextWindowTokens: 500_000, tokenizer: 'openai' };
     }
     if (/^(grok-4\.3(?:-latest)?|grok-latest)$/i.test(name) || /^grok-4\.20(?:$|-)/i.test(name)) {
