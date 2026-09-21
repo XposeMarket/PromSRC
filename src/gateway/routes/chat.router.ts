@@ -17214,6 +17214,35 @@ function sanitizeMessageMediaForUi(msg: any): void {
   }
 }
 
+// Mirror of the mobile client's `_isMobileTransientReasoningTraceEntry`
+// (web-ui/src/mobile/mobile-pages.js). These entries are streaming-only chatter:
+// the client already drops them from its durable thread cache, so shipping them
+// in restored history is pure payload weight. Full thoughts are durable journal
+// entries and must never be removed, even when a provider echoes a summary
+// field alongside them.
+function isTransientLiveTraceEntryForUi(entry: any): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const str = (value: any) => String(value || '').trim().toLowerCase();
+  const type = str(entry.type || entry.kind);
+  const event = str(entry.event || extra.event || extra.eventType);
+  const source = str(entry.source || extra.source);
+  const visibility = str(entry.visibility || extra.visibility);
+  const reasoningKind = str(entry.reasoningKind || extra.reasoningKind || extra.presentationKind);
+  if (reasoningKind === 'full_thought') return false;
+  return source === 'agent_progress'
+    || source === 'reasoning_summary'
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(type)
+    || ['reasoning_summary', 'reasoning_summary_delta', 'reasoning_delta'].includes(event)
+    || reasoningKind === 'summary'
+    || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
+}
+
+function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
+  const durable = entries.filter((entry) => !isTransientLiveTraceEntryForUi(entry));
+  return limit > 0 ? durable.slice(-limit) : durable;
+}
+
 function sanitizeHistoryForUiResponse(
   history: any[],
   options: {
@@ -17224,6 +17253,7 @@ function sanitizeHistoryForUiResponse(
     processEntryExtraLimit?: number;
     attachmentPreviewDataUrlLimit?: number;
     attachmentPreviewTextLimit?: number;
+    perMessageLiveTraceLimit?: number;
   },
 ): any[] {
   const source = Array.isArray(history) ? history : [];
@@ -17239,6 +17269,9 @@ function sanitizeHistoryForUiResponse(
           textLimit: options.processEntryTextLimit || 1600,
           extraLimit: options.processEntryExtraLimit || 1200,
         }));
+    }
+    if (Array.isArray(msg.liveTraceEntries) && typeof options.perMessageLiveTraceLimit === 'number') {
+      msg.liveTraceEntries = sanitizeLiveTraceEntriesForUi(msg.liveTraceEntries, options.perMessageLiveTraceLimit);
     }
     if (Array.isArray(msg.attachmentPreviews)) {
       msg.attachmentPreviews = msg.attachmentPreviews.map((preview: any) => sanitizeAttachmentPreviewForUi(preview, {
@@ -22732,6 +22765,7 @@ router.get('/api/sessions/:id/history-page', requireSafeSessionParam, (req, res)
       processEntryExtraLimit: fullProcess ? 4000 : mobileOptimized ? 700 : 1200,
       attachmentPreviewDataUrlLimit: mobileOptimized ? 30_000 : 60_000,
       attachmentPreviewTextLimit: mobileOptimized ? 2000 : 4000,
+      perMessageLiveTraceLimit: fullProcess ? undefined : mobileOptimized ? 60 : 180,
     });
     res.json({ sessionId, items, pageInfo: page.pageInfo });
   } catch (error: any) {
@@ -22790,6 +22824,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
       processEntryExtraLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 700 : 1200,
       attachmentPreviewDataUrlLimit: full ? 10_000_000 : mobileOptimized ? 30_000 : 60_000,
       attachmentPreviewTextLimit: full ? 10_000_000 : mobileOptimized ? 2000 : 4000,
+      perMessageLiveTraceLimit: full || fullProcess ? undefined : mobileOptimized ? 60 : 180,
     });
     const durableProcessLog = Array.isArray((session as any).processLog) ? (session as any).processLog : [];
     const responseProcessLog = [

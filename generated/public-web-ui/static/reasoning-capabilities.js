@@ -44,7 +44,7 @@ export function reasoningCapability(provider, model) {
     return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive', nativeEffort: true };
   }
   if (id === 'perplexity') return { efforts: ['low','medium','high'] };
-  if (id === 'xai') return { efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'] };
+  if (id === 'xai') return { efforts: /^(?:grok-4\.7(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name) ? ['low','medium','high','xhigh'] : ['low','medium','high'] };
   return { efforts: [] };
 }
 

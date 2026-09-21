@@ -2534,7 +2534,7 @@ window.refreshActiveChatModelRoute = refreshActiveChatModelRoute;
 window.followMainChatDefault = followMainChatDefault;
 
 const DESKTOP_SWITCHER_EXTRA_MODELS = {
-  xai: ['grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-build-0.1'],
+  xai: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-build-0.1'],
 };
 
 let _desktopSwitcherSettingsPromise = null;
