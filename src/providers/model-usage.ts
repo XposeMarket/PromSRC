@@ -123,8 +123,38 @@ const CALIBRATION_MAX = 2.5;
 const CALIBRATION_WINDOW = 12;
 const CALIBRATION_MIN_SAMPLES = 2;
 
-function cacheUsageIsSeparateFromInput(provider: string): boolean {
+/**
+ * Anthropic reports `input_tokens` as the *uncached* remainder: cache reads and
+ * cache writes are billed and counted separately and are NOT included in it.
+ * OpenAI-compatible providers instead report the full prompt in
+ * `prompt_tokens`/`input_tokens` and expose `cached_tokens` as a subset of it.
+ *
+ * Any code that wants "how big was the prompt we actually sent" must branch on
+ * this, or an Anthropic turn looks like a ~1-2 token call once prefix caching
+ * warms up.
+ */
+export function cacheUsageIsSeparateFromInput(provider: string): boolean {
   return String(provider || '').trim().toLowerCase().includes('anthropic');
+}
+
+/**
+ * The real prompt size the provider processed for a single call, normalized
+ * across providers. Use this for context-window/occupancy math instead of
+ * reading `inputTokens` directly.
+ *
+ * When the provider is unknown we deliberately do NOT add cache tokens: for
+ * OpenAI-style usage that would double-count a subset of the input.
+ */
+export function resolveProviderPromptTokens(event: {
+  provider?: unknown;
+  inputTokens?: unknown;
+  cacheReadTokens?: unknown;
+  cacheWriteTokens?: unknown;
+} | null | undefined): number {
+  if (!event || typeof event !== 'object') return 0;
+  const inputTokens = normalizeCount(event.inputTokens);
+  if (!cacheUsageIsSeparateFromInput(String(event.provider || ''))) return inputTokens;
+  return inputTokens + normalizeCount(event.cacheReadTokens) + normalizeCount(event.cacheWriteTokens);
 }
 
 /**
@@ -146,11 +176,7 @@ export function getUsageCalibration(provider: string, model: string): UsageCalib
     const recent = (_usageCalibrationEvents.get(usageCalibrationKey(prov, mdl)) || []).slice(-CALIBRATION_WINDOW);
     const ratios = recent
       .map((e) => {
-        const provider = String(e.provider || '');
-        const realInput = Number(e.inputTokens || 0)
-          + (cacheUsageIsSeparateFromInput(provider)
-            ? Number(e.cacheReadTokens || 0) + Number(e.cacheWriteTokens || 0)
-            : 0);
+        const realInput = resolveProviderPromptTokens(e);
         const estimate = Number(e.estimatedProviderInputTokens || 0);
         return estimate > 0 ? realInput / estimate : NaN;
       })
