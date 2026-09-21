@@ -5834,6 +5834,14 @@ function _mobileHistoryTurnsRepresentSameTurn(a, b) {
     && aAt > 0 && bAt > 0 && aAt === bAt;
 }
 
+function _mobileCanonicalTextIsTrailingFragment(localValue, canonicalValue) {
+  const localText = String(localValue || '').replace(/\s+/g, ' ').trim();
+  const canonicalText = String(canonicalValue || '').replace(/\s+/g, ' ').trim();
+  if (!localText || !canonicalText || localText === canonicalText) return false;
+  if (canonicalText.length < 24 || localText.length < canonicalText.length + 160) return false;
+  return !localText.startsWith(canonicalText) && localText.endsWith(canonicalText);
+}
+
 function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = false, appendOnlyNewer = false, serverAuthoritativeText = false } = {}) {
   const next = [];
   const incoming = Array.isArray(secondary) ? secondary : [];
@@ -5866,7 +5874,12 @@ function _mergeMobileHistoryRecords(primary, secondary, { sortByTimestamp = fals
     if (target.role === 'ai') {
       if (serverAuthoritativeText && preferIncoming && target.streaming !== true && candidate.streaming !== true) {
         const canonicalText = _mobileMessageCopyText(candidate);
-        if (canonicalText) {
+        const localText = _mobileMessageCopyText(target);
+        // A late empty-final salvage can durably contain only the last sentence
+        // even though the client already painted the full streamed answer. Keep
+        // that richer completed stream; ordinary canonical corrections remain
+        // server-authoritative.
+        if (canonicalText && !_mobileCanonicalTextIsTrailingFragment(localText, canonicalText)) {
           if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
           target.body.text = canonicalText;
           target.content = canonicalText;

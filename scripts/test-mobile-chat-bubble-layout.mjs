@@ -30,17 +30,17 @@ try {
   await page.setContent(`<!doctype html><html><head><style>${css}</style><style>
     html, body { margin: 0; width: 390px; }
     .fixture { width: 358px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  </style></head><body class="pm-mobile-active"><main class="fixture pm-chat-body pm-chat-thread">
+  </style></head><body class="pm-mobile-active pm-runtime-pills-paired" style="--pm-tabbar-h: 0px; --pm-composer-live-height: 0px;"><main class="fixture pm-chat-body pm-chat-thread">
     <div id="short" class="pm-msg from-user"><div class="pm-bubble"><div class="markdown-body"><p>Sounds good</p></div></div></div>
     <div id="normal" class="pm-msg from-user"><div class="pm-bubble"><div class="markdown-body"><p>Please review the mobile app and make sure this message wraps naturally across the available width.</p></div></div></div>
     <div id="token" class="pm-msg from-user"><div class="pm-bubble"><div class="markdown-body"><p>https://example.test/${'unbroken'.repeat(55)}</p></div></div></div>
-  </main></body></html>`);
+  </main><div class="pm-main-plan-dock"><button class="pm-main-plan-pill"><span class="pm-main-plan-ring"><i></i></span><strong>2 of 4</strong></button></div><div class="pm-background-spawn-dock is-collapsed"><button class="pm-background-spawn-pill"><span class="pm-background-spawn-pill-dot"></span><strong>4 Agents</strong></button></div></body></html>`);
   const metrics = await page.evaluate(() => {
     const rect = (selector) => {
       const element = document.querySelector(selector);
       const box = element.getBoundingClientRect();
       const style = getComputedStyle(element);
-      return { width: box.width, height: box.height, left: box.left, right: box.right, lineHeight: Number.parseFloat(style.lineHeight) || 0 };
+      return { width: box.width, height: box.height, top: box.top, left: box.left, right: box.right, lineHeight: Number.parseFloat(style.lineHeight) || 0 };
     };
     return {
       short: rect('#short .pm-bubble'),
@@ -49,6 +49,8 @@ try {
       token: rect('#token .pm-bubble'),
       viewportWidth: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,
+      planPill: rect('.pm-main-plan-pill'),
+      agentPill: rect('.pm-background-spawn-pill'),
     };
   });
 
@@ -59,6 +61,11 @@ try {
   assert(metrics.normalParagraph.height < 120, `normal prose wrapped into too many lines (${metrics.normalParagraph.height}px)`);
   assert(metrics.token.right <= metrics.viewportWidth, 'long token bubble escaped the viewport');
   assert(metrics.scrollWidth <= metrics.viewportWidth, `long token caused horizontal document overflow (${metrics.scrollWidth}px)`);
+  assert(Math.abs(metrics.planPill.height - metrics.agentPill.height) <= 1,
+    `paired plan/agent pills must share a height (${metrics.planPill.height}px vs ${metrics.agentPill.height}px)`);
+  const pairedTopOffset = metrics.planPill.top - metrics.agentPill.top;
+  assert(pairedTopOffset >= 3 && pairedTopOffset <= 5,
+    `paired plan pill must sit slightly lower than the agent pill (${metrics.planPill.top}px vs ${metrics.agentPill.top}px)`);
 } finally {
   await browser.close();
 }
