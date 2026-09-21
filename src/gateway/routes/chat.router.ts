@@ -97,6 +97,7 @@ import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveCh
 import { deriveContextWindowUsage } from '../context/context-window-usage';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
+import { boundToolMessageContentForModelContext } from '../tool-result-model-context';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -2225,86 +2226,6 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     maxChars: 2400,
     maxObservations: Math.min(12, Math.max(1, maxResults)),
     includeTelemetry: true,
-  });
-}
-
-const MODEL_TOOL_RESULT_MAX_CHARS = 12000;
-const MODEL_TOOL_RESULT_HEAD_CHARS = 7000;
-const MODEL_TOOL_RESULT_TAIL_CHARS = 2500;
-
-function summarizeLargeJsonToolResultForModel(value: string, toolName: string, maxChars: number): string | null {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const matches = Array.isArray(parsed.matches) ? parsed.matches : null;
-  if (!matches) return null;
-  const fileCounts = new Map<string, number>();
-  for (const match of matches) {
-    const file = String(match?.file || match?.path || parsed.file || parsed.path || '(unknown)');
-    fileCounts.set(file, (fileCounts.get(file) || 0) + 1);
-  }
-  const topFiles = [...fileCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 20)
-    .map(([file, count]) => ({ file, count }));
-  const compactMatches = matches.slice(0, 24).map((match: any) => ({
-    file: match?.file || match?.path || parsed.file || parsed.path,
-    line_number: match?.line_number,
-    line: String(match?.line || '').slice(0, 260),
-  }));
-  const summary = {
-    summarized_tool_result: true,
-    tool: toolName || 'tool',
-    searched: parsed.searched || parsed.directory || parsed.file || parsed.path,
-    pattern: parsed.pattern,
-    match_count: parsed.match_count ?? matches.length,
-    returned_count: parsed.returned_count ?? matches.length,
-    result_limit: parsed.result_limit,
-    top_files: topFiles,
-    first_matches: compactMatches,
-    omitted_matches: Math.max(0, matches.length - compactMatches.length),
-    note: 'Large search result was summarized before reinjection into model context. Raw/full output remains in tool logs/raw storage. Narrow with path/glob/pattern or read a targeted file window for exact code.',
-  };
-  const text = JSON.stringify(summary, null, 2);
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n[...large ${toolName || 'tool'} summary truncated]`;
-}
-
-function boundToolTextForModelContext(text: string, toolName: string, maxChars = MODEL_TOOL_RESULT_MAX_CHARS): string {
-  const value = String(text || '');
-  if (!value || value.length <= maxChars) return value;
-  const summarized = summarizeLargeJsonToolResultForModel(value, toolName, maxChars);
-  if (summarized) return summarized;
-  const headChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_HEAD_CHARS, Math.floor(maxChars * 0.75)));
-  const tailChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_TAIL_CHARS, maxChars - headChars));
-  const omitted = value.length - headChars - tailChars;
-  return [
-    value.slice(0, headChars).trimEnd(),
-    '',
-    `[...${omitted.toLocaleString('en-US')} chars omitted from ${toolName || 'tool'} result before reinjecting into model context; full output remains in tool logs/raw storage...]`,
-    '',
-    value.slice(-tailChars).trimStart(),
-  ].join('\n');
-}
-
-function boundToolMessageContentForModelContext(content: any, toolName: string): any {
-  // A skill is not considered read if its entrypoint was clipped before the
-  // next reasoning round. skill_read already returns one chosen skill plus a
-  // resource index, so preserve that result in full. Bundle resources remain
-  // progressive and are fetched individually with skill_resource_read.
-  if (toolName === 'skill_read') return content;
-  if (typeof content === 'string') return boundToolTextForModelContext(content, toolName);
-  if (!Array.isArray(content)) return content;
-  return content.map((part: any) => {
-    if (!part || typeof part !== 'object' || part.type !== 'text') return part;
-    return {
-      ...part,
-      text: boundToolTextForModelContext(String(part.text || ''), toolName),
-    };
   });
 }
 
@@ -4621,7 +4542,7 @@ async function handleChat(
       }
       const instrumentedResult = await envelopeOversizedToolResult(
         attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
-        { sessionId, toolName },
+        { sessionId, toolName, maxChars: 12_000 },
       );
       toolPerformance.complete(performanceRecord, instrumentedResult.result, instrumentedResult.error);
       const performanceTelemetry = toolPerformance.snapshot(performanceRecord);
@@ -4814,7 +4735,7 @@ async function handleChat(
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
       messages.push({ role: 'tool', tool_name: toolName, content: toolMessageContent });
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       orchestrationLog.push(
@@ -7137,7 +7058,7 @@ RULES:
               ? buildDesktopAck(toolName, toolResult) + goalReminder
               : toolResult.result + goalReminder;
         if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -9802,7 +9723,7 @@ RULES:
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
       const stopwatchLine = formatToolStopwatchLineForModel(toolResult);
       if (stopwatchLine) toolMessageContent = `${stopwatchLine}\n${toolMessageContent}`;
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
 	      messages.push({
 	        role: 'tool',
 	        tool_name: toolName,
