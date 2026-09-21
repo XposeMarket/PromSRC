@@ -1681,7 +1681,7 @@ function _isMobileGatewayRestartCheckpointMessage(msg) {
   if (!msg || (msg.role !== 'ai' && msg.role !== 'assistant')) return false;
   const messageKind = String(msg.messageKind || '').trim().toLowerCase();
   if (messageKind === 'restart_checkpoint') return true;
-  return /^\[Hot restart checkpoint: planned by this chat\]/i.test(_mobileMessageCopyText(msg));
+  return /^\[(?:Hot restart checkpoint: planned by this chat|Interrupted by gateway restart)\]/i.test(_mobileMessageCopyText(msg));
 }
 
 function _isMobileGatewayRestartTerminalMessage(msg) {
@@ -1727,31 +1727,15 @@ function _mapServerHistoryToMobile(history) {
     .filter((msg) => !_isMobileInternalServerMessage(msg))
     .map((msg, index) => _mapServerMessageToMobile(msg, index))
     .filter(Boolean);
-  // A planned restart can finish before the old SSE transport writes a final
-  // answer. In that case the successful checkpoint is the only durable proof
-  // of completion. Show a short status row and retain its activity trace,
-  // instead of hiding it and leaving the phone on an endless Working row.
-  mapped.forEach((checkpoint, index) => {
-    if (!_isMobileGatewayRestartCheckpointMessage(checkpoint)
-      || !/Gateway restart successful\. Prometheus is back online\./i.test(_mobileMessageCopyText(checkpoint))) return;
-    const nextUserIndex = mapped.findIndex((candidate, next) => next > index && candidate?.role === 'user');
-    const nextAssistantIndex = mapped.findIndex((candidate, next) => next > index
-      && (nextUserIndex < 0 || next < nextUserIndex)
-      && candidate?.role === 'ai' && !_isMobileGatewayRestartCheckpointMessage(candidate));
-    if (nextAssistantIndex >= 0) return;
-    checkpoint.messageKind = 'restart_status';
-    checkpoint._pmGatewayRestartTerminal = true;
-    checkpoint.body = { ...(checkpoint.body || {}), text: 'Restarted. Prometheus is back online.' };
-    checkpoint.content = checkpoint.body.text;
-    checkpoint.streaming = false;
-  });
   const visible = mapped.filter((message) => !_isMobileGatewayRestartCheckpointMessage(message));
-  // A restart checkpoint may only enrich the nearby boot reply before the
-  // next user prompt. Selecting the latest assistant in the whole session
-  // copied old tool streams into each newly hydrated turn.
+  // Checkpoints are transport boundaries, not turns. Fold their durable trace
+  // into the resumed assistant when present, or the immediately preceding
+  // assistant while the replacement turn has not reached history yet.
   mapped.forEach((checkpoint, index) => {
     if (!_isMobileGatewayRestartCheckpointMessage(checkpoint)) return;
     const checkpointAt = Number(checkpoint.timestamp || 0) || 0;
+    const checkpointRequest = String(checkpoint._clientRequestId || '').trim();
+    let target = null;
     for (let next = index + 1; next < mapped.length; next += 1) {
       const candidate = mapped[next];
       if (candidate?.role === 'user') break;
@@ -1760,16 +1744,24 @@ function _mapServerHistoryToMobile(history) {
       const candidateAt = Number(candidate.timestamp || 0) || 0;
       if (checkpointAt && candidateAt
         && (candidateAt < checkpointAt || candidateAt - checkpointAt > 10 * 60_000)) break;
-      const checkpointRequest = String(checkpoint._clientRequestId || '').trim();
       const candidateRequest = String(candidate._clientRequestId || '').trim();
-      if (candidateRequest && candidateRequest !== checkpointRequest) break;
-      _mergeMobileAssistantTurnDetails(candidate, checkpoint, { preserveTargetText: true });
-      Object.defineProperty(candidate, '_pmGatewayRestartTerminal', {
-        configurable: true,
-        value: true,
-      });
+      if (checkpointRequest && candidateRequest && candidateRequest !== checkpointRequest) break;
+      target = candidate;
       break;
     }
+    if (!target) {
+      for (let previous = index - 1; previous >= 0; previous -= 1) {
+        const candidate = mapped[previous];
+        if (candidate?.role === 'user') break;
+        if (_isMobileGatewayRestartCheckpointMessage(candidate)) continue;
+        if (candidate?.role !== 'ai') break;
+        const candidateRequest = String(candidate._clientRequestId || '').trim();
+        if (checkpointRequest && candidateRequest && candidateRequest !== checkpointRequest) break;
+        target = candidate;
+        break;
+      }
+    }
+    if (target) _mergeMobileAssistantTurnDetails(target, checkpoint, { preserveTargetText: true });
   });
   for (let index = 0; index < visible.length; index += 1) {
     const message = visible[index];
@@ -2486,6 +2478,10 @@ function _rememberMobileActiveRun(sessionId, state = {}) {
       streamId: has('streamId') ? String(state.streamId || '') : String(prev.streamId || ''),
       runtimeId: has('runtimeId') ? String(state.runtimeId || '') : String(prev.runtimeId || ''),
       clientRequestId: has('clientRequestId') ? String(state.clientRequestId || '') : String(prev.clientRequestId || ''),
+      restartSuspended: has('restartSuspended') ? state.restartSuspended === true : prev.restartSuspended === true,
+      restartReason: has('restartReason') ? String(state.restartReason || '') : String(prev.restartReason || ''),
+      priorStreamId: has('priorStreamId') ? String(state.priorStreamId || '') : String(prev.priorStreamId || ''),
+      priorRuntimeId: has('priorRuntimeId') ? String(state.priorRuntimeId || '') : String(prev.priorRuntimeId || ''),
       lastSeq: has('lastSeq')
         ? Math.max(0, Math.floor(Number(state.lastSeq || 0)) || 0)
         : Math.max(0, Math.floor(Number(prev.lastSeq || 0)) || 0),

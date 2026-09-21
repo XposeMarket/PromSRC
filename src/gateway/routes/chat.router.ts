@@ -1851,7 +1851,7 @@ import { router as connectionsRouter } from './connections.router';
 import { router as canvasRouter, initCanvasRouter } from './canvas.router';
 import { addCanvasFile, getCanvasContextBlock } from './canvas-state';
 import { getMCPManager } from '../mcp-manager';
-import { resumePlannedRestartMainChats } from '../runtime-recovery';
+import { resumePlannedRestartMainChats, registerRestartContinuityEmitter } from '../runtime-recovery';
 import {
   // Core exports
   buildTools,
@@ -10686,6 +10686,18 @@ async function runInteractiveTurn(
     durationMs: Date.now() - streamSetupStartedAt,
     reusedActiveStream: !!existingMainChatStream?.active,
   });
+  // A restart-recovery turn is the same logical turn the user is already
+  // watching. Emit the resumption only once the replacement stream exists, so
+  // clients receive the streamId they must follow rather than a bare notice.
+  if (flags?.syntheticRestartRecovery) {
+    announceRestartContinuityResumed({
+      sessionId,
+      stream: localMainChatStream || existingMainChatStream || null,
+      runtimeId: flags?.runtimeId,
+      clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) || undefined,
+      reason: 'gateway_restart',
+    });
+  }
   let localMainChatStreamCompleted = false;
   const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[]; goalCompletionReport?: any } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
@@ -11443,6 +11455,29 @@ type InterruptedMainChatRuntime = {
  * so this path deliberately suppresses a second user-message write while still
  * giving the model the exact original request and preserved checkpoint context.
  */
+
+/**
+ * Mirror a pre-shutdown suspension notice into the session's still-open stream.
+ * runtime-recovery cannot import this module (circular), so it calls us through
+ * this registered bridge. Without it, a client replaying the stream from seq 0
+ * after reconnecting never learns the turn was suspended rather than dropped.
+ */
+registerRestartContinuityEmitter((payload: Record<string, any>) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) return;
+  const stream = getMainChatStream(sessionId);
+  if (!stream) return;
+  try {
+    appendMainChatStreamEvent(sessionId, stream.streamId, 'restart_continuity', {
+      ...payload,
+      priorStreamId: stream.streamId,
+    });
+  } catch {}
+});
+/**
+ * Resume an interrupted main-chat turn on the replacement gateway. The original
+ * user message is not re-appended; the preserved checkpoint context is replayed.
+ */
 export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
   const sessionId = String(runtime?.sessionId || '').trim();
   const recoveryData = runtime?.recoveryData || {};
@@ -11587,6 +11622,40 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
 
   console.log(`[RuntimeRecovery] Automatically retriggered interrupted main-chat turn for ${sessionId} (old=${runtime.id}, new=${runtimeId}).`);
   return true;
+}
+
+/**
+ * Mirror of the pre-shutdown suspension notice. The suspended event promised the
+ * client that this turn would continue; this is the event that redeems it, so it
+ * must carry the new streamId the client has to follow.
+ */
+function announceRestartContinuityResumed(params: {
+  sessionId: string;
+  stream: MainChatStreamState | null;
+  priorRuntimeId?: string;
+  runtimeId?: string;
+  clientRequestId?: string;
+  reason?: string;
+}): void {
+  const sessionId = String(params.sessionId || '').trim();
+  if (!sessionId) return;
+  const stream = params.stream;
+  const payload = {
+    sessionId,
+    phase: 'resumed' as const,
+    reason: params.reason || 'gateway_restart',
+    priorRuntimeId: params.priorRuntimeId,
+    runtimeId: params.runtimeId,
+    newStreamId: stream?.streamId,
+    clientRequestId: params.clientRequestId,
+    at: Date.now(),
+  };
+  // Record it inside the durable stream too, so a client that reconnects and
+  // replays from seq 0 still learns this turn is a continuation.
+  if (stream) {
+    try { appendMainChatStreamEvent(sessionId, stream.streamId, 'restart_continuity', payload); } catch {}
+  }
+  try { broadcastWS({ type: 'restart_continuity', ...payload }); } catch {}
 }
 
 function createSSESender(res: express.Response): (event: string, data: any) => void {

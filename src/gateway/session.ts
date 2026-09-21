@@ -41,7 +41,13 @@ import type { ExternalImportBinding, ImportedHistoricalEvent } from './imports/i
 
 export interface ChatMessage {
   messageId?: string;
-  messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | string;
+  messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | 'restart_checkpoint' | string;
+  /**
+   * Present only on a self-triggered mid-turn restart boundary. The turn is
+   * suspended rather than finished, so clients fold this row into the turn it
+   * belongs to instead of rendering it as its own message.
+   */
+  restartContinuity?: { phase: 'suspended' | 'resumed'; priorRuntimeId?: string; runtimeId?: string; reason?: string };
   activeRunKind?: string;
   goalId?: string;
   goalTurnNumber?: number;
