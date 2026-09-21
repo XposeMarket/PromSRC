@@ -14328,7 +14328,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             args.base ? `--base ${quoteArg(String(args.base))}` : '',
             args.draft === true ? '--draft' : '',
           ].filter(Boolean).join(' ');
-          return runCapturedToolCommand(cmd, workspacePath, 120000);
+          const result = await runCapturedToolCommand(cmd, workspacePath, 120000);
+          if (result.error && /(?:not recognized|command not found|not found).*(?:gh)|(?:gh).*(?:not recognized|command not found|not found)/is.test(result.result)) {
+            return {
+              name,
+              args,
+              result: [
+                result.result,
+                '',
+                'GitHub CLI is unavailable. Use connector_github_create_pr with the same owner/repo/title/head/base/body/draft values when the GitHub connector is connected.',
+              ].join('\n'),
+              error: true,
+            };
+          }
+          return result;
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
