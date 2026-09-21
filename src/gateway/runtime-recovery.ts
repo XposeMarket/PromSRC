@@ -1,5 +1,6 @@
 import {
   isInterruptedByRestart,
+  isPlannedRestartCheckpointAwaitingBoot,
   getRestartInterruptEpoch,
   listDurableRuntimes,
   listInterruptedRuntimes,
@@ -610,7 +611,12 @@ function resolveActiveRestartEpoch(): number {
   let max = 0;
   for (const runtime of listDurableRuntimes()) {
     const rd = runtime.recoveryData || {};
-    if (rd.recoveredAt || rd.recovery) continue;
+    // A planned-restart checkpoint is marked 'chat_checkpointed' by startup
+    // runtime-recovery BEFORE BOOT runs, precisely because BOOT owns resuming it.
+    // Skipping it here would make this scan return 0 for the exact restart we are
+    // recovering from, and `isMainChatHotRestartRecoveryCandidate()` would then
+    // reject every candidate on `sinceEpoch <= 0` - silently dropping the turn.
+    if ((rd.recoveredAt || rd.recovery) && !isPlannedRestartCheckpointAwaitingBoot(runtime)) continue;
     const epoch = runtimeRestartEpoch(runtime);
     if (epoch > max) max = epoch;
   }

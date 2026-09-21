@@ -137,6 +137,29 @@ export function hasTerminalRuntimeCheckpoint(runtime: Pick<LiveRuntimeSnapshot, 
   return TERMINAL_CHECKPOINT_EVENTS.has(event);
 }
 
+// A main-chat turn interrupted by a planned restart is handed off in two stages:
+// startup runtime-recovery marks it 'chat_checkpointed' (deliberately NOT
+// retriggering it, because BOOT owns planned boundaries), and BOOT then resumes it
+// much later in startup. Between those two points the record carries a recovery
+// mark but is still unfinished work.
+//
+// Retention must treat that window as live. Otherwise the only record BOOT needs to
+// rebuild the interrupted turn is deleted before BOOT ever runs, and the user loses
+// the whole turn across a restart: no resume, no context, not even the original
+// request. Once BOOT actually resumes it the mark becomes
+// 'chat_planned_restart_retriggered' and the record is prunable again.
+export function isPlannedRestartCheckpointAwaitingBoot(
+  runtime: Pick<LiveRuntimeSnapshot, 'kind' | 'status' | 'sessionId' | 'recoveryData'> | null | undefined,
+): boolean {
+  if (!runtime) return false;
+  if (runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') return false;
+  if (!String(runtime.sessionId || '').trim()) return false;
+  if (runtime.status !== 'interrupted') return false;
+  const recoveryData = runtime.recoveryData || {};
+  if (String(recoveryData.recovery || '') !== 'chat_checkpointed') return false;
+  return Number(recoveryData.restartEpoch || 0) > 0;
+}
+
 export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData' | 'abortRequestedAt' | 'abortSource'> | null | undefined): boolean {
   if (!runtime) return false;
   if (hasTerminalRuntimeCheckpoint(runtime)) return false;
@@ -1375,6 +1398,8 @@ export function pruneDurableLedger(): { removed: number; kept: number } {
     for (const id of ids) {
       const rt = ledger.runtimes[id];
       const recovered = !!(rt?.recoveryData && (rt.recoveryData.recoveredAt || rt.recoveryData.recovery));
+      // A planned-restart checkpoint still waiting for BOOT is unfinished work.
+      if (isPlannedRestartCheckpointAwaitingBoot(rt)) continue;
       if (hasTerminalRuntimeCheckpoint(rt) || recovered) {
         delete ledger.runtimes[id];
         removed++;
@@ -1411,7 +1436,7 @@ export function compactRuntimeStateOnStartup(): { ledgerRemoved: number; ledgerK
         // Keep only entries that can actually be recovered after a restart
         // (running/interrupted, not terminal, not already recovered). Strip the
         // heavy process log from each survivor.
-        if (isRuntimeRecoverableAfterRestart(rt)) {
+        if (isRuntimeRecoverableAfterRestart(rt) || isPlannedRestartCheckpointAwaitingBoot(rt)) {
           next[id] = toDurableSnapshot(rt);
         } else {
           ledgerRemoved++;
