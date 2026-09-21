@@ -47,6 +47,7 @@
     "test:thread-handoff": "tsx src/gateway/threads/thread-handoff.regression.ts",
     "test:thread-ops-model-route": "tsx src/gateway/threads/thread-ops-model-route.regression.ts",
     "test:tool-category-manifest": "tsx src/runtime/tool-category-manifest.regression.ts",
+    "test:tool-result-elision": "tsx src/gateway/routes/tool-result-elision.regression.ts",
     "test:tool-category-routing": "tsx src/runtime/tool-category-routing.regression.ts",
     "test:tool-category-provisioning": "tsx src/gateway/tool-category-provisioning.regression.ts",
     "test:background-spawn-tool-surface": "tsx src/gateway/tasks/background-spawn-tool-surface.regression.ts",

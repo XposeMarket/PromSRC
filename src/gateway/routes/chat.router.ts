@@ -1958,6 +1958,8 @@ import {
 
 
 import { activeTasks } from '../chat/chat-state';
+import { elideStaleToolResults } from './tool-result-elision';
+
 import {
   buildTurnContextPacket,
   formatTurnContextPacketsForPrompt,
@@ -2307,6 +2309,8 @@ function boundToolMessageContentForModelContext(content: any, toolName: string):
     };
   });
 }
+
+
 
 function formatCompactionArtifactPaths(sessionId: string): string {
   const cfg = getConfig();
@@ -4184,6 +4188,18 @@ async function handleChat(
   const toolUsageTelemetryEnabled = process.env.PROMETHEUS_TOOL_USAGE_TELEMETRY !== '0'
     && rawCfgForPreempt?.observability?.tool_usage !== false
     && rawCfgForPreempt?.usage_tracking?.tool_usage !== false;
+  // Stale tool-result elision keeps long tool loops from re-sending every
+  // earlier result verbatim on every round. Opt out with
+  // PROMETHEUS_TOOL_RESULT_ELISION=0 or context.tool_result_elision=false.
+  const toolResultElisionEnabled = process.env.PROMETHEUS_TOOL_RESULT_ELISION !== '0'
+    && rawCfgForPreempt?.context?.tool_result_elision !== false;
+  // The per-result telemetry banner is useful for cost debugging but is
+  // re-sent to the provider on every later round. Keep the full banner for
+  // humans/logs and give the model the compact timing line unless the
+  // operator explicitly asks for verbose in-context telemetry.
+  const verboseToolTelemetryInModelContext = process.env.PROMETHEUS_TOOL_TELEMETRY_IN_CONTEXT === '1'
+    || rawCfgForPreempt?.observability?.tool_usage_in_model_context === true;
+
   const primaryProvider = rawCfgForPreempt.llm?.provider || 'ollama';
   // ── Local LLM primary detection (v2.0 local model layer) ──────────────────
   // True when the configured primary is Ollama, LM Studio, or llama.cpp.
@@ -4491,7 +4507,11 @@ async function handleChat(
     const elapsedMs = getToolElapsedMs(toolResult);
     if (!Number.isFinite(Number(elapsedMs))) return '';
     const telemetry = getToolResultTelemetry(toolResult);
-    if (!toolUsageTelemetryEnabled) {
+    // The full token/cost banner is re-sent to the provider on every later
+    // round of this turn, so by default the model only gets the timing it can
+    // actually act on. Full telemetry still reaches the UI, logs, and usage
+    // tracking through getToolResultTelemetry.
+    if (!toolUsageTelemetryEnabled || !verboseToolTelemetryInModelContext) {
       return `[TOOL_STOPWATCH] elapsed_ms=${elapsedMs} elapsed=${formatToolElapsedForHumans(Number(elapsedMs))}`;
     }
     const argsTokens = Math.max(0, Math.round(Number(telemetry.argsTokens || 0)));
@@ -9946,6 +9966,20 @@ RULES:
     }
 
     finalizeProgressRound();
+
+    // Every tool result from this turn is re-sent on the next provider round.
+    // Shorten the ones older rounds already consumed so input tokens stop
+    // growing quadratically with tool count. Runs before mid-workflow
+    // compaction so compaction sees the already-slimmed context.
+    if (toolResultElisionEnabled) {
+      const elision = elideStaleToolResults(messages);
+      if (elision.elidedCount > 0) {
+        console.log(
+          `[tool-result-elision] round=${round} elided=${elision.elidedCount} saved_chars=${elision.savedChars}`,
+        );
+      }
+    }
+
 
     if ((!sessionId.startsWith('subagent_') || isDirectSubagentChatTurn) && midWorkflowCompactionsThisTurn < 3) {
       const midCompact = await maybeRunMidWorkflowCompaction({
