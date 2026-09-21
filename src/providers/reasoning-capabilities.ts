@@ -96,7 +96,7 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   if (id === 'perplexity') return { efforts: ['low', 'medium', 'high'] };
   if (id === 'xai') {
     return {
-      efforts: /^grok-4\.20-multi-agent(?:-|$)/.test(name)
+      efforts: /^(?:grok-4\.7(?:-|$)|grok-4\.20-multi-agent(?:-|$))/.test(name)
         ? ['low', 'medium', 'high', 'xhigh']
         : ['low', 'medium', 'high'],
     };
