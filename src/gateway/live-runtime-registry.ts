@@ -146,19 +146,45 @@ export function hasTerminalRuntimeCheckpoint(runtime: Pick<LiveRuntimeSnapshot, 
 // Retention must treat that window as live. Otherwise the only record BOOT needs to
 // rebuild the interrupted turn is deleted before BOOT ever runs, and the user loses
 // the whole turn across a restart: no resume, no context, not even the original
-// request. Once BOOT actually resumes it the mark becomes
-// 'chat_planned_restart_retriggered' and the record is prunable again.
+// request.
+//
+// The window is deliberately bounded on three sides, because "waiting for BOOT" is
+// an exception to normal retention and must never become an immortality flag:
+//   1. Terminal work is never protected. A record that already finished, errored or
+//      was aborted is not pending work no matter what recovery marker it carries,
+//      so terminal state is checked BEFORE the exception applies.
+//   2. Every BOOT outcome consumes the checkpoint. Resuming stamps
+//      'chat_planned_restart_retriggered'; the acknowledgement-only path (a plain
+//      "restart the gateway" request, which is complete once the replacement
+//      gateway is up) stamps 'chat_planned_restart_acknowledged'. Both fall out of
+//      this predicate and become prunable again.
+//   3. The window expires. BOOT runs within seconds of startup recovery, so a
+//      checkpoint still unclaimed after PLANNED_RESTART_BOOT_HANDOFF_WINDOW_MS is
+//      abandoned - its BOOT pass never came, or never will - and must not pin a
+//      ledger entry forever.
+export const PLANNED_RESTART_BOOT_HANDOFF_WINDOW_MS = 60 * 60 * 1000;
+
 export function isPlannedRestartCheckpointAwaitingBoot(
-  runtime: Pick<LiveRuntimeSnapshot, 'kind' | 'status' | 'sessionId' | 'recoveryData'> | null | undefined,
+  runtime:
+    | Pick<LiveRuntimeSnapshot, 'kind' | 'status' | 'sessionId' | 'recoveryData' | 'checkpoint' | 'completedAt'>
+    | null
+    | undefined,
+  now = Date.now(),
 ): boolean {
   if (!runtime) return false;
+  // Terminal work is never "pending BOOT", regardless of recovery markers.
+  if (hasTerminalRuntimeCheckpoint(runtime)) return false;
   if (runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') return false;
   if (!String(runtime.sessionId || '').trim()) return false;
   if (runtime.status !== 'interrupted') return false;
   const recoveryData = runtime.recoveryData || {};
   if (String(recoveryData.recovery || '') !== 'chat_checkpointed') return false;
-  return Number(recoveryData.restartEpoch || 0) > 0;
+  const restartEpoch = Number(recoveryData.restartEpoch || 0);
+  if (!(restartEpoch > 0)) return false;
+  // An abandoned handoff stops being protected instead of leaking.
+  return now - restartEpoch <= PLANNED_RESTART_BOOT_HANDOFF_WINDOW_MS;
 }
+
 
 export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapshot, 'status' | 'checkpoint' | 'completedAt' | 'recoveryData' | 'abortRequestedAt' | 'abortSource'> | null | undefined): boolean {
   if (!runtime) return false;
