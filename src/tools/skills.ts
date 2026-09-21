@@ -283,6 +283,8 @@ export async function executeSkillCreate(
       promptSignals: parseJsonObject(args.promptSignals),
       triggerPositivePrompts: args.triggerPositivePrompts || [],
       triggerNegativePrompts: args.triggerNegativePrompts || [],
+      categories: parseCsv((args as any).categories),
+      requiredTools: parseCsv((args as any).requiredTools),
       implicitInvocation: args.implicitInvocation,
       instructions: args.instructions,
     });

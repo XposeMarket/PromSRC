@@ -61,6 +61,7 @@
     "test:deterministic-systems:workers": "node scripts/test-deterministic-systems.mjs --workers",
     "test:skill-routing-benchmark": "tsx src/runtime/skill-routing-benchmark.regression.ts",
     "test:skill-catalog-routing": "tsx src/runtime/skill-catalog-routing.regression.ts",
+    "test:skill-authoring-fidelity": "tsx src/gateway/skills-runtime/skill-authoring-fidelity.regression.ts",
     "test:pairing-admin-boundary": "npm run build:backend && node scripts/test-pairing-admin-boundary.mjs",
     "test:storage-boundaries": "npm run build:backend && node scripts/test-storage-boundaries.mjs",
     "test:tool-security-boundaries": "npm run build:backend && node scripts/test-tool-security-boundaries.mjs",
