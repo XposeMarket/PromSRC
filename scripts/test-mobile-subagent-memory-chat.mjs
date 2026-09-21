@@ -8,6 +8,7 @@ const pages = [
   read('web-ui/src/mobile/mobile-pages.js'),
   read('web-ui/src/mobile/mobile-subagent-pages.js'),
 ].join('\n');
+const renderer = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
 const router = read('web-ui/src/mobile/mobile-router.js');
 const api = read('web-ui/src/mobile/mobile-api.js');
 const channels = read('src/gateway/routes/channels.router.ts');
@@ -30,26 +31,26 @@ assert.match(styles, /\.pm-subagent-chat-body\s*\{\s*display:\s*flex;\s*flex-dir
 assert.ok(styles.includes('position: fixed !important;') && styles.includes('--pm-sa-chat-composer-space'), 'locked Chat composer must stay fixed above the tab bar with matching reading clearance');
 assert.ok(pages.includes('function scrollToLatest()') && pages.includes('setTimeout(pin, 80);'), 'subagent history must pin to the newest message after layout settles');
 assert.ok(pages.includes("document.body.classList.add('pm-mobile-subagent-chat-locked')") && pages.includes('historyResizeObserver = new ResizeObserver'), 'locked Chat must hold the newest message through its initial async layout');
-assert.ok(pages.includes('function _normalizeCollapsedAgentMarkdown') && pages.includes('_renderMobileMarkdown(markdownText)'), 'subagent responses must recover flattened Markdown headings and lists before rendering');
+assert.ok(renderer.includes('function _normalizeCollapsedAgentMarkdown') && renderer.includes('_renderMobileMarkdown(markdownText)'), 'subagent responses must recover flattened Markdown headings and lists before rendering');
 assert.ok(pages.includes("window.addEventListener('prometheus:markdown-ready', onMarkdownReady)") && pages.includes("window.removeEventListener('prometheus:markdown-ready', onMarkdownReady)"), 'subagent history must re-render after the Markdown library becomes available');
-assert.ok(pages.includes('function _mobileAgentTurnPresentation') && pages.includes('_renderMobileFileChanges(_mobileAgentMessageFileChanges(turnPresentation))'), 'subagent bubbles must rehydrate persisted touched-file cards');
-assert.ok(pages.includes('_renderMobileRichArtifacts(turnPresentation)') && pages.includes('_renderMobileMediaGallery(_collectMessageMedia({'), 'subagent bubbles must render the same finalized artifacts and media as main chat');
+assert.ok(renderer.includes('function _mobileAgentTurnPresentation') && renderer.includes('_renderMobileFileChanges(_mobileAgentMessageFileChanges(turnPresentation))'), 'subagent bubbles must rehydrate persisted touched-file cards');
+assert.ok(renderer.includes('_renderMobileRichArtifacts(turnPresentation)') && renderer.includes('_renderMobileMediaGallery(_collectMessageMedia({'), 'subagent bubbles must render the same finalized artifacts and media as main chat');
 assert.ok(pages.includes('attachStream?.(null);'), 'completed or aborted streams must be detached before route cleanup');
 
-const normalizerStart = pages.indexOf('function _normalizeCollapsedAgentMarkdown');
-const normalizerEnd = pages.indexOf('\nfunction _renderMobileAgentChatBubble', normalizerStart);
+const normalizerStart = renderer.indexOf('function _normalizeCollapsedAgentMarkdown');
+const normalizerEnd = renderer.indexOf('\nfunction _renderMobileAgentChatBubble', normalizerStart);
 assert.ok(normalizerStart >= 0 && normalizerEnd > normalizerStart, 'collapsed Markdown normalizer source must be extractable');
-const normalizeCollapsedAgentMarkdown = Function(`${pages.slice(normalizerStart, normalizerEnd)}; return _normalizeCollapsedAgentMarkdown;`)();
+const normalizeCollapsedAgentMarkdown = Function(`${renderer.slice(normalizerStart, normalizerEnd)}; return _normalizeCollapsedAgentMarkdown;`)();
 assert.equal(
   normalizeCollapsedAgentMarkdown('Completed. ### Delivered - First item - Second item'),
   'Completed.\n\n### Delivered\n- First item\n- Second item',
   'collapsed subagent Markdown must regain heading and list block boundaries',
 );
 
-const presentationStart = pages.indexOf('function _mobileAgentTurnPresentation');
-const presentationEnd = pages.indexOf('\nfunction _voiceMessageMeta', presentationStart);
+const presentationStart = renderer.indexOf('function _mobileAgentTurnPresentation');
+const presentationEnd = renderer.indexOf('\nfunction _voiceMessageMeta', presentationStart);
 assert.ok(presentationStart >= 0 && presentationEnd > presentationStart, 'subagent turn presentation source must be extractable');
-const mobileAgentTurnPresentation = Function(`${pages.slice(presentationStart, presentationEnd)}; return _mobileAgentTurnPresentation;`)();
+const mobileAgentTurnPresentation = Function(`${renderer.slice(presentationStart, presentationEnd)}; return _mobileAgentTurnPresentation;`)();
 const hydratedTurn = mobileAgentTurnPresentation({ metadata: { fileChanges: { files: [{ path: 'src/example.ts' }] }, richArtifacts: [{ type: 'sources', items: [] }] } });
 assert.equal(hydratedTurn.fileChanges.files[0].path, 'src/example.ts', 'reopened subagent history must retain touched files');
 assert.equal(hydratedTurn.richArtifacts[0].type, 'sources', 'reopened subagent history must retain rich artifacts');

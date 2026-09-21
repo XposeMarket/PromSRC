@@ -39,6 +39,7 @@ const desktopBackgroundEventListener = desktop.match(/wsEventBus\.on\('bg_agent_
 assert.ok(desktopBackgroundEventListener, 'desktop background-agent event listener must remain present');
 assert.doesNotMatch(desktopBackgroundEventListener, /_showChannelActivityToast\(/, 'background progress frames must not create desktop toasts');
 assert.match(mobileChatRuntime, /sendMobileBackgroundSteer\(backgroundId, msg\)/);
+assert.match(mobileChatRuntime, /catch \(persistError\)[\s\S]{0,500}local persistence failed after successful steer/, 'post-success local persistence must not be reported as a failed steer');
 assert.match(mobileChatRuntime, /loadMobileBackgroundStreamReplay\(cleanId, currentLane\?\.lastSeq \|\| 0\)/);
 assert.match(mobileChatRuntime, /_reconcileMobileBackgroundAgentSideThread\(sideThreadEl/);
 assert.match(mobileChatRuntime, /_mobileChatRendererInvoke\('backgroundDetailRecord'/, 'cold background detail records must use the chat renderer runtime');

@@ -68,6 +68,9 @@ export function normalizeText(record) {
   if (typeof record?.text === 'string') return record.text;
   if (typeof record?.content === 'string') return record.content;
   if (typeof record?.message === 'string') return record.message;
-  if (Array.isArray(record?.content)) return record.content.map((part) => typeof part === 'string' ? part : part?.text || '').join('');
+  if (Array.isArray(record?.content)) return record.content
+    .map((part) => typeof part === 'string' ? part : part?.text || '')
+    .filter((part) => part !== '')
+    .join('\n');
   return '';
 }
