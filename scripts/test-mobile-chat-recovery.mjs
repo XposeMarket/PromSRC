@@ -613,8 +613,13 @@ const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requeste
 assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
 assert.match(
   pages,
-  /export function shouldHoldStreamingTurn\([\s\S]{0,400}return replayStillActive\s*\|\|\s*\(localTurnStreaming && !completedDurableTurn && !gatewayRestartContinuity\)/,
-  'an inactive or recovered read must preserve the visible turn until durable completion is proven',
+  /export function shouldHoldStreamingTurn\([\s\S]{0,900}if \(replayStillActive\) return true;[\s\S]{0,400}if \(gatewayRestartContinuity\) return true;/,
+  'an inactive or recovered read must preserve the visible turn until durable completion is proven, and a planned restart must extend the hold rather than release it',
+);
+assert.doesNotMatch(
+  pages,
+  /localTurnStreaming && !completedDurableTurn && !gatewayRestartContinuity/,
+  'gatewayRestartContinuity must never cancel the streaming hold: that tears down the row before the resume can reattach',
 );
 assert.match(
   pages,
