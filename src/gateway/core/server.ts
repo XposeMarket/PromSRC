@@ -14,6 +14,7 @@ import https from 'https';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getConfig } from '../../config/config';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
@@ -89,6 +90,81 @@ const STATIC_MIME: Record<string, string> = {
 
 const RAW_FILE_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
 
+// ── Static text compression ──────────────────────────────────────────────
+// The mobile PWA loads an unbundled ES module graph: ~48 files / ~1.3 MB of
+// JS for the chat path plus a ~600 KB stylesheet. Uncompressed that is the
+// dominant cost of a cold mobile load over LAN/Tailscale, where bandwidth and
+// latency matter far more than local disk reads.
+//
+// Compressed payloads are cached in memory keyed by path + mtime + size, so a
+// file is only ever compressed once per version and subsequent requests are a
+// buffer write. Entries are invalidated automatically when the file changes,
+// which keeps raw-module development (edit → reload) correct.
+const COMPRESSIBLE_EXTENSIONS = new Set(['.js', '.mjs', '.css', '.html', '.json', '.svg']);
+const COMPRESSION_MIN_BYTES = 1024;
+const COMPRESSION_MAX_BYTES = 8 * 1024 * 1024;
+const COMPRESSION_CACHE_MAX_ENTRIES = 512;
+
+type CompressedStatic = { encoding: 'br' | 'gzip'; body: Buffer };
+const compressedStaticCache = new Map<string, CompressedStatic>();
+
+function pickCompressionEncoding(req: http.IncomingMessage): 'br' | 'gzip' | null {
+  const accepted = String(req.headers['accept-encoding'] || '').toLowerCase();
+  if (!accepted) return null;
+  // Brotli first: it is meaningfully smaller than gzip on JS/CSS and every
+  // browser that reaches this app over https supports it.
+  if (/\bbr\b/.test(accepted)) return 'br';
+  if (/\bgzip\b/.test(accepted)) return 'gzip';
+  return null;
+}
+
+function getCompressedStatic(
+  filePath: string,
+  encoding: 'br' | 'gzip',
+  stat: fs.Stats,
+): CompressedStatic | null {
+  const key = `${encoding}:${filePath}:${Math.floor(stat.mtimeMs)}:${stat.size}`;
+  const cached = compressedStaticCache.get(key);
+  if (cached) return cached;
+  try {
+    const raw = fs.readFileSync(filePath);
+    const body = encoding === 'br'
+      ? zlib.brotliCompressSync(raw, {
+        params: {
+          // Quality 5 is the practical sweet spot for on-the-fly compression:
+          // within ~3% of max ratio at a small fraction of the CPU cost, and
+          // the result is cached anyway.
+          [zlib.constants.BROTLI_PARAM_QUALITY]: 5,
+          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+        },
+      })
+      : zlib.gzipSync(raw, { level: 6 });
+    // Never serve a "compressed" payload that is larger than the original.
+    if (body.length >= raw.length) return null;
+    if (compressedStaticCache.size >= COMPRESSION_CACHE_MAX_ENTRIES) {
+      const oldest = compressedStaticCache.keys().next().value;
+      if (oldest) compressedStaticCache.delete(oldest);
+    }
+    const entry: CompressedStatic = { encoding, body };
+    compressedStaticCache.set(key, entry);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function resolveStaticCompression(
+  req: http.IncomingMessage,
+  filePath: string,
+  stat: fs.Stats,
+): CompressedStatic | null {
+  if (!COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return null;
+  if (stat.size < COMPRESSION_MIN_BYTES || stat.size > COMPRESSION_MAX_BYTES) return null;
+  const encoding = pickCompressionEncoding(req);
+  if (!encoding) return null;
+  return getCompressedStatic(filePath, encoding, stat);
+}
+
 function getRawStaticCacheControl(req: http.IncomingMessage, filePath: string): string {
   const rawUrl = String(req.url || '/');
   let pathname = '/';
@@ -140,11 +216,23 @@ function sendRawFile(req: http.IncomingMessage, res: http.ServerResponse, filePa
     if (!stat.isFile()) return false;
     res.statusCode = 200;
     res.setHeader('Content-Type', STATIC_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
-    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    const compressed = resolveStaticCompression(req, filePath, stat);
+    // The ETag must vary with the encoding, otherwise a cache or client can
+    // pair an identity-encoded validator with a compressed body (or the
+    // reverse) and decode garbage.
+    const etag = compressed
+      ? `W/"${stat.size}-${Math.floor(stat.mtimeMs)}-${compressed.encoding}"`
+      : `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
     res.setHeader('Cache-Control', getRawStaticCacheControl(req, filePath));
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
     res.setHeader('ETag', etag);
-    res.setHeader('Content-Length', stat.size);
+    if (compressed) {
+      res.setHeader('Content-Encoding', compressed.encoding);
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.setHeader('Content-Length', compressed.body.length);
+    } else {
+      res.setHeader('Content-Length', stat.size);
+    }
     const ifNoneMatch = String(req.headers['if-none-match'] || '');
     const ifModifiedSince = String(req.headers['if-modified-since'] || '');
     if (
@@ -153,11 +241,16 @@ function sendRawFile(req: http.IncomingMessage, res: http.ServerResponse, filePa
     ) {
       res.statusCode = 304;
       res.removeHeader('Content-Length');
+      res.removeHeader('Content-Encoding');
       res.end();
       return true;
     }
     if (String(req.method || 'GET').toUpperCase() === 'HEAD') {
       res.end();
+      return true;
+    }
+    if (compressed) {
+      res.end(compressed.body);
       return true;
     }
     if (stat.size <= RAW_FILE_BUFFER_LIMIT_BYTES) {
