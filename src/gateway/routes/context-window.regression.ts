@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { buildContextWindowCurrentState } from './chat.router.js';
+import { resolveProviderPromptTokens } from '../../providers/model-usage.js';
 
 const state = buildContextWindowCurrentState({
   sessionId: 'context_window_regression_empty',
@@ -115,3 +116,77 @@ assert.equal(
 );
 
 console.log('context-window provider authority regression: ok');
+
+// ─── Anthropic cached-prefix context accounting ──────────────────────────────
+// Anthropic reports `input_tokens` as the UNCACHED remainder only. Once prefix
+// caching warms up, a real ~140k-token turn reports input_tokens=1..2 with the
+// rest in cache_read/cache_creation. Reading inputTokens directly pinned the
+// context bar at ~0% on mobile and desktop for every Claude session.
+
+assert.equal(
+  resolveProviderPromptTokens({ provider: 'anthropic', inputTokens: 2, cacheReadTokens: 135_577, cacheWriteTokens: 1_996 }),
+  137_575,
+  'anthropic prompt size must add cache read + cache write to the uncached remainder',
+);
+assert.equal(
+  resolveProviderPromptTokens({ provider: 'openai', inputTokens: 36_484, cacheReadTokens: 34_304 }),
+  36_484,
+  'openai cached_tokens is a subset of prompt_tokens and must never be added again',
+);
+assert.equal(
+  resolveProviderPromptTokens({ provider: 'openai_codex', inputTokens: 35_378, cacheReadTokens: 0 }),
+  35_378,
+  'openai_codex prompt size is the reported input',
+);
+assert.equal(
+  resolveProviderPromptTokens({ provider: '', inputTokens: 500, cacheReadTokens: 9_000 }),
+  500,
+  'an unknown provider must not speculatively add cache tokens',
+);
+assert.equal(resolveProviderPromptTokens(null), 0, 'a missing usage event resolves to zero');
+
+const anthropicCachedState = buildContextWindowCurrentState({
+  sessionId: 'context_window_regression_anthropic_cache',
+  profile: { contextWindowTokens: 1_000_000, tokenizer: 'anthropic' },
+  currentInputTokens: 128,
+  messageTokens: 128,
+  historyMessages: 12,
+  recentToolTokens: 0,
+  inputBudgetTokens: 857_232,
+  compactionTriggerTokens: 771_508,
+  storedThread: { fullStoredThreadTokens: 100_754 },
+  modelUsage: {
+    calls: 30,
+    cacheReadTokens: 870_086,
+    lastContextCall: {
+      source: 'provider',
+      callType: 'chat',
+      agentId: 'main',
+      provider: 'anthropic',
+      inputTokens: 2,
+      cacheReadTokens: 135_577,
+      cacheWriteTokens: 1_996,
+      estimatedProviderInputTokens: 106_012,
+      estimatedMessageInputTokens: 90_000,
+      estimatedSystemPromptTokens: 13_009,
+      estimatedToolSchemaTokens: 12_483,
+    },
+  },
+});
+
+assert.equal(
+  anthropicCachedState.latestProviderReportedInputTokens,
+  137_575,
+  'a cache-warm Claude turn must report the full processed prompt, not the uncached remainder',
+);
+assert.equal(anthropicCachedState.currentStateTokens, 137_575, 'the context bar total must be the real prompt size');
+assert.ok(
+  anthropicCachedState.contextUsage.percent > 13 && anthropicCachedState.contextUsage.percent < 14,
+  `a 137.5k/1M cached Claude turn must read ~13.8%, got ${anthropicCachedState.contextUsage.percent}`,
+);
+assert.ok(
+  anthropicCachedState.freeSpaceTokens < 900_000,
+  'free space must shrink once the cached prefix is counted as occupied context',
+);
+
+console.log('context-window anthropic cached-prefix regression: ok');
