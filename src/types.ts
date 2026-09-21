@@ -509,21 +509,17 @@ export interface PrometheusConfig {
     memoryFlushThreshold?: number;
     /** Minimum real user/assistant messages before token-threshold compaction may run. */
     compactionMinMessages?: number;
-    /**
-     * Rolling context compaction (message-window based).
-     * When enabled, the gateway periodically summarizes the thread and resets
-     * active chat history to the compact summary.
-     */
+    /** Enable token/tool-budget compaction at model-call boundaries. */
     rollingCompactionEnabled?: boolean;
-    /** Trigger compaction when this many non-summary messages are reached. */
+    /** Legacy message-count setting retained for persisted-config compatibility. */
     rollingCompactionMessageCount?: number;
-    /** Number of recent assistant turns to include full tool logs from. */
+    /** Number of recent tool results to include in the compactor handoff. */
     rollingCompactionToolTurns?: number;
-    /** Max words requested from the compactor summary. */
+    /** Maximum words accepted from the compactor summary. */
     rollingCompactionSummaryMaxWords?: number;
-    /** Optional context window override for the standalone compaction call. */
+    /** Legacy context-window override retained for persisted-config compatibility. */
     rollingCompactionNumCtx?: number;
-    /** Optional model override for compaction (active provider model namespace). */
+    /** Fallback model when a compaction call has no admitted turn route. */
     rollingCompactionModel?: string;
     /** Automatic settling is disabled when this is zero or absent. */
     autoSettleAfterDays?: number;

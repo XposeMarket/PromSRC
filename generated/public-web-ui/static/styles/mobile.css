@@ -1,5 +1,5 @@
 @import './mobile-shell.css';
-/* Voice-mode-style reasoning/model takeover: centered controls obscure the lower third of chat. */
+/* Voice-mode-style reasoning/model takeover: centered controls cover the lower third of chat. */
 .pm-msheet-scrim.is-reasoning,
 .pm-msheet-scrim.is-model-switch {
   background:
@@ -195,8 +195,6 @@
 .pm-reasoning-arc-svg,
 .pm-reasoning-arc-thumb { display: none; }
 
-
-
 .pm-msheet.is-model-switch {
   height: auto;
   min-height: 0;
@@ -319,10 +317,6 @@
 @media (prefers-reduced-motion: reduce) {
   .pm-reasoning-fill { transition-duration: .01ms !important; }
 }
-
-
-
-
 
 /* Button haptic host — a native iOS switch overlay sits on top of the wrapped
    button so the physical tap emits a system haptic; the wrapper shrink-wraps the
@@ -852,7 +846,6 @@
   );
 }
 
-
 /* ── Clone cells: structural twin of .pm-tab, whole cell scaled ── */
 .pm-tab-magnify-cell {
   display: flex;
@@ -1253,7 +1246,6 @@ html.pm-session-context-open * {
   color: color-mix(in srgb, var(--pm-blue, #4a82d1) 56%, transparent);
   font-weight: 400;
 }
-
 
 .pm-drawer-session-head,
 .pm-drawer-session-list {
@@ -3918,7 +3910,7 @@ html.pm-session-context-open * {
   from { opacity: 0; transform: scale(.75); }
   to   { opacity: 1; transform: scale(1); }
 }
-/* Disable iOS native text selection + callout on user bubbles — copy via popover only */
+/* Disable iOS native text selection + callout on user bubbles; copy via popover */
 .pm-msg.from-user .pm-bubble {
   -webkit-user-select: none;
   user-select: none;
@@ -6701,6 +6693,7 @@ html.pm-session-context-open * {
   position: relative;
   overflow: hidden;
   min-height: 34px;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6797,11 +6790,10 @@ html.pm-session-context-open * {
   display: none !important;
 }
 
-
 .pm-runtime-pills-paired .pm-main-plan-dock {
   left: auto;
   right: calc(50% + 4px);
-  transform: none;
+  transform: translateY(4px);
 }
 .pm-runtime-pills-paired .pm-background-spawn-dock.is-collapsed {
   left: calc(50% + 4px);
@@ -6827,11 +6819,12 @@ html.pm-session-context-open * {
   overflow: hidden;
   pointer-events: auto;
   min-height: 34px;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 7px 14px;
+  padding: 6px 14px;
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
   background: rgba(255,255,255,.08);
@@ -11346,7 +11339,6 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 @keyframes pm-spin { to { transform: rotate(360deg); } }
 .pm-mini-spin { display: inline-block; }
 
-
 .pm-recent { margin-top: 24px; }
 .pm-recent-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .pm-recent-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
@@ -14277,7 +14269,6 @@ body.pm-mobile-active:is(.pm-mobile-context-popover-open, .pm-keyboard-open) .pm
   visibility: hidden !important;
 }
 
-
 /* ---------------- Mobile chat settings popover ---------------- */
 .pm-chat-settings-popover-overlay {
   position: fixed;
@@ -14824,8 +14815,6 @@ button.pm-ctx-row {
 .pm-ctx-gauge-fill.crit { background: linear-gradient(90deg, #f0744f, #e0402f); }
 .pm-ctx-plan-tokens { font-size: 12px; color: var(--pm-muted); font-variant-numeric: tabular-nums; }
 
-
-
 .pm-voice-speaking-highlight {
   color: rgba(255,255,255,.98);
   background: linear-gradient(180deg, rgba(255,255,255,.00) 48%, rgba(255,154,98,.34) 48%, rgba(255,154,98,.34) 88%, rgba(255,255,255,0) 88%);
@@ -14834,7 +14823,7 @@ button.pm-ctx-row {
   text-shadow: 0 0 18px rgba(255,154,98,.26);
 }
 
-/* Main chat realtime voice overlay: full-screen voice surface while preserving header controls. */
+/* Main chat realtime voice overlay: full-screen voice surface, header controls kept. */
 body.pm-mobile-active.pm-chat-voice-active .pm-tabbar {
   display: none !important;
 }
@@ -15128,8 +15117,7 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline #pm-voice-dicta
   }
 }
 
-
-/* Chat voice overlay refinement: keep chat visible, confine voice chrome to bottom third. */
+/* Chat voice overlay refinement: keep chat visible, voice chrome in bottom third. */
 body.pm-mobile-active.pm-chat-voice-active .pm-body.pm-chat-body.pm-chat-voice-occluded {
   -webkit-mask-image: none !important;
   mask-image: none !important;
@@ -15284,8 +15272,7 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline #pm-voice-dicta
   }
 }
 
-
-/* Chat voice overlay final polish: transparent chat overlay, single attach button, bottom fade. */
+/* Chat voice overlay polish: transparent overlay, single attach button, bottom fade. */
 body.pm-mobile-active.pm-chat-voice-active .pm-body.pm-chat-body.pm-chat-voice-occluded {
   padding-bottom: calc(env(safe-area-inset-bottom) + 410px) !important;
   -webkit-mask-image: linear-gradient(
@@ -17259,7 +17246,7 @@ body.pm-mobile-active .pm-ctx-popover {
   box-shadow: none !important;
 }
 
-/* Keep project cards prominent while giving regular chat session titles a lighter hierarchy. */
+/* Project cards stay prominent; regular chat session titles get a lighter hierarchy. */
 body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-project-row) .pm-session-title {
   font-weight: 650;
 }
@@ -17274,7 +17261,6 @@ body.pm-mobile-active .pm-drawer .pm-project-row .pm-session-title {
   font-weight: 750;
   font-family: var(--pm-font);
 }
-
 
 /* The drawer search toggle was replaced by the persistent bottom search field. */
 body.pm-mobile-active .pm-drawer-search-toggle {
@@ -17434,7 +17420,6 @@ body.pm-mobile-active :where(
   border-width: 0 !important;
   border-color: transparent !important;
 }
-
 
 /* Keep resting tabs muted; the clipped magnify clone is the only white layer. */
 body.pm-mobile-active .pm-tab,

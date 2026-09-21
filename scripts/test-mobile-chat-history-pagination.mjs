@@ -16,6 +16,7 @@ const legacy = {
   __pmChat: { completedAssistantTurns: {} },
   _mobileMessageCopyText: (message) => String(message?.content || message?.body?.text || '').trim(),
   _isMobileAssistantMessage: (message) => message?.role === 'ai',
+  _mobileAssistantHasVisibleAnswer: (message) => Boolean(String(message?.content || message?.body?.text || '').trim()),
   _mobileAssistantTurnIdentity: (message) => message?.messageId || '',
   _mergeMobileAssistantTurnDetails: () => {},
   _mergeMobileUserTurnDetails: () => {},
@@ -34,7 +35,8 @@ runInNewContext([
   section('_reconcileMobileThreadOrder', '_isMobileChatSteerWorkflowGroup'),
   section('_dedupeMobileAssistantTurns', '_newMobileClientRequestId'),
   section('_mobileMessagesRepresentSameTurn', '_mobileUserAttachmentSignature'),
-  section('_mobileHistoryTurnsRepresentSameTurn', '_mergeMobileHistoryRecords'),
+  section('_mobileHistoryTurnsRepresentSameTurn', '_mobileCanonicalTextIsTrailingFragment'),
+  section('_mobileCanonicalTextIsTrailingFragment', '_mergeMobileHistoryRecords'),
   section('_mergeMobileHistoryRecords', '_mobileHistoryPageIsPartial'),
   section('_mergeMobilePinnedCompletedTurn', '_mergeMobileAssistantTurnDetails'),
   'globalThis.mergeHistory = _mergeMobileHistoryRecords;',
@@ -70,6 +72,25 @@ const repaired = legacy.mergeHistory([cachedAnswer], [canonicalAnswer], { server
 assert.equal(repaired[0].content, 'Current answer',
   'a completed server answer must correct stale cached text for the same request');
 assert.equal(repaired[0].body.text, 'Current answer');
+const streamedFullAnswer = {
+  role: 'ai', _clientRequestId: 'salvage-request',
+  messageId: 'mobile-request:salvage-request:assistant',
+  content: `${'Full streamed analysis with important details. '.repeat(8)}One final note: no code or runtime configuration was changed during this audit.`,
+  body: { text: `${'Full streamed analysis with important details. '.repeat(8)}One final note: no code or runtime configuration was changed during this audit.` },
+  streaming: false,
+};
+const trailingSalvage = {
+  role: 'ai', _clientRequestId: 'salvage-request',
+  messageId: 'mobile-request:salvage-request:assistant',
+  content: 'One final note: no code or runtime configuration was changed during this audit.',
+  body: { text: 'One final note: no code or runtime configuration was changed during this audit.' },
+  processEntries: [{ id: 'durable-status-card' }],
+};
+const preservedStream = legacy.mergeHistory([streamedFullAnswer], [trailingSalvage], { serverAuthoritativeText: true });
+assert.equal(preservedStream[0].content, streamedFullAnswer.content,
+  'a trailing salvage fragment must not replace a materially richer completed stream');
+assert.equal(preservedStream[0].processEntries[0].id, 'durable-status-card',
+  'durable completion details must still merge into the preserved stream');
 const cachedTrace = {
   role: 'ai', _clientRequestId: 'current-request', messageId: 'mobile-request:current-request:assistant',
   content: 'Current answer', processEntries: [{ id: 'foreign-tool' }],
