@@ -370,10 +370,9 @@ body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mob
   z-index: 1;
 }
 
-/* Match the regular composer's resting row geometry. The side composer is
-   intentionally always in the single-line steer layout, so it must opt out of
-   the main composer's focused grid rules explicitly. */
-body.pm-mobile-active .pm-mobile-side-composer.pm-composer {
+/* Use the compact row only while resting; the focused composer gets the
+   same growing textarea and controls as the main chat. */
+body.pm-mobile-active .pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -384,7 +383,7 @@ body.pm-mobile-active .pm-mobile-side-composer.pm-composer {
   align-items: stretch;
 }
 
-body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row {
+body.pm-mobile-active .pm-mobile-side-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-row {
   width: 100%;
   height: 38px;
   min-height: 38px;
@@ -394,13 +393,13 @@ body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row {
   transform: translateY(-5px);
 }
 
-body.pm-mobile-active .pm-mobile-side-composer .pm-composer-input-wrap {
+body.pm-mobile-active .pm-mobile-side-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-input-wrap {
   height: 28px;
   min-height: 28px;
   align-items: center;
 }
 
-body.pm-mobile-active .pm-mobile-side-composer .pm-composer-input {
+body.pm-mobile-active .pm-mobile-side-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-input {
   width: 100%;
   height: 28px !important;
   min-height: 28px;
@@ -416,6 +415,71 @@ body.pm-mobile-active .pm-mobile-side-composer .pm-composer-row > .pm-send {
   align-self: center;
   margin: 0;
   padding: 0;
+}
+
+/* The sheet owns its composer; viewport coordinates on a fixed descendant of
+   the blurred panel would be offset and clipped when the iOS keyboard opens. */
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-panel {
+  top: var(--pm-side-top, 80px);
+  bottom: var(--pm-side-bottom, 0px);
+  height: auto;
+}
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-thread {
+  padding-bottom: 16px;
+  scroll-padding-bottom: 16px;
+}
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-composer.pm-composer {
+  position: relative !important;
+  inset: auto !important;
+  transform: none !important;
+  flex: 0 0 auto;
+  width: calc(100% - 24px);
+  margin: 8px 12px max(12px, env(safe-area-inset-bottom));
+  z-index: 2;
+}
+body.pm-mobile-active:has(.pm-mobile-side-sheet.open) .pm-tabbar {
+  visibility: hidden;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-plan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--pm-side-composer-height, 54px) + max(12px, env(safe-area-inset-bottom)) + 18px);
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+body.pm-mobile-active .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-plan[hidden] { display: none; }
+.pm-mobile-side-plan > * { pointer-events: auto; }
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) {
+  height: auto;
+  min-height: 112px;
+  max-height: min(46svh, 340px);
+  justify-content: flex-end;
+  padding: 10px 10px 8px;
+  border-radius: 24px;
+}
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  transform: none;
+}
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input-wrap,
+body.pm-mobile-active .pm-mobile-side-sheet .pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input {
+  height: auto !important;
+  max-height: 148px;
+  overflow-y: auto;
+}
+.pm-mobile-side-plan .pm-main-plan-popover {
+  position: absolute;
+  bottom: 100%;
+  left: 14px;
+  right: 14px;
+  max-height: min(40dvh, 280px);
+  overflow-y: auto;
 }
 
 /* Small controls on the glass use the same header-button material. */

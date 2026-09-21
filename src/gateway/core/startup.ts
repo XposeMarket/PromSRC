@@ -363,6 +363,7 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
 
   try {
     const { launchBackgroundTaskRunner, completePlainGatewayRestartTask } = require('../tasks/task-router') as typeof import('../tasks/task-router');
+    const { isRuntimeHostedByLiveHandoffHost, setHandoffRecoveryHandler } = require('../runtime/gateway-handoff-bridge') as typeof import('../runtime/gateway-handoff-bridge');
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,
@@ -372,7 +373,22 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       // Context construction/model work can otherwise monopolize the event
       // loop while health and restart clients are still trying to connect.
       deferMainChatRetrigger: true,
+      // Runtimes a draining previous gateway still owns are mirrored, not
+      // recovered; they only enter this path if that gateway dies or times out.
+      isHostedElsewhere: isRuntimeHostedByLiveHandoffHost,
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
+    });
+    setHandoffRecoveryHandler(() => {
+      const late = recoverInterruptedRuntimes({
+        launchBackgroundTaskRunner,
+        completePlainGatewayRestartTask,
+        retriggerInterruptedMainChat,
+        isHostedElsewhere: isRuntimeHostedByLiveHandoffHost,
+        notify: (message) => console.log(`[RuntimeRecovery/handoff] ${message}`),
+      });
+      if (late.inspected > 0) {
+        console.log(`[RuntimeRecovery/handoff] Inspected ${late.inspected} runtime(s) released by a previous gateway; resumed ${late.resumedTasks.length} task(s), retriggered ${late.retriggeredChats.length} chat turn(s).`);
+      }
     });
     deferredMainChatRecoveries = recovery.deferredMainChatRuntimes;
     if (recovery.inspected > 0) {

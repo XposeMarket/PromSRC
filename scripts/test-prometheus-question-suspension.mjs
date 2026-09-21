@@ -55,10 +55,60 @@ try {
   await cancelWait;
   assert.equal(cancelSettled, true, 'cancelling a card must release the suspended turn');
 
+  const runtimeModuleUrl = pathToFileURL(path.resolve('dist/gateway/live-runtime-registry.js')).href;
+  const { registerLiveRuntime, finishLiveRuntime } = await import(runtimeModuleUrl);
+  const runtimeId = registerLiveRuntime({ kind: 'main_chat', label: 'Original chat turn', sessionId: 'racing-session' });
+  try {
+    const racingQuestion = createQuestion('racing-session');
+    const racingResult = submitPrometheusQuestionResponse({
+      questionId: racingQuestion.id,
+      answers: [{ id: 'path', selected: ['A'] }],
+    });
+    assert.equal(racingResult.success, true);
+    assert.equal(racingResult.requiresChatResume, false,
+      'a fast answer without a registered waiter must not queue a second turn while the original runtime is live');
+  } finally {
+    finishLiveRuntime(runtimeId);
+  }
+
+  const interruptedQuestion = createQuestion('interrupted-session');
+  const interruptedResult = submitPrometheusQuestionResponse({
+    questionId: interruptedQuestion.id,
+    answers: [{ id: 'path', selected: ['B'] }],
+  });
+  assert.equal(interruptedResult.requiresChatResume, true,
+    'an answered question with no waiter or live owner still needs restart recovery');
+
+  const oldQuestion = createQuestion('reused-session');
+  oldQuestion.createdAt = new Date(Date.now() - 10_000).toISOString();
+  const newerRuntimeId = registerLiveRuntime({ kind: 'main_chat', label: 'Newer chat turn', sessionId: oldQuestion.sessionId });
+  try {
+    const oldQuestionResult = submitPrometheusQuestionResponse({
+      questionId: oldQuestion.id,
+      answers: [{ id: 'path', selected: ['A'] }],
+    });
+    assert.equal(oldQuestionResult.requiresChatResume, true,
+      'a newer turn in the same session must not be mistaken for the question’s original owner');
+  } finally {
+    finishLiveRuntime(newerRuntimeId);
+  }
+
   const executorSource = fs.readFileSync(path.resolve('src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
-  const hardWaitStart = executorSource.indexOf('const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>');
-  const answeredResult = executorSource.indexOf('status: \'answered\'', hardWaitStart);
-  assert.ok(hardWaitStart >= 0 && answeredResult > hardWaitStart, 'ask_prometheus_questions must await the card before returning an answered result');
+  const createStart = executorSource.indexOf('const question = questionQueue.create(payload);');
+  const registerWaiter = executorSource.indexOf('const waitForAnswer = new Promise<', createStart);
+  const broadcastCard = executorSource.indexOf("type: 'question_created'", createStart);
+  const telegramDelivery = executorSource.indexOf('await deps.telegramChannel.sendPrometheusQuestion(question)', createStart);
+  const hardWaitStart = executorSource.indexOf('const waitResult = await waitForAnswer;', createStart);
+  const answeredResult = executorSource.indexOf("status: 'answered'", hardWaitStart);
+  assert.ok(createStart >= 0 && registerWaiter > createStart && broadcastCard > registerWaiter
+    && telegramDelivery > broadcastCard && hardWaitStart > telegramDelivery && answeredResult > hardWaitStart,
+  'ask_prometheus_questions must register its waiter before exposing the card, then await the answer before returning');
+  assert.ok(executorSource.includes('questionQueue.clearWaiters(question.id)'),
+    'ask_prometheus_questions must detach its in-process waiter when the owning turn aborts');
+  assert.ok(executorSource.includes('questionAbortSignal?.addEventListener?.'),
+    'ask_prometheus_questions must observe owner aborts while its card is pending');
+  assert.ok(executorSource.includes('questionAbortSignal?.removeEventListener?.'),
+    'ask_prometheus_questions must remove its abort listener after the card resolves');
   assert.equal(executorSource.includes('End this turn now; the submitted answer will resume'), false, 'the old advisory-only yield must not return');
 
   console.log('Prometheus question suspension regression checks passed.');

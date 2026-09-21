@@ -1,3 +1,4 @@
+import { buildToolOutputArtifactPreview } from '../tool-result-model-context';
 // src/gateway/subagent-executor.ts
 // Tool execution engine — extracted from server-v2.ts (Step 14.1, Phase 3).
 // Restored and adapted for dep-injected execution.
@@ -5,7 +6,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { looksLikeNativeFileToolBypass } from './native-file-tool-bypass';
 import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
@@ -51,6 +53,7 @@ import {
   createSearchMatcher,
   formatPhysicalLineWindow,
   formatFileIntelligence,
+  formatGrepToolResult,
   formatSyntaxValidationResult,
   matchesGlobList,
   parseGlobList,
@@ -534,6 +537,8 @@ export interface ExecuteToolDeps {
   cronScheduler: any;
   broadcastWS: (data: any) => void;
   sendSSE?: (event: string, data: any) => void;
+  /** The caller attaches media visuals after the tool result, before model continuation. */
+  supportsDirectMediaObservation?: boolean;
   handleChat: (...args: any[]) => Promise<any>;
   runInteractiveTurn?: (...args: any[]) => Promise<any>;
   /** Used only by the hidden persistent thread-supervision runtime. */
@@ -559,7 +564,7 @@ export interface ExecuteToolDeps {
   buildBrowserLaunchCommand: (app: string, url: string) => string;
   normalizeWorkspacePathAliases: (rawCmd: string, workspacePath: string) => string;
   isAllowedShellCommand: (command: string) => boolean;
-  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }>;
+  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean; yieldTimeMs?: number; onOutput?: (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => void }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string; yielded?: boolean; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }>;
   toolCallId?: string;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
@@ -585,29 +590,33 @@ export interface ExecuteToolDeps {
 
 
 
-function looksLikeNativeFileToolBypass(command: string): boolean {
-  const raw = String(command || '').trim();
-  if (!raw) return false;
-  const lower = raw.toLowerCase();
-  const isInlineInterpreter =
-    /^(python|python3|py|node)\s+(-c|-e|<<|@')\b/.test(lower)
-    || /^(powershell|pwsh)\b.*\b(command|encodedcommand|set-content|add-content|out-file|new-item|remove-item|move-item|copy-item)\b/.test(lower);
-  const hasWriteApi =
-    /\b(writefile|writefilesync|appendfile|appendfilesync|set-content|add-content|out-file|new-item|remove-item|move-item|copy-item)\b/.test(lower);
-  const hasShellRedirect =
-    /(^|\s)(echo|printf|type|copy|set-content|add-content|out-file)\b[\s\S]*(>|>>|\|\s*(set-content|add-content|out-file)\b)/.test(lower);
-
-  return (isInlineInterpreter && hasWriteApi) || hasShellRedirect;
-}
-
+/**
+ * Match a blocked command invocation, not a vocabulary word.
+ *
+ * Patterns previously had their whitespace stripped, so a multi-token entry
+ * could never match and the list had to use bare words like "format". That
+ * rejected legitimate work whenever the word appeared in a commit message,
+ * a -Pattern argument, or ordinary prose. A multi-word entry is now matched as
+ * an ordered token sequence, so "format c:" blocks `format c:` and
+ * `format /fs:ntfs c:` while leaving "output format" alone.
+ */
 function commandContainsBlockedPattern(command: string, blockedPatterns: string[] | undefined): string | null {
   const cmd = String(command || '').toLowerCase();
+  const boundary = '(?:^|[\\s;&|()])';
+  const endBoundary = '(?:$|[\\s;&|()])';
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const rawBlocked of blockedPatterns || []) {
     const blocked = String(rawBlocked || '').trim().toLowerCase();
-    const token = blocked.replace(/\s+/g, '');
-    if (!token) continue;
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(^|[\\s;&|()])${escaped}($|[\\s;&|()])`, 'i').test(cmd)) {
+    if (!blocked) continue;
+    const parts = blocked.split(/\s+/).filter(Boolean);
+    if (!parts.length) continue;
+    // Allow intervening flags between tokens: "format /fs:ntfs c:" still hits
+    // the "format c:" entry, while unrelated prose does not.
+    const sequence = parts.map(escape).join('(?:[\\s]+[^\\s;&|()]+){0,3}?[\\s]+');
+    const pattern = parts.length === 1
+      ? `${boundary}${sequence}${endBoundary}`
+      : `${boundary}${sequence}`;
+    if (new RegExp(pattern, 'i').test(cmd)) {
       return blocked;
     }
   }
@@ -2153,7 +2162,7 @@ function compactWorkspaceReadArgs(args: Record<string, any>, pathArg: any): Reco
 function compactWorkspaceGrepArgs(args: Record<string, any>, pathArg: any): Record<string, any> {
   const out: Record<string, any> = pathArg ? { filename: pathArg } : {};
   copyIfPresent(out, args, ['pattern', 'glob', 'file_glob', 'directory', 'query', 'exclude']);
-  copyIfPresent(out, args, ['max_results', 'context', 'context_lines', 'before', 'after', 'char_window', 'char_before', 'char_after']);
+  copyIfPresent(out, args, ['max_results', 'context', 'context_lines', 'before', 'after', 'char_window', 'char_before', 'char_after', 'format']);
   if (args.regex === true) out.regex = true;
   if (args.literal === true) out.literal = true;
   if (args.case_insensitive === true) out.case_insensitive = true;
@@ -2178,7 +2187,9 @@ function compactWorkspaceBatchReadArgs(args: Record<string, any>): Record<string
     : (Array.isArray(args.paths) ? args.paths.map((p: any) => ({ filename: String(p) })) : []);
   const out: Record<string, any> = { files };
   copyIfPresent(out, args, ['max_files', 'max_lines_per_file', 'num_lines', 'query', 'max_result_tokens', 'hard_max_result_tokens']);
-  if (args.content === true || args.include_content === true) out.content = true;
+  if (args.content !== undefined) out.content = args.content;
+  if (args.include_content !== undefined) out.include_content = args.include_content;
+  if (args.summary !== undefined) out.summary = args.summary;
   if (String(args.mode || '').trim()) out.mode = String(args.mode).trim();
   if (args.full === true || args.allow_large === true) out.full = true;
   if (args.inline === true) out.inline = true;
@@ -2202,7 +2213,7 @@ function compactWorkspaceEditArgs(args: Record<string, any>, pathArg: any, actio
   } else if (action === 'delete_lines') {
     out.start_line = args.start_line;
     out.end_line = args.end_line;
-  } else if (action === 'create' || action === 'write') {
+  } else if (action === 'create' || action === 'write' || action === 'append') {
     out.content = args.content ?? '';
     if (args.overwrite === true) out.overwrite = true;
     if (args.create_dirs === true) out.create_dirs = true;
@@ -2292,7 +2303,7 @@ export function isWorkspacePrometheusSourceCopyPath(rawPath: unknown): boolean {
   return /^(?:workspace\/)?repos\/promsrc(?:[-_/].*)?(?:\/|$)/i.test(normalized);
 }
 
-function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, workspacePath = ''): { name: string; args: any; error?: string } | null {
+export function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, workspacePath = ''): { name: string; args: any; error?: string } | null {
   if (!/^workspace_(read|edit|run|git|safety|code_nav)$/.test(name)) return null;
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
   const action = String(args.action || '').trim().toLowerCase();
@@ -2413,6 +2424,7 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, workspacePath
   if (name === 'workspace_edit') {
     if (action === 'create') return { name: 'create_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'write') return { name: 'write_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
+    if (action === 'append') return { name: 'append_file', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'find_replace') return { name: 'find_replace', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'replace_lines') return { name: 'replace_lines', args: compactWorkspaceEditArgs(args, pathArg, action) };
     if (action === 'insert_after') return { name: 'insert_after', args: compactWorkspaceEditArgs(args, pathArg, action) };
@@ -2827,6 +2839,58 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     if (args.team_context == null && args.context != null) args.team_context = args.context;
     if (args.subagent_ids == null && Array.isArray(args.subagentIds)) args.subagent_ids = args.subagentIds;
     delete args.team_action;
+  }
+  // spawn_subagent requires subagent_id OR create_if_missing. The agent_ops schema
+  // advertises from_role/specialization as a standalone shorthand, so hydrate an
+  // implicit create_if_missing envelope instead of rejecting the documented call.
+  if (target === 'spawn_subagent') {
+    if (args.subagent_id == null && args.agent_id != null) args.subagent_id = args.agent_id;
+    const hasRoleShorthand = args.from_role != null || args.specialization != null;
+    if (args.subagent_id == null && hasRoleShorthand && !isPlainObjectArg(args.create_if_missing)) {
+      args.create_if_missing = {
+        ...(args.from_role != null ? { from_role: args.from_role } : {}),
+        ...(args.specialization != null ? { specialization: args.specialization } : {}),
+        ...(args.name != null ? { name: args.name } : {}),
+        ...(args.description != null ? { description: args.description } : {}),
+        ...(args.model != null ? { model: args.model } : {}),
+        ...(args.reasoning_effort != null ? { reasoning_effort: args.reasoning_effort } : {}),
+      };
+    }
+  }
+  // Wrapper schemas expose friendly parameter names that the underlying handlers do
+  // not read. Without these aliases a schema-conformant call fails validation, and
+  // agents burn steps guessing the handler's private parameter name.
+  if (name === 'team_ops_wrapper') {
+    if (args.team_id == null && args.teamId != null) args.team_id = args.teamId;
+    if (target === 'post_to_team_chat' || target === 'reply_to_team' || target === 'message_main_agent') {
+      if (args.message == null && args.content != null) args.message = args.content;
+    }
+    if (target === 'dispatch_team_agent') {
+      if (args.task_prompt == null && args.task != null) args.task_prompt = args.task;
+      if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    }
+  }
+  if (name === 'team_collab_ops') {
+    // talk_teammate documents teammate_id; the handler reads agent_id.
+    if (target === 'talk_to_teammate' && args.agent_id == null && args.teammate_id != null) {
+      args.agent_id = args.teammate_id;
+    }
+    // request_context documents context/request; the handler reads question.
+    if (target === 'request_context' && args.question == null) {
+      if (args.request != null) args.question = args.request;
+      else if (args.message != null) args.question = args.message;
+      else if (args.context != null) args.question = args.context;
+    }
+    // request_manager_help / talk_to_manager document request; the handler reads message.
+    if ((target === 'request_manager_help' || target === 'talk_to_manager') && args.message == null) {
+      if (args.request != null) args.message = args.request;
+      else if (args.context != null) args.message = args.context;
+    }
+    // update_status documents status; the handler reads phase/current_task.
+    if (target === 'update_my_status') {
+      if (args.phase == null && args.status != null) args.phase = args.status;
+      if (args.current_task == null && args.message != null) args.current_task = args.message;
+    }
   }
   return { name: target, args };
 }
@@ -3872,10 +3936,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     if (!relPath) {
       return `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`;
     }
-    return [
-      opts.summary || `${toolName} output was ${text.length} chars, which exceeds the ${inlineLimit} char inline budget.`,
-      `[TOOL_RESULT_ARTIFACT] Full output saved to ${relPath}. Read targeted ranges from that artifact only if needed.`,
-    ].join('\n');
+    return buildToolOutputArtifactPreview({
+      toolName,
+      text,
+      inlineLimit,
+      artifactPath: relPath,
+      summary: opts.summary,
+    });
   }
 	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = FILE_TOOL_DEFAULT_READ_LINES): string {
     const exactLine = resolvePositiveLineArg(argsObj.line ?? argsObj.line_number ?? argsObj.lineNumber ?? argsObj.physical_line);
@@ -5021,7 +5088,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       return {
         name,
         args,
-        result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
+        result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create"/"append") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
         error: true,
       };
     }
@@ -7601,8 +7668,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const batchCap = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_LINES, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || FILE_TOOL_DEFAULT_BATCH_LINES)));
         const resultChunks: string[] = [];
         const batchSummaryLines: string[] = [];
-        const forceContent = args.content === true || args.include_content === true || String(args.mode || '').toLowerCase() === 'content';
-        const forceSummary = args.summary === true || args.content === false || String(args.mode || '').toLowerCase() === 'summary';
+        const forceSummary = args.summary === true || args.content === false || args.include_content === false || String(args.mode || '').toLowerCase() === 'summary';
         const summarizeFile = (display: string, absPath: string): string => {
           return summarizeFileForTool(display, absPath, {
             readCap: batchCap,
@@ -7617,8 +7683,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             let bContent: string;
             let bDisplay: string;
             const entryFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
-            const hasWindow = entry.start_line !== undefined || entry.num_lines !== undefined || args.num_lines !== undefined;
-            const summaryOnly = forceSummary || (!forceContent && !hasWindow && !entryFull);
+            const summaryOnly = forceSummary;
             if (bNorm.startsWith('src/')) {
               if (summaryOnly) {
                 const projectRoot = resolveProjectRootForSourceAccess();
@@ -7775,6 +7840,23 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	          fs.mkdirSync(path.dirname(resolved.absPath), { recursive: true });
 	          fs.writeFileSync(resolved.absPath, content, 'utf-8');
 	          return withWorkspaceSnapshots({ name, args, result: `OK wrote ${resolved.normalizedRel} (${content.split('\n').length} lines).`, error: false }, [snapshot]);
+	        } catch (err: any) {
+	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
+	        }
+	      }
+
+	      case 'append_file': {
+	        const filename = args.filename || args.name || args.path || args.file;
+	        if (!filename) return { name, args, result: 'filename is required', error: true };
+	        const content = String(args.content ?? '');
+	        try {
+	          const resolved = resolveWorkspacePath(String(filename));
+	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'append_file');
+	          if (blocked) return blocked;
+	          const snapshot = snapshotPreMutation(resolved, 'append_file');
+	          fs.mkdirSync(path.dirname(resolved.absPath), { recursive: true });
+	          fs.appendFileSync(resolved.absPath, content, 'utf-8');
+	          return withWorkspaceSnapshots({ name, args, result: `OK appended ${content.length} characters to ${resolved.normalizedRel}.`, error: false }, [snapshot]);
 	        } catch (err: any) {
 	          return { name, args, result: recoverWorkspacePathError(err, filename, 'list_dir'), error: true };
 	        }
@@ -8340,7 +8422,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           no_match_hints: grep.totalMatches === 0 ? buildNoMatchHints({ pattern, searched: resolvedFile.displayPath, mode: matcher.mode }) : undefined,
           matches: grep.matches,
         };
-        return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+        return { name, args, result: formatGrepToolResult(payload, args.format), error: false };
       }
 
       case 'search_files':
@@ -8373,6 +8455,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             gitignore: args.gitignore,
             respect_gitignore: args.respect_gitignore,
             include_lockfiles: args.include_lockfiles,
+            format: args.format,
           }, workspacePath, deps, sessionId);
         }
         let resolvedDir: { absPath: string; normalizedRel: string; displayPath: string };
@@ -8476,7 +8559,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           ] : undefined,
           matches: sortedMatches,
         };
-        return { name, args, result: JSON.stringify(payload, null, 2), error: false };
+        return { name, args, result: formatGrepToolResult(payload, args.format), error: false };
       }
 
       case 'apply_workspace_patchset': {
@@ -8761,7 +8844,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           no_match_hints: gs_totalMatches === 0 ? buildNoMatchHints({ pattern: gs_pattern, searched: gs_searchedLabel, mode: gs_matcher.mode, excluded: Array.from(gs_excludes) }) : undefined,
           matches: gs_sortedMatches,
         };
-        return { name, args, result: JSON.stringify(gs_payload, null, 2), error: false };
+        return { name, args, result: formatGrepToolResult(gs_payload, args.format), error: false };
       }
 
       case 'grep_prom': {
@@ -8845,7 +8928,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             no_match_hints: gp_totalMatches === 0 ? buildNoMatchHints({ pattern: gp_pattern, searched: gp_resolved.normalizedRel || '.', mode: gp_matcher.mode, excluded: Array.from(gp_excludes) }) : undefined,
             matches: gp_sortedMatches,
           };
-          return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
+          return { name, args, result: formatGrepToolResult(gp_payload, args.format), error: false };
         }
         if (!gp_rootStat.isDirectory()) {
           return { name, args, result: `"${gp_resolved.normalizedRel || '.'}" is not a searchable file or directory`, error: true };
@@ -8906,7 +8989,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           no_match_hints: gp_totalMatches === 0 ? buildNoMatchHints({ pattern: gp_pattern, searched: gp_resolved.normalizedRel || '.', mode: gp_matcher.mode, excluded: Array.from(gp_excludes) }) : undefined,
           matches: gp_sortedMatches,
         };
-        return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
+        return { name, args, result: formatGrepToolResult(gp_payload, args.format), error: false };
       }
       case 'read_dev_sources': {
         const files = Array.isArray(args.files) ? args.files : [];
@@ -8916,8 +8999,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const results: string[] = [];
         const summaryLines: string[] = [];
         let sawError = false;
-        const forceContent = args.content === true || args.include_content === true || String(args.mode || '').toLowerCase() === 'content';
-        const forceSummary = args.summary === true || args.content === false || String(args.mode || '').toLowerCase() === 'summary';
+        const forceSummary = args.summary === true || args.content === false || args.include_content === false || String(args.mode || '').toLowerCase() === 'summary';
         const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
         const summarizeDevSource = (requested: string, isWebUi: boolean, sourceFile: string): string => {
           const projectRoot = resolveProjectRootForSourceAccess();
@@ -8954,9 +9036,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               regex: entry?.regex === true,
             }, workspacePath, deps, sessionId);
           } else {
-            const hasWindow = entry?.start_line !== undefined || entry?.num_lines !== undefined || entry?.head !== undefined || entry?.tail !== undefined || args.num_lines !== undefined;
-            const entryFull = entry?.full === true || entry?.allow_large === true || args.full === true || args.allow_large === true;
-            const summaryOnly = forceSummary || (!forceContent && !hasWindow && !entryFull);
+            const summaryOnly = forceSummary;
             if (summaryOnly) {
               try {
                 const summary = summarizeDevSource(requested, isWebUi, sourceFile);
@@ -14248,7 +14328,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             args.base ? `--base ${quoteArg(String(args.base))}` : '',
             args.draft === true ? '--draft' : '',
           ].filter(Boolean).join(' ');
-          return runCapturedToolCommand(cmd, workspacePath, 120000);
+          const result = await runCapturedToolCommand(cmd, workspacePath, 120000);
+          if (result.error && /(?:not recognized|command not found|not found).*(?:gh)|(?:gh).*(?:not recognized|command not found|not found)/is.test(result.result)) {
+            return {
+              name,
+              args,
+              result: [
+                result.result,
+                '',
+                'GitHub CLI is unavailable. Use connector_github_create_pr with the same owner/repo/title/head/base/body/draft values when the GitHub connector is connected.',
+              ].join('\n'),
+              error: true,
+            };
+          }
+          return result;
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -14642,8 +14735,26 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           let portOwner: any = null;
           if (process.platform === 'win32' && Number(args.port) > 0) {
             try {
-              const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', `$c=Get-NetTCPConnection -State Listen -LocalPort ${Math.floor(Number(args.port))} -ErrorAction SilentlyContinue | Select-Object -First 1 LocalAddress,LocalPort,OwningProcess; if($c){$c|ConvertTo-Json -Compress}`], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
-              if (output) portOwner = JSON.parse(output);
+              const wantedPort = Math.floor(Number(args.port));
+              const output = await new Promise<string>((resolve) => {
+                execFile('netstat.exe', ['-ano', '-p', 'tcp'],
+                  { encoding: 'utf8', timeout: 3000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+                  (error, stdout) => resolve(error ? '' : String(stdout || '')));
+              });
+              for (const line of output.split(/\r?\n/)) {
+                const fields = line.trim().split(/\s+/);
+                if (fields.length < 5) continue;
+                if (fields[3] !== 'LISTENING') continue;
+                const local = fields[1];
+                const separator = local.lastIndexOf(':');
+                if (separator < 0 || Number(local.slice(separator + 1)) !== wantedPort) continue;
+                portOwner = {
+                  LocalAddress: local.slice(0, separator).replace(/^\[|\]$/g, ''),
+                  LocalPort: wantedPort,
+                  OwningProcess: Number(fields[4]),
+                };
+                break;
+              }
             } catch {}
           }
           return { name, args, result: JSON.stringify({
@@ -14667,8 +14778,26 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       case 'process_wait': {
         const runId = String(args.runId || args.run_id || '').trim();
         if (!runId) return { name, args, result: 'runId is required', error: true };
-        const exit = await getProcessSupervisor().wait(runId);
-        if (!exit) return { name, args, result: `No active process found for ${runId}`, error: true };
+        const supervisor = getProcessSupervisor();
+        if (!supervisor.get(runId)) return { name, args, result: `No process found for ${runId}`, error: true };
+        const requestedWaitMs = Number(args.timeoutMs ?? args.timeout_ms ?? 10_000);
+        const waitMs = Number.isFinite(requestedWaitMs) ? Math.max(1_000, Math.min(30_000, requestedWaitMs)) : 10_000;
+        let waitTimer: NodeJS.Timeout | null = null;
+        const exit = await Promise.race([
+          supervisor.wait(runId),
+          new Promise<null>((resolve) => { waitTimer = setTimeout(() => resolve(null), waitMs); }),
+        ]);
+        if (waitTimer) clearTimeout(waitTimer);
+        if (!exit) {
+          const run = supervisor.get(runId);
+          const tail = supervisor.log(runId, 4000).combined.slice(-4000);
+          return {
+            name, args,
+            result: `${runId} is ${run?.state || 'running'} after ${Math.round(waitMs / 1000)}s.\n${tail || '(no output yet)'}\nUse process_status/process_log for progress or call process_wait again.`,
+            error: false,
+            extra: { runId, stillRunning: true },
+          };
+        }
         const output = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
         const outcome = classifyCommandTermination({ code: exit.exitCode, timedOut: exit.timedOut, reason: exit.reason, signal: exit.exitSignal });
         return {
@@ -14712,7 +14841,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return {
             name,
             args,
-            result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
+            result: 'Blocked: this looks like an ad hoc shell/Python/Node/PowerShell file edit. Use native workspace wrappers instead: workspace_read(action:"stats"/"read"/"grep") first, then workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"write"/"create"/"append") or workspace_edit(action:"patchset"). Use workspace_run for tests, builds, git/status, package installs, diagnostics, or transformations the file tools cannot perform.',
             error: true,
           };
         }
@@ -14785,6 +14914,27 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             return { name, args, result: `Administrator command failed: ${error?.message || error}`, error: true };
           }
         }
+        const requestedYieldMs = Number(args.yieldTimeMs ?? args.yield_time_ms ?? 10_000);
+        const yieldTimeMs = Number.isFinite(requestedYieldMs)
+          ? Math.max(1_000, Math.min(30_000, requestedYieldMs))
+          : 10_000;
+        let streamToSse = true;
+        const onCommandOutput = (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => {
+          if (!streamToSse) return;
+          deps.sendSSE?.('process_run_output', {
+            ...event,
+            action: 'run_command',
+            sessionId,
+            toolCallId: deps.toolCallId,
+          });
+        };
+        const yieldedCommandResult = (captured: { runId?: string; stdout: string }) => ({
+          name,
+          args,
+          result: `${normalizedCmd} [still running] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${captured.stdout.slice(-4000) || '(no output yet)'}\nUse process_status/process_log to inspect it, process_wait for a bounded wait, or process_kill to stop it.`,
+          error: false,
+          extra: { runId: captured.runId, stillRunning: true },
+        });
         let execCmd = '';
 
         // 1. Check allowlist (exact match)
@@ -14835,7 +14985,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 sessionId,
                 toolCallId: deps.toolCallId,
                 workspacePath,
+                yieldTimeMs,
+                onOutput: onCommandOutput,
               });
+              streamToSse = false;
+              if (captured.yielded) return yieldedCommandResult(captured);
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const outcome = classifyCommandTermination(captured);
               return {
@@ -14881,7 +15035,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 sessionId,
                 toolCallId: deps.toolCallId,
                 workspacePath,
+                yieldTimeMs,
+                onOutput: onCommandOutput,
               });
+              streamToSse = false;
+              if (captured.yielded) return yieldedCommandResult(captured);
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const outcome = classifyCommandTermination(captured);
               return {
@@ -14954,6 +15112,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             modelOverride: args.model ? String(args.model) : undefined,
             providerOverride: args.provider ? String(args.provider) : undefined,
             reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
+            toolCategories: Array.isArray(args.tool_categories) ? args.tool_categories : undefined,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
@@ -20836,6 +20995,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               return { name, args, result: `Prometheus question ${questionId} is ${existing.status}.`, error: true };
             }
 
+            let abortListener: (() => void) | undefined;
+            const questionAbortSignal: any = deps.abortSignal?.signal;
             const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string } | { cancelled: true }>((resolve) => {
               let settled = false;
               const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string } | { cancelled: true }) => {
@@ -20847,7 +21008,16 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               questionQueue.onResolve(questionId, (answerPayload) => safeResolve(answerPayload));
               questionQueue.onCancel(questionId, () => safeResolve({ cancelled: true }));
               questionQueue.onSteer(questionId, (steerMessage) => safeResolve({ steerInterrupt: steerMessage }));
+              abortListener = () => {
+                // Keep the durable card pending so a later answer can use the
+                // restart-resume path, but detach this dead turn's callbacks.
+                questionQueue.clearWaiters(questionId);
+                safeResolve({ cancelled: true });
+              };
+              if (questionAbortSignal?.aborted) abortListener();
+              else questionAbortSignal?.addEventListener?.('abort', abortListener, { once: true });
             });
+            if (abortListener) questionAbortSignal?.removeEventListener?.('abort', abortListener);
 
             if ('cancelled' in waitResult) {
               return { name, args, result: `Prometheus question ${questionId} was cancelled by the user.`, error: true };
@@ -20902,6 +21072,30 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           }
 
           const question = questionQueue.create(payload);
+          // Register the suspension before broadcasting the card or awaiting
+          // Telegram delivery. A fast web answer during that delivery gap
+          // otherwise sees no waiter and queues a second chat resume even
+          // though this tool invocation is still alive.
+          let abortListener: (() => void) | undefined;
+          const questionAbortSignal: any = deps.abortSignal?.signal;
+          const waitForAnswer = new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>((resolve) => {
+            let settled = false;
+            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+            };
+            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
+            questionQueue.onCancel(question.id, () => safeResolve({ cancelled: true }));
+            abortListener = () => {
+              // The card is durable. Only this turn's in-process waiter is
+              // removed, so an answer after restart can produce resumePrompt.
+              questionQueue.clearWaiters(question.id);
+              safeResolve({ cancelled: true });
+            };
+            if (questionAbortSignal?.aborted) abortListener();
+            else questionAbortSignal?.addEventListener?.('abort', abortListener, { once: true });
+          });
           try {
             appendAuditEntry({
               timestamp: new Date().toISOString(),
@@ -20950,16 +21144,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           // model continue the tool loop and emit a follow-up assistant message.
           // The record remains durable, so after a gateway restart the submit
           // endpoint can still resume a question that no longer has this waiter.
-          const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>((resolve) => {
-            let settled = false;
-            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }) => {
-              if (settled) return;
-              settled = true;
-              resolve(value);
-            };
-            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
-            questionQueue.onCancel(question.id, () => safeResolve({ cancelled: true }));
-          });
+          const waitResult = await waitForAnswer;
+          if (abortListener) questionAbortSignal?.removeEventListener?.('abort', abortListener);
 
           const wasCancelled = 'cancelled' in waitResult;
           if (activeTaskId) {

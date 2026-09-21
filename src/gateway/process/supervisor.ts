@@ -2,13 +2,15 @@ import crypto from 'crypto';
 import path from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { execSync } from 'child_process';
-import pty from 'node-pty';
+import * as pty from 'node-pty';
 import { getConfig } from '../../config/config';
 import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
 import { classifyCommandTermination } from './command-outcome';
-import { createTerminalWorkspaceTracker, type TerminalWorkspaceChangeResult, type TerminalWorkspaceTracker } from '../coding/terminal-change-tracker';
+import type { TerminalWorkspaceChangeResult } from '../coding/terminal-change-tracker';
+import { createManagedTerminalWorkspaceTracker, type ManagedTerminalWorkspaceTracker } from './terminal-workspace-worker-client';
 import { enqueueAsyncAppend } from '../../runtime/async-file-queue';
+import { ProcessOutputBatcher } from './output-batcher';
 import type {
   ManagedProcessRun,
   ProcessLogResult,
@@ -35,10 +37,37 @@ function trimPreview(text: string): string {
   return text.slice(-MAX_PREVIEW_CHARS);
 }
 
-function appendCaptured(current: string, text: string): { value: string; truncated: boolean } {
-  const combined = `${current}${text}`;
-  if (combined.length <= MAX_CAPTURE_CHARS) return { value: combined, truncated: false };
-  return { value: combined.slice(-MAX_CAPTURE_CHARS), truncated: true };
+class BoundedOutputCapture {
+  private chunks: string[] = [];
+  private chars = 0;
+  truncated = false;
+
+  append(text: string): void {
+    if (text.length >= MAX_CAPTURE_CHARS) {
+      this.chunks = [text.slice(-MAX_CAPTURE_CHARS)];
+      this.chars = this.chunks[0].length;
+      this.truncated = true;
+      return;
+    }
+    this.chunks.push(text);
+    this.chars += text.length;
+    while (this.chars > MAX_CAPTURE_CHARS) {
+      const excess = this.chars - MAX_CAPTURE_CHARS;
+      const first = this.chunks[0];
+      if (first.length <= excess) {
+        this.chunks.shift();
+        this.chars -= first.length;
+      } else {
+        this.chunks[0] = first.slice(excess);
+        this.chars -= excess;
+      }
+      this.truncated = true;
+    }
+  }
+
+  value(): string {
+    return this.chunks.join('');
+  }
 }
 
 function normalizeShell(input?: ProcessShell): ProcessShell {
@@ -114,10 +143,18 @@ export class ProcessSupervisor {
   private readonly active = new Map<string, ManagedProcessRun>();
   private readonly lastOutputRecordPersistAt = new Map<string, number>();
   private lastPersistenceWarningAt = 0;
+  private readonly initialization: Promise<void>;
+  private readonly initializedAt = Date.now();
 
   constructor(store: ProcessRunStore) {
     this.store = store;
-    this.markStaleRunsExited();
+    this.initialization = store.prime().then(() => this.markStaleRunsExited()).catch((error) => {
+      this.warnPersistenceFailure('loading process history', error);
+    });
+  }
+
+  ready(): Promise<void> {
+    return this.initialization;
   }
 
   private warnPersistenceFailure(operation: string, error: unknown): void {
@@ -201,8 +238,9 @@ export class ProcessSupervisor {
       outputPreview: '',
       outputSeq: 0,
     };
-    const workspaceTracker: TerminalWorkspaceTracker | null = input.trackWorkspaceChanges
-      ? createTerminalWorkspaceTracker({
+    this.persistAndBroadcast(record, 'process_run_started');
+    const workspaceTracker: ManagedTerminalWorkspaceTracker | null = input.trackWorkspaceChanges
+      ? await createManagedTerminalWorkspaceTracker({
           workspacePath: input.workspacePath || getConfig().getWorkspacePath() || cwd,
           cwd,
           command,
@@ -212,7 +250,6 @@ export class ProcessSupervisor {
         })
       : null;
     if (workspaceTracker) record.workspacePath = workspaceTracker.workspacePath;
-    this.persistAndBroadcast(record, 'process_run_started');
 
     if (input.pty === true) {
       return this.spawnPty(input, record, invocation, workspaceTracker);
@@ -225,15 +262,18 @@ export class ProcessSupervisor {
       stdio: [input.stdinMode === 'pipe' || input.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
 
-    let stdout = '';
-    let stderr = '';
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
+    const stdoutCapture = new BoundedOutputCapture();
+    const stderrCapture = new BoundedOutputCapture();
     let settled = false;
     let forcedReason: ProcessTerminationReason | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    let forcedCloseTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
+    const outputBatch = new ProcessOutputBatcher((stream, chunk, sequence) => {
+      this.persistAndBroadcast(record, 'process_run_output', { stream, chunk, sequence });
+      try { input.onOutput?.({ runId, stream, chunk, sequence }); } catch {}
+    });
 
     const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update', extra: Record<string, unknown> = {}) => {
       Object.assign(record, patch, { updatedAt: nowIso() });
@@ -257,15 +297,7 @@ export class ProcessSupervisor {
     const onChunk = (kind: 'stdout' | 'stderr', chunk: Buffer | string) => {
       const text = String(chunk);
       if (captureOutput) {
-        if (kind === 'stdout') {
-          const captured = appendCaptured(stdout, text);
-          stdout = captured.value;
-          stdoutTruncated ||= captured.truncated;
-        } else {
-          const captured = appendCaptured(stderr, text);
-          stderr = captured.value;
-          stderrTruncated ||= captured.truncated;
-        }
+        (kind === 'stdout' ? stdoutCapture : stderrCapture).append(text);
       }
       if (kind === 'stdout') {
         record.stdoutBytes += Buffer.byteLength(text);
@@ -276,15 +308,13 @@ export class ProcessSupervisor {
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
       record.outputSeq = Number(record.outputSeq || 0) + 1;
       touchOutput();
-      this.persistAndBroadcast(record, 'process_run_output', { stream: kind, chunk: text, sequence: record.outputSeq });
+      outputBatch.push(kind, text, record.outputSeq);
     };
 
     child.stdout.on('data', (chunk) => onChunk('stdout', chunk));
     child.stderr.on('data', (chunk) => onChunk('stderr', chunk));
     child.on('error', (err) => {
-      const captured = appendCaptured(stderr, String(err?.message || err));
-      stderr = captured.value;
-      stderrTruncated ||= captured.truncated;
+      stderrCapture.append(String(err?.message || err));
       forcedReason = 'spawn_error';
     });
 
@@ -303,10 +333,11 @@ export class ProcessSupervisor {
       if (typeof (timeoutTimer as any).unref === 'function') (timeoutTimer as any).unref();
     }
 
-    const finalizeWorkspace = (exit: ProcessRunExit): TerminalWorkspaceChangeResult | null => {
+    const finalizeWorkspace = async (exit: ProcessRunExit): Promise<TerminalWorkspaceChangeResult | null> => {
       if (!workspaceTracker) return null;
       try {
-        const result = workspaceTracker.finalize();
+        const result = await workspaceTracker.finalize();
+        if (!result) return null;
         if (result.workspaceChanges.length) {
           Object.assign(exit, {
             workspacePath: result.workspacePath,
@@ -323,12 +354,17 @@ export class ProcessSupervisor {
       }
     };
 
-    const waitPromise = new Promise<ProcessRunExit>((resolve) => {
-      child.on('close', (code, signal) => {
+    let resolveWait: (exit: ProcessRunExit) => void = () => {};
+    const waitPromise = new Promise<ProcessRunExit>((resolve) => { resolveWait = resolve; });
+    const finishRun = async (code: number | null, signal: NodeJS.Signals | null) => {
         if (settled) return;
         settled = true;
+        outputBatch.flush();
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (noOutputTimer) clearTimeout(noOutputTimer);
+        if (forcedCloseTimer) clearTimeout(forcedCloseTimer);
+        const stdout = stdoutCapture.value();
+        const stderr = stderrCapture.value();
         const reason: ProcessTerminationReason = forcedReason || (signal ? 'signal' : 'exit');
         const exit: ProcessRunExit = {
           runId,
@@ -337,12 +373,13 @@ export class ProcessSupervisor {
           exitSignal: signal,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
-          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
-          ...(stderrTruncated ? { stderrTruncated: true } : {}),
+          ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
+          ...(stderrCapture.truncated ? { stderrTruncated: true } : {}),
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
-        const workspaceResult = finalizeWorkspace(exit);
+        if (workspaceTracker) updateRecord({ state: 'exiting' });
+        const workspaceResult = await finalizeWorkspace(exit);
         const outcome = classifyCommandTermination({ code, timedOut: exit.timedOut, reason, signal });
         updateRecord({
           state: 'exited',
@@ -355,8 +392,8 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
-          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
-          ...(stderrTruncated ? { stderrTruncated: true } : {}),
+          ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
+          ...(stderrCapture.truncated ? { stderrTruncated: true } : {}),
           completionSummary: outcome.ok ? buildSummary(code, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(code, stderr, stdout) || outcome.label),
           ...(workspaceResult?.workspaceChanges.length ? {
@@ -381,9 +418,9 @@ export class ProcessSupervisor {
         }
         this.active.delete(runId);
         this.lastOutputRecordPersistAt.delete(runId);
-        resolve(exit);
-      });
-    });
+        resolveWait(exit);
+    };
+    child.on('close', (code, signal) => { void finishRun(code, signal); });
 
     const managed: ManagedProcessRun = {
       runId,
@@ -395,6 +432,17 @@ export class ProcessSupervisor {
         forcedReason = reason;
         updateRecord({ state: 'exiting', terminationReason: reason });
         killProcessTree(child);
+        // A detached child can keep stdout/stderr pipe handles open after the
+        // shell is killed. Node then never emits `close`, so a 30-second tool
+        // timeout can hold the chat turn until its 10-minute watchdog fires.
+        // Settle the captured run after a short drain window in that case.
+        if (!forcedCloseTimer) {
+          forcedCloseTimer = setTimeout(() => {
+            try { child.stdout.destroy(); } catch {}
+            try { child.stderr.destroy(); } catch {}
+            void finishRun(child.exitCode, child.signalCode);
+          }, 3_000);
+        }
       },
       write: (data: string) => {
         if (!child.stdin || child.stdin.destroyed) return false;
@@ -417,18 +465,20 @@ export class ProcessSupervisor {
     input: ProcessSpawnInput,
     record: ProcessRunRecord,
     invocation: ReturnType<typeof getShellInvocation>,
-    workspaceTracker: TerminalWorkspaceTracker | null,
+    workspaceTracker: ManagedTerminalWorkspaceTracker | null,
   ): Promise<ManagedProcessRun> {
     const runId = record.runId;
     const cwd = record.cwd;
-    let stdout = '';
-    let stderr = '';
-    let stdoutTruncated = false;
+    const stdoutCapture = new BoundedOutputCapture();
     let settled = false;
     let forcedReason: ProcessTerminationReason | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
+    const outputBatch = new ProcessOutputBatcher((stream, chunk, sequence) => {
+      this.persistAndBroadcast(record, 'process_run_output', { stream, chunk, sequence });
+      try { input.onOutput?.({ runId, stream, chunk, sequence }); } catch {}
+    });
 
     const updateRecord = (patch: Partial<ProcessRunRecord>, eventType = 'process_run_update', extra: Record<string, unknown> = {}) => {
       Object.assign(record, patch, { updatedAt: nowIso() });
@@ -460,9 +510,7 @@ export class ProcessSupervisor {
     const onChunk = (chunk: string) => {
       const text = String(chunk);
       if (captureOutput) {
-        const captured = appendCaptured(stdout, text);
-        stdout = captured.value;
-        stdoutTruncated ||= captured.truncated;
+        stdoutCapture.append(text);
       }
       record.stdoutBytes += Buffer.byteLength(text);
       this.appendOutput(runId, 'stdout', text);
@@ -470,7 +518,7 @@ export class ProcessSupervisor {
       record.outputSeq = Number(record.outputSeq || 0) + 1;
       record.waitingForInputHint = /(?:press any key|password|passphrase|enter .*:|continue\?|y\/n|\[y\/n\]|waiting for input)/i.test(record.outputPreview);
       touchOutput();
-      this.persistAndBroadcast(record, 'process_run_output', { stream: 'stdout', chunk: text, sequence: record.outputSeq });
+      outputBatch.push('stdout', text, record.outputSeq);
     };
 
     ptyProcess.onData(onChunk);
@@ -486,10 +534,11 @@ export class ProcessSupervisor {
       if (typeof (timeoutTimer as any).unref === 'function') (timeoutTimer as any).unref();
     }
 
-    const finalizeWorkspace = (exit: ProcessRunExit): TerminalWorkspaceChangeResult | null => {
+    const finalizeWorkspace = async (exit: ProcessRunExit): Promise<TerminalWorkspaceChangeResult | null> => {
       if (!workspaceTracker) return null;
       try {
-        const result = workspaceTracker.finalize();
+        const result = await workspaceTracker.finalize();
+        if (!result) return null;
         if (result.workspaceChanges.length) {
           Object.assign(exit, {
             workspacePath: result.workspacePath,
@@ -507,11 +556,14 @@ export class ProcessSupervisor {
     };
 
     const waitPromise = new Promise<ProcessRunExit>((resolve) => {
-      ptyProcess.onExit(({ exitCode, signal }) => {
+      ptyProcess.onExit(({ exitCode, signal }) => { void (async () => {
         if (settled) return;
         settled = true;
+        outputBatch.flush();
         if (timeoutTimer) clearTimeout(timeoutTimer);
         if (noOutputTimer) clearTimeout(noOutputTimer);
+        const stdout = stdoutCapture.value();
+        const stderr = '';
         const reason: ProcessTerminationReason = forcedReason || (signal ? 'signal' : 'exit');
         const exit: ProcessRunExit = {
           runId,
@@ -520,11 +572,12 @@ export class ProcessSupervisor {
           exitSignal: signal || null,
           stdout: stdout.trim(),
           stderr: stderr.trim(),
-          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+          ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
-        const workspaceResult = finalizeWorkspace(exit);
+        if (workspaceTracker) updateRecord({ state: 'exiting' });
+        const workspaceResult = await finalizeWorkspace(exit);
         const outcome = classifyCommandTermination({ code: exitCode, timedOut: exit.timedOut, reason, signal: signal || null });
         updateRecord({
           state: 'exited',
@@ -537,7 +590,7 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
-          ...(stdoutTruncated ? { stdoutTruncated: true } : {}),
+          ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
           completionSummary: outcome.ok ? buildSummary(exitCode, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(exitCode, stderr, stdout) || outcome.label),
           ...(workspaceResult?.workspaceChanges.length ? {
@@ -563,7 +616,7 @@ export class ProcessSupervisor {
         this.active.delete(runId);
         this.lastOutputRecordPersistAt.delete(runId);
         resolve(exit);
-      });
+      })(); });
     });
 
     const managed: ManagedProcessRun = {
@@ -604,7 +657,7 @@ export class ProcessSupervisor {
   write(runId: string, data: string, appendNewline = false): boolean {
     const run = this.active.get(runId);
     if (!run) return false;
-    return run.write(appendNewline ? `${data}\n` : data);
+    return run.write(appendNewline ? `${data}${run.record.pty ? '\r' : '\n'}` : data);
   }
 
   closeStdin(runId: string): boolean {
@@ -659,9 +712,11 @@ export class ProcessSupervisor {
     }
   }
 
-  private markStaleRunsExited(): void {
+  private async markStaleRunsExited(): Promise<void> {
+    let corrected = 0;
     for (const record of this.store.listRecords(500)) {
       if (record.state !== 'running' && record.state !== 'starting' && record.state !== 'exiting') continue;
+      if (this.active.has(record.runId) || Date.parse(record.startedAt) >= this.initializedAt) continue;
       const updated: ProcessRunRecord = {
         ...record,
         state: 'exited',
@@ -674,6 +729,7 @@ export class ProcessSupervisor {
       } catch (error) {
         this.warnPersistenceFailure(`marking stale record ${record.runId}`, error);
       }
+      if (++corrected % 16 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
 }

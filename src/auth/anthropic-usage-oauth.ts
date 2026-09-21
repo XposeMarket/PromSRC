@@ -1,6 +1,6 @@
 /**
  * anthropic-usage-oauth.ts
- * A SEPARATE, tracking-only OAuth credential for Anthropic.
+ * A SEPARATE OAuth credential used only for usage tracking by Prometheus.
  *
  * Why this exists (and why it is NOT the same as anthropic-oauth.ts):
  *   - Prometheus's main Anthropic auth uses a `claude setup-token`
@@ -39,6 +39,8 @@ export interface UsageOAuthTokens {
   /** Unix ms when access_token expires */
   expires_at: number;
   stored_at: number;
+  /** Permanent refresh failure; a new browser approval is required. */
+  reauth_required_at?: number;
 }
 
 interface PendingPkce {
@@ -137,6 +139,7 @@ export async function completeUsageOAuth(configDir: string, pastedCode: string):
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -184,6 +187,15 @@ async function refreshUsageToken(configDir: string, tokens: UsageOAuthTokens): P
   return loadUsageTokens(configDir)!;
 }
 
+// Usage cards and connection status can refresh at the same time. A rotating
+// refresh token must only be redeemed once per gateway process.
+const refreshInFlight = new Map<string, Promise<UsageOAuthTokens | null>>();
+
+export function usageTrackingState(configDir: string): { configured: boolean; reauthRequired: boolean } {
+  const tokens = loadUsageTokens(configDir);
+  return { configured: !!tokens, reauthRequired: !!tokens?.reauth_required_at };
+}
+
 /**
  * Get a valid access token for the usage endpoint, refreshing if near expiry.
  * Returns null if usage tracking is not connected.
@@ -191,14 +203,31 @@ async function refreshUsageToken(configDir: string, tokens: UsageOAuthTokens): P
 export async function getValidUsageToken(configDir: string): Promise<string | null> {
   let tokens = loadUsageTokens(configDir);
   if (!tokens) return null;
+  if (tokens.reauth_required_at) return null;
   // Refresh if expiring within 60s.
   if (Date.now() >= tokens.expires_at - 60_000) {
-    try {
-      tokens = await refreshUsageToken(configDir, tokens);
-    } catch (e: any) {
-      log.security('[anthropic-usage] Refresh failed:', e?.message);
-      return null;
+    let pending = refreshInFlight.get(configDir);
+    if (!pending) {
+      const current = tokens;
+      pending = (async () => {
+        try {
+          return await refreshUsageToken(configDir, current);
+        } catch (e: any) {
+          const message = String(e?.message || e);
+          if (/invalid_grant|refresh token expired|No refresh token/i.test(message)) {
+            saveUsageTokens(configDir, { ...current, reauth_required_at: Date.now() });
+            log.security('[anthropic-usage] Refresh credential expired; reconnect usage tracking.');
+          } else {
+            log.security('[anthropic-usage] Refresh failed:', message);
+          }
+          return null;
+        }
+      })();
+      refreshInFlight.set(configDir, pending);
+      void pending.finally(() => { if (refreshInFlight.get(configDir) === pending) refreshInFlight.delete(configDir); });
     }
+    tokens = await pending;
+    if (!tokens) return null;
   }
   return tokens.access_token;
 }

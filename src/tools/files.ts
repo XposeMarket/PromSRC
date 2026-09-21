@@ -1304,6 +1304,7 @@ export interface ReadFilesBatchArgs {
   allow_large?: boolean;
   content?: boolean;
   include_content?: boolean;
+  summary?: boolean;
   mode?: 'summary' | 'content';
   query?: string;
   inline?: boolean;
@@ -1319,8 +1320,7 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
   const metadata: Array<{ filename: string; line_count?: number; truncated?: boolean; next_start_line?: number; error?: string }> = [];
   const chunks: string[] = [];
   const summaryLines: string[] = [];
-  const forceContent = args.content === true || args.include_content === true || String(args.mode || '').toLowerCase() === 'content';
-  const forceSummary = args.content === false || String(args.mode || '').toLowerCase() === 'summary';
+  const forceSummary = args.summary === true || args.content === false || args.include_content === false || String(args.mode || '').toLowerCase() === 'summary';
   for (const entry of args.files.slice(0, maxFiles)) {
     const filename = entry?.filename || (entry as any)?.name;
     if (!filename) {
@@ -1349,8 +1349,10 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
       const allLines = splitLinesEolSafe(content);
       const startLine = Math.max(1, Number(entry.start_line || 1) || 1);
       const allowFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
-      const hasWindow = entry.start_line !== undefined || entry.num_lines !== undefined || args.num_lines !== undefined;
-      const summaryOnly = forceSummary || (!forceContent && !hasWindow && !allowFull);
+      // Batch reads return useful, capped content by default. Summary mode is
+      // opt-in so callers do not pay a second round trip after discovering
+      // that the first response contained metadata only.
+      const summaryOnly = forceSummary;
       if (summaryOnly) {
         metadata.push({ filename: String(filename), line_count: allLines.length, truncated: false });
         chunks.push(summarizeFileForTool(String(filename), absPath, {
@@ -1398,14 +1400,14 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
 
 export const readFilesBatchTool = {
   name: 'read_files_batch',
-  description: 'Read multiple workspace files cheaply. Summary-first by default; pass exact line windows or content:true for capped content. Defaults to first 80 lines per content file and first 2 files.',
+  description: 'Read multiple workspace files cheaply. Returns capped content by default; use mode:"summary" or content:false for metadata/read hints. Defaults to first 80 lines per file and first 2 files.',
   execute: executeReadFilesBatch,
   schema: {
     files: 'array (required) - Each item: { filename: string, start_line?: number, num_lines?: number }',
     max_files: 'number (optional) - Default 2, max 8',
     max_lines_per_file: 'number (optional) - Default 80, max 240',
-    content: 'boolean (optional) - Return capped content for entries without explicit windows. Default false/summary-only.',
-    mode: 'string (optional) - summary or content',
+    content: 'boolean (optional) - Return capped content for entries without explicit windows. Default true when omitted; set false for summary-only output.',
+    mode: 'string (optional) - summary or content; default content',
     inline: 'boolean (optional) - Keep large output inline instead of saving a temp artifact',
   },
 };

@@ -678,11 +678,11 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
 
   function render(state) {
     if (destroyed) return;
-    const stick = firstRender || (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120);
+    const stick = !state.olderLoading && (firstRender || (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120));
     thread.innerHTML = state.messages.length
       ? state.messages.map((message, index) => messageMarkup(message, index, gateway, shell, weatherSelections)).join('')
       : '<div class="pm-v2-chat-empty"><strong>Prometheus</strong><span>What can I help you with?</span></div>';
-    if (state.hasOlder) thread.insertAdjacentHTML('afterbegin', '<button class="pm-v2-load-older" type="button">Load earlier messages</button>');
+    if (state.hasOlder) thread.insertAdjacentHTML('afterbegin', `<button class="pm-v2-load-older" type="button" ${state.olderLoading ? 'disabled aria-busy="true"' : ''}>${state.olderLoading ? 'Loading earlier messages…' : 'Load earlier messages'}</button>`);
     if (state.error) thread.insertAdjacentHTML('beforeend', `<div class="pm-v2-stream-error">${escapeHtml(state.error)}</div>`);
     composer.classList.toggle('is-streaming', state.streaming);
     send.classList.toggle('is-abort', state.streaming);
@@ -744,13 +744,22 @@ export async function mountChatPage({ shell, gateway, gateways, chatStore, sessi
 
   async function loadOlder() {
     const state = chatStore.get(gatewayId, id);
-    if (!state.hasOlder || !state.olderCursor) return;
+    if (!state.hasOlder || !state.olderCursor || state.olderLoading) return;
     const beforeHeight = thread.scrollHeight;
+    const beforeTop = thread.scrollTop;
+    const cursor = state.olderCursor;
+    chatStore.mutate(gatewayId, id, (current) => { current.olderLoading = true; });
     try {
-      const page = await gateway.getHistoryPage(id, { limit: 80, before: state.olderCursor });
+      const page = await gateway.getHistoryPage(id, { limit: 80, before: cursor });
+      if (destroyed) return;
       chatStore.prependHistory(gatewayId, id, page);
-      requestAnimationFrame(() => { thread.scrollTop += thread.scrollHeight - beforeHeight; });
+      requestAnimationFrame(() => {
+        if (destroyed) return;
+        thread.scrollTop = beforeTop + thread.scrollHeight - beforeHeight;
+        chatStore.mutate(gatewayId, id, (current) => { current.olderLoading = false; });
+      });
     } catch (error) {
+      chatStore.mutate(gatewayId, id, (current) => { current.olderLoading = false; });
       shell.showNotice(error?.message || 'Could not load earlier messages.');
     }
   }

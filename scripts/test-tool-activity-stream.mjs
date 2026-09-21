@@ -8,6 +8,7 @@ const activity = await import(pathToFileURL(sourcePath).href);
 const {
   applyToolActivityEvent,
   applyCommandProcessEvent,
+  appendCommandTerminalChunkToDom,
   coalesceToolActivityEntries,
   renderToolActivityEntry,
   toolActivitySummary,
@@ -29,7 +30,8 @@ const {
   });
   assert.equal(entries.length, 1, 'normalized call updates the preparing row in place');
   assert.equal(called.id, preparing.id, 'operation identity remains stable');
-  assert.match(called.text, /Clicking desktop · ChatGPT · \(512, 340\)/);
+  assert.match(called.text, /Clicking ChatGPT/);
+  assert.match(renderToolActivityEntry(called), /512, 340/, 'coordinates remain available in the expanded detail');
 
   applyToolActivityEvent(entries, 'progress', {
     toolCallId: 'call_click_1',
@@ -47,9 +49,12 @@ const {
     error: false,
     durationMs: 420,
   });
-  assert.equal(entries.length, 2, 'result is the second visible row');
+  assert.equal(entries.length, 2, 'transport retains call and result for replay');
   assert.equal(result.type, 'result');
-  assert.match(result.text, /Clicked desktop · 420 ms/);
+  assert.match(result.text, /Clicked ChatGPT · 420 ms/);
+  const visible = coalesceToolActivityEntries(entries);
+  assert.equal(visible.length, 1, 'the visible call changes into its completed state');
+  assert.match(renderToolActivityEntry(visible[0]), /Clicked ChatGPT · 420 ms/);
 }
 
 {
@@ -76,6 +81,20 @@ const {
 {
   const entries = [];
   applyToolActivityEvent(entries, 'call', {
+    toolCallId: 'wait_1',
+    action: 'background_ops',
+    args: { action: 'wait', background_ids: ['agent_1'], wait_ms: 1000 },
+    at: Date.now() - 1500,
+  });
+  const visible = coalesceToolActivityEntries(entries);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].activity.kind, 'result', 'elapsed background wait loses its spinner');
+  assert.match(renderToolActivityEntry(visible[0]), /wait limit reached/i);
+}
+
+{
+  const entries = [];
+  applyToolActivityEvent(entries, 'call', {
     toolCallId: 'file_edit_1',
     action: 'apply_patch',
     args: { path: 'app.js', patch: '*** Begin Patch\n@@\n-old\n+new\n*** End Patch' },
@@ -97,6 +116,9 @@ const {
   assert.match(html, /tool-activity-diff-marker[^>]*>\+</);
   assert.match(html, />new<\/span>/);
   assert.doesNotMatch(html, /unchanged-four/);
+  const cached = coalesceToolActivityEntries(JSON.parse(JSON.stringify(entries)));
+  assert.equal(cached.length, 1, 'file edit shows one expandable row');
+  assert.match(renderToolActivityEntry(cached[0]), /tool-activity-diff-line is-added/);
 }
 
 {
@@ -192,6 +214,12 @@ const {
   assert.match(html, /tool-command-terminal is-live/);
   assert.match(html, /data-command-run-id="run_live_1" open/);
   assert.doesNotMatch(html, /duplicate ignored|\u001b/);
+  const staleRender = JSON.parse(JSON.stringify(entries[0]));
+  appendCommandTerminalChunkToDom('run_live_1', 'third line\n', 3);
+  appendCommandTerminalChunkToDom('run_live_1', 'duplicate third\n', 3);
+  const rerendered = renderToolActivityEntry(staleRender, (value) => String(value));
+  assert.match(rerendered, /third line/, 'a timeline rerender keeps the latest streamed output');
+  assert.doesNotMatch(rerendered, /duplicate third/, 'repeated transport events do not append twice');
 
   applyCommandProcessEvent(entries, 'process_run_exited', {
     run: { runId: 'run_live_1', toolCallId: 'command_live_1', state: 'exited', exitCode: 0, durationMs: 850, outputSeq: 2 },
@@ -274,7 +302,7 @@ const {
     },
   ];
   const rows = coalesceToolActivityEntries(legacy);
-  assert.equal(rows.filter((entry) => entry.activity?.kind === 'operation').length, 4);
+  assert.equal(rows.filter((entry) => entry.activity?.kind === 'operation').length, 0);
   assert.equal(rows.filter((entry) => entry.activity?.kind === 'result').length, 4);
   assert.equal(rows.filter((entry) => entry.type === 'error').length, 1, 'structured error metadata is authoritative');
   const summary = toolActivitySummary(legacy);

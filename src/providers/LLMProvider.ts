@@ -114,6 +114,8 @@ export interface ChatResult {
   message: ChatMessage;
   thinking?: string;
   usage?: ModelUsage;
+  /** Native provider termination reason; do not infer completion from empty content. */
+  stopReason?: string;
 }
 
 export interface GenerateResult {

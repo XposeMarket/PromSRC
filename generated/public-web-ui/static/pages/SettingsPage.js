@@ -1314,8 +1314,8 @@ function addProviderAccount(providerId) {
     authType: providerId === 'openai' || providerId === 'xai' ? 'api_key' : providerId === 'anthropic' ? 'setup_token' : 'oauth',
     status: 'disconnected',
   };
-  cache.providers[providerId] = { ...cfg, accounts, defaultAccountId: id };
-  if (cache.provider === providerId) cache.accountId = id;
+  // Opening a new account's setup form must not replace a working default.
+  cache.providers[providerId] = { ...cfg, accounts, defaultAccountId: cfg.defaultAccountId || Object.keys(accounts)[0] };
   window._llmSettingsCache = cache;
   renderDynamicProviderPanels();
   hydrateBuiltInProviderAccountControls();
@@ -1340,7 +1340,7 @@ function renderProviderAccountControls(provider) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
       <button class="btn btn-sm" onclick="addProviderAccount('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Add Account</button>
     </div>
-    <div style="margin-top:7px;font-size:11px;color:var(--muted)">The selected account becomes active for this provider when you save Settings.</div>
+    <div style="margin-top:7px;font-size:11px;color:var(--muted)">${provider.id === 'openai_codex' ? 'Connect a new account before it can become the default when you save Settings.' : 'The selected account becomes active for this provider when you save Settings.'}</div>
   </div>`;
 }
 
@@ -1924,7 +1924,6 @@ async function renderModelsUsage() {
   if (!wrap || !grid) return;
 
   const inUse = collectInUseProviders().filter(id => !MODELS_USAGE_LOCAL.has(id));
-  if (!inUse.length) { wrap.style.display = 'none'; return; }
   wrap.style.display = '';
   grid.innerHTML = `<div class="hub-empty">Loading…</div>`;
 
@@ -1937,9 +1936,14 @@ async function renderModelsUsage() {
     });
   } catch { /* fall through to no-data cards */ }
 
+  // A connected account may be used by a per-chat model route even when it
+  // is absent from the global main/agent defaults shown in this form.
+  const visibleIds = [...new Set([...inUse, ...Object.keys(byId)])];
+  if (!visibleIds.length) { wrap.style.display = 'none'; grid.innerHTML = ''; return; }
+
   const mainId = (document.getElementById('amd-main-chat-prov') || {}).value || window._llmSettingsCache?.provider || '';
   const mainAccountId = String(window._llmSettingsCache?.accountId || getProviderConfigFromCache(mainId)?.defaultAccountId || '').trim();
-  const cards = inUse.flatMap(id => {
+  const cards = visibleIds.flatMap(id => {
     const isPrimary = id === mainId;
     const entries = byId[id] || [];
     if (entries.length) {
@@ -2337,7 +2341,10 @@ function buildProviderPayload(providerOverride) {
         accounts,
       };
     } else if (providerId === 'openai_codex') {
-      providers.openai_codex = { ...(providers.openai_codex || {}), defaultAccountId: selected, accounts };
+      const defaultAccountId = accounts[selected]?.status === 'connected'
+        ? selected
+        : (accounts[existing.defaultAccountId] ? existing.defaultAccountId : selected);
+      providers.openai_codex = { ...(providers.openai_codex || {}), defaultAccountId, accounts };
     } else if (providerId === 'anthropic') {
       providers.anthropic = { ...(providers.anthropic || {}), defaultAccountId: selected, accounts };
     }
@@ -2353,6 +2360,9 @@ async function refreshCodexStatus() {
   try {
     const accountId = getSelectedProviderAccountId('openai_codex');
     const data = await api(`/api/auth/openai/status?accountId=${encodeURIComponent(accountId)}`);
+    if (getSelectedProviderAccountId('openai_codex') !== accountId) return;
+    const account = window._llmSettingsCache?.providers?.openai_codex?.accounts?.[accountId];
+    if (account) account.status = data?.connected ? 'connected' : 'disconnected';
     const disc = document.getElementById('codex-disconnected-state');
     const conn = document.getElementById('codex-connected-state');
     const acct = document.getElementById('codex-account-id');
@@ -2703,7 +2713,10 @@ async function refreshAnthropicUsageTracking() {
     const chk = document.getElementById('settings-anthropic-usage-tracking');
     const statusEl = document.getElementById('anthropic-usage-oauth-status');
     if (chk) chk.checked = !!data?.connected;
-    if (statusEl) statusEl.textContent = data?.connected ? 'Live usage tracking is on.' : '';
+    if (statusEl) statusEl.textContent = data?.reauthRequired
+      ? 'Usage connection expired. Turn this on to reconnect. Claude chat is unaffected.'
+      : data?.connected ? 'Live usage tracking is on.'
+      : data?.configured ? 'Usage is temporarily unavailable. Try again shortly.' : '';
   } catch {}
 }
 
@@ -2797,10 +2810,14 @@ async function testAnthropicConnection() {
   const statusEl = document.getElementById('anthropic-oauth-status');
   setSettingsStatus(statusEl, 'info', 'Testing…');
   try {
-    const data = await api('/api/auth/anthropic/test', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('anthropic') }) });
+    const model = document.getElementById('settings-anthropic-model')?.value || 'claude-haiku-4-5-20251001';
+    const data = await api('/api/auth/anthropic/test', {
+      method: 'POST',
+      body: JSON.stringify({ accountId: getSelectedProviderAccountId('anthropic'), model }),
+    });
     if (data?.success) {
       if (statusEl) statusEl.style.color = '#166534';
-      setSettingsStatus(statusEl, 'success', 'Connected — API responded successfully');
+      setSettingsStatus(statusEl, 'success', `${model} responded successfully`);
       setTimeout(() => {
         if (statusEl) {
           setSettingsStatus(statusEl, 'info', '');
@@ -2809,7 +2826,8 @@ async function testAnthropicConnection() {
       }, 4000);
     } else {
       if (statusEl) statusEl.style.color = '#991b1b';
-      setSettingsStatus(statusEl, 'error', data?.error || 'Connection failed');
+      const requestId = data?.requestId ? ` (request ${data.requestId})` : '';
+      setSettingsStatus(statusEl, 'error', `${model}: ${data?.error || 'Connection failed'}${requestId}`);
     }
   } catch (e) {
     if (statusEl) statusEl.style.color = '#991b1b';

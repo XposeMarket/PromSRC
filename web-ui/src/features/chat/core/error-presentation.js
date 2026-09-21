@@ -60,6 +60,14 @@ export function presentChatError(error) {
       technicalDetails,
     };
   }
+  if (code === 'MAIN_CHAT_RUNTIME_ABORTED' && String(payload?.reason || error?.reason || '') === 'semantic_progress_stall') {
+    return {
+      key: 'chat-progress-stalled', code, httpStatus,
+      severity: 'warning', title: 'This turn stopped after a tool stalled',
+      summary: 'Prometheus stopped waiting for a tool that did not return. Earlier work in this turn may have completed; check the activity before retrying.',
+      technicalDetails,
+    };
+  }
   return {
     key: code ? `chat-${code.toLowerCase()}` : `chat-http-${httpStatus || 'error'}`,
     code: code || 'CHAT_REQUEST_FAILED', httpStatus,

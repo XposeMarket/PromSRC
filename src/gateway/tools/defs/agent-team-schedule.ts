@@ -1452,9 +1452,14 @@ export function getAgentTeamScheduleTools(): any[] {
               items: { type: 'string' },
               description: 'Optional spawn tracking tags.',
             },
-            model: { type: 'string', description: 'Optional explicit spawn model override; otherwise background_task routing is used.' },
+            model: { type: 'string', description: 'Optional explicit spawn model override. Use a provider model ID (for example gpt-5.6-sol or gpt-5.6-luna); otherwise background_task routing is used.' },
             provider: { type: 'string', description: 'Optional explicit provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional provider/model-aware reasoning override for this spawn.' },
+            tool_categories: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'For spawn: tool categories the worker starts with (e.g. ["workspace_write"], ["browser_automation"]). Workers get core tools only plus these; the task prompt is NOT keyword-scanned for categories, so declare what the job needs. The worker can still call request_tool_category.',
+            },
           },
         },
       },
@@ -1488,7 +1493,7 @@ export function getAgentTeamScheduleTools(): any[] {
             timeout_ms: { type: 'number', description: 'Optional wait cap used by timeout-based policies. Default 120000.' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for tracking/grouping.' },
             resource_ids: { type: 'array', items: { type: 'string' }, description: 'Optional explicit resource IDs to authorize for this worker. If omitted, no thread resources are inherited.' },
-            model: { type: 'string', description: 'Optional model override.' },
+            model: { type: 'string', description: 'Optional provider model ID, for example gpt-5.6-sol or gpt-5.6-luna.' },
             provider: { type: 'string', description: 'Optional provider override.' },
             reasoning_effort: { type: 'string', enum: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },
           },
@@ -1627,7 +1632,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'declare_plan',
-        description: 'Declare a step-by-step plan before executing complex multi-phase work. Call this FIRST only when the task has meaningful phases (2–6) such as branching decisions, cross-system coordination, or extended execution. Do NOT use for quick linear actions even if they require multiple tools (e.g., screenshot capture/send, simple open-click-type flows, single lookup+reply). browser_* and desktop_* tools do NOT auto-advance the plan — many tool calls can belong to one phase. Call complete_plan_step when a phase is finished. Native file tools, terminal/workspace_run commands, browser actions, and verification results are all valid evidence for a phase; plan bookkeeping must remain usable even when one tool surface is unavailable.',
+        description: 'Declare a step-by-step plan before executing complex multi-phase work. Call this FIRST when the task has meaningful phases (2–6) such as branching decisions, cross-system coordination, or extended execution, or when the user explicitly asks for a visible plan, checklist, or step-by-step breakdown. Do NOT use for quick linear actions even if they require multiple tools (e.g., screenshot capture/send, simple open-click-type flows, single lookup+reply). browser_* and desktop_* tools do NOT auto-advance the plan — many tool calls can belong to one phase. Call complete_plan_step when a phase is finished. Native file tools, terminal/workspace_run commands, browser actions, and verification results are all valid evidence for a phase; plan bookkeeping must remain usable even when one tool surface is unavailable.',
         parameters: {
           type: 'object',
           required: ['steps'],

@@ -10,13 +10,18 @@
 
 
 import express from 'express';
+import { buildDirectMediaObservationMessage, buildMediaAnalysisPreviewPayloads } from '../media-analysis-preview';
 // cors and http moved to core/app.ts + core/server.ts (B3)
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { goalReminderForTool } from '../chat/goal-reminder';
 import { classifyMainChatStreamEvent } from '../chat/main-chat-stream';
+import { ModelResponseRecovery } from '../chat/model-response-recovery';
+import { presentProviderCallFailure } from '../chat/provider-error-presentation';
+import { createForegroundToolActivityTracker, foregroundConnectionMessage, type ForegroundToolActivity } from '../chat/foreground-tool-activity';
 import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { formatToolCategoryProvisioningFailure, preserveActivatedToolCategoriesForTurnOverride, verifyToolCategorySurface } from '../tool-category-provisioning';
 import { normalizeManifestToolCategory } from '../../runtime/tool-category-manifest';
@@ -93,6 +98,7 @@ import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveCh
 import { deriveContextWindowUsage } from '../context/context-window-usage';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservationSnapshot, readToolObservations, type ToolObservation, type ToolObservationSnapshot } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
+import { boundToolMessageContentForModelContext } from '../tool-result-model-context';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -414,56 +420,6 @@ function buildCapturedScreenshotPreviewPayload(
     width: Number(screenshot?.width || 0) || undefined,
     height: Number(screenshot?.height || 0) || undefined,
   };
-}
-
-function inferAnalysisPreviewMimeType(filePath: string): string {
-  const ext = path.extname(String(filePath || '')).toLowerCase();
-  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
-  if (ext === '.webp') return 'image/webp';
-  if (ext === '.gif') return 'image/gif';
-  if (ext === '.bmp') return 'image/bmp';
-  if (ext === '.svg') return 'image/svg+xml';
-  return 'image/png';
-}
-
-function buildMediaAnalysisPreviewPayloads(
-  toolName: string,
-  toolResult?: { error?: boolean; data?: any },
-): Record<string, any>[] {
-  if (toolResult?.error || !['analyze_image', 'analyze_video'].includes(String(toolName || ''))) return [];
-  const data = toolResult?.data && typeof toolResult.data === 'object' ? toolResult.data : {};
-  const previews: Record<string, any>[] = [];
-  const seen = new Set<string>();
-  const add = (candidate: unknown, title: string, artifactKind: string): void => {
-    const raw = String(candidate || '').trim();
-    if (!raw) return;
-    const workspacePath = raw.replace(/\\/g, '/');
-    const key = workspacePath.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    previews.push({
-      dataUrl: `/api/canvas/inline?path=${encodeURIComponent(workspacePath)}`,
-      workspacePath,
-      mimeType: inferAnalysisPreviewMimeType(workspacePath),
-      title,
-      artifactKind,
-    });
-  };
-
-  if (toolName === 'analyze_image') {
-    add(data.rel_path || data.file_path, path.basename(String(data.rel_path || data.file_path || 'analyzed image')), 'analyzed_image');
-    return previews;
-  }
-
-  const sheets = Array.isArray(data.contact_sheets) ? data.contact_sheets : [];
-  sheets.slice(0, 8).forEach((sheet: any, index: number) => {
-    add(sheet?.rel_path || sheet?.path, `Contact sheet ${index + 1}`, 'contact_sheet');
-  });
-  if (!previews.length) {
-    const frames = Array.isArray(data.sample_frames) ? data.sample_frames : [];
-    frames.slice(0, 8).forEach((frame: any, index: number) => add(frame, `Sample frame ${index + 1}`, 'sample_frame'));
-  }
-  return previews;
 }
 
 function inferImageGenerationPresentationMode(userMessage: string, toolName: string, toolArgs: any): 'foreground' | 'background' {
@@ -1897,7 +1853,7 @@ import { router as connectionsRouter } from './connections.router';
 import { router as canvasRouter, initCanvasRouter } from './canvas.router';
 import { addCanvasFile, getCanvasContextBlock } from './canvas-state';
 import { getMCPManager } from '../mcp-manager';
-import { resumePlannedRestartMainChats } from '../runtime-recovery';
+import { resumePlannedRestartMainChats, registerRestartContinuityEmitter } from '../runtime-recovery';
 import {
   // Core exports
   buildTools,
@@ -2233,86 +2189,6 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     maxChars: 2400,
     maxObservations: Math.min(12, Math.max(1, maxResults)),
     includeTelemetry: true,
-  });
-}
-
-const MODEL_TOOL_RESULT_MAX_CHARS = 12000;
-const MODEL_TOOL_RESULT_HEAD_CHARS = 7000;
-const MODEL_TOOL_RESULT_TAIL_CHARS = 2500;
-
-function summarizeLargeJsonToolResultForModel(value: string, toolName: string, maxChars: number): string | null {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const matches = Array.isArray(parsed.matches) ? parsed.matches : null;
-  if (!matches) return null;
-  const fileCounts = new Map<string, number>();
-  for (const match of matches) {
-    const file = String(match?.file || match?.path || parsed.file || parsed.path || '(unknown)');
-    fileCounts.set(file, (fileCounts.get(file) || 0) + 1);
-  }
-  const topFiles = [...fileCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 20)
-    .map(([file, count]) => ({ file, count }));
-  const compactMatches = matches.slice(0, 24).map((match: any) => ({
-    file: match?.file || match?.path || parsed.file || parsed.path,
-    line_number: match?.line_number,
-    line: String(match?.line || '').slice(0, 260),
-  }));
-  const summary = {
-    summarized_tool_result: true,
-    tool: toolName || 'tool',
-    searched: parsed.searched || parsed.directory || parsed.file || parsed.path,
-    pattern: parsed.pattern,
-    match_count: parsed.match_count ?? matches.length,
-    returned_count: parsed.returned_count ?? matches.length,
-    result_limit: parsed.result_limit,
-    top_files: topFiles,
-    first_matches: compactMatches,
-    omitted_matches: Math.max(0, matches.length - compactMatches.length),
-    note: 'Large search result was summarized before reinjection into model context. Raw/full output remains in tool logs/raw storage. Narrow with path/glob/pattern or read a targeted file window for exact code.',
-  };
-  const text = JSON.stringify(summary, null, 2);
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n[...large ${toolName || 'tool'} summary truncated]`;
-}
-
-function boundToolTextForModelContext(text: string, toolName: string, maxChars = MODEL_TOOL_RESULT_MAX_CHARS): string {
-  const value = String(text || '');
-  if (!value || value.length <= maxChars) return value;
-  const summarized = summarizeLargeJsonToolResultForModel(value, toolName, maxChars);
-  if (summarized) return summarized;
-  const headChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_HEAD_CHARS, Math.floor(maxChars * 0.75)));
-  const tailChars = Math.max(1000, Math.min(MODEL_TOOL_RESULT_TAIL_CHARS, maxChars - headChars));
-  const omitted = value.length - headChars - tailChars;
-  return [
-    value.slice(0, headChars).trimEnd(),
-    '',
-    `[...${omitted.toLocaleString('en-US')} chars omitted from ${toolName || 'tool'} result before reinjecting into model context; full output remains in tool logs/raw storage...]`,
-    '',
-    value.slice(-tailChars).trimStart(),
-  ].join('\n');
-}
-
-function boundToolMessageContentForModelContext(content: any, toolName: string): any {
-  // A skill is not considered read if its entrypoint was clipped before the
-  // next reasoning round. skill_read already returns one chosen skill plus a
-  // resource index, so preserve that result in full. Bundle resources remain
-  // progressive and are fetched individually with skill_resource_read.
-  if (toolName === 'skill_read') return content;
-  if (typeof content === 'string') return boundToolTextForModelContext(content, toolName);
-  if (!Array.isArray(content)) return content;
-  return content.map((part: any) => {
-    if (!part || typeof part !== 'object' || part.type !== 'text') return part;
-    return {
-      ...part,
-      text: boundToolTextForModelContext(String(part.text || ''), toolName),
-    };
   });
 }
 
@@ -2655,7 +2531,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -2718,6 +2594,10 @@ async function handleChat(
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
   const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
+  // Background spawns declare their tool categories explicitly; running the
+  // keyword planner over a task prompt would provision every category the
+  // prompt merely mentions (observed: 8 categories / 162 tools for a recon task).
+  const skipAutomaticToolCategoryActivation = runtimeOptions?.skipAutomaticToolCategoryActivation === true;
   let supervisionNoToolNudges = 0;
   let supervisionExpectedAction: 'review_decision' | 'supervision_wait' = 'review_decision';
   let supervisionWaitAfterEventId = '';
@@ -2837,6 +2717,7 @@ async function handleChat(
     makeBroadcastForTask,
     sendSSE,
     toolCallId: String(toolCallId || '').trim() || undefined,
+    supportsDirectMediaObservation: currentModelCapabilities.hasVision,
     executionPolicy: handleChatGoalExecutionPolicy,
     abortSignal,
     threadOpsOwnerSessionId: runtimeOptions?.supervisionOwnerSessionId,
@@ -2898,7 +2779,7 @@ async function handleChat(
   } catch (error: any) {
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
-  const automaticallyActivatedCategories = !isSupervisionLoop
+  const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
     ? autoActivateToolCategories(sessionId, message, history.length)
     : [];
   const stage4InstructionIntents = detectStage4InstructionIntents({
@@ -3434,12 +3315,7 @@ async function handleChat(
   let preflightReasonForTurn = '';
   let continuationNudges = 0;
   const MAX_CONTINUATION_NUDGES = 4;
-  // When the model stops calling tools but also emits an empty/near-empty final
-  // (typically after many rounds of heavy tool-result context), give it one
-  // tools-free retry to write its answer from what it already gathered instead
-  // of surfacing "No final response was generated. Please retry." to the user.
-  let emptyFinalSalvageAttempts = 0;
-  const MAX_EMPTY_FINAL_SALVAGE = 1;
+  const modelResponseRecovery = new ModelResponseRecovery();
   let setupFinalizationGuard = 0;
   const MAX_SETUP_FINALIZATION_GUARD = 3;
   let planFinalizationGuard = 0;
@@ -4521,7 +4397,7 @@ async function handleChat(
       }
       const instrumentedResult = await envelopeOversizedToolResult(
         attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
-        { sessionId, toolName },
+        { sessionId, toolName, maxChars: 12_000 },
       );
       toolPerformance.complete(performanceRecord, instrumentedResult.result, instrumentedResult.error);
       const performanceTelemetry = toolPerformance.snapshot(performanceRecord);
@@ -4700,7 +4576,7 @@ async function handleChat(
         }
       }
       sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 500), error: toolResult.error, stepNum: allToolResults.length, synthetic: true, actor: 'secondary' });
-      const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+      const goalReminder = goalReminderForTool(message, allToolResults.length);
       const isBrowserTool = isBrowserToolName(toolName);
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
@@ -4714,7 +4590,7 @@ async function handleChat(
             ? buildDesktopAck(toolName, toolResult) + goalReminder
             : toolResult.result + goalReminder;
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
       messages.push({ role: 'tool', tool_name: toolName, content: toolMessageContent });
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       orchestrationLog.push(
@@ -5321,6 +5197,32 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult?: { error?: boolean; data?: any; name?: string; args?: Record<string, any> },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
+    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+      let injected = toolResult?.data?.observation_mode !== 'direct';
+      if (!toolResult?.error && toolResult?.data?.observation_mode === 'direct') {
+        try {
+          if (!currentModelCapabilities.hasVision) throw new Error('The current model does not support vision.');
+          const observation = await buildDirectMediaObservationMessage(toolName, toolResult || {}, toolInput?.prompt);
+          if (observation) {
+            messages.push(observation);
+            injected = true;
+          }
+        } catch (error: any) {
+          messages.push({ role: 'user', content: `[MEDIA_OBSERVATION_UNAVAILABLE] The image inputs could not be attached: ${String(error?.message || error)}. Do not claim to have inspected them. Retry the analysis or use response_mode="report".` });
+          sendSSE('info', { message: 'Media preview is available, but model image attachment failed.' });
+        }
+      }
+      const analysisPreviews = buildMediaAnalysisPreviewPayloads(toolName, toolResult);
+      analysisPreviews.forEach((preview, index) => {
+        const isVideo = toolName !== 'analyze_image';
+        sendSSE('vision_injected', {
+          source: 'media_analysis', tool: toolName, preview,
+          previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
+          label: isVideo ? `Video sample ${index + 1}` : 'Image preview', injected,
+        });
+      });
+      return;
+    }
     if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
       if (toolResult?.error || !currentModelCapabilities.hasVision) return;
       const rawFrames = Array.isArray(toolResult?.data?.snapshots)
@@ -5602,6 +5504,10 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult: ToolResult,
     decision: PostActionObservationDecision,
   ): Promise<void> => {
+    if (['analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(toolName)) {
+      await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
+      return;
+    }
     if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
@@ -5641,18 +5547,6 @@ Do not produce prose. Use the canonical thread tool now.` });
     const executedToolArgs = toolResult?.args && typeof toolResult.args === 'object'
       ? toolResult.args
       : toolArgs;
-    const analysisPreviews = buildMediaAnalysisPreviewPayloads(executedToolName, toolResult);
-    analysisPreviews.forEach((preview, index) => {
-      const isVideo = executedToolName === 'analyze_video';
-      sendSSE('vision_injected', {
-        source: 'media_analysis',
-        tool: executedToolName,
-        preview,
-        previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
-        label: isVideo ? `Analyzed video visual ${index + 1}` : 'Analyzed image',
-        injected: true,
-      });
-    });
     const { decision, browserAfterPacket } = await buildObservationDecisionForTool(
       executedToolName,
       executedToolArgs,
@@ -6898,10 +6792,6 @@ RULES:
   const injectPendingChatSteers = async (): Promise<number> => {
     const steers = consumePendingRuntimeSteersForSession(sessionId, 16);
     if (!steers.length) return 0;
-    const cfg = getConfig().getConfig() as any;
-    const _steerActiveProvider = String(cfg?.llm?.provider || '').trim().toLowerCase();
-    const _steerProviderId = String(providerOverride || _steerActiveProvider || '').trim().toLowerCase();
-    const _steerIsAnthropic = _steerProviderId === 'anthropic';
     for (const steer of steers) {
       await appendSteerEventToMessages(steer);
       if (steer.kind === 'internal_watch_result' && steer.internalWatchId && steer.internalWatchActionPolicy) {
@@ -6916,11 +6806,8 @@ RULES:
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         backgroundResultInjectedIds.add(steer.backgroundAgentId);
       }
-      // Anthropic does not support assistant prefill — skip trailing assistant ack for that provider
-      const isRuntimeCompletionEvent = steer.kind === 'background_agent_result' || steer.kind === 'internal_watch_result';
-      if (!_steerIsAnthropic && !isRuntimeCompletionEvent) {
-        messages.push({ role: 'assistant', content: 'Understood. I will steer the current run with this correction.' });
-      }
+      // The steer is already a user message. A synthetic assistant acknowledgement
+      // can become unsupported prefill when the active route changes providers.
       sendSSE(
         steer.kind === 'background_agent_result'
           ? 'background_result_applied'
@@ -6951,11 +6838,6 @@ RULES:
 
   for (let round = 0; ; round++) {
     currentProviderCallIteration = round;
-    // During an empty-final salvage round the model must not be offered tools:
-    // the salvage prompt asks for a tools-free reply, and offering tools would
-    // let extra tool rounds bypass the MAX_EMPTY_FINAL_SALVAGE cap.
-    const salvageRound = emptyFinalSalvageAttempts > 0;
-
     if (abortSignal?.aborted) {
       console.log(`[v2] Aborted at round ${round} — client disconnected`);
       const partial = allToolResults.length > 0
@@ -7016,7 +6898,7 @@ RULES:
         );
         sendSSE('tool_result', { action: toolName, result: toolResult.result.slice(0, 300), error: toolResult.error, stepNum: allToolResults.length, synthetic: true });
 
-        const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+        const goalReminder = goalReminderForTool(message, allToolResults.length);
         const isBrowserTool = isBrowserToolName(toolName);
         const isDesktopTool = isDesktopToolName(toolName);
         // Screenshot always delivers full data (image for OpenAI, rich OCR text for local).
@@ -7031,7 +6913,7 @@ RULES:
               ? buildDesktopAck(toolName, toolResult) + goalReminder
               : toolResult.result + goalReminder;
         if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
-        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+        toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
         messages.push({
           role: 'tool',
           tool_name: toolName,
@@ -7172,6 +7054,7 @@ RULES:
     }
 
     let response: any;
+    let responseStopReason: string | undefined;
     let isGrokGeneration = false;
     let grokGreetingLikeTurn = false;
     try {
@@ -7413,10 +7296,10 @@ RULES:
       }
 
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
-        tools: salvageRound ? [] : tools,
+        tools,
         temperature: 0.3,
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
-        num_predict: grokGreetingLikeTurn ? 256 : 4096,
+        num_predict: grokGreetingLikeTurn ? 256 : modelResponseRecovery.outputBudget(generationOverride.providerId || '', generationOverride.model || ''),
 	        think: primaryThinkMode,
 	        speed: activeGenerationRouteSnapshot?.speed,
 	        model: generationOverride.model,
@@ -7611,6 +7494,7 @@ RULES:
             firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
           });
 	        response = result.message;
+          responseStopReason = result.stopReason;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7629,6 +7513,7 @@ RULES:
           firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
         });
 	        response = result.message;
+          responseStopReason = result.stopReason;
 	        if (result.thinking) {
 	          console.log(`[v2] THINK (${result.thinking.length} chars): ${result.thinking.slice(0, 150)}...`);
 	          if (!allThinking.includes(result.thinking)) {
@@ -7663,7 +7548,7 @@ RULES:
       }
       return {
         type: 'chat',
-        text: `Error: ${err.message}`,
+        text: presentProviderCallFailure(err),
         thinking: preservedThinking,
         reasoningSummary: preservedReasoningSummary,
         toolResults: preservedToolResults,
@@ -7672,16 +7557,27 @@ RULES:
 
     let toolCalls = response.tool_calls;
 
-    // Salvage rounds are tools-free by contract. If the provider still returns
-    // tool calls (or the text-recovery path below would synthesize one), drop
-    // them so the salvage round terminates in a final reply.
-    if (salvageRound && toolCalls && toolCalls.length > 0) {
-      console.log(`[v2] EMPTY FINAL SALVAGE: dropping ${toolCalls.length} tool call(s) returned during the tools-free salvage round`);
-      toolCalls = [];
+    const recovery = modelResponseRecovery.inspect(response, responseStopReason, abortSignal?.aborted);
+    if (recovery.action === 'retry') {
+      console.log(`[v2] MODEL RESPONSE RECOVERY: reason=${recovery.reason} attempt=${recovery.attempt}; retaining tools`);
+      sendSSE('info', { message: `The model returned an incomplete response (${recovery.reason}); continuing with tools available (${recovery.attempt}/2).` });
+      // Keep partial visible text, but never insert an empty assistant turn or
+      // fabricate a tool result for a call that was not executed.
+      if (String(response.content || '').trim()) messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: recovery.prompt });
+      continue;
+    }
+    if (recovery.action === 'exhausted') {
+      return {
+        type: 'execute',
+        text: 'The model repeatedly returned an empty or incomplete response after automatic recovery. The task is unfinished; completed tool results have been saved.',
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length ? allToolResults : undefined,
+      };
     }
 
     // Auto-recover: if model wrote a tool call as text instead of using the tool mechanism
-    if (!salvageRound && (!toolCalls || toolCalls.length === 0) && response.content) {
+    if ((!toolCalls || toolCalls.length === 0) && response.content) {
       const textToolMatch = response.content.match(/"action"\s*:\s*"(\w+)"\s*,\s*"action_input"\s*:\s*(\{[^}]+\})/s)
         || response.content.match(/"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})/s);
       if (textToolMatch) {
@@ -8283,46 +8179,8 @@ RULES:
       if (isGrokGeneration) {
         finalText = trimGrokRunawayRepetition(finalText);
       }
-      // Precompute a tool-work digest for the empty-final salvage path. Only
-      // counts, tool names, and short status previews are used: the digest is
-      // fed back to the MODEL so it can write the reply itself; the user-facing
-      // fallback below never synthesizes prose from tool payloads.
-      const emptyFinalToolDigest = summarizeToolWorkForEmptyFinal(allToolResults);
-      if (!finalText || finalText.length < 5) {
-        // Never infer completion from tool payloads. A tool can succeed while the
-        // user's larger request remains incomplete, and truncated JSON is not a
-        // user-facing answer. The provider adapter already retries incomplete
-        // Codex streams once; after that, report the missing final explicitly.
-        if (emptyFinalToolDigest.count > 0 && emptyFinalSalvageAttempts < MAX_EMPTY_FINAL_SALVAGE && !abortSignal?.aborted) {
-          emptyFinalSalvageAttempts += 1;
-          console.log(
-            `[v2] EMPTY FINAL SALVAGE: model returned an empty final after ${emptyFinalToolDigest.count} tool result(s); requesting a tools-free answer (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE})`,
-          );
-          sendSSE('info', {
-            message: `Post-check: the model finished tool work without writing a reply; asking it to summarize its findings (${emptyFinalSalvageAttempts}/${MAX_EMPTY_FINAL_SALVAGE}).`,
-          });
-          messages.push({
-            role: 'user',
-            content: [
-              'Your previous assistant message was empty after completing tool work.',
-              'Do not call any more tools. Write the user-facing reply now using only what you already gathered.',
-              'If the task is unfinished, say concretely what was completed, what remains, and what you would do next.',
-              '',
-              `Tool work this turn (${emptyFinalToolDigest.count} result(s), most recent last):`,
-              emptyFinalToolDigest.recentLines,
-            ].join('\n'),
-          });
-          continue;
-        }
-        if (emptyFinalToolDigest.count > 0) {
-          finalText = [
-            'I ran out of room to write a full reply this turn, but the work is not lost.',
-            `Completed ${emptyFinalToolDigest.count} tool call(s) this turn (${emptyFinalToolDigest.okCount} ok, ${emptyFinalToolDigest.errCount} error${emptyFinalToolDigest.errCount === 1 ? '' : 's'}) across: ${emptyFinalToolDigest.touched}.`,
-            'Send "continue" and I will pick up from that state and give you the summary.',
-          ].join(' ');
-        } else {
-          finalText = 'No final response was generated. Please retry.';
-        }
+      if (!finalText.trim()) {
+        finalText = 'No final response was generated. The task may still be unfinished; completed tool results have been saved.';
       }
       if (greetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
@@ -8535,10 +8393,10 @@ RULES:
 
     messages.push(response);
 
-    // Providers can return several tool calls in one assistant message. Keep
-    // the rollout intentionally conservative: only a whole batch of unique,
-    // independent read-only calls is started early. Mixed batches stay on the
-    // existing ordered path so a read can never race a write or browser action.
+    // Providers can return several tool calls in one assistant message. Only
+    // a whole batch admitted by the shared parallel policy starts early:
+    // read-only calls or explicitly marked independent shell operations.
+    // Mixed/dependent batches retain the ordered path.
     const parallelToolResults = new Map<any, ToolResult>();
     type ParallelCallEntry = {
       sourceCall: any;
@@ -8566,7 +8424,6 @@ RULES:
       && parallelCallEntries.every((entry: ParallelCallEntry) => Boolean(entry.toolCallId))
       && !isBootStartupTurn
       && !isHotRestartTurn
-      && !fileOpV2Active
       && !isSupervisionLoop
       && !isBrainThoughtRuntime
       && canExecuteToolCallsInParallel(parallelCallEntries.map((entry: ParallelCallEntry) => entry.parallelCall));
@@ -9702,7 +9559,7 @@ RULES:
         }
       }
 
-      const goalReminder = `\n\n[GOAL REMINDER: Your task is still: "${message.slice(0, 120)}". Stay focused on this goal only.]`;
+      const goalReminder = goalReminderForTool(message, allToolResults.length);
       // ── Multi-agent browser interception ────────────────────────────────────
       // Screenshot: OpenAI gets actual image, local model gets rich OCR+window text.
       // All other desktop tools: pass real result text so AI always knows the outcome.
@@ -9722,7 +9579,7 @@ RULES:
       if (isBrowserTool) toolMessageContent = wrapUntrustedBrowserToolContent(toolName, toolMessageContent);
       const stopwatchLine = formatToolStopwatchLineForModel(toolResult);
       if (stopwatchLine) toolMessageContent = `${stopwatchLine}\n${toolMessageContent}`;
-      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName);
+      toolMessageContent = boundToolMessageContentForModelContext(toolMessageContent, toolName, toolResult.extra?.toolResultEnvelope?.rawRef);
 	      messages.push({
 	        role: 'tool',
 	        tool_name: toolName,
@@ -10018,31 +9875,6 @@ function isGrokGreetingLikeMessage(text: string): boolean {
   if (isGreetingLikeMessage(raw)) return true;
   return /^(?:hi|hello|hey|yo|sup|howdy)(?:[!.?\s,]+(?:hi|hello|hey|yo|sup|howdy)){0,3}(?:[!.?\s,]+(?:prom|prometheus|claw))?[!.?\s]*$/i.test(raw);
 }
-
-/**
- * Digest of this turn's tool work for the empty-final salvage path. Returns
- * counts, touched tool names, and short per-call status lines. The status
- * preview is deliberately clipped and is only handed back to the model as a
- * reminder of what it already did; it is never used to compose a user-facing
- * reply directly (the missing-final fallback stays a fixed explanation).
- */
-function summarizeToolWorkForEmptyFinal(
-  toolResults: Array<{ name?: string; error?: boolean; result?: unknown }>,
-): { count: number; okCount: number; errCount: number; touched: string; recentLines: string } {
-  const list = Array.isArray(toolResults) ? toolResults : [];
-  const okCount = list.filter((r) => r && !r.error).length;
-  const touched = Array.from(new Set(list.map((r) => String(r?.name || 'tool')))).slice(0, 8).join(', ');
-  const recentLines = list
-    .slice(-12)
-    .map((r) => {
-      const status = r?.error ? '✗' : '✓';
-      const preview = String((r as any)?.result ?? '').replace(/\s+/g, ' ').slice(0, 160);
-      return `  ${status} ${String(r?.name || 'tool')}${preview ? ` — ${preview}` : ''}`;
-    })
-    .join('\n');
-  return { count: list.length, okCount, errCount: list.length - okCount, touched, recentLines };
-}
-
 
 function trimGrokRunawayRepetition(text: string): string {
   const raw = String(text || '').replace(/\r\n/g, '\n').trim();
@@ -10632,6 +10464,18 @@ async function runInteractiveTurn(
     durationMs: Date.now() - streamSetupStartedAt,
     reusedActiveStream: !!existingMainChatStream?.active,
   });
+  // A restart-recovery turn is the same logical turn the user is already
+  // watching. Emit the resumption only once the replacement stream exists, so
+  // clients receive the streamId they must follow rather than a bare notice.
+  if (flags?.syntheticRestartRecovery) {
+    announceRestartContinuityResumed({
+      sessionId,
+      stream: localMainChatStream || existingMainChatStream || null,
+      runtimeId: flags?.runtimeId,
+      clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) || undefined,
+      reason: 'gateway_restart',
+    });
+  }
   let localMainChatStreamCompleted = false;
   const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[]; goalCompletionReport?: any } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
@@ -11152,6 +10996,20 @@ async function runInteractiveTurn(
   if (packet) {
     recordWorkingContextPacket(sessionId, packet, { flush: packet.status === 'aborted' });
   }
+  const latestChatSteer = [...getHistory(sessionId, 80)].reverse().find((entry: any) =>
+    entry?.role === 'user'
+    && String(entry.workflowPart || '') === 'interruption'
+    && /^chat_steer_/i.test(String(entry.workflowGroupId || ''))
+    && Number(entry.timestamp || 0) >= turnTiming.startedAt - 2_000,
+  ) as any;
+  const chatSteerContinuationIdentity = latestChatSteer ? {
+    messageId: `${String(latestChatSteer.workflowGroupId)}:continuation`,
+    workflowGroupId: String(latestChatSteer.workflowGroupId),
+    workflowPart: 'interruption_response',
+    workflowLabel: 'Response after steer',
+    workflowBoundarySeq: latestChatSteer.workflowBoundarySeq,
+    workflowStreamId: latestChatSteer.workflowStreamId,
+  } : {};
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
@@ -11199,6 +11057,7 @@ async function runInteractiveTurn(
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
+      ...chatSteerContinuationIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
@@ -11260,6 +11119,7 @@ async function runInteractiveTurn(
     addMessage(sessionId, {
       role: 'assistant',
       ...assistantRequestIdentity,
+      ...chatSteerContinuationIdentity,
       ...goalMessageIdentity,
       ...threadSupervisionMessageIdentity,
       content: result.text,
@@ -11372,6 +11232,29 @@ type InterruptedMainChatRuntime = {
  * disappeared. The original user message is already durable in session history,
  * so this path deliberately suppresses a second user-message write while still
  * giving the model the exact original request and preserved checkpoint context.
+ */
+
+/**
+ * Mirror a pre-shutdown suspension notice into the session's still-open stream.
+ * runtime-recovery cannot import this module (circular), so it calls us through
+ * this registered bridge. Without it, a client replaying the stream from seq 0
+ * after reconnecting never learns the turn was suspended rather than dropped.
+ */
+registerRestartContinuityEmitter((payload: Record<string, any>) => {
+  const sessionId = String(payload?.sessionId || '').trim();
+  if (!sessionId) return;
+  const stream = getMainChatStream(sessionId);
+  if (!stream) return;
+  try {
+    appendMainChatStreamEvent(sessionId, stream.streamId, 'restart_continuity', {
+      ...payload,
+      priorStreamId: stream.streamId,
+    });
+  } catch {}
+});
+/**
+ * Resume an interrupted main-chat turn on the replacement gateway. The original
+ * user message is not re-appended; the preserved checkpoint context is replayed.
  */
 export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
   const sessionId = String(runtime?.sessionId || '').trim();
@@ -11517,6 +11400,40 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
 
   console.log(`[RuntimeRecovery] Automatically retriggered interrupted main-chat turn for ${sessionId} (old=${runtime.id}, new=${runtimeId}).`);
   return true;
+}
+
+/**
+ * Mirror of the pre-shutdown suspension notice. The suspended event promised the
+ * client that this turn would continue; this is the event that redeems it, so it
+ * must carry the new streamId the client has to follow.
+ */
+function announceRestartContinuityResumed(params: {
+  sessionId: string;
+  stream: MainChatStreamState | null;
+  priorRuntimeId?: string;
+  runtimeId?: string;
+  clientRequestId?: string;
+  reason?: string;
+}): void {
+  const sessionId = String(params.sessionId || '').trim();
+  if (!sessionId) return;
+  const stream = params.stream;
+  const payload = {
+    sessionId,
+    phase: 'resumed' as const,
+    reason: params.reason || 'gateway_restart',
+    priorRuntimeId: params.priorRuntimeId,
+    runtimeId: params.runtimeId,
+    newStreamId: stream?.streamId,
+    clientRequestId: params.clientRequestId,
+    at: Date.now(),
+  };
+  // Record it inside the durable stream too, so a client that reconnects and
+  // replays from seq 0 still learns this turn is a continuation.
+  if (stream) {
+    try { appendMainChatStreamEvent(sessionId, stream.streamId, 'restart_continuity', payload); } catch {}
+  }
+  try { broadcastWS({ type: 'restart_continuity', ...payload }); } catch {}
 }
 
 function createSSESender(res: express.Response): (event: string, data: any) => void {
@@ -12129,6 +12046,17 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
   const checkpoint = runtime?.checkpoint && typeof runtime.checkpoint === 'object'
     ? runtime.checkpoint
     : null;
+  const rawActiveTool = checkpoint?.activeTool;
+  const activeTool: ForegroundToolActivity | null = rawActiveTool && typeof rawActiveTool === 'object'
+    && Number(rawActiveTool.startedAt) > 0
+    ? {
+        name: String(rawActiveTool.name || '').slice(0, 120),
+        kind: ['terminal', 'background', 'tool'].includes(rawActiveTool.kind) ? rawActiveTool.kind : 'tool',
+        startedAt: Number(rawActiveTool.startedAt),
+        lastUpdateAt: Number(rawActiveTool.lastUpdateAt || rawActiveTool.startedAt),
+        openCalls: Math.max(1, Number(rawActiveTool.openCalls || 1)),
+      }
+    : null;
   const checkpointProcessEntries = Array.isArray(checkpoint?.processEntries)
     ? checkpoint.processEntries
       .slice(-500)
@@ -12154,6 +12082,8 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
       at: Number(checkpoint.at || 0) || null,
       toolName: String(checkpoint.toolName || ''),
       message: truncateRuntimeProcessText(checkpoint.message || '', 4000),
+      activeTool,
+      ...(activeTool ? { connectionMessage: foregroundConnectionMessage(activeTool, Date.now() - activeTool.lastUpdateAt) } : {}),
       processEntries: checkpointProcessEntries,
     } : null,
   };
@@ -21232,6 +21162,19 @@ router.post('/api/chat/steer', (req, res) => {
       res.status(400).json({ ok: false, success: false, error: 'Message or attachment required' });
       return;
     }
+    const mobileQueueSteer = String(body.source || '').trim() === 'mobile_queue_button';
+    const clientSteerId = mobileQueueSteer ? String(body.clientSteerId || '').trim().slice(0, 160) : '';
+    // A response can be lost after the gateway accepted the steer. Retrying the
+    // same queued item must not inject or display it a second time.
+    const priorSteer = clientSteerId
+      ? getSession(sessionId).history.find((entry: any) => entry?.role === 'user' && entry?.clientSteerId === clientSteerId)
+      : null;
+    if (priorSteer) {
+      res.json({ ok: true, success: true, eventId: (priorSteer as any).steerEventId,
+        messageId: priorSteer.messageId, timestamp: priorSteer.timestamp,
+        workflowGroupId: (priorSteer as any).workflowGroupId, alreadyAccepted: true });
+      return;
+    }
     const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
     const activeRuntime = listLiveRuntimes()
       .filter((runtime) => (
@@ -21255,6 +21198,25 @@ router.post('/api/chat/steer', (req, res) => {
     if (!steer.ok || !steer.event) {
       res.status(409).json({ ok: false, success: false, error: steer.error || 'Could not queue steer event.' });
       return;
+    }
+    let durableSteer: any = null;
+    if (mobileQueueSteer) {
+      const timestamp = Date.now();
+      const displayMessage = String(body.displayMessage || message).trim() || message;
+      durableSteer = {
+        role: 'user', content: displayMessage, timestamp,
+        messageId: `chat-steer:${steer.event.id}`,
+        steerEventId: steer.event.id,
+        clientSteerId: clientSteerId || undefined,
+        channel: 'mobile', channelLabel: 'steer',
+        workflowGroupId: `chat_steer_${steer.event.id}`,
+        workflowPart: 'interruption', workflowLabel: 'Message sent as steer',
+        workflowBoundarySeq: Math.max(0, Math.floor(Number(body.workflowBoundarySeq || 0) || 0)),
+        workflowStreamId: String(body.workflowStreamId || '').trim() || undefined,
+        ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
+      };
+      addMessage(sessionId, durableSteer, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+      flushSession(sessionId);
     }
     const injectedContextText = buildChatSteerContextBlock(steer.event);
     updateLiveRuntimeCheckpoint(activeRuntime.id, {
@@ -21302,6 +21264,11 @@ router.post('/api/chat/steer', (req, res) => {
       runtimeId: activeRuntime.id,
       injectedContextText,
       activeRun: summarizeMobileRuntime(activeRuntime),
+      ...(durableSteer ? {
+        messageId: durableSteer.messageId,
+        timestamp: durableSteer.timestamp,
+        workflowGroupId: durableSteer.workflowGroupId,
+      } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -21716,15 +21683,22 @@ router.post('/api/chat', async (req, res) => {
   sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
   let lastNonHeartbeatSseAt = Date.now();
   let lastVisibleHeartbeatAt = 0;
+  const foregroundActivity = createForegroundToolActivityTracker();
   const heartbeat = setInterval(() => {
     const now = Date.now();
     const idleMs = Math.max(0, now - lastNonHeartbeatSseAt);
-    const payload: Record<string, any> = { state: 'processing', idleMs };
-    if (idleMs >= 12_000 && now - lastVisibleHeartbeatAt >= 15_000) {
+    const activity = foregroundActivity.current();
+    // An open tool call is execution activity even when a long build has not
+    // produced a new output chunk. Its own timeout and the absolute turn age
+    // limit still bound a tool that never returns.
+    if (activity) {
+      chatStream.lastSemanticProgressAt = now;
+      chatStream.lastSemanticEvent = 'active_tool_wait';
+    }
+    const payload: Record<string, any> = { state: 'processing', idleMs, activeTool: activity };
+    if (idleMs >= 45_000 && now - lastVisibleHeartbeatAt >= 45_000) {
       lastVisibleHeartbeatAt = now;
-      payload.message = idleMs >= 30_000
-        ? `Still connected. Prometheus is working (${Math.round(idleMs / 1000)}s since the last visible update).`
-        : 'Still connected. Prometheus is working...';
+      payload.message = foregroundConnectionMessage(activity, idleMs, now);
     }
     try {
       if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
@@ -21818,6 +21792,7 @@ router.post('/api/chat', async (req, res) => {
   let lastRuntimeNarrationCheckpointAt = 0;
   sendSSE = (event, data) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
+    foregroundActivity.record(event, data);
     rawSendSSE(event, data);
     // Skip per-token checkpointing — token/thinking_delta are high-frequency streaming
     // events that don't need durable persistence. 3 sync fs ops per token was killing
@@ -21868,6 +21843,7 @@ router.post('/api/chat', async (req, res) => {
     if (event === 'ui_preflight') __turnTimingLog(`preflight: ${String(data?.message || '').slice(0, 60)}`);
     else if (event === 'thinking' || event === 'tool_call' || event === 'tool_result' || event === 'progress_state') __turnTimingLog(`${event}: ${String(data?.message || data?.name || data?.action || '').slice(0, 60)}`);
     const checkpoint: Record<string, any> = { event, at: Date.now() };
+    checkpoint.activeTool = foregroundActivity.current();
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
     if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
@@ -22555,6 +22531,8 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
     const existingHistory = Array.isArray(getSession(id).history) ? getSession(id).history : [];
     const history = mergeHistoryWithExistingMessageMetadata(existingHistory, rawHistory, {
       preserveAllExisting: isMobileHistorySyncRequest(req),
+      preferIncomingContent: req.body?.repairTranscriptText === true && !isMobileHistorySyncRequest(req),
+      preferIncomingTrace: req.body?.repairTranscriptTrace === true && !isMobileHistorySyncRequest(req),
     });
     replaceHistory(id, history as any, {
       resetCompaction: req.body?.resetCompaction === true,

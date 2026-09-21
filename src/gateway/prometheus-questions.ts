@@ -287,6 +287,20 @@ class PrometheusQuestionQueue {
     return this.callbacks.has(id);
   }
 
+  /**
+   * Detach an in-process waiter without resolving or cancelling the durable
+   * question.  A foreground turn can be aborted by the owner watchdog or a
+   * gateway restart while its question card is still pending.  Leaving the
+   * callback installed makes the next answer resolve the dead turn and hides
+   * the restart-resume path, so callers must detach it when their owner goes
+   * away.
+   */
+  clearWaiters(id: string): void {
+    this.callbacks.delete(id);
+    this.cancelCallbacks.delete(id);
+    this.steerCallbacks.delete(id);
+  }
+
   onResolve(id: string, callback: (answers: { answers: PrometheusQuestionAnswer[]; generalOther?: string }) => void): void {
     const record = this.records.get(id);
     if (record && record.status === 'answered') {
@@ -377,6 +391,23 @@ export function getPrometheusQuestionQueue(): PrometheusQuestionQueue {
   return questionQueueInstance;
 }
 
+function hasLiveQuestionSessionOwner(question: PrometheusQuestionRecord): boolean {
+  const createdAt = Date.parse(question.createdAt);
+  try {
+    // Resolve lazily: the runtime registry also consults this queue when a
+    // foreground turn is aborted, so a static import would form a cycle.
+    const { findLiveRuntime } = require('./live-runtime-registry') as typeof import('./live-runtime-registry');
+    return !!findLiveRuntime((runtime) =>
+      String(runtime.sessionId || '') === question.sessionId
+      && String(runtime.status || 'running') === 'running'
+      && !runtime.abortRequestedAt
+      && (!Number.isFinite(createdAt) || Number(runtime.startedAt || 0) <= createdAt + 1_000)
+      && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal'));
+  } catch {
+    return false;
+  }
+}
+
 export function submitPrometheusQuestionResponse(input: SubmitPrometheusQuestionInput): SubmitPrometheusQuestionResult {
   const questionId = String(input.questionId || '').trim();
   const resolvedBy = String(input.resolvedBy || 'user').trim() || 'user';
@@ -406,9 +437,12 @@ export function submitPrometheusQuestionResponse(input: SubmitPrometheusQuestion
   if (!resolved) return { success: false, statusCode: 409, error: 'Question could not be answered' };
 
   let resumePrompt = '';
-  if (!hadLiveWaiter) {
+  // The waiter may register just after a fast mobile answer on an older
+  // gateway. Its foreground runtime is still alive, so sending a fallback
+  // prompt would queue a second turn behind the original completed answer.
+  if (!hadLiveWaiter && !hasLiveQuestionSessionOwner(resolved)) {
     resumePrompt = [
-      `The pending Prometheus question "${resolved.id}" was answered after a gateway restart or while no live waiter was attached.`,
+      `The pending Prometheus question "${resolved.id}" was answered after its original chat turn was interrupted.`,
       `Original question prompt: ${resolved.prompt}`,
       `User answers:\n${JSON.stringify({ answers: resolved.answers || [], generalOther: resolved.generalOther || '' }, null, 2)}`,
       'Continue the interrupted work using these answers. Do not ask the same question again unless the answer is insufficient.',

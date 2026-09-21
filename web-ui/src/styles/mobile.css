@@ -4498,6 +4498,27 @@ html.pm-session-context-open * {
   object-fit: contain;
   transform: translateZ(0);
 }
+.pm-trace-vision-break .pm-live-vision-preview {
+  width: 100%;
+  max-height: none;
+  aspect-ratio: auto;
+  margin: 10px 0;
+}
+.pm-trace-vision-break .pm-live-vision-preview img {
+  height: auto;
+  max-height: 60vh;
+}
+.pm-vision-carousel {
+  display: flex;
+  gap: 12px;
+  max-width: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+}
+.pm-vision-carousel .pm-live-vision-preview {
+  flex: 0 0 calc(100% - 24px);
+  scroll-snap-align: start;
+}
 .pm-trace-tool-group-shell {
   width: 100%;
   min-width: 0;
@@ -6234,7 +6255,8 @@ html.pm-session-context-open * {
 .pm-chat-connection-status {
   gap: 8px;
   width: fit-content;
-  max-width: calc(100% - 48px);
+  max-width: calc(100% - 20px);
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 8px 12px;
   min-height: 34px;
@@ -6256,7 +6278,12 @@ html.pm-session-context-open * {
   font-size: 12px;
   font-weight: 850;
   line-height: 1.2;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: left;
+}
+.pm-chat-connection-status .pm-chat-connection-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .pm-chat-connection-spinner {
   width: 13px;
@@ -6266,6 +6293,11 @@ html.pm-session-context-open * {
   border: 2px solid color-mix(in srgb, var(--pm-orange) 22%, transparent);
   border-top-color: var(--pm-orange);
   animation: pm-spin .85s linear infinite;
+}
+.pm-chat-connection-status.activity .pm-chat-connection-spinner {
+  border-color: color-mix(in srgb, var(--pm-orange) 65%, transparent);
+  background: color-mix(in srgb, var(--pm-orange) 18%, transparent);
+  animation: none;
 }
 .pm-chat-connection-status.success {
   color: var(--pm-green);
@@ -9457,6 +9489,21 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
   scroll-padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
 }
+/* Keep scrolled messages legible as they pass beneath the floating controls. */
+.pm-body.pm-chat-body:not(.pm-chat-voice-occluded) {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) - 12px),
+    #000 calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 18px)
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) - 12px),
+    #000 calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 18px)
+  );
+}
 .pm-body.pm-chat-body.pm-chat-voice-occluded {
   /* Soft crossfade (not a hard cut) so the chat melts into the glass panel
      instead of ending on a visible border line above it. */
@@ -9528,7 +9575,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   transform: none !important;
 }
 .pm-mobile-side-sheet.background-agent-detail-mode .pm-mobile-side-panel {
-  height: min(84svh, 700px);
+  top: var(--pm-side-top, 80px);
+  bottom: var(--pm-side-bottom, 0px);
+  height: auto;
 }
 .pm-mobile-side-handle {
   width: 46px;
@@ -9659,7 +9708,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-keyboard-open .pm-mobile-side-composer.pm-composer {
   bottom: calc(var(--pm-keyboard-offset, 0px) + 8px);
 }
-.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-row {
   width: 100%;
   display: flex;
   grid-template-columns: none;
@@ -9672,7 +9721,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   margin: 0;
   transform: translateY(-5px);
 }
-.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input-wrap {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-input-wrap {
   flex: 1;
   grid-column: auto;
   grid-row: auto;
@@ -9682,8 +9731,8 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-self: center;
   display: flex;
 }
-.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-icon-btn,
-.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-send {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-row > .pm-icon-btn,
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-row > .pm-send {
   width: 38px;
   min-width: 38px;
   height: 38px;
@@ -9698,7 +9747,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-items: center;
   justify-content: center;
 }
-.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input {
+.pm-mobile-side-composer.pm-composer:not(.is-focused):not(.has-text):not(.has-attachments) .pm-composer-input {
   width: 100%;
   height: 28px !important;
   min-height: 28px;
@@ -9708,7 +9757,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   align-self: center;
   overflow: hidden;
 }
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) {
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) {
   height: auto;
   min-height: 112px;
   max-height: min(46svh, 340px);
@@ -9717,7 +9766,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   border-radius: 24px;
   opacity: 1;
 }
-.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
+.pm-mobile-side-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row {
   transform: none;
 }
 
@@ -17850,6 +17899,11 @@ body.pm-mobile-active :where(
     inset 0 -1px 1px rgba(255,255,255,.025),
     0 6px 16px rgba(0,0,0,.16) !important;
 }
+body.pm-mobile-active .pm-msheet.is-reasoning.has-composer-keyboard {
+  height: 176px;
+  padding: 8px 18px 8px;
+  justify-content: flex-end;
+}
 
 /* The tab bar is already separated from the page by its glass rim. Its outer
    shadow painted a dark band into the safe-area below the controls, especially
@@ -18152,6 +18206,74 @@ body.pm-mobile-active #pm-composer #pm-attach-sheet[hidden] {
 body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-scrim {
   display: none !important;
 }
+body.pm-mobile-active.pm-chat-attachment-open .pm-chat-body {
+  filter: blur(6px);
+}
+body.pm-mobile-active .pm-msheet-scrim:is(.is-reasoning, .is-model-switch) { z-index: 10030 !important; }
+body.pm-mobile-active .pm-msheet:is(.is-reasoning, .is-model-switch) { z-index: 10031 !important; }
+
+body.pm-mobile-active .pm-drawer .pm-session-model-logo {
+  display: inline-block;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  margin-right: 4px;
+}
+body.pm-mobile-active .pm-drawer :is(
+  .pm-session-model-logo--chatgpt,
+  .pm-session-model-logo--openai,
+  .pm-session-model-logo--xai,
+  .pm-session-import-logo--chatgpt,
+  .pm-session-import-logo--openai,
+  .pm-session-import-logo--xai
+) {
+  box-sizing: border-box;
+  padding: 2px;
+  border-radius: 4px;
+  background: #fff;
+}
+
+body.pm-mobile-active #pm-composer .pm-composer-model-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(44vw, 190px);
+  gap: 5px;
+  padding: 5px 2px;
+  border: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--pm-text);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+body.pm-mobile-active #pm-composer:not(.is-focused) .pm-composer-model-badge {
+  display: none;
+}
+body.pm-mobile-active #pm-composer .pm-composer-model-logo { width: 15px; height: 15px; flex: 0 0 15px; object-fit: contain; }
+body.pm-mobile-active #pm-composer .pm-composer-model-logo:is([data-pm-brand="chatgpt"], [data-pm-brand="openai"], [data-pm-brand="xai"]) {
+  box-sizing: border-box;
+  padding: 2px;
+  border-radius: 4px;
+  background: #fff;
+}
+body.pm-mobile-active #pm-composer .pm-composer-model-logo[hidden] { display: none; }
+body.pm-mobile-active #pm-composer .pm-composer-model-badge .pm-model-badge-label { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+body.pm-mobile-active #pm-composer .pm-composer-model-name { color: var(--pm-text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+body.pm-mobile-active #pm-composer .pm-composer-reasoning-name { color: var(--pm-muted); font-weight: 400; flex: 0 0 auto; }
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track { overflow: visible; }
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill {
+  z-index: 3;
+  max-width: calc(100% - 14px);
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
+  width: 68px;
+  height: 68px;
+  right: -34px;
+}
 body.pm-mobile-active #pm-composer #pm-attach-sheet > .pm-attach-sheet-panel {
   position: absolute !important;
   left: var(--pm-attach-origin-x, 0px) !important;
@@ -18385,3 +18507,13 @@ body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-pane
     animation: none !important;
   }
 }
+.pm-trace-tool-body .tool-activity-readable-detail {
+  max-height: min(42svh, 340px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.pm-trace-tool-body .tool-activity-detail-fields { display: grid; gap: 8px; margin-bottom: 8px; }
+.pm-trace-tool-body .tool-activity-detail-fields > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; line-height: 1.5; }
+.pm-trace-tool-body .tool-activity-detail-fields strong { font-size: .85em; opacity: .65; }
+.pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :first-child { margin-top: 0; }
+.pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :last-child { margin-bottom: 0; }

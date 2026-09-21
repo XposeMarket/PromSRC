@@ -12,13 +12,14 @@
 
 import crypto from 'crypto';
 import { getOllamaClient } from '../../agents/ollama-client';
-import { parseProviderModelRef } from '../../agents/model-routing.js';
+import { normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { broadcastWS as gatewayBroadcastWS } from '../comms/broadcaster';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
-import { getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
+import { addMessage, getSession, getWorkspace, replaceHistory, setActivatedToolCategories, setWorkspace } from '../session';
+import { normalizeToolCategory } from '../tool-builder';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import { gatewayRuntimeAdmission, type RuntimeAdmissionLease } from '../runtime-admission';
@@ -103,6 +104,8 @@ export interface EphemeralBackgroundStatus {
   reasoningEffort?: string;
   /** Stable snake_case field exposed to tool callers and benchmark runners. */
   executor_reasoning_effort?: string;
+  /** Explicit tool categories the worker starts with (core tools are always present). */
+  toolCategories?: string[];
   stream?: Record<string, any> | null;
   startedAt: number;
   completedAt?: number;
@@ -228,8 +231,8 @@ export class TaskRunner {
         continue;
       }
 
-      // Independent read-only calls may share a step. Mutations and dependent
-      // calls retain the original one-action-per-step behavior.
+      // Independent reads and explicitly marked shell calls may share a step.
+      // Dependent calls retain the original one-action-per-step behavior.
       const parallelEntries: Array<{ call: any; index: number; toolName: string; toolArgs: any }> = toolCalls.map((call: any, index: number) => ({
         call,
         index,
@@ -455,6 +458,13 @@ export interface EphemeralBackgroundSpawnInput {
   modelOverride?: string;
   providerOverride?: string;
   reasoningEffort?: string;
+  /**
+   * Explicit tool categories for the worker. Background spawns never run the
+   * keyword auto-activation pass over their task prompt (it would provision
+   * every category the prompt merely mentions), so the spawner declares what
+   * the worker needs up front. The worker can still call request_tool_category.
+   */
+  toolCategories?: string[];
 }
 
 export interface EphemeralBackgroundJoinResult {
@@ -482,6 +492,9 @@ export interface EphemeralBackgroundSteerResult {
   state: EphemeralBackgroundState;
   queued: boolean;
   eventId?: string;
+  streamId?: string;
+  seq?: number;
+  timestamp?: number;
   error?: string;
 }
 
@@ -498,6 +511,25 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
+const BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8;
+
+/**
+ * Normalize the spawner-declared tool categories for a background worker.
+ * Unknown ids are dropped (the worker can still request_tool_category later),
+ * duplicates collapse, and the list is capped so a spawn cannot re-create the
+ * full-surface bloat this field exists to prevent.
+ */
+export function normalizeBackgroundSpawnToolCategories(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const normalized = normalizeToolCategory(entry);
+    if (!normalized || out.includes(normalized)) continue;
+    out.push(normalized);
+    if (out.length >= BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES) break;
+  }
+  return out;
+}
 const _ephemeralBackgroundRuns = new Map<string, EphemeralBackgroundRecord>();
 
 function backgroundVoiceWorkgroupId(record: Pick<EphemeralBackgroundStatus, 'tags'>): string {
@@ -563,7 +595,7 @@ type BgHandleChat = (
   reasoningOptions?: any,
   providerOverride?: string,
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { admissionLease?: RuntimeAdmissionLease },
+  runtimeOptions?: { admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean },
 ) => Promise<string>;
 
 interface EphemeralBgDeps {
@@ -613,6 +645,9 @@ function emitBackgroundAgentEvent(
     bgId: record.id,
     eventType: event,
     actor: 'Background Agent',
+    providerId: record.providerId,
+    model: record.model,
+    reasoningEffort: record.reasoningEffort,
     task: record.prompt,
     prompt: record.prompt,
     taskPrompt: record.prompt,
@@ -702,7 +737,7 @@ export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgr
     const rawModel = String(record.model || '').trim();
     const parsed = parseProviderModelRef(rawModel);
     const providerId = parsed?.providerId || rawProvider || undefined;
-    const model = parsed?.model || rawModel || undefined;
+    const model = parsed?.model || (rawModel && providerId ? normalizeProviderModel(providerId, rawModel) : rawModel) || undefined;
     const reasoningEffort = normalizeReasoningEffort(String(providerId || ''), String(model || ''), record.reasoningEffort);
     if (record.reasoningEffort && !reasoningEffort) {
       throw new Error(`Reasoning effort "${record.reasoningEffort}" is not supported by ${providerId || 'the selected provider'}/${model || 'the selected model'}.`);
@@ -728,7 +763,7 @@ export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgr
     }
 
     const activeProvider = String(cfg?.llm?.provider || '').trim();
-    const activeModel = activeProvider ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim() : '';
+    const activeModel = activeProvider ? normalizeProviderModel(activeProvider, String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim()) : '';
     if (activeProvider || activeModel) {
       return {
         providerId: activeProvider || undefined,
@@ -828,7 +863,10 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         // Background agents get a fresh tool surface. They should not inherit
         // every category the foreground chat has opened during the session,
         // because that bloats native tool schemas for the entire background run.
-        setActivatedToolCategories(sessionId, []);
+        // Only the categories the spawner explicitly declared are pre-activated;
+        // handleChat runs with skipAutomaticToolCategoryActivation so the task
+        // prompt text cannot keyword-provision the rest of the catalog.
+        setActivatedToolCategories(sessionId, Array.isArray(record.toolCategories) ? record.toolCategories.slice() : []);
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
@@ -966,7 +1004,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
             : undefined,
           record.providerId,
           undefined,
-          { admissionLease: runtimeAdmissionLease || undefined },
+          { admissionLease: runtimeAdmissionLease || undefined, skipAutomaticToolCategoryActivation: true },
         );
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
         // handleChat returns a ChatResult object — extract .text, not the whole object
@@ -1080,6 +1118,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     model: resolvedRouting.model,
     modelSource: resolvedRouting.source,
     reasoningEffort: resolvedRouting.reasoningEffort,
+    toolCategories: normalizeBackgroundSpawnToolCategories(input?.toolCategories),
     backgroundStream: createBackgroundAgentStream(),
   };
 
@@ -1190,6 +1229,7 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
     clientRequestId: `background_agent_steer:${rec.id}:${Date.now()}`,
     contextSummary: `Live guidance for one-shot background agent ${rec.id}.`,
   });
+  let steerFrame: { streamId?: string; seq?: number; at?: number } | null = null;
   if (queued.ok && queued.event) {
     const frame = appendBackgroundAgentStreamEvent(rec.backgroundStream, 'user_message', {
       role: 'user',
@@ -1200,6 +1240,26 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
       source: queued.event.source,
       kind: queued.event.kind,
     });
+    steerFrame = frame;
+    const source = String(queued.event.source || options.source || '').trim();
+    const actor = /^(?:web_background_agent_chat|mobile|user)/i.test(source) ? 'User' : 'Prometheus';
+    addMessage(backgroundRuntimeSessionId(rec), {
+      role: 'user',
+      messageId: `background_steer_${queued.event.id}`,
+      messageKind: 'background_agent_steer',
+      backgroundAgentId: rec.id,
+      content: queued.event.message,
+      timestamp: frame.at,
+      streamId: frame.streamId,
+      seq: frame.seq,
+      source,
+      actor,
+      channel: 'steer',
+      channelLabel: 'steer',
+      workflowGroupId: `background_steer_${queued.event.id}`,
+      workflowPart: 'interruption',
+      workflowLabel: actor === 'User' ? 'Message sent as steer' : 'Prometheus steered agent',
+    } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     const spawnerSessionId = String(rec.spawnerSessionId || '').trim();
     if (spawnerSessionId) {
       const broadcast = _bgDeps?.broadcastWS || gatewayBroadcastWS;
@@ -1225,6 +1285,9 @@ export function backgroundSteer(backgroundId: string, message: string, options: 
     state: rec.state,
     queued: queued.ok,
     eventId: queued.event?.id,
+    streamId: steerFrame?.streamId,
+    seq: steerFrame?.seq,
+    timestamp: steerFrame?.at,
     error: queued.error,
   };
 }

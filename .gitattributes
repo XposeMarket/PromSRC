@@ -3,3 +3,14 @@
 generated/public-web-ui/asset-manifest.json text eol=lf
 generated/public-web-ui/build/**/*.js text eol=lf
 generated/public-web-ui/build/**/*.css text eol=lf
+# The sync check regenerates this whole tree and runs `git diff --exit-code`,
+# so every generated text file must round-trip as LF. Without these rules a
+# commit made on Windows with core.autocrlf=true stores CRLF blobs, and CI
+# fails "Verify public web source sync" even though the content matches.
+generated/public-web-ui/**/*.js text eol=lf
+generated/public-web-ui/**/*.mjs text eol=lf
+generated/public-web-ui/**/*.css text eol=lf
+generated/public-web-ui/**/*.html text eol=lf
+generated/public-web-ui/**/*.json text eol=lf
+generated/public-web-ui/**/*.svg text eol=lf
+generated/public-web-ui/**/*.webmanifest text eol=lf

@@ -101,9 +101,11 @@ import {
 } from './task-continuity';
 import {
   addPendingRuntimeSteerForSession,
+  findRemoteLiveRuntimeForTask,
   finishLiveRuntime,
   listLiveRuntimes,
   registerLiveRuntime,
+  requestRemoteRuntimeControl,
   updateLiveRuntimeCheckpoint,
 } from '../live-runtime-registry';
 import { notifyTaskWebPush } from '../notifications/task-events';
@@ -562,6 +564,13 @@ export class BackgroundTaskRunner {
   }
 
   static requestPause(taskId: string): void {
+    // A draining previous gateway (warm handoff) may still own this task's
+    // runner; its abort signal lives in that process.
+    const remote = !activeRunners.has(taskId) ? findRemoteLiveRuntimeForTask(taskId) : null;
+    if (remote && requestRemoteRuntimeControl(remote, 'task_pause', { taskId })) {
+      console.log(`[Background Task] Pause for ${taskId} forwarded to previous gateway (pid ${remote.remoteHostPid})`);
+      return;
+    }
     pauseRequests.add(taskId);
     // Immediately set abort signal so in-flight handleChat calls can interrupt
     const signal = taskAbortSignals.get(taskId);
@@ -574,6 +583,11 @@ export class BackgroundTaskRunner {
   static cancelTask(taskId: string, reason: string = 'Cancelled by operator.'): boolean {
     const task = loadTask(taskId);
     if (!task) return false;
+    const remote = !activeRunners.has(taskId) ? findRemoteLiveRuntimeForTask(taskId) : null;
+    if (remote && requestRemoteRuntimeControl(remote, 'task_cancel', { taskId, reason })) {
+      console.log(`[Background Task] Cancel for ${taskId} forwarded to previous gateway (pid ${remote.remoteHostPid})`);
+      return true;
+    }
     persistExternallyInterruptedTaskContinuity(taskId, 'failed', reason);
     pauseRequests.add(taskId);
     const signal = taskAbortSignals.get(taskId);
@@ -587,7 +601,9 @@ export class BackgroundTaskRunner {
     return true;
   }
 
-  static isRunning(taskId: string): boolean { return activeRunners.has(taskId); }
+  static isRunning(taskId: string): boolean {
+    return activeRunners.has(taskId) || !!findRemoteLiveRuntimeForTask(taskId);
+  }
 
   static forceRelease(taskId: string): void {
     if (activeRunners.has(taskId)) {
@@ -598,7 +614,13 @@ export class BackgroundTaskRunner {
     taskAbortSignals.delete(taskId);
   }
 
-  static getRunningTasks(): string[] { return Array.from(activeRunners); }
+  static getRunningTasks(): string[] {
+    const ids = new Set(activeRunners);
+    for (const runtime of listLiveRuntimes()) {
+      if (runtime.remoteHostPid && runtime.taskId && runtime.status === 'running') ids.add(runtime.taskId);
+    }
+    return Array.from(ids);
+  }
 
   static interruptTaskForSchedule(taskId: string, scheduleId: string): boolean {
     if (!activeRunners.has(taskId)) return false;

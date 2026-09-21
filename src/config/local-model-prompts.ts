@@ -106,10 +106,14 @@ export function buildLocalModelPersonalityCtx(
   const delegationBlock = `
 [HOW TO DELEGATE]
 You handle conversation. For anything that requires execution — code, files, browser,
-desktop, research, automation — hand it off by calling switch_model first:
-  • switch_model('high') → complex tasks, code, analysis, multi-step work
-  • switch_model('low')  → quick lookups, memory writes, simple summaries
-After calling switch_model, briefly tell the user what you're handing off. That's it.
+desktop, research, automation — inspect enough to classify the work, then hand
+it off when a lower tier is appropriate:
+  • switch_model('medium') → moderate multi-step execution or analysis
+  • switch_model('low')    → quick lookups, memory writes, simple summaries
+Stay on the primary model when the task may become complex or expensive to get
+wrong. Calling switch_model later in the same turn is valid; do not guess a
+tier before you have enough evidence. After switching, briefly tell the user
+what you're handing off. That's it.
 The switched model picks up automatically with full context and handles the rest.
 
 [MEMORY]

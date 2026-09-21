@@ -55,6 +55,8 @@ jobs:
           npx tsx src/gateway/agents-runtime/capabilities/memory-wrapper.regression.ts
       - name: Verify web_fetch batch (urls[]) routing in the capability executor
         run: npx tsx src/gateway/agents-runtime/capabilities/web-fetch-batch.regression.ts
+      - name: Verify agent/team wrapper parameter alignment
+        run: npm run test:agent-team-wrapper-params
       - name: Verify memory worker readiness and cold-elastic admission
         run: |
           npm run test:memory-worker-readiness
@@ -65,7 +67,7 @@ jobs:
       - name: Verify natural-language tool activation
         run: npm run test:extension-activation && npm run test:tool-category-routing && npx tsx src/runtime/tool-category-prompt-signals.regression.ts
       - name: Verify provider-facing tool category provisioning
-        run: npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model
+        run: npm run test:tool-category-provisioning && npm run test:tool-category-activation && npm run test:tool-category-switch-model && npm run test:background-spawn-tool-surface
       - name: Verify operating instructions and runtime behavior
         run: |
           node scripts/test-model-acceptance.mjs
@@ -130,6 +132,12 @@ jobs:
         run: node scripts/test-mobile-chat-recovery.mjs
       - name: Verify mobile stream receipt idempotency
         run: node scripts/test-mobile-stream-receipts.mjs
+      - name: Verify static asset compression
+        run: npm run test:static-compression
+      - name: Verify encoding negotiation and module cache policy
+        run: npx tsx src/gateway/static-encoding-negotiation.regression.ts
+
+
       - name: Verify foreground Chat owner restart reconciliation
         run: npm run test:restart-retrigger
       - name: Verify gateway supervisor identity and liveness recovery policy

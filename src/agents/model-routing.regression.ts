@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import {
   getPrimaryModelRef,
+  normalizeProviderModel,
+  parseProviderModelRef,
   resolveConfiguredAgentModel,
   resolveConfiguredAgentRouting,
 } from './model-routing.js';
+
+assert.equal(normalizeProviderModel('openai_codex', 'sol'), 'gpt-5.6-sol');
+assert.equal(normalizeProviderModel('openai_codex', 'luna'), 'gpt-5.6-luna');
+assert.equal(normalizeProviderModel('openai_codex', 'astra'), 'gpt-6-astra');
+assert.deepEqual(parseProviderModelRef('openai_codex/terra'), { providerId: 'openai_codex', model: 'gpt-5.6-terra' });
 
 const codexGlobal = {
   llm: {

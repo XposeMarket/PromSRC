@@ -24,9 +24,11 @@ function normalizeMaxChars(value: unknown, fallback = 200_000): number {
   return Math.max(1000, Math.min(1_000_000, Math.floor(parsed)));
 }
 
-router.get('/api/processes', (req, res) => {
+router.get('/api/processes', async (req, res) => {
   const limit = normalizeLimit(req.query.limit);
-  res.json({ runs: getProcessSupervisor().list(limit) });
+  const supervisor = getProcessSupervisor();
+  await supervisor.ready();
+  res.json({ runs: supervisor.list(limit) });
 });
 
 router.post('/api/processes', async (req, res) => {

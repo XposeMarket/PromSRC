@@ -14,9 +14,11 @@ import { markDevSourceEditContinuationComplete, type DevSourceEditContinuation }
 import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
 import { finalizeMainChatGoalRestartRecovery } from './main-chat-goals';
 import {
+  acknowledgePlannedRestartMainChats,
   listHotRestartMainChatRecoveries,
   type HotRestartMainChatRecovery,
 } from './runtime-recovery';
+
 
 export type BootAutomatedSession = {
   id: string;
@@ -128,6 +130,38 @@ function isInternalRestartHistoryMessage(msg: ChatMessage): boolean {
   return false;
 }
 
+export function selectRestartConversationEvidence(history: ChatMessage[]): {
+  excerpt: string;
+  lastUserRequest: string;
+  lastAssistantResponse: string;
+} {
+  // Recovery turns run with a system caller context. Replaying assistant prose
+  // (especially durable reasoning summaries or provider refusal text) inside
+  // that context can look like a request to extract private reasoning. User
+  // requests, recovery status, and the separate bounded tool log are enough to
+  // resume the work, so keep assistant transcript rows out of this packet.
+  const userMessages = (Array.isArray(history) ? history : [])
+    .filter((msg) => msg?.role === 'user' && !isInternalRestartHistoryMessage(msg))
+    .slice(-12);
+  const compact = (value: unknown, maxChars: number): string => String(value || '')
+    .replace(/\r/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxChars);
+  const excerpt = userMessages
+    .map((msg) => `USER: ${compact(msg.content, 900)}`)
+    .filter((line) => line !== 'USER:')
+    .join('\n');
+  const lastUserRequest = compact(userMessages.at(-1)?.content, 220);
+  return {
+    excerpt: excerpt || '(No recent user request was available.)',
+    lastUserRequest,
+    // Kept in the return shape for callers that use the fallback formatter;
+    // assistant transcript text is intentionally never replayed into recovery.
+    lastAssistantResponse: '',
+  };
+}
+
 function getRecentConversationForRestart(previousSessionId?: string): {
   excerpt: string;
   lastUserRequest: string;
@@ -145,7 +179,7 @@ function getRecentConversationForRestart(previousSessionId?: string): {
   }
 
   try {
-    const history = getHistoryForApiCall(sid, 12, { maxMessages: 24 })
+    const history = getHistoryForApiCall(sid, 12, { maxMessages: 24, includeCommentaryContext: false })
       .filter((msg) => !isInternalRestartHistoryMessage(msg));
     const recentToolLog = getRecentToolObservationsForContext(sid, 3, 3000);
 
@@ -158,28 +192,7 @@ function getRecentConversationForRestart(previousSessionId?: string): {
       };
     }
 
-    const excerpt = history.map((msg) => {
-      const role = msg.role === 'assistant' ? 'ASSISTANT' : 'USER';
-      const content = String(msg.content || '').replace(/\s+/g, ' ').trim().slice(0, 900);
-      return `${role}: ${content}`;
-    }).join('\n');
-
-    const lastUserRequest = [...history]
-      .reverse()
-      .find((msg) => msg.role === 'user' && !isInternalRestartHistoryMessage(msg))
-      ?.content
-      ?.replace(/\s+/g, ' ')
-      ?.trim()
-      ?.slice(0, 220) || '';
-    const lastAssistantResponse = [...history]
-      .reverse()
-      .find((msg) => msg.role === 'assistant' && !isInternalRestartHistoryMessage(msg))
-      ?.content
-      ?.replace(/\s+/g, ' ')
-      ?.trim()
-      ?.slice(0, 320) || '';
-
-    return { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog };
+    return { ...selectRestartConversationEvidence(history), recentToolLog };
   } catch (err: any) {
     return {
       excerpt: `(Could not load recent conversation history for ${sid}: ${String(err?.message || err || 'unknown error')})`,
@@ -544,6 +557,20 @@ export async function runBootMd(
         && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
         && !!targetRestartCheckpoint
         && /restart|prom_apply_dev_changes/i.test(`${targetGoal.pausedReason || ''} ${targetRestartCheckpoint.reason || ''}`);
+      // The previous session is included as a routing hint even for a restart
+      // requested after its chat turn finished. That alone must not launch a
+      // new BOOT model turn or append an unsolicited reply to the transcript.
+      if (!target.recoveryRuntimeIds.length && !goalOwnedRestart && !target.devEdit) {
+        // No runtime ids here means there is no planned checkpoint to dispose of.
+        return {
+          finalText: '',
+          targetSessionId: target.sessionId,
+          notificationId: undefined,
+          goalOwnedRestart: false,
+          foregroundPlannedRestart: false,
+          recoveryRuntimeIds: [],
+        };
+      }
       // A plain manual restart is already complete once this replacement
       // gateway has booted.  Limit this shortcut to the session that issued
       // the restart so unrelated runtimes interrupted by the same process
@@ -586,7 +613,13 @@ export async function runBootMd(
         // Do not retrigger the original user turn here.  That turn's only
         // intended action was the restart itself; replaying it after boot
         // causes a second gateway_restart call.
+        //
+        // This is still a real disposition of the planned checkpoint, so the
+        // record must be marked consumed. Retention treats an unclaimed planned
+        // checkpoint as live work (BOOT needs it to exist), so leaving it marked
+        // 'chat_checkpointed' here would pin the entry in the durable ledger.
         finalText = 'Restarted. Prometheus is back online.';
+        acknowledgePlannedRestartMainChats(target.recoveryRuntimeIds);
       } else if (foregroundPlannedRestart) {
         if (target.devEdit) {
           markDevSourceEditContinuationComplete({

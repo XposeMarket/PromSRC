@@ -301,6 +301,7 @@ function _pmTaskAction(task) {
 }
 
 export async function renderTasksPage(page, { navigate, taskId = '' }) {
+  const taskPageSize = 40;
   const extras = `<span class="pm-spacer"></span><span class="pm-count-pill" id="pm-tasks-count">...</span><button class="pm-icon-btn" id="pm-tasks-refresh" aria-label="Refresh" style="background:var(--pm-surface);border:1px solid var(--pm-border);">${ICONS.refresh}</button>`;
   page.innerHTML = `
     ${renderMobileHeader({ title: 'Tasks', online: true, extras, hideTitle: true, hideBrand: true })}
@@ -319,12 +320,43 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   let allTasks = [];
   let currentFilter = 'running';
   let expandedId = String(taskId || '').trim();
+  let visibleLimit = taskPageSize;
+  let lastPaintSignature = '';
   let details = {};
   let evidence = {};
   let refreshTimer = null;
   let eventRefreshTimer = null;
 
   function paint() {
+    const counts = PM_TASK_FILTERS.reduce((acc, f) => { acc[f.key] = 0; return acc; }, {});
+    for (const t of allTasks) counts[_pmTaskFilter(t.status)] = (counts[_pmTaskFilter(t.status)] || 0) + 1;
+    for (const f of PM_TASK_FILTERS) {
+      const el = filterEl.querySelector(`[data-count="${f.key}"]`);
+      if (el) el.textContent = counts[f.key] ? `(${counts[f.key]})` : '';
+    }
+
+    const tasks = allTasks.filter(t => _pmTaskFilter(t.status) === currentFilter);
+    if (!tasks.length) {
+      lastPaintSignature = '';
+      listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p></div>`;
+      return;
+    }
+
+    const visibleTasks = tasks.slice(0, visibleLimit);
+    const linkedTask = expandedId && tasks.find(t => String(t.id || '') === expandedId);
+    if (linkedTask && !visibleTasks.includes(linkedTask)) visibleTasks.unshift(linkedTask);
+    const paintSignature = JSON.stringify({
+      filter: currentFilter,
+      visibleLimit,
+      expandedId,
+      tasks: visibleTasks,
+      detail: expandedId ? details[expandedId] : null,
+      evidence: expandedId ? evidence[expandedId] : null,
+      liveMinute: visibleTasks.some(t => ['running', 'pending'].includes(_pmTaskFilter(t.status)))
+        ? Math.floor(Date.now() / 60_000) : 0,
+    });
+    if (paintSignature === lastPaintSignature) return;
+    lastPaintSignature = paintSignature;
     const bodyEl = page.querySelector('#pm-tasks-body');
     const bodySnapshot = bodyEl ? {
       top: bodyEl.scrollTop || 0,
@@ -336,20 +368,8 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       distanceFromBottom: Math.max(0, journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight),
       nearBottom: (journalEl.scrollHeight - journalEl.scrollTop - journalEl.clientHeight) < 48,
     } : null;
-    const counts = PM_TASK_FILTERS.reduce((acc, f) => { acc[f.key] = 0; return acc; }, {});
-    for (const t of allTasks) counts[_pmTaskFilter(t.status)] = (counts[_pmTaskFilter(t.status)] || 0) + 1;
-    for (const f of PM_TASK_FILTERS) {
-      const el = filterEl.querySelector(`[data-count="${f.key}"]`);
-      if (el) el.textContent = counts[f.key] ? `(${counts[f.key]})` : '';
-    }
 
-    const tasks = allTasks.filter(t => _pmTaskFilter(t.status) === currentFilter);
-    if (!tasks.length) {
-      listEl.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.clipboard}</div><h2>No tasks here</h2><p>Background tasks and agent runs will appear here.</p></div>`;
-      return;
-    }
-
-    listEl.innerHTML = tasks.map(t => {
+    listEl.innerHTML = visibleTasks.map(t => {
       const id = String(t.id || '');
       const pill = _pmTaskPill(String(t.status || ''));
       const brainLabel = _pmBrainTaskLabel(t);
@@ -400,7 +420,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
           </div>` : ''}
         </article>
       `;
-    }).join('');
+    }).join('') + (tasks.length > visibleLimit
+      ? `<button type="button" class="pm-btn ghost" data-pm-task-load-more style="display:block;margin:16px auto 24px;">Show more tasks (${Math.min(taskPageSize, tasks.length - visibleLimit)} of ${tasks.length - visibleLimit} remaining)</button>`
+      : '');
     wireTaskCards();
     const nextJournal = listEl.querySelector('[data-pm-task-journal]');
     if (nextJournal && journalSnapshot) {
@@ -419,6 +441,10 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   }
 
   function wireTaskCards() {
+    listEl.querySelector('[data-pm-task-load-more]')?.addEventListener('click', () => {
+      visibleLimit += taskPageSize;
+      paint();
+    });
     listEl.querySelectorAll('.pm-task-card').forEach(card => {
       card.addEventListener('click', async (event) => {
         if (event.target.closest('button, textarea, input, a, summary')) return;
@@ -488,6 +514,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
       b.classList.add('active');
       currentFilter = b.getAttribute('data-filter');
       expandedId = '';
+      visibleLimit = taskPageSize;
       paint();
     });
   });

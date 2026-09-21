@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { clearMobileRecoveryPlaceholder, MOBILE_CONNECTION_RECOVERY_PLACEHOLDER } from '../web-ui/src/mobile/mobile-chat-recovery-state.js';
+import { canRecoverMobileStreamingTurn } from '../web-ui/src/mobile/mobile-chat-page-runtime.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,12 +9,17 @@ import { createTimelineEntries, createWeightedTimelineController } from '../web-
 import { reconcileKeyedTimelineRows } from '../web-ui/src/features/chat/timeline/keyed-dom.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'prior' }, 'current'), false,
+  'recovery must not replay a new request into the prior answer');
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'current' }, 'current'), true);
+assert.equal(canRecoverMobileStreamingTurn({ streaming: true, _clientRequestId: 'prior', _pmAdmissionPending: true }, 'current'), true);
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = [
   read('web-ui/src/mobile/mobile-pages.js'),
   read('web-ui/src/mobile/mobile-chat-page-runtime.js'),
+  read('web-ui/src/mobile/mobile-restart-continuity.js'),
 ].join('\n');
 const renderer = [
   read('web-ui/src/mobile/mobile-chat-renderer-runtime.js'),
@@ -50,6 +56,17 @@ const auditMaterializer = read('src/gateway/audit/materializer.ts');
 const sessionStore = read('src/gateway/session.ts');
 const webPush = read('src/gateway/notifications/web-push.ts');
 
+assert.match(router, /const foregroundActivity = createForegroundToolActivityTracker\(\)/,
+  'main chat must track open tool calls independently of visible SSE output');
+assert.match(router, /payload\.message = foregroundConnectionMessage\(activity, idleMs, now\)/,
+  'heartbeats must describe the open tool instead of claiming generic work during silence');
+assert.match(pages, /case 'heartbeat':[\s\S]{0,180}evt\.message && !reconnectStatus\.isReconnectPending\(\)[\s\S]{0,100}setChatConnectionStatus\(true, String\(evt\.message\), \{ mode: 'activity' \}\)/,
+  'mobile chat must display tool-aware heartbeat status separately from reconnect status');
+assert.match(pages, /status\?\.run\?\.checkpoint\?\.connectionMessage/,
+  'recovery must restore the active tool status before the next heartbeat arrives');
+assert.match(pages, /if \(!aiTurn\._pmRecoveryReplay && \[[\s\S]{0,300}'tool_result'[\s\S]{0,150}\]\.includes\(evt\.type\)\) clearToolActivityStatus\(\)/,
+  'a completed tool or fresh visible event must clear an obsolete waiting banner');
+
 const legacyRecoveryTurn = {
   role: 'ai',
   body: { sender: '', text: MOBILE_CONNECTION_RECOVERY_PLACEHOLDER },
@@ -77,8 +94,13 @@ assert.match(
 );
 assert.match(
   pages,
-  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,700}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
-  'cold mobile history must omit internal planned-restart checkpoint bubbles',
+  /function _mapServerHistoryToMobile\(history\)[\s\S]{0,600}const visible = mapped\.filter\(\(message\) => !_isMobileGatewayRestartCheckpointMessage\(message\)\)/,
+  'cold mobile history must omit internal restart checkpoints from the visible thread',
+);
+assert.match(
+  pages,
+  /if \(target\) _mergeMobileAssistantTurnDetails\(target, checkpoint, \{ preserveTargetText: true \}\)/,
+  'a planned restart checkpoint must fold its durable trace into the resumed assistant turn instead of rendering a separate bubble',
 );
 assert.match(
   pages,
@@ -87,8 +109,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /const restartCheckpoints = mapped\.filter\(_isMobileGatewayRestartCheckpointMessage\)[\s\S]{0,900}_mergeMobileAssistantTurnDetails\(terminalTurn, checkpoint\)/,
-  'mobile history must fold restart checkpoint activity into the terminal acknowledgement row',
+  /mapped\.forEach\(\(checkpoint, index\) =>[\s\S]{0,600}if \(candidate\?\.role === 'user'\) break;[\s\S]{0,1400}if \(target\) _mergeMobileAssistantTurnDetails\(target, checkpoint, \{ preserveTargetText: true \}\)/,
+  'mobile history may fold restart checkpoint activity only into the nearby assistant turn before another user turn',
 );
 
 assert.match(mobileRouter, /document\.getElementById\('settings-modal'\)/, 'mobile settings must reuse the full desktop settings modal when it is present');
@@ -282,13 +304,13 @@ assert.equal(coldMixedTrace[0]?.type, 'think', 'cold recovery must leave model s
 assert.equal(coldMixedTrace[0]?.text, 'Activating required tool categories', 'cold recovery must preserve the model summary text');
 await recoveryRuntime.loadToolActivityFeature();
 const readyTrace = recoveryRuntime.coalesceToolActivityEntries(recoveredLegacyTrace);
-assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'ready recovery must use the live operation renderer');
+assert.ok(!readyTrace.some((entry) => entry.activity?.kind === 'operation'), 'completed recovery calls must use one visible row');
 assert.ok(readyTrace.some((entry) => entry.activity?.kind === 'result'), 'ready recovery must use the live result renderer');
 assert.equal(readyTrace.find((entry) => entry.activity?.kind === 'result')?.activity?.action, 'browser_scroll_collect', 'unnamed recovered results must attach to the preceding operation');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
 assert.match(router, /router\.post\('\/api\/mobile\/chat\/reconcile\/:sessionId'/, 'mobile must have an explicit server reconciliation action');
 assert.match(router, /mergeHistoryWithExistingMessageMetadata\(existingHistory, rawHistory, \{[\s\S]{0,100}preserveAllExisting: isMobileHistorySyncRequest\(req\)/, 'mobile history sync must merge into durable server history rather than replacing it');
-assert.match(historyReconciliation, /options\.preserveAllExisting \|\| serverOnly/, 'truncated mobile history must preserve ordinary server messages as well as system metadata');
+assert.match(historyReconciliation, /const result = preserve \? \[\.\.\.base\] : \[\.\.\.mergedIncoming\]/, 'truncated mobile history must keep the durable server transcript as its ordering spine');
 assert.match(historyReconciliation, /incomingByKey/, 'reconnect retries must dedupe stable client message identities');
 assert.match(router, /MAIN_CHAT_ORPHAN_GRACE_MS/, 'ownerless stream/lease state must expire instead of blocking indefinitely');
 assert.match(router, /mainChatTurnCoordinator\.discard\(sid\)/, 'reconciliation must discard both a stale lease and queued stale work');
@@ -382,7 +404,7 @@ assert.match(
 assert.match(pages, /reconcileMobileChatTurn\(busySessionId\)/, 'composer gating must consult authoritative server state before queueing behind local cache');
 assert.ok(
   pages.indexOf('__pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };')
-    < pages.indexOf('selectedGateway = await probeGateway(selectedGateway);'),
+    < pages.indexOf('selectedGateway = await probeGateway(selectedGateway, { retryTransient: true });'),
   'mobile send admission must be claimed before the awaited gateway probe',
 );
 assert.match(pages, /const sendAttemptKey = `\$\{msg\}\|\$\{files\.map/, 'duplicate-send admission must remain stable while a draft session is promoted');
@@ -405,17 +427,17 @@ assert.match(
 );
 assert.match(pages, /if \(requestIndex >= 0 && _mobileMessagesRepresentSameTurn\(previousRequestTurn, msg\)\)/, 'request-id dedupe must also verify compatible assistant content');
 assert.match(pages, /Request ids identify a transport run[\s\S]{0,360}aText\.startsWith\(bText\)/, 'transport request identity must not collapse distinct durable rows');
-assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true \}\)/, 'painted transcript order must remain the hydration continuity spine');
-assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,180}candidateTimestamp <= primaryLatestTimestamp/, 'stale unmatched hydration rows must not be appended as fake new messages');
+assert.match(pages, /const base = preserveLocalHistory\s*\? _mergeMobileHistoryRecords\(durableLocal, mapped, \{ appendOnlyNewer: true, serverAuthoritativeText: true \}\)/, 'painted transcript order must remain the hydration continuity spine while completed server text stays authoritative');
+assert.match(pages, /preferIncoming && appendOnlyNewer[\s\S]{0,300}const nextAnchor = incoming\.slice\(incomingIndex \+ 1\)/, 'unmatched hydration rows must be placed next to matching transcript anchors');
 assert.doesNotMatch(pages, /_mergeMobileHistoryRecords\(mapped, durableLocal, \{ sortByTimestamp: true \}\)/, 'mixed-clock hydration must never reorder the transcript by timestamp');
 assert.match(
   pages,
-  /const separatedByUser = list\.slice\(prevIndex \+ 1, i\)[\s\S]{0,420}Math\.abs\(currentAt - previousAt\) < 30_000/,
-  'recent identical responses from duplicate admissions must collapse even when recovery placed the user turn between them',
+  /if \(separatedByUser[\s\S]{0,240}requestId !== previousRequestId[\s\S]{0,180}!\(sameDurableId \|\| sameRequest \|\| sameTimestamp\)\)/,
+  'a user turn or conflicting request must keep a later identical assistant response distinct',
 );
 assert.match(
   pages,
-  /restore user -> assistant ordering[\s\S]{0,620}list\.splice\(assistantIndex, 0, user\)/,
+  /const \[reply\] = list\.splice\(assistantIndex, 1\);[\s\S]{0,100}list\.splice\(list\.indexOf\(user\) \+ 1, 0, reply\)/,
   'recovery must restore a request-owned user turn before its assistant response',
 );
 assert.match(
@@ -591,19 +613,24 @@ const inactiveClearIndex = pages.indexOf('_clearMobileLiveRunForSession(requeste
 assert.ok(inactiveReplayIndex >= 0 && inactiveClearIndex > inactiveReplayIndex, 'inactive recovery must inspect replay/history before clearing a cached streaming turn');
 assert.match(
   pages,
-  /if \(replayStillActive \|\| \(localAiTurn\?\.streaming && !completedDurableTurn\)\)/,
+  /export function shouldHoldStreamingTurn\([\s\S]{0,400}return replayStillActive\s*\|\|\s*\(localTurnStreaming && !completedDurableTurn && !gatewayRestartContinuity\)/,
   'an inactive or recovered read must preserve the visible turn until durable completion is proven',
+);
+assert.match(
+  pages,
+  /if \(holdStreamingTurn\(\{ replayStillActive, localTurnStreaming: localAiTurn\?\.streaming, completedDurableTurn, gatewayRestartContinuity \}\)\)/,
+  'mobile recovery must route the hold decision through the shared restart-continuity policy',
 );
 assert.match(pages, /const localThreadBeforeClear = localThread\.slice\(\)/, 'inactive recovery must snapshot the live array before destructive cleanup');
 assert.match(
   pages,
-  /const localThreadForMerge = completedDurableTurn && !gatewayRestartContinuity\s*\?\s*localThread\s*:\s*localThreadBeforeClear/,
+  /const merge = resolveRestartMerge\(\{[\s\S]{0,320}completedDurableTurn,[\s\S]{0,320}gatewayRestartContinuity,/,
   'inactive recovery must merge the pre-clear snapshot for planned gateway restart continuity',
 );
 assert.match(
   pages,
-  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,2200}serverRows\.splice\(terminalIndex, 1\)/,
-  'planned gateway restart recovery must coalesce the local restart row with the durable acknowledgement',
+  /function _mergeMobileGatewayRestartContinuity\(mapped, local\)[\s\S]{0,1900}nextUserAt[\s\S]{0,1300}serverRows\.splice\(terminalIndex, 1\)/,
+  'planned gateway restart recovery must coalesce the matching earlier row even after a later user turn',
 );
 assert.match(
   pages,
@@ -651,7 +678,7 @@ assert.match(
 );
 assert.match(
   voiceRuntime,
-  /messageKind: 'steer_continuation'[\s\S]{0,360}_clientRequestId: latestAi\._clientRequestId/,
+  /messageKind: 'steer_continuation'[\s\S]{0,500}messageId: continuationRequestId[\s\S]{0,500}_clientRequestId: continuationRequestId/,
   'a steer must create a durable request-owned continuation turn',
 );
 const sameTurnStart = pages.indexOf('function _mobileMessagesRepresentSameTurn');

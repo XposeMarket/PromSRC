@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { CodexIncompleteStreamError, OpenAICodexAdapter } from './openai-codex-adapter';
+import os from 'node:os';
+import path from 'node:path';
+import { loadTokens, saveTokens } from '../auth/openai-oauth';
+import { CodexIncompleteStreamError, OpenAICodexAdapter, codexHttpErrorDetail } from './openai-codex-adapter';
+
+assert.equal(codexHttpErrorDetail('{"error":{"message":"Unsupported model sol"}}'), 'Unsupported model sol');
+assert.equal(codexHttpErrorDetail('not JSON'), '');
+assert.equal(codexHttpErrorDetail('{"error":{"message":"Bearer secret123 sk-examplekey"}}'), 'Bearer [redacted] [redacted]');
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -21,6 +28,20 @@ async function parse(chunks: string[], options?: any) {
 }
 
 async function main(): Promise<void> {
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-codex-accounts-'));
+  try {
+    const token = { access_token: 'test-access-token', refresh_token: 'test-refresh-token', expires_at: Date.now() + 3_600_000 };
+    saveTokens(authDir, token, 'connected');
+    const accountAdapter = new OpenAICodexAdapter({ configDir: authDir, accountId: 'unfinished', accountIds: ['connected'] });
+    assert.equal(await accountAdapter.testConnection(), true, 'connection test must try a connected named account');
+    assert.equal(await new OpenAICodexAdapter({ configDir: authDir, accountId: 'unfinished' }).testConnection(), false);
+    saveTokens(authDir, token);
+    assert.equal(loadTokens(authDir, 'unfinished'), null, 'an unfinished account must not inherit a legacy unscoped token');
+    assert.ok(loadTokens(authDir, 'default'), 'the default account must retain legacy token compatibility');
+  } finally {
+    fs.rmSync(authDir, { recursive: true, force: true });
+  }
+
   const completedTextEvent = JSON.stringify({
     type: 'response.completed',
     response: {
@@ -92,11 +113,11 @@ async function main(): Promise<void> {
   assert.doesNotMatch(adapterSource, /error:\s*text\.slice\(0,\s*400\)/, 'provider response bodies must not be persisted as runtime error text');
 
   const chatSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
-  const fallbackStart = chatSource.indexOf('if (!finalText || finalText.length < 5)');
+  const fallbackStart = chatSource.indexOf('if (!finalText.trim())');
   const fallbackEnd = chatSource.indexOf('if (greetingLikeTurn', fallbackStart);
   assert.ok(fallbackStart >= 0 && fallbackEnd > fallbackStart, 'missing-final fallback block must exist');
   const fallbackBlock = chatSource.slice(fallbackStart, fallbackEnd);
-  assert.match(fallbackBlock, /No final response was generated\. Please retry\./, 'missing finals must be reported explicitly');
+  assert.match(fallbackBlock, /No final response was generated\. The task may still be unfinished/, 'missing finals must be reported explicitly');
   assert.doesNotMatch(fallbackBlock, /allToolResults|\.result\b|`Done\./, 'missing finals must never synthesize prose from tool results');
 
   const providerCatchStart = chatSource.indexOf("if (err?.code === 'CODEX_INCOMPLETE_STREAM'");

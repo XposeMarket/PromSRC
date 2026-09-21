@@ -726,6 +726,18 @@ export class BrainRunner {
     this._finalizeActiveRunForShutdown(reason);
   }
 
+  /**
+   * Warm handoff: stop scheduling new Thought/Dream runs in this process but
+   * let an in-flight run finish. The replacement gateway owns scheduling now.
+   */
+  suspendScheduling(): void {
+    if (this.ticker) {
+      clearInterval(this.ticker);
+      this.ticker = null;
+    }
+    this.shuttingDown = true;
+  }
+
   private _beginActiveRun(input: Omit<ActiveBrainRun, 'shutdownFinalized' | 'usageFinished' | 'modelBusyHeld'>): void {
     this.activeRun = {
       ...input,

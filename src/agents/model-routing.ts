@@ -44,6 +44,13 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   'claude-sonnet-4-5-20250514': 'claude-sonnet-4-5-20250929',
 };
 
+const OPENAI_CODEX_MODEL_ALIASES: Record<string, string> = {
+  sol: 'gpt-5.6-sol',
+  terra: 'gpt-5.6-terra',
+  luna: 'gpt-5.6-luna',
+  astra: 'gpt-6-astra',
+};
+
 export function normalizeProviderModel(providerId: string, model: string): string {
   const normalizedProviderId = String(providerId || '').trim().toLowerCase();
   const rawModel = String(model || '').trim();
@@ -51,6 +58,9 @@ export function normalizeProviderModel(providerId: string, model: string): strin
 
   if (normalizedProviderId === 'anthropic') {
     return ANTHROPIC_MODEL_ALIASES[rawModel.toLowerCase()] || rawModel;
+  }
+  if (normalizedProviderId === 'openai_codex') {
+    return OPENAI_CODEX_MODEL_ALIASES[rawModel.toLowerCase()] || rawModel;
   }
 
   return rawModel;

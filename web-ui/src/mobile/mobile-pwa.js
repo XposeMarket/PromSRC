@@ -1,4 +1,4 @@
-const PM_PWA_VERSION = 'pm-v312-2026-09-07-mobile-controls';
+const PM_PWA_VERSION = 'pm-v314-2026-09-20-mobile-reconnect';
 const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
 window.addEventListener('beforeinstallprompt', (event) => {
@@ -39,19 +39,10 @@ async function registerMobileServiceWorker() {
   }
 }
 
-let serviceWorkerReloadGuard = false;
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (serviceWorkerReloadGuard) return;
-    serviceWorkerReloadGuard = true;
-    try {
-      const pendingUntil = Number(sessionStorage.getItem('pm_reload_pending_until') || 0);
-      if (pendingUntil > Date.now()) return;
-      sessionStorage.setItem('pm_reload_pending_until', String(Date.now() + 15_000));
-    } catch {}
-    try { window.location.reload(); } catch {}
-  });
-}
+// The shell and scripts were already fetched from the network on this load.
+// Reloading during the initial worker claim can interrupt mobile boot (and on
+// some browsers repeatedly navigate a newly paired device). Let the next
+// normal navigation pick up the active worker and content-addressed assets.
 
 if (document.readyState === 'complete') queueMicrotask(registerMobileServiceWorker);
 else window.addEventListener('load', registerMobileServiceWorker, { once: true });

@@ -14,6 +14,7 @@ export const MAIN_CHAT_STREAM_EPHEMERAL_EVENTS: ReadonlySet<string> = new Set([
   'thinking_delta',
   'reasoning_summary_delta',
   'model_stream_event',
+  'process_run_output',
 ]);
 
 export const MAIN_CHAT_WS_DIRECT_EVENTS: ReadonlySet<string> = new Set([

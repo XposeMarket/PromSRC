@@ -460,7 +460,7 @@ export function getCisSystemTools(): any[] {
         name: 'switch_model',
         description:
           'Switch the active LLM for the remainder of this turn only. Auto-reverts to the session\'s primary model after turn end — never switch back manually. ' +
-          'Call EARLY (first or second tool call) when the task is clearly lightweight. ' +
+          'Call when the available evidence shows the remaining work is suitable for a lower tier; there is no first-or-second-call deadline, so you may inspect or read first. Switching later in the same turn is valid. If the task is still uncertain, stay on the primary model. ' +
           'LOW (speed): single command, file read/summary, quick lookup, write_note only, simple one-tool tasks. ' +
           'MEDIUM (careful): multi-step work that doesn\'t need the full primary model — analysis, moderate reasoning, structured writes. ' +
           'STAY ON PRIMARY: src/ edits, proposals, deep reasoning, auth/security/build system, anything that could go wrong expensively. ' +

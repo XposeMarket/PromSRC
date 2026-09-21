@@ -1,9 +1,11 @@
 import {
   isInterruptedByRestart,
+  isPlannedRestartCheckpointAwaitingBoot,
   getRestartInterruptEpoch,
   listDurableRuntimes,
   listInterruptedRuntimes,
   markActiveRuntimesInterrupted,
+  markLocalRuntimesInterruptedForHandoff,
   markDurableRuntimeRecovered,
   type LiveRuntimeSnapshot,
 } from './live-runtime-registry';
@@ -25,6 +27,7 @@ import {
 } from './main-chat-goals';
 import { buildTaskContinuitySnapshot } from './tasks/task-continuity';
 import { appendSubagentChatMessage } from './agents-runtime/subagent-chat-store';
+import { broadcastWS } from './comms/broadcaster';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -136,6 +139,20 @@ function mirrorSessionCheckpointToAgentChat(runtime: LiveRuntimeSnapshot): void 
   });
 }
 
+// True only for a main-chat turn that EXPLICITLY owns its restart, i.e. the turn
+// itself called gateway_restart / prom_apply_dev_changes.
+//
+// This must use the same ownership test as deferred-queue admission. The broader
+// `plannedRestartToolName()` also accepts a bare `interruptReason`, but startup
+// recovery defaults that field to 'gateway_restart' for ANY runtime it finds
+// interrupted - including supervisor crash recovery, where nothing was planned.
+// Classifying those as planned would hand crash recovery the short planned-restart
+// cooldown, which exists precisely to avoid recreating a CPU-bound backlog.
+export function isPlannedMainChatRestartRuntime(runtime: LiveRuntimeSnapshot): boolean {
+  return runtime?.kind === 'main_chat' && !!explicitlyOwnedMainChatRestartToolName(runtime);
+}
+
+
 function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
   const candidates = [
     runtime.checkpoint?.toolName,
@@ -179,6 +196,44 @@ function isPlainGatewayRestartTask(task: TaskRecord): boolean {
   const text = `${task.title || ''} ${task.prompt || ''}`.toLowerCase().replace(/\s+/g, ' ').trim();
   if (!/\b(restart|reboot)\b.*\b(gateway|prometheus|server)\b|\b(gateway|prometheus|server)\b.*\b(restart|reboot)\b/.test(text)) return false;
   return !/\b(build|compile|update|upgrade|apply|edit|change|fix|install|deploy|then|afterwards?|after that|and then|verify files?|run tests?)\b/.test(text);
+}
+
+/**
+ * Bridge used by the chat router to mirror a restart suspension/resumption into
+ * the durable main-chat stream. It is registered at startup so this module does
+ * not need a circular import of the router.
+ */
+type RestartContinuityEmitter = (payload: Record<string, any>) => void;
+let _emitRestartContinuity: RestartContinuityEmitter | undefined;
+
+export function registerRestartContinuityEmitter(emitter: RestartContinuityEmitter | undefined): void {
+  _emitRestartContinuity = emitter;
+}
+
+/**
+ * A planned mid-turn restart must not look like a dropped connection. Emitting
+ * the suspension before shutdown lets attached clients keep the assistant turn,
+ * its activity stream, and the busy composer open across the process swap.
+ */
+function announceRestartContinuitySuspended(runtime: LiveRuntimeSnapshot, reason: string): void {
+  const sessionId = String(runtime.sessionId || '').trim();
+  if (!sessionId) return;
+  // Only a self-triggered restart is a true suspension. A crash keeps the old
+  // explicit-interruption treatment so the user still learns something broke.
+  if (!plannedRestartToolName(runtime)) return;
+  const payload = {
+    sessionId,
+    phase: 'suspended' as const,
+    reason,
+    priorRuntimeId: runtime.id,
+    clientRequestId: String(runtime.clientRequestId || runtime.recoveryData?.clientRequestId || '').trim() || undefined,
+    plannedRestartTool: plannedRestartToolName(runtime),
+    at: Date.now(),
+  };
+  try { _emitRestartContinuity?.(payload); } catch {}
+  try {
+    broadcastWS({ type: 'restart_continuity', ...payload });
+  } catch {}
 }
 
 type RestartCheckpointPhase = 'initiated' | 'recovered';
@@ -326,9 +381,18 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   });
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
+  // A self-triggered mid-turn restart is a suspension of the SAME turn, so the
+  // checkpoint exists for durable recovery evidence only. Tagging it lets every
+  // client fold it into the turn it belongs to instead of rendering a bubble.
+  const plannedContinuityCheckpoint = runtime.kind === 'main_chat' && !!plannedRestartToolName(runtime);
   addMessage(runtime.sessionId, {
     role: 'assistant',
-    messageKind: runtime.kind === 'main_chat_goal' ? 'goal_restart_checkpoint' : undefined,
+    messageKind: runtime.kind === 'main_chat_goal'
+      ? 'goal_restart_checkpoint'
+      : plannedContinuityCheckpoint ? 'restart_checkpoint' : undefined,
+    restartContinuity: plannedContinuityCheckpoint
+      ? { phase: 'suspended', priorRuntimeId: runtime.id, reason }
+      : undefined,
     activeRunKind: runtime.kind === 'main_chat_goal' ? 'main_chat_goal' : undefined,
     goalId: runtime.checkpoint?.goalId,
     goalTurnNumber: runtime.checkpoint?.goalTurnNumber,
@@ -480,7 +544,22 @@ function pauseTaskForRestart(task: TaskRecord, runtime: LiveRuntimeSnapshot, rea
 }
 
 export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
-  const interrupted = markActiveRuntimesInterrupted(reason);
+  return finalizeInterruptedRuntimesForRestart(markActiveRuntimesInterrupted(reason), reason);
+}
+
+/**
+ * Warm handoff: interrupt only the runtimes that asked for this restart (they
+ * must resume on the replacement's new code) and leave every other runtime
+ * running in this process until it finishes on its own.
+ */
+export function prepareInitiatingRuntimesForGatewayHandoff(
+  reason: string,
+  isInitiating: (runtime: LiveRuntimeSnapshot) => boolean,
+): LiveRuntimeSnapshot[] {
+  return finalizeInterruptedRuntimesForRestart(markLocalRuntimesInterruptedForHandoff(reason, isInitiating), reason);
+}
+
+function finalizeInterruptedRuntimesForRestart(interrupted: LiveRuntimeSnapshot[], reason: string): LiveRuntimeSnapshot[] {
   for (const runtime of interrupted) {
     try {
       if (isTaskRuntime(runtime) && runtime.taskId) {
@@ -497,6 +576,10 @@ export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdo
 
       if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
         pauseMainChatGoalRuntimeForRestart(runtime, reason);
+        // A planned mid-turn restart is a suspension, not an ending. Tell every
+        // attached client to hold the streaming turn open before this process
+        // exits, so the socket drop reads as a pause instead of a failure.
+        if (runtime.kind === 'main_chat') announceRestartContinuitySuspended(runtime, reason);
         if (runtime.kind === 'main_chat') addCheckpointMessageToSession(runtime, reason);
       }
     } catch (err: any) {
@@ -538,7 +621,12 @@ function resolveActiveRestartEpoch(): number {
   let max = 0;
   for (const runtime of listDurableRuntimes()) {
     const rd = runtime.recoveryData || {};
-    if (rd.recoveredAt || rd.recovery) continue;
+    // A planned-restart checkpoint is marked 'chat_checkpointed' by startup
+    // runtime-recovery BEFORE BOOT runs, precisely because BOOT owns resuming it.
+    // Skipping it here would make this scan return 0 for the exact restart we are
+    // recovering from, and `isMainChatHotRestartRecoveryCandidate()` would then
+    // reject every candidate on `sinceEpoch <= 0` - silently dropping the turn.
+    if ((rd.recoveredAt || rd.recovery) && !isPlannedRestartCheckpointAwaitingBoot(runtime)) continue;
     const epoch = runtimeRestartEpoch(runtime);
     if (epoch > max) max = epoch;
   }
@@ -553,7 +641,9 @@ function isMainChatHotRestartRecoveryCandidate(runtime: LiveRuntimeSnapshot, sin
   // belongs to this restart epoch (else it's a stale/older checkpoint).
   const recovery = String(runtime.recoveryData?.recovery || '').trim();
   if (recovery !== 'chat_checkpointed') return false;
-  if (sinceEpoch <= 0) return true;
+  // No interrupted runtime from this shutdown means there is no restart
+  // recovery epoch. An older checkpoint must not manufacture BOOT work.
+  if (sinceEpoch <= 0) return false;
   return runtimeRestartEpoch(runtime) >= sinceEpoch;
 }
 
@@ -739,6 +829,45 @@ export function resumePlannedRestartMainChats(
 }
 
 /**
+ * Consume planned-restart checkpoints that BOOT resolved WITHOUT resuming a
+ * foreground turn.
+ *
+ * A plain "restart the gateway" request is already complete once the replacement
+ * gateway is up: BOOT answers it deterministically and deliberately does not
+ * replay the original turn, because that turn's only intended action was the
+ * restart itself. That outcome still has to dispose of the checkpoint. Otherwise
+ * the record keeps `recovery: 'chat_checkpointed'` forever, and retention - which
+ * must treat an unclaimed planned checkpoint as live work so BOOT can find it -
+ * would pin that entry in the durable ledger indefinitely.
+ *
+ * Every BOOT outcome therefore has an explicit disposition: resumed turns are
+ * stamped 'chat_planned_restart_retriggered' by resumePlannedRestartMainChats(),
+ * and acknowledgement-only restarts are stamped here.
+ */
+export function acknowledgePlannedRestartMainChats(runtimeIds: string[]): string[] {
+  const requested = new Set((runtimeIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  if (!requested.size) return [];
+
+  const acknowledged: string[] = [];
+  for (const runtime of listDurableRuntimes()) {
+    if (!requested.has(String(runtime.id || '').trim())) continue;
+    if (runtime.kind !== 'main_chat' && runtime.kind !== 'main_chat_goal') continue;
+    if (String(runtime.recoveryData?.recovery || '') !== 'chat_checkpointed') continue;
+    try {
+      markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+        recovery: 'chat_planned_restart_acknowledged',
+        sessionId: runtime.sessionId,
+        recoveredAt: Date.now(),
+      });
+      acknowledged.push(String(runtime.id));
+    } catch (err: any) {
+      console.warn('[runtime-recovery] Planned restart acknowledgement failed:', runtime.id, err?.message || err);
+    }
+  }
+  return acknowledged;
+}
+
+/**
  * Start one foreground recovery that was held back during gateway startup.
  * The original durable runtime remains recoverable until the replacement
  * execution owner has actually been admitted.
@@ -772,6 +901,8 @@ export function recoverInterruptedRuntimes(opts: {
   retriggerInterruptedMainChat?: (runtime: LiveRuntimeSnapshot) => boolean;
   /** Keep foreground model turns out of the pre-listener startup window. */
   deferMainChatRetrigger?: boolean;
+  /** Warm handoff: a live previous gateway still runs this runtime; do not recover it. */
+  isHostedElsewhere?: (runtime: LiveRuntimeSnapshot) => boolean;
   notify?: (message: string) => void;
 } = {}): {
   inspected: number;
@@ -782,7 +913,8 @@ export function recoverInterruptedRuntimes(opts: {
   crashRecoveredGoalSessionIds: string[];
 } {
   const runtimes = listInterruptedRuntimes()
-    .filter((runtime) => Number(runtime.pid || 0) !== process.pid);
+    .filter((runtime) => Number(runtime.pid || 0) !== process.pid)
+    .filter((runtime) => !(opts.isHostedElsewhere?.(runtime) === true));
   const resumedTasks: string[] = [];
   const retriggeredChats: string[] = [];
   const interruptedChats: string[] = [];

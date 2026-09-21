@@ -2,6 +2,8 @@ import { api, ENDPOINTS } from '../api.js';
 import { escHtml } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 
+const MAX_LIVE_TERMINAL_CHARS = 128 * 1024;
+
 function fmtTime(value) {
   if (!value) return '';
   try { return new Date(value).toLocaleTimeString(); } catch { return ''; }
@@ -41,7 +43,11 @@ function appendTerminalChunk(runId, chunk, stream = 'stdout') {
   const tab = activeTab(runId);
   if (tab !== 'combined' && tab !== stream) return;
   const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  el.textContent = `${el.textContent === '(no output yet)' || el.textContent === '(no output)' ? '' : el.textContent}${chunk}`;
+  const previous = el.textContent === '(no output yet)' || el.textContent === '(no output)' ? '' : el.textContent;
+  const next = `${previous}${chunk}`;
+  el.textContent = next.length > MAX_LIVE_TERMINAL_CHARS
+    ? `[Older live output hidden; open the saved log for more.]\n${next.slice(-MAX_LIVE_TERMINAL_CHARS)}`
+    : next;
   if (wasNearBottom) el.scrollTop = el.scrollHeight;
 }
 

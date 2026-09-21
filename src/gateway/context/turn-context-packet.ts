@@ -54,6 +54,8 @@ export const WORKING_CONTEXT_PACKET_LIMIT = 5;
 export const WORKING_CONTEXT_PACKET_MAX_CHARS = 16_000;
 export const WORKING_CONTEXT_PROMPT_MAX_CHARS = 9_000;
 
+const CONTINUITY_COMMAND_RE = /(?:\r?\n|&&|\|\||[|<>]|(?:^|\s)(?:add-content|set-content|out-file|convertto-json|invoke-[a-z]+|powershell(?:\.exe)?|pwsh|cmd(?:\.exe)?|bash|zsh|sh|node|npm|npx|python(?:\.exe)?|git|cargo|go|dotnet|pytest|tsc)\b|-command\b|@\s*['"])/i;
+
 function compactText(value: unknown, maxChars: number): string {
   const text = String(value ?? '')
     .replace(/\r/g, '')
@@ -69,6 +71,27 @@ function compactList(values: Array<unknown> | undefined, maxItems = 8, maxChars 
   const seen = new Set<string>();
   for (const value of Array.isArray(values) ? values : []) {
     const item = compactText(value, maxChars);
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function compactActivityText(value: unknown, maxChars: number): string {
+  const text = compactText(value, maxChars);
+  if (!text || !CONTINUITY_COMMAND_RE.test(text)) return text;
+  const marker = text.search(CONTINUITY_COMMAND_RE);
+  const prefix = marker > 0 ? text.slice(0, marker).replace(/[\s:|=-]+$/, '').trim() : '';
+  return prefix ? `${prefix}: [shell command omitted; inspect tool observations for the exact command]` : '[shell command omitted; inspect tool observations for the exact command]';
+}
+
+function compactActivityList(values: Array<unknown> | undefined, maxItems = 8, maxChars = 360): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of Array.isArray(values) ? values : []) {
+    const item = compactActivityText(value, maxChars);
     if (!item || seen.has(item)) continue;
     seen.add(item);
     out.push(item);
@@ -104,13 +127,13 @@ export function normalizeTurnContextPacket(input: any): TurnContextPacket | null
     status,
     request,
     reasoningSummary: normalizeReasoningSummary(input.reasoningSummary),
-    findings: compactList(input.findings),
-    decisions: compactList(input.decisions),
-    completedActions: compactList(input.completedActions),
-    toolState: compactText(input.toolState, 2_400),
-    progressState: compactText(input.progressState, 1_800),
-    uncertainties: compactList(input.uncertainties),
-    pendingTasks: compactList(input.pendingTasks),
+    findings: compactActivityList(input.findings),
+    decisions: compactActivityList(input.decisions),
+    completedActions: compactActivityList(input.completedActions),
+    toolState: compactActivityText(input.toolState, 2_400),
+    progressState: compactActivityText(input.progressState, 1_800),
+    uncertainties: compactActivityList(input.uncertainties),
+    pendingTasks: compactActivityList(input.pendingTasks),
     continueFromHere: compactText(input.continueFromHere, 900)
       || 'Continue from the recorded state; verify any action that was in flight before taking it again.',
     abortReason: compactText(input.abortReason, 260),
@@ -122,11 +145,11 @@ export function normalizeTurnContextPacket(input: any): TurnContextPacket | null
   packet.reasoningSummary = normalizeReasoningSummary(packet.reasoningSummary, 2_200);
   packet.toolState = compactText(packet.toolState, 1_400);
   packet.progressState = compactText(packet.progressState, 1_000);
-  packet.findings = compactList(packet.findings, 5, 240);
-  packet.decisions = compactList(packet.decisions, 5, 240);
-  packet.completedActions = compactList(packet.completedActions, 6, 240);
-  packet.uncertainties = compactList(packet.uncertainties, 5, 240);
-  packet.pendingTasks = compactList(packet.pendingTasks, 5, 240);
+  packet.findings = compactActivityList(packet.findings, 5, 240);
+  packet.decisions = compactActivityList(packet.decisions, 5, 240);
+  packet.completedActions = compactActivityList(packet.completedActions, 6, 240);
+  packet.uncertainties = compactActivityList(packet.uncertainties, 5, 240);
+  packet.pendingTasks = compactActivityList(packet.pendingTasks, 5, 240);
   return packet;
 }
 

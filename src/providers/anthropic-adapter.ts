@@ -16,14 +16,18 @@
  *   - anthropic-version: 2023-06-01
  */
 
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
   GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ToolCall,
 } from './LLMProvider';
+import { PROMPT_CACHE_MARKER } from './LLMProvider';
 import {
-  buildAuthHeaders, getValidToken, loadTokens,
+  buildAuthHeaders, loadTokens,
   ANTHROPIC_API_BASE,
 } from '../auth/anthropic-oauth';
+import type { AnthropicTokens } from '../auth/anthropic-oauth';
 import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
@@ -442,6 +446,16 @@ export class AnthropicAdapter implements LLMProvider {
     // Flush any remaining tool results at end of message list
     flushToolResults();
 
+    // Runtime acknowledgements and orphan tool notes can leave an assistant
+    // tail after a steer. This adapter never intentionally requests prefill.
+    // Preserve that history, but end the request with a user continuation.
+    if (anthropicMessages.at(-1)?.role === 'assistant') {
+      anthropicMessages.push({
+        role: 'user',
+        content: 'Continue the active user request from the completed results above.',
+      });
+    }
+
     // Prompt-cache breakpoint #3 (rolling history): tag the last content block of
     // the final message. Anthropic caches the longest matching prefix, so each new
     // turn reads the prior conversation from cache and only the newest delta is
@@ -566,10 +580,10 @@ export class AnthropicAdapter implements LLMProvider {
 
   // Only add interleaved-thinking beta when extended thinking is actually enabled.
   // Adding it unconditionally causes 429s on OAuth tokens.
-  private buildHeaders(model: string, extendedThinkingEnabled = false, fastSpeed = false): Record<string, string> {
+  private buildHeaders(model: string, extendedThinkingEnabled = false, fastSpeed = false, tokens?: AnthropicTokens | null): Record<string, string> {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
-      : buildAuthHeaders(this.configDir!, this.accountId);
+      : buildAuthHeaders(this.configDir!, this.accountId, tokens);
     const isThinkingGeneration = /claude-(sonnet|opus)-4-(6|7|8)/.test(model);
     if (isThinkingGeneration && extendedThinkingEnabled) {
       const existing = headers['anthropic-beta'];
@@ -633,7 +647,10 @@ export class AnthropicAdapter implements LLMProvider {
       && (anthropicCfg.extended_thinking === true || !!options?.think);
 
     const fastSpeed = normalizeSpeed('anthropic', model, options?.speed || anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
-    const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed);
+    const vaultTokens = !this.directConfig && this.configDir
+      ? loadTokens(this.configDir, this.accountId)
+      : null;
+    const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed, vaultTokens);
     const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
 
     const body: any = {
@@ -645,15 +662,11 @@ export class AnthropicAdapter implements LLMProvider {
     const tools = this.buildTools(options?.tools);
     if (tools) body.tools = tools;
 
-    // Subscription OAuth gate: Anthropic only routes requests to Pro/Max
-    // subscription quota when the FIRST system block is the Claude Code identity
-    // preamble. Without it, Sonnet/Opus return either a generic 429 "Error" or
-    // a 400 "out of extra usage" (the gate masquerades as a quota error). The
-    // preamble must be sent on EVERY OAuth request — including subagent calls
-    // that may have empty system prompts. API keys don't need this.
-    const isOAuth = !this.directConfig
-      && this.configDir
-      && loadTokens(this.configDir, this.accountId)?.auth_type === 'setup_token';
+    // Keep the Claude Code identity block first for setup-token requests,
+    // including calls with an otherwise empty system prompt. A provider-side
+    // usage rejection still needs its own diagnosis; this block does not prove
+    // which account or usage pool Anthropic applied.
+    const isOAuth = !this.directConfig && !!headers['Authorization'];
     const claudeCodePreamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
 
     if (system) {
@@ -667,6 +680,9 @@ export class AnthropicAdapter implements LLMProvider {
       }
     } else if (isOAuth) {
       body.system = [claudeCodePreamble];
+    }
+    if (isOAuth && body.system?.[0]?.text !== claudeCodePreamble.text) {
+      throw new Error('Claude setup-token request is missing its first system block.');
     }
 
     // `output_config.effort` only goes to models that accept it natively
@@ -714,6 +730,33 @@ export class AnthropicAdapter implements LLMProvider {
       console.log(`[anthropic-debug] model=${model} isOAuth=${isOAuth} system=${sysPreview} auth=${authHdrType} ua=${uaHdr} beta=${betaHdr} headers=[${headerKeys}] tools=${tools?.length || 0} max_tokens=${body.max_tokens}`);
     } catch {}
 
+    const rejectRequest = async (response: Response): Promise<never> => {
+      const raw = await response.text().catch(() => '');
+      try {
+        const payload = JSON.parse(raw);
+        if (this.configDir) {
+          const logDir = join(this.configDir, 'logs');
+          mkdirSync(logDir, { recursive: true });
+          appendFileSync(join(logDir, 'anthropic-request-errors.ndjson'), JSON.stringify({
+            at: new Date().toISOString(),
+            status: response.status,
+            requestId: String(payload?.request_id || response.headers.get('request-id') || '').slice(0, 100),
+            errorType: String(payload?.error?.type || '').slice(0, 100),
+            model,
+            accountId: this.accountId || null,
+            authMode: isOAuth ? 'setup_token' : (headers['x-api-key'] ? 'api_key' : 'other'),
+            firstSystemIsPreamble: body.system?.[0]?.text === claudeCodePreamble.text,
+            systemBlocks: Array.isArray(body.system) ? body.system.length : 0,
+            systemChars: Array.isArray(body.system) ? body.system.reduce((sum: number, block: any) => sum + String(block?.text || '').length, 0) : 0,
+            messageCount: body.messages.length,
+            toolCount: tools?.length || 0,
+            requestBytes: Buffer.byteLength(JSON.stringify(body)),
+          }) + '\n', 'utf8');
+        }
+      } catch { /* Diagnostics must never change provider handling. */ }
+      throw new Error(`${this.id} API error ${response.status}: ${raw.slice(0, 500)}`);
+    };
+
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
       body.stream = true;
@@ -721,12 +764,11 @@ export class AnthropicAdapter implements LLMProvider {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(180_000),
+        signal: options?.abortSignal
+          ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
+          : AbortSignal.timeout(180_000),
       });
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
-      }
+      if (!response.ok) await rejectRequest(response);
       return this.parseStreamingResponse(response, model, options);
     }
 
@@ -734,13 +776,12 @@ export class AnthropicAdapter implements LLMProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(180_000),
+      signal: options?.abortSignal
+        ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
+        : AbortSignal.timeout(180_000),
     });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`${this.id} API error ${response.status}: ${text.slice(0, 500)}`);
-    }
+    if (!response.ok) await rejectRequest(response);
 
     const data = await response.json() as any;
     return this.parseResponse(data);
@@ -763,14 +804,15 @@ export class AnthropicAdapter implements LLMProvider {
     let cacheWriteTokens = 0;
     let stopReason: unknown;
     let stopDetails: any;
+    let messageStopped = false;
+    let invalidToolInput = false;
     // Track per-block accumulation: blockIndex → { type, id, name, inputJson }
     const blocks: Record<number, any> = {};
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += done ? decoder.decode() + '\n' : decoder.decode(value, { stream: true });
 
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -779,9 +821,14 @@ export class AnthropicAdapter implements LLMProvider {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6).trim();
           if (!data || data === '[DONE]') continue;
-          try {
-            const event = JSON.parse(data);
+          let event: any;
+          try { event = JSON.parse(data); } catch { continue; }
             const type = event.type as string;
+
+            if (type === 'error') {
+              throw new Error(`${this.id} stream error: ${String(event.error?.type || 'unknown')}: ${String(event.error?.message || 'Provider stream failed').slice(0, 500)}`);
+            }
+            if (type === 'message_stop') messageStopped = true;
 
             if (type === 'message_start' && event.message?.usage) {
               const usage = event.message.usage;
@@ -807,6 +854,8 @@ export class AnthropicAdapter implements LLMProvider {
                 id:   block.id,
                 name: block.name,
                 inputJson: '',
+                initialInput: block.input,
+                stopped: false,
               };
               if (block.type === 'tool_use') {
                 options.onModelEvent?.({ type: 'tool_call_start', id: block.id || `tool_${idx}`, name: block.name || '', nativeType: 'content_block_start.tool_use', provider: this.id, model });
@@ -841,9 +890,16 @@ export class AnthropicAdapter implements LLMProvider {
             if (type === 'content_block_stop') {
               const idx = event.index ?? 0;
               const block = blocks[idx];
+              if (block) block.stopped = true;
               if (block?.type === 'tool_use') {
-                let parsedInput: any = {};
-                try { parsedInput = JSON.parse(block.inputJson || '{}'); } catch { parsedInput = {}; }
+                let parsedInput: any;
+                try {
+                  parsedInput = block.inputJson ? JSON.parse(block.inputJson) : (block.initialInput || {});
+                  if (!parsedInput || typeof parsedInput !== 'object' || Array.isArray(parsedInput)) throw new Error('Invalid tool input');
+                } catch {
+                  invalidToolInput = true;
+                  continue;
+                }
                 toolCalls.push({
                   id:   block.id || `call_${Date.now()}`,
                   type: 'function',
@@ -863,10 +919,8 @@ export class AnthropicAdapter implements LLMProvider {
                 });
               }
             }
-          } catch {
-            // Skip malformed SSE lines
-          }
         }
+        if (done) break;
       }
     } finally {
       reader.releaseLock();
@@ -874,6 +928,15 @@ export class AnthropicAdapter implements LLMProvider {
 
     const refusal = this.refusalText(stopReason, stopDetails);
     if (refusal && !textContent) options.onToken?.(refusal);
+
+    // Never execute a partial batch or fabricate {} for truncated arguments.
+    const incomplete = !messageStopped || invalidToolInput
+      || Object.values(blocks).some(block => block.type === 'tool_use' && !block.stopped);
+    if (incomplete) toolCalls.length = 0;
+    const nativeStopReason = typeof stopReason === 'string' ? stopReason : undefined;
+    const effectiveStopReason = incomplete && nativeStopReason !== 'max_tokens' && nativeStopReason !== 'refusal'
+      ? 'incomplete_stream' : nativeStopReason;
+    console.log(`[anthropic] response stop_reason=${effectiveStopReason || 'unknown'} output_tokens=${outputTokens} tools=${toolCalls.length} incomplete=${incomplete}`);
 
     const message: ChatMessage = {
       role:       'assistant',
@@ -884,6 +947,7 @@ export class AnthropicAdapter implements LLMProvider {
       message,
       thinking: thinking || undefined,
       usage: this.mergeStreamingUsage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+      stopReason: effectiveStopReason,
     };
   }
 
@@ -947,7 +1011,7 @@ export class AnthropicAdapter implements LLMProvider {
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
 
-    return { message, thinking: thinking || undefined, usage: this.parseUsage(data.usage) };
+    return { message, thinking: thinking || undefined, usage: this.parseUsage(data.usage), stopReason: data.stop_reason || undefined };
   }
 
   // ─── Generate (single prompt) ────────────────────────────────────────────────
@@ -979,25 +1043,45 @@ export class AnthropicAdapter implements LLMProvider {
 
   // ─── Test Connection ─────────────────────────────────────────────────────────
 
-  async testConnection(): Promise<boolean> {
+  async diagnoseConnection(model = 'claude-haiku-4-5-20251001', variant: 'plain' | 'matched-skill' = 'plain'): Promise<{
+    success: boolean;
+    model: string;
+    variant: string;
+    error?: string;
+    requestId?: string;
+  }> {
     try {
-      if (!this.directConfig) {
-        getValidToken(this.configDir!, this.accountId);
-      }
-      const headers = this.buildHeaders('claude-haiku-4-5-20251001', false);
-      const response = await fetch(this.getMessagesEndpoint(), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model:      this.directConfig?.staticModels?.[0] || 'claude-haiku-4-5-20251001',
-          max_tokens: 10,
-          messages:   [{ role: 'user', content: 'hi' }],
-        }),
-        signal: AbortSignal.timeout(15_000),
+      const messages: ChatMessage[] = variant === 'matched-skill'
+        ? [
+            { role: 'system', content: `Stable instructions${PROMPT_CACHE_MARKER}Matched skill reference: imagegen` },
+            { role: 'user', content: 'Use the imagegen skill. Reply OK.' },
+          ]
+        : [{ role: 'user', content: 'Reply OK.' }];
+      await this.chat(messages, model, {
+        think: false,
+        max_tokens: 32,
       });
-      return response.ok;
-    } catch {
-      return false;
+      return { success: true, model, variant };
+    } catch (error: any) {
+      const raw = String(error?.message || error);
+      const match = raw.match(/API error \d+: (\{.*\})$/s);
+      if (match) {
+        try {
+          const payload = JSON.parse(match[1]);
+          return {
+            success: false,
+            model,
+            variant,
+            error: String(payload?.error?.message || payload?.error?.type || 'Anthropic rejected the request').slice(0, 300),
+            requestId: String(payload?.request_id || '').slice(0, 100) || undefined,
+          };
+        } catch { /* Keep a concise generic error below. */ }
+      }
+      return { success: false, model, variant, error: raw.slice(0, 300) };
     }
+  }
+
+  async testConnection(): Promise<boolean> {
+    return (await this.diagnoseConnection(this.directConfig?.staticModels?.[0] || 'claude-haiku-4-5-20251001')).success;
   }
 }

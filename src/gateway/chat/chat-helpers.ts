@@ -339,14 +339,41 @@ export function isAllowedShellCommand(rawCmd: string): boolean {
   return segments.length > 0 && segments.every(isAllowedShellSegment);
 }
 
-const BLOCKED_PATTERNS = ['format', 'shutdown', 'restart'];
+/**
+ * Destructive commands that must never run from a shell tool.
+ *
+ * These are matched as whole tokens against the command, so bare English words
+ * blocked legitimate work: a `git commit -m "...grep compaction, output
+ * format..."` message and a `Select-String -Pattern "compact|format"` probe
+ * were both rejected because they contained the word "format". "restart" hit
+ * anything mentioning a gateway restart.
+ *
+ * Each entry is a command invocation, not a vocabulary word. Entries with a
+ * space are matched as an ordered token sequence, so `format c:` still blocks
+ * `format c:` and `format /fs:ntfs c:` without blocking prose.
+ */
+const BLOCKED_PATTERNS = [
+  'format c:',
+  'format d:',
+  'format /q',
+  'format /fs',
+  'mkfs',
+  'diskpart',
+  'shutdown /s',
+  'shutdown /r',
+  'shutdown -h',
+  'shutdown -r',
+  'shutdown now',
+  'stop-computer',
+  'restart-computer',
+];
 
 async function runCommandCaptured(
   command: string,
   cwd: string,
   timeoutMs = 120000,
-  options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean } = {},
-): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason: ProcessTerminationReason; signal: NodeJS.Signals | number | null; noOutputTimedOut: boolean; runId?: string; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }> {
+  options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean; yieldTimeMs?: number; onOutput?: (event: { runId: string; stream: 'stdout' | 'stderr' | 'combined'; chunk: string; sequence: number }) => void } = {},
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: ProcessTerminationReason; signal: NodeJS.Signals | number | null; noOutputTimedOut: boolean; runId?: string; yielded?: boolean; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }> {
   const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
   const run = await getProcessSupervisor().spawn({
     command,
@@ -361,8 +388,34 @@ async function runCommandCaptured(
     workspacePath: options.workspacePath || getConfig().getWorkspacePath(),
     trackWorkspaceChanges: options.trackWorkspaceChanges === true
       || (options.trackWorkspaceChanges !== false && shouldTrackTerminalWorkspaceChanges(command)),
+    onOutput: options.onOutput,
   });
-  const exit = await run.wait();
+  let yieldTimer: NodeJS.Timeout | null = null;
+  const yieldTimeMs = Math.max(0, Number(options.yieldTimeMs || 0));
+  const exit = yieldTimeMs > 0
+    ? await Promise.race([
+        run.wait(),
+        new Promise<null>((resolve) => {
+          yieldTimer = setTimeout(() => resolve(null), yieldTimeMs);
+          yieldTimer.unref?.();
+        }),
+      ])
+    : await run.wait();
+  if (yieldTimer) clearTimeout(yieldTimer);
+  if (!exit) {
+    return {
+      stdout: String(run.record.outputPreview || '').trim(),
+      stderr: '',
+      code: null,
+      timedOut: false,
+      // No termination has occurred; the supervised process remains live.
+      signal: null,
+      noOutputTimedOut: false,
+      runId: run.runId,
+      yielded: true,
+      workspacePath: run.record.workspacePath,
+    };
+  }
   return {
     stdout: exit.stdout.trim(),
     stderr: exit.stderr.trim(),

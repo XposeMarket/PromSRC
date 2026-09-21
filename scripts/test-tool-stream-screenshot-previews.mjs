@@ -7,12 +7,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const router = read('src/gateway/routes/chat.router.ts');
+const analysisPreview = read('src/gateway/media-analysis-preview.ts');
+const mediaExecutor = read('src/gateway/agents-runtime/capabilities/web-media-executor.ts');
 const durableTrace = read('src/gateway/durable-chat-trace.ts');
 const executor = read('src/gateway/agents-runtime/subagent-executor.ts');
 const desktop = read('web-ui/src/pages/ChatPage.js');
 const mobileApi = read('web-ui/src/mobile/mobile-api.js');
 const mobile = read('web-ui/src/mobile/mobile-pages.js');
 const mobileRuntime = read('web-ui/src/mobile/mobile-chat-renderer-runtime.js');
+const mobilePageRuntime = read('web-ui/src/mobile/mobile-chat-page-runtime.js');
+const desktopSendRuntime = read('web-ui/src/features/chat/runtime/desktop-send-chat-runtime.js');
 
 assert.match(
   router,
@@ -39,16 +43,21 @@ assert.match(router, /function buildDurableToolStreamTrace\([\s\S]*?buildDurable
 assert.match(durableTrace, /eventType === 'vision_injected'/, 'the shared durable trace adapter must retain screenshot-bearing traces');
 assert.match(router, /liveTraceEntries: durableToolStreamTrace/, 'completed assistant history must include the durable screenshot trace');
 assert.match(router, /const executedToolName = String\(toolResult\?\.name \|\| toolName/, 'unified browser and desktop wrappers must use their executed screenshot identity');
-assert.match(router, /function buildMediaAnalysisPreviewPayloads\([\s\S]*?\['analyze_image', 'analyze_video'\]/, 'image and video analysis tools must build visual preview payloads');
+assert.match(analysisPreview, /function buildMediaAnalysisPreviewPayloads\([\s\S]*?\['analyze_image', 'analyze_video', 'video_analyze_imported_video'\]/, 'image and video analysis tools must build visual preview payloads');
 assert.match(router, /analysisPreviews\.forEach\([\s\S]{0,500}?source: 'media_analysis'/, 'analysis visuals must emit after their tool result through the shared vision stream');
-assert.match(router, /contact_sheets[\s\S]{0,500}?sample_frames/, 'video previews must prefer contact sheets and fall back to sampled frames');
-assert.match(router, /\/api\/canvas\/inline\?path=/, 'analysis previews must use bounded same-origin media URLs instead of embedding large sheets in stream history');
+assert.match(router, /supportsDirectMediaObservation: currentModelCapabilities\.hasVision/, 'only a vision-capable continuation may opt into direct media inspection');
+assert.match(router, /await buildDirectMediaObservationMessage\(toolName,[\s\S]{0,160}?messages\.push\(observation\)/, 'prepared visuals must reach the model continuation, not just the UI');
+assert.match(router, /const appendObservationArtifacts[\s\S]{0,500}?\['analyze_image', 'analyze_video', 'video_analyze_imported_video'\][\s\S]{0,150}?maybeAppendVisionScreenshotForTool/, 'main tool results must run media injection even when browser observation policy selects none');
+assert.match(analysisPreview, /contact_sheets[\s\S]{0,500}?sample_frames/, 'video previews must prefer contact sheets and fall back to sampled frames');
+assert.match(analysisPreview, /\/api\/canvas\/inline\?path=/, 'analysis previews must use bounded same-origin media URLs instead of embedding large sheets in stream history');
+assert.match(mediaExecutor, /case 'analyze_image':[\s\S]{0,900}?data: toolResult\.success === true \? toolResult\.data : undefined/, 'the active image capability must preserve preview data');
+assert.match(mediaExecutor, /case 'analyze_video':[\s\S]{0,2400}?data: toolResult\.success === true \? toolResult\.data : undefined/, 'the active video capability must preserve preview data');
 assert.match(executor, /case 'analyze_image':[\s\S]{0,900}?data: toolResult\.success === true \? toolResult\.data : undefined/, 'analyze_image must preserve structured visual artifacts for preview emission');
 assert.match(executor, /case 'analyze_video':[\s\S]{0,1600}?data: toolResult\.success === true \? toolResult\.data : undefined/, 'analyze_video must preserve contact-sheet and frame metadata for preview emission');
 
-assert.match(mobile, /case 'vision_injected':[\s\S]{0,180}?_appendMobileVisionTrace\(aiTurn, evt\)/, 'mobile live streams must append screenshot previews');
+assert.match(mobilePageRuntime, /case 'vision_injected':[\s\S]{0,180}?_appendMobileVisionTrace\(aiTurn, evt\)/, 'mobile live streams must append screenshot previews');
 assert.match(mobile, /liveTraceEntries: Array\.isArray\(m\??\.liveTraceEntries\)[\s\S]{0,120}?m\??\.liveTraceEntries/, 'mobile session history must retain screenshot trace entries');
-assert.match(desktop, /liveTraceEntries: Array\.isArray\(streamState\.liveTraceEntries\) \? streamState\.liveTraceEntries\.slice\(\) : undefined/, 'desktop completed turns must retain screenshot trace entries');
+assert.match(desktopSendRuntime, /liveTraceEntries: Array\.isArray\(streamState\.liveTraceEntries\) \? streamState\.liveTraceEntries\.slice\(\) : undefined/, 'desktop completed turns must retain screenshot trace entries');
 assert.match(desktop, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/, 'desktop screenshots must break out of collapsible tool groups');
 assert.match(desktop, /class="live-turn-vision-break"/, 'desktop must render a standalone screenshot timeline card');
 assert.match(mobileRuntime, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/, 'mobile screenshots must break out of collapsible tool groups');

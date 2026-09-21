@@ -299,7 +299,7 @@ export function createMobileV2Shell({ root, gateways, features }) {
     headerSlot.innerHTML = `<header class="pm-header pm-v2-header">
       <button class="pm-icon-btn" type="button" data-v2-header-left="${leftAction}" data-v2-back-route="${escapeHtml(backRoute)}" aria-label="${leftLabel}">${leftSvg}</button>
       ${showStatus ? `<button class="pm-online pm-model-badge pm-v2-status" id="pm-v2-status" type="button" aria-label="Current model — tap for reasoning, hold to switch model">
-        <span class="pm-v2-status-dot" aria-hidden="true"></span><span class="pm-model-speed-icon" data-model-fast aria-label="Fast mode" title="Fast mode" hidden>⚡</span><span data-model-label>${escapeHtml(currentModelLabel)}</span><input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+        <span class="pm-v2-status-dot" aria-hidden="true"></span><span class="pm-model-speed-icon" data-model-fast aria-label="Fast mode" title="Fast mode" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.4 2 4.5 13h6.7L10.6 22l8.9-11h-6.7L13.4 2Z"/></svg></span><span data-model-label>${escapeHtml(currentModelLabel)}</span><input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
       </button>` : ''}
       <div class="pm-header-actions">${actions}</div>
     </header>`;

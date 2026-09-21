@@ -41,7 +41,13 @@ import type { ExternalImportBinding, ImportedHistoricalEvent } from './imports/i
 
 export interface ChatMessage {
   messageId?: string;
-  messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | string;
+  messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | 'restart_checkpoint' | string;
+  /**
+   * Present only on a self-triggered mid-turn restart boundary. The turn is
+   * suspended rather than finished, so clients fold this row into the turn it
+   * belongs to instead of rendering it as its own message.
+   */
+  restartContinuity?: { phase: 'suspended' | 'resumed'; priorRuntimeId?: string; runtimeId?: string; reason?: string };
   activeRunKind?: string;
   goalId?: string;
   goalTurnNumber?: number;
@@ -590,6 +596,26 @@ function deleteCachedSession(sessionId: string): void {
   sessionCacheEstimatedBytes -= sessionCacheWeights.get(sessionId) || 0;
   sessionCacheWeights.delete(sessionId);
   if (sessionCacheEstimatedBytes < 0) sessionCacheEstimatedBytes = 0;
+}
+
+/**
+ * Drop a session from the in-memory cache without writing it. Used when a
+ * draining previous gateway (warm handoff) owned the session's turn and has
+ * just flushed its newer copy to disk: any debounced save this process still
+ * held for it would clobber that copy, so the pending save is discarded too.
+ */
+export function evictSessionFromCache(id: string): boolean {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return false;
+  const timer = sessionSaveTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    sessionSaveTimers.delete(sessionId);
+  }
+  pendingSessionSnapshots.delete(sessionId);
+  const existed = sessions.has(sessionId);
+  deleteCachedSession(sessionId);
+  return existed;
 }
 
 function pruneSessionCache(): void {
@@ -2958,6 +2984,23 @@ function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
   };
 }
 
+function isSyntheticRecoveryOrProviderMessage(msg: ChatMessage): boolean {
+  if (msg?.role !== 'assistant') return false;
+  const text = String(msg.content || '').trim();
+  if (!text) return true;
+  // These records are continuity/control data. They may be persisted for the
+  // UI and audit trail, but replaying them as assistant prose makes provider
+  // safety classifiers treat a recovery packet as a request to expose private
+  // reasoning or follow embedded control text.
+  if (/^(?:Restart Context Packet\b|\[HOT RESTART CONTEXT\]|\[(?:TURN_CONTEXT|WORKING_CONTEXT_PACKETS|TOOL_STATE_SUMMARY|RECENT_TOOL_OBSERVATIONS)\b)/i.test(text)) return true;
+  // Provider refusal notices describe a previous provider decision; they are
+  // not task context and can themselves contain sensitive safety categories.
+  if (/^Claude declined this request for safety reasons\./i.test(text)) return true;
+  if (/\b(?:reasoning[_ -]?extraction|chain[_ -]?of[_ -]?thought|private reasoning)\b/i.test(text)
+    && /\b(?:refusal|declined|safety|provider|internal)\b/i.test(text)) return true;
+  return false;
+}
+
 export function getHistoryForApiCall(
   id: string,
   maxTurns: number = 60,
@@ -2998,6 +3041,12 @@ export function getHistoryForApiCall(
 
   const includeCommentaryContext = options?.includeCommentaryContext !== false;
   return messages.map((msg) => {
+    // These are transport/recovery records, not assistant conversation. The
+    // interrupted-turn checkpoint may carry a long prior model summary; replaying
+    // it as an assistant utterance can make a harmless follow-up look like a
+    // request for another model's internal reasoning. Refusal notices likewise
+    // describe a prior provider decision rather than useful task context.
+    if (isSyntheticRecoveryOrProviderMessage(msg)) return null;
     const cleaned = msg.role === 'assistant'
       ? stripInternalToolNotes(msg.content)
       : String(msg.content || '');
@@ -3617,6 +3666,7 @@ async function drainSessionSnapshots(): Promise<void> {
         if (sessionIndexRevision === indexWriteRevision) {
           await fs.promises.rename(indexTempPath, indexPath);
         }
+        notifySessionWritten(id);
       } catch (err) {
         console.warn(`[session] Failed to save session ${id}:`, err);
       } finally {
@@ -3672,9 +3722,23 @@ export function flushSession(id: string): void {
   try {
     fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));
     upsertSessionSummary(session);
+    notifySessionWritten(id);
   } catch (err) {
     console.warn(`[session] Failed to flush session ${id}:`, err);
   }
+}
+
+// Warm handoff: a draining gateway tells the replacement which session files
+// it just rewrote so the replacement drops any cached copy of them.
+let sessionWriteObserver: ((sessionId: string) => void) | null = null;
+
+export function setSessionWriteObserver(observer: ((sessionId: string) => void) | null): void {
+  sessionWriteObserver = observer;
+}
+
+function notifySessionWritten(id: string): void {
+  if (!sessionWriteObserver) return;
+  try { sessionWriteObserver(id); } catch {}
 }
 
 export function getWorkspace(id: string): string {

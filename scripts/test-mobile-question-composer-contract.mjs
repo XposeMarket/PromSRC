@@ -49,6 +49,14 @@ assert.match(mobilePages, /_syncMobileQuestionComposerPopover\(sessionId \|\| q\
 assert.match(mobilePages, /function _paintMobileQuestionComposerPopover\(/, 'question transitions must have a single repaint owner');
 assert.match(mobilePages, /pm-q-step-transitioning/, 'question steps must animate instead of abruptly swapping');
 assert.match(mobilePages, /submitButton\.disabled = true/, 'question submission must ignore duplicate taps during the handoff');
+assert.match(mobilePageFacade, /questionRequest: m\?\.questionRequest && typeof m\.questionRequest === 'object'/,
+  'pending questions must survive the mobile offline thread snapshot');
+assert.match(mobilePageFacade, /if \(questionOnly\)[\s\S]*?thread\.splice\(index, 1\)/,
+  'answering a question must remove its empty compatibility bubble');
+assert.match(mobilePageRuntime, /function refreshMobileQuestionRecovery\([\s\S]*?loadMobileQuestions\('all', requestedSession\)/,
+  'question recovery must run independently of main-chat run status');
+assert.match(mobilePageRuntime, /const runRecoveryOnReturn = \(\) => \{\s*void refreshMobileQuestionRecovery\(\)/,
+  'foreground reconnect must recheck durable question state');
 
 assert.match(mobileCss, /\.pm-composer\.has-pending-question \.pm-composer-row[\s\S]*?display: none !important/, 'pending questions must hide the normal mobile composer row');
 assert.match(mobileCss, /\.pm-composer\.has-pending-question \.pm-mobile-question-popover[\s\S]*?position: relative/, 'pending questions must occupy the composer host');

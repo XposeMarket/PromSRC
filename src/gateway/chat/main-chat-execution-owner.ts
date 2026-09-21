@@ -56,7 +56,6 @@ const NON_SEMANTIC_EVENTS = new Set([
   'info',
   'warn',
   'progress_state',
-  'tool_progress',
   'session_title',
 ]);
 

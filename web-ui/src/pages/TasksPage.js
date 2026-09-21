@@ -1614,7 +1614,9 @@ window.refreshProcessRunsPanel = async function refreshProcessRunsPanel() {
 installProcessRunCardHandlers(document);
 installCodingWorkspaceHandlers(document);
 wsEventBus.on('process_run_started', () => window.refreshProcessRunsPanel?.());
-wsEventBus.on('process_run_output', () => window.refreshProcessRunsPanel?.());
+// ProcessRunCard appends live chunks itself. Re-fetching and replacing the
+// entire task/process panel for every terminal chunk makes noisy commands
+// compete with typing and WebSocket delivery on the browser main thread.
 wsEventBus.on('process_run_exited', () => window.refreshProcessRunsPanel?.());
 wsEventBus.on('skill_proposal_created', (msg) => {
   bgtToast('Skill draft created', msg?.title || 'Draft saved');

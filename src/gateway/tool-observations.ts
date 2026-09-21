@@ -412,7 +412,7 @@ function stringifyPreview(value: unknown, maxChars: number): string {
 function inferToolCategory(toolName: string): string {
   const name = String(toolName || '').trim();
   if (!name) return 'other';
-  if (/^(terminal|shell|run_command|run_command_supervised|start_process|process_)/.test(name)) return 'shell_process';
+  if (/^(terminal|shell|run_command|run_command_supervised|workspace_run|terminal_run|shell_command|start_process|process_)/.test(name)) return 'shell_process';
   if (/^(read|write|edit|list|delete|rename|copy|mkdir|stat|append|apply_patch|grep_|search_files|file_|source_|webui_source_)/.test(name)) return 'file';
   if (/^(shopping_search_products|web_search|web_fetch|download_)/.test(name)) return 'web';
   if (/^browser_/.test(name)) return 'browser';
@@ -427,24 +427,74 @@ function inferToolCategory(toolName: string): string {
   return 'other';
 }
 
+const PATH_FIELD_RE = /^(?:path|paths|file|files|filename|filenames|filepath|filepaths|(?:source|target|output|dest|destination|cwd)(?:_?path)?|(?:affected|allowed|approved|changed|modified|deleted|created)_?files?)$/i;
+const COMMAND_FIELD_RE = /^(?:command|cmd|script|shell|stdout|stderr|result|content|message|text|prompt|query)$/i;
+const SHELL_BODY_RE = /(?:\r?\n|&&|\|\||[|<>]|(?:^|\s)(?:add-content|set-content|out-file|convertto-json|invoke-[a-z]+|powershell(?:\.exe)?|pwsh|cmd(?:\.exe)?|bash|zsh|sh|node|npm|npx|python(?:\.exe)?|git|cargo|go|dotnet|pytest|tsc)\b|-command\b|@\s*['"])/i;
+
+/**
+ * A path field is the only place where a string may become paths_touched.
+ *
+ * Tool arguments also contain free-form command bodies, prompts, snippets and
+ * result text. The old extractor classified any string with a slash or file
+ * extension as a path, so a PowerShell script in `command` became a huge,
+ * misleading `paths_touched` entry and was replayed into model context.
+ */
+function normalizePathCandidate(value: unknown): string {
+  const original = String(value ?? '').trim();
+  if (!original || original.length > 500) return '';
+  if (/^(?:https?|file):\/\//i.test(original)) return '';
+  if (/[\r\n]/.test(original) || SHELL_BODY_RE.test(original)) return '';
+  const quoted = original.length >= 2
+    && ((original.startsWith('"') && original.endsWith('"'))
+      || (original.startsWith("'") && original.endsWith("'"))
+      || (original.startsWith('`') && original.endsWith('`')));
+  const candidate = (quoted ? original.slice(1, -1) : original).replace(/\s+/g, ' ').trim();
+  if (!candidate || candidate.length > 400 || candidate.startsWith('-')) return '';
+  // A bare filename is valid. Preserve legitimate paths containing spaces when
+  // the first path segment is unambiguous, while rejecting e.g. "changed
+  // src/a.ts" that merely contains a path-looking fragment.
+  if (!quoted && /\s/.test(candidate)) {
+    const firstSegment = candidate.split(/[\\/]/, 1)[0] || '';
+    if (!/[\\/]/.test(candidate) || /\s/.test(firstSegment)) return '';
+  }
+  if (!quoted && !(/[\\/]/.test(candidate) || /^[^\\/\s]+\.[a-z0-9]{1,16}$/i.test(candidate))) return '';
+  return candidate;
+}
+
+function safePathValues(values: unknown[], maxItems: number, maxChars = 180): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of Array.isArray(values) ? values : []) {
+    const candidate = normalizePathCandidate(value);
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    out.push(compactLine(candidate, maxChars));
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
 function extractPaths(value: unknown): string[] {
   const paths = new Set<string>();
-  const visit = (node: unknown, depth = 0) => {
-    if (depth > 4 || node == null) return;
+  const visit = (node: unknown, depth = 0, pathValue = false): void => {
+    if (depth > 5 || node == null) return;
     if (typeof node === 'string') {
-      if (/[\\/]/.test(node) || /\.[a-z0-9]{1,8}$/i.test(node)) paths.add(node.slice(0, 500));
+      if (pathValue) {
+        const candidate = normalizePathCandidate(node);
+        if (candidate) paths.add(candidate);
+      }
       return;
     }
     if (Array.isArray(node)) {
-      for (const item of node.slice(0, 30)) visit(item, depth + 1);
+      for (const item of node.slice(0, 30)) visit(item, depth + 1, pathValue);
       return;
     }
     if (typeof node === 'object') {
       for (const [key, inner] of Object.entries(node as Record<string, unknown>)) {
-        if (/^(path|file|filename|target|cwd|output|dest|destination|source|url)$/i.test(key) && typeof inner === 'string') {
-          paths.add(inner.slice(0, 500));
-        }
-        visit(inner, depth + 1);
+        // Never walk free-form command/result strings. Nested objects are
+        // still visited so `{artifact:{path:"..."}}` remains discoverable.
+        if (COMMAND_FIELD_RE.test(key)) continue;
+        visit(inner, depth + 1, PATH_FIELD_RE.test(key));
       }
     }
   };
@@ -511,13 +561,36 @@ function shouldShowObservationInSummary(obs: ToolObservation): boolean {
   return false;
 }
 
+function isShellObservation(obs: ToolObservation): boolean {
+  return obs.category === 'shell_process'
+    || /^(?:terminal|shell|run_command|run_command_supervised|workspace_run|terminal_run|shell_command|start_process|process_)/i.test(String(obs.toolName || ''));
+}
+
+function formatObservationArgsForContext(obs: ToolObservation): string {
+  if (!obs.argsPreview) return '';
+  // Exact shell commands belong in the out-of-band observation record. Putting
+  // them into restart/brain context both wastes budget and lets a multiline
+  // script be mistaken for model instructions or a path list.
+  return isShellObservation(obs)
+    ? 'args: [shell command omitted; inspect the tool observation record for the exact command]'
+    : `args: ${obs.argsPreview}`;
+}
+
+function formatObservationResultForContext(obs: ToolObservation): string {
+  if (!obs.resultPreview) return '';
+  if (isShellObservation(obs) && SHELL_BODY_RE.test(String(obs.resultPreview))) {
+    return 'result: [shell output omitted; inspect the tool observation record for the exact output]';
+  }
+  return `result: ${obs.resultPreview}`;
+}
+
 function summarizeObservationForState(obs: ToolObservation): string {
   const bits = [
     `#${obs.stepNum}`,
     obs.toolName,
     obs.status === 'error' ? 'ERROR' : 'ok',
   ];
-  const paths = uniqueCompact(obs.pathsTouched || [], 2, 120);
+  const paths = safePathValues(obs.pathsTouched || [], 2, 120);
   if (paths.length) bits.push(`paths=${paths.join(', ')}`);
   if (Number.isFinite(Number(obs.exitCode))) bits.push(`exit=${obs.exitCode}`);
   if (Number.isFinite(Number(obs.durationMs))) bits.push(`${Math.round(Number(obs.durationMs))}ms`);
@@ -526,7 +599,9 @@ function summarizeObservationForState(obs: ToolObservation): string {
     if (artifacts.length) bits.push(`artifacts=${artifacts.join(', ')}`);
   }
   if (obs.status === 'error') {
-    const detail = compactLine(obs.resultPreview, 180);
+    const detail = isShellObservation(obs) && SHELL_BODY_RE.test(String(obs.resultPreview || ''))
+      ? '[shell error omitted; inspect the tool observation record]'
+      : compactLine(obs.resultPreview, 180);
     if (detail) bits.push(`result=${detail}`);
   }
   if (obs.resultRawRef) bits.push(`raw=${obs.resultRawRef}`);
@@ -833,9 +908,10 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
     .slice(0, maxObservations)
     .sort((a, b) => a.createdAt - b.createdAt);
   const blocks = ranked.map((obs) => {
+    const paths = safePathValues(obs.pathsTouched || [], 12, 180);
     const lines = [
       `--- observation ${obs.stepNum}: ${obs.toolName} (${obs.category}, ${obs.status}) ---`,
-      obs.pathsTouched?.length ? `paths: ${obs.pathsTouched.join(', ')}` : '',
+      paths.length ? `paths: ${paths.join(', ')}` : '',
       obs.artifacts?.length ? `artifacts: ${obs.artifacts.map((a: any) => String(a?.path || a?.url || a?.id || a).slice(0, 180)).join(', ')}` : '',
       Number.isFinite(Number(obs.exitCode)) ? `exit_code: ${obs.exitCode}` : '',
       includeTelemetry && Number.isFinite(Number(obs.durationMs)) ? `duration_ms: ${obs.durationMs}` : '',
@@ -851,8 +927,8 @@ export function formatToolObservationsForContext(observations: ToolObservation[]
           obs.tokenEstimate.pricingSource ? `pricing_source=${obs.tokenEstimate.pricingSource}` : '',
         ].filter(Boolean).join(', ')
         : '',
-      obs.argsPreview ? `args: ${obs.argsPreview}` : '',
-      obs.resultPreview ? `result: ${obs.resultPreview}` : '',
+      formatObservationArgsForContext(obs),
+      formatObservationResultForContext(obs),
       obs.resultRawRef ? `raw_ref: ${obs.resultRawRef}` : '',
     ].filter(Boolean);
     return lines.join('\n');
@@ -873,7 +949,7 @@ export function formatToolStateSummaryForContext(observations: ToolObservation[]
   const errors = sorted.filter((obs) => obs.status === 'error');
   const rawRefs = sorted.filter((obs) => obs.resultRawRef).length;
   const artifacts = uniqueCompact(sorted.flatMap((obs) => obs.artifacts || []).map((a: any) => a?.path || a?.url || a?.id || a), 6, 140);
-  const paths = uniqueCompact(sorted.flatMap((obs) => obs.pathsTouched || []).reverse(), 10, 140);
+  const paths = safePathValues(sorted.flatMap((obs) => obs.pathsTouched || []).reverse(), 10, 140);
 
   let totalDurationMs = 0;
   let totalArgsTokens = 0;

@@ -17,7 +17,8 @@ assert.equal(isMainChatSemanticProgressEvent('token'), true, 'model output must 
 assert.equal(isMainChatSemanticProgressEvent('tool_result'), true, 'tool results must count as semantic progress');
 assert.equal(isMainChatSemanticProgressEvent('ui_preflight'), false, 'preflight must not reset the semantic watchdog');
 assert.equal(isMainChatSemanticProgressEvent('info'), false, 'informational progress must not reset the semantic watchdog');
-assert.equal(isMainChatSemanticProgressEvent('tool_progress'), false, 'tool transport progress must not reset the semantic watchdog');
+assert.equal(isMainChatSemanticProgressEvent('tool_progress'), true, 'active tool progress must reset the semantic watchdog');
+assert.equal(isMainChatSemanticProgressEvent('process_run_output'), true, 'process output must reset the semantic watchdog');
 
 assert.equal(isMainChatStreamOwnerOrphaned({
   now,

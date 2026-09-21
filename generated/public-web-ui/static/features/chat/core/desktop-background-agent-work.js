@@ -3,6 +3,7 @@ const BACKGROUND_AGENT_WORK_PERSIST_DEBOUNCE_MS = 750;
 export function createDesktopBackgroundAgentWork({
   mergeBackgroundAgentEvents,
   mergeBackgroundAgentTraceEntries,
+  mergeBackgroundAgentSteerMessages,
   normalizeBackgroundAgentWork,
   readBackgroundAgentWork,
   writeBackgroundAgentWork,
@@ -79,8 +80,14 @@ export function createDesktopBackgroundAgentWork({
           ? normalized.events.slice(-1200)
           : mergeBackgroundAgentEvents(previousEvents, normalized.events),
         liveTraceEntries: mergeBackgroundAgentTraceEntries(previous.liveTraceEntries, normalized.liveTraceEntries),
-        steerMessages: normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages,
+        steerMessages: typeof mergeBackgroundAgentSteerMessages === 'function'
+          ? mergeBackgroundAgentSteerMessages(previous.steerMessages, normalized.steerMessages)
+          : (normalized.steerMessages.length ? normalized.steerMessages : previous.steerMessages),
         backgroundSessionId: normalized.backgroundSessionId || previous.backgroundSessionId,
+        model: normalized.model || previous.model,
+        providerId: normalized.providerId || previous.providerId,
+        reasoningEffort: normalized.reasoningEffort || previous.reasoningEffort,
+        plan: normalized.plan || previous.plan,
         streamId: normalized.streamId || previous.streamId,
         lastSeq: Math.max(previousLastSeq, normalizedLastSeq),
       };

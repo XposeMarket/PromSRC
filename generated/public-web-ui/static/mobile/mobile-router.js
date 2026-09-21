@@ -29,6 +29,7 @@ import { buildMobileSettingsHandoffUrl } from '../settings-return.js';
 
 let mobileRenderGeneration = 0;
 const mobileRouteOwnerPromises = new Map();
+const mobileRouteOwnersReady = new Set();
 const MOBILE_ROUTE_OWNER_LOADERS = Object.freeze({
   pair: () => import('./mobile-pairing-page.js'),
   gateways: () => import('./mobile-gateways-page.js'),
@@ -52,10 +53,13 @@ export function loadMobileRouteOwner(route) {
   const owner = Object.hasOwn(MOBILE_ROUTE_OWNER_LOADERS, route) ? route : 'chat';
   if (!mobileRouteOwnerPromises.has(owner)) {
     if (owner === 'chat') markClientPerformance('mobile_chat_chunk_requested', { surface: 'mobile' });
-    const pending = MOBILE_ROUTE_OWNER_LOADERS[owner]().catch((error) => {
-      mobileRouteOwnerPromises.delete(owner);
-      throw error;
-    });
+    const pending = MOBILE_ROUTE_OWNER_LOADERS[owner]()
+      .then((module) => { mobileRouteOwnersReady.add(owner); return module; })
+      .catch((error) => {
+        mobileRouteOwnerPromises.delete(owner);
+        mobileRouteOwnersReady.delete(owner);
+        throw error;
+      });
     mobileRouteOwnerPromises.set(owner, pending);
   }
   return mobileRouteOwnerPromises.get(owner);
@@ -439,12 +443,17 @@ function render() {
   slot.dataset.mobileRouteState = 'loading';
   slot.dataset.mobileRouteStartedAt = String(Date.now());
   slot.setAttribute('aria-busy', 'true');
-  slot.innerHTML = `
-    <div class="pm-mobile-route-loading" role="status" aria-live="polite">
-      <span class="pm-mobile-route-loading-spinner" aria-hidden="true"></span>
-      <span>Loading Prometheus…</span>
-    </div>
-  `;
+  const routeOwner = page === 'settings' && document.getElementById('settings-modal') ? 'chat' : page;
+  // A cached route renders on the next microtask. Avoid flashing a loading
+  // screen between two already available pages.
+  if (!mobileRouteOwnersReady.has(routeOwner)) {
+    slot.innerHTML = `
+      <div class="pm-mobile-route-loading" role="status" aria-live="polite">
+        <span class="pm-mobile-route-loading-spinner" aria-hidden="true"></span>
+        <span>Loading Prometheus…</span>
+      </div>
+    `;
+  }
   window.__pmMobileCleanup = () => {
     if (typeof slot._pmCleanup === 'function') slot._pmCleanup();
   };
@@ -473,7 +482,6 @@ function render() {
     } catch {}
   }
 
-  const routeOwner = page === 'settings' && document.getElementById('settings-modal') ? 'chat' : page;
   return loadMobileRouteOwner(routeOwner).then((owner) => {
     // Navigation may win while a route owner is still crossing the network.
     if (renderGeneration !== mobileRenderGeneration) return undefined;

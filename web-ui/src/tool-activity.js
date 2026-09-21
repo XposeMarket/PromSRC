@@ -70,6 +70,16 @@ function durationLabel(value) {
 }
 
 const COMMAND_TERMINAL_MAX_CHARS = 64 * 1024;
+const commandTerminalCache = new Map();
+function cachedCommandTerminal(runId) {
+  return runId ? commandTerminalCache.get(String(runId)) : null;
+}
+function rememberCommandTerminal(runId, output, sequence) {
+  if (!runId) return;
+  commandTerminalCache.delete(runId);
+  commandTerminalCache.set(runId, { output: boundTerminalText(output), sequence });
+  while (commandTerminalCache.size > 50) commandTerminalCache.delete(commandTerminalCache.keys().next().value);
+}
 const TERMINAL_COMMAND_ACTIONS = new Set([
   'workspace_run',
   'run_command',
@@ -466,16 +476,19 @@ function targetFromArgs(args = {}) {
 }
 
 function describeTool(actionRaw, argsRaw = {}) {
-  const action = normalizeAction(actionRaw);
+  let action = normalizeAction(actionRaw);
   const args = parseArgs(argsRaw);
   const subAction = normalizeAction(args.action || args.operation || args.mode);
+  if ((/^browser_(act|observe|session|extract)$/.test(action) || /^desktop_(act|observe|input|window|screen|apps|background|window_control)$/.test(action)) && subAction) {
+    action = `${action.split('_')[0]}_${subAction}`;
+  }
   const target = targetFromArgs(args);
   const fileTarget = pathLabel(firstValue(args, ['file', 'filename', 'path', 'source', 'target', 'to_path', 'from_path', 'workspacePath'], 180));
   const command = firstValue(args, ['command', 'cmd', 'script'], 150);
   const search = firstValue(args, ['pattern', 'query', 'q', 'search'], 90);
   const url = firstValue(args, ['url', 'href', 'targetUrl'], 100);
-  const textTarget = firstValue(args, ['label', 'text', 'selector', 'ref', 'ariaLabel'], 72);
-  const windowTarget = firstValue(args, ['window', 'windowTitle', 'title', 'app', 'name'], 72);
+  const textTarget = firstValue(args, ['label', 'text', 'ariaLabel', 'element_name'], 72);
+  const windowTarget = firstValue(args, ['window', 'windowTitle', 'window_title', 'title', 'app', 'name'], 72);
   const coords = Number.isFinite(Number(args.x)) && Number.isFinite(Number(args.y))
     ? `${Math.round(Number(args.x))}, ${Math.round(Number(args.y))}`
     : '';
@@ -494,6 +507,24 @@ function describeTool(actionRaw, argsRaw = {}) {
   if (action === 'declare_plan') return make('plan.declare', 'plan', 'Preparing plan…', 'Creating plan', 'Created plan', { family: 'plan', target: '' });
   if (['complete_plan_step', 'step_complete', 'bg_plan_advance'].includes(action)) return make('plan.step', 'plan step', 'Preparing plan update…', 'Updating plan', 'Updated plan', { family: 'plan', target: '' });
   if (action === 'write_note') return make('note.write', 'note', 'Preparing note…', 'Writing note', 'Saved note', { family: 'memory', target: firstValue(args, ['tag', 'title'], 72) });
+  if (action === 'analyze_image') return make('media.inspect.image', 'image analysis', 'Preparing image…', 'Analyzing image', 'Analyzed image', { family: 'media', target: fileTarget });
+  if (action === 'analyze_video' || action === 'video_analyze_imported_video') return make('media.inspect.video', 'video analysis', 'Preparing video frames…', 'Analyzing video', 'Analyzed video', { family: 'media', target: fileTarget });
+  if (action === 'background_ops' || /^background_(spawn|steer|wait|status|progress|join)$/.test(action)) {
+    const operation = action === 'background_ops' ? subAction : action.slice(11);
+    const count = Array.isArray(args.background_ids) ? args.background_ids.length : args.background_id ? 1 : 0;
+    const agents = count ? `${count} agent${count === 1 ? '' : 's'}` : 'background agents';
+    const ms = Number(args.wait_ms ?? args.timeout_ms);
+    const wait = Number.isFinite(ms) && ms >= 0 ? ` for up to ${durationLabel(ms) || '0s'}` : '';
+    const labels = {
+      spawn: ['Starting background agent', 'Started background agent'],
+      steer: [`Messaging ${count ? agents : 'agent'}`, `Sent message to ${count ? agents : 'agent'}`],
+      wait: [`Waiting for ${agents}${wait}`, `Finished waiting for ${agents}`],
+      join: [`Waiting for ${agents}${wait}`, `Collected background results`],
+      status: [`Checking ${agents}`, `Checked ${agents}`],
+      progress: [`Checking progress of ${agents}`, `Checked agent progress`],
+    }[operation] || ['Managing background agents', 'Updated background agents'];
+    return make(`background.${operation}`, 'background operation', `${labels[0]}…`, ...labels, { family: 'background', target: '', countNoun: 'background operation' });
+  }
   if (action === 'skill_list') return make('skill.search', 'skill search', 'Preparing skill search…', 'Searching skills', 'Searched skills', { family: 'skill', target: search });
   if (/^(?:voice_)?skill_(?:read|resource_read)$/.test(action)) return make('skill.read', 'skill', 'Preparing skill…', 'Reading skill', 'Loaded skill', { family: 'skill', target: firstValue(args, ['id', 'skill_id', 'name', 'path', 'resource_path'], 90) });
   if (action === 'skill_resource_list') return make('skill.list', 'skill resources', 'Preparing skill resources…', 'Listing skill resources', 'Listed skill resources', { family: 'skill' });
@@ -521,21 +552,28 @@ function describeTool(actionRaw, argsRaw = {}) {
 
   if (action.startsWith('desktop_')) {
     const name = action.slice('desktop_'.length);
-    if (name.includes('click')) return make('desktop.click', 'desktop click', 'Preparing desktop click…', `Clicking desktop${windowTarget ? ` · ${windowTarget}` : ''}${coords ? ` · (${coords})` : ''}`, 'Clicked desktop', { family: 'desktop', target: windowTarget || coords, countNoun: 'desktop click' });
+    const verbs = { minimize: ['Minimizing', 'Minimized'], maximize: ['Maximizing', 'Maximized'], restore: ['Restoring', 'Restored'], close: ['Closing', 'Closed'], launch: ['Opening', 'Opened'], launch_app: ['Opening', 'Opened'], find_window: ['Finding', 'Found'] };
+    if (verbs[name]) return make(`desktop.${name}`, 'window action', 'Preparing window action…', `${verbs[name][0]} ${windowTarget || 'window'}`, `${verbs[name][1]} ${windowTarget || 'window'}`, { family: 'desktop', target: windowTarget });
+    if (name.includes('press_key') || name === 'key') return make('desktop.key', 'key press', 'Preparing key press…', `Pressing ${firstValue(args, ['key', 'keys'], 60) || 'key'} on desktop`, `Pressed ${firstValue(args, ['key', 'keys'], 60) || 'key'} on desktop`, { family: 'desktop', target: windowTarget });
+    if (name.includes('click')) return make('desktop.click', 'desktop click', 'Preparing desktop click…', `Clicking ${windowTarget || 'desktop'}`, `Clicked ${windowTarget || 'desktop'}`, { family: 'desktop', target: windowTarget || coords, countNoun: 'desktop click' });
     if (name.includes('screenshot') || name === 'screen') return make('desktop.screenshot', 'desktop capture', 'Preparing desktop capture…', windowTarget ? `Capturing ${windowTarget}` : 'Capturing desktop', windowTarget ? `Captured ${windowTarget}` : 'Captured desktop', { family: 'desktop', target: windowTarget, countNoun: 'desktop capture' });
     if (name.includes('focus')) return make('desktop.focus', 'window focus', 'Preparing window focus…', windowTarget ? `Focusing ${windowTarget}` : 'Focusing desktop window', windowTarget ? `Focused ${windowTarget}` : 'Focused desktop window', { family: 'desktop', target: windowTarget, countNoun: 'window focus' });
     if (name.includes('type')) return make('desktop.type', 'desktop typing', 'Preparing desktop typing…', firstValue(args, ['text', 'value'], 60) ? `Typing ${quote(firstValue(args, ['text', 'value'], 60))}` : 'Typing on desktop', 'Typed on desktop', { family: 'desktop', target: windowTarget, countNoun: 'desktop typing action' });
-    if (name.includes('scroll')) return make('desktop.scroll', 'desktop scroll', 'Preparing desktop scroll…', 'Scrolling desktop', 'Scrolled desktop', { family: 'desktop', target: windowTarget, countNoun: 'desktop scroll' });
+    if (name.includes('scroll')) return make('desktop.scroll', 'desktop scroll', 'Preparing desktop scroll…', `Scrolling ${windowTarget || 'desktop'}`, `Scrolled ${windowTarget || 'desktop'}`, { family: 'desktop', target: windowTarget, countNoun: 'desktop scroll' });
     return make(`desktop.${name}`, 'desktop action', 'Preparing desktop action…', `${titleCase(name)} on desktop`, `${titleCase(name)} completed`, { family: 'desktop', target, countNoun: 'desktop action' });
   }
 
   if (action.startsWith('browser_')) {
     const name = action.slice('browser_'.length);
-    if (name.includes('click')) return make('browser.click', 'browser click', 'Preparing browser click…', textTarget ? `Clicking ${quote(textTarget)} in browser` : 'Clicking in browser', textTarget ? `Clicked ${quote(textTarget)}` : 'Clicked in browser', { family: 'browser', target: textTarget, countNoun: 'browser click' });
+    let site = '';
+    try { site = url ? new URL(url).hostname : ''; } catch {}
+    const location = site ? ` on ${site}` : ' in browser';
+    if (name.includes('press_key') || name === 'key') return make('browser.key', 'key press', 'Preparing key press…', `Pressing ${firstValue(args, ['key', 'keys'], 60) || 'key'}${location}`, `Pressed ${firstValue(args, ['key', 'keys'], 60) || 'key'}${location}`, { family: 'browser', target: url });
+    if (name.includes('click')) return make('browser.click', 'browser click', 'Preparing browser click…', `Clicking${textTarget ? ` ${quote(textTarget)}` : ''}${location}`, `Clicked${textTarget ? ` ${quote(textTarget)}` : ''}${location}`, { family: 'browser', target: textTarget, countNoun: 'browser click' });
     if (['open', 'navigate', 'goto'].includes(name)) return make('browser.open', 'page open', 'Preparing page…', url ? `Opening ${compact(url, 90)}` : 'Opening page', url ? `Opened ${compact(url, 90)}` : 'Opened page', { family: 'browser', target: url, countNoun: 'page open' });
     if (name.includes('type') || name === 'fill') return make('browser.type', 'browser typing', 'Preparing browser input…', firstValue(args, ['text', 'value'], 60) ? `Typing ${quote(firstValue(args, ['text', 'value'], 60))} in browser` : 'Typing in browser', 'Entered text in browser', { family: 'browser', target: textTarget, countNoun: 'browser input' });
     if (name.includes('snapshot') || name.includes('screenshot')) return make('browser.capture', 'browser capture', 'Preparing browser capture…', 'Capturing browser', 'Captured browser', { family: 'browser', target: url, countNoun: 'browser capture' });
-    if (name.includes('scroll')) return make('browser.scroll', 'browser scroll', 'Preparing browser scroll…', 'Scrolling browser', 'Scrolled browser', { family: 'browser', target: url, countNoun: 'browser scroll' });
+    if (name.includes('scroll')) return make('browser.scroll', 'browser scroll', 'Preparing browser scroll…', `Scrolling${location}`, `Scrolled${location}`, { family: 'browser', target: url, countNoun: 'browser scroll' });
     if (name.includes('extract') || name.includes('read')) return make('browser.read', 'page read', 'Preparing page read…', 'Reading page', 'Read page', { family: 'browser', target: url, countNoun: 'page read' });
     return make(`browser.${name}`, 'browser action', 'Preparing browser action…', `${titleCase(name)} in browser`, `${titleCase(name)} completed`, { family: 'browser', target, countNoun: 'browser action' });
   }
@@ -563,6 +601,7 @@ function failureLabel(description, result) {
 }
 
 function successLabel(description, result) {
+  if (description.key === 'background.wait' && result === 'wait limit reached') return 'Background wait limit reached';
   const found = resultCount(result, ['returned_count', 'match_count', 'count', 'total']);
   if (description.key === 'file.search' && found != null) return `Found ${found} match${found === 1 ? '' : 'es'}`;
   return description.success;
@@ -625,10 +664,11 @@ function makeActivity(payload, phase, previous = null) {
     progress: phase === 'progress' ? compact(payload.message || payload.progress || payload.status, 180) : previous?.progress || '',
     result: phase === 'result' ? String(result || '') : previous?.result || '',
     durationMs: Number.isFinite(durationMs) ? durationMs : previous?.durationMs,
-    startedAt: previous?.startedAt || Number(payload.at || payload.timestamp || now),
+    startedAt: previous?.startedAt || Number(payload.startedAt || payload.at || payload.timestamp || now),
     updatedAt: now,
     technicalName: action,
     activityId: previous?.activityId || payload.activityId || '',
+    diffPreview: payload.diffPreview || previous?.diffPreview || '',
     ...(eventKey ? { eventKey } : {}),
     ...(streamId ? { streamId } : {}),
     ...(seq != null ? { seq } : {}),
@@ -710,7 +750,7 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
   // Keep a bounded, display-ready diff on the result itself. Reconnect caches
   // intentionally trim large tool arguments, but the inline disclosure must
   // remain expandable after the live event has been rehydrated.
-  resultActivity.diffPreview = editActivityDiff(resultActivity);
+  resultActivity.diffPreview = resultActivity.diffPreview || editActivityDiff(resultActivity);
   const existingResult = entries.find((entry) => entry?.activity?.kind === 'result'
     && ((resultActivity.eventKey && entry.activity.eventKey === resultActivity.eventKey)
       || (resultActivity.callId && entry.activity.callId === resultActivity.callId)
@@ -763,10 +803,16 @@ export function applyCommandProcessEvent(entriesInput, eventTypeRaw, payload = {
 
   if (eventType === 'process_run_output') {
     const sequence = Number(payload.sequence ?? run.outputSeq ?? 0);
-    if (!sequence || sequence > Number(terminal.sequence || 0)) {
-      terminal.output = boundTerminalText(`${terminal.output || ''}${payload.chunk || ''}`);
-      terminal.sequence = sequence || Number(terminal.sequence || 0) + 1;
+    const cached = cachedCommandTerminal(terminal.runId);
+    const baseline = cached && cached.sequence > Number(terminal.sequence || 0) ? cached : terminal;
+    if (!sequence || sequence > Number(baseline.sequence || 0)) {
+      terminal.output = boundTerminalText(`${baseline.output || ''}${payload.chunk || ''}`);
+      terminal.sequence = sequence || Number(baseline.sequence || 0) + 1;
       terminal.lastStream = String(payload.stream || 'stdout');
+      rememberCommandTerminal(terminal.runId, terminal.output, terminal.sequence);
+    } else if (cached && cached.sequence > Number(terminal.sequence || 0)) {
+      terminal.output = cached.output;
+      terminal.sequence = cached.sequence;
     }
   } else if (!terminal.output && run.outputPreview) {
     terminal.output = boundTerminalText(run.outputPreview);
@@ -862,16 +908,48 @@ export function coalesceToolActivityEntries(entriesInput) {
     }
     out.push({ ...original });
   }
-  return out;
+  for (const entry of [...out]) {
+    const activity = entry?.activity;
+    if (activity?.kind !== 'operation' || activity.key !== 'background.wait' || activity.resultAttached) continue;
+    const limitMs = Number(activity.args?.wait_ms ?? activity.args?.timeout_ms);
+    const startedAt = Number(activity.startedAt);
+    const reachedLimit = Number.isFinite(limitMs) && limitMs > 0
+      && startedAt > 0 && Date.now() >= startedAt + limitMs;
+    const hasLaterAction = out.slice(out.indexOf(entry) + 1).some((next) => next?.activity?.kind === 'operation');
+    if (!reachedLimit && !hasLaterAction) continue;
+    const resultActivity = makeActivity({
+      action: activity.action,
+      args: activity.args,
+      callId: activity.callId,
+      result: reachedLimit ? 'wait limit reached' : 'wait finished',
+      durationMs: reachedLimit ? limitMs : Math.max(0, Date.now() - startedAt),
+      ok: true,
+    }, 'result', activity);
+    out.splice(out.indexOf(entry) + 1, 0, {
+      id: `tool_result_${activity.activityId || activity.callId || 'background_wait'}`,
+      type: 'result',
+      activity: resultActivity,
+      text: activityText(resultActivity),
+      ts: entry.ts,
+    });
+  }
+  // A call and its result are separate transport events, but one action in
+  // the transcript. Keep both in the source journal for terminal updates and
+  // replay, then show only the current state of that action here.
+  const completedCalls = new Set(out.filter((entry) => entry?.activity?.kind === 'result')
+    .map((entry) => entry.activity.callId || entry.activity.activityId || entry.id));
+  return out.filter((entry) => entry?.activity?.kind !== 'operation'
+    || !completedCalls.has(entry.activity.callId || entry.activity.activityId || entry.id));
 }
 
 export function toolActivitySummary(entriesInput, { live = false } = {}) {
   const entries = coalesceToolActivityEntries(entriesInput);
   const operations = entries.filter((entry) => entry?.activity?.kind === 'operation').map((entry) => entry.activity);
   const results = entries.filter((entry) => entry?.activity?.kind === 'result').map((entry) => entry.activity);
-  if (!operations.length) return '';
+  if (!operations.length && !results.length) return '';
   if (live) {
-    const current = operations[operations.length - 1];
+    const current = entries.filter((entry) => entry?.activity?.kind === 'operation' || entry?.activity?.kind === 'result').at(-1)?.activity;
+    if (!current) return '';
     const text = activityText(current);
     return current.progress ? `${text} · ${current.progress}` : text;
   }
@@ -1109,13 +1187,55 @@ function displayedDiffDelta(value) {
   return { added, removed };
 }
 
+function readableActivityDetail(activity, esc) {
+  const args = parseArgs(activity.args);
+  const action = normalizeAction(activity.action);
+  const fields = [];
+  const add = (label, value) => {
+    if (typeof value === 'string' && value.trim()) fields.push(`<div><strong>${esc(label)}</strong><span>${esc(value)}</span></div>`);
+  };
+  let body = '';
+  if (action === 'write_note' || action.startsWith('background_')) {
+    const content = action === 'write_note' ? args.content : args.message || args.prompt || args.task_prompt;
+    if (typeof content === 'string' && content.trim()) {
+      // Notes and instructions are documents, not embedded applications.
+      const markdown = content.replace(/```(html|svg|chart|mermaid)\b/g, '```text');
+      const html = typeof window !== 'undefined' && typeof window.renderMd === 'function'
+        ? window.renderMd(markdown) : esc(markdown).replace(/\n/g, '<br>');
+      body = `<div class="markdown-body">${html}</div>`;
+    }
+    add('Model', args.model);
+    add('Reasoning', args.reasoning_effort);
+    const ids = Array.isArray(args.background_ids) ? args.background_ids.join(', ') : args.background_id;
+    add('Agents', ids);
+    const wait = Number(args.wait_ms ?? args.timeout_ms);
+    if (Number.isFinite(wait) && wait >= 0) add('Wait limit', `${wait / 1000} seconds`);
+    if (activity.durationMs != null) add('Elapsed', durationLabel(activity.durationMs));
+  } else if (/^(desktop|browser)_/.test(action)) {
+    add('Window', firstValue(args, ['window', 'windowTitle', 'window_title', 'app', 'title', 'name'], 500));
+    add('Page', firstValue(args, ['url', 'href', 'targetUrl'], 2000));
+    add('Element', firstValue(args, ['label', 'ariaLabel', 'selector', 'ref', 'element'], 1000));
+    add('Text', firstValue(args, ['text', 'value'], 4000));
+    add('Key', firstValue(args, ['key', 'keys'], 200));
+    add('Direction', args.direction);
+    if (args.x != null && args.y != null) add('Position', `${args.x}, ${args.y}`);
+    add('Action', titleCase(args.action || action.replace(/^(desktop|browser)_/, '')));
+  } else if (['web_search', 'web_fetch', 'analyze_image', 'analyze_video', 'video_analyze_imported_video'].includes(action)) {
+    add('Search', args.query || args.q);
+    add('Page', args.url);
+    add('File', args.file_path || args.path || args.video_path || args.image_path);
+    add('Instructions', args.prompt || args.question);
+  }
+  return fields.length || body ? `<div class="tool-activity-inline-detail tool-activity-readable-detail">${fields.length ? `<div class="tool-activity-detail-fields">${fields.join('')}</div>` : ''}${body}</div>` : '';
+}
+
 export function renderToolActivityEntry(entry, escapeHtml) {
   const activity = entry?.activity;
   if (!activity) return '';
   const esc = typeof escapeHtml === 'function'
     ? escapeHtml
     : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  const label = String(entry.text || activityText(activity));
+  const label = String(activityText(activity) || entry.text);
   const toolIconHtml = renderToolActivityIcon(activity, esc);
   // The badge and disclosure must describe the same rows. Markup edits are
   // expanded for readability, so counting the raw one-line replacement here
@@ -1140,23 +1260,27 @@ export function renderToolActivityEntry(entry, escapeHtml) {
   const terminal = activity.family === 'command' ? activity.terminal : null;
   const terminalActive = terminal && !terminal.completed && !['exited'].includes(String(terminal.state || '').toLowerCase());
   const showTerminal = terminal && ((activity.kind === 'operation' && !activity.resultAttached) || activity.kind === 'result');
-  const terminalOutput = String(terminal?.output || '').trim();
+  const cachedTerminal = cachedCommandTerminal(terminal?.runId);
+  const renderedTerminal = cachedTerminal && cachedTerminal.sequence >= Number(terminal?.sequence || 0)
+    ? cachedTerminal : terminal;
+  const terminalOutput = String(renderedTerminal?.output || '').trim();
   const terminalDisclosureKey = `terminal:${terminal?.runId || activityKey}`;
   const storedTerminalDisclosure = disclosureState()?.get(terminalDisclosureKey);
   const terminalOpen = storedTerminalDisclosure === true || (storedTerminalDisclosure == null && terminalActive);
   const terminalHtml = showTerminal ? `<details class="tool-command-terminal${terminalActive ? ' is-live' : ' is-complete'}" data-tool-disclosure-key="${esc(terminalDisclosureKey)}" data-command-run-id="${esc(terminal.runId || '')}"${terminalOpen ? ' open' : ''}>
     <summary><span>${terminalActive ? 'Live terminal' : 'Terminal output'}</span><em>${terminalActive ? 'streaming' : 'completed'}</em><i aria-hidden="true">›</i></summary>
-    <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(terminal.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
+    <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(renderedTerminal?.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
   </details>` : '';
   const skillDetail = skillActivityDetail(activity);
-  const inlineDetailKind = skillDetail ? 'skill' : (editDiff ? 'file' : '');
+  const readableDetail = readableActivityDetail(activity, esc);
+  const inlineDetailKind = skillDetail ? 'skill' : (editDiff ? 'file' : readableDetail ? 'action' : '');
   const inlineDisclosureKey = inlineDetailKind ? `${inlineDetailKind}:${activityKey}` : '';
   const inlineOpen = inlineDisclosureKey && disclosureState()?.get(inlineDisclosureKey) === true;
   const inlineDetailHtml = skillDetail
     ? `<div class="tool-activity-inline-detail tool-activity-skill-detail"><strong>${esc(skillDetail.name)}</strong><span>${esc(skillDetail.description)}</span></div>`
     : editDiff
       ? `<div class="tool-activity-inline-detail tool-activity-file-diff" aria-label="File diff" role="region"><span class="tool-activity-diff-sr">File changes</span>${renderDiffLines(editDiff, esc, activity.target)}</div>`
-      : '';
+      : readableDetail;
   if (inlineDetailHtml) {
     return `<details class="tool-activity-wrap tool-activity-disclosure" data-activity-key="${esc(activityKey)}" data-activity-status="${esc(state)}" data-tool-disclosure-key="${esc(inlineDisclosureKey)}"${inlineOpen ? ' open' : ''}>
   <summary class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
@@ -1175,19 +1299,23 @@ export function renderToolActivityEntry(entry, escapeHtml) {
 }
 
 export function appendCommandTerminalChunkToDom(runIdRaw, chunkRaw, sequenceRaw = 0) {
-  if (typeof document === 'undefined') return;
   const runId = String(runIdRaw || '').trim();
   const chunk = cleanTerminalText(chunkRaw);
   if (!runId || !chunk) return;
+  const previous = cachedCommandTerminal(runId);
+  const sequence = Number(sequenceRaw || 0);
+  const alreadyCached = Boolean(sequence && previous && sequence <= previous.sequence);
+  const output = alreadyCached ? previous.output : boundTerminalText(`${previous?.output || ''}${chunk}`);
+  const nextSequence = alreadyCached ? previous.sequence : (sequence || Number(previous?.sequence || 0) + 1);
+  if (!alreadyCached) rememberCommandTerminal(runId, output, nextSequence);
+  if (typeof document === 'undefined') return;
   document.querySelectorAll('[data-command-terminal-output]').forEach((element) => {
     if (String(element.getAttribute('data-command-terminal-output') || '') !== runId) return;
-    const sequence = Number(sequenceRaw || 0);
     const previousSequence = Number(element.getAttribute('data-terminal-sequence') || 0);
-    if (sequence && sequence <= previousSequence) return;
+    if (nextSequence <= previousSequence) return;
     const wasNearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 32;
-    const current = /^(Waiting for output…|Open to load output…)$/.test(element.textContent || '') ? '' : element.textContent || '';
-    element.textContent = boundTerminalText(`${current}${chunk}`);
-    element.setAttribute('data-terminal-sequence', String(sequence || previousSequence + 1));
+    element.textContent = output;
+    element.setAttribute('data-terminal-sequence', String(nextSequence));
     if (wasNearBottom) element.scrollTop = element.scrollHeight;
   });
 }

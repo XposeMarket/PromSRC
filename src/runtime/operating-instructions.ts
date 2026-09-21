@@ -1,7 +1,7 @@
 /** Operational policy shared by main chat, worker overlays, and goal continuation. */
 export const OPERATING_INSTRUCTION_SOURCE = 'src/runtime/operating-instructions.ts';
 
-export const USER_PLAN_INSTRUCTION = 'Default to direct execution. Call declare_plan only when the user explicitly asks for a plan, checklist, or step-by-step breakdown. Internal organization does not require a visible plan.';
+export const USER_PLAN_INSTRUCTION = 'Default to direct execution for quick linear or single-phase work. Call declare_plan FIRST when the task has meaningful phases (2–6), such as branching decisions, cross-system coordination, or extended execution, or when the user explicitly asks for a plan, checklist, or step-by-step breakdown. Do not call it for simple lookups, exploratory reads, or other work that has no meaningful phases. Internal organization does not require a visible plan.';
 
 export function buildOperatingInstructions(input: { executionMode: string; hasDurableTaskPlan?: boolean; activeGoal?: boolean }): string {
   const block = (id: string, reason: string, text: string) => `[OPERATING_RULE ${id} ${reason}]\n${text}\n[/OPERATING_RULE]`;
@@ -19,7 +19,7 @@ export function buildOperatingInstructions(input: { executionMode: string; hasDu
     block('core.plan_protocol', plan[0], plan[1]),
     block('core.skills_recovery', 'skill_failure_recovery', 'When a skill-guided path fails, recover with another viable approach. If that works, offer an evidence-backed skill correction. Do not rewrite the skill catalog merely because a fallback worked.'),
     input.executionMode === 'interactive'
-      ? block('core.work_updates', 'interactive_work', 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, write commentary only for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. Every later update must contain new evidence plus what it changes or what you will do next; if nothing materially changed, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls, paraphrasing an earlier update, or repeating information already visible in the tool activity UI.')
+      ? block('core.work_updates', 'interactive_work', 'For tool-using work, keep the user oriented with brief visible commentary. Treat the entire multi-round tool loop as one assistant turn: give exactly one preamble before the first meaningful tool call, and never restate that approach in later rounds. Afterward, update for a material state transition: a concrete new finding, a changed plan, a blocker, or completed verification. During extended tool work, also emit a short visible heartbeat about every two minutes even when nothing materially changed; name the current operation and say it is still in progress. Between those updates, call the next tool silently. These updates are user-facing commentary, not private chain-of-thought or reasoning summaries. Avoid narrating low-level calls or repeating information already visible in the tool activity UI.')
       : '',
   ].filter(Boolean).join('\n');
 }

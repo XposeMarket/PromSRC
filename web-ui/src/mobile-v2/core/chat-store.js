@@ -35,6 +35,21 @@ function normalizeInteractionList(records, kind) {
     .filter((record) => record.id);
 }
 
+function historyId(record, role, text) {
+  const explicit = String(record?.id || record?.messageId || record?.turnId || '').trim();
+  if (explicit) return explicit;
+  // Page-relative array indexes repeat for every history request. Use stable
+  // record data so an earlier page cannot collide with the loaded tail.
+  const stamp = String(record?.timestamp || record?.createdAt || record?.workStartedAt || 'undated');
+  const seed = `${role}|${stamp}|${text}`;
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `history-${role}-${stamp}-${(hash >>> 0).toString(36)}`;
+}
+
 function upsertInteraction(list, record, kind) {
   const next = normalizeInteraction(record, kind);
   if (!next.id) return null;
@@ -94,7 +109,7 @@ function dedupeAssistantHistory(messages) {
 }
 
 function normalizeHistory(history = []) {
-  const messages = (Array.isArray(history) ? history : []).flatMap((record, index) => {
+  const messages = (Array.isArray(history) ? history : []).flatMap((record) => {
     const text = textFromRecord(record);
     const role = record?.role === 'user' ? 'user' : 'assistant';
     const label = String(record?.channelLabel || record?.channel || record?.source || '').trim().toLowerCase();
@@ -108,7 +123,7 @@ function normalizeHistory(history = []) {
 
     return [{
       ...record,
-      id: String(record?.id || record?.messageId || record?.turnId || `history-${index}`),
+      id: historyId(record, role, text),
       role,
       text,
       body: {
@@ -135,6 +150,8 @@ function freshState(gatewayId, sessionId) {
     messages: [],
     olderCursor: null,
     hasOlder: false,
+    historyExpanded: false,
+    olderLoading: false,
     loading: false,
     streaming: false,
     error: '',
@@ -180,12 +197,26 @@ export class ChatStore {
     const session = payload?.session || payload || {};
     const history = Array.isArray(session.history) ? session.history : (Array.isArray(payload?.history) ? payload.history : []);
     return this.mutate(gatewayId, sessionId, (state) => {
+      const expandedCursor = state.olderCursor;
+      const expandedHasOlder = state.hasOlder;
       state.title = String(session.title || state.title || 'New Chat');
-      state.messages = normalizeHistory(history);
+      const incoming = normalizeHistory(history);
+      if (state.historyExpanded && state.messages.length) {
+        const byId = new Map(incoming.map((message) => [`${message.role}:${message.id}`, message]));
+        const retained = state.messages.map((message) => {
+          const key = `${message.role}:${message.id}`;
+          const fresh = byId.get(key);
+          byId.delete(key);
+          return fresh || message;
+        });
+        state.messages = dedupeAssistantHistory([...retained, ...byId.values()]);
+      } else {
+        state.messages = incoming;
+      }
       const page = session.historyPage || payload?.historyPage || {};
       const pageInfo = page?.pageInfo || page;
-      state.olderCursor = pageInfo?.olderCursor || null;
-      state.hasOlder = pageInfo?.hasOlder === true || session.historyTruncated === true;
+      state.olderCursor = state.historyExpanded ? expandedCursor : (pageInfo?.olderCursor || null);
+      state.hasOlder = state.historyExpanded ? expandedHasOlder : (pageInfo?.hasOlder === true || session.historyTruncated === true);
       state.loading = false;
       state.error = '';
     });
@@ -196,6 +227,7 @@ export class ChatStore {
       const older = normalizeHistory(page?.items || []);
       const existing = new Set(state.messages.map((message) => message.id));
       state.messages = dedupeAssistantHistory([...older.filter((message) => !existing.has(message.id)), ...state.messages]);
+      state.historyExpanded = true;
       const pageInfo = page?.pageInfo || page;
       state.olderCursor = pageInfo?.olderCursor || null;
       state.hasOlder = pageInfo?.hasOlder === true;

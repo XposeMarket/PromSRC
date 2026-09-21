@@ -5,6 +5,7 @@ import { getConfig } from '../../config/config';
 import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
+import { preferConnectedAccountId } from '../../auth/provider-account-pool';
 import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
 import { getOllamaClient } from '../../agents/ollama-client';
@@ -311,6 +312,20 @@ function normalizeLLMAccounts(llm: any): any {
   return out;
 }
 
+function preferConnectedCodexAccount(llm: any): any {
+  const providerCfg = llm?.providers?.openai_codex;
+  const accounts = providerCfg?.accounts;
+  if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) return llm;
+  const requested = String(providerCfg.defaultAccountId || '').trim();
+  const connectedId = preferConnectedAccountId(accounts, requested, id => isConnected(CONFIG_DIR_PATH, id));
+  if (!connectedId) return llm;
+  if (connectedId !== requested) providerCfg.defaultAccountId = connectedId;
+  if (llm.provider === 'openai_codex' && !isConnected(CONFIG_DIR_PATH, String(llm.accountId || '').trim())) {
+    llm.accountId = connectedId;
+  }
+  return llm;
+}
+
 function migrateAccountSecretsToVault(llm: any): any {
   if (!llm || typeof llm !== 'object') return llm;
   const out = JSON.parse(JSON.stringify(llm));
@@ -439,14 +454,16 @@ router.post('/api/settings/usage-budgets', (req, res) => {
 
 // ─── Anthropic usage-tracking OAuth (separate, read-only credential) ──────────
 // This is NOT the chat credential. It carries the `user:profile` scope so the
-// /api/oauth/usage endpoint works, and is used ONLY to read usage limits.
+// /api/oauth/usage endpoint works; Prometheus uses it only for usage reads.
 const anthropicUsageOAuth = () => require('../../auth/anthropic-usage-oauth');
 
 // GET status — whether usage tracking is connected.
-router.get('/api/settings/anthropic/usage-tracking', (_req, res) => {
+router.get('/api/settings/anthropic/usage-tracking', async (_req, res) => {
   try {
     const configDir = getConfig().getConfigDir();
-    res.json({ success: true, connected: anthropicUsageOAuth().hasUsageTracking(configDir) });
+    const usageOAuth = anthropicUsageOAuth();
+    const connected = !!(await usageOAuth.getValidUsageToken(configDir));
+    res.json({ success: true, connected, ...usageOAuth.usageTrackingState(configDir) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }
@@ -2193,11 +2210,11 @@ router.post('/api/settings/provider', (req, res) => {
     const configManager = getConfig();
     const current = (configManager.getConfig() as any).llm || {};
     const llm = preserveMaskedProviderSecrets(llmIncoming, current);
-    const mergedLlm = preserveLiveMainChatRoute(configManager.getConfig(), {
+    const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(configManager.getConfig(), {
       ...current,
       ...llm,
       providers: mergeProviderConfigs(current.providers || {}, llm.providers || {}),
-    });
+    }));
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
     const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
     const legacyModelSync = activeModel
@@ -2301,11 +2318,11 @@ router.post('/api/settings/bulk', async (req, res) => {
       if (!llmIncoming?.provider) { res.status(400).json({ success: false, error: 'Missing llm.provider' }); return; }
       const currentLlm = current.llm || {};
       const llm = preserveMaskedProviderSecrets(llmIncoming, currentLlm);
-      const mergedLlm = preserveLiveMainChatRoute(current, {
+      const mergedLlm = preferConnectedCodexAccount(preserveLiveMainChatRoute(current, {
         ...currentLlm,
         ...llm,
         providers: mergeProviderConfigs(currentLlm.providers || {}, llm.providers || {}),
-      });
+      }));
       updates.llm = mergedLlm;
       const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
       const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
@@ -2641,8 +2658,14 @@ router.post('/api/auth/anthropic/test', async (req, res) => {
   try {
     const { AnthropicAdapter } = require('../../providers/anthropic-adapter');
     const adapter = new AnthropicAdapter({ configDir, accountId: accountId || undefined });
-    const ok = await adapter.testConnection();
-    res.json({ success: ok, error: ok ? undefined : 'Token rejected by Anthropic API. Re-run `claude setup-token` and paste a fresh token.' });
+    const configuredModel = String((getConfig().getConfig() as any)?.llm?.providers?.anthropic?.model || '').trim();
+    const requestedModel = String(req.body?.model || configuredModel || 'claude-haiku-4-5-20251001').trim();
+    if (!/^claude-[a-z0-9-]{1,100}$/.test(requestedModel)) {
+      res.status(400).json({ success: false, error: 'Invalid Claude model.' });
+      return;
+    }
+    const variant = req.body?.variant === 'matched-skill' ? 'matched-skill' : 'plain';
+    res.json(await adapter.diagnoseConnection(requestedModel, variant));
   } catch (err: any) {
     res.json({ success: false, error: err.message });
   }

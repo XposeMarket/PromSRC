@@ -11,6 +11,7 @@ import { contentToString } from '../providers/content-utils.js';
 import { buildVisionImagePart, primarySupportsVision } from '../gateway/vision-chat.js';
 import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline.js';
+import { snapshotAnalysisVisual } from './media-analysis-visuals.js';
 import { getConfig } from '../config/config.js';
 
 const execFileAsync = promisify(execFile);
@@ -18,6 +19,9 @@ const execFileAsync = promisify(execFile);
 type AnalyzeImageArgs = {
   file_path: string;
   prompt?: string;
+  response_mode?: 'view' | 'report';
+  /** Internal: only a runtime that will attach visuals to the next model call may opt in. */
+  direct_observation?: boolean;
 };
 
 export type MediaAnalysisProgress = {
@@ -30,6 +34,8 @@ export type MediaAnalysisProgress = {
 type AnalyzeVideoArgs = {
   file_path: string;
   prompt?: string;
+  response_mode?: 'view' | 'report';
+  direct_observation?: boolean;
   analysis_mode?: 'quick' | 'detail' | 'both';
   sample_count?: number;
   quick_sample_count?: number;
@@ -358,13 +364,15 @@ async function runVideoAnalyzer(scriptPath: string, args: string[], options: {
   return parseJsonFromStdout(stdout);
 }
 
-async function readFileAsVisionPart(filePath: string): Promise<any> {
+async function readFileAsVisionPart(filePath: string, visuals: any[], artifactKind: string): Promise<any> {
   const mimeType = inferMimeType(filePath);
   if (!mimeType.startsWith('image/')) {
     throw new Error(`Unsupported image type for vision: ${path.basename(filePath)}`);
   }
-  const base64 = (await fsp.readFile(filePath)).toString('base64');
-  return buildVisionImagePart(base64, mimeType);
+  const snapshot = await snapshotAnalysisVisual(getWorkspaceRoot(), filePath);
+  visuals.push({ path: snapshot.path, rel_path: snapshot.rel_path, source_name: path.basename(filePath), artifactKind });
+  const base64 = snapshot.bytes.toString('base64');
+  return buildVisionImagePart(base64, inferMimeType(snapshot.path));
 }
 
 async function analyzeWithPrimaryVision(messages: any[], options: { maxTokens?: number; think?: 'none' | 'minimal' | 'low' | 'medium' | 'high' } = {}): Promise<string> {
@@ -466,7 +474,10 @@ export async function executeAnalyzeImage(args: AnalyzeImageArgs): Promise<ToolR
     if (!fs.statSync(absPath).isFile()) return { success: false, error: `"${requestedPath}" is not a file` };
 
     const userPrompt = String(args?.prompt || '').trim();
-    const analysis = await analyzeWithPrimaryVision([
+    const visualInputs: any[] = [];
+    const imagePart = await readFileAsVisionPart(absPath, visualInputs, 'analyzed_image');
+    const direct = args.direct_observation === true && args.response_mode !== 'report';
+    const analysis = direct ? undefined : await analyzeWithPrimaryVision([
       {
         role: 'system',
         content:
@@ -483,7 +494,7 @@ export async function executeAnalyzeImage(args: AnalyzeImageArgs): Promise<ToolR
               `${userPrompt || 'Analyze this image and explain what is visible.'}\n` +
               `Image file: ${path.basename(absPath)}`,
           },
-          await readFileAsVisionPart(absPath),
+          imagePart,
         ],
       },
     ]);
@@ -491,11 +502,13 @@ export async function executeAnalyzeImage(args: AnalyzeImageArgs): Promise<ToolR
     const relPath = path.relative(workspaceRoot, absPath).replace(/\\/g, '/');
     return {
       success: true,
-      stdout: analysis,
+      stdout: analysis || 'Image prepared for direct visual inspection in the next model turn.',
       data: {
         file_path: absPath,
         rel_path: relPath,
         mime_type: inferMimeType(absPath),
+        visual_inputs: visualInputs,
+        observation_mode: direct ? 'direct' : 'report',
         analysis,
       },
     };
@@ -665,13 +678,14 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       },
     ];
 
+    const visualInputs: any[] = [];
     for (let idx = 0; idx < visualSheetPaths.length; idx += 1) {
       const sheet = contactSheets[idx] || {};
       userContent.push({
         type: 'text',
         text: `Contact sheet ${idx + 1} of ${visualSheetPaths.length}: ${path.basename(visualSheetPaths[idx])}${sheet.frame_count ? ` (${sheet.frame_count} frames)` : ''}`,
       });
-      userContent.push(await readFileAsVisionPart(visualSheetPaths[idx]));
+      userContent.push(await readFileAsVisionPart(visualSheetPaths[idx], visualInputs, 'contact_sheet'));
     }
 
     for (let idx = 0; idx < fallbackFramePaths.length; idx += 1) {
@@ -679,7 +693,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         type: 'text',
         text: `Frame ${idx + 1} of ${fallbackFramePaths.length}: ${path.basename(fallbackFramePaths[idx])}`,
       });
-      userContent.push(await readFileAsVisionPart(fallbackFramePaths[idx]));
+      userContent.push(await readFileAsVisionPart(fallbackFramePaths[idx], visualInputs, 'sample_frame'));
     }
 
     if (transcript) {
@@ -690,7 +704,8 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     }
 
     args.onProgress?.({ phase: 'analyzing', message: 'Analyzing the sampled frames and transcript…' });
-    const analysis = await analyzeWithPrimaryVision([
+    const direct = args.direct_observation === true && args.response_mode !== 'report';
+    const analysis = direct ? undefined : await analyzeWithPrimaryVision([
       {
         role: 'system',
         content:
@@ -725,7 +740,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     args.onProgress?.({ phase: 'complete', message: 'Video analysis complete.' });
     return {
       success: true,
-      stdout: analysis,
+      stdout: analysis || 'Video samples prepared for direct visual inspection in the next model turn.',
       data: {
         file_path: absPath,
         rel_path: path.relative(workspaceRoot, absPath).replace(/\\/g, '/'),
@@ -734,6 +749,10 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         analysis_mode: analysisMode,
         sample_count: framePaths.length,
         sample_frames: relFrames,
+        // The preview must show precisely the visual inputs inspected by the
+        // model, not every extracted frame (or an arbitrary preview limit).
+        visual_inputs: visualInputs,
+        observation_mode: direct ? 'direct' : 'report',
         contact_sheets: contactSheets.map((sheet: any) => ({
           ...sheet,
           rel_path: relPath(workspaceRoot, String(sheet.path)),

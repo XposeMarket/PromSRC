@@ -33,6 +33,7 @@ const PM_PINNED_PROJECTS_KEY = 'pm_mobile_pinned_projects';
 let _pinnedSessionMigrationPromise = null;
 let _drawerPinnedSessions = null;
 let _drawerProjects = [];
+let _drawerDefaultModel = null;
 const _drawerExpandedProjectIds = new Set();
 
 function _getPinnedSessionIds() {
@@ -324,6 +325,8 @@ let _drawerSearchTimer = null;
 let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
+let _shellActiveTab = null;
+let _shellOnNavigate = null;
 let _drawerRefreshing = false;
 let _drawerRenderInFlight = 0;
 let _drawerGatewayHeartbeatTimer = null;
@@ -961,6 +964,9 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   let dragging = false;
   let pendingTab = null;       // currently highlighted tab during the gesture
   let requestGestureNativeHaptic = null;
+  let gestureGeometry = null;
+  let dragFrame = 0;
+  let pendingDragX = 0;
   // While pressed/dragging the pill swells past the bar so it reads as a lens
   // lifting off the surface (and the icon underneath magnifies via CSS).
   // The active pill should grow a touch farther than the bar itself, like the
@@ -969,17 +975,30 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
 
   const tabs = () => Array.from(tabbar.querySelectorAll('.pm-tab'));
   const indicator = () => tabbar.querySelector('.pm-tab-indicator');
+  const measureTabs = () => {
+    const rect = tabbar.getBoundingClientRect();
+    return {
+      left: rect.left,
+      width: rect.width,
+      items: tabs().map((element) => {
+        const left = element.offsetLeft;
+        const width = element.offsetWidth;
+        return { element, left, width, center: left + width / 2 };
+      }),
+    };
+  };
+  const geometry = () => gestureGeometry || measureTabs();
+  const geometryFor = (element) => geometry().items.find((item) => item.element === element);
 
   // Nearest tab to a clientX, by horizontal centre distance.
   const tabAtX = (clientX) => {
-    const rect = tabbar.getBoundingClientRect();
-    const x = clientX - rect.left;
+    const measured = geometry();
+    const x = clientX - measured.left;
     let best = null;
     let bestDist = Infinity;
-    for (const t of tabs()) {
-      const centre = t.offsetLeft + t.offsetWidth / 2;
-      const d = Math.abs(centre - x);
-      if (d < bestDist) { bestDist = d; best = t; }
+    for (const item of measured.items) {
+      const d = Math.abs(item.center - x);
+      if (d < bestDist) { bestDist = d; best = item.element; }
     }
     return best;
   };
@@ -987,13 +1006,12 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   // The glass pill follows the finger but is clamped to the first and last
   // tab. Use its actual center for haptic timing, not the nearest-tab midpoint.
   const sliderCenterAtX = (clientX) => {
-    const items = tabs();
-    const first = items[0];
-    const last = items[items.length - 1];
-    const rect = tabbar.getBoundingClientRect();
+    const measured = geometry();
+    const first = measured.items[0];
+    const last = measured.items[measured.items.length - 1];
     if (!first || !last) return Number(clientX) || 0;
-    const minCenter = rect.left + first.offsetLeft + first.offsetWidth / 2;
-    const maxCenter = rect.left + last.offsetLeft + last.offsetWidth / 2;
+    const minCenter = measured.left + first.center;
+    const maxCenter = measured.left + last.center;
     return Math.max(minCenter, Math.min(maxCenter, Number(clientX) || minCenter));
   };
 
@@ -1009,15 +1027,15 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   // stretches in the direction of travel like a blob of liquid being pulled.
   const followDrag = (clientX) => {
     const ind = indicator();
-    const tabEl = pendingTab || tabs()[0];
-    if (!ind || !tabEl) return;
-    const rect = tabbar.getBoundingClientRect();
-    const width = tabEl.offsetWidth;
-    const first = tabs()[0];
-    const last = tabs()[tabs().length - 1];
-    const minLeft = first ? first.offsetLeft : 0;
-    const maxLeft = last ? last.offsetLeft : 0;
-    let left = (clientX - rect.left) - width / 2;
+    const measured = geometry();
+    const tab = geometryFor(pendingTab) || measured.items[0];
+    if (!ind || !tab) return;
+    const width = tab.width;
+    const first = measured.items[0];
+    const last = measured.items[measured.items.length - 1];
+    const minLeft = first ? first.left : 0;
+    const maxLeft = last ? last.left : 0;
+    let left = (clientX - measured.left) - width / 2;
     left = Math.max(minLeft, Math.min(maxLeft, left));
     ind.style.setProperty('--pm-ind-x', `${left}px`);
     ind.style.setProperty('--pm-ind-w', `${width}px`);
@@ -1032,7 +1050,7 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     // inset() can match the pill rectangle exactly on BOTH sides — a circle
     // radius was asymmetric (bled early on the leading edge).
     const visualHalfW = (width * stretch) / 2;
-    const barW = tabbar.offsetWidth;
+    const barW = measured.width;
     const pillLeft  = pillCenterX - visualHalfW;
     const pillRight = barW - (pillCenterX + visualHalfW);
     const pillSpan  = visualHalfW * 2;  // visual width of pill
@@ -1044,17 +1062,26 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     ind.style.transform = `translateX(${lean}px) scaleX(${stretch}) scaleY(${PRESS_GROW})`;
 
   };
+  const scheduleFollowDrag = (clientX) => {
+    pendingDragX = clientX;
+    if (dragFrame) return;
+    dragFrame = window.requestAnimationFrame(() => {
+      dragFrame = 0;
+      followDrag(pendingDragX);
+    });
+  };
 
   // Spring the pill onto a tab and let the elastic stretch relax to rest.
   const settle = (tabEl) => {
     const ind = indicator();
-    if (!ind || !tabEl) return;
-    ind.style.setProperty('--pm-ind-x', `${tabEl.offsetLeft}px`);
-    const ctr = tabEl.offsetLeft + tabEl.offsetWidth / 2;
+    const tab = geometryFor(tabEl);
+    if (!ind || !tab) return;
+    ind.style.setProperty('--pm-ind-x', `${tab.left}px`);
+    const ctr = tab.center;
     tabbar.style.setProperty('--pm-lens-x', `${ctr}px`);
     // Reset pill bounds to resting (un-stretched) so inverse mask clears correctly.
-    const hw = tabEl.offsetWidth / 2;
-    const barW = tabbar.offsetWidth;
+    const hw = tab.width / 2;
+    const barW = geometry().width;
     tabbar.style.setProperty('--pm-pill-left',  `${ctr - hw}px`);
     tabbar.style.setProperty('--pm-pill-right', `${barW - (ctr + hw)}px`);
     tabbar.style.setProperty('--pm-pill-span',  `${hw * 2}px`);
@@ -1073,18 +1100,20 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   const pulseIconsCrossed = (fromCenterX, toCenterX) => {
     if (!Number.isFinite(fromCenterX) || !Number.isFinite(toCenterX) || fromCenterX === toCenterX) return;
     const movingRight = toCenterX > fromCenterX;
-    const rect = tabbar.getBoundingClientRect();
-    for (const tab of tabs()) {
-      const iconCenterX = rect.left + tab.offsetLeft + tab.offsetWidth / 2;
+    const measured = geometry();
+    for (const tab of measured.items) {
+      const iconCenterX = measured.left + tab.center;
       const crossed = movingRight
         ? iconCenterX > fromCenterX && iconCenterX <= toCenterX
         : iconCenterX < fromCenterX && iconCenterX >= toCenterX;
-      if (crossed) pulseTab(tab.getAttribute('data-tab'));
+      if (crossed) pulseTab(tab.element.getAttribute('data-tab'));
     }
   };
 
   const finish = (e, gesture = {}) => {
     if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
+    if (dragFrame) window.cancelAnimationFrame(dragFrame);
+    dragFrame = 0;
     const wasDragging = dragging;
     try { tabbar.releasePointerCapture(pointerId); } catch {}
     tabbar.classList.remove('pm-tabbar-dragging');
@@ -1097,6 +1126,7 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     const target = e && Number.isFinite(e.clientX) ? tabAtX(e.clientX) : pendingTab;
     if (!target) {
       requestGestureNativeHaptic = null;
+      gestureGeometry = null;
       return;
     }
     // Plain taps use the native switch click (plus the fallback vibration).
@@ -1114,14 +1144,17 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     try { if (currentId) sessionStorage.setItem(PM_ACTIVE_TAB_KEY, currentId); } catch {}
     setActive(target);
     settle(target);
+    gestureGeometry = null;
     if (id !== currentId && tabObj && typeof onNavigate === 'function') {
-      window.setTimeout(() => onNavigate(tabObj.route), 90);
+      onNavigate(tabObj.route);
     }
     requestGestureNativeHaptic = null;
   };
 
   const cancel = () => {
     if (pointerId === null) return;
+    if (dragFrame) window.cancelAnimationFrame(dragFrame);
+    dragFrame = 0;
     try { tabbar.releasePointerCapture(pointerId); } catch {}
     tabbar.classList.remove('pm-tabbar-dragging', 'pm-tabbar-pressing');
     pointerId = null;
@@ -1130,12 +1163,14 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     pendingTab = null;
     requestGestureNativeHaptic = null;
     settle(tabbar.querySelector('.pm-tab.active'));
+    gestureGeometry = null;
   };
 
   attachMobileHapticGestureSurface(tabbar, {
     onPointerDown: (e, gesture) => {
+      gestureGeometry = measureTabs();
       const t = tabAtX(e.clientX);
-      if (!t) return;
+      if (!t) { gestureGeometry = null; return; }
       requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
       pointerId = e.pointerId;
       startX = lastX = e.clientX;
@@ -1152,9 +1187,10 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
       // right away (before any drag starts).
       const pillEl = indicator();
       if (pillEl) {
-        const pl = parseFloat(pillEl.style.getPropertyValue('--pm-ind-x') || t.offsetLeft);
-        const pw = parseFloat(pillEl.style.getPropertyValue('--pm-ind-w') || t.offsetWidth);
-        const barW2 = tabbar.offsetWidth;
+        const tab = geometryFor(t);
+        const pl = parseFloat(pillEl.style.getPropertyValue('--pm-ind-x') || tab.left);
+        const pw = parseFloat(pillEl.style.getPropertyValue('--pm-ind-w') || tab.width);
+        const barW2 = gestureGeometry.width;
         tabbar.style.setProperty('--pm-pill-left',  `${pl}px`);
         tabbar.style.setProperty('--pm-pill-right', `${barW2 - (pl + pw)}px`);
         tabbar.style.setProperty('--pm-pill-span',  `${pw}px`);
@@ -1178,7 +1214,7 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
         pendingTab = nearest;
         setActive(nearest);
       }
-      followDrag(e.clientX);
+      scheduleFollowDrag(e.clientX);
     },
     onPointerUp: finish,
     onPointerCancel: cancel,
@@ -1549,6 +1585,23 @@ function _mountDrawerGatewayFilterPanel() {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  _shellOnNavigate = onNavigate;
+  const existingApp = root?.querySelector(':scope > #pm-app');
+  const existingPage = existingApp?.querySelector(':scope > #pm-page');
+  const existingTabbar = existingApp?.querySelector(':scope > .pm-tabbar');
+  if (existingApp?.isConnected && existingPage && existingTabbar && _drawerEl?.isConnected) {
+    _drawerCallbacks = { onOpenSession, loadSessions, searchSessions, onNewChat };
+    const previousTab = _shellActiveTab;
+    _shellActiveTab = activeTab;
+    existingTabbar.querySelectorAll('.pm-tab').forEach((tab) => {
+      const selected = tab.getAttribute('data-tab') === activeTab;
+      tab.classList.toggle('active', selected);
+      tab.setAttribute('aria-selected', String(selected));
+    });
+    if (activeTab) _positionTabIndicator(existingTabbar, activeTab, { animate: !!previousTab && previousTab !== activeTab });
+    _rememberActiveTab(activeTab);
+    return { app: existingApp, page: existingPage, tabbar: existingTabbar };
+  }
   _restoreDrawerLayoutState();
   _stopDrawerGatewayHeartbeat();
   _drawerSwipeCleanup?.();
@@ -1645,13 +1698,13 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     btn.addEventListener('click', () => {
       const route = btn.getAttribute('data-route');
       closeDrawer();
-      if (typeof onNavigate === 'function') onNavigate(route);
+      if (typeof _shellOnNavigate === 'function') _shellOnNavigate(route);
     });
   });
   _drawerEl.querySelector('[data-route="#mobile/gateways"]')?.addEventListener('click', (event) => {
     event.preventDefault();
     closeDrawer();
-    if (typeof onNavigate === 'function') onNavigate('#mobile/gateways');
+    if (typeof _shellOnNavigate === 'function') _shellOnNavigate('#mobile/gateways');
   });
   const _drawerNewChatBtn = _drawerEl.querySelector('[data-mobile-new-chat]');
   // Haptic feedback on the drawer's New Chat button
@@ -1660,7 +1713,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   }
   _drawerNewChatBtn?.addEventListener('click', () => {
     closeDrawer();
-    Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
+    Promise.resolve(typeof _drawerCallbacks?.onNewChat === 'function' ? _drawerCallbacks.onNewChat() : null)
       .then(() => {
         _saveDrawerState({ view: 'mobile', channel: '' });
         _resetDrawerPageState();
@@ -1676,7 +1729,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   _drawerEl.querySelector('[data-mobile-theme-toggle]')?.addEventListener('click', _toggleMobileTheme);
   _drawerEl.querySelector('#pm-drawer-search-input')?.addEventListener('input', (ev) => {
     _drawerSearch = String(ev.target?.value || '').trim();
-    _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    _renderDrawerSearchState(_drawerCallbacks);
   });
   _applyMobileTheme(_getTheme());
   // Capture live callbacks so refreshMobileDrawerSessions() and pull-to-refresh
@@ -1742,7 +1795,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // the native switch overlay (iOS haptic) and navigates on release; dragging
   // lets the pill track the finger and snaps to the tab you let go over.
   app.appendChild(tabbar);
-  _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
+  _shellActiveTab = activeTab;
+  _wireTabbarSlider(tabbar, { onNavigate: (route) => _shellOnNavigate?.(route), getActiveTab: () => _shellActiveTab });
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous
   // tab if we just navigated here from another tab.
@@ -1796,6 +1850,18 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     apply();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
   };
+  try {
+    const settings = await mobileGatewayFetch('/api/settings/provider');
+    const llm = settings?.llm || {};
+    const provider = String(llm.provider || '').trim();
+    _drawerDefaultModel = {
+      provider,
+      model: String(llm.providers?.[provider]?.model || '').trim(),
+    };
+  } catch (err) {
+    console.warn('[mobile drawer] Could not load the default model logo', err);
+  }
+  if (!isCurrent()) return;
   if (_drawerSearch) {
     const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
     if (pinnedEl) pinnedEl.innerHTML = '';
@@ -2334,6 +2400,18 @@ function _projectSessionRows(project) {
   return '<div class="pm-project-chat-list">' + rows.map((session) => _sessionButtonHtml(session, { projectChild: true })).join('') + '</div>';
 }
 
+function _mobileSessionModelLogo(session) {
+  const route = session?.chatModelRoute?.effective || session?.chatModelRoute?.override || {};
+  const provider = String(route.providerId || route.provider || session?.chatModelRoute?.providerId || session?.modelProvider || _drawerDefaultModel?.provider || '').toLowerCase();
+  const model = String(route.model || session?.chatModelRoute?.model || session?.model || _drawerDefaultModel?.model || '').toLowerCase();
+  const brand = provider === 'anthropic' || model.includes('claude') ? MOBILE_IMPORTED_SOURCE_BRANDS.claude
+    : provider === 'openai_codex' || model.includes('codex') ? MOBILE_IMPORTED_SOURCE_BRANDS.openai
+    : provider === 'openai' || model.startsWith('gpt-') ? MOBILE_IMPORTED_SOURCE_BRANDS.chatgpt
+    : provider === 'xai' || model.includes('grok') ? { label: 'xAI', asset: '/static/assets/import-sources/xai.svg', key: 'xai' }
+    : null;
+  return brand ? `<img class="pm-session-model-logo pm-session-model-logo--${brand.key}" src="${brand.asset}" alt="${brand.label} model" width="14" height="14" decoding="async">` : '';
+}
+
 function _projectButtonHtml(project) {
   const id = String(project?.id || '');
   const title = String(project?.name || 'Project');
@@ -2365,7 +2443,7 @@ function _sessionButtonHtml(session, options = {}) {
   const state = _sessionStateMeta(session);
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
-  const sourceLogo = _mobileImportedSourceLogo(session);
+  const sourceLogo = _mobileSessionModelLogo(session) || _mobileImportedSourceLogo(session);
   const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
@@ -2396,7 +2474,7 @@ function _searchResultButtonHtml(session, query) {
   const state = _sessionStateMeta(session);
   const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
   const importedClass = imported ? ' is-imported-session' : '';
-  const sourceLogo = _mobileImportedSourceLogo(session);
+  const sourceLogo = _mobileSessionModelLogo(session) || _mobileImportedSourceLogo(session);
   const timestamp = state.activeRun ? '' : _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
@@ -2869,10 +2947,10 @@ export function closeDrawer() {
   setTimeout(() => document.dispatchEvent(new CustomEvent('pm-drawer-closed')), 0);
 }
 
-export function renderMobileHeader({ title, online = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
+export function renderMobileHeader({ title, online = true, showModelBadge = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
   const settingsButton = `<button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>`;
-  const modelBadge = online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
-          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}>⚡</span>
+  const modelBadge = online && showModelBadge ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.4 2 4.5 13h6.7L10.6 22l8.9-11h-6.7L13.4 2Z"/></svg></span>
           <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
           <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>` : '';

@@ -6,7 +6,7 @@
  *
  *   1. "live"     — the provider's own usage/rate-limit endpoint, queried with
  *                   the OAuth/subscription token already stored in the vault.
- *                   Available for Anthropic (setup-token), OpenAI ChatGPT/Codex
+ *                   Available for Anthropic (separate usage OAuth), OpenAI ChatGPT/Codex
  *                   (OAuth) and xAI Grok. Yields real subscription windows
  *                   (e.g. 5-hour / weekly / monthly utilisation + reset times).
  *   2. "internal" — Prometheus' own token accounting from model-usage.jsonl,
@@ -205,8 +205,18 @@ async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null>
   // browser-OAuth "usage tracking" token instead (see anthropic-usage-oauth.ts).
   const usageOAuth = require('../auth/anthropic-usage-oauth');
   const accessToken: string | null = await usageOAuth.getValidUsageToken(configDir);
-  // Not connected → no error, just fall back to internal tracking silently.
-  if (!accessToken) return null;
+  if (!accessToken) {
+    const state = usageOAuth.usageTrackingState(configDir);
+    return {
+      windows: [],
+      plan_label: null,
+      error: state.reauthRequired
+        ? 'Claude usage connection expired. Reconnect live usage tracking in Settings; Claude chat is unaffected.'
+        : state.configured
+          ? 'Claude usage is temporarily unavailable. Try again shortly.'
+          : 'Connect Claude live usage tracking in Settings to see 5-hour and weekly limits.',
+    };
+  }
 
   // The usage endpoint requires Claude Code's User-Agent or it returns 429.
   const headers: Record<string, string> = {
@@ -772,7 +782,11 @@ async function getLive(providerId: string, configDir: string, accountId?: string
     result = { windows: [], plan_label: null, error: err?.message || String(err) };
   }
 
-  if (result) liveCache.set(cacheKey, { ts: Date.now(), value: result });
+  // A reconnection must become visible on the next read, not after the
+  // two-minute live cache expires.
+  if (result && !(providerId === 'anthropic' && !result.windows.length)) {
+    liveCache.set(cacheKey, { ts: Date.now(), value: result });
+  }
   return result;
 }
 
@@ -974,7 +988,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
       label: codexSelection?.usage_scope === 'model' ? 'OpenAI · Codex Spark' : labelFor(id),
       ...(account.id ? { account_id: account.id, account_label: account.label || account.id } : {}),
       configured: true,
-      source: live ? 'live' : 'internal',
+      source: windows.length ? 'live' : 'internal',
       plan_label: live?.plan_label ?? null,
       windows,
       usage_scope: codexSelection?.usage_scope || 'provider',
