@@ -132,6 +132,12 @@ jobs:
         run: node scripts/test-mobile-chat-recovery.mjs
       - name: Verify mobile stream receipt idempotency
         run: node scripts/test-mobile-stream-receipts.mjs
+      - name: Verify static asset compression
+        run: npm run test:static-compression
+      - name: Verify encoding negotiation and module cache policy
+        run: npx tsx src/gateway/static-encoding-negotiation.regression.ts
+
+
       - name: Verify foreground Chat owner restart reconciliation
         run: npm run test:restart-retrigger
       - name: Verify gateway supervisor identity and liveness recovery policy

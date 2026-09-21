@@ -108,15 +108,45 @@ const COMPRESSION_CACHE_MAX_ENTRIES = 512;
 type CompressedStatic = { encoding: 'br' | 'gzip'; body: Buffer };
 const compressedStaticCache = new Map<string, CompressedStatic>();
 
-function pickCompressionEncoding(req: http.IncomingMessage): 'br' | 'gzip' | null {
-  const accepted = String(req.headers['accept-encoding'] || '').toLowerCase();
-  if (!accepted) return null;
+// Parse Accept-Encoding per RFC 9110 rather than substring-matching token names.
+// `q=0` means "not acceptable", so `br;q=0, gzip` must NOT select brotli; a bare
+// substring test reads the forbidden token as support and returns an encoding the
+// client explicitly refused. `*` sets the default for anything not named, which
+// also makes `*;q=0` a real opt-out rather than an accidental miss.
+export function pickCompressionEncoding(req: http.IncomingMessage): 'br' | 'gzip' | null {
+  const header = String(req.headers['accept-encoding'] || '').trim().toLowerCase();
+  if (!header) return null;
+
+  const explicit = new Map<string, number>();
+  let wildcard: number | undefined;
+
+  for (const part of header.split(',')) {
+    const [rawToken, ...params] = part.trim().split(';');
+    const token = rawToken.trim();
+    if (!token) continue;
+    let q = 1;
+    for (const param of params) {
+      const [key, value] = param.split('=');
+      if (String(key || '').trim() !== 'q') continue;
+      const parsed = Number(String(value || '').trim());
+      q = Number.isFinite(parsed) ? parsed : 1;
+    }
+    if (token === '*') wildcard = q;
+    else explicit.set(token, q);
+  }
+
+  const acceptable = (token: string): boolean => {
+    const q = explicit.has(token) ? explicit.get(token)! : wildcard;
+    return q !== undefined && q > 0;
+  };
+
   // Brotli first: it is meaningfully smaller than gzip on JS/CSS and every
   // browser that reaches this app over https supports it.
-  if (/\bbr\b/.test(accepted)) return 'br';
-  if (/\bgzip\b/.test(accepted)) return 'gzip';
+  if (acceptable('br')) return 'br';
+  if (acceptable('gzip')) return 'gzip';
   return null;
 }
+
 
 function getCompressedStatic(
   filePath: string,
