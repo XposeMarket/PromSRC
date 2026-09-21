@@ -26,6 +26,7 @@ import {
 } from './main-chat-goals';
 import { buildTaskContinuitySnapshot } from './tasks/task-continuity';
 import { appendSubagentChatMessage } from './agents-runtime/subagent-chat-store';
+import { broadcastWS } from './comms/broadcaster';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -182,6 +183,44 @@ function isPlainGatewayRestartTask(task: TaskRecord): boolean {
   return !/\b(build|compile|update|upgrade|apply|edit|change|fix|install|deploy|then|afterwards?|after that|and then|verify files?|run tests?)\b/.test(text);
 }
 
+/**
+ * Bridge used by the chat router to mirror a restart suspension/resumption into
+ * the durable main-chat stream. It is registered at startup so this module does
+ * not need a circular import of the router.
+ */
+type RestartContinuityEmitter = (payload: Record<string, any>) => void;
+let _emitRestartContinuity: RestartContinuityEmitter | undefined;
+
+export function registerRestartContinuityEmitter(emitter: RestartContinuityEmitter | undefined): void {
+  _emitRestartContinuity = emitter;
+}
+
+/**
+ * A planned mid-turn restart must not look like a dropped connection. Emitting
+ * the suspension before shutdown lets attached clients keep the assistant turn,
+ * its activity stream, and the busy composer open across the process swap.
+ */
+function announceRestartContinuitySuspended(runtime: LiveRuntimeSnapshot, reason: string): void {
+  const sessionId = String(runtime.sessionId || '').trim();
+  if (!sessionId) return;
+  // Only a self-triggered restart is a true suspension. A crash keeps the old
+  // explicit-interruption treatment so the user still learns something broke.
+  if (!plannedRestartToolName(runtime)) return;
+  const payload = {
+    sessionId,
+    phase: 'suspended' as const,
+    reason,
+    priorRuntimeId: runtime.id,
+    clientRequestId: String(runtime.clientRequestId || runtime.recoveryData?.clientRequestId || '').trim() || undefined,
+    plannedRestartTool: plannedRestartToolName(runtime),
+    at: Date.now(),
+  };
+  try { _emitRestartContinuity?.(payload); } catch {}
+  try {
+    broadcastWS({ type: 'restart_continuity', ...payload });
+  } catch {}
+}
+
 type RestartCheckpointPhase = 'initiated' | 'recovered';
 type RestartCheckpointTextOptions = {
   includeProcessPacket?: boolean;
@@ -327,9 +366,18 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   });
   const workspacePath = getWorkspace(runtime.sessionId) || process.cwd();
   const fileChanges = collectTurnFileChangesFromProcessEntries(processEntries, workspacePath);
+  // A self-triggered mid-turn restart is a suspension of the SAME turn, so the
+  // checkpoint exists for durable recovery evidence only. Tagging it lets every
+  // client fold it into the turn it belongs to instead of rendering a bubble.
+  const plannedContinuityCheckpoint = runtime.kind === 'main_chat' && !!plannedRestartToolName(runtime);
   addMessage(runtime.sessionId, {
     role: 'assistant',
-    messageKind: runtime.kind === 'main_chat_goal' ? 'goal_restart_checkpoint' : undefined,
+    messageKind: runtime.kind === 'main_chat_goal'
+      ? 'goal_restart_checkpoint'
+      : plannedContinuityCheckpoint ? 'restart_checkpoint' : undefined,
+    restartContinuity: plannedContinuityCheckpoint
+      ? { phase: 'suspended', priorRuntimeId: runtime.id, reason }
+      : undefined,
     activeRunKind: runtime.kind === 'main_chat_goal' ? 'main_chat_goal' : undefined,
     goalId: runtime.checkpoint?.goalId,
     goalTurnNumber: runtime.checkpoint?.goalTurnNumber,
@@ -513,6 +561,10 @@ function finalizeInterruptedRuntimesForRestart(interrupted: LiveRuntimeSnapshot[
 
       if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
         pauseMainChatGoalRuntimeForRestart(runtime, reason);
+        // A planned mid-turn restart is a suspension, not an ending. Tell every
+        // attached client to hold the streaming turn open before this process
+        // exits, so the socket drop reads as a pause instead of a failure.
+        if (runtime.kind === 'main_chat') announceRestartContinuitySuspended(runtime, reason);
         if (runtime.kind === 'main_chat') addCheckpointMessageToSession(runtime, reason);
       }
     } catch (err: any) {

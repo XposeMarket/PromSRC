@@ -3190,8 +3190,12 @@ void main() {
   };
 
   let wsReconnectPending = false;
+  const hasPendingRestartContinuity = () => _readMobileActiveRun(requestedSession)?.restartSuspended === true;
   const showReconnectingStatus = (msg = {}) => {
     wsReconnectPending = true;
+    // A planned restart is part of the active turn, so the global connection
+    // banner would be false alarm UI layered over an otherwise continuous row.
+    if (hasPendingRestartContinuity()) return;
     const waitingForNetwork = String(msg?.type || '') === 'ws:waiting_for_network';
     setChatConnectionStatus(true, waitingForNetwork ? 'Waiting for network' : 'Reconnecting to Prometheus');
   };
@@ -8122,11 +8126,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           // answer from merging because local text wins reconciliation.
           _clearRecoveredMobileChatError(targetAiTurn);
           targetAiTurn.streaming = true;
-          _recordMobileChatError(targetAiTurn, err);
+          const plannedRestart = _readMobileActiveRun(actualSessionId)?.restartSuspended === true;
+          if (!plannedRestart) {
+            _recordMobileChatError(targetAiTurn, err);
+            setChatConnectionStatus(true, 'Reconnecting to Prometheus');
+            pmToast(targetAiTurn.errorPresentation);
+          }
           _rememberMobileActiveRun(actualSessionId, { disconnected: true });
-          setChatConnectionStatus(true, 'Reconnecting to Prometheus');
-          pmToast(targetAiTurn.errorPresentation);
-          scheduleMobileRunRecovery(2500, { force: true });
+          scheduleMobileRunRecovery(plannedRestart ? 250 : 2500, { force: true });
         } else {
           const sourcePresentation = err?.chatPresentation || presentChatError(err);
           if (sourcePresentation?.key === 'session-turn-active') {
@@ -8406,6 +8413,79 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     } else if (applied && applied !== 'duplicate') setBusy(true);
     return applied;
   };
+
+  const clearRestartContinuityStatus = (turn) => {
+    if (!turn || !Array.isArray(turn.processEntries)) return;
+    turn.processEntries = turn.processEntries.filter((entry) => entry?._pmRestartContinuity !== true
+      && entry?.extra?._pmRestartContinuity !== true);
+  };
+  const onRestartContinuity = (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    if (sid !== requestedSession || __pmChat.activeSessionId !== requestedSession) return;
+    const phase = String(msg.phase || '').trim().toLowerCase();
+    if (phase !== 'suspended' && phase !== 'resumed') return;
+    const activeThread = _activeMobileThread();
+    const remembered = _readMobileActiveRun(requestedSession) || {};
+    const clientRequestId = String(msg.clientRequestId || remembered.clientRequestId || '').trim();
+    const aiTurn = _findMobileRecoverableAssistantTurn(activeThread, clientRequestId)
+      || _findLatestAssistantTurn(activeThread);
+    if (!aiTurn) return;
+
+    clearRestartContinuityStatus(aiTurn);
+    if (phase === 'suspended') {
+      const priorStreamId = String(msg.priorStreamId || aiTurn._streamId || remembered.streamId || '').trim();
+      const priorRuntimeId = String(msg.priorRuntimeId || aiTurn.runtimeId || remembered.runtimeId || '').trim();
+      aiTurn.streaming = true;
+      _appendMobileProcess(aiTurn, 'info', 'Gateway restarting — turn will continue', { _pmRestartContinuity: true });
+      const entry = aiTurn.processEntries?.[aiTurn.processEntries.length - 1];
+      if (entry) entry._pmRestartContinuity = true;
+      _rememberMobileActiveRun(requestedSession, {
+        restartSuspended: true,
+        restartReason: String(msg.reason || ''),
+        priorStreamId,
+        priorRuntimeId,
+        clientRequestId,
+        disconnected: false,
+      });
+      _markMobileSessionRunning(requestedSession, true);
+      setBusy(true);
+      setChatConnectionStatus(false);
+      renderThreadNow();
+      return;
+    }
+
+    const newStreamId = String(msg.newStreamId || msg.streamId || '').trim();
+    const runtimeId = String(msg.runtimeId || '').trim();
+    if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+    __pmChat.activeRuns[requestedSession] = {
+      ...(__pmChat.activeRuns[requestedSession] || {}),
+      busy: true,
+      streamId: newStreamId,
+      runtimeId,
+      clientRequestId,
+      lastSeq: 0,
+    };
+    aiTurn.streaming = true;
+    if (newStreamId) aiTurn._streamId = newStreamId;
+    if (runtimeId) aiTurn.runtimeId = runtimeId;
+    if (clientRequestId) aiTurn._clientRequestId = clientRequestId;
+    _rememberMobileActiveRun(requestedSession, {
+      restartSuspended: false,
+      restartReason: '',
+      priorStreamId: '',
+      priorRuntimeId: '',
+      streamId: newStreamId,
+      runtimeId,
+      clientRequestId,
+      lastSeq: 0,
+      disconnected: false,
+    });
+    wsReconnectPending = false;
+    setChatConnectionStatus(false);
+    _markMobileSessionRunning(requestedSession, true);
+    setBusy(true);
+    renderThreadNow();
+  };
   const onMainChatStreamEvent = (msg = {}) => {
     applyMainChatStreamPayload(msg);
   };
@@ -8587,6 +8667,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   wsEventBus?.on?.('main_chat_stream_event', onMainChatStreamEvent);
   wsEventBus?.on?.('main_chat_stream_update', onMainChatStreamUpdate);
+  wsEventBus?.on?.('restart_continuity', onRestartContinuity);
   wsEventBus?.on?.('internal_watch_sse', onInternalWatchSse);
   wsEventBus?.on?.('main_chat_goal_sse', onMainChatGoalSse);
   wsEventBus?.on?.('voice_interruption', onVoiceInterruptionEvent);
@@ -8682,6 +8763,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     document.removeEventListener('visibilitychange', runRecoveryOnVisibility);
     wsEventBus?.off?.('main_chat_stream_event', onMainChatStreamEvent);
     wsEventBus?.off?.('main_chat_stream_update', onMainChatStreamUpdate);
+    wsEventBus?.off?.('restart_continuity', onRestartContinuity);
     wsEventBus?.off?.('internal_watch_sse', onInternalWatchSse);
     wsEventBus?.off?.('main_chat_goal_sse', onMainChatGoalSse);
     wsEventBus?.off?.('voice_interruption', onVoiceInterruptionEvent);

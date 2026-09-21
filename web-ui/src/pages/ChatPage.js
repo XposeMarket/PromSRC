@@ -7682,10 +7682,57 @@ function normalizeExternalImportSummary(value) {
   };
 }
 
+function isDesktopGatewayRestartCheckpointMessage(msg) {
+  if (!isAssistantLikeMessage(msg)) return false;
+  if (String(msg?.messageKind || '').trim().toLowerCase() === 'restart_checkpoint') return true;
+  return /^\[(?:Hot restart checkpoint: planned by this chat|Interrupted by gateway restart)\]/i
+    .test(String(msg?.content || '').trim());
+}
+
+function foldDesktopGatewayRestartCheckpoints(history) {
+  const list = Array.isArray(history) ? history : [];
+  const out = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const checkpoint = list[index];
+    if (!isDesktopGatewayRestartCheckpointMessage(checkpoint)) {
+      out.push(checkpoint);
+      continue;
+    }
+    const checkpointRequest = String(checkpoint?.clientRequestId || checkpoint?._clientRequestId || '').trim();
+    let target = null;
+    for (let next = index + 1; next < list.length; next += 1) {
+      const candidate = list[next];
+      if (String(candidate?.role || '').toLowerCase() === 'user') break;
+      if (isDesktopGatewayRestartCheckpointMessage(candidate)) continue;
+      if (!isAssistantLikeMessage(candidate)) break;
+      const candidateRequest = String(candidate?.clientRequestId || candidate?._clientRequestId || '').trim();
+      if (checkpointRequest && candidateRequest && checkpointRequest !== candidateRequest) break;
+      target = candidate;
+      break;
+    }
+    if (!target) {
+      for (let previous = out.length - 1; previous >= 0; previous -= 1) {
+        const candidate = out[previous];
+        if (String(candidate?.role || '').toLowerCase() === 'user') break;
+        if (!isAssistantLikeMessage(candidate)) break;
+        const candidateRequest = String(candidate?.clientRequestId || candidate?._clientRequestId || '').trim();
+        if (checkpointRequest && candidateRequest && checkpointRequest !== candidateRequest) break;
+        target = candidate;
+        break;
+      }
+    }
+    if (target) mergeChatMessageMetadata(target, checkpoint);
+  }
+  return out;
+}
+
 function normalizeStoredSession(session) {
   const history = reconcileChatHistoryAfterMerge(
     collapseDuplicateAssistantMessages(
-      normalizeChatHistoryTimestamps(Array.isArray(session?.history) ? session.history.filter((msg) => !isInternalChatMessage(msg)) : [])
+      normalizeChatHistoryTimestamps(
+        foldDesktopGatewayRestartCheckpoints(Array.isArray(session?.history) ? session.history : [])
+          .filter((msg) => !isInternalChatMessage(msg))
+      )
     )
   );
   const normalizedTitleSession = {
@@ -46900,6 +46947,83 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
 }
 
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+
+wsEventBus.on('restart_continuity', (msg = {}) => {
+  const sid = String(msg.sessionId || '').trim();
+  const phase = String(msg.phase || '').trim().toLowerCase();
+  if (!sid || (phase !== 'suspended' && phase !== 'resumed')) return;
+  const sess = getChatSessionById(sid);
+  if (!sess) return;
+  const streamState = getSessionStreamState(sid) || resetSessionStreamState(sid);
+  const remembered = readDesktopActiveChatRun(sid) || {};
+  const clientRequestId = String(msg.clientRequestId || remembered.clientRequestId || '').trim();
+  const restartText = 'Gateway restarting — turn will continue';
+  const removeRestartStatus = () => {
+    if (Array.isArray(sess.processLog)) {
+      sess.processLog = sess.processLog.filter((entry) => entry?._pmRestartContinuity !== true
+        && entry?.extra?._pmRestartContinuity !== true
+        && String(entry?.content || '') !== restartText);
+    }
+    streamState.currentProgressLines = Array.isArray(streamState.currentProgressLines)
+      ? streamState.currentProgressLines.filter((line) => String(line || '') !== restartText)
+      : [];
+  };
+  removeRestartStatus();
+
+  if (phase === 'suspended') {
+    const priorStreamId = String(msg.priorStreamId || remembered.streamId || window._mainChatStreamActiveIdBySession?.[sid] || '').trim();
+    const priorRuntimeId = String(msg.priorRuntimeId || remembered.runtimeId || '').trim();
+    sess.activeRun = true;
+    window._sessionThinking[sid] = true;
+    streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'running', level: '', message: restartText, current_step: 'restarting' };
+    streamState.currentProgressLines.push(restartText);
+    const entry = { type: 'info', content: restartText, timestamp: Date.now(), _pmRestartContinuity: true, extra: { _pmRestartContinuity: true } };
+    sess.processLog = Array.isArray(sess.processLog) ? sess.processLog : [];
+    sess.processLog.push(entry);
+    rememberDesktopActiveChatRun(sid, {
+      restartSuspended: true,
+      restartReason: String(msg.reason || ''),
+      priorStreamId,
+      priorRuntimeId,
+      streamId: priorStreamId,
+      runtimeId: priorRuntimeId,
+      clientRequestId,
+      disconnected: false,
+      forcePersist: true,
+    });
+  } else {
+    const newStreamId = String(msg.newStreamId || msg.streamId || '').trim();
+    const runtimeId = String(msg.runtimeId || '').trim();
+    if (newStreamId) {
+      resetMainChatStreamCursor(sid, newStreamId);
+      window._mainChatStreamActiveIdBySession[sid] = newStreamId;
+    }
+    sess.activeRun = true;
+    window._sessionThinking[sid] = true;
+    streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'running', level: '', message: '', current_step: 'working' };
+    rememberDesktopActiveChatRun(sid, {
+      restartSuspended: false,
+      restartReason: '',
+      priorStreamId: '',
+      priorRuntimeId: '',
+      streamId: newStreamId,
+      runtimeId,
+      clientRequestId,
+      lastSeq: 0,
+      disconnected: false,
+      forcePersist: true,
+    });
+  }
+  if (sid === window.activeChatSessionId && !_isMobileShellActive()) {
+    applyStreamStateToWindow(sid);
+    syncActiveSessionRunState();
+    if (typeof window.setButtonState === 'function') window.setButtonState(true);
+    updateHeartbeatUI();
+    renderChatMessages();
+  }
+  saveChatSessions();
+});
+
 
 // Internal-watch turns are server-originated and also carry a dedicated
 // envelope. Consuming it as a normal stream frame makes progress visible even
