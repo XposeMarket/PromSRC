@@ -5382,24 +5382,30 @@ void main() {
           workflowLabel: 'Message sent as steer',
         };
         const lane = _mobileBackgroundSpawnLanes()[backgroundId];
-        if (lane) {
-          if (!lane.steerMessages.some((item) => item.id === steer.id
-            || ((!item.seq || !steer.seq) && item.content === msg
-              && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000))) {
-            lane.steerMessages.push(steer);
-            lane.steerMessages = lane.steerMessages.slice(-80);
-            lane.updatedAt = Date.now();
-            persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+        try {
+          if (lane) {
+            if (!lane.steerMessages.some((item) => item.id === steer.id
+              || ((!item.seq || !steer.seq) && item.content === msg
+                && Math.abs(Number(item.timestamp || 0) - steer.timestamp) < 5000))) {
+              lane.steerMessages.push(steer);
+              lane.steerMessages = lane.steerMessages.slice(-80);
+              lane.updatedAt = Date.now();
+              persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+            }
+          } else {
+            const stored = _mobileBackgroundAgentDetailRecord(backgroundId);
+            if (stored) {
+              persistBackgroundAgentWork({
+                ...stored,
+                steerMessages: [...(stored.steerMessages || []), steer].slice(-80),
+                updatedAt: Date.now(),
+              });
+            }
           }
-        } else {
-          const stored = _mobileBackgroundAgentDetailRecord(backgroundId);
-          if (stored) {
-            persistBackgroundAgentWork({
-              ...stored,
-              steerMessages: [...(stored.steerMessages || []), steer].slice(-80),
-              updatedAt: Date.now(),
-            });
-          }
+        } catch (persistError) {
+          // The gateway has already accepted this steer. Local cache failure
+          // must not be reported as a failed steer.
+          console.warn('[mobile background steer] local persistence failed after successful steer:', persistError);
         }
         if (sideInput) {
           sideInput.value = '';

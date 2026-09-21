@@ -6701,6 +6701,7 @@ html.pm-session-context-open * {
   position: relative;
   overflow: hidden;
   min-height: 34px;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6801,7 +6802,7 @@ html.pm-session-context-open * {
 .pm-runtime-pills-paired .pm-main-plan-dock {
   left: auto;
   right: calc(50% + 4px);
-  transform: none;
+  transform: translateY(4px);
 }
 .pm-runtime-pills-paired .pm-background-spawn-dock.is-collapsed {
   left: calc(50% + 4px);
@@ -6827,11 +6828,12 @@ html.pm-session-context-open * {
   overflow: hidden;
   pointer-events: auto;
   min-height: 34px;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 7px 14px;
+  padding: 6px 14px;
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
   background: rgba(255,255,255,.08);
