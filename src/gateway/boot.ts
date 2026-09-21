@@ -14,9 +14,11 @@ import { markDevSourceEditContinuationComplete, type DevSourceEditContinuation }
 import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
 import { finalizeMainChatGoalRestartRecovery } from './main-chat-goals';
 import {
+  acknowledgePlannedRestartMainChats,
   listHotRestartMainChatRecoveries,
   type HotRestartMainChatRecovery,
 } from './runtime-recovery';
+
 
 export type BootAutomatedSession = {
   id: string;
@@ -559,6 +561,7 @@ export async function runBootMd(
       // requested after its chat turn finished. That alone must not launch a
       // new BOOT model turn or append an unsolicited reply to the transcript.
       if (!target.recoveryRuntimeIds.length && !goalOwnedRestart && !target.devEdit) {
+        // No runtime ids here means there is no planned checkpoint to dispose of.
         return {
           finalText: '',
           targetSessionId: target.sessionId,
@@ -610,7 +613,13 @@ export async function runBootMd(
         // Do not retrigger the original user turn here.  That turn's only
         // intended action was the restart itself; replaying it after boot
         // causes a second gateway_restart call.
+        //
+        // This is still a real disposition of the planned checkpoint, so the
+        // record must be marked consumed. Retention treats an unclaimed planned
+        // checkpoint as live work (BOOT needs it to exist), so leaving it marked
+        // 'chat_checkpointed' here would pin the entry in the durable ledger.
         finalText = 'Restarted. Prometheus is back online.';
+        acknowledgePlannedRestartMainChats(target.recoveryRuntimeIds);
       } else if (foregroundPlannedRestart) {
         if (target.devEdit) {
           markDevSourceEditContinuationComplete({

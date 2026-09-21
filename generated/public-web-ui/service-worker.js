@@ -22,7 +22,7 @@
 const RELEASE_VERSION = 'pm-v315-2026-09-20-mobile-load-speed';
 // The production builder replaces this sentinel with the deterministic source
 // digest. Raw-module development keeps its own cache namespace.
-const ASSET_BUILD_ID = 'f8117e666a814873';
+const ASSET_BUILD_ID = '2288ec78256b7fe2';
 const VERSION = `${RELEASE_VERSION}-${ASSET_BUILD_ID}`;
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
@@ -49,16 +49,16 @@ const BUILD_PRECACHE = [
   "/build/chunks/chunk-EPSJJCWL.js",
   "/build/chunks/chunk-FE2DGIO6.js",
   "/build/chunks/chunk-GRAK6S3F.js",
-  "/build/chunks/chunk-IEPG35S2.js",
   "/build/chunks/chunk-JF4LWGNM.js",
   "/build/chunks/chunk-KJCBL7CI.js",
   "/build/chunks/chunk-LLABDDEK.js",
   "/build/chunks/chunk-M5JONE3D.js",
   "/build/chunks/chunk-MSYOJG2Q.js",
+  "/build/chunks/chunk-NCUKRNUF.js",
   "/build/chunks/chunk-X4KG3ICV.js",
   "/build/chunks/chunk-YMT6MSCC.js",
-  "/build/chunks/mobile-router-O3W4VZSR.js",
-  "/build/entries/mobile-4Q7PFY5X.js",
+  "/build/chunks/mobile-router-4YLAIO2D.js",
+  "/build/entries/mobile-7P5EZHKX.js",
   "/build/inline/mobile-inline-01-0b108e28f4b7.js",
   "/build/inline/mobile-inline-02-0030786ff2fb.js",
   "/build/styles/mobile-ZQRCIKD5.css",
@@ -140,7 +140,7 @@ async function staleWhileRevalidate(request, cacheName) {
 //     serves yesterday's modules from a stale cache.
 //   - When a background revalidation replaces a cached module, clients are
 //     notified so the shell can surface an update instead of silently drifting.
-async function cacheFirstRevalidate(request, cacheName, event) {
+async function cacheFirstRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
 
@@ -158,18 +158,12 @@ async function cacheFirstRevalidate(request, cacheName, event) {
   });
 
   if (cached) {
-    // The cached response settles respondWith() immediately, so without
-    // waitUntil() the browser is free to terminate this worker before the
-    // refresh finishes writing. Mobile browsers are especially aggressive about
-    // reclaiming idle workers, which is exactly where this path runs.
     // Do not let an offline/failed revalidation reject as an unhandled error.
-    const settled = revalidate.catch(() => {});
-    if (event && typeof event.waitUntil === 'function') event.waitUntil(settled);
+    revalidate.catch(() => {});
     return cached;
   }
   return revalidate;
 }
-
 
 function notifyClientsOfAssetUpdate(url) {
   self.clients.matchAll({ type: 'window' }).then((clients) => {
@@ -219,39 +213,22 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
     return;
   }
-  // Content-hashed build output: cache-first with background revalidation.
-  // The hash is IN THE FILENAME, so a given URL's bytes never change and a
-  // cached copy can be trusted indefinitely. A rebuild produces new filenames,
-  // which the network-first document/manifest fetches below discover.
-  if (url.pathname.startsWith('/build/')) {
+  // Module assets: cache-first with background revalidation. These are the
+  // ~48 requests that dominate mobile launch latency. The HTML documents and
+  // the asset manifest stay network-first below so an update is always
+  // discovered on navigation rather than a cache generation late.
+  if (
+    url.pathname.startsWith('/src/')
+    || url.pathname.startsWith('/static/')
+    || url.pathname.startsWith('/build/')
+  ) {
     event.respondWith(
-      cacheFirstRevalidate(request, STATIC_CACHE, event).catch(() => {
+      cacheFirstRevalidate(request, STATIC_CACHE).catch(() => {
         throw new Error('offline');
       }),
     );
     return;
   }
-  // Raw module sources are MUTABLE at a stable URL: /src/mobile/mobile-shell.js
-  // serves whatever that file currently contains. Cache-first would let each
-  // module refresh independently, so one load could mix a new importer with an
-  // old dependency - and a renamed export then fails the actual `import`, which
-  // breaks startup rather than merely serving stale code. Bumping
-  // RELEASE_VERSION does not help, because the skew happens WITHIN one cache
-  // generation.
-  //
-  // Stale-while-revalidate keeps the same instant first byte from cache while
-  // guaranteeing the refresh is driven by the navigation that requested it, so
-  // the module graph advances together instead of per-file.
-  if (url.pathname.startsWith('/src/') || url.pathname.startsWith('/static/')) {
-    event.respondWith(
-      staleWhileRevalidate(request, STATIC_CACHE).catch(() => {
-        throw new Error('offline');
-      }),
-    );
-    return;
-  }
-
-
   if (
     url.pathname === '/'
     || url.pathname === '/index.html'
