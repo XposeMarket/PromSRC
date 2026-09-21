@@ -23,6 +23,14 @@ export function clearRestartContinuityStatus(turn) {
  *
  * A planned restart's durable checkpoint is not a completed turn, so the
  * streaming row must survive until the replacement stream reports in.
+ *
+ * `gatewayRestartContinuity` marks exactly that case, so it must *extend* the
+ * hold rather than cancel it. Treating it as a release condition tore the
+ * streaming row down the moment recovery noticed the restart checkpoint, and
+ * the later `restart_continuity` resume arrived with no row left to reattach
+ * to — the turn silently vanished until the next manual message forced a
+ * history reload. `resolveRestartRecoveryMerge` below reads the same flag as a
+ * preserve signal; both must agree.
  */
 export function shouldHoldStreamingTurn({
   replayStillActive = false,
@@ -30,8 +38,12 @@ export function shouldHoldStreamingTurn({
   completedDurableTurn = false,
   gatewayRestartContinuity = false,
 } = {}) {
-  return replayStillActive
-    || (localTurnStreaming && !completedDurableTurn && !gatewayRestartContinuity);
+  if (replayStillActive) return true;
+  if (!localTurnStreaming) return false;
+  // A planned restart outranks a "completed" durable read: the checkpoint that
+  // marks the suspension can look terminal while the turn is still resuming.
+  if (gatewayRestartContinuity) return true;
+  return !completedDurableTurn;
 }
 
 /**
