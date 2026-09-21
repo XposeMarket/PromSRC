@@ -92,6 +92,26 @@ async function main(): Promise<void> {
       ['active work after boundary', 'active response after boundary'],
       'task and agent resume stores must persist only the active transcript after compaction',
     );
+    sessionApi.recordSessionCompaction(
+      compactedSessionId,
+      'rolling',
+      'Second summary retaining the first summary and later active work.',
+      sessionApi.getSession(compactedSessionId).history.length,
+    );
+    sessionApi.addMessage(compactedSessionId, {
+      role: 'user',
+      content: 'work after the second compaction',
+      timestamp: Date.now() + 14,
+    });
+    assert.deepEqual(
+      sessionApi.getActiveHistoryForApiCall(compactedSessionId).map((message: any) => message.content),
+      [
+        '[Rolling context summary]\nSecond summary retaining the first summary and later active work.',
+        'work after the second compaction',
+      ],
+      'a later compaction must replace the retained summary and advance the active-history boundary',
+    );
+
     const refusalSessionId = 'session_provider_refusal_context';
     sessionApi.addMessage(refusalSessionId, { role: 'user', content: 'Improve the Vita bridge', timestamp: Date.now() + 20 });
     sessionApi.addMessage(refusalSessionId, {

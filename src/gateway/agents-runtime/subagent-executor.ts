@@ -1,3 +1,4 @@
+import { buildToolOutputArtifactPreview } from '../tool-result-model-context';
 // src/gateway/subagent-executor.ts
 // Tool execution engine — extracted from server-v2.ts (Step 14.1, Phase 3).
 // Restored and adapted for dep-injected execution.
@@ -2839,6 +2840,58 @@ export function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { nam
     if (args.subagent_ids == null && Array.isArray(args.subagentIds)) args.subagent_ids = args.subagentIds;
     delete args.team_action;
   }
+  // spawn_subagent requires subagent_id OR create_if_missing. The agent_ops schema
+  // advertises from_role/specialization as a standalone shorthand, so hydrate an
+  // implicit create_if_missing envelope instead of rejecting the documented call.
+  if (target === 'spawn_subagent') {
+    if (args.subagent_id == null && args.agent_id != null) args.subagent_id = args.agent_id;
+    const hasRoleShorthand = args.from_role != null || args.specialization != null;
+    if (args.subagent_id == null && hasRoleShorthand && !isPlainObjectArg(args.create_if_missing)) {
+      args.create_if_missing = {
+        ...(args.from_role != null ? { from_role: args.from_role } : {}),
+        ...(args.specialization != null ? { specialization: args.specialization } : {}),
+        ...(args.name != null ? { name: args.name } : {}),
+        ...(args.description != null ? { description: args.description } : {}),
+        ...(args.model != null ? { model: args.model } : {}),
+        ...(args.reasoning_effort != null ? { reasoning_effort: args.reasoning_effort } : {}),
+      };
+    }
+  }
+  // Wrapper schemas expose friendly parameter names that the underlying handlers do
+  // not read. Without these aliases a schema-conformant call fails validation, and
+  // agents burn steps guessing the handler's private parameter name.
+  if (name === 'team_ops_wrapper') {
+    if (args.team_id == null && args.teamId != null) args.team_id = args.teamId;
+    if (target === 'post_to_team_chat' || target === 'reply_to_team' || target === 'message_main_agent') {
+      if (args.message == null && args.content != null) args.message = args.content;
+    }
+    if (target === 'dispatch_team_agent') {
+      if (args.task_prompt == null && args.task != null) args.task_prompt = args.task;
+      if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    }
+  }
+  if (name === 'team_collab_ops') {
+    // talk_teammate documents teammate_id; the handler reads agent_id.
+    if (target === 'talk_to_teammate' && args.agent_id == null && args.teammate_id != null) {
+      args.agent_id = args.teammate_id;
+    }
+    // request_context documents context/request; the handler reads question.
+    if (target === 'request_context' && args.question == null) {
+      if (args.request != null) args.question = args.request;
+      else if (args.message != null) args.question = args.message;
+      else if (args.context != null) args.question = args.context;
+    }
+    // request_manager_help / talk_to_manager document request; the handler reads message.
+    if ((target === 'request_manager_help' || target === 'talk_to_manager') && args.message == null) {
+      if (args.request != null) args.message = args.request;
+      else if (args.context != null) args.message = args.context;
+    }
+    // update_status documents status; the handler reads phase/current_task.
+    if (target === 'update_my_status') {
+      if (args.phase == null && args.status != null) args.phase = args.status;
+      if (args.current_task == null && args.message != null) args.current_task = args.message;
+    }
+  }
   return { name: target, args };
 }
 
@@ -3883,10 +3936,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     if (!relPath) {
       return `${opts.summary ? `${opts.summary}\n` : ''}[TOOL_RESULT_TRUNCATED] Output was ${text.length} chars; returning first ${inlineLimit} chars because overflow artifact write failed.\n${text.slice(0, inlineLimit)}`;
     }
-    return [
-      opts.summary || `${toolName} output was ${text.length} chars, which exceeds the ${inlineLimit} char inline budget.`,
-      `[TOOL_RESULT_ARTIFACT] Full output saved to ${relPath}. Read targeted ranges from that artifact only if needed.`,
-    ].join('\n');
+    return buildToolOutputArtifactPreview({
+      toolName,
+      text,
+      inlineLimit,
+      artifactPath: relPath,
+      summary: opts.summary,
+    });
   }
 	  function renderNumberedRead(displayPath: string, allLines: string[], argsObj: any, defaultCap = FILE_TOOL_DEFAULT_READ_LINES): string {
     const exactLine = resolvePositiveLineArg(argsObj.line ?? argsObj.line_number ?? argsObj.lineNumber ?? argsObj.physical_line);
@@ -14272,7 +14328,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             args.base ? `--base ${quoteArg(String(args.base))}` : '',
             args.draft === true ? '--draft' : '',
           ].filter(Boolean).join(' ');
-          return runCapturedToolCommand(cmd, workspacePath, 120000);
+          const result = await runCapturedToolCommand(cmd, workspacePath, 120000);
+          if (result.error && /(?:not recognized|command not found|not found).*(?:gh)|(?:gh).*(?:not recognized|command not found|not found)/is.test(result.result)) {
+            return {
+              name,
+              args,
+              result: [
+                result.result,
+                '',
+                'GitHub CLI is unavailable. Use connector_github_create_pr with the same owner/repo/title/head/base/body/draft values when the GitHub connector is connected.',
+              ].join('\n'),
+              error: true,
+            };
+          }
+          return result;
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }

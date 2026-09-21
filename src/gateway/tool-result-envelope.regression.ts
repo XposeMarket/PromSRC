@@ -79,6 +79,16 @@ async function main(): Promise<void> {
   const small = { name: 'small_tool', args: {}, result: 'small', error: false };
   assert.strictEqual(await envelopeOversizedToolResult(small, { sessionId: 'small' }), small);
 
+  const activeContextSizedRaw = 'm'.repeat(20_000);
+  const activeContextSized = await envelopeOversizedToolResult(
+    { name: 'workspace_read', args: {}, result: activeContextSizedRaw, error: false },
+    { sessionId: 'active-context-sized', toolName: 'workspace_read', maxChars: 12_000 },
+  );
+  assert.equal(activeContextSized.extra?.toolResultEnvelope?.rawPersistence, 'stored');
+  assert.match(String(activeContextSized.extra?.toolResultEnvelope?.rawRef || ''), /^tool-result-raw:/);
+  assert.ok(activeContextSized.result.includes('Use tool_result_read'));
+  assert.equal(await readRawToolResult(String(activeContextSized.extra?.toolResultEnvelope?.rawRef)), activeContextSizedRaw);
+
   const { getConfig } = await import('../config/config');
   const rawParent = path.join(getConfig().getConfigDir(), 'tool-results');
   fs.rmSync(rawParent, { recursive: true, force: true });

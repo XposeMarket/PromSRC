@@ -119,7 +119,7 @@ async function staleWhileRevalidate(request, cacheName) {
 //     serves yesterday's modules from a stale cache.
 //   - When a background revalidation replaces a cached module, clients are
 //     notified so the shell can surface an update instead of silently drifting.
-async function cacheFirstRevalidate(request, cacheName) {
+async function cacheFirstRevalidate(request, cacheName, event) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
 
@@ -137,12 +137,18 @@ async function cacheFirstRevalidate(request, cacheName) {
   });
 
   if (cached) {
+    // The cached response settles respondWith() immediately, so without
+    // waitUntil() the browser is free to terminate this worker before the
+    // refresh finishes writing. Mobile browsers are especially aggressive about
+    // reclaiming idle workers, which is exactly where this path runs.
     // Do not let an offline/failed revalidation reject as an unhandled error.
-    revalidate.catch(() => {});
+    const settled = revalidate.catch(() => {});
+    if (event && typeof event.waitUntil === 'function') event.waitUntil(settled);
     return cached;
   }
   return revalidate;
 }
+
 
 function notifyClientsOfAssetUpdate(url) {
   self.clients.matchAll({ type: 'window' }).then((clients) => {
@@ -192,22 +198,39 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE));
     return;
   }
-  // Module assets: cache-first with background revalidation. These are the
-  // ~48 requests that dominate mobile launch latency. The HTML documents and
-  // the asset manifest stay network-first below so an update is always
-  // discovered on navigation rather than a cache generation late.
-  if (
-    url.pathname.startsWith('/src/')
-    || url.pathname.startsWith('/static/')
-    || url.pathname.startsWith('/build/')
-  ) {
+  // Content-hashed build output: cache-first with background revalidation.
+  // The hash is IN THE FILENAME, so a given URL's bytes never change and a
+  // cached copy can be trusted indefinitely. A rebuild produces new filenames,
+  // which the network-first document/manifest fetches below discover.
+  if (url.pathname.startsWith('/build/')) {
     event.respondWith(
-      cacheFirstRevalidate(request, STATIC_CACHE).catch(() => {
+      cacheFirstRevalidate(request, STATIC_CACHE, event).catch(() => {
         throw new Error('offline');
       }),
     );
     return;
   }
+  // Raw module sources are MUTABLE at a stable URL: /src/mobile/mobile-shell.js
+  // serves whatever that file currently contains. Cache-first would let each
+  // module refresh independently, so one load could mix a new importer with an
+  // old dependency - and a renamed export then fails the actual `import`, which
+  // breaks startup rather than merely serving stale code. Bumping
+  // RELEASE_VERSION does not help, because the skew happens WITHIN one cache
+  // generation.
+  //
+  // Stale-while-revalidate keeps the same instant first byte from cache while
+  // guaranteeing the refresh is driven by the navigation that requested it, so
+  // the module graph advances together instead of per-file.
+  if (url.pathname.startsWith('/src/') || url.pathname.startsWith('/static/')) {
+    event.respondWith(
+      staleWhileRevalidate(request, STATIC_CACHE).catch(() => {
+        throw new Error('offline');
+      }),
+    );
+    return;
+  }
+
+
   if (
     url.pathname === '/'
     || url.pathname === '/index.html'
