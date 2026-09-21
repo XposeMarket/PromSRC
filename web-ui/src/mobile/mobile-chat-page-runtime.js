@@ -3394,7 +3394,7 @@ void main() {
       return true;
     };
     try {
-      // ── Parallel batch 1: run-status + session history (independent) ──────────
+      // Parallel batch 1: run-status + session history (independent)
       const [status, prefetchedSession, backgroundStatusResponse] = await Promise.all([
         loadMobileChatRunStatus(requestedSession),
         (fullRefresh || force) ? loadMobileChatSession(requestedSession, { force: true }).catch(() => null) : Promise.resolve(null),
@@ -3431,7 +3431,7 @@ void main() {
         // CRITICAL: do NOT replace the thread with server history while a run is
         // still active. Server history never includes the in-progress streaming turn,
         // so merging it here destroys the live aiTurn before hasLocalLiveHistory is
-        // evaluated — making hasLocalLiveHistory always false and forcing a full
+        // evaluated, making hasLocalLiveHistory always false and forcing a full
         // seq=0 replay that wipes and reloads the entire tool stream on every
         // reconnect. Defer the history merge to after active-run recovery.
         if (history.length && !status?.active) {
@@ -5403,9 +5403,8 @@ void main() {
             }
           }
         } catch (persistError) {
-          // The gateway has already accepted this steer. Local cache failure
-          // must not be reported as a failed steer.
-          console.warn('[mobile background steer] local persistence failed after successful steer:', persistError);
+          // Gateway already accepted the steer; local cache failure is not a failed steer.
+          console.warn('[mobile background steer] local persistence failed:', persistError);
         }
         if (sideInput) {
           sideInput.value = '';
@@ -7054,7 +7053,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         return 'streaming';
       }
       case 'model_reverted': {
-        // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
+        // switch_model is turn-scoped; gateway emits this at turn end to revert badge.
         import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
           refreshMobileModelBadge(true, null).catch(() => {});
         }).catch(() => {});
@@ -8569,7 +8568,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       updateMobileChatSessionHistory(requestedSession, _mobileHistoryForServer(_activeMobileThread())).catch(() => {});
     }
   };
-  // Stamp disconnected:true whenever the app is hidden/closed while a run is active.
+  // Stamp disconnected:true whenever the app is hidden/closed during an active run.
   // This is the ONLY reliable way to detect a cold reopen on iOS — the app dies
   // silently without firing a WS error, so disconnected never gets set otherwise.
   // On next open, isColdReopen=true → replayAfter=0 → full tool stream from seq=0.
