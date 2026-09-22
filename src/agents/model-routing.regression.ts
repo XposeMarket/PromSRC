@@ -6,11 +6,58 @@ import {
   resolveConfiguredAgentModel,
   resolveConfiguredAgentRouting,
 } from './model-routing.js';
+import { ANTHROPIC_MODELS } from '../providers/anthropic-adapter.js';
+import {
+  getReasoningCapability,
+  normalizeReasoningEffort,
+  supportsFastSpeed,
+} from '../providers/reasoning-capabilities.js';
 
 assert.equal(normalizeProviderModel('openai_codex', 'sol'), 'gpt-5.6-sol');
 assert.equal(normalizeProviderModel('openai_codex', 'luna'), 'gpt-5.6-luna');
 assert.equal(normalizeProviderModel('openai_codex', 'astra'), 'gpt-6-astra');
 assert.deepEqual(parseProviderModelRef('openai_codex/terra'), { providerId: 'openai_codex', model: 'gpt-5.6-terra' });
+
+// ── Claude Opus 5.5 ─────────────────────────────────────────────────────────
+// The dotted marketing name must resolve to the dashed API id, and Opus 5.5
+// must be a selectable Anthropic model rather than silently falling back.
+assert.equal(normalizeProviderModel('anthropic', 'opus-5.5'), 'claude-opus-5-5');
+assert.equal(normalizeProviderModel('anthropic', 'opus-5-5'), 'claude-opus-5-5');
+assert.equal(normalizeProviderModel('anthropic', 'claude-opus-5.5'), 'claude-opus-5-5');
+// Opus 5 must keep resolving to itself; 5.5 must not shadow it.
+assert.equal(normalizeProviderModel('anthropic', 'opus-5'), 'claude-opus-5');
+assert.deepEqual(
+  parseProviderModelRef('anthropic/opus-5.5'),
+  { providerId: 'anthropic', model: 'claude-opus-5-5' },
+);
+assert.ok(
+  ANTHROPIC_MODELS.includes('claude-opus-5-5'),
+  'claude-opus-5-5 must be listed in the Anthropic model catalog',
+);
+assert.ok(
+  ANTHROPIC_MODELS.indexOf('claude-opus-5-5') < ANTHROPIC_MODELS.indexOf('claude-opus-5'),
+  'Opus 5.5 must rank above Opus 5 in the catalog ordering',
+);
+
+// Reasoning/speed capability gates are regex-driven. Pin that Opus 5.5 inherits
+// the full Opus-5 surface instead of returning an empty effort list, which is
+// what makes a spawn hard-error with "Reasoning effort X is not supported".
+const opus55 = getReasoningCapability('anthropic', 'claude-opus-5-5');
+assert.ok(opus55.efforts.includes('high'), 'Opus 5.5 must accept high reasoning');
+assert.ok(opus55.efforts.includes('xhigh'), 'Opus 5.5 must accept xhigh reasoning');
+assert.ok(opus55.efforts.includes('max'), 'Opus 5.5 must accept max reasoning');
+assert.equal(opus55.nativeEffort, true, 'Opus 5.5 must use native effort, not manual budgets');
+assert.equal(opus55.thinkingMode, 'adaptive');
+assert.equal(
+  normalizeReasoningEffort('anthropic', 'claude-opus-5-5', 'xhigh'),
+  'xhigh',
+  'xhigh must survive normalization for Opus 5.5',
+);
+assert.equal(
+  supportsFastSpeed('anthropic', 'claude-opus-5-5'),
+  true,
+  'Opus 5.5 must keep Opus-5 fast-speed support',
+);
 
 const codexGlobal = {
   llm: {
