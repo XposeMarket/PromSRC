@@ -21,8 +21,17 @@
 //    that just executed must reach it verbatim, regardless of how many tool
 //    messages that batch contains.
 
-export const TOOL_RESULT_ELISION_KEEP_RECENT = 3;
-export const TOOL_RESULT_ELISION_KEEP_RECENT_ROUNDS = 1;
+// A result must stay readable for several rounds, not one: the model's
+// reasoning from earlier calls is not carried forward, so a result elided one
+// round after it arrived is effectively lost and gets re-requested, costing a
+// full extra provider round each time (measured 2026-09-22: ~15 re-reads in a
+// single turn with keepRecentRounds=1).
+export const TOOL_RESULT_ELISION_KEEP_RECENT = 8;
+export const TOOL_RESULT_ELISION_KEEP_RECENT_ROUNDS = 4;
+// Beyond the round/count guarantees, keep the newest results verbatim until
+// this many characters of recent tool output are retained. Only output older
+// than this working window is shortened.
+export const TOOL_RESULT_ELISION_RECENT_BUDGET_CHARS = 60_000;
 export const TOOL_RESULT_ELISION_MIN_CHARS = 1200;
 export const TOOL_RESULT_ELISION_PREVIEW_CHARS = 220;
 export const TOOL_RESULT_ELISION_MARKER = '[TOOL_RESULT_ELIDED]';
@@ -54,9 +63,9 @@ export function buildElidedToolResultText(text: string, toolName: string): strin
   return [
     `${TOOL_RESULT_ELISION_MARKER} tool=${toolName || 'tool'} original_chars=${text.length}`,
     `preview: ${preview}`,
-    'This older result was already consumed in an earlier round of this turn and has been',
-    'shortened to keep the context small. The full output remains in tool logs/raw storage;',
-    're-run the tool or use a targeted read if the exact payload is needed again.',
+    'This result is from several rounds ago and falls outside the recent working window, so',
+    'it was shortened to keep the context small. The full output remains in tool logs/raw',
+    'storage; re-run the tool or use a targeted read if the exact payload is needed again.',
   ].join('\n');
 }
 
@@ -132,7 +141,7 @@ function groupToolMessagesByRound(messages: Array<any>): number[][] {
  */
 export function elideStaleToolResults(
   messages: Array<any>,
-  options: { keepRecent?: number; keepRecentRounds?: number } = {},
+  options: { keepRecent?: number; keepRecentRounds?: number; recentBudgetChars?: number } = {},
 ): { elidedCount: number; savedChars: number } {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { elidedCount: 0, savedChars: 0 };
@@ -161,6 +170,26 @@ export function elideStaleToolResults(
   if (keepRecent > 0) {
     // slice(-0) would return the whole array, so guard the zero case.
     for (const index of toolIndexes.slice(-keepRecent)) protectedIndexes.add(index);
+  }
+  const recentBudgetChars = Math.max(
+    0,
+    Number.isFinite(Number(options.recentBudgetChars))
+      ? Math.floor(Number(options.recentBudgetChars))
+      : TOOL_RESULT_ELISION_RECENT_BUDGET_CHARS,
+  );
+  if (recentBudgetChars > 0) {
+    // Walk newest -> oldest and keep results verbatim while the recent window
+    // still has room. Stops at the first result that would overflow it so the
+    // protected window stays contiguous.
+    let used = 0;
+    for (let k = toolIndexes.length - 1; k >= 0; k--) {
+      const index = toolIndexes[k];
+      const content = messages[index]?.content;
+      const size = typeof content === 'string' ? content.length : JSON.stringify(content ?? '').length;
+      if (!protectedIndexes.has(index) && used + size > recentBudgetChars) break;
+      used += size;
+      protectedIndexes.add(index);
+    }
   }
 
   let elidedCount = 0;
