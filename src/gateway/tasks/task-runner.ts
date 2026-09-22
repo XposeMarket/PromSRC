@@ -95,6 +95,7 @@ export interface EphemeralBackgroundStatus {
   spawnerSessionId?: string;
   backgroundSessionId?: string;
   resourceIds?: string[];
+  /** Full prompt is only returned from the spawn call; polls carry promptPreview. */
   prompt?: string;
   promptPreview?: string;
   fileChanges?: any;
@@ -509,7 +510,14 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   backgroundStream: BackgroundAgentStreamState;
 }
 
-const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
+// Ceiling for an EXPLICIT background wait. Real spawns routinely run 20-30
+// minutes, so a 2 minute hard clamp silently turned every long wait into a
+// timeout + re-poll loop, which re-sent the whole poll payload each cycle.
+// Matches the 1800000ms ceiling already used by the sibling agent/team wait
+// tools rather than inventing a second, stricter policy.
+const BACKGROUND_WAIT_ALL_CAP_MS = 1_800_000;
+// Default when the caller does not pass timeoutMs. Kept short on purpose: an
+// unspecified wait should not block a foreground turn for half an hour.
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
 const BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8;
 
@@ -1164,7 +1172,9 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: backgroundRuntimeSessionId(rec),
     resourceIds: rec.resourceIds,
-    prompt: rec.prompt,
+    // Poll responses (status/wait/progress) deliberately omit the full prompt:
+    // the caller wrote it and re-ingesting 2-4 KB per agent per poll is pure
+    // context cost. The spawn response still carries it once.
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,
     providerId: rec.providerId,
@@ -1354,7 +1364,6 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: `background_${rec.id}`,
-    prompt: rec.prompt,
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,
     providerId: rec.providerId,
