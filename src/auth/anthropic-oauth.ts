@@ -46,10 +46,31 @@ const OAUTH_BETA_HEADERS = [
   'fine-grained-tool-streaming-2025-05-14',
 ];
 const CLAUDE_CLI_VERSION_FALLBACK = '2.1.75';
+// The detected version used to be memoized for the whole gateway lifetime, so
+// running `claude update` had no effect until a gateway restart and the only
+// symptom was a provider 400 "claude_code_version_too_old". Re-detect on a TTL
+// and immediately after that error.
+const CLAUDE_CLI_VERSION_TTL_MS = 10 * 60_000;
 let cachedClaudeCliVersion: string | null = null;
+let cachedClaudeCliVersionAt = 0;
 
-function detectClaudeCliVersion(): string {
-  if (cachedClaudeCliVersion) return cachedClaudeCliVersion;
+export function invalidateClaudeCliVersionCache(): void {
+  cachedClaudeCliVersion = null;
+  cachedClaudeCliVersionAt = 0;
+}
+
+/** True when a provider error says the reported Claude Code client is too old. */
+export function isClaudeCodeVersionTooOldError(error: unknown): boolean {
+  const text = typeof error === 'string'
+    ? error
+    : String((error as any)?.message || '') + ' ' + (() => { try { return JSON.stringify(error); } catch { return ''; } })();
+  return /claude_code_version_too_old/i.test(text) || /Claude Code [\d.]+ does not support this model/i.test(text);
+}
+
+export function detectClaudeCliVersion(now: number = Date.now()): string {
+  if (cachedClaudeCliVersion && now - cachedClaudeCliVersionAt < CLAUDE_CLI_VERSION_TTL_MS) {
+    return cachedClaudeCliVersion;
+  }
 
   for (const command of ['claude', 'claude-code']) {
     try {
@@ -62,6 +83,7 @@ function detectClaudeCliVersion(): string {
       const version = stdout.split(/\s+/)[0] || '';
       if (/^\d/.test(version)) {
         cachedClaudeCliVersion = version;
+        cachedClaudeCliVersionAt = now;
         return version;
       }
     } catch {
@@ -70,6 +92,7 @@ function detectClaudeCliVersion(): string {
   }
 
   cachedClaudeCliVersion = CLAUDE_CLI_VERSION_FALLBACK;
+  cachedClaudeCliVersionAt = now;
   return cachedClaudeCliVersion;
 }
 

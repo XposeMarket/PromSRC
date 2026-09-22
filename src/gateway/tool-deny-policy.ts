@@ -65,6 +65,12 @@ export function formatHardToolDeny(decision: HardToolDenyDecision): string {
   ].join('\n');
 }
 
+export function stripQuotedLiterals(command: string): string {
+  return String(command || '')
+    .replace(/"(?:[^"\\`]|\\.|`.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+}
+
 function commandMatches(command: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(command));
 }
@@ -196,7 +202,17 @@ function evaluateCommandDeny(rawCommand: string): HardToolDenyDecision {
     );
   }
 
+  // Power-state commands are only real when they appear as executable tokens.
+  // Quoted literals (search patterns, echo text, commit messages) mentioning
+  // "shutdown" or "restart" must not trip this, e.g.
+  // Select-String -Pattern "restart|shutdown" on a log file.
   if (commandMatches(cmd, [
+    // Wrapped invocations such as cmd /c "shutdown /r /t 0" still count, even
+    // inside quotes: a flag right after the verb is an execution, not prose.
+    /\bshutdown(?:\.exe)?\s+[\/-][a-z]/,
+    /\brestart-computer\b(?!\s*['"|])/,
+    /\bstop-computer\b(?!\s*['"|])/,
+  ]) || commandMatches(stripQuotedLiterals(cmd), [
     /\bshutdown\b/,
     /\brestart-computer\b/,
     /\bstop-computer\b/,

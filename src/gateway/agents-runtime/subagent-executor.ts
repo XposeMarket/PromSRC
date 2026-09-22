@@ -12,7 +12,7 @@ import { shouldTrackTerminalWorkspaceChanges } from '../terminal-service';
 import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { resolveGatewayRestartScope } from '../../runtime/supervisor-restart-request';
-import { getConfig, getAgents, getAgentById } from '../../config/config';
+import { getConfig, getAgents, getAgentById, getResolvedConfigDir } from '../../config/config';
 import { mainChatRoutePatch } from '../../config/main-chat-route.js';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
@@ -4285,7 +4285,23 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       return false;
     }
   }
-  function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: boolean; requireDirectory?: boolean; allowEmpty?: boolean } = {}): { absPath: string; normalizedRel: string; displayPath: string } {
+  /**
+ * Runtime diagnostic directories that read-only search/read tools may open.
+ * These hold restart, watchdog, turn-timing, process and tool-observation
+ * evidence. Deliberately excludes the config dir root itself (config.json,
+ * vault, credentials) — only named log/telemetry subdirectories.
+ */
+function getRuntimeDiagnosticsReadRoots(): string[] {
+  try {
+    const configDir = getResolvedConfigDir();
+    if (!configDir) return [];
+    return ['logs', path.join('processes', 'logs'), 'tool-observations'].map((sub) => path.resolve(configDir, sub));
+  } catch {
+    return [];
+  }
+}
+
+function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: boolean; requireDirectory?: boolean; allowEmpty?: boolean; readOnlyDiagnostics?: boolean } = {}): { absPath: string; normalizedRel: string; displayPath: string } {
     const raw = String(relPath ?? '').trim();
     if (!raw && !opts.allowEmpty) throw new Error('path is required');
     const root = path.resolve(workspacePath);
@@ -4300,6 +4316,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       : isPrimaryWorkspaceRun
       ? Array.from(new Set([root, ...configuredAllowed.map((p: any) => String(p || '').trim()).filter(Boolean)].map((p) => path.resolve(p))))
       : [root];
+    // Read-only search/read of runtime diagnostics (turn timing, process logs,
+    // tool observations) must work: that is where restart/watchdog evidence
+    // lives. Never extended to writes, and never to credential-bearing files.
+    if (opts.readOnlyDiagnostics && isPrimaryWorkspaceRun) {
+      for (const diag of getRuntimeDiagnosticsReadRoots()) {
+        if (!allowedRoots.some((r: string) => normalizePathForPermissionCompare(r) === normalizePathForPermissionCompare(diag))) allowedRoots.push(diag);
+      }
+    }
     const blockedRoots = Array.isArray(permissions.blocked_paths)
       ? permissions.blocked_paths.map((p: any) => String(p || '').trim()).filter(Boolean).map((p: string) => path.resolve(p))
       : [];
@@ -7580,7 +7604,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       case 'list_files': {
         try {
           const listArgs = args || {};
-          const resolved = resolveAllowedWorkspacePath(String(listArgs.path ?? listArgs.directory ?? '.'), { requireDirectory: true, allowEmpty: true });
+          const resolved = resolveAllowedWorkspacePath(String(listArgs.path ?? listArgs.directory ?? '.'), { requireDirectory: true, allowEmpty: true, readOnlyDiagnostics: true });
           const files = fs.readdirSync(resolved.absPath).filter(f => {
             try { return fs.statSync(path.join(resolved.absPath, f)).isFile(); } catch { return false; }
           });
@@ -7596,7 +7620,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         try {
           const rawPath = listArgs.path ?? listArgs.directory ?? '.';
           const directoryArg = String(rawPath || '.').trim() || '.';
-          resolvedDir = resolveAllowedWorkspacePath(directoryArg, { requireDirectory: true, allowEmpty: true });
+          resolvedDir = resolveAllowedWorkspacePath(directoryArg, { requireDirectory: true, allowEmpty: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -7716,7 +7740,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               batchSummaryLines.push(`${bFilename}: content`);
               continue;
             }
-            const bResolved = resolveAllowedWorkspacePath(String(bFilename), { requireFile: true });
+            const bResolved = resolveAllowedWorkspacePath(String(bFilename), { requireFile: true, readOnlyDiagnostics: true });
             bDisplay = bResolved.displayPath;
             if (summaryOnly) {
               resultChunks.push(summarizeFile(bDisplay, bResolved.absPath));
@@ -7777,7 +7801,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         let resolvedFile: { absPath: string; normalizedRel: string; displayPath: string };
         try {
-          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true });
+          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           const requested = String(filename || '').replace(/\\/g, '/');
           return { name, args, result: recoverWorkspacePathError(err, requested, 'list_dir'), error: true };
@@ -8103,7 +8127,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const requested = args.path || args.filename || args.file;
         if (!requested) return { name, args, result: 'path is required', error: true };
         try {
-          const resolved = resolveAllowedWorkspacePath(String(requested));
+          const resolved = resolveAllowedWorkspacePath(String(requested), { readOnlyDiagnostics: true });
           if (!fs.existsSync(resolved.absPath)) return { name, args, result: JSON.stringify({ path: resolved.displayPath, exists: false }, null, 2), error: false };
           const stat = fs.statSync(resolved.absPath);
           return {
@@ -8257,7 +8281,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         let resolvedFile: { absPath: string; normalizedRel: string; displayPath: string };
         try {
-          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true });
+          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -8377,7 +8401,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         if (!pattern) return { name, args, result: 'pattern is required', error: true };
         let resolvedFile: { absPath: string; normalizedRel: string; displayPath: string };
         try {
-          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true });
+          resolvedFile = resolveAllowedWorkspacePath(String(filename), { requireFile: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -8460,7 +8484,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         let resolvedDir: { absPath: string; normalizedRel: string; displayPath: string };
         try {
-          resolvedDir = resolveAllowedWorkspacePath(String(directoryArg), { requireDirectory: true, allowEmpty: true });
+          resolvedDir = resolveAllowedWorkspacePath(String(directoryArg), { requireDirectory: true, allowEmpty: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
@@ -8627,7 +8651,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return { absPath, displayPath: subPath ? `${label}/${subPath}` : label };
         };
         try {
-          ftResolved = ftResolveSourceTree() ?? resolveAllowedWorkspacePath(ftRootArg, { requireDirectory: true, allowEmpty: true });
+          ftResolved = ftResolveSourceTree() ?? resolveAllowedWorkspacePath(ftRootArg, { requireDirectory: true, allowEmpty: true, readOnlyDiagnostics: true });
         } catch (err: any) {
           return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
         }
