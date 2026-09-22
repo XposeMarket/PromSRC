@@ -526,11 +526,17 @@ const BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8;
  * Unknown ids are dropped (the worker can still request_tool_category later),
  * duplicates collapse, and the list is capped so a spawn cannot re-create the
  * full-surface bloat this field exists to prevent.
+ *
+ * A bare string is accepted and treated as a single-entry list. Previously a
+ * string silently normalized to [] — the spawn then ran core-only while the
+ * spawner believed the category had been granted, which is invisible at runtime
+ * and only shows up as an unexplainably slow worker.
  */
 export function normalizeBackgroundSpawnToolCategories(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
+  const entries = typeof raw === 'string' ? [raw] : raw;
+  if (!Array.isArray(entries)) return [];
   const out: string[] = [];
-  for (const entry of raw) {
+  for (const entry of entries) {
     const normalized = normalizeToolCategory(entry);
     if (!normalized || out.includes(normalized)) continue;
     out.push(normalized);
@@ -995,6 +1001,17 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         }
       };
 
+      // Background workers run with skipAutomaticToolCategoryActivation, so the
+      // only on-demand categories they have are the ones the spawner declared.
+      // Without this notice a worker cannot tell that (for example) terminal
+      // access is absent rather than merely unused, so it silently substitutes
+      // dozens of native read/grep round trips for one shell command. State the
+      // surface explicitly and point at the escape hatch.
+      const grantedToolCategories = Array.isArray(record.toolCategories) ? record.toolCategories : [];
+      const toolSurfaceNotice = grantedToolCategories.length
+        ? `Pre-activated tool categories for this run: ${grantedToolCategories.join(', ')}. Any other category is NOT loaded.`
+        : 'No optional tool categories are pre-activated for this run: you have CORE TOOLS ONLY (file read/search/web). Terminal/shell (workspace_run), file writing, browser, and desktop tools are NOT loaded.';
+
       try {
         const chatResult = await handleChat(
           prompt,
@@ -1002,7 +1019,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           sendSSE,
           undefined,   // extra
           abortSignal,
-          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}.`,
+          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}. TOOL SURFACE: ${toolSurfaceNotice} Call request_tool_category({category, scope:"session"}) to load one you need — prefer "workspace_write" for terminal/shell access when a single command (git, ripgrep, PowerShell pipeline) would replace many individual file reads. Requesting a needed category is expected, not exceptional.`,
           record.model,   // modelOverride
           'background_task',
           undefined,   // toolFilter — full tool access
