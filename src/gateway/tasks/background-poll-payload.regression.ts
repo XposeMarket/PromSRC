@@ -59,4 +59,31 @@ const waitBody = extractFunctionBody('export async function backgroundWait(');
 assert(/\bstatusFromRecord\b/.test(waitBody), 'backgroundWait must serialize agents via statusFromRecord');
 assert(!/\bprompt: rec\.prompt\b/.test(waitBody), 'backgroundWait must not inline the full prompt');
 
+
+// ── Explicit wait ceiling ───────────────────────────────────────────────────
+// The re-poll loop that caused the prompt echo was driven by a 120s hard clamp:
+// a caller asking to wait 10 minutes was silently clamped to 2, timed out, and
+// polled again. Real spawns run 20-30 minutes, so an EXPLICIT wait must be able
+// to exceed two minutes. The unspecified default stays short so an omitted
+// timeout never blocks a foreground turn for half an hour.
+const capMatch = source.match(/const BACKGROUND_WAIT_ALL_CAP_MS = ([0-9_]+);/);
+assert(capMatch, 'BACKGROUND_WAIT_ALL_CAP_MS must remain declared');
+const capMs = Number(capMatch![1].replace(/_/g, ''));
+assert.ok(
+  capMs >= 1_800_000,
+  `explicit background waits must allow >= 30min to match sibling agent/team wait tools, got ${capMs}ms`,
+);
+
+const defMatch = source.match(/const DEFAULT_BACKGROUND_TIMEOUT_MS = ([0-9_]+);/);
+assert(defMatch, 'DEFAULT_BACKGROUND_TIMEOUT_MS must remain declared');
+const defMs = Number(defMatch![1].replace(/_/g, ''));
+assert.ok(defMs <= 120_000, `unspecified background wait default must stay short, got ${defMs}ms`);
+assert.ok(defMs < capMs, 'default wait must be below the explicit ceiling');
+
+// The clamp must still floor absurd/negative input rather than trusting callers.
+assert.ok(
+  /Math\.max\(500,\s*Math\.min\(BACKGROUND_WAIT_ALL_CAP_MS/.test(source),
+  'clampBackgroundTimeoutMs must keep flooring at 500ms and ceiling at the cap',
+);
+
 console.log('background-poll-payload regression: ok');

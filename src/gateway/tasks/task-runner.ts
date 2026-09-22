@@ -510,7 +510,14 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   backgroundStream: BackgroundAgentStreamState;
 }
 
-const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
+// Ceiling for an EXPLICIT background wait. Real spawns routinely run 20-30
+// minutes, so a 2 minute hard clamp silently turned every long wait into a
+// timeout + re-poll loop, which re-sent the whole poll payload each cycle.
+// Matches the 1800000ms ceiling already used by the sibling agent/team wait
+// tools rather than inventing a second, stricter policy.
+const BACKGROUND_WAIT_ALL_CAP_MS = 1_800_000;
+// Default when the caller does not pass timeoutMs. Kept short on purpose: an
+// unspecified wait should not block a foreground turn for half an hour.
 const DEFAULT_BACKGROUND_TIMEOUT_MS = 120_000;
 const BACKGROUND_SPAWN_MAX_TOOL_CATEGORIES = 8;
 
