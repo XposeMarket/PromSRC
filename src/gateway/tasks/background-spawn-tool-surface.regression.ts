@@ -38,7 +38,23 @@ const RECON_PROMPT = [
 
 // 1 + 3: normalization
 assert.deepEqual(normalizeBackgroundSpawnToolCategories(undefined), []);
-assert.deepEqual(normalizeBackgroundSpawnToolCategories('workspace_write'), []);
+// A bare string is a single category, not an empty grant. Returning [] here
+// silently downgraded the spawn to core-only while the spawner believed the
+// category was granted — invisible at runtime, and the worker then burns many
+// native round trips replacing one shell command.
+assert.deepEqual(
+  normalizeBackgroundSpawnToolCategories('workspace_write'),
+  ['workspace_write'],
+  'a bare string category must be accepted, not silently dropped',
+);
+assert.deepEqual(
+  normalizeBackgroundSpawnToolCategories('browser'),
+  ['browser_automation'],
+  'a bare string category must still normalize legacy aliases',
+);
+assert.deepEqual(normalizeBackgroundSpawnToolCategories('not_a_category'), []);
+assert.deepEqual(normalizeBackgroundSpawnToolCategories(''), []);
+assert.deepEqual(normalizeBackgroundSpawnToolCategories(42), []);
 assert.deepEqual(
   normalizeBackgroundSpawnToolCategories(['workspace_write', 'workspace_write', 'not_a_category', 'browser']),
   ['workspace_write', 'browser_automation'],
@@ -58,10 +74,15 @@ assert.equal(coreNames.has('request_tool_category'), true, 'spawn workers must k
 assert.equal(coreNames.has('workspace_edit'), false, 'core-only spawn must not expose workspace_edit');
 assert.equal(coreNames.has('browser_session'), false, 'core-only spawn must not expose browser_session');
 assert.equal(coreNames.has('desktop_screen'), false, 'core-only spawn must not expose desktop_screen');
+// Terminal access is the expensive omission: without workspace_run a worker
+// rebuilds one shell command out of many native read/grep round trips. Pin the
+// fact so the tool-surface notice in task-runner stays truthful.
+assert.equal(coreNames.has('workspace_run'), false, 'core-only spawn must not expose workspace_run (terminal)');
 
 const declared = buildTools(deps, new Set(normalizeBackgroundSpawnToolCategories(['workspace_write'])));
 const declaredNames = new Set(declared.map((tool: any) => String(tool?.function?.name || '')));
 assert.equal(declaredNames.has('workspace_edit'), true, 'declared workspace_write must expose workspace_edit');
+assert.equal(declaredNames.has('workspace_run'), true, 'declared workspace_write must expose workspace_run (terminal)');
 assert.equal(declaredNames.has('browser_session'), false, 'declared workspace_write must not drag in browser tools');
 assert.ok(
   declared.length < coreSurface.length + 40,
