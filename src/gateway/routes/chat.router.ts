@@ -17239,9 +17239,20 @@ function isTransientLiveTraceEntryForUi(entry: any): boolean {
     || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
 }
 
+// Share of the cap reserved for the OLDEST durable entries when truncating.
+// A turn that spans a gateway restart re-materializes with its pre-restart
+// events at the front of the list, so a pure tail slice deletes precisely the
+// part of the stream a user notices missing after a reconnect.
+const LIVE_TRACE_HEAD_RETENTION_RATIO = 0.35;
+
 function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
   const durable = entries.filter((entry) => !isTransientLiveTraceEntryForUi(entry));
-  return limit > 0 ? durable.slice(-limit) : durable;
+  if (!(limit > 0) || durable.length <= limit) return durable;
+  // Keep a head window as well as the tail so both halves of a restart-spanning
+  // turn survive the cap. Order is preserved and the total never exceeds `limit`.
+  const head = Math.min(limit - 1, Math.max(1, Math.floor(limit * LIVE_TRACE_HEAD_RETENTION_RATIO)));
+  const tail = limit - head;
+  return [...durable.slice(0, head), ...durable.slice(durable.length - tail)];
 }
 
 function sanitizeHistoryForUiResponse(

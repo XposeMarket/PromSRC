@@ -65,9 +65,14 @@ function isTransientLiveTraceEntryForUi(entry: any): boolean {
     || (visibility === 'summary' && ['think', 'thinking', 'agent_thought'].includes(type));
 }
 
+const LIVE_TRACE_HEAD_RETENTION_RATIO = 0.35;
+
 function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
   const durable = entries.filter((entry) => !isTransientLiveTraceEntryForUi(entry));
-  return limit > 0 ? durable.slice(-limit) : durable;
+  if (!(limit > 0) || durable.length <= limit) return durable;
+  const head = Math.min(limit - 1, Math.max(1, Math.floor(limit * LIVE_TRACE_HEAD_RETENTION_RATIO)));
+  const tail = limit - head;
+  return [...durable.slice(0, head), ...durable.slice(durable.length - tail)];
 }
 
 // Durable content must survive.
@@ -106,12 +111,37 @@ assert.deepEqual(
   'durable entries must survive and transient streaming entries must be dropped',
 );
 
-// The limit must keep the most recent durable entries, not the oldest.
+// The cap must never exceed `limit`, and must keep the newest entries.
 const many = Array.from({ length: 200 }, (_, i) => ({ type: 'tool_call', text: `entry-${i}` }));
 const capped = sanitizeLiveTraceEntriesForUi(many, 60);
 assert.equal(capped.length, 60, 'limit must be applied');
 assert.equal((capped[capped.length - 1] as any).text, 'entry-199', 'must keep the newest entries');
-assert.equal((capped[0] as any).text, 'entry-140', 'must drop the oldest entries');
+
+// Restart regression: a turn that spans a gateway restart re-materializes with its
+// pre-restart events at the FRONT of the list. A tail-only slice deleted exactly
+// those, so the UI lost the pre-restart half of a continued turn. The oldest
+// entries must survive alongside the newest.
+assert.equal((capped[0] as any).text, 'entry-0', 'must retain the oldest entries for restart-spanning turns');
+const indices = capped.map((e: any) => Number(String(e.text).replace('entry-', '')));
+// Find where the head window stops being contiguous with entry-0.
+let headCount = 0;
+while (headCount < indices.length && indices[headCount] === headCount) headCount += 1;
+assert.ok(headCount > 0, 'a contiguous head window must be present before the tail window');
+assert.ok(headCount < capped.length, 'the cap must still reserve room for a tail window');
+// Both windows ascend, and the tail is strictly newer than the head.
+indices.forEach((n: number, i: number) => {
+  if (i > 0) assert.ok(n > indices[i - 1], 'entries must stay in ascending original order');
+});
+assert.equal(indices[indices.length - 1], 199, 'tail window must end at the newest entry');
+// Order is preserved across the join and nothing is duplicated.
+const seen = new Set(capped.map((e: any) => e.text));
+assert.equal(seen.size, capped.length, 'cap must not duplicate entries');
+
+// Degenerate limits must stay in-bounds rather than throwing or over-returning.
+assert.equal(sanitizeLiveTraceEntriesForUi(many, 1).length, 1, 'limit 1 must return exactly one entry');
+assert.equal((sanitizeLiveTraceEntriesForUi(many, 1)[0] as any).text, 'entry-199', 'limit 1 keeps the newest');
+assert.equal(sanitizeLiveTraceEntriesForUi(many, 2).length, 2, 'limit 2 must return exactly two entries');
+assert.equal(sanitizeLiveTraceEntriesForUi(many, 250).length, 200, 'limit above length must not truncate');
 
 // A limit of 0 means "no cap", matching the option being omitted for full reads.
 assert.equal(sanitizeLiveTraceEntriesForUi(many, 0).length, 200, 'limit 0 must not truncate');
