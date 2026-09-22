@@ -45,7 +45,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `recent-3 ${BIG}`, 'c5'),
   ];
   const before = totalChars(messages);
-  const result = elideStaleToolResults(messages, { keepRecent: 3 });
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
 
   assert(result.elidedCount === 2, `expected 2 elided, got ${result.elidedCount}`);
   assert(result.savedChars > 0, 'expected a positive savedChars');
@@ -78,7 +78,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `filler ${BIG}`, 'e4'),
     toolMsg('run_command', `filler ${BIG}`, 'e5'),
   ];
-  elideStaleToolResults(messages, { keepRecent: 3 });
+  elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(messages[0].content === errorText, 'error results must never be elided');
 }
 
@@ -92,7 +92,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', shortText, 's4'),
     toolMsg('run_command', shortText, 's5'),
   ];
-  const result = elideStaleToolResults(messages, { keepRecent: 3 });
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(result.elidedCount === 0, 'short results should not be elided');
   assert(messages[0].content === shortText, 'short result must stay verbatim');
 }
@@ -107,7 +107,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `filler ${BIG}`, 'k4'),
     toolMsg('run_command', `filler ${BIG}`, 'k5'),
   ];
-  elideStaleToolResults(messages, { keepRecent: 3 });
+  elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(messages[0].content === skillText, 'skill_read must stay verbatim');
 }
 
@@ -123,7 +123,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `filler ${BIG}`, 'm4'),
     toolMsg('run_command', `filler ${BIG}`, 'm5'),
   ];
-  elideStaleToolResults(messages, { keepRecent: 3 });
+  elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   const parts = messages[0].content as Array<any>;
   assert(parts.length === 2, 'multimodal parts must be preserved');
   assert(parts[0].type === 'image', 'image part must survive elision');
@@ -141,9 +141,9 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `r ${BIG}`, 'i3'),
     toolMsg('run_command', `r ${BIG}`, 'i4'),
   ];
-  const first = elideStaleToolResults(messages, { keepRecent: 3 });
+  const first = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   const snapshot = String(messages[0].content);
-  const second = elideStaleToolResults(messages, { keepRecent: 3 });
+  const second = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(first.elidedCount === 1, 'first pass should elide exactly one');
   assert(second.elidedCount === 0, 'second pass must be a no-op');
   assert(String(messages[0].content) === snapshot, 'content must be stable across passes');
@@ -156,7 +156,7 @@ function totalChars(messages: Array<any>): number {
     toolMsg('run_command', `only ${BIG}`, 'n2'),
   ];
   const before = totalChars(messages);
-  const result = elideStaleToolResults(messages, { keepRecent: 3 });
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(result.elidedCount === 0, 'short turns should be untouched');
   assert(totalChars(messages) === before, 'short turns must not lose content');
 }
@@ -169,7 +169,7 @@ function totalChars(messages: Array<any>): number {
     messages.push(toolMsg('run_command', `result ${i} ${BIG}`, `t${i}`));
   }
   const before = totalChars(messages);
-  const result = elideStaleToolResults(messages);
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   const after = totalChars(messages);
   assert(result.elidedCount === 12, `expected 12 elided in a 15-call turn, got ${result.elidedCount}`);
   assert(after < before * 0.35, `expected >65% reduction, got ${Math.round((after / before) * 100)}%`);
@@ -184,7 +184,7 @@ function totalChars(messages: Array<any>): number {
   messages.push(toolMsg('read_file', `old ${BIG}`, 'old1'));
   messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }, { id: 'b4' }, { id: 'b5' }] });
   for (let i = 1; i <= 5; i++) messages.push(toolMsg('read_file', `batch ${i} ${BIG}`, `b${i}`));
-  const result = elideStaleToolResults(messages);
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   assert(result.elidedCount === 1, `expected only the prior-round result elided, got ${result.elidedCount}`);
   assert(String(messages[2].content).startsWith(TOOL_RESULT_ELISION_MARKER), 'prior-round result should be elided');
   for (let i = 1; i <= 5; i++) {
@@ -201,7 +201,7 @@ function totalChars(messages: Array<any>): number {
   for (let i = 1; i <= 4; i++) messages.push(toolMsg('grep_file', `first ${i} ${BIG}`, `a${i}`));
   messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'c1' }, { id: 'c2' }] });
   for (let i = 1; i <= 2; i++) messages.push(toolMsg('grep_file', `second ${i} ${BIG}`, `c${i}`));
-  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1 });
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1, recentBudgetChars: 0 });
   // 6 tool messages: newest round protects second1/second2; keepRecent=3 also
   // protects first4. first1..first3 are the only eligible results.
   assert(result.elidedCount === 3, `expected first batch minus the keepRecent overlap (3) elided, got ${result.elidedCount}`);
@@ -218,7 +218,7 @@ function totalChars(messages: Array<any>): number {
     messages.push({ role: 'assistant', content: '', tool_calls: ids.map((id) => ({ id })) });
     for (const id of ids) messages.push(toolMsg('read_file', `${id} ${BIG}`, id));
   }
-  const result = elideStaleToolResults(messages, { keepRecent: 0, keepRecentRounds: 2 });
+  const result = elideStaleToolResults(messages, { keepRecent: 0, keepRecentRounds: 2, recentBudgetChars: 0 });
   assert(result.elidedCount === 4, `expected only round 0 (4 msgs) elided, got ${result.elidedCount}`);
   assert(String(messages[7].content).startsWith('r1i0 '), 'round 1 must stay verbatim with keepRecentRounds=2');
 }
