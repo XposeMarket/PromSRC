@@ -95,6 +95,7 @@ export interface EphemeralBackgroundStatus {
   spawnerSessionId?: string;
   backgroundSessionId?: string;
   resourceIds?: string[];
+  /** Full prompt is only returned from the spawn call; polls carry promptPreview. */
   prompt?: string;
   promptPreview?: string;
   fileChanges?: any;
@@ -1164,7 +1165,9 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: backgroundRuntimeSessionId(rec),
     resourceIds: rec.resourceIds,
-    prompt: rec.prompt,
+    // Poll responses (status/wait/progress) deliberately omit the full prompt:
+    // the caller wrote it and re-ingesting 2-4 KB per agent per poll is pure
+    // context cost. The spawn response still carries it once.
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,
     providerId: rec.providerId,
@@ -1354,7 +1357,6 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
     backgroundSessionId: `background_${rec.id}`,
-    prompt: rec.prompt,
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,
     providerId: rec.providerId,
