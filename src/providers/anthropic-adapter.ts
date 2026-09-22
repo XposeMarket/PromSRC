@@ -26,6 +26,7 @@ import { PROMPT_CACHE_MARKER } from './LLMProvider';
 import {
   buildAuthHeaders, loadTokens,
   ANTHROPIC_API_BASE,
+  invalidateClaudeCliVersionCache, isClaudeCodeVersionTooOldError,
 } from '../auth/anthropic-oauth';
 import type { AnthropicTokens } from '../auth/anthropic-oauth';
 import { contentToString, splitOnCacheMarker } from './content-utils';
@@ -755,6 +756,17 @@ export class AnthropicAdapter implements LLMProvider {
           }) + '\n', 'utf8');
         }
       } catch { /* Diagnostics must never change provider handling. */ }
+      if (isClaudeCodeVersionTooOldError(raw)) {
+        // The locally installed Claude Code CLI may have been updated since the
+        // version was detected. Drop the cache so the next request re-detects
+        // it instead of requiring a gateway restart.
+        invalidateClaudeCliVersionCache();
+        throw new Error(
+          `${this.id} API error ${response.status}: the installed Claude Code client is too old for ${model}. `
+          + `Run \`claude update\` (the next request re-detects the version automatically; no restart needed). `
+          + `Provider said: ${raw.slice(0, 300)}`,
+        );
+      }
       throw new Error(`${this.id} API error ${response.status}: ${raw.slice(0, 500)}`);
     };
 
