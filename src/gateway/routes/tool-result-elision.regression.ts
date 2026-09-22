@@ -175,4 +175,52 @@ function totalChars(messages: Array<any>): number {
   assert(after < before * 0.35, `expected >65% reduction, got ${Math.round((after / before) * 100)}%`);
 }
 
+// 8. A parallel batch in the newest round is never elided before the model has
+//    seen it, even when the batch is larger than keepRecent. Message-count
+//    keying alone would shorten the first results of a 5-call batch.
+{
+  const messages: Array<any> = [{ role: 'user', content: 'batch it' }];
+  messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'old1' }] });
+  messages.push(toolMsg('read_file', `old ${BIG}`, 'old1'));
+  messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }, { id: 'b4' }, { id: 'b5' }] });
+  for (let i = 1; i <= 5; i++) messages.push(toolMsg('read_file', `batch ${i} ${BIG}`, `b${i}`));
+  const result = elideStaleToolResults(messages);
+  assert(result.elidedCount === 1, `expected only the prior-round result elided, got ${result.elidedCount}`);
+  assert(String(messages[2].content).startsWith(TOOL_RESULT_ELISION_MARKER), 'prior-round result should be elided');
+  for (let i = 1; i <= 5; i++) {
+    const content = String(messages[3 + i].content);
+    assert(content.startsWith(`batch ${i} `), `newest-round batch result ${i} must stay verbatim, got: ${content.slice(0, 40)}`);
+  }
+}
+
+// 9. Round protection composes with keepRecent: a large batch two rounds back
+//    is eligible, but the newest round plus keepRecent newest messages survive.
+{
+  const messages: Array<any> = [{ role: 'user', content: 'two batches' }];
+  messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }, { id: 'a4' }] });
+  for (let i = 1; i <= 4; i++) messages.push(toolMsg('grep_file', `first ${i} ${BIG}`, `a${i}`));
+  messages.push({ role: 'assistant', content: '', tool_calls: [{ id: 'c1' }, { id: 'c2' }] });
+  for (let i = 1; i <= 2; i++) messages.push(toolMsg('grep_file', `second ${i} ${BIG}`, `c${i}`));
+  const result = elideStaleToolResults(messages, { keepRecent: 3, keepRecentRounds: 1 });
+  // 6 tool messages: newest round protects second1/second2; keepRecent=3 also
+  // protects first4. first1..first3 are the only eligible results.
+  assert(result.elidedCount === 3, `expected first batch minus the keepRecent overlap (3) elided, got ${result.elidedCount}`);
+  assert(String(messages[5].content).startsWith('first 4 '), 'keepRecent tail must still protect the newest older-round message');
+  assert(String(messages[7].content).startsWith('second 1 '), 'newest-round message 1 must stay verbatim');
+  assert(String(messages[8].content).startsWith('second 2 '), 'newest-round message 2 must stay verbatim');
+}
+
+// 10. keepRecentRounds=2 protects both of the last two rounds in full.
+{
+  const messages: Array<any> = [{ role: 'user', content: 'three rounds' }];
+  for (let r = 0; r < 3; r++) {
+    const ids = [0, 1, 2, 3].map((i) => `r${r}i${i}`);
+    messages.push({ role: 'assistant', content: '', tool_calls: ids.map((id) => ({ id })) });
+    for (const id of ids) messages.push(toolMsg('read_file', `${id} ${BIG}`, id));
+  }
+  const result = elideStaleToolResults(messages, { keepRecent: 0, keepRecentRounds: 2 });
+  assert(result.elidedCount === 4, `expected only round 0 (4 msgs) elided, got ${result.elidedCount}`);
+  assert(String(messages[7].content).startsWith('r1i0 '), 'round 1 must stay verbatim with keepRecentRounds=2');
+}
+
 console.log('tool-result-elision regression passed');
