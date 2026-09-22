@@ -3049,15 +3049,38 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
     && !!sourceText
     && sourceText.length > targetText.length
     && sourceText.startsWith(targetText);
+  // A gateway restart writes transient checkpoint rows ("Gateway Restart
+  // Initiated" / "Gateway restart successful") into the same turn, ahead of the
+  // real answer. Those rows carry no _clientRequestId, so nothing stops a
+  // checkpoint from landing in the target first. The final answer is authored
+  // after recovery and does not textually extend the checkpoint banner, so
+  // `sourceExtendsTarget` is false and the answer used to be discarded — the
+  // thread kept only the pre-restart stream while the drawer preview (which
+  // reads the session record directly) showed the real answer.
+  //
+  // Restart checkpoints are never the canonical copy for a turn: let a
+  // non-checkpoint source replace checkpoint target text outright.
+  const targetIsRestartCheckpoint = _isMobileGatewayRestartCheckpointMessage(target);
+  const sourceIsRestartCheckpoint = _isMobileGatewayRestartCheckpointMessage(source);
+  const sourceSupersedesCheckpoint = targetIsRestartCheckpoint && !sourceIsRestartCheckpoint;
   if (!preserveTargetText && (!targetText
     || /^attached file\(s\)$/i.test(targetText)
     || /^please review the attached file\(s\)\.?$/i.test(targetText)
-    || sourceExtendsTarget)
+    || sourceExtendsTarget
+    || sourceSupersedesCheckpoint)
     && sourceText) {
     if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
     target.body.text = sourceText;
     target.content = target.body.text;
+    if (sourceSupersedesCheckpoint) {
+      // The row is no longer a checkpoint banner; clear the marker so later
+      // merges in the same load treat it as an ordinary assistant answer.
+      if (String(target.messageKind || '') === 'restart_checkpoint') {
+        target.messageKind = String(source.messageKind || '');
+      }
+    }
   }
+
   if (!target.time && source.time) target.time = source.time;
   const targetStartedAt = Number(target.workStartedAt || target.startedAt || 0);
   const sourceStartedAt = Number(source.workStartedAt || source.startedAt || 0);
