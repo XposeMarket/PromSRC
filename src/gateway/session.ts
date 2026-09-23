@@ -15,6 +15,7 @@ import { getUsageCalibration } from '../providers/model-usage';
 import { normalizeSpeed } from '../providers/reasoning-capabilities';
 import { clearToolObservationSnapshotCache, getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
+import { repairReappendedAssistantRows } from './history-reconciliation';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import { listLiveRuntimes } from './live-runtime-registry';
 import { normalizeManifestToolCategory } from '../runtime/tool-category-manifest';
@@ -2544,9 +2545,16 @@ export function getSession(id: string): Session {
   if (fs.existsSync(filePath)) {
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      // One-time heal for chats damaged by the old desktop re-append bug:
+      // replies duplicated/moved after later turns. The merge path only heals
+      // on the next desktop save, so untouched chats stayed broken on disk.
+      const rawHistory = Array.isArray(data.history) ? data.history : [];
+      let healedHistory = rawHistory;
+      try { healedHistory = repairReappendedAssistantRows(rawHistory); } catch { healedHistory = rawHistory; }
+      const historyWasHealed = healedHistory !== rawHistory;
       const session: Session = {
         id: sessionId,
-        history: boundHistoryRuntimeMetadata(Array.isArray(data.history) ? data.history : []),
+        history: boundHistoryRuntimeMetadata(healedHistory),
         workspace: data.workspace || getConfig().getWorkspacePath(),
         title: typeof data.title === 'string' ? data.title : undefined,
         autoTitleLocked: data.autoTitleLocked === true,
@@ -2607,6 +2615,10 @@ export function getSession(id: string): Session {
       setSessionCacheWeight(sessionId, session);
       touchSessionCache(sessionId);
       pruneSessionCache();
+      if (historyWasHealed) {
+        console.log(`[session] healed re-appended assistant rows in ${sessionId}: ${rawHistory.length} -> ${healedHistory.length}`);
+        saveSession(sessionId);
+      }
       return session;
     } catch {
       // Corrupted file, create new session

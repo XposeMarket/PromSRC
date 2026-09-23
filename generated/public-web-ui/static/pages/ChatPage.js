@@ -319,8 +319,8 @@ const desktopQuestionController = createQuestionController({
     const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
     showToast('Answer required', `Answer the current question: ${labels}`, 'warning');
   },
-  onSubmitSuccess: () => loadSessionApprovals(),
-  onCancelSuccess: () => loadSessionApprovals(),
+  onSubmitSuccess: () => loadSessionApprovals({ force: true }),
+  onCancelSuccess: () => loadSessionApprovals({ force: true }),
   onError: (error, details = {}) => {
     const title = details.phase === 'cancel' ? 'Question cancel failed' : 'Question submit failed';
     showToast(title, String(error?.message || error), 'error');
@@ -45139,7 +45139,25 @@ async function restorePendingInlineQuestionsForSession(sessionId) {
   }
 }
 
-async function loadSessionApprovals() {
+// Opening a chat repaints twice (cached stub, then server history) and both
+// paths ask for pending actions. Coalesce calls for the same chat that land
+// within a short window instead of firing three extra requests each time.
+let _sessionApprovalsInflight = null;
+let _sessionApprovalsKey = '';
+let _sessionApprovalsAt = 0;
+function loadSessionApprovals(options = {}) {
+  const key = String(window.activeChatSessionId || '').trim();
+  const now = Date.now();
+  if (options?.force !== true && key === _sessionApprovalsKey && now - _sessionApprovalsAt < 1500 && _sessionApprovalsInflight) {
+    return _sessionApprovalsInflight;
+  }
+  _sessionApprovalsKey = key;
+  _sessionApprovalsAt = now;
+  _sessionApprovalsInflight = _loadSessionApprovalsNow();
+  return _sessionApprovalsInflight;
+}
+
+async function _loadSessionApprovalsNow() {
   const list = document.getElementById('session-approvals-list');
   const badge = document.getElementById('session-approvals-badge');
   const section = document.getElementById('session-approvals-section');
@@ -45222,7 +45240,7 @@ async function resolveSessionApproval(id, action, endpoint, grantScope = '') {
     const method = 'POST';
     const body = JSON.stringify(grantScope ? { grantScope } : {});
     const result = await api(endpoint, { method, body });
-    await loadSessionApprovals();
+    await loadSessionApprovals({ force: true });
     if (window.currentMode === 'proposals' && typeof window.loadProposals === 'function') window.loadProposals();
     if (window.currentMode === 'approvals' && typeof window.loadApprovals === 'function') window.loadApprovals();
     if (typeof window.checkPendingProposalsBadge === 'function') window.checkPendingProposalsBadge();
@@ -48413,7 +48431,7 @@ wsEventBus.on('coordinator_progress', (msg) => {
     const matchesSession = String(msg.sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
     if (typeof window.loadApprovals === 'function') window.loadApprovals();
     if (matchesSession && typeof window.loadSessionApprovals === 'function') {
-      window.loadSessionApprovals();
+      window.loadSessionApprovals({ force: true });
     } else if (eventName === 'approval_created') {
       const badge = document.getElementById('approvals-badge');
       if (badge) {

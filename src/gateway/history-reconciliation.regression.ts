@@ -162,3 +162,24 @@ console.log('history reconciliation desktop snapshot regression passed');
   const clean = damaged.slice(0, 4);
   assert.equal(repairReappendedAssistantRows(clean), clean, 'healthy history is returned untouched');
 }
+
+{
+  // A whole turn displaced to the top of the chat moves back to its time slot,
+  // and nothing is dropped.
+  const min = 60_000;
+  const displaced = [
+    { role: 'user', content: 'late prompt', timestamp: 100 * min },
+    { role: 'assistant', content: 'late reply that belongs near the end', timestamp: 103 * min },
+    { role: 'user', content: 'first prompt', timestamp: 1 * min },
+    { role: 'assistant', content: 'first reply for the first prompt', timestamp: 2 * min },
+    { role: 'user', content: 'second prompt', timestamp: 50 * min },
+    { role: 'assistant', content: 'second reply for the second prompt', timestamp: 51 * min },
+  ];
+  const healed = repairReappendedAssistantRows(displaced);
+  assert.deepEqual(healed.map((m: any) => m.content), [
+    'first prompt', 'first reply for the first prompt',
+    'second prompt', 'second reply for the second prompt',
+    'late prompt', 'late reply that belongs near the end',
+  ]);
+  console.log('history reconciliation displaced-turn regression passed');
+}

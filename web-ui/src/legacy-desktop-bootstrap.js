@@ -296,11 +296,14 @@ function syncPriorityBell() {
   const dot = document.getElementById('sidebarUnreadDot');
   const priorityCount = _priorityAttentionSessions().length;
   const hasPriority = priorityCount > 0;
-  if (dot) dot.hidden = !hasPriority;
+  // Runs on every sidebar render; only touch the DOM when a value changes.
+  if (dot && dot.hidden !== !hasPriority) dot.hidden = !hasPriority;
   if (button) {
-    button.classList.toggle('has-unread', hasPriority);
-    button.setAttribute('aria-label', hasPriority ? `Open priority chats (${priorityCount} priority)` : 'Open priority chats');
-    button.title = hasPriority ? `${priorityCount} priority chat${priorityCount === 1 ? '' : 's'}` : 'Priority chats';
+    if (button.classList.contains('has-unread') !== hasPriority) button.classList.toggle('has-unread', hasPriority);
+    const label = hasPriority ? `Open priority chats (${priorityCount} priority)` : 'Open priority chats';
+    if (button.getAttribute('aria-label') !== label) button.setAttribute('aria-label', label);
+    const title = hasPriority ? `${priorityCount} priority chat${priorityCount === 1 ? '' : 's'}` : 'Priority chats';
+    if (button.title !== title) button.title = title;
   }
 }
 
@@ -2003,9 +2006,9 @@ function renderSessionsList() {
     _renderPriorityPanel(el);
     return;
   }
-  if (priorityPanel) priorityPanel.hidden = true;
+  if (priorityPanel && !priorityPanel.hidden) priorityPanel.hidden = true;
   const sessionsSection = document.getElementById('sidebar-sessions-section');
-  if (sessionsSection) sessionsSection.style.display = '';
+  if (sessionsSection && sessionsSection.style.display) sessionsSection.style.display = '';
   syncPriorityBell();
   if (_settledViewOpen) {
     _renderSettledSessionsList(el);
@@ -2506,8 +2509,21 @@ function _applyDesktopSwitcherRouteState(sessionId, state) {
   return state;
 }
 
-async function refreshActiveChatModelRoute(sessionIdOverride = '') {
+// Opening a chat asks for its route twice (cached paint + server load).
+// Share one request per chat within a short window.
+const _modelRouteRefreshInflight = new Map();
+function refreshActiveChatModelRoute(sessionIdOverride = '', options = {}) {
   const sessionId = getActiveChatModelRouteSessionId(sessionIdOverride);
+  if (!sessionId) return Promise.resolve(null);
+  const existing = _modelRouteRefreshInflight.get(sessionId);
+  // Writes (route PUT/DELETE) must never reuse a read that started before them.
+  if (options?.force !== true && existing && Date.now() - existing.at < 1500) return existing.promise;
+  const promise = _refreshActiveChatModelRouteNow(sessionId);
+  _modelRouteRefreshInflight.set(sessionId, { at: Date.now(), promise });
+  return promise;
+}
+
+async function _refreshActiveChatModelRouteNow(sessionId) {
   if (!sessionId) return null;
   const cachedState = _desktopSwitcherCachedRouteForSession(sessionId);
   if (cachedState?.effective?.providerId && cachedState?.effective?.model) {
@@ -2530,7 +2546,7 @@ async function setActiveChatModelRoute(route, sessionIdOverride = '') {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
-  await refreshActiveChatModelRoute(sessionId);
+  await refreshActiveChatModelRoute(sessionId, { force: true });
   if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(50);
   return data?.chatModelRoute;
 }
@@ -2540,7 +2556,7 @@ async function followMainChatDefault(sessionIdOverride = '') {
   if (!sessionId) return;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
-    await refreshActiveChatModelRoute(sessionId);
+    await refreshActiveChatModelRoute(sessionId, { force: true });
     _closeModelSwitcher(sessionId);
   } catch (err) { console.warn('followMainChatDefault:', err); }
 }

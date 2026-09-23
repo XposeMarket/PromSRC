@@ -17527,6 +17527,19 @@ function isTransientLiveTraceEntryForUi(entry: any): boolean {
 // part of the stream a user notices missing after a reconnect.
 const LIVE_TRACE_HEAD_RETENTION_RATIO = 0.35;
 
+function trimLiveTraceStringLeaves(value: any, maxChars: number, depth: number): any {
+  if (typeof value === 'string') return value.length > maxChars ? truncateRuntimeProcessText(value, maxChars) : value;
+  if (!value || typeof value !== 'object') return value;
+  if (depth >= 6) return value;
+  if (Array.isArray(value)) {
+    const items = value.length > 40 ? value.slice(0, 40) : value;
+    return items.map((item) => trimLiveTraceStringLeaves(item, maxChars, depth + 1));
+  }
+  const next: any = {};
+  for (const key of Object.keys(value)) next[key] = trimLiveTraceStringLeaves(value[key], maxChars, depth + 1);
+  return next;
+}
+
 function sanitizeLiveTraceEntriesForUi(entries: any[], limit: number): any[] {
   const durable = entries.filter((entry) => !isTransientLiveTraceEntryForUi(entry));
   if (!(limit > 0) || durable.length <= limit) return durable;
@@ -17566,6 +17579,17 @@ function sanitizeHistoryForUiResponse(
     }
     if (Array.isArray(msg.liveTraceEntries) && typeof options.perMessageLiveTraceLimit === 'number') {
       msg.liveTraceEntries = sanitizeLiveTraceEntriesForUi(msg.liveTraceEntries, options.perMessageLiveTraceLimit);
+    }
+    if (Array.isArray(msg.liveTraceEntries)) {
+      // Trace rows carry full tool args/results (3-18KB each, 500 per turn).
+      // They were count-capped but never size-capped, so one long turn could
+      // add ~2MB to every chat open. Apply the same per-field limits as
+      // processEntries; `full` requests pass effectively unlimited limits.
+      // Trim long string leaves only: the tool-activity renderer reads
+      // structured fields (args.command, args.code, activity.result), so the
+      // object shape must survive.
+      const leafLimit = Math.max(options.processEntryTextLimit || 1600, options.processEntryExtraLimit || 1200);
+      msg.liveTraceEntries = msg.liveTraceEntries.map((entry: any) => trimLiveTraceStringLeaves(entry, leafLimit, 0));
     }
     if (Array.isArray(msg.attachmentPreviews)) {
       msg.attachmentPreviews = msg.attachmentPreviews.map((preview: any) => sanitizeAttachmentPreviewForUi(preview, {
