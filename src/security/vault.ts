@@ -40,6 +40,14 @@ const AUDIT_MAX_BYTES = 10 * 1024 * 1024;
 const AUDIT_SIZE_CHECK_INTERVAL_MS = 30_000;
 const DERIVED_KEY_CACHE_MAX_ENTRIES = 256;
 
+// Derived keys are shared by every SecretVault instance in the process. Several
+// call sites construct or resolve the vault through different config-dir
+// spellings (and mcp-manager builds its own instance), so a per-instance cache
+// missed constantly and each miss is a ~150 ms synchronous PBKDF2 on the event
+// loop. Keys are namespaced by a master-key fingerprint, never by plaintext.
+const SHARED_DERIVED_KEY_CACHE = new Map<string, { at: number; key: Buffer }>();
+const SHARED_DERIVED_KEY_INFLIGHT = new Map<string, Promise<Buffer>>();
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface VaultEntry {
@@ -191,8 +199,9 @@ export class SecretVault {
   private readonly auditPath: string;
   private masterKey: Buffer | null = null;
   private data: VaultMetadata = { version: 1, entries: {} };
-  private derivedKeyCache = new Map<string, { at: number; key: Buffer }>();
-  private derivedKeyAsyncInflight = new Map<string, Promise<Buffer>>();
+  private derivedKeyCache = SHARED_DERIVED_KEY_CACHE;
+  private derivedKeyAsyncInflight = SHARED_DERIVED_KEY_INFLIGHT;
+  private masterKeyFingerprint = '';
   private lastAuditSizeCheckAt = 0;
 
   constructor(configDir: string) {
@@ -208,6 +217,7 @@ export class SecretVault {
 
   private loadOrInit(): void {
     this.masterKey = this.loadOrCreateMasterKey();
+    this.masterKeyFingerprint = crypto.createHash('sha256').update(this.masterKey).digest('hex').slice(0, 16);
     this.data = this.readDiskData();
   }
 
@@ -241,7 +251,7 @@ export class SecretVault {
   }
 
   private deriveKey(salt: Buffer): Buffer {
-    const cacheKey = salt.toString('hex');
+    const cacheKey = `${this.masterKeyFingerprint}:${salt.toString('hex')}`;
     const cached = this.derivedKeyCache.get(cacheKey);
     if (cached) {
       // Refresh insertion order so the bounded map behaves like an LRU cache.
@@ -254,7 +264,7 @@ export class SecretVault {
   }
 
   private deriveKeyAsync(salt: Buffer): Promise<Buffer> {
-    const cacheKey = salt.toString('hex');
+    const cacheKey = `${this.masterKeyFingerprint}:${salt.toString('hex')}`;
     const cached = this.derivedKeyCache.get(cacheKey);
     if (cached) {
       this.derivedKeyCache.delete(cacheKey);

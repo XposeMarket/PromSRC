@@ -14,6 +14,8 @@ import type { TurnTimingRecorder } from './turn-timing.js';
 interface ContextBuildResult {
   context: string;
   rssBytes: number;
+  buildMs?: number;
+  receivedAt?: number;
 }
 
 interface ContextBuildTask {
@@ -82,6 +84,7 @@ const maxMessageBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_MESSAGE_BYTES', 2 *
 const recycleAfterJobs = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_JOBS', 100, 1, 10_000);
 const recycleRssBytes = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 2_147_483_647);
 const maxHeapUsedBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_HEAP_USED_BYTES', 0, 0, 8 * 1024 * 1024 * 1024);
+const hybridMemoryBudgetMs = envInt('PROMETHEUS_HYBRID_MEMORY_BUDGET_MS', 700, 50, 30_000);
 
 const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
   broker: new RuntimeWorkerBroker({
@@ -196,9 +199,16 @@ async function runNext(slot: WorkerSlot): Promise<void> {
       task.payload,
       remainingMs,
     );
+    const executionDoneAt = Date.now();
     task.timing?.mark('context_worker_execution_done', {
       worker: slot.broker.getStatus().name,
-      durationMs: Date.now() - executionStartedAt,
+      durationMs: executionDoneAt - executionStartedAt,
+      // buildMs = time inside buildPersonalityContext; ipcInMs = send -> child
+      // received; the remainder is result serialization + IPC back.
+      buildMs: Number(result?.buildMs ?? -1),
+      ipcInMs: result?.receivedAt ? Math.max(0, Number(result.receivedAt) - executionStartedAt) : -1,
+      payloadChars: (() => { try { return JSON.stringify(task.payload).length; } catch { return -1; } })(),
+      resultChars: String(result?.context || '').length,
     });
     if (aborted || task.signal?.aborted) {
       cancelled += 1;
@@ -335,18 +345,33 @@ export async function buildPersonalityContextIsolated(
     const memoryStartedAt = Date.now();
     timing?.mark('atomic_memory_hybrid_start');
     try {
-      snapshot.memoryAtomContext = await buildHybridMemoryAtomReferenceContext(
-        workspacePath,
-        messageText,
-        {
-          additionalContext: snapshot.projectContextBlock,
-          maxAtoms: options?.profile === 'voice_agent' ? 4 : 6,
-          maxChars: options?.profile === 'voice_agent' ? 4_500 : 14_000,
-        },
-      );
+      // Semantic atom retrieval is strictly additive (the snapshot already holds
+      // the deterministic atom result), so it must never hold the provider
+      // request hostage. Measured live at ~1.7s per turn; cap it and keep the
+      // deterministic context when the budget runs out.
+      let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+      const budgetExpired = Symbol('hybrid-memory-budget');
+      const hybrid = await Promise.race([
+        buildHybridMemoryAtomReferenceContext(
+          workspacePath,
+          messageText,
+          {
+            additionalContext: snapshot.projectContextBlock,
+            maxAtoms: options?.profile === 'voice_agent' ? 4 : 6,
+            maxChars: options?.profile === 'voice_agent' ? 4_500 : 14_000,
+          },
+        ),
+        new Promise<typeof budgetExpired>((resolve) => {
+          budgetTimer = setTimeout(() => resolve(budgetExpired), hybridMemoryBudgetMs);
+        }),
+      ]).finally(() => { if (budgetTimer) clearTimeout(budgetTimer); });
+      const timedOut = hybrid === budgetExpired;
+      if (!timedOut && typeof hybrid === 'string') snapshot.memoryAtomContext = hybrid;
       timing?.mark('atomic_memory_hybrid_done', {
         durationMs: Date.now() - memoryStartedAt,
-        injected: Boolean(snapshot.memoryAtomContext),
+        injected: !timedOut && Boolean(hybrid),
+        timedOut,
+        budgetMs: hybridMemoryBudgetMs,
       });
     } catch (error: any) {
       // The snapshot already contains the synchronous deterministic atom result,

@@ -519,6 +519,9 @@ const INTERNAL_SESSION_ID_RE = /^(background_|brain_thought_|brain_dream_|brain_
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
 const sessionSaveRevisions = new Map<string, number>();
+// Highest revision known to be on disk per session. A cached session whose save
+// revision is not ahead of this has nothing unsaved, so shutdown can skip it.
+const sessionPersistedRevisions = new Map<string, number>();
 const pendingSessionSnapshots = new Map<string, number>();
 const sessionPersistenceIdleWaiters = new Set<() => void>();
 let sessionSnapshotDrainScheduled = false;
@@ -3663,6 +3666,7 @@ async function drainSessionSnapshots(): Promise<void> {
         ]);
         if (Number(sessionSaveRevisions.get(id) || 0) !== revision) continue;
         await fs.promises.rename(sessionTempPath, sessionPath);
+        sessionPersistedRevisions.set(id, Math.max(revision, Number(sessionPersistedRevisions.get(id) || 0)));
         if (sessionIndexRevision === indexWriteRevision) {
           await fs.promises.rename(indexTempPath, indexPath);
         }
@@ -3720,7 +3724,10 @@ export function flushSession(id: string): void {
   applyAutoSessionTitleOnce(session);
   ensureSessionDir();
   try {
-    fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));
+    // Compact JSON, matching the async snapshot path. Pretty-printing a 20 MB
+    // thread roughly doubles serialize + write time on the shutdown path.
+    fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session)));
+    sessionPersistedRevisions.set(id, revision);
     upsertSessionSummary(session);
     notifySessionWritten(id);
   } catch (err) {
@@ -4060,8 +4067,25 @@ export function expireScopedToolCategoryActivations(id: string): void {
   }
 }
 
-export function flushAllSessions(): void {
-  for (const id of sessions.keys()) flushSession(id);
+export function sessionHasUnsavedChanges(id: string): boolean {
+  if (sessionSaveTimers.has(id) || pendingSessionSnapshots.has(id)) return true;
+  return Number(sessionSaveRevisions.get(id) || 0) > Number(sessionPersistedRevisions.get(id) || 0);
+}
+
+/**
+ * Write every cached session that has unsaved changes. Sessions that were only
+ * loaded for reading (thread opens, history pages, sidebar previews) are already
+ * identical on disk; rewriting them made shutdown cost ~2s with large threads.
+ */
+export function flushAllSessions(): { flushed: number; skipped: number } {
+  let flushed = 0;
+  let skipped = 0;
+  for (const id of Array.from(sessions.keys())) {
+    if (!sessionHasUnsavedChanges(id)) { skipped++; continue; }
+    flushSession(id);
+    flushed++;
+  }
+  return { flushed, skipped };
 }
 
 export function flushPendingSessionWrites(): Promise<void> {

@@ -360,8 +360,19 @@ export class ChatRuntime {
 
   replaceHistoryTurn(message, options = {}) {
     const source = message && typeof message === 'object' ? message : {};
-    const key = cleanId(options.key) || chatTurnKey(source, 0, 0);
-    const index = this._indexByKey.get(key);
+    // A row's own identity wins over the caller's stream cursor key. Stream
+    // writers pass the active stream's turnKey (`request:assistant:<cid>`),
+    // but after a steer the target is the continuation row
+    // (`id:<group>:continuation`) and after a gateway restart the recovered
+    // row can carry its own id. Using the cursor key there either appended a
+    // second copy of the row (duplicate tool stream after restart) or left
+    // the real row stale (steer continuation stuck on "..." until reopen).
+    const ownKey = chatTurnKey(source, 0, 0);
+    const ownIndex = this._indexByKey.get(ownKey);
+    // Explicit ids (`id:`) always identify the row; never re-key it under a
+    // stream cursor, or a later reconcile sees two rows for one turn.
+    const key = Number.isInteger(ownIndex) || ownKey.startsWith('id:') ? ownKey : (cleanId(options.key) || ownKey);
+    const index = Number.isInteger(ownIndex) ? ownIndex : this._indexByKey.get(key);
     if (!Number.isInteger(index)) {
       return this.appendHistoryTurn(source, { ...options, key, source: cleanId(options.source, 'append') });
     }

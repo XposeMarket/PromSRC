@@ -603,7 +603,32 @@ function handleExit(slot: WorkerSlot, child: ChildProcess, code: number | null, 
     settle(task, { error });
   }
   slot.task = null;
-  if (!shuttingDown) scheduleDrain();
+  if (!shuttingDown) {
+    scheduleDrain();
+    // A warm slot that was deliberately stopped (job/RSS recycle) must come
+    // straight back, otherwise the next model call pays a cold child boot
+    // (0.7-2.8s of time-to-first-token). Crashed slots are left to on-demand
+    // spawning so a crash-looping worker cannot spin here.
+    if (wasStopping && isWarmSlot(slot)) setImmediate(() => spawnSlot(slot));
+  }
+}
+
+/**
+ * Spawn the warm worker slot(s) ahead of the first model call. Warm slots are
+ * exempt from idle retirement, but before this they were only created on first
+ * demand, so the first call after every gateway start paid a cold child-process
+ * boot on the critical path. Call once the gateway is listening.
+ */
+export function prewarmModelCallWorkers(): number {
+  if (!enabled || shuttingDown) return 0;
+  let started = 0;
+  for (const slot of slots) {
+    if (!isWarmSlot(slot)) continue;
+    if (slot.child || slot.state === 'starting' || slot.state === 'stopping') continue;
+    spawnSlot(slot);
+    started += 1;
+  }
+  return started;
 }
 
 function spawnSlot(slot: WorkerSlot): void {

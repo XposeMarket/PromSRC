@@ -52,6 +52,10 @@ const OPENAI_CODEX_MODEL_ALIASES: Record<string, string> = {
   terra: 'gpt-5.6-terra',
   luna: 'gpt-5.6-luna',
   astra: 'gpt-6-astra',
+  'sol-6': 'gpt-6-sol',
+  'luna-6': 'gpt-6-luna',
+  'gpt-6-sol': 'gpt-6-sol',
+  'gpt-6-luna': 'gpt-6-luna',
 };
 
 export function normalizeProviderModel(providerId: string, model: string): string {

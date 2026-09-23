@@ -39,7 +39,7 @@ const isElided = (m: any) => typeof m.content === 'string' && m.content.startsWi
 
 // 3. Long turns still shrink: very old output beyond the window is elided.
 {
-  const messages = sequentialTurn(40, 4000); // 160k chars
+  const messages = sequentialTurn(90, 4000); // 360k chars, past the 180k window
   const { elidedCount, savedChars } = elideStaleToolResults(messages);
   const tools = messages.filter((m) => m.role === 'tool');
   assert.ok(elidedCount > 0 && savedChars > 0, 'old output beyond the window must still be elided');

@@ -141,6 +141,106 @@ export function mergeSkillSafetyScans(scans: SkillSafetyScan[]): SkillSafetyScan
   };
 }
 
+// ── Boot-time scan cache ─────────────────────────────────────────────────────
+// Every gateway start re-ran the regex safety pass over every file of every
+// skill (~1s for ~190 skills), even though skills rarely change between
+// restarts. A stat-only fingerprint of the exact files the scan would read is
+// ~6x cheaper, so unchanged skills reuse the previous verdict. Any size/mtime/
+// file-set change, a rule-set change, or a corrupt cache falls back to a full scan.
+const SAFETY_CACHE_VERSION = `v1:${hashText(FINDING_RULES.map((rule) => `${rule.id}:${rule.pattern.source}`))}`;
+type SafetyCacheEntry = { fp: string; scan: SkillSafetyScan };
+const safetyCaches = new Map<string, { file: string; entries: Map<string, SafetyCacheEntry>; dirty: boolean; timer: ReturnType<typeof setTimeout> | null }>();
+
+function safetyCacheFor(rootDir: string) {
+  const skillsDir = path.dirname(path.resolve(rootDir));
+  let cache = safetyCaches.get(skillsDir);
+  if (cache) return cache;
+  const file = path.join(skillsDir, '.cache', 'skill-safety-scan-cache.json');
+  const entries = new Map<string, SafetyCacheEntry>();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (parsed?.version === SAFETY_CACHE_VERSION && parsed.entries && typeof parsed.entries === 'object') {
+      for (const [key, value] of Object.entries(parsed.entries as Record<string, SafetyCacheEntry>)) {
+        if (value && typeof value.fp === 'string' && value.scan && typeof value.scan.verdict === 'string') entries.set(key, value);
+      }
+    }
+  } catch { /* missing or corrupt cache: rebuild */ }
+  cache = { file, entries, dirty: false, timer: null };
+  safetyCaches.set(skillsDir, cache);
+  return cache;
+}
+
+function persistSafetyCache(cache: NonNullable<ReturnType<typeof safetyCacheFor>>): void {
+  if (!cache.dirty || cache.timer) return;
+  cache.timer = setTimeout(() => {
+    cache.timer = null;
+    if (!cache.dirty) return;
+    cache.dirty = false;
+    try {
+      fs.mkdirSync(path.dirname(cache.file), { recursive: true });
+      const tmp = `${cache.file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: SAFETY_CACHE_VERSION, entries: Object.fromEntries(cache.entries) }), 'utf-8');
+      fs.renameSync(tmp, cache.file);
+    } catch { /* cache is an optimization only */ }
+  }, 1500);
+  (cache.timer as any)?.unref?.();
+}
+
+/** Stat-only fingerprint of exactly the files scanSkillDirectory would read. */
+export function fingerprintSkillDirectory(rootDir: string, maxFiles = 80): string {
+  const root = path.resolve(rootDir);
+  const stack = [root];
+  const parts: string[] = [];
+  let counted = 0;
+  while (stack.length && counted < maxFiles) {
+    const current = stack.pop();
+    if (!current) continue;
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const abs = path.join(current, entry.name);
+      const rel = path.relative(root, abs).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.history') continue;
+        stack.push(abs);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (path.basename(rel).toLowerCase() !== 'skill.json' && !canReadSkillResource(rel)) continue;
+      try {
+        const stat = fs.statSync(abs);
+        if (stat.size > 512_000) continue;
+        parts.push(`${rel}:${stat.size}:${Math.trunc(stat.mtimeMs)}`);
+        counted++;
+      } catch {}
+      if (counted >= maxFiles) break;
+    }
+  }
+  return hashText(parts);
+}
+
+/** scanSkillDirectory with a persistent fingerprint cache for unchanged skills. */
+export function scanSkillDirectoryCached(rootDir: string, maxFiles = 80): SkillSafetyScan {
+  let cache: ReturnType<typeof safetyCacheFor> | null = null;
+  let fp = '';
+  const key = path.resolve(rootDir).toLowerCase();
+  try {
+    cache = safetyCacheFor(rootDir);
+    fp = fingerprintSkillDirectory(rootDir, maxFiles);
+    const hit = cache.entries.get(key);
+    if (hit && hit.fp === fp) return hit.scan;
+  } catch {
+    cache = null;
+  }
+  const scan = scanSkillDirectory(rootDir, maxFiles);
+  if (cache && fp) {
+    cache.entries.set(key, { fp, scan });
+    cache.dirty = true;
+    persistSafetyCache(cache);
+  }
+  return scan;
+}
+
 export function scanSkillDirectory(rootDir: string, maxFiles = 80): SkillSafetyScan {
   const scans: SkillSafetyScan[] = [];
   const root = path.resolve(rootDir);

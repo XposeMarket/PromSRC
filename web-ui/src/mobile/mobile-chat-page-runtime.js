@@ -1670,10 +1670,33 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
     const viewportHeight = Math.max(320, Math.round(window.visualViewport?.height || window.innerHeight || 640));
     const dynamicCap = Math.max(96, Math.min(280, Math.floor(viewportHeight * 0.5) - 86));
     const maxHeight = Number(input.dataset.maxHeight || dynamicCap);
-    input.style.height = 'auto';
-    const nextHeight = Math.min(input.scrollHeight || 0, maxHeight);
-    input.style.height = `${Math.max(28, nextHeight)}px`;
-    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    // Growing: scrollHeight already reports the needed height, so set it
+    // directly. Collapsing to 'auto' on every keystroke made the focused
+    // textarea shrink for a frame; iOS then scrolled the page to "reveal" the
+    // caret, which read as the composer flickering/jumping up while typing.
+    // Only take the collapse path when the text may have shrunk (deletes).
+    const currentHeight = Math.round(input.getBoundingClientRect?.().height || input.offsetHeight || 0);
+    const valueLength = String(input.value || '').length;
+    const mayHaveShrunk = valueLength < Number(input.dataset.pmLastLen || 0);
+    input.dataset.pmLastLen = String(valueLength);
+    let contentHeight = input.scrollHeight || 0;
+    if (mayHaveShrunk || !currentHeight) {
+      const docScroller = document.scrollingElement || document.documentElement;
+      const savedDocTop = docScroller ? docScroller.scrollTop : 0;
+      const body = document.getElementById('pm-chat-body');
+      const savedBodyTop = body ? body.scrollTop : 0;
+      input.style.height = 'auto';
+      contentHeight = input.scrollHeight || 0;
+      // Restore any scroll iOS applied during the collapsed frame.
+      if (docScroller && docScroller.scrollTop !== savedDocTop) docScroller.scrollTop = savedDocTop;
+      if (body && body.scrollTop !== savedBodyTop) body.scrollTop = savedBodyTop;
+    }
+    const nextHeight = Math.max(28, Math.min(contentHeight, maxHeight));
+    if (Math.abs(nextHeight - currentHeight) >= 1 || mayHaveShrunk) {
+      input.style.height = `${nextHeight}px`;
+    }
+    const overflow = contentHeight > maxHeight ? 'auto' : 'hidden';
+    if (input.style.overflowY !== overflow) input.style.overflowY = overflow;
   };
   // SpeechRecognition may deliver a final result after the composer has been
   // cleared. Dictation installs this hook below so a send ends recognition
@@ -1682,6 +1705,7 @@ export function createMobileChatPageRenderer(resolveContext = () => ({})) {
   const resetComposerInput = () => {
     if (!input) return;
     input.value = '';
+    input.dataset.pmLastLen = '0';
     saveComposerDraft(draftKeyFor(), '');
     resetChatDictationComposerState();
     input.style.height = '';
@@ -5627,8 +5651,37 @@ void main() {
       // displacement, which is the iOS fixed/static-position failure mode.
       if (Math.abs(drift) < 24) return;
       const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
-      const nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
+      let nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
+      // The correction is relative (currentTop + drift) because in the iOS
+      // fixed/static failure mode the rendered rect and style.top differ. If
+      // Safari reports a transient rect mid-animation, repeated relative
+      // corrections can walk style.top down to 0, which parks the composer at
+      // the top of the screen. With the keyboard open the composer can never
+      // legitimately sit in the top portion of the visible area, so fall back
+      // to the absolute keyboard-edge position instead.
+      const visibleTop = Math.max(0, Number(vv?.offsetTop || 0));
+      const floor = Math.round(visibleTop + visualHeight * 0.3);
+      // Symmetric guard: the composer must also never sit below the keyboard
+      // edge (bottom of the visual viewport), where it is hidden behind the
+      // keyboard. Out-of-band on either side means the relative correction
+      // used a transient rect, so use the absolute keyboard-edge position.
+      const ceiling = Math.round(visibleTop + visualHeight - rect.height);
+      if ((nextTop < floor || nextTop > ceiling) && desiredTop >= floor && desiredTop <= ceiling + 24) nextTop = desiredTop;
       composer.style.setProperty('top', `${nextTop}px`, 'important');
+      // Verify on the next frame; if it still rendered near the top, pin it to
+      // the absolute position rather than leaving it stuck up there.
+      requestAnimationFrame(() => {
+        if (!_pmKbFocusActive || !composer.isConnected) return;
+        const after = composer.getBoundingClientRect?.();
+        const vvNow = window.visualViewport;
+        const vTop = Math.max(0, Number(vvNow?.offsetTop || 0));
+        const vHeight = Math.max(0, Number(vvNow?.height || window.innerHeight || 0));
+        const offTop = after && after.top < vTop + vHeight * 0.3;
+        const offBottom = after && after.bottom > vTop + vHeight + 4;
+        if (after && after.height && (offTop || offBottom) && desiredTop >= floor) {
+          composer.style.setProperty('top', `${desiredTop}px`, 'important');
+        }
+      });
     });
   }
   function _pmKbActiveComposer() {

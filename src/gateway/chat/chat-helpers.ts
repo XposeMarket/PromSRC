@@ -741,11 +741,17 @@ export interface AutoActivatedToolCategory {
   activationStateBefore: ToolCategoryActivationSnapshot;
 }
 
-export function autoActivateToolCategories(sessionId: string, message: string, historyLength: number): AutoActivatedToolCategory[] {
+export function autoActivateToolCategories(
+  sessionId: string,
+  message: string,
+  historyLength: number,
+  mark?: (label: string, fields?: Record<string, unknown>) => void,
+): AutoActivatedToolCategory[] {
   // Run on every turn so late-intent shifts (e.g., greeting first, then browser task)
   // still activate required tool categories in the same session.
   void historyLength; // retained for call-site compatibility
   const cats = detectToolCategories(message);
+  mark?.('pre_context.toolcats.detect_done', { detected: cats.size });
   let connectedExtensionIds: Set<string> | undefined;
   try {
     connectedExtensionIds = new Set(
@@ -754,7 +760,9 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   } catch {
     connectedExtensionIds = undefined;
   }
+  mark?.('pre_context.toolcats.mcp_tools_listed', { servers: connectedExtensionIds?.size ?? -1 });
   const extensionPlan = planMessageExtensionActivation({ message, connectedExtensionIds });
+  mark?.('pre_context.toolcats.extension_plan_done', { categories: extensionPlan.categories.length });
   for (const category of extensionPlan.categories) cats.add(category);
   if (cats.has('external_apps') && !extensionPlan.categories.includes('external_apps')) {
     const genericConnectorRequest = /\b(?:connected app|connected apps|connected account|connected service|external app|external apps|connector|plugin|connector_list|list connectors)\b/i.test(message);
@@ -793,6 +801,7 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
       activationStateBefore,
     });
   }
+  mark?.('pre_context.toolcats.provision_done', { provisioned: provisionedCategories.length });
   return provisionedCategories;
 }
 

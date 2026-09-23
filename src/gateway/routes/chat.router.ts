@@ -72,7 +72,8 @@ import { getSession, addMessage, getHistory, getHistoryForApiCall, getActiveHist
 import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
-import { buildDurableChatTraceFromFrames } from '../durable-chat-trace';
+import { buildDurableChatTraceFromFrames, buildDurableChatTraceFromProcessEntries } from '../durable-chat-trace';
+import { extractTurnFileTouches, mergeTurnFileTouches, type TurnFileTouch } from '../file-change-summary';
 import {
   appendDurableCommentaryContext,
   buildDurableCommentaryContext,
@@ -1325,6 +1326,47 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
   if (entries.length > 12_000) entries.splice(0, entries.length - 12_000);
 }
 
+/**
+ * Record the files a tool result changed onto a durable, restart-surviving
+ * list. The process-entry trace drops tool args when persisted, so this list
+ * is the only way a resumed turn knows what it edited before a restart.
+ */
+// tool_result SSE events do not carry args; the paired tool_call does. Keep
+// the pending call args per touch-list, keyed by step (or tool name fallback).
+const pendingFileTouchCallArgs = new WeakMap<TurnFileTouch[], Map<string, any>>();
+
+function fileTouchStepKey(data: any): string {
+  const step = data?.stepNum ?? data?.toolCallId ?? data?.tool_call_id ?? data?.callId;
+  return step != null && String(step) !== '' ? `s:${String(step)}` : `t:${String(data?.action || data?.name || '')}`;
+}
+
+function appendRuntimeFileTouch(fileTouches: TurnFileTouch[], event: string, data: any, processEntry: any): boolean {
+  let pending = pendingFileTouchCallArgs.get(fileTouches);
+  if (!pending) { pending = new Map(); pendingFileTouchCallArgs.set(fileTouches, pending); }
+  if (event === 'tool_call') {
+    if (data?.args && typeof data.args === 'object') {
+      pending.set(fileTouchStepKey(data), data.args);
+      pending.set(`t:${String(data?.action || data?.name || '')}`, data.args);
+      if (pending.size > 200) pending.delete(pending.keys().next().value as string);
+    }
+    return false;
+  }
+  if (event !== 'tool_result' || !processEntry || data?.error) return false;
+  const toolName = String(processEntry.extra?.toolName || data?.action || data?.name || '');
+  const args = (data?.args && typeof data.args === 'object')
+    ? data.args
+    : pending.get(fileTouchStepKey(data)) || pending.get(`t:${toolName}`);
+  pending.delete(fileTouchStepKey(data));
+  const touches = extractTurnFileTouches([
+    { extra: { event: 'tool_call', toolName, args, stepNum: 'x' } },
+    { ...processEntry, extra: { ...(processEntry.extra || {}), toolName, args, stepNum: 'x' } },
+  ]);
+  if (!touches.length) return false;
+  const merged = mergeTurnFileTouches(fileTouches, touches);
+  fileTouches.splice(0, fileTouches.length, ...merged);
+  return true;
+}
+
 function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
   const sources = [data?.extra, data]
     .filter((source) => source && typeof source === 'object');
@@ -1358,6 +1400,25 @@ function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
       : {}),
   };
 }
+
+// Why a turn's abort signal fired. The registry stamps abortSignal.reason when a
+// gateway restart/drain/watchdog interrupts a running turn; only a bare abort
+// with no reason (or an explicit user stop) is a real user cancellation.
+export function describeTurnAbortCause(abortSignal: { aborted?: boolean; reason?: unknown } | undefined | null): string {
+  const raw = String((abortSignal as any)?.reason ?? '').trim();
+  const reason = raw.toLowerCase();
+  if (reason.includes('watchdog')) {
+    return `Gateway watchdog interrupted the active turn (${raw.slice(0, 120)}); this was not a user cancellation.`;
+  }
+  if (reason && /restart|shutdown|drain|sigterm|sigint|exit|crash|reload|gateway/.test(reason)) {
+    return `Gateway restart interrupted the active turn (${raw.slice(0, 120)}); this was not a user cancellation.`;
+  }
+  if (!raw && isGatewayDraining()) {
+    return 'Gateway shutdown interrupted the active turn; this was not a user cancellation.';
+  }
+  return 'User cancelled the active turn.';
+}
+
 
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
@@ -1759,6 +1820,7 @@ import {
   normalizeTelegramConfig,
   normalizeDiscordConfig,
   normalizeWhatsAppConfig,
+  isGatewayDraining,
 } from '../comms/broadcaster';
 import { notifyChatCompletion } from '../notifications/completion-bridge';
 import {
@@ -1825,6 +1887,7 @@ import {
   addPendingRuntimeSteer,
   consumePendingRuntimeSteersForSession,
   isSteerableChatRuntimeKind,
+  stripInheritedRecoveryMarks,
   type RuntimeSteerEvent,
 } from '../live-runtime-registry';
 import {
@@ -1961,7 +2024,7 @@ import {
 
 
 import { activeTasks } from '../chat/chat-state';
-import { elideStaleToolResults } from './tool-result-elision';
+import { elideStaleToolResults, TOOL_RESULT_ELISION_BATCH_MIN_CHARS } from './tool-result-elision';
 
 import {
   buildTurnContextPacket,
@@ -1969,6 +2032,8 @@ import {
   normalizeReasoningSummary,
   shouldPersistTurnContext,
 } from '../context/turn-context-packet';
+import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
+
 // ─── Injected singletons (set by initChatRouter in server-v2.ts) ──────────────
 let _cronScheduler: CronScheduler;
 let _telegramChannel: TelegramChannel;
@@ -2537,6 +2602,9 @@ async function handleChat(
   runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; brainThoughtRuntime?: boolean; allowNativeWorkspaceTools?: boolean; runtimeId?: string; admissionLease?: RuntimeAdmissionLease; skipAutomaticToolCategoryActivation?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
+  // Stable key for this turn's cross-turn edit-log entries. Restart-resumed
+  // turns keep the root turn id so their edits stay grouped with the original.
+  const editLogTurnId = String((runtimeOptions as any)?.turnContextId || runtimeOptions?.runtimeId || `turn_${latencyStartAt.toString(36)}`);
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
     startedAt: latencyStartAt,
     phase: 'handle_chat',
@@ -2782,9 +2850,11 @@ async function handleChat(
   } catch (error: any) {
     console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
   }
+  htime('pre_context.legacy_history_migrated');
   const automaticallyActivatedCategories = !isSupervisionLoop && !skipAutomaticToolCategoryActivation
-    ? autoActivateToolCategories(sessionId, message, history.length)
+    ? autoActivateToolCategories(sessionId, message, history.length, (label, fields) => htime(label, fields))
     : [];
+  htime('pre_context.tool_categories_activated');
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
     recentMessages: history
@@ -2801,6 +2871,7 @@ async function handleChat(
         : [],
     businessContextEnabled: isBusinessContextEnabled(sessionId),
   });
+  htime('pre_context.instruction_intents_detected');
   // Build a compact tool-state summary from recent assistant turns. Full raw
   // observations stay out-of-band for Hub/debugging instead of prompt context.
   const activeContextProfile = admittedRouteSnapshot?.contextProfile || resolveActiveModelContextProfile();
@@ -2813,7 +2884,10 @@ async function handleChat(
   htime('after getRecentToolObservationsForContext');
   const workingContextBlock = executionMode === 'cron' || isBootStartupTurn
     ? ''
-    : getWorkingContextForContext(sessionId, 9_000);
+    : [
+        getWorkingContextForContext(sessionId, 9_000),
+        formatEditLogForPrompt(sessionId, { excludeTurnId: editLogTurnId, excludeSince: latencyStartAt }),
+      ].filter(Boolean).join('\n\n');
   const codingContextPacketDecision = selectCodingContextPacket({
     enabled: codingContextPacketEnabled,
     sessionId,
@@ -4513,6 +4587,22 @@ async function handleChat(
   let pendingSyntheticToolCalls: Array<{ function: { name: string; arguments: any } }> = [];
 
   const trackFileOpMutation = (toolName: string, toolArgs: any, toolResult: ToolResult, actor: 'primary' | 'secondary') => {
+    // Shell-driven edits (PowerShell/sed/git apply through workspace_run or
+    // run_command) bypass the file-mutation tools; log them for the next turn.
+    if (toolName === 'workspace_run' || toolName === 'run_command') {
+      const runAction = String(toolArgs?.action || 'run');
+      if (runAction === 'run' || runAction === 'start') {
+        recordShellEditLogEntry({
+          sessionId,
+          turnId: editLogTurnId,
+          tool: toolName,
+          command: String(toolArgs?.command || ''),
+          cwd: String(toolArgs?.cwd || workspacePath || ''),
+          error: toolResult.error,
+        });
+      }
+      return;
+    }
     if (!isFileMutationTool(toolName)) return;
     const estimate = estimateFileToolChange(toolName, toolArgs);
     const target = extractFileToolTarget(toolName, toolArgs);
@@ -4533,6 +4623,14 @@ async function handleChat(
       estimate_chars: estimate.chars_changed,
     });
     if (fileOpToolHistory.length > 64) fileOpToolHistory.shift();
+    recordEditLogEntry({
+      sessionId,
+      turnId: editLogTurnId,
+      tool: toolName,
+      args: toolArgs,
+      result: toolResult.result,
+      error: toolResult.error,
+    });
     maybeSaveFileOpCheckpoint({
       phase: 'execute',
       next_action: `${actor} applied ${toolName}`,
@@ -9748,7 +9846,7 @@ RULES:
     // growing quadratically with tool count. Runs before mid-workflow
     // compaction so compaction sees the already-slimmed context.
     if (toolResultElisionEnabled) {
-      const elision = elideStaleToolResults(messages);
+      const elision = elideStaleToolResults(messages, { batchMinChars: TOOL_RESULT_ELISION_BATCH_MIN_CHARS });
       if (elision.elidedCount > 0) {
         console.log(
           `[tool-result-elision] round=${round} elided=${elision.elidedCount} saved_chars=${elision.savedChars}`,
@@ -10091,6 +10189,8 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         const turnStartedAt = Date.now();
         broadcastMainChatGoalState(sid, 'turn_started', { turnsUsed: current.turnsUsed });
         const runtimeProcessEntries: Record<string, any>[] = [];
+        // Durable path-only list of files this turn changed; survives restarts.
+        const runtimeFileTouches: TurnFileTouch[] = [];
         let runtimeThinkingTail = '';
         let runtimeNarrationTail = '';
         let lastRuntimeNarrationCheckpointAt = 0;
@@ -10138,6 +10238,9 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
                     runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
                   }
                   checkpoint.processEntries = [...runtimeProcessEntries];
+                  if (appendRuntimeFileTouch(runtimeFileTouches, event, data, processEntry)) {
+                    checkpoint.fileTouches = [...runtimeFileTouches];
+                  }
                 }
                 if (event === 'thinking') {
                   const thinking = String(data?.thinking || data?.text || '').trim();
@@ -10378,7 +10481,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; promptMemoryMode?: 'full' | 'compact' },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; turnContextId?: string; promptMemoryMode?: 'full' | 'compact' },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -10599,7 +10702,7 @@ async function runInteractiveTurn(
     if (!abortSignal?.aborted) return;
     try {
       const packet = buildTurnContextPacket({
-        turnId: String(flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
+        turnId: String(flags?.turnContextId || flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
         sessionId,
         status: 'aborted',
         request: message,
@@ -10911,6 +11014,9 @@ async function runInteractiveTurn(
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
         runtimeId: flags?.runtimeId,
+        // Restart-resumed turns keep the root turn id so the cross-turn edit
+        // log files pre- and post-restart edits under one turn.
+        ...({ turnContextId: (flags as any)?.turnContextId } as any),
         admissionLease: runtimeAdmissionLease || undefined,
       },
   ));
@@ -10965,13 +11071,56 @@ async function runInteractiveTurn(
     : '';
   turnTiming.mark('tool_summary_built', { durationMs: Date.now() - toolSummaryStartedAt });
   const fileChangesStartedAt = Date.now();
-  const resultFileChanges = result.fileChanges || await collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
+  // Restart-spanning turns: the end-of-turn diff must cover the work done
+  // before the restart(s) too, not only the post-restart tool results.
+  // The resumed runtime inherits `fileTouches` from every earlier runtime of
+  // this turn (see restart recovery), so this covers N restarts, not just one.
+  let preRestartToolResults: any[] = [];
+  if (flags?.syntheticRestartRecovery && flags?.runtimeId) {
+    try {
+      const resumedRuntime: any = getLiveRuntime(String(flags.runtimeId));
+      const inherited = Array.isArray(resumedRuntime?.recoveryData?.inheritedFileTouches)
+        ? resumedRuntime.recoveryData.inheritedFileTouches
+        : [];
+      if (inherited.length) preRestartToolResults = inherited.map((touch: any) => ({ ...touch, result: '', error: false }));
+    } catch {}
+  }
+  const resultFileChanges = preRestartToolResults.length
+    ? await collectTurnFileChanges(
+      [...preRestartToolResults, ...((result.toolResults as any[] | undefined) || [])],
+      getWorkspace(sessionId) || process.cwd(),
+    ) || result.fileChanges
+    : result.fileChanges || await collectTurnFileChanges(
+      (result.toolResults as any[] | undefined) || [],
+      getWorkspace(sessionId) || process.cwd(),
+    );
   turnTiming.mark('file_changes_collected', {
     durationMs: Date.now() - fileChangesStartedAt,
     changedFileCount: Array.isArray((resultFileChanges as any)?.files) ? (resultFileChanges as any).files.length : 0,
   });
   const durableTraceStartedAt = Date.now();
-  const durableToolStreamTrace = buildDurableToolStreamTrace(sessionId);
+  let durableToolStreamTrace = buildDurableToolStreamTrace(sessionId);
+  // A restart-resumed turn is the SAME turn as the work before the restart(s).
+  // Its live stream only holds post-restart frames, and the per-restart
+  // checkpoint rows are not guaranteed to survive (warm handoff), so the final
+  // message must carry the whole turn itself: prepend the pre-restart trace the
+  // recovery path seeded into this runtime's checkpoint (chains across restarts).
+  let restartSpanStartedAt = 0;
+  if (flags?.syntheticRestartRecovery && flags?.runtimeId) {
+    try {
+      const resumedRuntime: any = getLiveRuntime(String(flags.runtimeId));
+      const seeded = (Array.isArray(resumedRuntime?.checkpoint?.processEntries) ? resumedRuntime.checkpoint.processEntries : [])
+        .filter((entry: any) => entry && typeof entry === 'object' && entry.extra?.preRestart === true);
+      const preTrace = seeded.length ? (buildDurableChatTraceFromProcessEntries(seeded) || []) : [];
+      if (preTrace.length) durableToolStreamTrace = [...preTrace, ...(durableToolStreamTrace || [])];
+      restartSpanStartedAt = Number(resumedRuntime?.recoveryData?.rootStartedAt || 0) || 0;
+    } catch (err: any) {
+      console.warn('[restart-span] could not merge pre-restart trace:', err?.message || err);
+    }
+  }
+  const turnWorkStartedAt = restartSpanStartedAt > 0 && restartSpanStartedAt < turnTiming.startedAt
+    ? restartSpanStartedAt
+    : turnTiming.startedAt;
   turnTiming.mark('durable_trace_built', {
     durationMs: Date.now() - durableTraceStartedAt,
     traceEntryCount: Array.isArray(durableToolStreamTrace) ? durableToolStreamTrace.length : 0,
@@ -10993,6 +11142,11 @@ async function runInteractiveTurn(
     : /^\s*error:/i.test(String(result.text || ''))
       ? 'failed'
       : 'completed';
+  // An abort is not always the user. A gateway restart/drain (planned by this
+  // chat's own gateway_restart call, or an unplanned drop/watchdog) also aborts
+  // the turn, and labelling that "User cancelled" makes the resumed turn believe
+  // the user stopped it and lose track of who started the restart.
+  const packetAbortCause = packetStatus === 'aborted' ? describeTurnAbortCause(abortSignal) : '';
   const packetUncertainties = packetStatus === 'aborted'
     ? ['The active model/tool boundary was interrupted; verify any in-flight side effect before retrying it.']
     : [];
@@ -11004,7 +11158,10 @@ async function runInteractiveTurn(
     hasArtifacts: !!(result.artifacts?.length || result.generatedImages?.length || result.generatedVideos?.length || result.richArtifacts?.length),
   })
     ? buildTurnContextPacket({
-        turnId: String(flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
+        // A turn that spans restarts runs as several runtimes. Key the packet on
+        // the root turn so every segment merges into one packet instead of each
+        // segment evicting unrelated context from the bounded packet list.
+        turnId: String(flags?.turnContextId || flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
         sessionId,
         status: packetStatus,
         request: message,
@@ -11023,7 +11180,7 @@ async function runInteractiveTurn(
         continueFromHere: packetStatus === 'aborted'
           ? 'Resume from the completed observations, then verify the interrupted boundary before repeating it.'
           : 'Use these findings and decisions as the starting state for the next related turn.',
-        abortReason: packetStatus === 'aborted' ? 'User cancelled the active turn.' : undefined,
+        abortReason: packetStatus === 'aborted' ? packetAbortCause : undefined,
       })
     : null;
   if (packet) {
@@ -11095,9 +11252,9 @@ async function runInteractiveTurn(
       ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
       timestamp: Date.now(),
-      workStartedAt: turnTiming.startedAt,
+      workStartedAt: turnWorkStartedAt,
       workEndedAt: assistantWorkEndedAt,
-      workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
+      workDurationMs: Math.max(0, assistantWorkEndedAt - turnWorkStartedAt),
       toolLog: toolLogText || checkpointPacket,
       reasoningSummary: result.reasoningSummary || result.thinking || undefined,
       visibleReasoningSummary: result.reasoningSummary || undefined,
@@ -11157,9 +11314,9 @@ async function runInteractiveTurn(
       ...threadSupervisionMessageIdentity,
       content: result.text,
       timestamp: Date.now(),
-      workStartedAt: turnTiming.startedAt,
+      workStartedAt: turnWorkStartedAt,
       workEndedAt: assistantWorkEndedAt,
-      workDurationMs: Math.max(0, assistantWorkEndedAt - turnTiming.startedAt),
+      workDurationMs: Math.max(0, assistantWorkEndedAt - turnWorkStartedAt),
       artifacts: Array.isArray(result.artifacts) && result.artifacts.length ? result.artifacts : undefined,
       generatedImages: Array.isArray(result.generatedImages) && result.generatedImages.length ? result.generatedImages : undefined,
       generatedVideos: Array.isArray(result.generatedVideos) && result.generatedVideos.length ? result.generatedVideos : undefined,
@@ -11289,6 +11446,60 @@ registerRestartContinuityEmitter((payload: Record<string, any>) => {
  * Resume an interrupted main-chat turn on the replacement gateway. The original
  * user message is not re-appended; the preserved checkpoint context is replayed.
  */
+// Tell the resumed turn WHO caused the restart. Without this the model sees a
+// generic "gateway exited" note and cannot tell its own planned gateway_restart
+// from an unplanned crash/watchdog drop, so it re-verifies (or re-runs) work it
+// already knows the outcome of.
+export function describeRestartProvenance(runtime: any): string {
+  const toolName = String(runtime?.checkpoint?.toolName || '').trim();
+  const reason = String(runtime?.interruptReason || runtime?.recoveryData?.interruptReason || '').trim();
+  const interruptedAt = Number(runtime?.interruptedAt || runtime?.recoveryData?.restartEpoch || 0);
+  const downSec = interruptedAt > 0 ? Math.max(0, Math.round((Date.now() - interruptedAt) / 1000)) : 0;
+  const downtime = downSec > 0 ? ` The gateway was down for about ${downSec}s.` : '';
+  if (/^(gateway_restart|prom_apply_dev_changes)$/i.test(toolName)) {
+    return `Restart provenance: PLANNED. You (Prometheus, in this chat) started this restart yourself by calling ${toolName}; it was not a crash and the user did not cancel anything.${downtime} Treat the restart as a completed step of your own plan.`;
+  }
+  if (/watchdog/i.test(reason)) {
+    return `Restart provenance: UNPLANNED. The gateway watchdog interrupted this turn (${reason.slice(0, 120)}) because it stopped reporting progress. Neither you nor the user asked for it.${downtime} Re-check whatever was in flight at the last tool boundary before relying on it.`;
+  }
+  return `Restart provenance: UNPLANNED. The gateway process stopped (${reason ? reason.slice(0, 120) : 'unexpected exit'}) while this turn was running; neither you nor the user asked for it.${downtime} Re-check whatever was in flight at the last tool boundary before relying on it.`;
+}
+
+// Compact digest of the work this turn already did before the restart. The
+// resumed turn otherwise only sees a truncated commentary row, which is why it
+// kept losing track of completed merges/edits and re-verified them from scratch.
+export function buildPreRestartWorkDigest(runtime: any, maxChars = 6000): string {
+  const entries: any[] = Array.isArray(runtime?.checkpoint?.processEntries) ? runtime.checkpoint.processEntries : [];
+  const lines: string[] = [];
+  for (const entry of entries) {
+    const type = String(entry?.type || '').toLowerCase();
+    if (type !== 'tool' && type !== 'result' && type !== 'error') continue;
+    // Checkpoint entries use `content` (live SSE shape) or `text` (runtime
+    // checkpoint shape); accept both or real ledgers produce an empty digest.
+    const content = String(entry?.content || entry?.text || '').replace(/\s+/g, ' ').trim();
+    if (!content || /^(Preparing|Prepared)\b/i.test(content)) continue;
+    const toolName = String(entry?.extra?.toolName || entry?.extra?.action || '').trim();
+    const label = type === 'tool' ? 'call' : type;
+    lines.push(`- ${label}${toolName ? ` ${toolName}` : ''}: ${content.slice(0, 220)}`);
+  }
+  const narration = String(runtime?.checkpoint?.narrationTail || '').replace(/\s+/g, ' ').trim();
+  if (!lines.length && !narration) return '';
+  const header = `Work this turn already completed before the restart (${lines.length} tool step(s), oldest first; trust these results, do not redo them):`;
+  const kept: string[] = [];
+  let used = header.length;
+  // Keep the most recent steps when over budget; they matter most for the next action.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (used + lines[i].length + 1 > maxChars) {
+      kept.unshift(`- (${i + 1} earlier step(s) omitted for length)`);
+      break;
+    }
+    kept.unshift(lines[i]);
+    used += lines[i].length + 1;
+  }
+  const said = narration ? `\nLast thing you told the user before the restart: "${narration.slice(-600)}"` : '';
+  return `${header}\n${kept.join('\n')}${said}`;
+}
+
 export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
   const sessionId = String(runtime?.sessionId || '').trim();
   const recoveryData = runtime?.recoveryData || {};
@@ -11311,6 +11522,13 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     : 1;
   const abortController = new AbortController();
   const abortSignal = { aborted: false, signal: abortController.signal };
+  const rootTurnContextId = String(recoveryData.rootTurnId || runtime.id || '').trim() || undefined;
+  // Everything the interrupted runtime changed, plus what it had itself
+  // inherited from earlier restarts of the same turn.
+  const inheritedFileTouchesForResume: TurnFileTouch[] = mergeTurnFileTouches(
+    Array.isArray(recoveryData.inheritedFileTouches) ? recoveryData.inheritedFileTouches : [],
+    Array.isArray((runtime as any)?.checkpoint?.fileTouches) ? (runtime as any).checkpoint.fileTouches : [],
+  );
   const runtimeId = registerLiveRuntime({
     kind: 'main_chat',
     label: 'Main chat (restart recovery)',
@@ -11323,15 +11541,37 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     onAbort: () => abortController.abort(),
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
-      ...recoveryData,
+      ...stripInheritedRecoveryMarks(recoveryData),
+      // Files changed by every earlier runtime of this turn (all prior restarts).
+      inheritedFileTouches: inheritedFileTouchesForResume,
       recoveredFromRuntimeId: runtime.id,
+      rootTurnId: rootTurnContextId,
+      rootStartedAt: Number(recoveryData.rootStartedAt || 0) || Number((runtime as any).startedAt || 0) || Date.now(),
       restartRecoveryAttempts,
       restartRecoveryAttemptedAt: Date.now(),
     },
   });
 
   setModelBusy(true);
-  const runtimeProcessEntries: Record<string, any>[] = [];
+  // Seed the resumed runtime with the pre-restart trace. The mobile client
+  // rebuilds a live turn from this runtime's checkpoint on reopen; starting
+  // empty meant a reopened app only ever showed post-restart work.
+  const runtimeProcessEntries: Record<string, any>[] = Array.isArray(runtime.checkpoint?.processEntries)
+    ? runtime.checkpoint.processEntries
+      .filter((entry: any) => entry && typeof entry === 'object')
+      .slice(-4_000)
+      .map((entry: any) => ({ ...entry, extra: { ...(entry.extra || {}), preRestart: true, priorRuntimeId: runtime.id } }))
+    : [];
+  // Carry pre-restart file touches forward so a *further* restart still has them.
+  const runtimeFileTouches: TurnFileTouch[] = [...inheritedFileTouchesForResume];
+  if (runtimeProcessEntries.length || runtimeFileTouches.length) {
+    updateLiveRuntimeCheckpoint(runtimeId, {
+      event: 'restart_resumed',
+      at: Date.now(),
+      ...(runtimeProcessEntries.length ? { processEntries: [...runtimeProcessEntries] } : {}),
+      ...(runtimeFileTouches.length ? { fileTouches: [...runtimeFileTouches] } : {}),
+    });
+  }
   let runtimeThinkingTail = '';
   let runtimeNarrationTail = '';
   let lastRuntimeNarrationCheckpointAt = 0;
@@ -11386,13 +11626,18 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
         runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
       }
       checkpoint.processEntries = [...runtimeProcessEntries];
+      if (appendRuntimeFileTouch(runtimeFileTouches, event, data, processEntry)) {
+        checkpoint.fileTouches = [...runtimeFileTouches];
+      }
     }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };
   const checkpointSummary = [
     '[GATEWAY RESTART RECOVERY]',
     `The previous gateway process exited while executing this already-persisted user turn (runtime ${runtime.id}).`,
+    describeRestartProvenance(runtime),
     'Continue the same turn automatically. Do not ask the user to send "continue" and do not repeat completed or destructive work.',
+    buildPreRestartWorkDigest(runtime),
     runtime.checkpoint?.toolName ? `Last tool boundary: ${String(runtime.checkpoint.toolName)}` : '',
     /^(gateway_restart|prom_apply_dev_changes)$/i.test(String(runtime.checkpoint?.toolName || ''))
       ? 'That restart/apply tool boundary completed successfully. Do not invoke that same restart or apply tool again for this work; continue with post-restart verification and every remaining step of the original request.'
@@ -11413,7 +11658,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     undefined,
     undefined,
     undefined,
-    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease, runtimeId },
+    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease, runtimeId, turnContextId: rootTurnContextId },
     origin,
     { clientRequestId: runtime.clientRequestId },
   ).catch((err: any) => {
@@ -21868,6 +22113,8 @@ router.post('/api/chat', async (req, res) => {
   });
   const rawSendSSE = sendSSE;
   const runtimeProcessEntries: Record<string, any>[] = [];
+  // Durable path-only list of files this turn changed; survives restarts.
+  const runtimeFileTouches: TurnFileTouch[] = [];
   let __firstContentLogged = false;
   let runtimeThinkingTail = '';
   let runtimeNarrationTail = '';
@@ -21944,6 +22191,9 @@ router.post('/api/chat', async (req, res) => {
         runtimeProcessEntries.splice(0, runtimeProcessEntries.length - 12_000);
       }
       checkpoint.processEntries = [...runtimeProcessEntries];
+      if (appendRuntimeFileTouch(runtimeFileTouches, event, data, processEntry)) {
+        checkpoint.fileTouches = [...runtimeFileTouches];
+      }
     }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };

@@ -744,6 +744,27 @@ export class AnthropicAdapter implements LLMProvider {
             status: response.status,
             requestId: String(payload?.request_id || response.headers.get('request-id') || '').slice(0, 100),
             errorType: String(payload?.error?.type || '').slice(0, 100),
+            // The message distinguishes "out of extra usage" from a version gate
+            // or a plain rate limit; errorType alone collapses them all to 400/429.
+            message: String(payload?.error?.message || '').slice(0, 300),
+            // Anthropic's unified rate-limit headers name the limit/pool the
+            // request was charged against (5h, weekly, per-model, overage).
+            // Without them an "extra usage" rejection is undiagnosable.
+            rateLimitHeaders: (() => {
+              const out: Record<string, string> = {};
+              try {
+                response.headers.forEach((value, key) => {
+                  const k = key.toLowerCase();
+                  if (k.startsWith('anthropic-ratelimit') || k === 'retry-after' || k === 'x-should-retry') {
+                    out[k] = String(value).slice(0, 200);
+                  }
+                });
+              } catch { /* headers are optional diagnostics */ }
+              return out;
+            })(),
+            speed: body.speed || 'standard',
+            effort: body.output_config?.effort || null,
+            anthropicBeta: String((headers as any)['anthropic-beta'] || '').slice(0, 300),
             model,
             accountId: this.accountId || null,
             authMode: isOAuth ? 'setup_token' : (headers['x-api-key'] ? 'api_key' : 'other'),

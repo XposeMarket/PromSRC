@@ -3066,10 +3066,16 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!_isMobileSessionRenderCurrent(timerKey)) return;
     _commitMobileTranscriptCache(_mobileSessionIdForRenderKey(timerKey), 'mobile-flush-render');
     mobileStreamRenderScheduler.cancel(`mobile:patch:${timerKey}`);
+    // Recovery/reconnect paths flush a full thread render. When the rebuilt
+    // rows momentarily collapse the scroller, iOS clamps scrollTop to 0 and
+    // the user lands at the top of the chat. Capture the position first and
+    // restore it (following the tail if the user was at the bottom).
+    const scrollSnapshot = bodyEl ? _mobileChatScrollSnapshot(bodyEl) : null;
     mobileStreamRenderScheduler.flush(`mobile:thread:${timerKey}`, () => {
       _renderThread(threadEl, timerKey);
       _syncMobileWorkTimer(threadEl, bodyEl, timerKey);
       if (options.forceBottom) _restoreMobileChatScroll(bodyEl, null, options);
+      else if (bodyEl && scrollSnapshot && options.preserveScroll !== false) _restoreMobileChatScroll(bodyEl, scrollSnapshot);
     });
   }
   
@@ -3126,15 +3132,27 @@ function _findMobileCompletedTurn(thread, evt = null, sessionId = '') {
   const streamId = String(evt?.streamId || evt?.data?.streamId || '').trim();
   if (!clientRequestId && !streamId) return null;
   const sid = String(sessionId || evt?.sessionId || '').trim();
+  // A gateway restart resumes the SAME request (same clientRequestId) on a NEW
+  // stream. The pre-restart stream can end with an abort/done frame that pins
+  // or freezes the turn, and matching on clientRequestId alone then discarded
+  // every post-restart frame as a duplicate: the live view froze until the app
+  // was reopened. A request-id match on a different, known stream is a
+  // continuation unless that turn already received its real final answer.
+  const requestMatchIsCompleted = (turn) => {
+    if (!clientRequestId || String(turn?._clientRequestId || '').trim() !== clientRequestId) return false;
+    const turnStreamId = String(turn?._streamId || turn?._pmLastStreamId || '').trim();
+    if (streamId && turnStreamId && streamId !== turnStreamId && turn?._pmFinalReceived !== true) return false;
+    return true;
+  };
   const pinned = sid ? __pmChat.completedAssistantTurns?.[sid] : null;
   if (pinned && Date.now() - Number(pinned.at || 0) <= 120_000) {
     const pinnedTurn = pinned.turn;
-    if (clientRequestId && String(pinnedTurn?._clientRequestId || '').trim() === clientRequestId) return pinnedTurn;
+    if (requestMatchIsCompleted(pinnedTurn)) return pinnedTurn;
     if (streamId && String(pinnedTurn?._streamId || pinnedTurn?._pmLastStreamId || '').trim() === streamId) return pinnedTurn;
   }
   return [...thread].reverse().find((turn) => {
     if (turn?.role !== 'ai' || turn.streaming === true) return false;
-    if (clientRequestId && String(turn._clientRequestId || '').trim() === clientRequestId) return true;
+    if (requestMatchIsCompleted(turn)) return true;
     return !!streamId && String(turn._streamId || turn._pmLastStreamId || '').trim() === streamId;
   }) || null;
 }

@@ -150,7 +150,7 @@ function isOfficialOpenAIEndpoint(endpoint: string): boolean {
 
 function supportsOpenAIResponsesReasoning(model: string): boolean {
   const m = String(model || '').trim().toLowerCase();
-  return /^(o\d|gpt-5|gpt-6-astra(?:-|$)|codex)/.test(m);
+  return /^(o\d|gpt-5|gpt-6-(?:astra|sol|luna)(?:-|$)|codex)/.test(m);
 }
 
 function parseUsage(data: any): ModelUsage | undefined {
@@ -364,7 +364,7 @@ export class OpenAICompatAdapter implements LLMProvider {
 
     // Astra tool calls require Responses. The SSE reader also collects a
     // complete result for callers that do not subscribe to token callbacks.
-    if (this.id === 'openai' && /^gpt-6-astra(?:-|$)/i.test(model)) {
+    if (this.id === 'openai' && /^gpt-6-(?:astra|sol|luna)(?:-|$)/i.test(model)) {
       return this.streamOpenAIResponses(finalMessages, model, body, options);
     }
 	    if (body.stream) {
@@ -832,7 +832,7 @@ export class OpenAICompatAdapter implements LLMProvider {
     if (options?.format === 'json') {
       body.response_format = { type: 'json_object' };
     }
-    if (this.id === 'openai' && /^gpt-6-astra(?:-|$)/i.test(model)) {
+    if (this.id === 'openai' && /^gpt-6-(?:astra|sol|luna)(?:-|$)/i.test(model)) {
       delete body.temperature;
       body.max_completion_tokens = body.max_tokens;
       delete body.max_tokens;

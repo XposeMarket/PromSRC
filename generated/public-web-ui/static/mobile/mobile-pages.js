@@ -1826,6 +1826,16 @@ function _mapServerMessageToMobile(m, index = -1) {
     goalIterationNumber: Number.isFinite(Number(m?.goalIterationNumber)) ? Number(m.goalIterationNumber) : undefined,
     goalTurnId: String(m?.goalTurnId || '').trim() || undefined,
     _clientRequestId: String(m?._clientRequestId || m?.clientRequestId || '').trim() || undefined,
+    // The gateway writes its own final answer with `clientRequestId`; rows the
+    // phone synced back mid-turn carry `_clientRequestId`. The server-authored
+    // final is the canonical copy of a turn (text + file changes), even when a
+    // phone-synced partial copy has a longer trace.
+    // `role` is already mapped to the mobile vocabulary ('ai'), not 'assistant'.
+    _pmServerAuthoredFinal: role === 'ai'
+      && !String(m?._clientRequestId || '').trim()
+      && !!String(m?.clientRequestId || '').trim()
+      ? true
+      : undefined,
     sourceIndex: Number.isFinite(Number(index)) ? Number(index) : -1,
     timestamp: Number(m?.timestamp || Date.now()) || Date.now(),
     workStartedAt: Number(m?.workStartedAt || 0) || undefined,
@@ -2611,7 +2621,13 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     // work performed after this steer.
     const timerAnchor = latestAi._steerTimerAnchorTurn || latestAi;
     if (timerAnchor === latestAi) latestAi._steerTimerAnchor = true;
-    latestAi._steerTimerAnchorTurn = timerAnchor;
+    // Non-enumerable: a plain self-reference here made every later
+    // JSON.stringify of the thread throw "cyclic structures", which surfaced as
+    // "Steer failed" after a successful steer and silently dropped the
+    // before/after split from the cache and the server snapshot.
+    try {
+      Object.defineProperty(latestAi, '_steerTimerAnchorTurn', { value: timerAnchor, configurable: true, writable: true, enumerable: false });
+    } catch { /* frozen object: timer anchoring is cosmetic */ }
     latestAi._steerFrozenTrace = true;
     latestAi.workflowGroupId = workflowGroupId;
     latestAi.workflowPart = 'before_interruption';
@@ -2841,6 +2857,11 @@ function _mobileHistoryHasCompletedTurnSince(history, startedAt = 0, options = {
     const role = String(msg?.role || '').toLowerCase();
     if (role === 'user') return false;
     if (role !== 'assistant' && role !== 'ai') continue;
+    // Restart checkpoint/status rows are written into history *during* a
+    // mid-turn restart. They are continuity markers, not the turn's answer:
+    // counting them as completion made an app that stayed open finalize the
+    // live turn at the restart and freeze until a cold reopen.
+    if (_isMobileGatewayRestartCheckpointMessage(msg) || _isMobileGatewayRestartTerminalMessage(msg)) continue;
     const content = String(msg?.content || msg?.body?.text || '').trim();
     if (!content) continue;
     const ts = Math.max(0, Number(msg?.timestamp || msg?.workEndedAt || msg?.workStartedAt || 0) || 0);
@@ -2961,9 +2982,16 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
     const incoming = Array.isArray(source[key]) ? source[key] : [];
     if (!incoming.length) return;
     target[key] = existing.slice();
-    const keyFor = (item) => {
-      if (!item || typeof item !== 'object') return '';
+    // An entry can be identified several ways: a stream event key (streamId:seq),
+    // a tool call id, or its type/action/text signature. The live stream copy of
+    // an entry carries the event key, while the durable copy restored after a
+    // reconnect or gateway restart usually does not (or has a new streamId), so
+    // matching on a single "best" key produced duplicate tool streams. Match on
+    // ANY shared identity instead.
+    const keysFor = (item) => {
+      if (!item || typeof item !== 'object') return [];
       const extra = item.extra && typeof item.extra === 'object' ? item.extra : {};
+      const keys = [];
       const eventKey = String(
         item.eventKey
           || extra.eventKey
@@ -2971,7 +2999,7 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
             ? `${extra.streamId || item.streamId}:${extra.seq ?? item.seq}`
             : ''),
       ).trim();
-      if (eventKey) return `event:${eventKey}`;
+      if (eventKey) keys.push(`event:${eventKey}`);
       const callId = String(
         item.callId
           || item.toolCallId
@@ -2987,19 +3015,23 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
       const action = String(item.action || item.toolName || extra.action || extra.toolName || item.activity?.action || '').trim().toLowerCase();
       const text = String(item.text || item.content || item.message || '').replace(/\s+/g, ' ').trim();
       const preview = String(item.preview?.dataUrl || item.dataUrl || '').slice(0, 120);
-      if (!callId && !action && !text && !preview) return '';
-      return `${type}|${callId}|${action}|${text}|${preview}`;
+      if (callId) keys.push(`call:${type}|${callId}`);
+      if (callId || action || text || preview) keys.push(`sig:${type}|${callId}|${action}|${text}|${preview}`);
+      return keys;
     };
     const positions = new Map();
-    target[key].forEach((item, index) => {
-      const itemKey = keyFor(item);
-      if (itemKey && !positions.has(itemKey)) positions.set(itemKey, index);
-    });
+    const remember = (keys, index) => {
+      for (const k of keys) if (!positions.has(k)) positions.set(k, index);
+    };
+    target[key].forEach((item, index) => remember(keysFor(item), index));
     incoming.forEach((item) => {
       const itemRequest = String(item?.clientRequestId || item?.extra?.clientRequestId || item?.extra?.activeRequestId || '').trim();
       if (targetRequest && itemRequest && itemRequest !== targetRequest) return;
-      const itemKey = keyFor(item);
-      const existingIndex = itemKey ? positions.get(itemKey) : undefined;
+      const itemKeys = keysFor(item);
+      let existingIndex;
+      for (const k of itemKeys) {
+        if (positions.has(k)) { existingIndex = positions.get(k); break; }
+      }
       if (existingIndex !== undefined) {
         const prior = target[key][existingIndex];
         const priorText = String(prior?.text || prior?.content || '').trim();
@@ -3010,8 +3042,9 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
           ...(priorText.length > incomingText.length ? { text: prior.text } : {}),
           ...(prior?.extra || item?.extra ? { extra: { ...(prior?.extra || {}), ...(item?.extra || {}) } } : {}),
         };
+        remember(itemKeys, existingIndex);
       } else {
-        if (itemKey) positions.set(itemKey, target[key].length);
+        remember(itemKeys, target[key].length);
         target[key].push(item);
       }
     });
@@ -3036,7 +3069,11 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
   if (!String(target._clientRequestId || '').trim() && String(source._clientRequestId || '').trim()) {
     target._clientRequestId = String(source._clientRequestId).trim();
   }
-  if (!String(target.messageKind || '').trim() && String(source.messageKind || '').trim()) target.messageKind = source.messageKind;
+  // Never let a folded restart checkpoint relabel a real answer as a checkpoint:
+  // the renderer hides checkpoint rows, which made the post-restart final vanish.
+  if (!String(target.messageKind || '').trim()
+    && String(source.messageKind || '').trim()
+    && String(source.messageKind || '').trim() !== 'restart_checkpoint') target.messageKind = source.messageKind;
   if (!String(target.workflowGroupId || '').trim() && String(source.workflowGroupId || '').trim()) target.workflowGroupId = source.workflowGroupId;
   if (!String(target.workflowPart || '').trim() && String(source.workflowPart || '').trim()) target.workflowPart = source.workflowPart;
   if (!String(target.workflowLabel || '').trim() && String(source.workflowLabel || '').trim()) target.workflowLabel = source.workflowLabel;
@@ -3063,11 +3100,21 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
   const targetIsRestartCheckpoint = _isMobileGatewayRestartCheckpointMessage(target);
   const sourceIsRestartCheckpoint = _isMobileGatewayRestartCheckpointMessage(source);
   const sourceSupersedesCheckpoint = targetIsRestartCheckpoint && !sourceIsRestartCheckpoint;
+  // The gateway's own final answer for a turn beats any phone-synced partial
+  // copy of that turn. After a restart the partial holds "Restarting now..."
+  // plus pre-restart commentary glued together, which the final never
+  // textually extends, so without this the real answer was discarded.
+  const sourceIsServerFinal = source._pmServerAuthoredFinal === true && target._pmServerAuthoredFinal !== true;
+  if (sourceIsServerFinal) {
+    target._pmServerAuthoredFinal = true;
+    if (source.fileChanges) target.fileChanges = source.fileChanges;
+  }
   if (!preserveTargetText && (!targetText
     || /^attached file\(s\)$/i.test(targetText)
     || /^please review the attached file\(s\)\.?$/i.test(targetText)
     || sourceExtendsTarget
-    || sourceSupersedesCheckpoint)
+    || sourceSupersedesCheckpoint
+    || sourceIsServerFinal)
     && sourceText) {
     if (!target.body || typeof target.body !== 'object') target.body = { text: '' };
     target.body.text = sourceText;
@@ -3293,7 +3340,13 @@ function _dedupeMobileAssistantTurns(thread = _activeMobileThread()) {
     const requestId = _isMobileAssistantMessage(msg) ? String(msg._clientRequestId || '').trim() : '';
     const previousRequestTurn = requestId ? seenRequests.get(requestId) : null;
     const requestIndex = previousRequestTurn ? list.indexOf(previousRequestTurn) : -1;
-    if (requestIndex >= 0 && _mobileMessagesRepresentSameTurn(previousRequestTurn, msg)) {
+    // A phone-synced partial copy of a turn and the gateway's own final answer
+    // for the same request are one turn, even when the partial's text/kind
+    // make them look distinct (e.g. "Restarting now..." before a restart).
+    const serverFinalPair = requestIndex >= 0
+      && (msg?._pmServerAuthoredFinal === true) !== (previousRequestTurn?._pmServerAuthoredFinal === true)
+      && !String(msg?.workflowPart || previousRequestTurn?.workflowPart || '').trim();
+    if (requestIndex >= 0 && (serverFinalPair || _mobileMessagesRepresentSameTurn(previousRequestTurn, msg))) {
       const previous = previousRequestTurn;
       // A continuation can legitimately reuse the transport request id after
       // the user steers or resumes a turn. A user row is a hard conversation

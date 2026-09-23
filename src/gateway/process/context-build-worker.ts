@@ -30,6 +30,10 @@ interface ContextBuildPayload {
 interface ContextBuildResult {
   context: string;
   rssBytes: number;
+  /** Wall time spent inside buildPersonalityContext in the worker. */
+  buildMs?: number;
+  /** Child-side receive timestamp, for measuring parent->child IPC delay. */
+  receivedAt?: number;
 }
 
 const MAX_RESULT_BYTES = Math.max(
@@ -71,6 +75,7 @@ async function execute(payload: ContextBuildPayload): Promise<ContextBuildResult
       while (Date.now() < until) Math.sqrt(Date.now());
     }
   }
+  const buildStartedAt = Date.now();
   const fakeSkillsManager = {
     buildTurnContext: () => {
       throw new Error('Context worker attempted to access mutable SkillsManager state.');
@@ -88,12 +93,13 @@ async function execute(payload: ContextBuildPayload): Promise<ContextBuildResult
     new Set(Array.isArray(payload.extraCats) ? payload.extraCats.map(String) : []),
     payload.options,
   );
-  return { context, rssBytes: process.memoryUsage().rss };
+  return { context, rssBytes: process.memoryUsage().rss, buildMs: Date.now() - buildStartedAt };
 }
 
 process.on('disconnect', () => process.exit(0));
 process.on('message', (raw: unknown) => {
   void (async () => {
+    const receivedAt = Date.now();
     if (!isRuntimeWorkerProtocolMessage(raw)) return;
     const message = raw as RuntimeWorkerParentMessage;
     if (message.type === 'shutdown') {
@@ -133,7 +139,7 @@ process.on('message', (raw: unknown) => {
       startedAt: Date.now(),
     });
     try {
-      const result = await execute(message.payload as ContextBuildPayload);
+      const result = { ...(await execute(message.payload as ContextBuildPayload)), receivedAt };
       send({
         protocolVersion: RUNTIME_WORKER_PROTOCOL_VERSION,
         type: 'result',
