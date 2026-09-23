@@ -2472,7 +2472,12 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               const route = data.session?.mainChatGoals || {};
               return { name, args, result: `Goal Support routing for "${agentType}" updated: model=${route[`${goalPrefix}Model`] || 'current main chat'}, reasoning=${route[`${goalPrefix}Reasoning`] || 'provider default'}.`, error: false };
             }
-            return { name, args, result: `Default model for "${agentType}" agents set to "${model}". New agents of this type will use this model.`, error: false };
+            // Report what was actually persisted, never the requested value.
+            const savedModel = String((getConfig().getConfig() as any)?.agent_model_defaults?.[agentType] || data.defaults?.[agentType] || '').trim();
+            if (model && savedModel !== model) {
+              return { name, args, result: `ERROR: set_agent_model for "${agentType}" did not persist: requested "${model}", config now has "${savedModel || 'primary'}".`, error: true };
+            }
+            return { name, args, result: `Default routing for "${agentType}" updated: model=${savedModel || 'primary'}, reasoning=${data.reasoning?.[agentType] || 'provider default'}.`, error: false };
           }
 
           return { name, args, result: 'ERROR: Provide either agent_id (to update a specific agent) or agent_type (to set a type-level default).', error: true };

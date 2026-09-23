@@ -7421,7 +7421,7 @@ RULES:
         if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
       }
 
-      const generationPromise = ollama.chatWithThinking(messages, 'executor', {
+      const generationOptions: any = {
         tools,
         temperature: 0.3,
         num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
@@ -7474,7 +7474,35 @@ RULES:
               },
             },
           },
-	      });
+	      };
+      // switch_model helper fallback: a helper tier (e.g. a provider that is out
+      // of usage and returns 429) must never end the turn with a raw provider
+      // error. Drop the turn override and finish this round, and the rest of the
+      // turn, on the admitted main-chat route.
+      const helperRoundActive = generationOverride.source === 'turn_override' && !!admittedRouteSnapshot;
+      const generationPromise = (async () => {
+        try {
+          return await ollama.chatWithThinking(messages, 'executor', generationOptions);
+        } catch (helperErr: any) {
+          if (!helperRoundActive || abortSignal?.aborted || !admittedRouteSnapshot) throw helperErr;
+          const helperLabel = `${generationOverride.providerId}/${generationOverride.model}`;
+          const mainLabel = `${admittedRouteSnapshot.providerId}/${admittedRouteSnapshot.model}`;
+          console.warn(`[switch_model] helper ${helperLabel} failed (${String(helperErr?.message || helperErr).slice(0, 200)}); falling back to main ${mainLabel}`);
+          clearTurnModelOverride(sessionId);
+          activeGenerationRouteSnapshot = admittedRouteSnapshot;
+          if (messages[0]?.role === 'system') messages[0].content = buildSystemPrompt('full');
+          sendSSE('info', { message: `Helper model ${helperLabel} failed; continuing on ${mainLabel}.` });
+          sendSSE('model_switched', { providerId: admittedRouteSnapshot.providerId, model: admittedRouteSnapshot.model, reason: 'helper_failed_fallback', tier: 'main' });
+          return await ollama.chatWithThinking(messages, 'executor', {
+            ...generationOptions,
+            model: admittedRouteSnapshot.model,
+            provider: admittedRouteSnapshot.provider,
+            speed: admittedRouteSnapshot.speed,
+            num_ctx: admittedRouteSnapshot.contextProfile?.contextWindowTokens || generationOptions.num_ctx,
+            think: admittedRouteSnapshot.reasoningEffort || generationOptions.think,
+          });
+        }
+      })();
 
       // ── Preempt watchdog ────────────────────────────────────────────
       if (

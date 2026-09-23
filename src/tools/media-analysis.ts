@@ -13,6 +13,7 @@ import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline.js';
 import { snapshotAnalysisVisual } from './media-analysis-visuals.js';
 import { getConfig } from '../config/config.js';
+import { normalizeVisionImageBuffer } from '../gateway/chat/vision-image-normalize.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -371,8 +372,10 @@ async function readFileAsVisionPart(filePath: string, visuals: any[], artifactKi
   }
   const snapshot = await snapshotAnalysisVisual(getWorkspaceRoot(), filePath);
   visuals.push({ path: snapshot.path, rel_path: snapshot.rel_path, source_name: path.basename(filePath), artifactKind });
-  const base64 = snapshot.bytes.toString('base64');
-  return buildVisionImagePart(base64, inferMimeType(snapshot.path));
+  // Cap dimensions/bytes so a full-res phone photo (e.g. 4536x8064) never
+  // trips a provider's hard pixel limit and fails the analysis request.
+  const normalized = await normalizeVisionImageBuffer(snapshot.bytes, inferMimeType(snapshot.path));
+  return buildVisionImagePart(normalized.base64, normalized.mimeType);
 }
 
 async function analyzeWithPrimaryVision(messages: any[], options: { maxTokens?: number; think?: 'none' | 'minimal' | 'low' | 'medium' | 'high' } = {}): Promise<string> {

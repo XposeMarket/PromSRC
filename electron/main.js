@@ -3013,7 +3013,7 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   registry.activeTabId = tabId;
 
   let view = getNativeViewByPartition(partition, tabId);
-  if (view) return { view, partition, tabId };
+  if (view) return { view, wc: view.webContents, partition, tabId };
 
   const profileDescriptor = resolveNativeProfileDescriptor(partition);
   const webPreferences = {
@@ -3060,7 +3060,9 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
   ensureNativeBrowserNetworkObserver(view, partition);
   applyNativeBrowserVisibilityPolicy(view, false);
   startNativeBrowserResourceSampler();
-  return { view, partition, tabId };
+  // Callers such as newNativeBrowserTab destructure `wc`; returning only the view
+  // made every new-tab-with-URL fail with "reading 'loadURL'" of undefined.
+  return { view, wc: view.webContents, partition, tabId };
 }
 
 function requireNativeViewForSession(sessionId, profileId = '', tabId = '') {
@@ -3569,14 +3571,49 @@ async function inputNativeBrowserSurface(payload = {}) {
     wc.sendInputEvent({ type: 'keyDown', keyCode });
     wc.sendInputEvent({ type: 'keyUp', keyCode });
   } else if (action === 'wheel') {
+    // Callers pass DOM-convention deltas (positive deltaY = scroll down).
+    // Electron's mouseWheel uses wheel-tick convention (negative = down), so
+    // negate. Then VERIFY movement and fall back to a DOM scroll of the main
+    // scroller, so "Scrolled down" is never reported for a page that did not move.
+    const deltaX = Number(payload.deltaX || 0);
+    const deltaY = Number(payload.deltaY || 0);
+    const readScroll = `(() => { const s = document.scrollingElement || document.documentElement; return { y: Math.round(s.scrollTop || window.scrollY || 0), x: Math.round(s.scrollLeft || window.scrollX || 0) }; })()`;
+    const before = await wc.executeJavaScript(readScroll, true).catch(() => null);
     wc.sendInputEvent({
       type: 'mouseWheel',
       x: Math.max(0, Math.round(Number(payload.x || 0))),
       y: Math.max(0, Math.round(Number(payload.y || 0))),
-      deltaX: Number(payload.deltaX || 0),
-      deltaY: Number(payload.deltaY || 0),
+      deltaX: -deltaX,
+      deltaY: -deltaY,
       canScroll: true,
     });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    let after = await wc.executeJavaScript(readScroll, true).catch(() => null);
+    let method = 'wheel';
+    if (before && after && before.y === after.y && before.x === after.x && (deltaY || deltaX)) {
+      // Wheel did not move the document: scroll the largest scrollable element
+      // (feeds/apps often scroll an inner container), else the window.
+      after = await wc.executeJavaScript(`(() => {
+        const dy = ${JSON.stringify(deltaY)}, dx = ${JSON.stringify(deltaX)};
+        const root = document.scrollingElement || document.documentElement;
+        let target = root;
+        if (root.scrollHeight <= root.clientHeight + 2) {
+          let best = null, bestArea = 0;
+          for (const el of document.querySelectorAll('*')) {
+            const cs = getComputedStyle(el);
+            if (!/(auto|scroll|overlay)/.test(cs.overflowY) || el.scrollHeight <= el.clientHeight + 2) continue;
+            const area = el.clientWidth * el.clientHeight;
+            if (area > bestArea) { best = el; bestArea = area; }
+          }
+          if (best) target = best;
+        }
+        target.scrollBy({ top: dy, left: dx, behavior: 'instant' });
+        return { y: Math.round(target.scrollTop || 0), x: Math.round(target.scrollLeft || 0), container: target !== root };
+      })()`, true).catch(() => after);
+      method = 'dom_fallback';
+    }
+    const moved = !!(before && after && (before.y !== after.y || before.x !== after.x));
+    return { ok: true, moved, method, before, after };
   } else if (action === 'click') {
     const x = Math.max(0, Math.round(Number(payload.x || 0)));
     const y = Math.max(0, Math.round(Number(payload.y || 0)));
@@ -3804,9 +3841,12 @@ async function startNativeBrowserRpcServer() {
         else return respond(404, { error: 'Unknown native browser RPC route.' });
         return respond(200, { ok: true, result });
       } catch (err) {
-        nativeBrowserState.lastError = err?.message || String(err);
-        broadcastNativeBrowserState();
-        return respond(500, { error: nativeBrowserState.lastError });
+        // Always return the concrete reason (e.g. "Target element not found.")
+        // so tools can report it instead of an opaque "RPC failed (500)".
+        const message = String(err?.message || err || '').trim() || `Native browser ${pathName} failed.`;
+        nativeBrowserState.lastError = message;
+        try { broadcastNativeBrowserState(); } catch {}
+        return respond(500, { error: message });
       }
     });
   });

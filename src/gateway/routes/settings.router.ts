@@ -1016,7 +1016,13 @@ function mainChatRoutePatchForDefaults(config: any, defaults: Record<string, str
   // the live route. When present, it is the one deliberate route switch.
   if (!parsed) return {};
   const effort = String(reasoning.main_chat || '').trim();
-  return mainChatRoutePatch(config, {
+  // mainChatRoutePatch rebuilds agent_model_defaults/agent_model_default_reasoning
+  // from the config it is given. Callers spread this patch AFTER the freshly
+  // normalized defaults, so passing the pre-save config silently reverted every
+  // other key (e.g. switch_model_low) to its old value while still reporting
+  // success. Seed it with the defaults being saved.
+  const nextConfig = { ...(config || {}), agent_model_defaults: defaults, agent_model_default_reasoning: reasoning };
+  return mainChatRoutePatch(nextConfig, {
     ...parsed,
     ...(effort || explicitMainReasoning ? { reasoningEffort: effort } : {}),
     ...(accounts.main_chat ? { accountId: accounts.main_chat } : {}),
