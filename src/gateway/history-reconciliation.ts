@@ -318,5 +318,34 @@ export function repairReappendedAssistantRows(history: any[]): any[] {
     out.splice(insertAt, 0, row);
     changed = true;
   }
+  // A whole turn (prompt + its replies) can also be displaced earlier than
+  // much older turns. Detect a user row that is clearly newer than the turn
+  // right after it and move the block to its time slot. Conservative: only
+  // blocks at least 10 minutes out of order, and only forward.
+  const BLOCK_SKEW_MS = 10 * 60_000;
+  for (let pass = 0; pass < 8; pass += 1) {
+    let moved = false;
+    for (let index = 0; index < out.length; index += 1) {
+      const user = out[index];
+      if (user?.role !== 'user' || !ts(user)) continue;
+      let end = index + 1;
+      while (end < out.length && out[end]?.role !== 'user') end += 1;
+      const next = out[end];
+      if (!next || !ts(next) || ts(user) - ts(next) < BLOCK_SKEW_MS) continue;
+      let insertAt = end;
+      for (let j = end; j < out.length; j += 1) {
+        const t = ts(out[j]);
+        if (t && t <= ts(user)) insertAt = j + 1;
+      }
+      // Land on a turn boundary so the block never splits a later turn.
+      while (insertAt < out.length && out[insertAt]?.role !== 'user') insertAt += 1;
+      const block = out.splice(index, end - index);
+      out.splice(insertAt - block.length, 0, ...block);
+      changed = true;
+      moved = true;
+      break;
+    }
+    if (!moved) break;
+  }
   return changed ? out : history;
 }
