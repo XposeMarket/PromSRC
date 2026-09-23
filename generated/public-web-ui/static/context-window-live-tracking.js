@@ -5,6 +5,7 @@ const SEMANTIC_LABEL = 'Context window';
 const SETTLE_REFRESH_DELAYS_MS = [120, 900];
 const MAINTENANCE_INTERVAL_MS = 500;
 const PRESSURE_REFRESH_MS = 2000;
+const PRESSURE_IDLE_REFRESH_MS = 30_000;
 
 const liveBySession = new Map();
 let maintenanceTimer = 0;
@@ -122,11 +123,17 @@ function removeSemanticNote(elements) {
   elements.root?.querySelector('[data-context-window-semantic-note]')?.remove();
 }
 
+// This pass runs every 500ms; unconditional writes caused constant attribute
+// mutations (style/layout invalidation) even when nothing changed.
+function setAttrIfChanged(node, name, value) {
+  if (node && node.getAttribute(name) !== value) node.setAttribute(name, value);
+}
+
 function setSurfaceAccessibilityLabel(elements) {
   if (!elements.root) return;
-  elements.root.setAttribute('aria-label', SEMANTIC_LABEL);
-  elements.button?.setAttribute('aria-label', SEMANTIC_LABEL);
-  if (!String(elements.button?.title || '')) elements.button?.setAttribute('title', SEMANTIC_LABEL);
+  setAttrIfChanged(elements.root, 'aria-label', SEMANTIC_LABEL);
+  setAttrIfChanged(elements.button, 'aria-label', SEMANTIC_LABEL);
+  if (!String(elements.button?.title || '')) setAttrIfChanged(elements.button, 'title', SEMANTIC_LABEL);
 }
 
 function makeState(sessionId, surface, clientRequestId = '') {
@@ -195,7 +202,10 @@ async function fetchPressure(surface, sessionId) {
 function refreshPressure(state, force = false) {
   if (!state?.sessionId) return Promise.resolve(null);
   if (state.pressurePromise) return state.pressurePromise;
-  if (!force && state.pressureFetchedAt > 0 && Date.now() - state.pressureFetchedAt < PRESSURE_REFRESH_MS) {
+  if (!force && typeof document !== 'undefined' && document.visibilityState === 'hidden') return Promise.resolve(null);
+  // Poll quickly only while a turn is live; idle chats change only on events.
+  const refreshMs = state.active ? PRESSURE_REFRESH_MS : PRESSURE_IDLE_REFRESH_MS;
+  if (!force && state.pressureFetchedAt > 0 && Date.now() - state.pressureFetchedAt < refreshMs) {
     return Promise.resolve(null);
   }
 
@@ -350,15 +360,18 @@ function renderLiveEstimate(state) {
   const isLiveEstimate = unreflectedTokens > 0;
   const label = `${isLiveEstimate ? '~' : ''}${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} (${Math.round((estimatedTokens / windowTokens) * 100)}%)`;
   state.lastRenderedText = label;
-  elements.total.textContent = label;
-  if (elements.fill) elements.fill.style.width = `${percent.toFixed(1)}%`;
-  if (state.surface === 'mobile') elements.ring?.style.setProperty('--pm-ctx-deg', `${Math.round(percent * 3.6)}deg`);
-  else elements.ring?.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
+  if (elements.total.textContent !== label) elements.total.textContent = label;
+  const width = `${percent.toFixed(1)}%`;
+  if (elements.fill && elements.fill.style.width !== width) elements.fill.style.width = width;
+  const degProp = state.surface === 'mobile' ? '--pm-ctx-deg' : '--chat-context-window-deg';
+  const deg = `${Math.round(percent * 3.6)}deg`;
+  if (elements.ring && elements.ring.style.getPropertyValue(degProp) !== deg) elements.ring.style.setProperty(degProp, deg);
 
   const titleParts = [`Context window: ${formatTokens(estimatedTokens)} / ${formatTokens(windowTokens)} tokens`];
   if (state.pressureTriggerTokens > 0) titleParts.push(`compaction at ${formatTokens(state.pressureTriggerTokens)}`);
   if (isLiveEstimate) titleParts.push('live estimate');
-  if (elements.button) elements.button.title = titleParts.join(' · ');
+  const title = titleParts.join(' · ');
+  if (elements.button && elements.button.title !== title) elements.button.title = title;
 
   removeSemanticNote(elements);
   setSurfaceAccessibilityLabel(elements);

@@ -554,6 +554,10 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       const workEndedAt = Number(message.workEndedAt || Date.now());
       const assistantMessage = {
         ...message,
+        // Desktop rows used to omit the request id the server row carries, so
+        // saves re-appended server copies (out-of-order replies) and stopped
+        // turns' tool logs could not be paired with their own turn.
+        clientRequestId: message.clientRequestId || clientRequestId,
         role: message.role || 'ai',
         timestamp: Number(message.timestamp || (shouldAppendAfterInterruption ? Date.now() : assistantTurnTimestamp)),
         workStartedAt,

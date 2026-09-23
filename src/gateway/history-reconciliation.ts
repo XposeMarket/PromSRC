@@ -43,6 +43,21 @@ function matchingCanonicalAssistant(existing: any[], incoming: any): any | null 
   }) || null;
 }
 
+/** Same assistant reply stored under two identities (client row lacks the request id). */
+function sameAssistantReply(candidate: any, serverMessage: any): boolean {
+  const isAssistant = (m: any) => m?.role === 'assistant' || m?.role === 'ai';
+  if (!isAssistant(candidate) || !isAssistant(serverMessage)) return false;
+  const norm = (m: any) => String(m?.content || '').replace(/\s+/g, ' ').trim();
+  const text = norm(serverMessage);
+  if (!text || text !== norm(candidate)) return false;
+  const a = String(candidate?.clientRequestId || candidate?._clientRequestId || '').trim();
+  const b = String(serverMessage?.clientRequestId || serverMessage?._clientRequestId || '').trim();
+  if (a && b && a !== b) return false;
+  const ta = Number(candidate?.timestamp || 0) || 0;
+  const tb = Number(serverMessage?.timestamp || 0) || 0;
+  return !ta || !tb || Math.abs(ta - tb) < 30 * 60_000;
+}
+
 function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   if (!prior || typeof prior !== 'object' || !raw || typeof raw !== 'object') return raw;
   const next: any = { ...raw };
@@ -220,7 +235,25 @@ export function mergeHistoryWithExistingMessageMetadata(
     for (const serverMessage of base) {
       const key = historyMessageMergeKey(serverMessage);
       const serverOnly = String(serverMessage?.channel || '') === 'system' || !!serverMessage?.messageKind || !!serverMessage?.goalId || Array.isArray(serverMessage?.processEntries) || !!serverMessage?.toolLog;
-      if (serverOnly && key && !represented.has(key) && !representedExistingKeys.has(key)) { result.push(serverMessage); represented.add(key); }
+      if (!serverOnly || !key || represented.has(key) || representedExistingKeys.has(key)) continue;
+      // Desktop snapshots store assistant rows without the request id the
+      // server row carries, so the keys differ. Appending the server copy put
+      // old replies after newer turns (out of order + repeated). If the client
+      // already has the same reply, it is represented; never append it.
+      const echo = mergedIncoming.find((candidate) => sameAssistantReply(candidate, serverMessage));
+      if (echo) {
+        const index = mergedIncoming.indexOf(echo);
+        const position = result.indexOf(echo);
+        if (position >= 0) result[position] = mergeHistoryMetadataFromPrior({
+          ...echo,
+          clientRequestId: echo.clientRequestId || serverMessage.clientRequestId,
+        }, serverMessage);
+        if (index >= 0) mergedIncoming[index] = result[position] ?? echo;
+        represented.add(key);
+        continue;
+      }
+      result.push(serverMessage);
+      represented.add(key);
     }
   }
   // Earlier timestamp sorting could persist a completed reply before its own
@@ -238,5 +271,52 @@ export function mergeHistoryWithExistingMessageMetadata(
     const userPosition = result.indexOf(user);
     result.splice(userPosition + 1, 0, reply);
   }
-  return pruneCrossTurnTraceCopies(result);
+  return pruneCrossTurnTraceCopies(repairReappendedAssistantRows(result));
+}
+
+/**
+ * Heal transcripts damaged by the old desktop-save bug, which re-appended
+ * server copies of earlier replies after newer turns. Drops exact repeated
+ * replies (keeping the first, with merged metadata) and moves assistant rows
+ * that are clearly older than the user turn they follow back to their
+ * chronological slot. Only acts on rows that are provably misplaced.
+ */
+export function repairReappendedAssistantRows(history: any[]): any[] {
+  if (!Array.isArray(history) || history.length < 3) return history;
+  const isAssistant = (m: any) => m?.role === 'assistant' || m?.role === 'ai';
+  const ts = (m: any) => Number(m?.timestamp || 0) || 0;
+  let changed = false;
+  const out: any[] = [];
+  for (const message of history) {
+    const body = String(message?.content || '').trim();
+    if (isAssistant(message) && body.length >= 20 && !/^Error:/.test(body)) {
+      const firstIndex = out.findIndex((prior) => sameAssistantReply(prior, message));
+      if (firstIndex >= 0) {
+        out[firstIndex] = mergeHistoryMetadataFromPrior(out[firstIndex], message);
+        changed = true;
+        continue;
+      }
+    }
+    out.push(message);
+  }
+  const SKEW_MS = 2 * 60_000;
+  for (let index = 1; index < out.length; index += 1) {
+    const message = out[index];
+    const at = ts(message);
+    if (!isAssistant(message) || !at) continue;
+    let userIndex = -1;
+    for (let j = index - 1; j >= 0; j -= 1) if (out[j]?.role === 'user') { userIndex = j; break; }
+    if (userIndex < 0 || !ts(out[userIndex]) || at >= ts(out[userIndex]) - SKEW_MS) continue;
+    let insertAt = 0;
+    for (let j = 0; j < out.length; j += 1) {
+      if (j === index) continue;
+      const t = ts(out[j]);
+      if (t && t <= at) insertAt = j < index ? j + 1 : j;
+    }
+    if (insertAt >= index) continue;
+    const [row] = out.splice(index, 1);
+    out.splice(insertAt, 0, row);
+    changed = true;
+  }
+  return changed ? out : history;
 }
