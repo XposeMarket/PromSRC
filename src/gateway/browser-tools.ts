@@ -6809,11 +6809,17 @@ export async function browserScroll(
     const resolved = resolveSessionId(sessionId);
     const amount = Math.min(Math.max(Number(multiplier || 1) || 1, 0.25), 5);
     const deltaY = (direction === 'up' ? -1 : 1) * Math.round(640 * amount);
-    await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+    const wheel: any = await callInHouseBrowser('input', { sessionId: resolved, action: 'wheel', x: 60, y: 180, deltaY, deltaX: 0 });
+    // Older Electron builds return only { ok }; treat unknown as moved.
+    const moved = wheel?.moved !== false;
+    const where = wheel?.after && typeof wheel.after.y === 'number' ? ` (scrollY ${wheel.before?.y ?? '?'} -> ${wheel.after.y})` : '';
+    const summary = moved
+      ? `Scrolled ${direction} in Prometheus in-house browser${where}.`
+      : `Scroll ${direction} had no effect: the page is already at the ${direction === 'down' ? 'bottom' : 'top'} or is not scrollable${where}.`;
     const observeMode = options?.observe || resolveBrowserObserveMode('browser_scroll');
-    if (shouldReturnSnapshot(observeMode)) return browserSnapshotInHouse(resolved);
-    broadcastInHouseBrowserStatus(resolved, 'browser_scroll', `Scrolled ${direction} in Prometheus in-house browser.`, { active: true });
-    return `Scrolled ${direction} in Prometheus in-house browser.`;
+    if (shouldReturnSnapshot(observeMode)) return `${summary}\n\n${await browserSnapshotInHouse(resolved)}`;
+    broadcastInHouseBrowserStatus(resolved, 'browser_scroll', summary, { active: true });
+    return summary;
   }
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';

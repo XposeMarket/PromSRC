@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
+import { normalizeVisionImageBuffer } from './chat/vision-image-normalize';
 
 // The model receives image parts; the stream/history keeps only artifact URLs.
 // Call after appending the tool result so provider tool-call pairing stays valid.
@@ -7,16 +8,20 @@ export async function buildDirectMediaObservationMessage(toolName: string, toolR
   if (toolResult?.error || toolResult?.data?.observation_mode !== 'direct') return undefined;
   const previews = buildMediaAnalysisPreviewPayloads(toolName, toolResult);
   if (!previews.length) throw new Error('No visual inputs were prepared.');
-  const images = await Promise.all(previews.map(async preview => [
-    { type: 'text', text: preview.title },
-    {
-      type: 'image_url',
-      image_url: {
-        url: `data:${preview.mimeType};base64,${(await fs.readFile(preview.workspacePath)).toString('base64')}`,
-        detail: 'high',
+  const images = await Promise.all(previews.map(async preview => {
+    // Downscale before attaching: provider pixel caps (Anthropic 8000px) reject the whole request.
+    const normalized = await normalizeVisionImageBuffer(await fs.readFile(preview.workspacePath), preview.mimeType);
+    return [
+      { type: 'text', text: preview.title },
+      {
+        type: 'image_url',
+        image_url: {
+          url: `data:${normalized.mimeType};base64,${normalized.base64}`,
+          detail: 'high',
+        },
       },
-    },
-  ]));
+    ];
+  }));
   return {
     role: 'user',
     content: [

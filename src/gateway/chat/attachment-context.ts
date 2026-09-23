@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { getConfig } from '../../config/config';
+import { normalizeVisionImageBuffer, VISION_TARGET_MAX_BYTES } from './vision-image-normalize';
 
 const mammoth: any = require('mammoth');
 const pdfParse: any = require('pdf-parse');
@@ -154,20 +155,37 @@ async function extractTextPreview(absPath: string, mimeType: string, ext: string
   return '';
 }
 
-function createVisionAttachmentFromDataUrl(
+// Raw inputs above this are refused outright (decode cost); everything below is
+// downscaled/re-encoded to fit provider limits before it is attached.
+const MAX_RAW_VISION_INPUT_BYTES = 40 * 1024 * 1024;
+
+async function normalizeForVision(
+  buffer: Buffer,
+  mimeType: string,
+  name: string,
+  maxVisionBytesPerImage: number,
+): Promise<RuntimeVisionAttachment | null> {
+  try {
+    const normalized = await normalizeVisionImageBuffer(buffer, mimeType, { maxBytes: Math.min(maxVisionBytesPerImage, VISION_TARGET_MAX_BYTES) });
+    const bytes = Math.floor((normalized.base64.length * 3) / 4);
+    if (bytes > maxVisionBytesPerImage) return null;
+    return { base64: normalized.base64, mimeType: normalized.mimeType, name };
+  } catch {
+    return null;
+  }
+}
+
+async function createVisionAttachmentFromDataUrl(
   preview: AttachmentPreview,
   mimeType: string,
   maxVisionBytesPerImage: number,
-): RuntimeVisionAttachment | null {
+): Promise<RuntimeVisionAttachment | null> {
   const parsed = parseDataUrl(String(preview.dataUrl || ''));
   if (!parsed || !parsed.mimeType.startsWith('image/')) return null;
   const estimatedBytes = Math.floor((parsed.base64.length * 3) / 4);
-  if (estimatedBytes > maxVisionBytesPerImage) return null;
-  return {
-    base64: parsed.base64,
-    mimeType: parsed.mimeType || mimeType,
-    name: String(preview.name || 'attached-image').trim() || 'attached-image',
-  };
+  if (estimatedBytes > MAX_RAW_VISION_INPUT_BYTES) return null;
+  const name = String(preview.name || 'attached-image').trim() || 'attached-image';
+  return normalizeForVision(Buffer.from(parsed.base64, 'base64'), parsed.mimeType || mimeType, name, maxVisionBytesPerImage);
 }
 
 async function createVisionAttachmentFromFile(
@@ -177,12 +195,8 @@ async function createVisionAttachmentFromFile(
   maxVisionBytesPerImage: number,
 ): Promise<RuntimeVisionAttachment | null> {
   const stat = await fs.promises.stat(absPath);
-  if (!stat.isFile() || stat.size > maxVisionBytesPerImage) return null;
-  return {
-    base64: (await fs.promises.readFile(absPath)).toString('base64'),
-    mimeType,
-    name,
-  };
+  if (!stat.isFile() || stat.size > MAX_RAW_VISION_INPUT_BYTES) return null;
+  return normalizeForVision(await fs.promises.readFile(absPath), mimeType, name, maxVisionBytesPerImage);
 }
 
 export async function buildAttachmentRuntimeContext(
@@ -236,7 +250,7 @@ export async function buildAttachmentRuntimeContext(
     if (isImageAttachment(mimeType, ext)) {
       let addedVision = false;
       if (visionAttachments.length < maxVisionImages) {
-        const fromDataUrl = createVisionAttachmentFromDataUrl(preview, mimeType, maxVisionBytesPerImage);
+        const fromDataUrl = await createVisionAttachmentFromDataUrl(preview, mimeType, maxVisionBytesPerImage);
         if (fromDataUrl) {
           visionAttachments.push(fromDataUrl);
           addedVision = true;

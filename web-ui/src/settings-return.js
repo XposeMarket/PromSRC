@@ -39,6 +39,12 @@ export function buildMobileSettingsHandoffUrl(locationLike = globalThis.location
   return `/?${query.toString()}`;
 }
 
+const RETURN_STORAGE_KEY = 'pm_mobile_settings_return_url';
+
+function sessionStore(windowRef) {
+  try { return windowRef?.sessionStorage || globalThis.sessionStorage || null; } catch { return null; }
+}
+
 export function resolveMobileSettingsReturnUrl(locationLike = globalThis.location) {
   const url = locationUrl(locationLike);
   const route = normalizeMobileSettingsReturnRoute(url.searchParams.get(MOBILE_SETTINGS_RETURN_PARAM));
@@ -49,16 +55,52 @@ export function resolveMobileSettingsReturnUrl(locationLike = globalThis.locatio
   return `/${route.slice(1)}`;
 }
 
-export function returnFromMobileSettings(locationLike = globalThis.location) {
-  const target = resolveMobileSettingsReturnUrl(locationLike);
+function isSafeStoredReturnUrl(value) {
+  const target = String(value || '');
+  return /^\/\?source=pwa#mobile(?:\/|$)/.test(target) || /^\/mobile(?:\/|$)/.test(target);
+}
+
+export function returnFromMobileSettings(locationLike = globalThis.location, windowRef = globalThis.window) {
+  const store = sessionStore(windowRef);
+  let target = resolveMobileSettingsReturnUrl(locationLike);
+  if (!target) {
+    // The handoff query can be lost (reload/rewrite). The handoff page recorded
+    // where it came from; never strand a mobile user on the desktop app.
+    try {
+      const stored = store?.getItem(RETURN_STORAGE_KEY) || '';
+      if (isSafeStoredReturnUrl(stored)) target = stored;
+    } catch {}
+  }
   if (!target) return false;
-  locationLike.assign(target);
+  try { store?.removeItem(RETURN_STORAGE_KEY); } catch {}
+  // replace (not assign): the desktop handoff document must leave history.
+  // With assign, an iOS swipe-back or bfcache restore reopened that document
+  // with Settings already closed, i.e. the full desktop UI on a phone.
+  if (typeof locationLike.replace === 'function') locationLike.replace(target);
+  else locationLike.assign(target);
   return true;
 }
 
 export function installMobileSettingsReturnBridge(windowRef = globalThis.window) {
   if (!windowRef) return;
-  windowRef.__PROM_RETURN_FROM_MOBILE_SETTINGS = () => returnFromMobileSettings(windowRef.location);
+  const initialTarget = resolveMobileSettingsReturnUrl(windowRef.location);
+  if (initialTarget) {
+    try { sessionStore(windowRef)?.setItem(RETURN_STORAGE_KEY, initialTarget); } catch {}
+    // bfcache restore of a handoff page whose Settings surface was already
+    // closed would show the desktop app. Send it straight back to mobile.
+    try {
+      windowRef.addEventListener?.('pageshow', (event) => {
+        if (!event?.persisted) return;
+        const modal = windowRef.document?.getElementById?.('settings-modal');
+        if (!modal || modal.style?.display === 'none') {
+          const target = resolveMobileSettingsReturnUrl(windowRef.location) || initialTarget;
+          if (typeof windowRef.location.replace === 'function') windowRef.location.replace(target);
+          else windowRef.location.assign(target);
+        }
+      });
+    } catch {}
+  }
+  windowRef.__PROM_RETURN_FROM_MOBILE_SETTINGS = () => returnFromMobileSettings(windowRef.location, windowRef);
   const closeSettings = windowRef.closeSettings;
   if (typeof closeSettings !== 'function' || closeSettings.__promMobileSettingsReturnBridge) return;
   const closeSettingsWithMobileReturn = (...args) => {
