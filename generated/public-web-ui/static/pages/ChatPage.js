@@ -382,6 +382,7 @@ let desktopNewChatContextProjectsCacheReady = false;
 let desktopNewChatContextProjectsLoad = null;
 let desktopNewChatContextDismissBound = false;
 let desktopSessionOpenGeneration = 0;
+let desktopSessionOpenAbort = null;
 const desktopSessionLoadStates = new Map();
 
 function getDesktopSessionLoadState(sessionId) {
@@ -1136,6 +1137,13 @@ function isDesktopChatTransportDisconnect(error) {
 async function fetchJsonWithTimeout(url, timeoutMs = 2500, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // Callers can cancel a superseded request (e.g. switching chats quickly).
+  const external = options.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
@@ -1156,6 +1164,7 @@ async function fetchJsonWithTimeout(url, timeoutMs = 2500, options = {}) {
     return null;
   } finally {
     clearTimeout(timeout);
+    if (external) external.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -8026,7 +8035,7 @@ async function _loadSessionFromServer(id, options = {}) {
     const data = await fetchJsonWithTimeout(
       `/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`,
       10000,
-      { throwOnHttpError: true, throwOnError: true },
+      { throwOnHttpError: true, throwOnError: true, signal: options.signal },
     );
     const s = data?.session;
     if (!s) throw new Error('The desktop gateway returned no session data.');
@@ -8118,6 +8127,11 @@ async function _loadSessionFromServer(id, options = {}) {
     // visibly distinct from a real new-chat draft. A failed read must never
     // erase the cached transcript or silently fall through to the welcome UI.
     sess._needsServerLoad = true;
+    if (options.signal?.aborted) {
+      // Superseded by a newer chat open. Not an error: the next open of this
+      // chat reloads it (opens always force a server refresh).
+      return { ok: false, aborted: true };
+    }
     const gatewayUnavailable = isDesktopGatewayLoadError(error) || !error?.status;
     setDesktopSessionLoadState(id, 'error', {
       message: gatewayUnavailable
@@ -8912,12 +8926,20 @@ async function _openSession(id, generation) {
     window._maybeClearProjectState(id);
   }
   syncActiveChat();
+  // Opening chats back-to-back used to leave every earlier history fetch
+  // running (and later merging/saving multi-MB histories), so loads piled up.
+  // Cancel the previous open's fetch; this open owns the page now.
+  try { desktopSessionOpenAbort?.abort(); } catch {}
+  const openAbort = new AbortController();
+  desktopSessionOpenAbort = openAbort;
   const loadResult = sess
     ? await _loadSessionFromServer(id, {
         force: true,
         recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
+        signal: openAbort.signal,
       })
     : { ok: false, reason: 'missing_session' };
+  if (desktopSessionOpenAbort === openAbort) desktopSessionOpenAbort = null;
   // A newer click owns the page. An older history response may still finish
   // and update its own cached session, but it must not repaint the active view.
   if (generation !== desktopSessionOpenGeneration || window.activeChatSessionId !== id) return sess || null;

@@ -965,8 +965,36 @@ export function sanitizeHtml(html) {
   });
 }
 
+// Rendering the same finished message repeatedly (every chat re-render, chat
+// switch, sidebar refresh) re-ran marked + DOMPurify from scratch each time.
+// Cache plain-markdown output; anything with visual fences is not cached since
+// its output embeds per-render placeholders and persisted artifacts.
+const RENDER_MD_CACHE_MAX = 600;
+const RENDER_MD_CACHEABLE_MAX_CHARS = 200000;
+const renderMdCache = new Map();
+
 export function renderMd(text, options = {}) {
   if (!text) return '';
+  const source = String(text);
+  const cacheable = source.length <= RENDER_MD_CACHEABLE_MAX_CHARS
+    && !/```(chart|svg|html|mermaid)\n/.test(source)
+    && !(Array.isArray(options.visualArtifacts) && options.visualArtifacts.length);
+  if (cacheable) {
+    const hit = renderMdCache.get(source);
+    if (hit !== undefined) {
+      renderMdCache.delete(source);
+      renderMdCache.set(source, hit);
+      return hit;
+    }
+    const html = renderMdUncached(source, options);
+    renderMdCache.set(source, html);
+    if (renderMdCache.size > RENDER_MD_CACHE_MAX) renderMdCache.delete(renderMdCache.keys().next().value);
+    return html;
+  }
+  return renderMdUncached(source, options);
+}
+
+function renderMdUncached(text, options = {}) {
   try {
     const visuals = [];
     const placeholderPrefix = `PROMVISUAL${Math.random().toString(36).slice(2)}X`;
