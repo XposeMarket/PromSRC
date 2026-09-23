@@ -3024,6 +3024,14 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
       for (const k of keys) if (!positions.has(k)) positions.set(k, index);
     };
     target[key].forEach((item, index) => remember(keysFor(item), index));
+    // Resolve every incoming item first: either it updates an existing row, or
+    // it is new. New rows are inserted BEFORE the next incoming item that
+    // matched an existing row, so the merged list follows the source order.
+    // Appending them instead put pre-restart entries (restored from the server
+    // after a reconnect) after the post-restart entries the phone already had,
+    // which showed the newest commentary at the top of the turn.
+    const resolved = [];
+    const pendingByKey = new Map();
     incoming.forEach((item) => {
       const itemRequest = String(item?.clientRequestId || item?.extra?.clientRequestId || item?.extra?.activeRequestId || '').trim();
       if (targetRequest && itemRequest && itemRequest !== targetRequest) return;
@@ -3043,11 +3051,40 @@ function _mergeMobileAssistantTurnDetails(target, source, { preserveTargetText =
           ...(prior?.extra || item?.extra ? { extra: { ...(prior?.extra || {}), ...(item?.extra || {}) } } : {}),
         };
         remember(itemKeys, existingIndex);
-      } else {
-        remember(itemKeys, target[key].length);
-        target[key].push(item);
+        resolved.push({ anchor: existingIndex });
+        return;
       }
+      const dup = itemKeys.map((k) => pendingByKey.get(k)).find(Boolean);
+      if (dup) return;
+      const pending = { item };
+      for (const k of itemKeys) pendingByKey.set(k, pending);
+      resolved.push({ pending });
     });
+    const inserts = new Map(); // anchor index -> items to insert before it
+    const appended = [];
+    for (let i = 0; i < resolved.length; i += 1) {
+      const entry = resolved[i];
+      if (!entry.pending) continue;
+      let anchor;
+      for (let j = i + 1; j < resolved.length; j += 1) {
+        if (resolved[j].anchor !== undefined) { anchor = resolved[j].anchor; break; }
+      }
+      if (anchor === undefined) appended.push(entry.pending.item);
+      else {
+        if (!inserts.has(anchor)) inserts.set(anchor, []);
+        inserts.get(anchor).push(entry.pending.item);
+      }
+    }
+    if (inserts.size) {
+      const next = [];
+      target[key].forEach((item, index) => {
+        const before = inserts.get(index);
+        if (before) next.push(...before);
+        next.push(item);
+      });
+      target[key] = next;
+    }
+    if (appended.length) target[key].push(...appended);
   };
   if (!preserveTargetTrace) {
     mergeList('processEntries');
