@@ -1446,6 +1446,9 @@ function getSessionSortTime(s) {
   const activity = getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
   return activity * 1000;
 }
+// ChatPage (a separate ES module) sorts the session registry with the same
+// ordering; expose it so both modules agree.
+window.getSessionSortTime = getSessionSortTime;
 
 function _priorityTimestampMillis(value) {
   const numeric = Number(value || 0);

@@ -15,7 +15,7 @@
     "build:thinking-orb": "node scripts/build-thinking-orb.mjs",
     "build:web-production": "node scripts/build-web-ui-production.mjs",
     "build:web": "npm run check:web-ui",
-    "check:web-ui": "node scripts/check-public-web-ui-sync.js",
+    "check:web-ui": "node scripts/check-public-web-ui-sync.js && node scripts/check-web-ui-module-globals.mjs",
     "test:web-ui-architecture": "node scripts/test-web-ui-architecture-guardrails.mjs",
     "test:static-compression": "node scripts/test-static-compression.mjs",
     "test:chat-question-controller": "node scripts/test-chat-question-controller.mjs",
