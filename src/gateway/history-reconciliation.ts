@@ -43,6 +43,21 @@ function matchingCanonicalAssistant(existing: any[], incoming: any): any | null 
   }) || null;
 }
 
+/** Same assistant reply stored under two identities (client row lacks the request id). */
+function sameAssistantReply(candidate: any, serverMessage: any): boolean {
+  const isAssistant = (m: any) => m?.role === 'assistant' || m?.role === 'ai';
+  if (!isAssistant(candidate) || !isAssistant(serverMessage)) return false;
+  const norm = (m: any) => String(m?.content || '').replace(/\s+/g, ' ').trim();
+  const text = norm(serverMessage);
+  if (!text || text !== norm(candidate)) return false;
+  const a = String(candidate?.clientRequestId || candidate?._clientRequestId || '').trim();
+  const b = String(serverMessage?.clientRequestId || serverMessage?._clientRequestId || '').trim();
+  if (a && b && a !== b) return false;
+  const ta = Number(candidate?.timestamp || 0) || 0;
+  const tb = Number(serverMessage?.timestamp || 0) || 0;
+  return !ta || !tb || Math.abs(ta - tb) < 30 * 60_000;
+}
+
 function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   if (!prior || typeof prior !== 'object' || !raw || typeof raw !== 'object') return raw;
   const next: any = { ...raw };
@@ -220,7 +235,25 @@ export function mergeHistoryWithExistingMessageMetadata(
     for (const serverMessage of base) {
       const key = historyMessageMergeKey(serverMessage);
       const serverOnly = String(serverMessage?.channel || '') === 'system' || !!serverMessage?.messageKind || !!serverMessage?.goalId || Array.isArray(serverMessage?.processEntries) || !!serverMessage?.toolLog;
-      if (serverOnly && key && !represented.has(key) && !representedExistingKeys.has(key)) { result.push(serverMessage); represented.add(key); }
+      if (!serverOnly || !key || represented.has(key) || representedExistingKeys.has(key)) continue;
+      // Desktop snapshots store assistant rows without the request id the
+      // server row carries, so the keys differ. Appending the server copy put
+      // old replies after newer turns (out of order + repeated). If the client
+      // already has the same reply, it is represented; never append it.
+      const echo = mergedIncoming.find((candidate) => sameAssistantReply(candidate, serverMessage));
+      if (echo) {
+        const index = mergedIncoming.indexOf(echo);
+        const position = result.indexOf(echo);
+        if (position >= 0) result[position] = mergeHistoryMetadataFromPrior({
+          ...echo,
+          clientRequestId: echo.clientRequestId || serverMessage.clientRequestId,
+        }, serverMessage);
+        if (index >= 0) mergedIncoming[index] = result[position] ?? echo;
+        represented.add(key);
+        continue;
+      }
+      result.push(serverMessage);
+      represented.add(key);
     }
   }
   // Earlier timestamp sorting could persist a completed reply before its own
