@@ -131,6 +131,14 @@ export function isXAIConnected(configDir: string, accountId?: string): boolean {
   return loadXAITokens(configDir, accountId) !== null;
 }
 
+export function isDefinitiveXaiRefreshRejection(body: string): boolean {
+  const text = String(body || '');
+  let code = '';
+  try { code = String(JSON.parse(text)?.error || '').toLowerCase(); } catch { /* not JSON */ }
+  if (code === 'invalid_grant' || code === 'unauthorized_client' || code === 'invalid_client') return true;
+  return /invalid_grant|refresh token (?:has )?(?:expired|been revoked|is invalid)|token (?:was )?revoked/i.test(text);
+}
+
 export async function refreshXAITokens(configDir: string, accountId?: string): Promise<XAITokens> {
   const existing = loadXAITokens(configDir, accountId);
   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
@@ -148,10 +156,15 @@ export async function refreshXAITokens(configDir: string, accountId?: string): P
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (res.status === 400 || res.status === 401) {
-      // Refresh token has expired or been revoked — clear stale session so UI
-      // shows disconnected rather than a forever-broken "connected" state.
-      clearXAITokens(configDir, accountId);
-      throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
+      // Only a definitive OAuth rejection proves the refresh token is dead.
+      // A bare 400/401 (proxy hiccup, malformed discovery, transient server
+      // error) used to wipe the saved login, which forced a manual reconnect
+      // for a problem that would have cleared on the next attempt.
+      if (isDefinitiveXaiRefreshRejection(text)) {
+        clearXAITokens(configDir, accountId);
+        throw new Error(`xAI OAuth session expired (${res.status}). Please reconnect xAI in Settings → Models.`);
+      }
+      throw new Error(`xAI token refresh rejected (${res.status}); saved login kept. ${text.slice(0, 200)}`);
     }
     throw new Error(`xAI token refresh failed (${res.status}): ${text.slice(0, 300)}`);
   }
