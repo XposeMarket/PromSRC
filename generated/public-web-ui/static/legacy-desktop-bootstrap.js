@@ -1551,7 +1551,7 @@ function _renderSettledSessionsList(el) {
   if (pinnedSection) pinnedSection.style.display = 'none';
   const projectsSection = document.getElementById('sidebar-projects-section');
   const projectsListEl = document.getElementById('sidebar-projects-list');
-  if (projectsListEl) projectsListEl.innerHTML = '';
+  setSidebarHtmlIfChanged(projectsListEl, '');
   if (projectsSection) projectsSection.style.display = 'none';
   const sessions = _sessionSearchQuery
     ? (_sessionSearchResults || []).map(sessionFromSearchResult).filter(Boolean)
@@ -1576,7 +1576,7 @@ function _renderSettledSessionsList(el) {
   if (!_sessionSearchQuery && _settledSessionsHasMore) {
     content += `<button class="sessions-show-more-btn" onclick="loadSettledSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:color-mix(in srgb, var(--pm-gold, var(--brand)) 12%, transparent);border:1px solid color-mix(in srgb, var(--pm-gold, var(--brand)) 30%, transparent);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif">Load more settled chats</button>`;
   }
-  el.innerHTML = content;
+  setSidebarHtmlIfChanged(el, content);
 }
 
 const CHAT_SETTLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="m8.5 12.2 2.2 2.2 4.8-5"></path></svg>';
@@ -1983,6 +1983,18 @@ async function dropSidebarSession(event) {
   }
 }
 
+// The sidebar re-renders on every poll/stream tick. Rebuilding identical HTML
+// tore down and recreated every row (lost hover state, full layout). Skip it.
+function setSidebarHtmlIfChanged(node, html) {
+  if (!node) return;
+  // Other code paths write these lists directly, so validate the cache against
+  // the node's live children count before trusting it.
+  if (node.__pmLastHtml === html && node.__pmLastChildCount === node.childElementCount) return;
+  node.innerHTML = html;
+  node.__pmLastHtml = html;
+  node.__pmLastChildCount = node.childElementCount;
+}
+
 function renderSessionsList() {
   const el = document.getElementById('jobs-list');
   if (!el) return;
@@ -2033,10 +2045,10 @@ function renderSessionsList() {
   const onChatsTab = (window.sidebarTab || 'chats') === 'chats' || document.querySelector('[data-tab="chats"]')?.classList.contains('active');
   if (pinnedSection && pinnedListEl) {
     if (pinned.length && onChatsTab) {
-      pinnedListEl.innerHTML = pinned.map(renderChatSessionCard).join('');
+      setSidebarHtmlIfChanged(pinnedListEl, pinned.map(renderChatSessionCard).join(''));
       pinnedSection.style.display = '';
     } else {
-      pinnedListEl.innerHTML = '';
+      setSidebarHtmlIfChanged(pinnedListEl, '');
       pinnedSection.style.display = 'none';
     }
   }
@@ -2048,10 +2060,10 @@ function renderSessionsList() {
   const projectsListEl = document.getElementById('sidebar-projects-list');
   if (projectsSection && projectsListEl) {
     if (projectRows && onChatsTab) {
-      projectsListEl.innerHTML = projectRows;
+      setSidebarHtmlIfChanged(projectsListEl, projectRows);
       projectsSection.style.display = '';
     } else {
-      projectsListEl.innerHTML = '';
+      setSidebarHtmlIfChanged(projectsListEl, '');
       projectsSection.style.display = 'none';
     }
   }
@@ -2098,7 +2110,7 @@ function renderSessionsList() {
     }
   }
 
-  el.innerHTML = content;
+  setSidebarHtmlIfChanged(el, content);
 
 }
 
@@ -4150,7 +4162,10 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!isRenderWorker && typeof refreshAll === 'function') refreshAll();
     if (!isRenderWorker && typeof updateQueuedPromptUI === 'function') updateQueuedPromptUI();
     if (!isRenderWorker) setInterval(checkStatus, 10000);
-    if (!isRenderWorker) setInterval(loadSystemStats, 3000);
+    if (!isRenderWorker) setInterval(() => {
+      // Stats are only shown on screen; skip the 3s poll while hidden.
+      if (document.visibilityState !== 'hidden') loadSystemStats();
+    }, 3000);
 
     if (!isRenderWorker) {
       const chatModePromise = Promise.resolve(typeof setMode === 'function' ? setMode('chat') : undefined);

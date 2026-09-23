@@ -1558,13 +1558,18 @@ function renderChatContextWindow(data, target = null) {
     hasCurrentState ? data.contextUsage || currentState.contextUsage : pressure?.usage || data.contextUsage || currentState.contextUsage,
   );
   const usageLabel = formatChatContextWindowUsage(usage);
-  btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);
+  // Only write what changed: this renders on a timer and every write
+  // invalidates style for the composer.
+  const ringDeg = `${Math.round(usage.progressPercent * 3.6)}deg`;
+  if (btn.style.getPropertyValue('--chat-context-window-deg') !== ringDeg) btn.style.setProperty('--chat-context-window-deg', ringDeg);
   btn.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
-  btn.title = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
-  if (fill) fill.style.width = `${usage.progressPercent.toFixed(1)}%`;
+  const btnTitle = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
+  if (btn.title !== btnTitle) btn.title = btnTitle;
+  const fillWidth = `${usage.progressPercent.toFixed(1)}%`;
+  if (fill && fill.style.width !== fillWidth) fill.style.width = fillWidth;
   if (fill) fill.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
   setChatContextWindowHeadLabel('Context window', target);
-  if (total) {
+  if (total && total.textContent !== usageLabel) {
     total.textContent = usageLabel;
   }
   // The rows describe the current model-call composition. Keep their own
@@ -1866,6 +1871,10 @@ if (!window.__promChatContextWindowHandlersInstalled) {
   // emitted (for example after a background tool or a resumed PWA tab).
   setInterval(() => {
     if (document.visibilityState === 'hidden') return;
+    // Idle chats only change on stream/model events (which refresh directly);
+    // poll every 5s only while a run is live, otherwise every 30s.
+    const liveRun = !!window._sessionThinking?.[window.activeChatSessionId];
+    if (!liveRun && Date.now() - Number(chatContextWindowState.lastFetchAt || 0) < 30_000) return;
     refreshChatContextWindow({ force: true }).catch(() => {});
     if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
     document.querySelectorAll('[data-context-window-session-id]').forEach((target) => {
@@ -13641,9 +13650,45 @@ function renderLiveTurnTrace(entries, { streaming = false, openLiveCurrent = fal
         <span class="live-turn-tool-chevron" aria-hidden="true">›</span>
         <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
-      <div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>
+      ${!streaming && !openAttr && toolBodyEntries.length
+        ? `<div class="live-turn-tool-body" data-lazy-trace="${escHtml(rememberLazyTraceBody(toolBodyEntries))}"></div>`
+        : `<div class="live-turn-tool-body">${renderLiveTraceList(toolBodyEntries)}</div>`}
     </details>`;
   }).join('')}</div>`;
+}
+
+// Finished turns used to build full HTML for every collapsed tool group on
+// every chat open/re-render (MBs of markup for long chats). Collapsed groups
+// now render an empty body and fill it the first time the group is opened.
+const LAZY_TRACE_BODY_MAX = 6000;
+const lazyTraceBodies = new Map();
+let lazyTraceBodySeq = 0;
+function rememberLazyTraceBody(entries) {
+  const key = `lt${++lazyTraceBodySeq}`;
+  lazyTraceBodies.set(key, entries);
+  if (lazyTraceBodies.size > LAZY_TRACE_BODY_MAX) {
+    lazyTraceBodies.delete(lazyTraceBodies.keys().next().value);
+  }
+  return key;
+}
+function hydrateLazyTraceBody(body) {
+  const key = body?.getAttribute?.('data-lazy-trace');
+  if (!key) return;
+  const entries = lazyTraceBodies.get(key);
+  body.removeAttribute('data-lazy-trace');
+  body.innerHTML = entries
+    ? renderLiveTraceList(entries)
+    : '<div class="live-turn-trace"><small>Details unavailable. Reopen this chat to load them.</small></div>';
+}
+if (typeof document !== 'undefined' && !window.__pmLazyTraceBound) {
+  window.__pmLazyTraceBound = true;
+  // 'toggle' does not bubble; capture it at the document.
+  document.addEventListener('toggle', (event) => {
+    const group = event.target;
+    if (!group?.matches?.('details.live-turn-tool-group') || !group.open) return;
+    const body = group.querySelector(':scope > .live-turn-tool-body[data-lazy-trace]');
+    if (body) hydrateLazyTraceBody(body);
+  }, true);
 }
 
 function desktopWorkflowTraceEntriesForMessage(message) {
@@ -15536,6 +15581,16 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   }
   const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
+  if (currentBody && nextBody?.hasAttribute('data-lazy-trace')) {
+    // Settled turn: keep an already-rendered body; otherwise adopt the lazy key.
+    if (currentBody.hasAttribute('data-lazy-trace') || !currentBody.firstElementChild) {
+      currentBody.setAttribute('data-lazy-trace', nextBody.getAttribute('data-lazy-trace'));
+      currentBody.innerHTML = '';
+      if (wasOpen) hydrateLazyTraceBody(currentBody);
+    }
+    currentGroup.open = wasOpen;
+    return true;
+  }
   const currentTrace = directLiveTraceChild(currentBody, (node) => node.classList.contains('live-turn-trace'));
   const nextTrace = directLiveTraceChild(nextBody, (node) => node.classList.contains('live-turn-trace'));
   if (currentTrace && nextTrace) {

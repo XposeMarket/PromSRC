@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { mergeHistoryWithExistingMessageMetadata } from './history-reconciliation';
+import { mergeHistoryWithExistingMessageMetadata, repairReappendedAssistantRows } from './history-reconciliation';
 
 const requestId = 'mobile_session_request_1';
 const userAt = 10_002;
@@ -140,3 +140,25 @@ assert.equal(desktopMerged[3].clientRequestId, 'web:s:2', 'server request id is 
 const desktopAgain = mergeHistoryWithExistingMessageMetadata(desktopMerged, desktopSnapshot);
 assert.equal(desktopAgain.length, 5, 'repeat saves stay stable');
 console.log('history reconciliation desktop snapshot regression passed');
+
+// Transcripts already damaged by the re-append bug heal on the next save.
+{
+  const damaged = [
+    { role: 'user', content: 'Q1', timestamp: 1_000_000 },
+    { role: 'assistant', content: 'Answer one is long enough to count', timestamp: 1_060_000 },
+    { role: 'user', content: 'Q2', timestamp: 2_000_000 },
+    { role: 'assistant', content: 'Answer two is long enough to count', timestamp: 2_060_000 },
+    { role: 'user', content: 'Q3', timestamp: 9_000_000 },
+    { role: 'assistant', content: 'Answer one is long enough to count', timestamp: 1_070_000, clientRequestId: 'r1', processEntries: [{ id: 'e1' }] },
+    { role: 'assistant', content: 'Stray old error reply text here', timestamp: 1_500_000 },
+    { role: 'assistant', content: 'Answer three is long enough too', timestamp: 9_060_000 },
+  ];
+  const healed = repairReappendedAssistantRows(damaged);
+  assert.deepEqual(healed.map((m: any) => m.content), [
+    'Q1', 'Answer one is long enough to count', 'Stray old error reply text here',
+    'Q2', 'Answer two is long enough to count', 'Q3', 'Answer three is long enough too',
+  ]);
+  assert.equal((healed[1] as any).processEntries.length, 1, 'metadata from the dropped copy is kept');
+  const clean = damaged.slice(0, 4);
+  assert.equal(repairReappendedAssistantRows(clean), clean, 'healthy history is returned untouched');
+}

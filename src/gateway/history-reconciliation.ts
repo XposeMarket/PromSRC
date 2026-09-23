@@ -271,5 +271,52 @@ export function mergeHistoryWithExistingMessageMetadata(
     const userPosition = result.indexOf(user);
     result.splice(userPosition + 1, 0, reply);
   }
-  return pruneCrossTurnTraceCopies(result);
+  return pruneCrossTurnTraceCopies(repairReappendedAssistantRows(result));
+}
+
+/**
+ * Heal transcripts damaged by the old desktop-save bug, which re-appended
+ * server copies of earlier replies after newer turns. Drops exact repeated
+ * replies (keeping the first, with merged metadata) and moves assistant rows
+ * that are clearly older than the user turn they follow back to their
+ * chronological slot. Only acts on rows that are provably misplaced.
+ */
+export function repairReappendedAssistantRows(history: any[]): any[] {
+  if (!Array.isArray(history) || history.length < 3) return history;
+  const isAssistant = (m: any) => m?.role === 'assistant' || m?.role === 'ai';
+  const ts = (m: any) => Number(m?.timestamp || 0) || 0;
+  let changed = false;
+  const out: any[] = [];
+  for (const message of history) {
+    const body = String(message?.content || '').trim();
+    if (isAssistant(message) && body.length >= 20 && !/^Error:/.test(body)) {
+      const firstIndex = out.findIndex((prior) => sameAssistantReply(prior, message));
+      if (firstIndex >= 0) {
+        out[firstIndex] = mergeHistoryMetadataFromPrior(out[firstIndex], message);
+        changed = true;
+        continue;
+      }
+    }
+    out.push(message);
+  }
+  const SKEW_MS = 2 * 60_000;
+  for (let index = 1; index < out.length; index += 1) {
+    const message = out[index];
+    const at = ts(message);
+    if (!isAssistant(message) || !at) continue;
+    let userIndex = -1;
+    for (let j = index - 1; j >= 0; j -= 1) if (out[j]?.role === 'user') { userIndex = j; break; }
+    if (userIndex < 0 || !ts(out[userIndex]) || at >= ts(out[userIndex]) - SKEW_MS) continue;
+    let insertAt = 0;
+    for (let j = 0; j < out.length; j += 1) {
+      if (j === index) continue;
+      const t = ts(out[j]);
+      if (t && t <= at) insertAt = j < index ? j + 1 : j;
+    }
+    if (insertAt >= index) continue;
+    const [row] = out.splice(index, 1);
+    out.splice(insertAt, 0, row);
+    changed = true;
+  }
+  return changed ? out : history;
 }
