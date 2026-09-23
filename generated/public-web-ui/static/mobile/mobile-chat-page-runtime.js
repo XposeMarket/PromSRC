@@ -31,13 +31,19 @@ export function resolveMobileKeyboardComposerTop({
   const resolvedLayoutHeight = Math.max(0, Number(layoutHeight || 0));
   const resolvedVisualHeight = Math.max(0, Number(visualHeight || resolvedLayoutHeight));
   const liveVisualBottom = Math.max(0, Number(visualTop || 0)) + resolvedVisualHeight;
+  // Always track the LIVE keyboard edge (offsetTop + height). A bottom locked
+  // at keyboard-open time goes stale as soon as iOS pans the visual viewport
+  // (the user scrolls with the keyboard up): the composer then sits behind the
+  // keyboard until another event, or floats too high if the snapshot was taken
+  // mid keyboard animation. `visualBottomAnchor` is only a fallback when the
+  // live viewport is unavailable.
   const lockedVisualBottom = Math.max(0, Number(visualBottomAnchor || 0));
   const viewportBottom = viewportMode === 'visual'
-    ? (lockedVisualBottom || liveVisualBottom)
+    ? (liveVisualBottom || lockedVisualBottom)
     : resolvedLayoutHeight;
   return Math.max(0, Math.round(
     viewportBottom
-    - Math.max(8, Math.round(Number(bottom) || 8))
+    - Math.max(4, Math.round(Number(bottom) || 4))
     - Math.max(0, Number(composerHeight || 0)),
   ));
 }
@@ -5586,7 +5592,7 @@ void main() {
       Number(document.documentElement?.clientHeight || 0),
     );
     const vv = window.visualViewport;
-    const resolvedBottom = Math.max(8, Math.round(Number(bottomPx) || 8));
+    const resolvedBottom = Math.max(4, Math.round(Number(bottomPx) || 4));
     // Safari can derive an auto `top` for a fixed element from its old flow
     // position while the document is being scrolled. Give the keyboard-owned
     // composer an explicit top and make bottom auto so that static-position
@@ -5602,6 +5608,7 @@ void main() {
       bottom: resolvedBottom,
       composerHeight,
     });
+    // (resolvedBottom floor is applied inside resolveMobileKeyboardComposerTop)
     const values = {
       position: 'fixed',
       left: '10px',
@@ -5636,7 +5643,7 @@ void main() {
       const visualHeight = Math.max(0, Number(vv?.height || layoutHeight || 0));
       const visualBottom = Math.round(Math.max(0, Number(vv?.offsetTop || 0)) + visualHeight);
       const keyboardHeightOffset = vv ? Math.max(0, Math.round(layoutHeight - visualHeight)) : 0;
-      const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8;
+      const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 4 : 4;
       const desiredTop = resolveMobileKeyboardComposerTop({
         layoutHeight,
         visualHeight,
@@ -5647,9 +5654,9 @@ void main() {
         composerHeight: rect.height,
       });
       const drift = desiredTop - Math.round(rect.top);
-      // Normal visualViewport panning should be a no-op. Only repair a large
-      // displacement, which is the iOS fixed/static-position failure mode.
-      if (Math.abs(drift) < 24) return;
+      // desiredTop now follows the live keyboard edge, so any visible drift is
+      // real (panning or a stale layout). Snap it; sub-2px is rounding noise.
+      if (Math.abs(drift) < 2) return;
       const currentTop = Number.parseFloat(composer.style.getPropertyValue('top'));
       let nextTop = Number.isFinite(currentTop) ? Math.max(0, Math.round(currentTop + drift)) : desiredTop;
       // The correction is relative (currentTop + drift) because in the iOS
@@ -5774,7 +5781,7 @@ void main() {
         _pmKbVisualBottomAnchor = visualBottom;
         _pmKbVisualHeight = visualHeight;
       }
-      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? keyboardHeightOffset + 8 : 8);
+      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? keyboardHeightOffset + 4 : 4);
     }
     const keyboardOffset = open && _pmKbViewportMode === 'layout' ? keyboardHeightOffset : 0;
     const keyboardOffsetValue = `${keyboardOffset}px`;

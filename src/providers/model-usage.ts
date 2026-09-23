@@ -562,10 +562,54 @@ export function readModelUsageEvents(): ModelUsageEvent[] {
   }
 }
 
+// Per-session incremental cache. The context-window endpoint asks for one
+// session's usage on every poll; re-reading and JSON-parsing the whole
+// append-only log (tens of MB) each time blocked the gateway main thread for
+// >1.5s right as a turn was being prepared. The first read per session is a
+// full scan; later reads only parse bytes appended since the last read.
+const SESSION_USAGE_CACHE_MAX = 8;
+const _sessionUsageCache = new Map<string, { filePath: string; size: number; events: ModelUsageEvent[] }>();
+
+function readSessionUsageEventsIncremental(sessionId: string): ModelUsageEvent[] {
+  const filePath = usageLogPath();
+  let size = 0;
+  try { size = fs.statSync(filePath).size; } catch { return []; }
+  const cached = _sessionUsageCache.get(sessionId);
+  if (cached && cached.filePath === filePath && size >= cached.size) {
+    if (size > cached.size) {
+      // Only consume complete lines; a partial trailing row is re-read next time.
+      const tail = readUsageTail(filePath, cached.size, size);
+      const lastNewline = tail.lastIndexOf('\n');
+      if (lastNewline >= 0) {
+        const complete = tail.slice(0, lastNewline + 1);
+        cached.events.push(...parseUsageEvents(complete, sessionId));
+        cached.size += Buffer.byteLength(complete, 'utf-8');
+      }
+    }
+    _sessionUsageCache.delete(sessionId);
+    _sessionUsageCache.set(sessionId, cached);
+    return cached.events.slice();
+  }
+  let raw = '';
+  try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return []; }
+  const lastNewline = raw.lastIndexOf('\n');
+  const complete = lastNewline >= 0 ? raw.slice(0, lastNewline + 1) : '';
+  const events = parseUsageEvents(complete, sessionId);
+  _sessionUsageCache.set(sessionId, { filePath, size: Buffer.byteLength(complete, 'utf-8'), events });
+  while (_sessionUsageCache.size > SESSION_USAGE_CACHE_MAX) {
+    const oldest = _sessionUsageCache.keys().next().value;
+    if (oldest === undefined) break;
+    _sessionUsageCache.delete(oldest);
+  }
+  return events.slice();
+}
+
 export function readModelUsageEventsForSession(sessionId: string): ModelUsageEvent[] {
   try {
     ensureUsageReadCache();
-    return readHistoricalUsageEvents(sessionId);
+    const wanted = String(sessionId || '').trim();
+    if (!wanted) return readHistoricalUsageEvents();
+    return readSessionUsageEventsIncremental(wanted);
   } catch {
     return [];
   }

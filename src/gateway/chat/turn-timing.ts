@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import inspector from 'node:inspector';
 import path from 'node:path';
 import { getConfig } from '../../config/config';
 
@@ -140,6 +141,66 @@ function appendTimingLine(
   return next;
 }
 
+// ── On-demand TTFT CPU profiling ────────────────────────────────────────────
+// Turn prep has shown ~1-1.6s main-thread stalls (worker results and budget
+// timers delivered late). Touch `<configDir>/logs/ttft-profile.flag` to capture
+// a V8 CPU profile from request_received to provider_request_start for the
+// next few turns. Profiles land in `<configDir>/logs/ttft-profiles/`.
+const TTFT_PROFILE_MAX_TURNS = 3;
+let ttftProfileActiveTurn = '';
+let ttftProfileSession: any = null;
+let ttftProfilesTaken = 0;
+let ttftProfileFlagSeenAt = 0;
+
+function ttftProfileFlagPath(configDir: string): string {
+  return path.join(configDir, 'logs', 'ttft-profile.flag');
+}
+
+function maybeStartTtftProfile(configDir: string, turnId: string): void {
+  if (ttftProfileActiveTurn) return;
+  let flagMtime = 0;
+  try { flagMtime = fs.statSync(ttftProfileFlagPath(configDir)).mtimeMs; } catch { return; }
+  if (flagMtime !== ttftProfileFlagSeenAt) { ttftProfileFlagSeenAt = flagMtime; ttftProfilesTaken = 0; }
+  if (ttftProfilesTaken >= TTFT_PROFILE_MAX_TURNS) return;
+  try {
+    const session = new inspector.Session();
+    session.connect();
+    session.post('Profiler.enable', () => {
+      session.post('Profiler.setSamplingInterval', { interval: 500 }, () => {
+        session.post('Profiler.start');
+      });
+    });
+    ttftProfileSession = session;
+    ttftProfileActiveTurn = turnId;
+    ttftProfilesTaken += 1;
+  } catch {
+    ttftProfileSession = null;
+    ttftProfileActiveTurn = '';
+  }
+}
+
+function maybeStopTtftProfile(configDir: string, turnId: string): void {
+  if (!ttftProfileSession || ttftProfileActiveTurn !== turnId) return;
+  const session = ttftProfileSession;
+  ttftProfileSession = null;
+  ttftProfileActiveTurn = '';
+  try {
+    session.post('Profiler.stop', (error: any, result: any) => {
+      try {
+        if (!error && result?.profile) {
+          const dir = path.join(configDir, 'logs', 'ttft-profiles');
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFile(path.join(dir, `${Date.now()}-${turnId.slice(0, 8)}.cpuprofile`), JSON.stringify(result.profile), () => undefined);
+        }
+      } finally {
+        try { session.disconnect(); } catch {}
+      }
+    });
+  } catch {
+    try { session.disconnect(); } catch {}
+  }
+}
+
 export function createTurnTimingRecorder(
   sessionId: string,
   options: TurnTimingOptions = {},
@@ -166,6 +227,8 @@ export function createTurnTimingRecorder(
     mark(label: string, extra: Record<string, unknown> = {}): number {
       const now = Date.now();
       if (!enabled) return now;
+      if (label === 'request_received') maybeStartTtftProfile(configDir, turnId);
+      else if (label === 'provider_request_start') maybeStopTtftProfile(configDir, turnId);
       const payload = {
         timestamp: new Date(now).toISOString(),
         elapsedMs: now - startedAt,
