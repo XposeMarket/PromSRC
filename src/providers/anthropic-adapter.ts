@@ -16,7 +16,16 @@
  *   - anthropic-version: 2023-06-01
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
+
+/**
+ * Anthropic's rejection when a setup-token request is billed to extra usage
+ * and extra usage is disabled/exhausted. Matched on the message text because
+ * it arrives as a generic 400 invalid_request_error.
+ */
+export function isOutOfExtraUsageError(raw: unknown): boolean {
+  return /out of extra usage/i.test(String(raw || ''));
+}
 import { join } from 'node:path';
 import type {
   LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult,
@@ -732,8 +741,58 @@ export class AnthropicAdapter implements LLMProvider {
       console.log(`[anthropic-debug] model=${model} isOAuth=${isOAuth} system=${sysPreview} auth=${authHdrType} ua=${uaHdr} beta=${betaHdr} headers=[${headerKeys}] tools=${tools?.length || 0} max_tokens=${body.max_tokens}`);
     } catch {}
 
-    const rejectRequest = async (response: Response): Promise<never> => {
-      const raw = await response.text().catch(() => '');
+    const collectRateLimitHeaders = (response: Response): Record<string, string> => {
+      const out: Record<string, string> = {};
+      try {
+        response.headers.forEach((value, key) => {
+          const k = key.toLowerCase();
+          if (k.startsWith('anthropic-ratelimit') || k === 'retry-after' || k === 'x-should-retry') {
+            out[k] = String(value).slice(0, 200);
+          }
+        });
+      } catch { /* headers are optional diagnostics */ }
+      return out;
+    };
+
+    const requestShape = () => ({
+      speed: body.speed || 'standard',
+      effort: body.output_config?.effort || null,
+      anthropicBeta: String((headers as any)['anthropic-beta'] || '').slice(0, 300),
+      model,
+      accountId: this.accountId || null,
+      authMode: isOAuth ? 'setup_token' : (headers['x-api-key'] ? 'api_key' : 'other'),
+      firstSystemIsPreamble: body.system?.[0]?.text === claudeCodePreamble.text,
+      systemBlocks: Array.isArray(body.system) ? body.system.length : 0,
+      systemChars: Array.isArray(body.system) ? body.system.reduce((sum: number, block: any) => sum + String(block?.text || '').length, 0) : 0,
+      messageCount: body.messages.length,
+      toolCount: tools?.length || 0,
+      requestBytes: Buffer.byteLength(JSON.stringify(body)),
+    });
+
+    // Successful setup-token requests are logged too (headers + request shape),
+    // so a request Anthropic billed to extra usage can be diffed against the
+    // ones it billed to the plan. Rotated at 4 MB to stay bounded.
+    const logSuccess = (response: Response, attempt: number) => {
+      if (!isOAuth || !this.configDir) return;
+      try {
+        const logDir = join(this.configDir, 'logs');
+        mkdirSync(logDir, { recursive: true });
+        const file = join(logDir, 'anthropic-request-ok.ndjson');
+        try {
+          if (existsSync(file) && statSync(file).size > 4 * 1024 * 1024) renameSync(file, `${file}.1`);
+        } catch { /* rotation is best-effort */ }
+        appendFileSync(file, JSON.stringify({
+          at: new Date().toISOString(),
+          status: response.status,
+          attempt,
+          requestId: String(response.headers.get('request-id') || '').slice(0, 100),
+          rateLimitHeaders: collectRateLimitHeaders(response),
+          ...requestShape(),
+        }) + '\n', 'utf8');
+      } catch { /* Diagnostics must never change provider handling. */ }
+    };
+
+    const rejectRequest = async (response: Response, raw: string, attempt: number): Promise<never> => {
       try {
         const payload = JSON.parse(raw);
         if (this.configDir) {
@@ -742,6 +801,7 @@ export class AnthropicAdapter implements LLMProvider {
           appendFileSync(join(logDir, 'anthropic-request-errors.ndjson'), JSON.stringify({
             at: new Date().toISOString(),
             status: response.status,
+            attempt,
             requestId: String(payload?.request_id || response.headers.get('request-id') || '').slice(0, 100),
             errorType: String(payload?.error?.type || '').slice(0, 100),
             // The message distinguishes "out of extra usage" from a version gate
@@ -749,31 +809,8 @@ export class AnthropicAdapter implements LLMProvider {
             message: String(payload?.error?.message || '').slice(0, 300),
             // Anthropic's unified rate-limit headers name the limit/pool the
             // request was charged against (5h, weekly, per-model, overage).
-            // Without them an "extra usage" rejection is undiagnosable.
-            rateLimitHeaders: (() => {
-              const out: Record<string, string> = {};
-              try {
-                response.headers.forEach((value, key) => {
-                  const k = key.toLowerCase();
-                  if (k.startsWith('anthropic-ratelimit') || k === 'retry-after' || k === 'x-should-retry') {
-                    out[k] = String(value).slice(0, 200);
-                  }
-                });
-              } catch { /* headers are optional diagnostics */ }
-              return out;
-            })(),
-            speed: body.speed || 'standard',
-            effort: body.output_config?.effort || null,
-            anthropicBeta: String((headers as any)['anthropic-beta'] || '').slice(0, 300),
-            model,
-            accountId: this.accountId || null,
-            authMode: isOAuth ? 'setup_token' : (headers['x-api-key'] ? 'api_key' : 'other'),
-            firstSystemIsPreamble: body.system?.[0]?.text === claudeCodePreamble.text,
-            systemBlocks: Array.isArray(body.system) ? body.system.length : 0,
-            systemChars: Array.isArray(body.system) ? body.system.reduce((sum: number, block: any) => sum + String(block?.text || '').length, 0) : 0,
-            messageCount: body.messages.length,
-            toolCount: tools?.length || 0,
-            requestBytes: Buffer.byteLength(JSON.stringify(body)),
+            rateLimitHeaders: collectRateLimitHeaders(response),
+            ...requestShape(),
           }) + '\n', 'utf8');
         }
       } catch { /* Diagnostics must never change provider handling. */ }
@@ -791,31 +828,50 @@ export class AnthropicAdapter implements LLMProvider {
       throw new Error(`${this.id} API error ${response.status}: ${raw.slice(0, 500)}`);
     };
 
+    // Anthropic intermittently bills a single setup-token request to extra
+    // usage ("out of extra usage") while identical requests seconds later are
+    // billed to the plan (observed 2026-09-23: failure at 17:05:26, same thread
+    // succeeded at 17:05:58 and for 12 requests after). Nothing has been sent
+    // to the caller before the status check, so one delayed retry is safe for
+    // both streaming and non-streaming calls.
+    const EXTRA_USAGE_RETRY_DELAY_MS = 4_000;
+    const send = async (): Promise<Response> => {
+      for (let attempt = 1; ; attempt += 1) {
+        const response = await fetch(this.getMessagesEndpoint(), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: options?.abortSignal
+            ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
+            : AbortSignal.timeout(180_000),
+        });
+        if (response.ok) {
+          logSuccess(response, attempt);
+          return response;
+        }
+        const raw = await response.text().catch(() => '');
+        if (attempt === 1 && isOAuth && isOutOfExtraUsageError(raw) && !options?.abortSignal?.aborted) {
+          try {
+            await rejectRequest(response, raw, attempt);
+          } catch { /* logged; retrying once */ }
+          console.warn(`[anthropic] ${model}: request billed to extra usage (rejected); retrying once in ${EXTRA_USAGE_RETRY_DELAY_MS}ms`);
+          await new Promise((resolve) => setTimeout(resolve, EXTRA_USAGE_RETRY_DELAY_MS));
+          if (options?.abortSignal?.aborted) return rejectRequest(response, raw, attempt);
+          continue;
+        }
+        return rejectRequest(response, raw, attempt);
+      }
+    };
+
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
       body.stream = true;
-      const response = await fetch(this.getMessagesEndpoint(), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: options?.abortSignal
-          ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
-          : AbortSignal.timeout(180_000),
-      });
-      if (!response.ok) await rejectRequest(response);
+      const response = await send();
       return this.parseStreamingResponse(response, model, options);
     }
 
-    const response = await fetch(this.getMessagesEndpoint(), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: options?.abortSignal
-        ? AbortSignal.any([options.abortSignal, AbortSignal.timeout(180_000)])
-        : AbortSignal.timeout(180_000),
-    });
+    const response = await send();
 
-    if (!response.ok) await rejectRequest(response);
 
     const data = await response.json() as any;
     return this.parseResponse(data);

@@ -101,7 +101,35 @@ function validateCompositeDef(def: CompositeDef): string | null {
   return null;
 }
 
+// loadComposites() is hit once per tool name during tool classification
+// (hundreds of times per turn). Re-reading the directory each call cost ~0.5s
+// of main thread during turn prep. Cache the parsed map and revalidate on the
+// directory mtime (file add/remove/rename) at most every 2s; save/delete here
+// invalidate immediately.
+let _compositeCache: { map: Map<string, CompositeDef>; dirMtimeMs: number; checkedAt: number } | null = null;
+const COMPOSITE_CACHE_RECHECK_MS = 2000;
+
+function invalidateCompositeCache(): void {
+  _compositeCache = null;
+}
+
 export function loadComposites(): Map<string, CompositeDef> {
+  const now = Date.now();
+  if (_compositeCache && now - _compositeCache.checkedAt < COMPOSITE_CACHE_RECHECK_MS) {
+    return new Map(_compositeCache.map);
+  }
+  let dirMtimeMs = -1;
+  try { dirMtimeMs = fs.statSync(COMPOSITES_DIR).mtimeMs; } catch { dirMtimeMs = -1; }
+  if (_compositeCache && _compositeCache.dirMtimeMs === dirMtimeMs) {
+    _compositeCache.checkedAt = now;
+    return new Map(_compositeCache.map);
+  }
+  const map = loadCompositesFromDisk();
+  _compositeCache = { map, dirMtimeMs, checkedAt: now };
+  return new Map(map);
+}
+
+function loadCompositesFromDisk(): Map<string, CompositeDef> {
   const map = new Map<string, CompositeDef>();
   if (!fs.existsSync(COMPOSITES_DIR)) return map;
   for (const file of fs.readdirSync(COMPOSITES_DIR)) {
@@ -119,6 +147,7 @@ export function saveComposite(def: CompositeDef): void {
   if (validationError) throw new Error(validationError);
   ensureDir();
   fs.writeFileSync(path.join(COMPOSITES_DIR, `${def.name}.json`), JSON.stringify(def, null, 2), 'utf-8');
+  invalidateCompositeCache();
 }
 
 export function deleteComposite(name: string): boolean {
@@ -126,6 +155,7 @@ export function deleteComposite(name: string): boolean {
   const file = path.join(COMPOSITES_DIR, `${name}.json`);
   if (!fs.existsSync(file)) return false;
   fs.unlinkSync(file);
+  invalidateCompositeCache();
   return true;
 }
 

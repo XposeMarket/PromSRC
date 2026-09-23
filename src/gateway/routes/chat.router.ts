@@ -17553,6 +17553,8 @@ function safeTokenSessionFileName(sessionId: string): string {
   return String(sessionId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_') || 'unknown';
 }
 
+const rawToolTokenCache = new Map<string, { size: number; mtimeMs: number; tokens: number }>();
+
 function estimateToolObservationRawTokens(sessionId: string, profile: { tokenizer: any }): { tokens: number; bytes: number; files: number } {
   let tokens = 0;
   let bytes = 0;
@@ -17567,10 +17569,26 @@ function estimateToolObservationRawTokens(sessionId: string, profile: { tokenize
       if (!st.isFile()) continue;
       files += 1;
       bytes += st.size;
+      // Raw tool-result files are immutable once written; re-reading and
+      // tokenizing every one on each context-window poll cost ~1s of main
+      // thread per poll on long sessions. Cache by path + size + mtime.
+      const cacheKey = `${full}\u0000${String(profile.tokenizer || '')}`;
+      const cachedTokens = rawToolTokenCache.get(cacheKey);
+      if (cachedTokens && cachedTokens.size === st.size && cachedTokens.mtimeMs === st.mtimeMs) {
+        tokens += cachedTokens.tokens;
+        continue;
+      }
+      let fileTokens = 0;
       try {
-        tokens += estimateTextTokensForModel(fs.readFileSync(full, 'utf-8'), profile.tokenizer);
+        fileTokens = estimateTextTokensForModel(fs.readFileSync(full, 'utf-8'), profile.tokenizer);
       } catch {
-        tokens += Math.ceil(st.size / 3.5);
+        fileTokens = Math.ceil(st.size / 3.5);
+      }
+      tokens += fileTokens;
+      rawToolTokenCache.set(cacheKey, { size: st.size, mtimeMs: st.mtimeMs, tokens: fileTokens });
+      if (rawToolTokenCache.size > 20_000) {
+        const oldest = rawToolTokenCache.keys().next().value;
+        if (oldest !== undefined) rawToolTokenCache.delete(oldest);
       }
     }
   } catch {}
