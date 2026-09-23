@@ -1333,7 +1333,10 @@ async function startGatewayListeners(): Promise<void> {
       // twice. That ownership rule is intentional and is left intact here. The fast
       // lane stays for the runtimes that legitimately reach this queue, and the
       // corrected classifier is what stops crash recovery from claiming it.
-      const plannedDelayMs = Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 1_500));
+      // A planned restart resumes a turn the user is watching. The listener
+      // answers health within ~250ms of load; a fixed 1.5s wait here was pure
+      // dead time on every self-restart.
+      const plannedDelayMs = Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESTART_RESUME_DELAY_MS || 400));
       const crashDelayMs = isHotRestartBoot
         ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
         : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
@@ -1354,7 +1357,7 @@ async function startGatewayListeners(): Promise<void> {
       // Planned continuations also must not sit behind the model-busy poll for
       // a full cycle; keep their retry cadence tight.
       const pollForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
-        runtime && isPlannedMainChatRestartRuntime(runtime) ? 750 : 5_000
+        runtime && isPlannedMainChatRestartRuntime(runtime) ? 250 : 5_000
       );
       const scheduleRecoveryDrain = (delayMs: number): void => {
         const timer = setTimeout(drainRecoveryQueue, delayMs);
@@ -1434,7 +1437,9 @@ async function startGatewayListeners(): Promise<void> {
     let plannedResumePending = false;
     try { plannedResumePending = !!readRestartContext(); } catch {}
     const postReadyDelayMs = plannedResumePending
-      ? Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESUME_POST_READY_DELAY_MS || 750))
+      // 250ms is enough for the listener to answer health/relay probes first;
+      // the resumed turn is what the user is watching.
+      ? Math.max(100, Number(process.env.PROMETHEUS_PLANNED_RESUME_POST_READY_DELAY_MS || 250))
       : isHotRestartBoot
         ? Math.max(3_000, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 5_000))
         : Math.max(500, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 3000));

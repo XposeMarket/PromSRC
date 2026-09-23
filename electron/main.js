@@ -31,6 +31,7 @@ const path       = require('path');
 const http       = require('http');
 const net        = require('net');
 const fs         = require('fs');
+const { pathToFileURL } = require('url');
 const crypto     = require('crypto');
 const { createGatewayReverseProxy } = require('./gateway-reverse-proxy');
 const {
@@ -1123,9 +1124,15 @@ function getTailscaleCliPath() {
 // Funnel's public URL is stable; only its local target must follow a relay
 // port selected for this Electron profile. Do this after the relay is bound so
 // there is no gap where Funnel forwards requests to a closed local listener.
+let lastTailscaleFunnelTarget = '';
 function synchronizeTailscaleFunnelTarget() {
   const funnel = getConfiguredTailscaleFunnel();
   if (!funnel) return;
+  // The stable relay port does not change across gateway restarts. Re-running
+  // a synchronous CLI call on the Electron main thread every restart only
+  // delays the respawn.
+  const target = `${funnel.httpsPort}->${gatewayPort}`;
+  if (target === lastTailscaleFunnelTarget) return;
   const tailscaleBin = getTailscaleCliPath();
   try {
     execFileSync(tailscaleBin, ['funnel', '--bg', `--https=${funnel.httpsPort}`, String(gatewayPort)], {
@@ -1134,6 +1141,7 @@ function synchronizeTailscaleFunnelTarget() {
       windowsHide: true,
       timeout: 12_000,
     });
+    lastTailscaleFunnelTarget = target;
     writeGatewayLog(`[main] Tailscale Funnel ${funnel.publicUrl} now targets local relay ${gatewayPort}\n`);
   } catch (error) {
     writeGatewayLog(`[main] Could not retarget Tailscale Funnel to ${gatewayPort} via ${tailscaleBin}: ${error?.message || error}\n`);
@@ -2045,7 +2053,17 @@ async function startGateway() {
     writeGatewayLog(`[main] Source gateway runtime: ${sourceGatewayNode}\n`);
     // tsx relays the IPC channel to the real gateway child, so the handoff
     // notice still reaches Electron through the wrapper.
-    gatewayProcess = spawn(sourceGatewayNode, [tsxCli, getGatewayEntryPath()], {
+    // Load tsx as a loader in the gateway process itself. `tsx/dist/cli.mjs`
+    // spawns a second node child and relays IPC/stdio, which cost an extra
+    // process boot (~150ms) on every restart. Fall back to the CLI wrapper if
+    // the loader files are missing (older tsx layouts).
+    const tsxPreflight = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'preflight.cjs');
+    const tsxLoader = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+    const directTsxArgs = fs.existsSync(tsxPreflight) && fs.existsSync(tsxLoader)
+      && String(process.env.PROMETHEUS_GATEWAY_TSX_CLI_WRAPPER || '') !== '1'
+      ? ['--require', tsxPreflight, '--import', pathToFileURL(tsxLoader).href, getGatewayEntryPath()]
+      : null;
+    gatewayProcess = spawn(sourceGatewayNode, directTsxArgs || [tsxCli, getGatewayEntryPath()], {
       cwd:   getGatewayWorkingDirectory(),
       env:   { ...gatewayEnv },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
@@ -2178,6 +2196,7 @@ async function handoffGatewayFromElectron(hostProcess, notice) {
 async function restartGatewayFromElectron(options = {}) {
   if (isGatewayRestarting) return false;
   isGatewayRestarting = true;
+  const restartRequestedAt = Date.now();
   const terminateExisting = options.terminateExisting === true;
   const automaticRecovery = options.automaticRecovery !== false;
   const reason = String(options.reason || 'gateway requested restart');
@@ -2201,11 +2220,13 @@ async function restartGatewayFromElectron(options = {}) {
       await waitForGatewayPortRelease();
     }
     gatewayProcess = null;
+    const spawnAt = Date.now();
     await startGateway();
+    const spawnedAt = Date.now();
     await waitForGateway();
     gatewayRelay?.setState('ready');
     gatewayRecoveryAttempts.length = 0;
-    writeGatewayLog('[main] Electron-managed gateway restart complete\n');
+    writeGatewayLog(`[main] Electron-managed gateway restart complete (requested->spawn ${spawnAt - restartRequestedAt}ms, spawn setup ${spawnedAt - spawnAt}ms, spawn->healthy ${Date.now() - spawnedAt}ms, total ${Date.now() - restartRequestedAt}ms)\n`);
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(GATEWAY_URL);
@@ -2237,6 +2258,12 @@ async function restartGatewayFromElectron(options = {}) {
 }
 
 function waitForGateway(retries = MAX_RETRIES) {
+  // The relay answers 503 to every client until this probe flips it to ready,
+  // so the probe interval is pure dead time on each restart. A warm gateway
+  // listens ~2.5s after spawn: probe every 50ms for the first 8s, then fall
+  // back to the slow cadence for cold/dev boots.
+  const waitStartedAt = Date.now();
+  const nextHealthDelay = () => (Date.now() - waitStartedAt < 8_000 ? 50 : RETRY_DELAY);
   return new Promise((resolve, reject) => {
     let settled = false;
     const done = (fn) => { if (!settled) { settled = true; fn(); } };
@@ -2271,7 +2298,7 @@ function waitForGateway(retries = MAX_RETRIES) {
           return;
         }
         if (retries-- > 0) {
-          setTimeout(attempt, RETRY_DELAY);
+          setTimeout(attempt, nextHealthDelay());
         } else {
           if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
           done(() => reject(new Error(
@@ -2282,7 +2309,7 @@ function waitForGateway(retries = MAX_RETRIES) {
       request.on('error', () => {
         if (settled) return;
         if (retries-- > 0) {
-          setTimeout(attempt, RETRY_DELAY);
+          setTimeout(attempt, nextHealthDelay());
         } else {
           if (gatewayProcess) gatewayProcess.removeListener('exit', onProcessExit);
           done(() => reject(new Error(

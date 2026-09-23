@@ -2033,6 +2033,7 @@ import {
   shouldPersistTurnContext,
 } from '../context/turn-context-packet';
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
+import { formatUsageAwarenessForPrompt } from '../../providers/usage-awareness';
 
 // ─── Injected singletons (set by initChatRouter in server-v2.ts) ──────────────
 let _cronScheduler: CronScheduler;
@@ -2887,6 +2888,14 @@ async function handleChat(
     : [
         getWorkingContextForContext(sessionId, 9_000),
         formatEditLogForPrompt(sessionId, { excludeTurnId: editLogTurnId, excludeSince: latencyStartAt }),
+        // Plan usage for THIS turn's provider only; empty above 30% left, so it
+        // adds nothing to the prompt (or the cache) in the normal case.
+        (() => {
+          try {
+            const usageProvider = String(admittedRouteSnapshot?.providerId || (getConfig().getConfig() as any)?.llm?.provider || '').trim();
+            return usageProvider ? formatUsageAwarenessForPrompt(usageProvider) : '';
+          } catch { return ''; }
+        })(),
       ].filter(Boolean).join('\n\n');
   const codingContextPacketDecision = selectCodingContextPacket({
     enabled: codingContextPacketEnabled,

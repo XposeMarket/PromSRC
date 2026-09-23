@@ -677,17 +677,31 @@ function makeActivity(payload, phase, previous = null) {
   };
 }
 
+function sameStreamScope(a, b) {
+  const left = String(a || '').trim();
+  const right = String(b || '').trim();
+  // Legacy entries without a stream id keep the old step-only pairing.
+  if (!left || !right) return true;
+  return left === right;
+}
+
 function matchingOperation(entries, payload, phase) {
   const callId = callIdFromPayload(payload);
   const eventKey = eventKeyFromPayload(payload);
   const stepNum = stepNumberFromPayload(payload);
+  const streamId = streamIdFromPayload(payload);
   const action = actionFromPayload(payload);
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const activity = entries[index]?.activity;
     if (!activity || activity.kind !== 'operation') continue;
     if (callId && activity.callId && callId === activity.callId) return entries[index];
     if (eventKey && activity.eventKey && eventKey === activity.eventKey) return entries[index];
-    if (stepNum != null && activity.stepNum != null && stepNum === activity.stepNum) return entries[index];
+    // stepNum restarts at 1 on every new stream (restart resume, steer
+    // continuation). Only pair by step inside the same stream, otherwise the
+    // resumed turn's step 1 silently overwrites the pre-restart step 1 and no
+    // new tool row ever appears until the thread is reopened.
+    if (stepNum != null && activity.stepNum != null && stepNum === activity.stepNum
+      && sameStreamScope(streamId, activity.streamId)) return entries[index];
     if (activity.resultAttached) continue;
     if (action && activity.action === action && ['preparing', 'running'].includes(activity.status)) return entries[index];
     if (phase === 'call' && activity.status === 'preparing' && action && describeTool(action).key === activity.key) return entries[index];
@@ -754,7 +768,8 @@ export function applyToolActivityEvent(entriesInput, phaseRaw, payload = {}) {
   const existingResult = entries.find((entry) => entry?.activity?.kind === 'result'
     && ((resultActivity.eventKey && entry.activity.eventKey === resultActivity.eventKey)
       || (resultActivity.callId && entry.activity.callId === resultActivity.callId)
-      || (resultActivity.stepNum != null && entry.activity.stepNum === resultActivity.stepNum)));
+      || (resultActivity.stepNum != null && entry.activity.stepNum === resultActivity.stepNum
+        && sameStreamScope(resultActivity.streamId, entry.activity.streamId))));
   if (existingResult) {
     existingResult.activity = resultActivity;
     existingResult.type = resultActivity.ok ? 'result' : 'error';

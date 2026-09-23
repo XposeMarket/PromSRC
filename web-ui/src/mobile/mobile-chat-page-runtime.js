@@ -3143,7 +3143,9 @@ void main() {
     const busy = !!(__pmChat.activeRuns?.[sid]?.busy || __pmChat.drawerRunSessionIds?.has?.(sid));
     if (!force && !remembered && !busy) return;
     if (__pmChat.recoverTimer) clearTimeout(__pmChat.recoverTimer);
-    __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true, force, fullRefresh }), Math.max(250, Number(delay) || 2500));
+    // `Number(0) || 2500` turned an explicit immediate recovery into a 2.5s wait.
+    const requestedDelay = Number.isFinite(Number(delay)) ? Number(delay) : 2500;
+    __pmChat.recoverTimer = setTimeout(() => refreshMobileRunRecovery({ silent: true, force, fullRefresh }), Math.max(force ? 0 : 250, requestedDelay));
   }
 
   const recoverVisibleMobileActiveRun = (sessionId, options = {}) => {
@@ -3427,7 +3429,15 @@ void main() {
       // Parallel batch 1: run-status + session history (independent)
       const [status, prefetchedSession, backgroundStatusResponse] = await Promise.all([
         loadMobileChatRunStatus(requestedSession),
-        (fullRefresh || force) ? loadMobileChatSession(requestedSession, { force: true }).catch(() => null) : Promise.resolve(null),
+        // Recovery only reconciles the visible tail. Fetching the whole session
+        // (multi-MB on long threads) delayed rendering the active turn by
+        // seconds every time the app returned to the foreground.
+        (fullRefresh || force) ? loadMobileChatSession(requestedSession, {
+          force: true,
+          historyLimit: PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE,
+          processLimit: 60,
+          fullProcess: false,
+        }).catch(() => null) : Promise.resolve(null),
         loadMobileBackgroundStatuses(requestedSession).catch(() => null),
       ]);
       const recoveredBackgroundStatuses = Array.isArray(backgroundStatusResponse?.statuses) ? backgroundStatusResponse.statuses : [];
@@ -3890,15 +3900,33 @@ void main() {
         hideReconnectingStatus();
         const activeToolMessage = String(status?.run?.checkpoint?.connectionMessage || '').trim();
         if (activeToolMessage && !reconnectStatus.isReconnectPending()) setChatConnectionStatus(true, activeToolMessage, { mode: 'activity' });
+        // Only carry a local cursor forward when it belongs to the SAME stream as
+        // this replay. A gateway restart (or steer continuation) starts a new
+        // stream at seq 1; merging the old stream's high lastSeq here made every
+        // new tool frame look like a duplicate until the thread was reopened.
+        const resumedStreamId = String(replay?.stream?.streamId || __pmChat.activeRuns?.[requestedSession]?.streamId || remembered?.streamId || '').trim();
+        const cursorFor = (source) => (
+          source && resumedStreamId && String(source.streamId || '').trim() === resumedStreamId
+            ? (Number(source.lastSeq || 0) || 0)
+            : 0
+        );
+        const resumedLastSeq = Math.max(
+          Number(replay?.stream?.lastSeq || 0) || 0,
+          cursorFor(__pmChat.activeRuns?.[requestedSession]),
+          cursorFor(remembered),
+        );
+        if (__pmChat.activeRuns?.[requestedSession]) {
+          __pmChat.activeRuns[requestedSession] = {
+            ...__pmChat.activeRuns[requestedSession],
+            streamId: resumedStreamId,
+            lastSeq: resumedLastSeq,
+          };
+        }
         _rememberMobileActiveRun(requestedSession, {
           startedAt: status.run?.startedAt || remembered?.startedAt,
           disconnected: false,
-          streamId: replay?.stream?.streamId || remembered?.streamId || '',
-          lastSeq: Math.max(
-            Number(replay?.stream?.lastSeq || 0) || 0,
-            Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
-            Number(remembered?.lastSeq || 0) || 0,
-          ),
+          streamId: resumedStreamId,
+          lastSeq: resumedLastSeq,
         });
         await recoverBackgroundDock(events);
         if (!isCurrentRecoveryTarget()) return;
@@ -4058,7 +4086,15 @@ void main() {
         }), 0);
       }
     } catch (err) {
-      if (_readMobileActiveRun(requestedSession)?.disconnected) scheduleMobileRunRecovery(2500, { fullRefresh });
+      const rememberedRun = _readMobileActiveRun(requestedSession);
+      // A planned restart marks the run restart-suspended, not disconnected, so
+      // a recovery that ran while the gateway was still down never retried and
+      // the resumed turn stayed frozen until the thread was reopened. Retry
+      // quickly while the gateway reports it is restarting.
+      const gatewayRestarting = err?.code === 'GATEWAY_RESTARTING' || isRestartSuspended(rememberedRun);
+      if (rememberedRun?.disconnected || gatewayRestarting) {
+        scheduleMobileRunRecovery(gatewayRestarting ? 1000 : 2500, { force: gatewayRestarting, fullRefresh });
+      }
       if (!silent) pmToast(`Recovery check failed: ${err.message || err}`, 'warn');
     }
   }
@@ -8249,17 +8285,23 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   window.__pmMobileSendMessage = sendMessage;
 
   let lastForegroundRecoveryAt = 0;
-  const runRecoveryOnReturn = () => {
+  const runRecoveryOnReturn = ({ bypassCooldown = false } = {}) => {
     void refreshMobileQuestionRecovery();
     const now = Date.now();
-    if (now - lastForegroundRecoveryAt < 5000) return;
+    if (!bypassCooldown && now - lastForegroundRecoveryAt < 5000) return;
     lastForegroundRecoveryAt = now;
-    scheduleMobileRunRecovery(250, { force: true, fullRefresh: true });
+    // The thread is already in memory: paint is instant. Start reconciling
+    // right away instead of waiting a tick.
+    scheduleMobileRunRecovery(0, { force: true, fullRefresh: true });
   };
   const runRecoveryOnVisibility = () => {
     if (!document.hidden) runRecoveryOnReturn();
   };
-  const runRecoveryOnWsOpen = () => runRecoveryOnReturn();
+  // A socket reopen means the gateway is (back) up. After a restart the
+  // foreground/pageshow recovery usually fired while the gateway was still
+  // down, and the 5s cooldown then skipped this one, so the resumed turn's
+  // events were never replayed until the thread was reopened.
+  const runRecoveryOnWsOpen = () => runRecoveryOnReturn({ bypassCooldown: true });
   const applyMainChatStreamPayload = (msg = {}) => {
     if (String(msg.sessionId || '') !== requestedSession) return '';
     if (__pmChat.activeSessionId !== requestedSession) return '';

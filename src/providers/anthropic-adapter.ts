@@ -41,6 +41,7 @@ import type { AnthropicTokens } from '../auth/anthropic-oauth';
 import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
+import { recordAnthropicRateLimitHeaders } from './usage-awareness';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
@@ -773,7 +774,11 @@ export class AnthropicAdapter implements LLMProvider {
     // so a request Anthropic billed to extra usage can be diffed against the
     // ones it billed to the plan. Rotated at 4 MB to stay bounded.
     const logSuccess = (response: Response, attempt: number) => {
-      if (!isOAuth || !this.configDir) return;
+      if (!isOAuth) return;
+      // Feed plan-usage awareness from headers we already receive (no extra
+      // request). Never allowed to affect provider handling.
+      try { recordAnthropicRateLimitHeaders(collectRateLimitHeaders(response)); } catch { /* best-effort */ }
+      if (!this.configDir) return;
       try {
         const logDir = join(this.configDir, 'logs');
         mkdirSync(logDir, { recursive: true });
