@@ -42,6 +42,8 @@ const BUILT_IN_RULES: PricingRule[] = [
   { provider: /^(ollama|llama_cpp|lm_studio)$/i, model: /.*/, input: 0, output: 0, source: 'local' },
 
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-6-astra(?:-|$)/i, input: 10.00, output: 50.00, cacheRead: 1.00, cacheWrite: 12.50 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6-sol(?:-|$)/i, input: 2.00, output: 10.00, cacheRead: 0.20, cacheWrite: 2.50 },
+  { provider: /^(openai|openai_codex)$/i, model: /^gpt-6-luna(?:-|$)/i, input: 0.10, output: 0.50, cacheRead: 0.01 },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.5/i, input: 5.00, output: 30.00, cacheRead: 0.50 },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.4-nano/i, input: 0.20, output: 1.25, cacheRead: 0.020 },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5\.4-mini/i, input: 0.75, output: 4.50, cacheRead: 0.075 },

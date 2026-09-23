@@ -40,6 +40,7 @@ import {
   assertSkillScanAllowed,
   ensureSkillSafetyDirs,
   scanSkillDirectory,
+  scanSkillDirectoryCached,
   scanSkillText,
   type SkillSafetyScan,
 } from './skill-safety';
@@ -591,8 +592,19 @@ function mergeSkillIds(primary: string[], fallback: string[], limit = 8): string
 
 export class SkillsManager {
   private skillsDir: string;
-  private skills: Map<string, Skill> = new Map();
+  private skillsStore: Map<string, Skill> = new Map();
+  private scannedOnce = false;
   private lastScanAt = 0;
+
+  // Loading ~200 skill packages is 0.6-0.9s of synchronous filesystem work.
+  // It used to run in the constructor, before the gateway listener was bound,
+  // on every restart. The scan is now lazy: the first real access performs it
+  // synchronously (so callers never observe an empty catalog), and the gateway
+  // warms it right after listen via warmInBackground().
+  private get skills(): Map<string, Skill> {
+    if (!this.scannedOnce) this.scanSkills();
+    return this.skillsStore;
+  }
 
   constructor(workspaceOrSkillsDir: string) {
     this.skillsDir = workspaceOrSkillsDir.endsWith('skills')
@@ -601,13 +613,42 @@ export class SkillsManager {
 
     fs.mkdirSync(this.skillsDir, { recursive: true });
     ensureSkillSafetyDirs(this.skillsDir);
-    this.scanSkills();
   }
 
   getSkillsDir(): string { return this.skillsDir; }
 
+  hasScanned(): boolean { return this.scannedOnce; }
+
+  /**
+   * Skill count for status displays that must not force the full scan
+   * (for example the terminal ready banner, which runs before listen).
+   * Returns the loaded count once scanned, otherwise a cheap directory count.
+   */
+  peekSkillCount(): number {
+    if (this.scannedOnce) return this.skillsStore.size;
+    try {
+      return fs.readdirSync(this.skillsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.startsWith('_'))
+        .length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Perform the initial scan off the startup critical path. */
+  warmInBackground(onDone?: (count: number, ms: number) => void): void {
+    if (this.scannedOnce) return;
+    setImmediate(() => {
+      if (this.scannedOnce) return;
+      const started = Date.now();
+      try { this.scanSkills(); } catch (e) { console.error('[Skills] Background warm failed:', e); }
+      try { onDone?.(this.skillsStore.size, Date.now() - started); } catch {}
+    });
+  }
+
   scanSkills(): void {
-    this.skills.clear();
+    this.scannedOnce = true;
+    this.skillsStore.clear();
     this.lastScanAt = Date.now();
 
     if (!fs.existsSync(this.skillsDir)) return;
@@ -619,7 +660,8 @@ export class SkillsManager {
       try {
         const pkg = loadSkillPackage(path.join(this.skillsDir, entry.name), entry.name);
         if (!pkg) continue;
-        const safety = scanSkillDirectory(pkg.rootDir);
+        // Boot/rescan path: reuse the previous verdict when the skill's files are unchanged.
+        const safety = scanSkillDirectoryCached(pkg.rootDir);
         const eligibility = resolveSkillEligibility({
           status: pkg.status,
           safety,

@@ -41,8 +41,8 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
@@ -426,6 +426,44 @@ async function _loadCredentialedIds(force) {
   return _credentialedIds;
 }
 
+// Per-provider plan usage for the provider list ("Primary Account: XX% Left").
+// Same source as Settings and the context-window card (/api/usage/limits).
+let _usageCache = null;
+let _usageFetchedAt = 0;
+const USAGE_CACHE_TTL_MS = 60_000;
+
+async function _loadUsage(force) {
+  if (_usageCache && !force && Date.now() - _usageFetchedAt < USAGE_CACHE_TTL_MS) return _usageCache;
+  try {
+    const d = await mobileGatewayFetch('/api/usage/limits');
+    if (d && d.success !== false) {
+      _usageCache = Array.isArray(d.providers) ? d.providers : [];
+      _usageFetchedAt = Date.now();
+    }
+  } catch {}
+  return _usageCache || [];
+}
+
+function _usageIsFresh() {
+  return !!_usageCache && Date.now() - _usageFetchedAt < USAGE_CACHE_TTL_MS;
+}
+
+// Percent left on the provider's primary account, using its most-constrained
+// window (e.g. Anthropic 5-hour 31% / weekly 56% used -> 44% left).
+function _primaryUsageLeft(providerId) {
+  const rows = (_usageCache || []).filter((row) => String(row?.provider || '') === providerId
+    && Array.isArray(row?.windows) && row.windows.length);
+  if (!rows.length) return null;
+  const cfg = (_llmCache?.providers || {})[providerId] || {};
+  const primaryId = String(cfg.defaultAccountId || cfg.accountId || '').trim();
+  const row = (primaryId && rows.find((r) => String(r?.account_id || '') === primaryId))
+    || rows.find((r) => String(r?.account_id || '') === 'default')
+    || rows[0];
+  const used = row.windows.map((w) => Number(w?.used_percent)).filter((n) => Number.isFinite(n));
+  if (!used.length) return null;
+  return Math.max(0, Math.min(100, Math.round(100 - Math.max(...used))));
+}
+
 function _providerLabel(id) {
   const item = (_catalogCache || []).find((p) => p.id === id);
   return item?.name || BUILTIN_LABELS[id] || id;
@@ -435,9 +473,24 @@ function _modelsForProvider(provider) {
   const item = (_catalogCache || []).find((p) => p.id === provider);
   const out = [];
   const push = (arr) => { if (Array.isArray(arr)) for (const m of arr) { const s = String(m?.name || m || '').trim(); if (s && !out.includes(s)) out.push(s); } };
-  // Catalog order is source of truth; builtin fills gaps only.
+  // Catalog order is source of truth; builtin fills gaps only. A gap is
+  // inserted right after its builtin predecessor instead of appended, so a
+  // catalog cached before a new model shipped (e.g. across a restart) does not
+  // push that model to the bottom of the picker.
   push(item?.runtime?.options?.staticModels);
-  push(BUILTIN_STATIC_MODELS[provider]);
+  const builtin = Array.isArray(BUILTIN_STATIC_MODELS[provider]) ? BUILTIN_STATIC_MODELS[provider] : [];
+  builtin.forEach((raw, idx) => {
+    const s = String(raw || '').trim();
+    if (!s || out.includes(s)) return;
+    let at = -1;
+    for (let j = idx - 1; j >= 0 && at < 0; j--) at = out.indexOf(String(builtin[j] || '').trim());
+    if (at >= 0) out.splice(at + 1, 0, s);
+    else {
+      let next = -1;
+      for (let j = idx + 1; j < builtin.length && next < 0; j++) next = out.indexOf(String(builtin[j] || '').trim());
+      if (next >= 0) out.splice(next, 0, s); else out.push(s);
+    }
+  });
   const def = item?.config?.defaults?.model;
   if (def && !out.includes(String(def))) out.unshift(String(def));
   return out;
@@ -812,16 +865,40 @@ export function setMobileSubagentReasoningContext(context = null) {
     : null;
 }
 
+function _pickerStateKey() {
+  const { provider } = _activeModel(_llmCache);
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  return `${provider}|${cfg.model || ''}|${cfg.reasoning_effort || ''}|${cfg.speed || ''}`;
+}
+
+// Refresh picker data in the background. The badge refresh reuses the llm
+// config fetched here instead of fetching it a second time.
+function _refreshPickerData() {
+  return Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true), _loadUsage(false)])
+    .then(() => refreshMobileModelBadge(false))
+    .catch(() => {});
+}
+
 async function _openReasoningSheet() {
   pmHaptic(10);
-  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading...</div>');
+  // Open instantly from cached data when we have it, then revalidate. Only the
+  // very first open (nothing cached yet) shows a loading state.
+  const warm = !!(_llmCache && _catalogCache);
+  const sheet = _openSheet('', warm ? '' : '<div class="pm-msheet-loading">Loading...</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
-  await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
-  await refreshMobileModelBadge(true);
-  const { provider } = _activeModel(_llmCache);
-  const cfg = (_llmCache.providers || {})[provider] || {};
-  _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
+  const render = () => {
+    const { provider } = _activeModel(_llmCache);
+    const cfg = (_llmCache?.providers || {})[provider] || {};
+    _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
+  };
+  const shownKey = warm ? _pickerStateKey() : '';
+  if (warm) render();
+  await _refreshPickerData();
+  if (!sheet?.isConnected || !sheet.classList.contains('is-reasoning')) return;
+  const body = document.getElementById('pm-msheet-body');
+  const stillOnSelector = !!body?.querySelector('#pm-reasoning-selector, .pm-msheet-loading');
+  if (stillOnSelector && (!warm || _pickerStateKey() !== shownKey)) render();
 }
 
 function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
@@ -1054,13 +1131,19 @@ function _queueReasoningSave(provider, patch, immediate = false) {
 
 // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Advanced: provider / model / intelligence controls ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 async function _openSwitchSheet() {
-  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">&rsaquo;</span>', '<div class="pm-msheet-loading">Loading controls...</div>');
+  const warm = !!(_llmCache && _catalogCache);
+  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">&rsaquo;</span>', warm ? '' : '<div class="pm-msheet-loading">Loading controls...</div>');
   sheet?.classList.add('is-model-switch');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
   sheet?.removeAttribute('style');
-  await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
-  await refreshMobileModelBadge(true);
-  _renderAdvancedSheet();
+  const shownKey = warm ? _pickerStateKey() : '';
+  if (warm) _renderAdvancedSheet();
+  await _refreshPickerData();
+  if (!sheet?.isConnected) return;
+  const body = document.getElementById('pm-msheet-body');
+  if (body?.querySelector('[data-pm-view="providers"]')) { _renderProviderList(); return; }
+  const stillOnAdvanced = !!body?.querySelector('.pm-advanced-panel, .pm-msheet-loading');
+  if (stillOnAdvanced && (!warm || _pickerStateKey() !== shownKey)) _renderAdvancedSheet();
 }
 
 function _currentAdvancedState() {
@@ -1134,13 +1217,26 @@ function _renderProviderList() {
     return;
   }
 
-  const rows = ids.map((id) => `
+  const rows = ids.map((id) => {
+    const left = _primaryUsageLeft(id);
+    const usage = left == null
+      ? ''
+      : `<span class="pm-msheet-row-usage${left <= 15 ? ' is-low' : ''}">Primary Account: ${left}% Left</span>`;
+    return `
     <button type="button" class="pm-msheet-row" data-provider="${_esc(id)}">
       <span class="pm-msheet-row-label">${_esc(_providerLabel(id))}</span>
+      ${usage}
       ${id === activeProvider ? '<span class="pm-msheet-dot" title="Current"></span>' : ''}
       <span class="pm-msheet-chev">&rsaquo;</span>
-    </button>`).join('');
-  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+    </button>`;
+  }).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows" data-pm-view="providers">${rows}</div>`);
+  if (!_usageIsFresh()) {
+    // Usage arrives after first paint; re-render only if the list is still open.
+    _loadUsage(false).then(() => {
+      if (_usageIsFresh() && document.querySelector('#pm-msheet-body [data-pm-view="providers"]')) _renderProviderList();
+    }).catch(() => {});
+  }
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
   if (!body) return;
   body.querySelectorAll('[data-provider]').forEach((btn) => {
@@ -1282,4 +1378,12 @@ export function initMobileModelBadge() {
   });
 
   refreshMobileModelBadge(true).catch(() => {});
+
+  // Warm the picker's data so the first tap on the badge opens instantly.
+  // iOS Safari has no requestIdleCallback, so fall back to a short delay.
+  const prefetchPicker = () => {
+    Promise.all([_loadCatalog(false), _loadCredentialedIds(false), _loadUsage(false)]).catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(prefetchPicker, { timeout: 3000 });
+  else setTimeout(prefetchPicker, 1500);
 }

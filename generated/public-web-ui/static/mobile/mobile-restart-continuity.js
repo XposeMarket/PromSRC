@@ -198,6 +198,15 @@ export function createRestartContinuityHandler(context = {}) {
 
     const newStreamId = String(msg.newStreamId || msg.streamId || '').trim();
     const runtimeId = String(msg.runtimeId || '').trim();
+    // The resumed runtime continues this request. Drop any "completed" pin the
+    // pre-restart stream left behind so its frames are not treated as replays.
+    const pins = chatState?.completedAssistantTurns;
+    const pinnedRequest = String(pins?.[requestedSession]?.turn?._clientRequestId || '').trim();
+    if (pins && (!clientRequestId || !pinnedRequest || pinnedRequest === clientRequestId)) {
+      delete pins[requestedSession];
+    }
+    delete aiTurn._pmFinalized;
+    delete aiTurn._pmLiveActivityCompleted;
     if (chatState && (!chatState.activeRuns || typeof chatState.activeRuns !== 'object')) chatState.activeRuns = {};
     if (chatState?.activeRuns) {
       chatState.activeRuns[requestedSession] = {

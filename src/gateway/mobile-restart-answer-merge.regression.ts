@@ -40,7 +40,7 @@ assert.ok(
 
 // Guard 2: the predicate is actually wired into the text-adoption condition.
 // Without this the branch would compute a value nobody reads.
-const adoptionIdx = source.indexOf('|| sourceSupersedesCheckpoint)');
+const adoptionIdx = source.indexOf('|| sourceSupersedesCheckpoint');
 assert.ok(adoptionIdx > 0, 'sourceSupersedesCheckpoint must gate the copy-text adoption branch');
 const extendsIdx = source.indexOf('|| sourceExtendsTarget');
 assert.ok(
@@ -136,3 +136,28 @@ assert.equal(
 );
 
 console.log('mobile-restart-answer-merge regression: ok');
+
+// ── Server-authored final beats a phone-synced partial copy of the same turn ──
+// Observed 2026-09-23: after a mid-turn restart the session held
+//   [partial (phone-synced, _clientRequestId, 37 trace entries)]
+//   [checkpoint] [checkpoint]
+//   [server final (clientRequestId, 1 trace entry, fileChanges)]
+// Dedupe keeps the "richer" partial and merges the final into it; the final did
+// not textually extend the partial, so its text and file changes were dropped.
+assert.ok(
+  /_pmServerAuthoredFinal: role === 'ai'\s*&& !String\(m\?\._clientRequestId/.test(source),
+  'history mapping must tag gateway-authored finals (clientRequestId without _clientRequestId)',
+);
+assert.ok(
+  source.includes("const sourceIsServerFinal = source._pmServerAuthoredFinal === true && target._pmServerAuthoredFinal !== true;"),
+  'merge must detect a server-authored final arriving onto a partial copy',
+);
+assert.ok(
+  source.includes('|| sourceIsServerFinal)'),
+  'a server-authored final must gate the copy-text adoption branch',
+);
+assert.ok(
+  /if \(sourceIsServerFinal\) \{[\s\S]{0,120}target\.fileChanges = source\.fileChanges/.test(source),
+  'a server-authored final must carry its fileChanges onto the kept row',
+);
+console.log('mobile server-final merge guards: ok');

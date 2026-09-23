@@ -4295,7 +4295,9 @@ function getRuntimeDiagnosticsReadRoots(): string[] {
   try {
     const configDir = getResolvedConfigDir();
     if (!configDir) return [];
-    return ['logs', path.join('processes', 'logs'), 'tool-observations'].map((sub) => path.resolve(configDir, sub));
+    // `runtimes` holds active-runtimes.json / runtime-events.ndjson: the
+    // restart-recovery and interruption records. No credentials live there.
+    return ['logs', path.join('processes', 'logs'), 'tool-observations', 'runtimes'].map((sub) => path.resolve(configDir, sub));
   } catch {
     return [];
   }

@@ -72,10 +72,10 @@ import {
 import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
-import { setShutdownHooks } from './lifecycle';
+import { readRestartContext, setShutdownHooks } from './lifecycle';
 import { adoptGatewayHandoffHostsAtBoot, startHandoffSyntheticRuntimeFixture } from './runtime/gateway-handoff-bridge';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
-import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, registerRestartContinuityEmitter } from './runtime-recovery';
+import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime, isPlannedMainChatRestartRuntime, isFirstLoneCrashRetry, registerRestartContinuityEmitter } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import { assertSupportedNodeRuntime } from './runtime/node-runtime';
 import {
@@ -184,7 +184,7 @@ import {
 } from './chat/chat-helpers';
 import { createApp } from './core/app';
 import { createServer } from './core/server';
-import { runStartup, startPostReadyWorkspaceStartup } from './core/startup';
+import { runStartup, setStartupMarkSink, startPostReadyWorkspaceStartup } from './core/startup';
 import { getMemoryIndexRefreshWorkerStatus, scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
 import { warmMemoryAtomSnapshot } from './memory-index/memory-atoms.js';
 import {
@@ -198,7 +198,7 @@ import { warmModelUsageIndex } from '../providers/model-usage';
 import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool, warmContextBuildWorkerPool } from './chat/context-build-worker-client';
 import { prepareTaskReplyLookupIndex } from './tasks/task-store';
-import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
+import { getModelCallWorkerPoolStatus, prewarmModelCallWorkers, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
 import { getBrainActivityWorkerStatus, shutdownBrainActivityWorker } from './brain/activity-package-worker-client';
 import { getRuntimeWorkerDiagnostics } from './process/runtime-worker-broker.js';
 import { gatewayRuntimeAdmission } from './runtime-admission';
@@ -279,11 +279,43 @@ function loadGatewayHttpsOptions(): { port: number; options: any } | null {
 const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
 const startupT0 = Date.now();
 let startupLast = startupT0;
+let startupImportLogged = false;
+// Always-on startup timeline. Console output stays opt-in, but every boot
+// records its phase timings so restart latency is measured, not guessed.
+const startupTimeline: Array<{ label: string; atMs: number; deltaMs: number }> = [];
+const startupImportMs = Math.round(process.uptime() * 1000);
+let startupTimelineFlushed = false;
 function startupMark(label: string): void {
-  if (!STARTUP_PROFILE) return;
   const now = Date.now();
-  console.error(`[startup] +${String(now - startupT0).padStart(5)}ms Δ${String(now - startupLast).padStart(5)}ms ${label}`);
+  startupTimeline.push({ label, atMs: now - startupT0, deltaMs: now - startupLast });
+  if (STARTUP_PROFILE) {
+    if (!startupImportLogged) {
+      // Time from process spawn to this module body = tsx transpile + eager import graph.
+      startupImportLogged = true;
+      console.error(`[startup] process uptime at first mark: ${startupImportMs}ms (module import graph + transpile)`);
+    }
+    console.error(`[startup] +${String(now - startupT0).padStart(5)}ms Δ${String(now - startupLast).padStart(5)}ms ${label}`);
+  }
   startupLast = now;
+}
+function flushStartupTimeline(reason: string): void {
+  if (startupTimelineFlushed) return;
+  startupTimelineFlushed = true;
+  try {
+    const logDir = path.join(configManager.getConfigDir(), 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const record = {
+      at: new Date().toISOString(),
+      pid: process.pid,
+      reason,
+      hotRestart: process.env.PROMETHEUS_HOT_RESTART === '1',
+      importMs: startupImportMs,
+      listenMs: startupTimeline.find((m) => m.label === 'server listen callback')?.atMs ?? null,
+      totalFromSpawnMs: Math.round(process.uptime() * 1000),
+      marks: startupTimeline,
+    };
+    fs.appendFileSync(path.join(logDir, 'startup-timeline.jsonl'), `${JSON.stringify(record)}\n`);
+  } catch {}
 }
 
 type ChatRouterModule = typeof import('./routes/chat.router');
@@ -373,6 +405,25 @@ const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificat
 // scaffold here rather than relying on the CLI onboarding flow.
 configManager.ensureDirectories();
 startupMark('config directories ensured');
+
+// Start child-process warmups now. They run in separate processes, so they
+// overlap the synchronous skill scan and chat-router import below instead of
+// adding ~0.7s serially right before listen. The pre-listen await further down
+// reuses these same in-flight promises (the warm functions are idempotent).
+const earlyWorkerWarmups = (() => {
+  try {
+    const workspacePath = getConfig().getWorkspacePath();
+    const settle = <T,>(p: Promise<T>) => { p.catch(() => {}); return p; };
+    return {
+      context: settle(warmContextBuildWorkerPool()),
+      memory: settle(warmMemorySearchWorker(workspacePath, { awaitPrewarm: false })),
+      automaticMemory: settle(warmAutomaticMemorySearchWorkers(workspacePath, { awaitPrewarm: false })),
+    };
+  } catch {
+    return null;
+  }
+})();
+startupMark('child worker warmups started early');
 
 const skillsDir = resolveSkillsDir(configuredSkillsDir);
 
@@ -597,7 +648,9 @@ setSkillRecoveryFn(() => {
     skillsManager.scanSkills();
   } catch (err: any) { console.warn(`[Skills] Recovery failed: ${err.message}`); }
 });
-recoverSkillsIfEmpty();
+// Deferred: forcing getAll() here would pull the full skill scan back before
+// listen. The empty-catalog recovery runs once the post-listen warm finishes.
+setTimeout(() => { try { recoverSkillsIfEmpty(); } catch {} }, 2_000).unref?.();
 
 const heartbeatConfigPath = path.join(CONFIG_DIR_PATH, 'heartbeat', 'config.json');
 const heartbeatRunner = new HeartbeatRunner({
@@ -1062,11 +1115,16 @@ setShutdownHooks({
     } catch { resolve(); }
   }),
   flushSessions: async () => {
-    try { flushAllSessions(); } catch {}
-    await Promise.all([
-      flushPendingChatAuditWrites(),
-      flushLiveRuntimePersistence(),
+    const t0 = Date.now();
+    let counts = { flushed: 0, skipped: 0 };
+    try { counts = flushAllSessions(); } catch {}
+    const t1 = Date.now();
+    const timed = async (fn: () => Promise<unknown>) => { const s = Date.now(); try { await fn(); } catch {} return Date.now() - s; };
+    const [auditMs, runtimeMs] = await Promise.all([
+      timed(() => flushPendingChatAuditWrites()),
+      timed(() => flushLiveRuntimePersistence()),
     ]);
+    console.log(`[lifecycle] session flush: sessions=${t1 - t0}ms (flushed=${counts.flushed} skipped=${counts.skipped}) audit=${auditMs}ms runtimes=${runtimeMs}ms`);
   },
   // Warm handoff: this process keeps its in-flight runtimes (and the model /
   // context workers they depend on) but must not start anything new. The
@@ -1173,13 +1231,17 @@ async function startGatewayListeners(): Promise<void> {
   } catch (error: any) {
     console.warn('[memory-atoms] Preload failed; prompt turns will retry lazily:', error?.message || error);
   }
+  // Import the chat router while the child workers finish booting; both used
+  // to run back-to-back.
+  warmChatRouter('pre-listen');
+  startupMark('chat router prewarmed before listen');
   const [contextWarmup, memoryWarmup, automaticMemoryWarmup] = await Promise.allSettled([
-    warmContextBuildWorkerPool(),
+    earlyWorkerWarmups?.context ?? warmContextBuildWorkerPool(),
     // Listener readiness depends on the child processes being IPC-ready. The
     // optional SQLite/FTS first-query prewarms continue asynchronously so a
     // slow cold index cannot keep the gateway unavailable for 15 seconds.
-    warmMemorySearchWorker(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
-    warmAutomaticMemorySearchWorkers(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
+    earlyWorkerWarmups?.memory ?? warmMemorySearchWorker(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
+    earlyWorkerWarmups?.automaticMemory ?? warmAutomaticMemorySearchWorkers(getConfig().getWorkspacePath(), { awaitPrewarm: false }),
   ]);
   if (contextWarmup.status === 'fulfilled') {
     console.log('[context-build] Worker pool prewarmed before accepting traffic.');
@@ -1206,11 +1268,8 @@ async function startGatewayListeners(): Promise<void> {
     startupMark('automatic memory search worker prewarm failed');
   }
 
-  // Load and initialize the chat router before the first request. This removes
-  // the post-restart race where the first message can arrive while the lazy
-  // router/tool surface is still being imported.
-  warmChatRouter('pre-listen');
-  startupMark('chat router prewarmed before listen');
+  // The chat router is loaded above (before the worker await) so the first
+  // request never races a lazy router/tool-surface import after restart.
 
   // Finish the synchronous/background wiring that historically ran one second
   // after listen. Some of those startup phases perform large synchronous
@@ -1218,6 +1277,7 @@ async function startGatewayListeners(): Promise<void> {
   // but event-loop-blocked window where the first message can time out or lose
   // its tool surface.
   try {
+    setStartupMarkSink((label) => startupMark(`runStartup: ${label}`));
     deferredMainChatRecoveries = await runStartup({
       HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
       handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
@@ -1233,6 +1293,23 @@ async function startGatewayListeners(): Promise<void> {
 
   server.listen(PORT, HOST, () => {
     startupMark('server listen callback');
+    skillsManager.warmInBackground((count, ms) => startupMark(`skills warmed after listen (${count} in ${ms}ms)`));
+    // The mobile model picker's first open after a restart used to pay a
+    // ~1.5s cold build of the provider catalog. Build it once off the
+    // critical path so the first picker open is served warm.
+    setTimeout(() => {
+      const startedAt = Date.now();
+      import('../extensions/catalog-service.js')
+        .then(({ buildExtensionsCatalog }) => {
+          buildExtensionsCatalog('provider');
+          startupMark(`provider catalog warmed after listen (${Date.now() - startedAt}ms)`);
+        })
+        .catch(() => {});
+    }, 250);
+    // Boot the warm model-call worker now so the first turn after a restart
+    // (usually a resumed one) does not pay a cold child boot before the
+    // provider request is even sent.
+    try { startupMark(`model workers prewarmed (${prewarmModelCallWorkers()})`); } catch {}
     const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
     try { startHandoffSyntheticRuntimeFixture(); } catch {}
     // Foreground recovery checkpoints are durable before the listener binds,
@@ -1264,9 +1341,16 @@ async function startGatewayListeners(): Promise<void> {
       // Planned continuations resume first; they are the turns a user is watching.
       recoveryQueue.sort((a, b) => Number(isPlannedMainChatRestartRuntime(b)) - Number(isPlannedMainChatRestartRuntime(a)));
 
-      const delayForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
-        runtime && isPlannedMainChatRestartRuntime(runtime) ? plannedDelayMs : crashDelayMs
-      );
+      // First crash retry of a lone turn: the user is usually watching it, and
+      // the per-turn attempt cap (MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS)
+      // already stops a crash loop. The long cool-down is kept for repeat
+      // attempts and for multi-turn backlogs, which is what it exists for.
+      const firstCrashRetryDelayMs = Math.max(1_000, Number(process.env.PROMETHEUS_FIRST_CRASH_RETRY_DELAY_MS || 4_000));
+      const delayForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => {
+        if (!runtime) return crashDelayMs;
+        if (isPlannedMainChatRestartRuntime(runtime)) return plannedDelayMs;
+        return isFirstLoneCrashRetry(runtime, recoveryQueue.length) ? firstCrashRetryDelayMs : crashDelayMs;
+      };
       // Planned continuations also must not sit behind the model-busy poll for
       // a full cycle; keep their retry cadence tight.
       const pollForRuntime = (runtime: LiveRuntimeSnapshot | undefined): number => (
@@ -1324,7 +1408,11 @@ async function startGatewayListeners(): Promise<void> {
     // window; a hot replacement gets a longer idle grace period because another
     // restart is most likely while the previous build/apply is still settling.
     const vaultWarmupDelayMs = isHotRestartBoot
-      ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_VAULT_WARMUP_DELAY_MS || 60_000))
+      // Hot restarts resume a turn within ~1.5 s, and every cold vault read on
+      // that turn is a ~150 ms synchronous PBKDF2 on the event loop. Warming on
+      // the libuv pool right away (concurrency 1, ~22 entries) keeps those
+      // reads off the resumed turn's critical path.
+      ? Math.max(0, Number(process.env.PROMETHEUS_HOT_VAULT_WARMUP_DELAY_MS || 250))
       : Math.max(5_000, Number(process.env.PROMETHEUS_VAULT_WARMUP_DELAY_MS || 15_000));
     const vaultWarmupTimer = setTimeout(() => {
       void getVault(CONFIG_DIR_PATH).prewarmDerivedKeysAsync().then((vaultWarmup) => {
@@ -1337,13 +1425,25 @@ async function startGatewayListeners(): Promise<void> {
     // Give the listener a real scheduling window before BOOT/hooks begin. The
     // hook handler can construct a large snapshot or enter the model path; a
     // short post-bind delay keeps /api/health responsive even in TSX mode.
-    const postReadyDelayMs = isHotRestartBoot
-      ? Math.max(3_000, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 5_000))
-      : Math.max(500, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 3000));
+    // A pending restart context means a turn the user is actively watching is
+    // waiting on BOOT to resume it (planned gateway_restart/apply). The long
+    // hot-boot grace existed to protect health probes from a heavy BOOT
+    // snapshot, but on every self-restart it simply added ~5s of dead time
+    // before the resumed turn could start. Keep a short scheduling window so
+    // the listener still answers first, then resume promptly.
+    let plannedResumePending = false;
+    try { plannedResumePending = !!readRestartContext(); } catch {}
+    const postReadyDelayMs = plannedResumePending
+      ? Math.max(250, Number(process.env.PROMETHEUS_PLANNED_RESUME_POST_READY_DELAY_MS || 750))
+      : isHotRestartBoot
+        ? Math.max(3_000, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 5_000))
+        : Math.max(500, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 3000));
+    startupMark(`post-ready startup scheduled in ${postReadyDelayMs}ms (plannedResume=${plannedResumePending})`);
     const postReadyMaintenanceTimer = setTimeout(() => {
       startupMark('post-ready workspace startup callback entered');
       startPostReadyWorkspaceStartup(getConfig().getWorkspacePath());
       startupMark('post-ready workspace startup invoked');
+      flushStartupTimeline('post_ready');
     }, postReadyDelayMs);
     if (typeof (postReadyMaintenanceTimer as any).unref === 'function') (postReadyMaintenanceTimer as any).unref();
     // Usage telemetry is useful after a stable boot but has no bearing on
@@ -1399,6 +1499,16 @@ let electronParentWatchdog: NodeJS.Timeout | null = null;
 async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  const shutdownT0 = Date.now();
+  const shutdownMarks: Array<{ label: string; atMs: number }> = [];
+  const shutdownMark = (label: string) => { shutdownMarks.push({ label, atMs: Date.now() - shutdownT0 }); };
+  const flushShutdownTimeline = () => {
+    try {
+      const logDir = path.join(configManager.getConfigDir(), 'logs');
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.appendFileSync(path.join(logDir, 'startup-timeline.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, kind: 'shutdown', signal, totalMs: Date.now() - shutdownT0, marks: shutdownMarks })}\n`);
+    } catch {}
+  };
   if (electronParentWatchdog) {
     clearInterval(electronParentWatchdog);
     electronParentWatchdog = null;
@@ -1407,6 +1517,8 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   // Never let that keep an Electron-owned port alive indefinitely.
   const forceExitTimer = setTimeout(() => {
     console.warn('[Gateway] Graceful shutdown timed out; forcing process exit.');
+    shutdownMark('force exit timeout');
+    flushShutdownTimeline();
     process.exit(0);
   }, 12_000);
   console.log('[Gateway] Shutting down...');
@@ -1431,9 +1543,11 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop('gateway_shutdown'); } catch {}
   try { shutdownCodexRealtimeBridge(); } catch {}
+  shutdownMark('services stopped');
   try { flushAllSessions(); } catch (err: any) {
     console.warn('[Gateway] Session flush failed:', err?.message || err);
   }
+  shutdownMark('sessions flushed');
   try {
     await Promise.all([
       flushPendingChatAuditWrites(),
@@ -1442,6 +1556,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   } catch (err: any) {
     console.warn('[Gateway] Async persistence drain failed:', err?.message || err);
   }
+  shutdownMark('persistence drained');
   try {
     await Promise.all([
       shutdownMemoryIndexRefreshWorker(),
@@ -1452,6 +1567,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   } catch (err: any) {
     console.warn('[Gateway] Worker shutdown failed:', err?.message || err);
   }
+  shutdownMark('workers stopped');
   try { if (wss) wss.close(); } catch {}
   try { secureBundle?.wss.close(); } catch {}
   try { xaiVoiceStreaming.close(); } catch {}
@@ -1460,9 +1576,23 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
     try { secureBundle?.server.close(); } catch {}
     server.close(() => {
       clearTimeout(forceExitTimer);
+      shutdownMark('server closed');
+      flushShutdownTimeline();
       process.exit(0);
     });
-  } catch { process.exit(0); }
+    // server.close() only stops accepting; it waits for every open socket.
+    // Long-lived SSE/keep-alive clients (mobile + desktop chat streams) never
+    // end on their own, so shutdown used to sit until the 12s force-exit.
+    // State is already flushed above, so drop idle sockets now and the rest
+    // after a short grace window for in-flight responses.
+    try { (server as any).closeIdleConnections?.(); } catch {}
+    const hardCloseTimer = setTimeout(() => {
+      shutdownMark('open connections force-closed');
+      try { (server as any).closeAllConnections?.(); } catch {}
+      try { (secureBundle?.server as any)?.closeAllConnections?.(); } catch {}
+    }, 400);
+    hardCloseTimer.unref?.();
+  } catch { flushShutdownTimeline(); process.exit(0); }
 }
 
 process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });

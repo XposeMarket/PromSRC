@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { goalReminderForTool } from './goal-reminder';
 
-const task = 'Inspect the Vita bridge, fix the terminal runtime, and verify each change.';
-for (let count = 1; count <= 30; count += 1) {
-  const reminder = goalReminderForTool(task, count);
-  assert.equal(Boolean(reminder), count === 12 || count === 24, `unexpected reminder at tool ${count}`);
+// The mid-turn [GOAL REMINDER] suffix is retired: it was appended to every
+// 12th tool result, adding noise to the visible tool stream and mutating
+// tool-result bytes that feed the provider prompt-cache prefix.
+const goal = 'Fix the mobile restart freeze, the goal reminder noise, and search_files log access.';
+for (const count of [0, 1, 11, 12, 24, 36, 120]) {
+  assert.equal(goalReminderForTool(goal, count), '', `no goal reminder may be injected at tool #${count}`);
 }
-assert.equal(goalReminderForTool('Rebooted', 12), '');
-assert.match(goalReminderForTool(task, 12), /Vita bridge/);
-console.log('goal reminder cadence regression passed');
+
+console.log('goal-reminder regression: ok');

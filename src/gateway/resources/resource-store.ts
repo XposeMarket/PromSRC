@@ -521,9 +521,16 @@ export class ResourceStore {
   private readonly registryPath: string;
   private readonly contentDir: string;
   private readonly migrationDir: string;
+  private readonly migratedThreads = new Set<string>();
   private readonly telemetrySink?: ResourceTelemetrySink;
   private readonly telemetryEvents: ResourceTelemetryEvent[] = [];
   private readonly snapshotCache = new Map<string, string>();
+  // Read-only parsed registry, keyed on file identity. getContext() runs on
+  // every chat turn and the registry is 18+ MB in real installs, so reparsing
+  // and re-sanitizing it cost ~0.5s of time-to-first-token per turn. Mutating
+  // paths keep using readState() (fresh copy) so a cached object can never be
+  // edited in place and then persisted.
+  private readCache: { key: string; state: ResourceState } | null = null;
 
   constructor(options: { configDir?: string; rootDir?: string; workspacePath?: string; telemetry?: ResourceTelemetrySink } = {}) {
     const configDir = options.configDir || getConfig().getConfigDir();
@@ -557,7 +564,28 @@ export class ResourceStore {
     }
   }
 
+  /**
+   * Parsed registry for read-only callers. Returns a shared object: callers
+   * must not mutate it. Invalidated by writeState() and by any change to the
+   * registry file's mtime/size (e.g. another process writing it).
+   */
+  private readStateForRead(): ResourceState {
+    let key = '';
+    try {
+      const stat = fs.statSync(this.registryPath);
+      key = `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      this.readCache = null;
+      return emptyState();
+    }
+    if (this.readCache && this.readCache.key === key) return this.readCache.state;
+    const state = this.readState();
+    this.readCache = { key, state };
+    return state;
+  }
+
   private writeState(state: ResourceState): void {
+    this.readCache = null;
     this.ensureStorageDirs();
     state = sanitizeResourceState(state);
     const tempPath = `${this.registryPath}.${process.pid}.${Date.now()}.tmp`;
@@ -1374,7 +1402,7 @@ export class ResourceStore {
 
   getContext(threadId: string, query: string, options: { maxChars?: number; explicitResourceIds?: string[]; includePinned?: boolean } = {}): ResourceContextResult {
     const safeThreadId = assertSafeStorageId(threadId, 'thread');
-    const state = this.readState();
+    const state = this.readStateForRead();
     const activeLinks = state.links
       .filter((link) => link.threadId === safeThreadId && !link.detachedAt)
       .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.attachedAt.localeCompare(a.attachedAt));
@@ -1475,10 +1503,19 @@ export class ResourceStore {
    */
   migrateLegacyHistory(threadId: string, history: Array<Record<string, unknown>>): { attached: number; skipped: number } {
     const safeThreadId = assertSafeStorageId(threadId, 'thread');
+    // This runs at the start of every chat turn, but migration is one-time per
+    // thread. Check the marker (memoized in-process) BEFORE the registry
+    // sanitize pass: sanitizing parses, rewrites, and double-stringifies the
+    // whole registry (18+ MB in real installs), which cost ~1.5s of
+    // time-to-first-token on every turn for threads that were long migrated.
+    if (this.migratedThreads.has(safeThreadId)) return { attached: 0, skipped: 0 };
+    const markerPath = resolveConfinedStoragePath(this.migrationDir, `thread_${sha256(safeThreadId).slice(0, 32)}.done`, { label: 'resource migration marker' });
+    if (fs.existsSync(markerPath)) {
+      this.migratedThreads.add(safeThreadId);
+      return { attached: 0, skipped: 0 };
+    }
     this.sanitizePersistedState();
     fs.mkdirSync(this.migrationDir, { recursive: true });
-    const markerPath = resolveConfinedStoragePath(this.migrationDir, `thread_${sha256(safeThreadId).slice(0, 32)}.done`, { label: 'resource migration marker' });
-    if (fs.existsSync(markerPath)) return { attached: 0, skipped: 0 };
     let attached = 0;
     let skipped = 0;
     for (const message of Array.isArray(history) ? history.slice(-500) : []) {
@@ -1519,6 +1556,7 @@ export class ResourceStore {
       }
     }
     fs.writeFileSync(markerPath, JSON.stringify({ migratedAt: nowIso(), threadId: safeThreadId, attached, skipped }), 'utf8');
+    this.migratedThreads.add(safeThreadId);
     return { attached, skipped };
   }
 }

@@ -26,12 +26,30 @@
 // round after it arrived is effectively lost and gets re-requested, costing a
 // full extra provider round each time (measured 2026-09-22: ~15 re-reads in a
 // single turn with keepRecentRounds=1).
-export const TOOL_RESULT_ELISION_KEEP_RECENT = 8;
-export const TOOL_RESULT_ELISION_KEEP_RECENT_ROUNDS = 4;
+import fs from 'fs';
+import path from 'path';
+import { getConfig } from '../../config/config';
+
+// Window sizing (2026-09-23): with a 60k-char / 4-round window a typical
+// 3-5 KB-per-call turn only kept ~16 results verbatim, so files still being
+// edited were cut in one batch and re-read (one extra provider round each).
+// With the prompt cache now stable, re-sending a verbatim result is a cheap
+// cache read, so the window is sized to cover a real working set.
+export const TOOL_RESULT_ELISION_KEEP_RECENT = 24;
+export const TOOL_RESULT_ELISION_KEEP_RECENT_ROUNDS = 12;
 // Beyond the round/count guarantees, keep the newest results verbatim until
 // this many characters of recent tool output are retained. Only output older
 // than this working window is shortened.
-export const TOOL_RESULT_ELISION_RECENT_BUDGET_CHARS = 60_000;
+export const TOOL_RESULT_ELISION_RECENT_BUDGET_CHARS = 180_000;
+// Prompt-cache hysteresis. Providers cache the conversation prefix (Anthropic
+// rolling history breakpoint, OpenAI automatic prefix cache). Rewriting ANY
+// older message invalidates everything after it, so eliding one result per
+// round turned every other request into a full ~200k-token cache write
+// (measured 2026-09-23 on claude-opus-5-5: alternating cacheRead=38k/write=200k
+// vs cacheRead=240k/write=1k). That was the dominant first-token delay and a
+// 1.25x usage cost. The live call site therefore only rewrites history once
+// enough stale output has accumulated, then elides it all in one batch.
+export const TOOL_RESULT_ELISION_BATCH_MIN_CHARS = 48_000;
 export const TOOL_RESULT_ELISION_MIN_CHARS = 1200;
 export const TOOL_RESULT_ELISION_PREVIEW_CHARS = 220;
 export const TOOL_RESULT_ELISION_MARKER = '[TOOL_RESULT_ELIDED]';
@@ -63,9 +81,9 @@ export function buildElidedToolResultText(text: string, toolName: string): strin
   return [
     `${TOOL_RESULT_ELISION_MARKER} tool=${toolName || 'tool'} original_chars=${text.length}`,
     `preview: ${preview}`,
-    'This result is from several rounds ago and falls outside the recent working window, so',
-    'it was shortened to keep the context small. The full output remains in tool logs/raw',
-    'storage; re-run the tool or use a targeted read if the exact payload is needed again.',
+    'This older result fell outside the recent working window (newest ~24 results / 180k chars',
+    'stay verbatim), so it was shortened. Re-run the tool or do a targeted read only if the exact',
+    'payload is still needed.',
   ].join('\n');
 }
 
@@ -101,6 +119,15 @@ export function elideToolMessageContent(
  * that round. Tool messages with no anchor (legacy/degenerate shapes) are each
  * treated as their own round so the message-count fallback still applies.
  */
+let tripwireDumps = 0;
+
+function usingDefaultWindowForTripwire(options: { keepRecent?: number; keepRecentRounds?: number; recentBudgetChars?: number }): boolean {
+  return options.keepRecent === undefined
+    && options.keepRecentRounds === undefined
+    && options.recentBudgetChars === undefined
+    && !process.env.PROMETHEUS_DISABLE_ELISION_DIAGNOSTICS;
+}
+
 function groupToolMessagesByRound(messages: Array<any>): number[][] {
   const rounds: number[][] = [];
   let current: number[] | null = null;
@@ -141,8 +168,8 @@ function groupToolMessagesByRound(messages: Array<any>): number[][] {
  */
 export function elideStaleToolResults(
   messages: Array<any>,
-  options: { keepRecent?: number; keepRecentRounds?: number; recentBudgetChars?: number } = {},
-): { elidedCount: number; savedChars: number } {
+  options: { keepRecent?: number; keepRecentRounds?: number; recentBudgetChars?: number; batchMinChars?: number } = {},
+): { elidedCount: number; savedChars: number; deferredChars?: number } {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { elidedCount: 0, savedChars: 0 };
   }
@@ -192,8 +219,33 @@ export function elideStaleToolResults(
     }
   }
 
+  // Cache hysteresis: skip the rewrite entirely until the stale, still-verbatim
+  // output is large enough to be worth one prompt-cache invalidation.
+  const batchMinChars = Math.max(
+    0,
+    Number.isFinite(Number(options.batchMinChars)) ? Math.floor(Number(options.batchMinChars)) : 0,
+  );
+  if (batchMinChars > 0) {
+    let pendingChars = 0;
+    for (const index of toolIndexes) {
+      if (protectedIndexes.has(index)) continue;
+      const msg = messages[index];
+      if (TOOL_RESULT_ELISION_EXEMPT_TOOLS.has(String(msg?.tool_name || '').trim())) continue;
+      const content = msg?.content;
+      const text = typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? content.map((part: any) => (part?.type === 'text' ? String(part.text || '') : '')).join('')
+          : '';
+      if (text.length < TOOL_RESULT_ELISION_MIN_CHARS || text.includes(TOOL_RESULT_ELISION_MARKER)) continue;
+      pendingChars += text.length;
+    }
+    if (pendingChars < batchMinChars) return { elidedCount: 0, savedChars: 0, deferredChars: pendingChars };
+  }
+
   let elidedCount = 0;
   let savedChars = 0;
+  const elidedPositions: number[] = [];
   for (const index of toolIndexes) {
     if (protectedIndexes.has(index)) continue;
     const msg = messages[index];
@@ -201,9 +253,90 @@ export function elideStaleToolResults(
     if (TOOL_RESULT_ELISION_EXEMPT_TOOLS.has(toolName)) continue;
     const result = elideToolMessageContent(msg.content, toolName);
     if (result.savedChars <= 0) continue;
-    msg.content = result.content;
+    const rankFromNewest = toolIndexes.length - toolIndexes.indexOf(index);
+    // Provenance stamp: makes it visible in the transcript which process and
+    // window decision produced a placeholder, so stale-code or foreign-process
+    // elision can be told apart from a genuine out-of-window result.
+    msg.content = typeof result.content === 'string'
+      ? `${result.content}\n[elision pid=${process.pid} rank=${rankFromNewest}/${toolIndexes.length} rounds=${rounds.length} protected=${protectedIndexes.size}]`
+      : result.content;
     elidedCount++;
     savedChars += result.savedChars;
+    elidedPositions.push(rankFromNewest);
+  }
+  // Tripwire: a result answering the NEWEST assistant tool_calls must never be
+  // elided (the model has not read it yet). If it happens, the message array is
+  // not chronological; dump its shape so the out-of-order producer is visible.
+  if (usingDefaultWindowForTripwire(options) && elidedCount > 0) {
+    try {
+      let lastAnchor = -1;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m?.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) { lastAnchor = i; break; }
+      }
+      const newestIds = new Set<string>(
+        lastAnchor >= 0 ? messages[lastAnchor].tool_calls.map((c: any) => String(c?.id || '')).filter(Boolean) : [],
+      );
+      const hit = toolIndexes.some((index) => !protectedIndexes.has(index)
+        && String(messages[index]?.content || '').includes(TOOL_RESULT_ELISION_MARKER)
+        && (index > lastAnchor || newestIds.has(String(messages[index]?.tool_call_id || ''))));
+      // Also capture elision of results that are NOT the oldest: the live
+      // transcript showed freshly returned results stamped rank=23/23 and
+      // rank=31/53, i.e. positioned before older ones. Capped per process.
+      // Out of order = an elided result is newer than a result that stayed
+      // verbatim. Normal batches cut oldest-first; the previous `rank > half`
+      // heuristic flagged every batch and buried real signal.
+      const newestElided = elidedPositions.length ? Math.min(...elidedPositions) : Infinity;
+      const outOfOrder = toolIndexes.some((index, k) => {
+        const rank = toolIndexes.length - k;
+        return rank > newestElided
+          && !String(messages[index]?.content || '').includes(TOOL_RESULT_ELISION_MARKER)
+          && !protectedIndexes.has(index)
+          && String(messages[index]?.content || '').length >= TOOL_RESULT_ELISION_MIN_CHARS
+          && !toolResultTextLooksLikeError(String(messages[index]?.content || ''))
+          && !TOOL_RESULT_ELISION_EXEMPT_TOOLS.has(String(messages[index]?.tool_name || '').trim());
+      });
+      if ((hit || outOfOrder) && tripwireDumps < 6) {
+        tripwireDumps += 1;
+        const shape = messages.map((m: any, i: number) => {
+          const c = m?.content;
+          const len = typeof c === 'string' ? c.length : JSON.stringify(c ?? '').length;
+          const calls = Array.isArray(m?.tool_calls) ? m.tool_calls.length : 0;
+          return `${i}:${m?.role || '?'}${m?.tool_name ? `/${m.tool_name}` : ''}${calls ? `+${calls}calls` : ''}${m?.tool_call_id ? `#${String(m.tool_call_id).slice(-6)}` : ''}:${len}`;
+        });
+        const dir = path.join(getConfig().getConfigDir(), 'logs');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, 'tool-result-elision-order.ndjson'), `${JSON.stringify({
+          at: new Date().toISOString(), hit, outOfOrder, lastAnchor, messages: messages.length, elidedFromNewest: elidedPositions, shape: shape.slice(-120),
+        })}\n`);
+      }
+    } catch {}
+  }
+  // Diagnostic: results were observed elided while still among the newest few
+  // tool messages. Record the round shape whenever something recent (within the
+  // last 12 tool results) is cut so the cause is visible without a debugger.
+  // Only the production call path (default window, no overrides) logs: tests
+  // deliberately pass tiny windows and must not pollute the live anomaly log.
+  const usingDefaultWindow = options.keepRecent === undefined
+    && options.keepRecentRounds === undefined
+    && options.recentBudgetChars === undefined;
+  if (usingDefaultWindow && !process.env.PROMETHEUS_DISABLE_ELISION_DIAGNOSTICS && elidedPositions.some((pos) => pos <= 12)) {
+    try {
+      const assistantWithCalls = messages.filter((m: any) => m?.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0).length;
+      const line = JSON.stringify({
+        at: new Date().toISOString(),
+        messages: messages.length,
+        rounds: rounds.length,
+        roundSizes: rounds.slice(-8).map((r) => r.length),
+        toolMessages: toolIndexes.length,
+        assistantWithCalls,
+        protected: protectedIndexes.size,
+        elidedFromNewest: elidedPositions.slice(-12),
+      });
+      const dir = path.join(getConfig().getConfigDir(), 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, 'tool-result-elision-anomalies.ndjson'), `${line}\n`);
+    } catch {}
   }
   return { elidedCount, savedChars };
 }

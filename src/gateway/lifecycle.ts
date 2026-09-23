@@ -577,7 +577,22 @@ export function markStartupNotificationDelivered(
 async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void> {
   const shutdownStartedAt = Date.now();
   let shutdownPhaseStartedAt = shutdownStartedAt;
+  // Always record phase timings (cheap) so restart latency is measurable
+  // without env flags; console output stays behind the profile flags.
+  const recordedMarks: Array<{ phase: string; atMs: number; deltaMs: number }> = [];
+  let lastRecordedAt = shutdownStartedAt;
   const shutdownMark = (phase: string): void => {
+    const at = Date.now();
+    recordedMarks.push({ phase, atMs: at - shutdownStartedAt, deltaMs: at - lastRecordedAt });
+    lastRecordedAt = at;
+    if (phase === 'shutdown complete') {
+      try {
+        fs.appendFileSync(
+          path.join(getLifecycleStateRoot(), 'shutdown-timeline.jsonl'),
+          `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, trigger: restartTrigger, totalMs: at - shutdownStartedAt, marks: recordedMarks })}\n`,
+        );
+      } catch {}
+    }
     if (process.env.PROMETHEUS_LIFECYCLE_PROFILE !== '1' && process.env.PROMETHEUS_STARTUP_PROFILE !== '1') return;
     const now = Date.now();
     console.error(

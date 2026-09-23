@@ -66,9 +66,14 @@ export function formatHardToolDeny(decision: HardToolDenyDecision): string {
 }
 
 export function stripQuotedLiterals(command: string): string {
+  // Single quotes are literal in both PowerShell and POSIX shells: a backslash
+  // does not escape the closing quote. Treating `\'` as an escape misaligned
+  // quote pairing on Windows paths such as 'C:\Users\x\' and exposed quoted
+  // search patterns to the power-state checks. PowerShell's only in-quote
+  // escape is a doubled '' which this pattern also consumes.
   return String(command || '')
-    .replace(/"(?:[^"\\`]|\\.|`.)*"/g, '""')
-    .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/"(?:[^"\\`]|\\.|`.)*"/g, '""');
 }
 
 function commandMatches(command: string, patterns: RegExp[]): boolean {
@@ -213,7 +218,9 @@ function evaluateCommandDeny(rawCommand: string): HardToolDenyDecision {
     /\brestart-computer\b(?!\s*['"|])/,
     /\bstop-computer\b(?!\s*['"|])/,
   ]) || commandMatches(stripQuotedLiterals(cmd), [
-    /\bshutdown\b/,
+    // Bare verb only: not part of a filename/identifier such as
+    // shutdown-timeline.jsonl, shutdown_hooks, or ./shutdown.log.
+    /(?<![\w.\/\\-])shutdown(?![\w.\/\\-])/,
     /\brestart-computer\b/,
     /\bstop-computer\b/,
     /\blogoff\b/,

@@ -40,8 +40,8 @@ function prettifyModelName(model, provider) {
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-6-astra', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
-  openai_codex: ['gpt-6-astra', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
+  openai: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
+  openai_codex: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
   anthropic: ['claude-fable-5-1','claude-fable-5','claude-opus-5-5','claude-opus-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro','sonar','sonar-reasoning-pro','sonar-reasoning','sonar-deep-research'],
   gemini: ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash'],
@@ -74,7 +74,19 @@ function modelsForProvider(provider, currentModel = '') {
   };
   // Prefer extension catalog order (source of truth), then builtin fallback.
   push(item && item.runtime && item.runtime.options && item.runtime.options.staticModels);
-  push(BUILTIN_STATIC_MODELS[id]);
+  // Fill builtin gaps next to their builtin neighbour instead of appending, so
+  // a stale catalog never drops a newly added model to the bottom of the list.
+  const builtin = Array.isArray(BUILTIN_STATIC_MODELS[id]) ? BUILTIN_STATIC_MODELS[id] : [];
+  builtin.forEach((raw, idx) => {
+    const model = String(raw || '').trim();
+    if (!model || out.includes(model)) return;
+    let at = -1;
+    for (let j = idx - 1; j >= 0 && at < 0; j--) at = out.indexOf(String(builtin[j] || '').trim());
+    if (at >= 0) { out.splice(at + 1, 0, model); return; }
+    let next = -1;
+    for (let j = idx + 1; j < builtin.length && next < 0; j++) next = out.indexOf(String(builtin[j] || '').trim());
+    if (next >= 0) out.splice(next, 0, model); else out.push(model);
+  });
   const selected = String(currentModel || '').trim();
   if (selected && !out.includes(selected)) out.unshift(selected);
   return out;

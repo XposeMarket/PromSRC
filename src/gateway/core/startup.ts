@@ -74,7 +74,14 @@ function retireLegacySelfRepairStore(configDir: string): void {
 const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
 let startupT0 = 0;
 let startupLast = 0;
+// Optional sink so runStartup's internal phases land in the always-on
+// startup-timeline.jsonl instead of only appearing with the console profile.
+let startupMarkSink: ((label: string) => void) | null = null;
+export function setStartupMarkSink(sink: ((label: string) => void) | null): void {
+  startupMarkSink = sink;
+}
 function startupMark(label: string): void {
+  try { startupMarkSink?.(label); } catch {}
   if (!STARTUP_PROFILE) return;
   const now = Date.now();
   if (!startupT0) {
@@ -332,7 +339,10 @@ export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot
       port: PORT,
       model: effectiveModel,
       workspace: liveConfig.workspace.path,
-      skillsTotal: skillsManager.getAll().length,
+      // peekSkillCount avoids forcing the ~1s synchronous skill scan before listen.
+      skillsTotal: typeof (skillsManager as any).peekSkillCount === 'function'
+        ? (skillsManager as any).peekSkillCount()
+        : skillsManager.getAll().length,
       skillsEnabled: 0,
       searchStatus: hasSearch,
       memoryFiles: 'SOUL.md + USER.md + MEMORY.md',

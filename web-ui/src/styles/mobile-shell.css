@@ -1089,6 +1089,12 @@ body.pm-model-badge-pressing * {
 .pm-msheet-check { color: var(--pm-green); font-weight: 800; }
 .pm-msheet-chev { color: var(--pm-muted); font-size: 19px; }
 .pm-msheet-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--pm-green); }
+.pm-msheet-row-usage {
+  flex: 0 0 auto;
+  font-size: 12px; font-weight: 500; color: var(--pm-muted);
+  white-space: nowrap;
+}
+.pm-msheet-row-usage.is-low { color: #ff6371; }
 .pm-msheet-toggle {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; margin-top: 10px; padding: 12px 14px;

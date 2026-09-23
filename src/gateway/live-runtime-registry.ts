@@ -201,6 +201,23 @@ export function isRuntimeRecoverableAfterRestart(runtime: Pick<LiveRuntimeSnapsh
   return runtime.status === 'running' || runtime.status === 'interrupted';
 }
 
+// Recovery bookkeeping that belongs to ONE runtime record and must never be
+// inherited by the replacement runtime a recovery spawns. The replacement is
+// fresh, unrecovered work: if it carried `recovery`/`recoveredAt` forward,
+// isRuntimeRecoverableAfterRestart() would treat it as already handled, and the
+// next restart that interrupts it would delete it (restart_skipped_completed)
+// instead of resuming it. That silently dropped the whole post-restart turn,
+// so the reply never existed for any client to render. restartEpoch and
+// interruptReason are likewise per-interruption facts, re-stamped on the next
+// interruption.
+const INHERITED_RECOVERY_MARK_KEYS = ['recovery', 'recoveredAt', 'restartEpoch', 'interruptReason'] as const;
+
+export function stripInheritedRecoveryMarks<T extends Record<string, any>>(recoveryData: T | null | undefined): Partial<T> {
+  const copy: Record<string, any> = { ...(recoveryData || {}) };
+  for (const key of INHERITED_RECOVERY_MARK_KEYS) delete copy[key];
+  return copy as Partial<T>;
+}
+
 // The epoch (ms timestamp) of the most recent shutdown that interrupted live
 // runtimes in THIS process. Stamped onto each runtime it interrupts so post-restart
 // recovery can distinguish "interrupted by this restart" from stale runtimes left
@@ -565,6 +582,12 @@ function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
         : {}),
       ...(Array.isArray(cp.processEntries) && cp.processEntries.length
         ? { processEntries: compactDurableCheckpointTrace(cp.processEntries) }
+        : {}),
+      // Compact path-only record of files this turn changed. The trace above
+      // drops tool args, so without this a restart-resumed turn loses its
+      // pre-restart end-of-turn diff.
+      ...(Array.isArray(cp.fileTouches) && cp.fileTouches.length
+        ? { fileTouches: cp.fileTouches.slice(-300) }
         : {}),
     };
     for (const k of Object.keys(light)) {

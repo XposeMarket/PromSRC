@@ -21,6 +21,12 @@ for (const cmd of [
   `echo "gateway shutdown observed at 14:54"`,
   `git commit -m "Handle interrupted restart and shutdown recovery"`,
   `rg "Restart-Computer" src`,
+  // Windows paths ending in a backslash inside single quotes must not
+  // misalign quote pairing and expose a later quoted pattern.
+  `Get-ChildItem src | ForEach-Object { $_.FullName.Replace('C:\\Users\\rafel\\PromSRC\\','') }; Select-String -Path x.ts -Pattern 'shutdown|logoff|restart-computer'`,
+  // Filenames that merely contain the word.
+  `Get-ChildItem C:\\data -Recurse -Filter shutdown-timeline.jsonl -Depth 4`,
+  `Get-Content .prometheus\\shutdown_hooks.log -Tail 5`,
 ]) {
   assert.notEqual(category(cmd), 'machine_interruption', `quoted mention must not be blocked: ${cmd}`);
 }

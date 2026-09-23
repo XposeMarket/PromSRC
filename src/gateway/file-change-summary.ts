@@ -64,9 +64,24 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   'prom_apply_dev_changes',
 ]);
 
-function isTurnFileMutationTool(toolName: string): boolean {
+// Unified workspace_edit wrapper: only these actions change files.
+const WORKSPACE_EDIT_MUTATING_ACTIONS = new Set([
+  'create', 'write', 'append', 'find_replace', 'replace_lines', 'insert_after', 'delete_lines',
+  'delete_file', 'move', 'copy', 'move_directory', 'copy_directory', 'patchset', 'apply_patch',
+]);
+
+function isWorkspaceEditMutation(toolName: string, args: any): boolean {
+  if (toolName !== 'workspace_edit') return false;
+  const action = String(args?.action || '').trim().toLowerCase();
+  if (!action || !WORKSPACE_EDIT_MUTATING_ACTIONS.has(action)) return false;
+  if (args?.dry_run === true || args?.check === true) return false;
+  return true;
+}
+
+function isTurnFileMutationTool(toolName: string, args?: any): boolean {
   const name = String(toolName || '').trim();
   if (!name) return false;
+  if (name === 'workspace_edit') return args === undefined ? true : isWorkspaceEditMutation(name, args);
   if (FILE_MUTATION_TOOL_NAMES.has(name)) return true;
   if (/^(write|delete|find_replace|replace_lines|insert_after)_/.test(name) && /(source|webui|prom|file)$/.test(name)) return true;
   return false;
@@ -154,7 +169,14 @@ function collectCandidatePathsFromArgs(toolName: string, args: any, workspacePat
       return s && !/^src[\\/]/i.test(s) ? path.join('src', s) : s;
     }));
   }
-  if (toolName === 'apply_patch' && typeof safeArgs.patch === 'string') {
+  if (Array.isArray(safeArgs.edits)) {
+    for (const edit of safeArgs.edits) {
+      if (edit && typeof edit === 'object') {
+        for (const key of ['path', 'file', 'filename']) if (edit[key] != null) candidates.push(edit[key]);
+      }
+    }
+  }
+  if ((toolName === 'apply_patch' || toolName === 'workspace_edit') && typeof safeArgs.patch === 'string') {
     candidates.push(...extractPatchTargetPaths(safeArgs.patch));
   }
   return Array.from(new Set(
@@ -168,7 +190,7 @@ function collectCandidatePathsFromArgs(toolName: string, args: any, workspacePat
 
 export function extractTouchedFilesFromToolResult(result: any, workspacePath: string): string[] {
   const toolName = String(result?.name || result?.toolName || '').trim();
-  if (!isTurnFileMutationTool(toolName)) return [];
+  if (!isTurnFileMutationTool(toolName, result?.args ?? {})) return [];
   if (result?.error === true) return [];
   return collectCandidatePathsFromArgs(toolName, result?.args, workspacePath);
 }
@@ -208,6 +230,79 @@ function extractExplicitTerminalChangesFromToolResult(result: any, workspacePath
     }
   }
   return Array.from(new Map(changes.map((change) => [path.resolve(change.path).toLowerCase(), change])).values());
+}
+
+// ── Durable per-turn file touches ────────────────────────────────────────────
+// The durable runtime snapshot keeps only a short text trace (no args), so a
+// restart-resumed turn could not tell which files it had edited. This compact
+// list (tool name + path-only args + workspaceChanges without diff bodies)
+// is persisted with the checkpoint and inherited across every restart, so the
+// end-of-turn diff can cover the whole turn.
+export type TurnFileTouch = { name: string; args?: Record<string, any>; extra?: { workspaceChanges?: any[] } };
+const TURN_FILE_TOUCH_ARG_KEYS = [
+  'action', 'path', 'file', 'filename', 'name', 'target', 'target_path', 'targetPath',
+  'old_path', 'oldPath', 'new_path', 'newPath', 'source', 'destination',
+  'files', 'allowedFiles', 'affected_files', 'affectedFiles', 'changed_files', 'changedFiles', 'changed_surfaces',
+];
+const MAX_TURN_FILE_TOUCHES = 300;
+
+function compactTouchArgs(args: any): Record<string, any> | undefined {
+  if (!args || typeof args !== 'object') return undefined;
+  const out: Record<string, any> = {};
+  for (const key of TURN_FILE_TOUCH_ARG_KEYS) {
+    const value = args[key];
+    if (value == null) continue;
+    out[key] = Array.isArray(value) ? value.slice(0, 50).map((v) => String(v).slice(0, 400)) : (typeof value === 'object' ? undefined : String(value).slice(0, 400));
+    if (out[key] === undefined) delete out[key];
+  }
+  if (Array.isArray(args.edits)) {
+    out.edits = args.edits.slice(0, 50)
+      .filter((edit: any) => edit && typeof edit === 'object')
+      .map((edit: any) => ({ path: String(edit.path || edit.file || edit.filename || '').slice(0, 400) }))
+      .filter((edit: any) => edit.path);
+  }
+  if (typeof args.patch === 'string') {
+    const targets = extractPatchTargetPaths(args.patch).slice(0, 50);
+    if (targets.length) out.edits = [...(out.edits || []), ...targets.map((p) => ({ path: p }))];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+export function extractTurnFileTouches(entries: any[] | undefined): TurnFileTouch[] {
+  const touches: TurnFileTouch[] = [];
+  for (const result of synthesizeToolResultsFromProcessEntries(Array.isArray(entries) ? entries : [])) {
+    if (result?.error === true) continue;
+    const name = String(result?.name || '').trim();
+    const rawChanges = result?.extra?.workspaceChanges || result?.extra?.workspace_changes;
+    const workspaceChanges = Array.isArray(rawChanges)
+      ? rawChanges.filter((c: any) => c && typeof c === 'object').slice(0, 100).map((c: any) => {
+        const { diffPreview, ...rest } = c;
+        return rest;
+      })
+      : [];
+    const isMutation = isTurnFileMutationTool(name, result?.args ?? {});
+    if (!isMutation && !workspaceChanges.length) continue;
+    const args = isMutation ? compactTouchArgs(result?.args) : undefined;
+    if (isMutation && !args) continue;
+    touches.push({
+      name,
+      ...(args ? { args } : {}),
+      ...(workspaceChanges.length ? { extra: { workspaceChanges } } : {}),
+    });
+  }
+  return touches;
+}
+
+export function mergeTurnFileTouches(...lists: Array<TurnFileTouch[] | undefined>): TurnFileTouch[] {
+  const seen = new Map<string, TurnFileTouch>();
+  for (const list of lists) {
+    for (const touch of Array.isArray(list) ? list : []) {
+      if (!touch || typeof touch !== 'object' || !touch.name) continue;
+      const key = JSON.stringify([touch.name, touch.args || null, touch.extra?.workspaceChanges?.map((c: any) => c?.path) || null]);
+      if (!seen.has(key)) seen.set(key, touch);
+    }
+  }
+  return Array.from(seen.values()).slice(-MAX_TURN_FILE_TOUCHES);
 }
 
 export function synthesizeToolResultsFromProcessEntries(entries: any[]): any[] {

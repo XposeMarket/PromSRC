@@ -205,6 +205,24 @@ async function runSyntheticTestRequest(
     : { response: 'synthetic', thinking: 'b' };
 }
 
+// Provider/config modules are large (every adapter + auth). Importing them on
+// the first request put ~1.7s between worker_started and provider_started on
+// the first turn after every gateway restart. Start the import as soon as the
+// worker is ready; execute() awaits the same promise, so a request that
+// arrives before preload finishes simply waits for it instead of re-importing.
+let providerModulesPromise: Promise<[typeof import('../../config/config.js'), typeof import('../../providers/factory.js')]> | null = null;
+function loadProviderModules() {
+  if (!providerModulesPromise) {
+    providerModulesPromise = Promise.all([
+      import('../../config/config.js'),
+      import('../../providers/factory.js'),
+    ]);
+    // A failed preload must not poison later requests.
+    providerModulesPromise.catch(() => { providerModulesPromise = null; });
+  }
+  return providerModulesPromise;
+}
+
 async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, batcher: EventBatcher): Promise<ModelCallWorkerResult> {
   throwIfAborted(signal);
   if (
@@ -213,10 +231,7 @@ async function execute(request: ModelCallWorkerRequest, signal: AbortSignal, bat
   ) {
     return runSyntheticTestRequest(request, batcher, signal);
   }
-  const [{ getConfig }, { buildProviderById }] = await Promise.all([
-    import('../../config/config.js'),
-    import('../../providers/factory.js'),
-  ]);
+  const [{ getConfig }, { buildProviderById }] = await loadProviderModules();
   getConfig().reloadConfig();
   throwIfAborted(signal);
   const provider = buildProviderById(request.providerId, request.accountId);
@@ -351,3 +366,7 @@ send({
   pid: process.pid,
   resourceSample: sampleRuntimeWorkerResources(),
 });
+
+if (process.env.PROMETHEUS_MODEL_WORKER_TEST_HOOKS !== '1') {
+  setImmediate(() => { loadProviderModules().catch(() => {}); });
+}

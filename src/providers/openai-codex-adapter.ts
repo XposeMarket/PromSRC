@@ -57,6 +57,8 @@ export class CodexIncompleteStreamError extends Error {
 // Model access depends on the connected account's provisioning.
 export const CODEX_MODELS = [
   'gpt-6-astra',
+  'gpt-6-sol',
+  'gpt-6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',

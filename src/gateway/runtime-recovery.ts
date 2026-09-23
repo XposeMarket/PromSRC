@@ -57,6 +57,21 @@ function automaticMainChatRecoveryAttempts(runtime: Pick<LiveRuntimeSnapshot, 'r
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+/**
+ * A crash-interrupted main-chat turn gets a short first retry when it is the
+ * only turn waiting to recover and has not been auto-recovered before. Repeat
+ * attempts and multi-turn backlogs keep the long cool-down, and the hard
+ * MAX_AUTOMATIC_MAIN_CHAT_RECOVERY_ATTEMPTS cap still prevents crash loops.
+ */
+export function isFirstLoneCrashRetry(
+  runtime: Pick<LiveRuntimeSnapshot, 'kind' | 'recoveryData'>,
+  queuedTurns: number,
+): boolean {
+  return runtime?.kind === 'main_chat'
+    && queuedTurns <= 1
+    && automaticMainChatRecoveryAttempts(runtime) === 0;
+}
+
 function pauseAutomaticMainChatRecovery(runtime: LiveRuntimeSnapshot, reason = 'recovery_attempt_limit'): void {
   const sessionId = String(runtime.sessionId || '').trim();
   const attempts = automaticMainChatRecoveryAttempts(runtime);
@@ -1040,13 +1055,25 @@ export function recoverInterruptedRuntimes(opts: {
         // process exits again before the post-listener drain, the next gateway
         // can safely pick up the same checkpoint.
         if (!deferMainChatRetrigger) {
+          const recovery = crashRecoveryFinalized
+            ? 'main_chat_goal_crash_recovered'
+            : autoRetriggered
+              ? 'chat_auto_retriggered'
+              : 'chat_checkpointed';
+          // BOOT only resumes a 'chat_checkpointed' planned restart when the
+          // record carries a restartEpoch (isPlannedRestartCheckpointAwaitingBoot /
+          // resolveActiveRestartEpoch). The shutdown-side stamp is persisted
+          // asynchronously and can be lost when the old process exits first; the
+          // ledger then holds a still-'running' record with no epoch, and the
+          // continuation turn is silently dropped. Guarantee the stamp here.
+          const existingEpoch = Number(runtime.recoveryData?.restartEpoch || 0);
+          const restartEpoch = existingEpoch > 0
+            ? existingEpoch
+            : Number(runtime.interruptedAt || 0) > 0 ? Number(runtime.interruptedAt) : Date.now();
           markDurableRuntimeRecovered(runtime.id, 'interrupted', {
-            recovery: crashRecoveryFinalized
-              ? 'main_chat_goal_crash_recovered'
-              : autoRetriggered
-                ? 'chat_auto_retriggered'
-                : 'chat_checkpointed',
+            recovery,
             sessionId: runtime.sessionId,
+            ...(recovery === 'chat_checkpointed' ? { restartEpoch } : {}),
           });
         }
         continue;

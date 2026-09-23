@@ -23,7 +23,8 @@ export function formatModelDisplayName(model, provider = '') {
   if (!raw) return 'Model';
 
   const lower = raw.toLowerCase();
-  if (/^gpt-6-astra(?:-|$)/.test(lower) && OPENAI_PROVIDER_IDS.has(providerId)) return 'Astra 6';
+  const gpt6 = lower.match(/^gpt-6-(astra|sol|luna)(?:-|$)/);
+  if (gpt6 && OPENAI_PROVIDER_IDS.has(providerId)) return `${titleWord(gpt6[1])} 6`;
   const gpt56 = lower.match(/^gpt-5\.6-(sol|terra|luna)(?:-|$)/);
   if (gpt56 && OPENAI_PROVIDER_IDS.has(providerId)) return `5.6 ${titleWord(gpt56[1])}`;
   if (lower === 'gpt-5.3-codex-spark' && providerId === 'openai_codex') return '5.3 Spark';
