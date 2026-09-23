@@ -4232,6 +4232,21 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', guardMainNavigation);
   mainWindow.webContents.on('will-redirect', guardMainNavigation);
 
+  // The native browser is a separate view layered ABOVE the renderer. When the
+  // renderer reloads (gateway restart reconnect, refresh, crash recovery) the
+  // page forgets the browser canvas is open, but the native view stays
+  // attached and paints over the reloading app. Detach it on every top-level
+  // renderer navigation; the page re-attaches it if it restores a browser tab.
+  mainWindow.webContents.on('did-start-navigation', (details, legacyUrl, legacyIsInPlace, legacyIsMainFrame) => {
+    const isMainFrame = typeof details === 'object' && details ? details.isMainFrame : legacyIsMainFrame;
+    const isSameDocument = typeof details === 'object' && details ? details.isSameDocument : legacyIsInPlace;
+    if (!isMainFrame || isSameDocument) return;
+    try { hideNativeBrowserSurface('main renderer navigation'); } catch {}
+  });
+  mainWindow.webContents.on('render-process-gone', () => {
+    try { hideNativeBrowserSurface('main renderer gone'); } catch {}
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
     nativeBrowserState.available = false;

@@ -382,6 +382,7 @@ let desktopNewChatContextProjectsCacheReady = false;
 let desktopNewChatContextProjectsLoad = null;
 let desktopNewChatContextDismissBound = false;
 let desktopSessionOpenGeneration = 0;
+let desktopSessionOpenAbort = null;
 const desktopSessionLoadStates = new Map();
 
 function getDesktopSessionLoadState(sessionId) {
@@ -986,11 +987,15 @@ function recallActiveChatSessionId() {
     return '';
   }
 }
-function setAgentSessionId(id) {
+function setAgentSessionId(id, options = {}) {
   const next = String(id || '').trim() || generateSessionId();
   window.agentSessionId = next;
-  window.agentSessionId = next;
-  localStorage.setItem(AGENT_SESSION_KEY, next);
+  // An empty draft must not overwrite the remembered "last chat". Otherwise one
+  // startup that fell back to a draft (gateway still warming up, summaries
+  // timed out) permanently replaced the real last chat with a blank id, and
+  // every later launch/refresh opened an empty New chat.
+  if (options.remember === false) return next;
+  try { localStorage.setItem(AGENT_SESSION_KEY, next); } catch {}
   rememberActiveChatSessionId(next);
   return next;
 }
@@ -1132,6 +1137,13 @@ function isDesktopChatTransportDisconnect(error) {
 async function fetchJsonWithTimeout(url, timeoutMs = 2500, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // Callers can cancel a superseded request (e.g. switching chats quickly).
+  const external = options.signal;
+  const onExternalAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
@@ -1152,6 +1164,7 @@ async function fetchJsonWithTimeout(url, timeoutMs = 2500, options = {}) {
     return null;
   } finally {
     clearTimeout(timeout);
+    if (external) external.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -4825,10 +4838,17 @@ function setBrowserCanvasSurface(surface, options = {}) {
   const changed = state.surface !== nextSurface;
   state.surface = nextSurface;
   if (changed && nextSurface !== 'browser') browserCanvasPanelWidthMode = '';
+  const wasCanvasOpen = !!canvasOpen;
   if (nextSurface === 'browser' && options.autoOpen !== false && !canvasOpen) {
     toggleCanvas(true, { force: true });
   }
   const activeTab = getActiveCanvasTab();
+  if (!changed && wasCanvasOpen && nextSurface === 'browser' && options.forceLayout !== true) {
+    // Already showing the browser: only repaint the browser surface. The
+    // view-mode + tab rebuild is the expensive part and is a no-op here.
+    renderBrowserCanvasSurface();
+    return;
+  }
   if (canvasOpen || nextSurface === 'browser') {
     applyCanvasViewMode(activeTab?.mode || 'code', activeTab || null);
     canvasRenderTabs();
@@ -6233,6 +6253,11 @@ function applyBrowserEventState(msg, options = {}) {
   const previousHost = getBrowserKnowledgeHost(state.url);
   const incomingSessionId = String(msg.sessionId || state.sessionId || '').trim();
   const allowInteractionSync = !isFollowingDetachedBrowserCanvasSession(state) || incomingSessionId === getBrowserCanvasPrimarySessionId();
+  // Auto-open only on a real activation edge (idle -> active, or a different
+  // browser session). Every browser tool emits a status event; re-running the
+  // full open path per event re-opened a canvas the user closed and rebuilt
+  // the canvas tabs/view on every click/type/scroll.
+  const activationEdge = state.active !== true || String(state.sessionId || '').trim() !== incomingSessionId;
   state.sessionId = incomingSessionId;
   state.active = msg.active !== false;
   state.url = String(msg.url || state.url || '').trim();
@@ -6311,7 +6336,7 @@ function applyBrowserEventState(msg, options = {}) {
   }
   persistActiveChat();
   if (state.active && nextHost) requestBrowserKnowledge();
-  if (options.autoOpen && state.active && !creativeLocked) {
+  if (options.autoOpen && state.active && !creativeLocked && activationEdge) {
     setBrowserCanvasSurface('browser');
   } else {
     renderBrowserCanvasSurface();
@@ -7257,7 +7282,7 @@ function setDraftChatSession(id = generateSessionId()) {
   const nextId = String(id || '').trim() || generateSessionId();
   window.activeChatSessionId = nextId;
   syncDesktopComposerDraft();
-  setAgentSessionId(nextId);
+  setAgentSessionId(nextId, { remember: false });
   emptyChatBrainCardIconOrder = [];
   // A draft is a new browser scope as well as a new message scope. Clear the
   // previous chat's registry before rendering the empty chat surface.
@@ -7961,7 +7986,22 @@ function mergeServerSessionSummaries(summaries) {
     }
   }
   if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(window._pinnedChats || []));
-  window.chatSessions.sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
+  window.chatSessions.sort((a, b) => chatSessionSortTime(b) - chatSessionSortTime(a));
+}
+
+// ChatPage is an ES module. `getSessionSortTime` lives in the legacy sidebar
+// module, so the bare call here threw a ReferenceError on every summary merge.
+// That aborted desktop startup right after the summary fetch: the remembered
+// chat never loaded its history (stuck on a 1-message stub, "my last message
+// disappeared") and the 45s summary refresh silently failed forever.
+function chatSessionSortTime(s) {
+  if (typeof window.getSessionSortTime === 'function') {
+    try { return Number(window.getSessionSortTime(s)) || 0; } catch {}
+  }
+  const sidebarOrder = Number(s?.sidebarOrder);
+  if (s?.sidebarOrder !== null && s?.sidebarOrder !== undefined && Number.isFinite(sidebarOrder)) return sidebarOrder;
+  const activity = Number(s?.lastMessageAt || s?.lastActiveAt || s?.updatedAt || s?.createdAt || 0) || 0;
+  return activity * 1000;
 }
 
 // Fetch a single session's full history from the server and populate the stub.
@@ -7995,7 +8035,7 @@ async function _loadSessionFromServer(id, options = {}) {
     const data = await fetchJsonWithTimeout(
       `/api/sessions/${encodeURIComponent(id)}${query ? `?${query}` : ''}`,
       10000,
-      { throwOnHttpError: true, throwOnError: true },
+      { throwOnHttpError: true, throwOnError: true, signal: options.signal },
     );
     const s = data?.session;
     if (!s) throw new Error('The desktop gateway returned no session data.');
@@ -8087,6 +8127,11 @@ async function _loadSessionFromServer(id, options = {}) {
     // visibly distinct from a real new-chat draft. A failed read must never
     // erase the cached transcript or silently fall through to the welcome UI.
     sess._needsServerLoad = true;
+    if (options.signal?.aborted) {
+      // Superseded by a newer chat open. Not an error: the next open of this
+      // chat reloads it (opens always force a server refresh).
+      return { ok: false, aborted: true };
+    }
     const gatewayUnavailable = isDesktopGatewayLoadError(error) || !error?.status;
     setDesktopSessionLoadState(id, 'error', {
       message: gatewayUnavailable
@@ -8159,6 +8204,32 @@ async function loadChatSessions() {
         syncActiveChat();
       }
     }
+  }
+  // The summary list is capped (160 most recent). A remembered chat that fell
+  // outside that window, or whose local stub was dropped because the local
+  // cache exceeded the startup size guard, used to silently turn every launch
+  // into a blank new chat. Ask the gateway for that one session directly.
+  if (!shouldRestoreRememberedSession && rememberedSessionId && startupGeneration === desktopSessionOpenGeneration
+    && !getChatSessionById(rememberedSessionId)
+    && !/^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i.test(rememberedSessionId)) {
+    try {
+      const probe = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(rememberedSessionId)}?historyLimit=20&processLimit=20&includeToolLog=0`, 4000);
+      const probeSession = probe?.session;
+      const probeCount = Number(probeSession?.totalHistoryCount || (Array.isArray(probeSession?.history) ? probeSession.history.length : 0)) || 0;
+      if (probeSession?.id === rememberedSessionId && probeCount > 0 && startupGeneration === desktopSessionOpenGeneration) {
+        window.chatSessions.unshift(sessionStubFromServer({ ...probeSession, lastActiveAt: probeSession.lastActiveAt }));
+        startupSession = getChatSessionById(rememberedSessionId);
+        rememberedRun = readDesktopActiveChatRun(rememberedSessionId);
+        shouldRestoreRememberedSession = !!startupSession;
+        if (shouldRestoreRememberedSession) {
+          startupSessionId = rememberedSessionId;
+          window.activeChatSessionId = startupSessionId;
+          setAgentSessionId(startupSessionId);
+          if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+          syncActiveChat();
+        }
+      }
+    } catch {}
   }
   if (startupGeneration !== desktopSessionOpenGeneration) return;
   if (shouldRestoreRememberedSession) {
@@ -8822,7 +8893,25 @@ async function _openSession(id, generation) {
   resetDesktopNewChatContext();
   window.activeChatSessionId = id;
   setAgentSessionId(id);
-  const sess = window.chatSessions.find(s => s.id === id);
+  let sess = window.chatSessions.find(s => s.id === id);
+  if (!sess) {
+    // Opened before startup summaries arrived (stream recovery, deep link,
+    // restart continuity) or the chat is outside the 160-summary window. The
+    // old path returned `missing_session` without ever fetching, and because
+    // this open also claimed the navigation generation, startup gave up too:
+    // the chat stayed stuck on whatever tiny local stub existed.
+    try {
+      const probe = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}?historyLimit=20&processLimit=20&includeToolLog=0`, 6000);
+      if (probe?.session?.id === id && generation === desktopSessionOpenGeneration) {
+        sess = window.chatSessions.find(s => s.id === id);
+        if (!sess) {
+          window.chatSessions.unshift(sessionStubFromServer(probe.session));
+          sess = window.chatSessions.find(s => s.id === id);
+          if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+        }
+      }
+    } catch {}
+  }
   setDesktopSessionLoadState(id, 'loading', {
     message: 'Loading this chat…',
   });
@@ -8837,12 +8926,20 @@ async function _openSession(id, generation) {
     window._maybeClearProjectState(id);
   }
   syncActiveChat();
+  // Opening chats back-to-back used to leave every earlier history fetch
+  // running (and later merging/saving multi-MB histories), so loads piled up.
+  // Cancel the previous open's fetch; this open owns the page now.
+  try { desktopSessionOpenAbort?.abort(); } catch {}
+  const openAbort = new AbortController();
+  desktopSessionOpenAbort = openAbort;
   const loadResult = sess
     ? await _loadSessionFromServer(id, {
         force: true,
         recovery: sess.activeRun === true || !!readDesktopActiveChatRun(id),
+        signal: openAbort.signal,
       })
     : { ok: false, reason: 'missing_session' };
+  if (desktopSessionOpenAbort === openAbort) desktopSessionOpenAbort = null;
   // A newer click owns the page. An older history response may still finish
   // and update its own cached session, but it must not repaint the active view.
   if (generation !== desktopSessionOpenGeneration || window.activeChatSessionId !== id) return sess || null;
@@ -15377,6 +15474,27 @@ function directLiveTraceChild(parent, predicate) {
   return Array.from(parent?.children || []).find(predicate) || null;
 }
 
+// Reconcile `parent`'s children to exactly `ordered` while touching only nodes
+// that are new or out of place. appendChild() on an already-attached node MOVES
+// it (detach + reinsert), so the previous `ordered.forEach(appendChild)` pass
+// re-inserted every tool row on every tool event: full relayout, lost hover and
+// selection, and O(rows) mutations per event on long turns.
+function reconcileLiveTraceChildren(parent, ordered) {
+  if (!parent) return;
+  const keep = new Set(ordered);
+  Array.from(parent.children).forEach((node) => {
+    if (!keep.has(node)) node.remove();
+  });
+  let cursor = parent.firstElementChild;
+  for (const node of ordered) {
+    if (node === cursor) {
+      cursor = cursor.nextElementSibling;
+      continue;
+    }
+    parent.insertBefore(node, cursor);
+  }
+}
+
 // Merge a live tool group in place. Existing entries retain their DOM nodes
 // until their own data changes, while newly observed entries are appended.
 // This keeps a user-opened metadata disclosure stable while the stream grows.
@@ -15404,10 +15522,7 @@ function patchLiveTraceEntries(currentTrace, nextTrace) {
     }
     ordered.push(nextNode.cloneNode(true));
   });
-  Array.from(currentTrace.children).forEach((node) => {
-    if (!ordered.includes(node)) node.remove();
-  });
-  ordered.forEach((node) => currentTrace.appendChild(node));
+  reconcileLiveTraceChildren(currentTrace, ordered);
   return true;
 }
 
@@ -15416,7 +15531,9 @@ function patchLiveTraceGroup(currentGroup, nextGroup) {
   syncLiveTraceNodeAttributes(currentGroup, nextGroup);
   const currentSummary = directLiveTraceChild(currentGroup, (node) => node.tagName === 'SUMMARY');
   const nextSummary = directLiveTraceChild(nextGroup, (node) => node.tagName === 'SUMMARY');
-  if (currentSummary && nextSummary) currentSummary.innerHTML = nextSummary.innerHTML;
+  if (currentSummary && nextSummary && currentSummary.innerHTML !== nextSummary.innerHTML) {
+    currentSummary.innerHTML = nextSummary.innerHTML;
+  }
   const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
   const currentTrace = directLiveTraceChild(currentBody, (node) => node.classList.contains('live-turn-trace'));
@@ -15467,10 +15584,7 @@ function patchLiveTurnTimeline(content, nextContent) {
       ordered.push(nextNode.cloneNode(true));
     }
   });
-  Array.from(currentTimeline.children).forEach((node) => {
-    if (!ordered.includes(node)) node.remove();
-  });
-  ordered.forEach((node) => currentTimeline.appendChild(node));
+  reconcileLiveTraceChildren(currentTimeline, ordered);
   return true;
 }
 
@@ -17858,6 +17972,8 @@ function persistSession(id) {
   if (idx === -1) return;
   const s = window.chatSessions[idx];
   if (window.activeChatSessionId === id) {
+    // A draft becomes the remembered "last chat" once it has real content.
+    if (Array.isArray(s.history) && s.history.length > 0) rememberActiveChatSessionId(id);
     window.chatHistory = Array.isArray(s.history) ? s.history : (s.history = []);
     window.processLogEntries = Array.isArray(s.processLog) ? s.processLog : (s.processLog = []);
     window.runtimeProgressState = normalizeDeclaredRuntimeProgressState(s.progressState);
@@ -17872,7 +17988,12 @@ function persistSession(id) {
   if (typeof window.updateStats === 'function') window.updateStats([]);
   // Re-render messages only if user is currently viewing this session.
   if (isSessionVisibleInChatSurface(id)) {
-    renderChatMessages();
+    // While a turn is streaming, every tool event debounces into here. The live
+    // bubble is already reconciled in place by patchStreamingChatBubble; a full
+    // renderChatMessages() re-serialized every row and rewrote the live row's
+    // innerHTML (the whole tool timeline) on each event. Use the patch path and
+    // only fall back to a full render when the bubble cannot be patched.
+    if (!(isSessionThinking(id) && patchStreamingChatBubble(id))) renderChatMessages();
     scheduleChatContextWindowRefresh(500);
   }
 }
