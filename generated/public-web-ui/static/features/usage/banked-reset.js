@@ -79,8 +79,22 @@ function slotFor(popover) {
   return slot;
 }
 
-function render(slot, providers) {
-  const available = providers.filter((p) => Number(p?.available) > 0 && p?.next?.id);
+// The provider the ACTIVE chat is on. A reset only helps the provider you are
+// actually using, so a Claude chat must never show a Codex reset (and vice
+// versa). Desktop keeps window._activeProvider in sync with the per-chat
+// route; mobile keeps window.__pmChatModelRoute (effective > override).
+// Unknown provider => show nothing rather than guess.
+function activeChatProvider(popover) {
+  const mobile = popover?.id === 'pm-ctx-popover' || document.body?.classList?.contains('pm-mobile-active');
+  const route = mobile ? window.__pmChatModelRoute : window._activeChatModelRoute;
+  const fromRoute = route?.effective?.providerId || route?.override?.providerId || route?.providerId;
+  const raw = fromRoute || (!mobile ? window._activeProvider : '') || '';
+  return String(raw).trim().toLowerCase();
+}
+
+function render(slot, providers, activeProvider = '') {
+  const available = providers.filter((p) => Number(p?.available) > 0 && p?.next?.id
+    && activeProvider && String(p.provider).toLowerCase() === activeProvider);
   if (!available.length) { slot.hidden = true; slot.innerHTML = ''; return; }
   slot.hidden = false;
   slot.innerHTML = available.map((p) => {
@@ -98,7 +112,10 @@ function render(slot, providers) {
 
 async function refreshPopover(popover, force = false) {
   const slot = slotFor(popover);
-  render(slot, await loadBankedResets(force));
+  const providers = await loadBankedResets(force);
+  // Read the provider after the await so a chat/model switch during the fetch
+  // is respected.
+  render(slot, providers, activeChatProvider(popover));
 }
 
 function closeConfirm() {

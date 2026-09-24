@@ -23,6 +23,31 @@ import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'nod
  * and extra usage is disabled/exhausted. Matched on the message text because
  * it arrives as a generic 400 invalid_request_error.
  */
+/**
+ * Tools to keep on an extra-usage retry: every tool already called in this
+ * conversation, plus a core set. Returns null when slimming would not shrink
+ * the list meaningfully (then the retry is pointless and we just fail).
+ */
+export function slimToolsForExtraUsageRetry(tools: any[] | undefined, messages: any[] | undefined): any[] | null {
+  if (!Array.isArray(tools) || tools.length < 60) return null;
+  const CORE = new Set([
+    'web_search', 'web_fetch', 'memory', 'write_note', 'delivery_send', 'switch_model', 'set_current_model',
+    'ask_prometheus_questions', 'request_tool_category', 'skill_list', 'skill_read', 'background_ops',
+    'declare_plan', 'complete_plan_step', 'tool_result_read', 'show_ui_card', 'timer', 'read_file', 'search_files',
+  ]);
+  const used = new Set<string>();
+  for (const m of messages || []) {
+    if (!Array.isArray(m?.content)) continue;
+    for (const part of m.content) if (part?.type === 'tool_use' && part.name) used.add(String(part.name));
+  }
+  const kept = tools.filter((t) => CORE.has(t.name) || used.has(t.name)).map((t) => {
+    const { cache_control, ...rest } = t; return rest;
+  });
+  if (kept.length >= tools.length * 0.7) return null;
+  if (kept.length) (kept[kept.length - 1] as any).cache_control = { type: 'ephemeral' };
+  return kept;
+}
+
 export function isOutOfExtraUsageError(raw: unknown): boolean {
   return /out of extra usage/i.test(String(raw || ''));
 }
@@ -682,7 +707,15 @@ export class AnthropicAdapter implements LLMProvider {
     const claudeCodePreamble = { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." };
 
     if (system) {
-      const bodyWithoutSystem = JSON.stringify({ ...body, system: undefined });
+      // Base64 image payloads are not tokens at 3.5 chars/token: a 1.8MB body
+      // that was mostly screenshots drove the budget negative and stripped the
+      // ENTIRE system prompt (logged 2026-09-23/24 as systemChars=57). Count
+      // each image at a flat ~1,600 tokens instead of its base64 length.
+      let imageCount = 0;
+      const bodyWithoutSystem = JSON.stringify({ ...body, system: undefined }, (key, value) => {
+        if (key === 'data' && typeof value === 'string' && value.length > 1000) { imageCount += 1; return ''; }
+        return value;
+      }) + ' '.repeat(Math.min(imageCount * 5_600, 400_000));
       const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem);
       const blocks = this.buildSystemBlocks(trimmed, !!isOAuth);
       if (blocks.length > 0) {
@@ -859,6 +892,16 @@ export class AnthropicAdapter implements LLMProvider {
           try {
             await rejectRequest(response, raw, attempt);
           } catch { /* logged; retrying once */ }
+          // Every logged rejection (6/6 first attempts, 2026-09-23..24) carried
+          // 120-145 tool schemas after a 4.6-12 min idle gap (cold cache), and
+          // the identical 4s retry failed every time. The request that
+          // succeeded next always carried ~21-36 tools. Retry with a slimmer
+          // tool list instead of the same body.
+          const slim = slimToolsForExtraUsageRetry(body.tools, body.messages);
+          if (slim) {
+            console.warn(`[anthropic] ${model}: retrying extra-usage rejection with ${slim.length}/${body.tools.length} tools`);
+            body.tools = slim;
+          }
           console.warn(`[anthropic] ${model}: request billed to extra usage (rejected); retrying once in ${EXTRA_USAGE_RETRY_DELAY_MS}ms`);
           await new Promise((resolve) => setTimeout(resolve, EXTRA_USAGE_RETRY_DELAY_MS));
           if (options?.abortSignal?.aborted) return rejectRequest(response, raw, attempt);
