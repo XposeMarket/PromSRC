@@ -2282,6 +2282,8 @@ function appendTranscriptArtifacts(
       `${JSON.stringify(payload)}\n`,
       mdLines.join('\n'),
     );
+    // Recall index picks up the new line a few seconds after the async write.
+    try { require('./memory-index/recall-index').markRecallDirty(workspacePath, jsonlPath, 4000); } catch { /* best-effort */ }
   } catch {
     // Transcript logging is best-effort only.
   }

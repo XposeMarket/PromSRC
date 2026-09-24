@@ -2219,13 +2219,13 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory',
-        description: 'Unified lightweight memory wrapper. Set action="write" to add a durable fact, action="update" to replace one exact existing durable bullet, action="read" to read USER.md/SOUL.md/MEMORY.md, or action="search" to retrieve relevant long-term memory. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
+        description: 'Unified lightweight memory wrapper. Set action="write" to add a durable fact, action="update" to replace one exact existing durable bullet, action="read" to read USER.md/SOUL.md/MEMORY.md, action="search" to recall anything from the past (searches ALL chat transcripts, intraday notes, MEMORY/USER bullets and captured ideas via the full-text recall index, plus the structured memory index; the current chat is excluded; each hit is labeled strong/partial/weak and the header says NO STRONG MATCH when nothing fits), action="recall" for the fast transcript/notes/ideas index only, or action="ideas" to list "we should build X" ideas auto-captured from past user messages. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
         parameters: {
           type: 'object',
           required: ['action'],
           additionalProperties: false,
           properties: {
-            action: { type: 'string', enum: ['write', 'update', 'read', 'search'], description: 'Memory operation to perform.' },
+            action: { type: 'string', enum: ['write', 'update', 'read', 'search', 'recall', 'ideas'], description: 'Memory operation to perform.' },
             file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/update/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
             category: { type: 'string', description: 'For write/update: category section name, such as coding, communication_style, projects, or Personality.' },
             previous_content: { type: 'string', description: 'For update: exact current bullet text after the leading "- ". The update fails if zero or multiple bullets in the category match.' },
@@ -2238,6 +2238,8 @@ export function getFileWebMemoryTools(): any[] {
             date_to: { type: 'string', description: 'For search: upper date bound, YYYY-MM-DD or ISO timestamp.' },
             source_types: { type: 'array', items: { type: 'string' }, description: 'For search: evidence source-type filters.' },
             min_durability: { type: 'number', minimum: 0, maximum: 1, description: 'For search: minimum evidence durability from 0 to 1.' },
+            sources: { type: 'array', items: { type: 'string', enum: ['transcript', 'note', 'memory', 'idea'] }, description: 'For search/recall: restrict the recall index to these sources.' },
+            include_current_chat: { type: 'boolean', description: 'For search/recall: also match the current chat (excluded by default).' },
           },
         },
       },

@@ -127,6 +127,66 @@ function resolveMemoryPath(workspacePath: string, filename: string, sessionId?: 
   return path.join(configWorkspace, filename);
 }
 
+/**
+ * Unified recall for memory(action:"search"|"recall"). The incremental recall
+ * index (transcripts, notes, MEMORY/USER bullets, captured ideas) answers
+ * first and never waits on memory maintenance. The structured memory index is
+ * appended as a secondary section with a short timeout: if maintenance holds
+ * it, the answer still returns with a note instead of a 30s failure.
+ * The current chat is excluded so the question can't match itself.
+ */
+async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boolean): Promise<ToolResult> {
+  const { name, args, workspacePath, sessionId } = ctx;
+  const query = String(args?.query || '').trim();
+  if (!query) return { name, args, result: `memory(action="${recallOnly ? 'recall' : 'search'}"): query is required`, error: true };
+  const sections: string[] = [];
+  let recallBest = 'none';
+  try {
+    const { searchRecall, formatRecallResult } = require('../../memory-index/recall-index');
+    const sources = Array.isArray(args?.sources) ? args.sources.map((s: any) => String(s || '').trim()).filter(Boolean) : undefined;
+    const res = searchRecall(workspacePath, {
+      query,
+      limit: Math.min(15, Number(args?.limit || 8)),
+      sources,
+      excludeSessionId: args?.include_current_chat === true ? '' : String(sessionId || ''),
+      dateFrom: args?.date_from ? String(args.date_from) : undefined,
+      dateTo: args?.date_to ? String(args.date_to) : undefined,
+    });
+    recallBest = res.best;
+    sections.push(formatRecallResult(res));
+  } catch (err: any) {
+    sections.push(`recall index unavailable: ${String(err?.message || err)}`);
+  }
+  if (!recallOnly) {
+    try {
+      const modeRaw = String(args?.mode || 'quick').trim().toLowerCase();
+      const mode = (modeRaw === 'deep' || modeRaw === 'project' || modeRaw === 'timeline') ? modeRaw : 'quick';
+      const sourceTypes = Array.isArray(args?.source_types) ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean) : undefined;
+      const timeoutMs = recallBest === 'strong' ? 4000 : 8000;
+      const structured = await Promise.race([
+        searchMemoryInWorker('memory_search', {
+          workspacePath,
+          params: {
+            query, mode: mode as any, limit: Math.min(8, Number(args?.limit || 6)),
+            projectId: args?.project_id ? String(args.project_id) : undefined,
+            dateFrom: args?.date_from ? String(args.date_from) : undefined,
+            dateTo: args?.date_to ? String(args.date_to) : undefined,
+            sourceTypes: sourceTypes as any,
+            minDurability: args?.min_durability !== undefined ? Number(args.min_durability) : undefined,
+            rerank: true,
+            queryRoute: 'tool_manual',
+          },
+        }, { signal: ctx.deps?.abortSignal?.signal }),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error(`structured memory index busy (>${timeoutMs}ms, likely maintenance); skipped`)), timeoutMs)),
+      ]);
+      sections.push(`STRUCTURED MEMORY INDEX (decisions/tasks/proposals; scores are relative, not confidence):\n${compactMemorySearchResult(structured)}`);
+    } catch (err: any) {
+      sections.push(`STRUCTURED MEMORY INDEX: ${String(err?.message || err)}`);
+    }
+  }
+  return { name, args, result: sections.join('\n\n'), error: false };
+}
+
 export const memoryCapabilityExecutor: CapabilityExecutor = {
   id: 'memory',
 
@@ -143,6 +203,21 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
     // and result formatting stay identical across old and new call paths.
     if (name === 'memory') {
       const action = String(args?.action || '').trim().toLowerCase();
+      if (action === 'search' || action === 'recall') {
+        return runUnifiedRecall(ctx, action === 'recall');
+      }
+      if (action === 'ideas') {
+        try {
+          const { listRecallIdeas } = require('../../memory-index/recall-index');
+          const ideas = listRecallIdeas(workspacePath, Number(args?.limit || 20));
+          const body = ideas.length
+            ? ideas.map((i: any) => `- ${i.ts ? new Date(i.ts).toISOString().slice(0, 10) : 'undated'} [${i.sessionId}] ${i.text}`).join('\n')
+            : 'No captured ideas yet (index may still be backfilling).';
+          return { name, args, result: `Captured ideas (newest first):\n${body}`, error: false };
+        } catch (err: any) {
+          return { name, args, result: `memory(action="ideas") failed: ${String(err?.message || err)}`, error: true };
+        }
+      }
       const delegateName = action === 'write'
         ? 'memory_write'
         : action === 'update'
@@ -590,6 +665,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
           if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
           fs.appendFileSync(intradayFile, entry + '\n');
+          try { require('../../memory-index/recall-index').markRecallDirty(workspacePath, intradayFile, 500); } catch { /* best-effort */ }
         } catch (err: any) {
           return { name, args, result: `write_note: failed to write intraday note: ${err.message}`, error: true };
         }

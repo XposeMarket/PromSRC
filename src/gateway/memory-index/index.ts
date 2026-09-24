@@ -261,6 +261,10 @@ const WORKSPACE_PRIORITY_ROOTS = [
 ];
 const WORKSPACE_MAX_FILES = 12000;
 const MEMORY_STORE_MAX_FILE_BYTES = 128 * 1024 * 1024;
+// NOTE (2026-09-24): the live store sits at ~26.5k chunks, over this cap, so
+// structured refreshes stop absorbing new transcripts. Full-history transcript
+// recall now lives in recall-index.ts; revisit trimming transcripts out of
+// this store rather than raising caps (next limit would be token postings).
 const MEMORY_STORE_MAX_RECORDS = 8_000;
 const MEMORY_STORE_MAX_CHUNKS = 25_000;
 const MEMORY_STORE_MAX_CHUNK_TEXT_CHARS = 32 * 1024 * 1024;

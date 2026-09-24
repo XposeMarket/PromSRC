@@ -908,6 +908,12 @@ export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
     .fire({ type: 'gateway:startup', workspacePath })
     .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
 
+  // Incremental recall index (transcripts, notes, memory, ideas). Runs in
+  // small time-sliced batches, independent of the memory maintenance gate.
+  try { require('../memory-index/recall-index').startRecallIndex(workspacePath, 20_000); } catch (err: any) {
+    console.warn('[recall-index] could not start:', err?.message || err);
+  }
+
   void (async () => {
     // Re-establish Tailscale funnel if remote access was enabled before this
     // gateway session started, then keep a watchdog running so it auto-recovers
