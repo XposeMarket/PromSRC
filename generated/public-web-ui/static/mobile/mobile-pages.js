@@ -4631,12 +4631,23 @@ function _handleMobileInlineCommandProcessEvent(eventType, message = {}, attempt
   for (const entries of _mobileCommandActivityCollections(sessionId)) {
     if (applyCommandProcessEvent(entries, eventType, message)) applied = true;
   }
-  if (!applied && attempt < 12) {
-    setTimeout(() => _handleMobileInlineCommandProcessEvent(eventType, message, attempt + 1), 40 + attempt * 20);
+  if (eventType === 'process_run_output') {
+    // Always cache/paint output immediately. It used to wait behind the retry
+    // loop below until the command row existed, and was only painted into a
+    // terminal <pre> that was already on screen, so live output stalled until
+    // some unrelated stream event re-rendered the row.
+    appendCommandTerminalChunkToDom(runId, message.chunk, message.sequence || run.outputSeq);
+    const onScreen = typeof document !== 'undefined'
+      && [...document.querySelectorAll('[data-command-terminal-output]')]
+        .some((node) => node.getAttribute('data-command-terminal-output') === runId);
+    // The chunk is cached above; the next row render reads it from that cache.
+    // renderThreadSoon is coalesced by the adaptive scheduler, so a burst of
+    // chunks costs one patch per frame budget, not one per chunk.
+    if (!onScreen && String(__pmChat.activeSessionId || '') === sessionId) window.__pmRenderActiveChatThread?.();
     return;
   }
-  if (eventType === 'process_run_output') {
-    appendCommandTerminalChunkToDom(runId, message.chunk, message.sequence || run.outputSeq);
+  if (!applied && attempt < 12) {
+    setTimeout(() => _handleMobileInlineCommandProcessEvent(eventType, message, attempt + 1), 40 + attempt * 20);
     return;
   }
   if (applied && String(__pmChat.activeSessionId || '') === sessionId) window.__pmRenderActiveChatThread?.();

@@ -26,6 +26,20 @@ async function handle(method, params) {
     case 'tabs.navigate': { const tabId = await resolveTabId(params); await chrome.tabs.update(tabId, { url: params.url, active: params.active !== false }); return true; }
     case 'tabs.get': { const tab = await chrome.tabs.get(await resolveTabId(params)); return { id: tab.id, windowId: tab.windowId, active: tab.active, title: tab.title || '', url: tab.url || '', incognito: !!tab.incognito, width: tab.width, height: tab.height }; }
     case 'cdp': { const tabId = await resolveTabId(params); return cdp(tabId, params.method, params.params || {}); }
+    case 'cookies.forDomains': {
+      // Login import: cookies for the requested sites only (plus their auth
+      // providers). Explicitly requested per login; never a blanket dump.
+      const domains = [...new Set((params.domains || []).map(d => String(d || '').trim().toLowerCase().replace(/^\./, '')).filter(Boolean))].slice(0, 20);
+      const out = []; const seen = new Set();
+      for (const domain of domains) {
+        for (const c of await chrome.cookies.getAll({ domain })) {
+          const key = c.domain + '|' + c.path + '|' + c.name + '|' + (c.storeId || '');
+          if (seen.has(key)) continue; seen.add(key);
+          out.push({ name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite, session: c.session, expirationDate: c.expirationDate, hostOnly: c.hostOnly });
+        }
+      }
+      return { cookies: out, domains };
+    }
     case 'downloads.search': return chrome.downloads.search(params.query || {});
     default: throw new Error(`Unsupported Personal Chrome relay method: ${method}`);
   }

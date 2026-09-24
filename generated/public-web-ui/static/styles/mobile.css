@@ -18526,31 +18526,108 @@ body.pm-mobile-active .pm-chat-slash-popover {
 }
 .pm-q-login-note { font-size: 12px; color: var(--pm-muted, rgba(255,255,255,.6)); }
 body.pm-login-handoff-open { overflow: hidden; }
-.pm-login-handoff {
-  position: fixed; inset: 0; z-index: 10050; display: flex; flex-direction: column;
-  background: var(--pm-bg, #0b0b0d); color: var(--pm-text, #fff);
-  padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+/* Login handoff: iOS Safari-style sheet (SFSafariViewController look). */
+.pm-lh { position: fixed; inset: 0; z-index: 10050; pointer-events: none; }
+.pm-lh-scrim {
+  position: absolute; inset: 0; background: rgba(0,0,0,.42); opacity: 0;
+  transition: opacity .32s ease; pointer-events: auto;
 }
-.pm-login-head {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
+.pm-lh.is-open .pm-lh-scrim { opacity: 1; }
+.pm-lh-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  display: flex; flex-direction: column; overflow: hidden; pointer-events: auto;
+  border-radius: 12px 12px 0 0;
+  background: #f2f2f7; color: #000;
+  box-shadow: 0 -10px 40px rgba(0,0,0,.35);
+  transform: translateY(104%); transition: transform .34s cubic-bezier(.32,.72,0,1);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
-.pm-login-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.pm-login-title strong { font-size: 15px; }
-.pm-login-url { font-size: 12px; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pm-login-close, .pm-login-done, .pm-login-mask {
-  appearance: none; border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; cursor: pointer;
-  background: rgba(255,255,255,.08); color: inherit;
+.pm-lh.is-open .pm-lh-sheet { transform: translateY(0); }
+.pm-lh.is-closing .pm-lh-sheet { transform: translateY(104%); }
+@media (prefers-color-scheme: dark) {
+  .pm-lh-sheet { background: #1c1c1e; color: #fff; }
 }
-.pm-login-done { background: #fff; color: #111; font-weight: 600; }
-.pm-login-stage { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; background: #000; }
-.pm-login-frame { display: block; width: 100%; height: auto; touch-action: pan-x; user-select: none; -webkit-user-select: none; }
-.pm-login-status:empty { display: none; }
-.pm-login-status { padding: 6px 12px; font-size: 12px; opacity: .75; }
-.pm-login-keys { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.08); }
-.pm-login-type {
-  flex: 1; min-width: 0; border-radius: 12px; border: 1px solid rgba(255,255,255,.12);
-  background: rgba(255,255,255,.05); color: inherit; padding: 10px 12px; font-size: 16px;
+.pm-lh-grabber { width: 36px; height: 5px; border-radius: 3px; background: rgba(60,60,67,.3); margin: 6px auto 0; flex: none; }
+@media (prefers-color-scheme: dark) { .pm-lh-grabber { background: rgba(235,235,245,.3); } }
+.pm-lh-bar {
+  flex: none; display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: 8px; padding: 6px 10px 8px;
+}
+.pm-lh-done, .pm-lh-finish {
+  appearance: none; border: 0; background: none; padding: 6px 4px; margin: 0;
+  font: inherit; font-size: 17px; color: #007aff; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.pm-lh-done { font-weight: 600; }
+.pm-lh-finish { font-weight: 600; }
+@media (prefers-color-scheme: dark) { .pm-lh-done, .pm-lh-finish { color: #0a84ff; } }
+.pm-lh-address {
+  min-width: 0; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 4px;
+  background: rgba(118,118,128,.12); padding: 0 10px;
+  font-size: 15px; font-weight: 500; letter-spacing: -.2px;
+}
+@media (prefers-color-scheme: dark) { .pm-lh-address { background: rgba(118,118,128,.24); } }
+.pm-lh-lock { display: inline-flex; width: 13px; height: 13px; opacity: .6; flex: none; }
+.pm-lh-lock svg { width: 100%; height: 100%; }
+.pm-lh-host { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-lh-progress { flex: none; height: 2px; background: transparent; position: relative; overflow: hidden; }
+.pm-lh-progress.is-loading::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 40%;
+  background: #007aff; animation: pm-lh-progress 1.1s ease-in-out infinite;
+}
+@keyframes pm-lh-progress { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+.pm-lh-stage {
+  position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fff;
+  touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+}
+.pm-lh-frame {
+  position: relative; z-index: 1; display: block; width: 100%; height: 100%;
+  object-fit: contain; object-position: top center; opacity: 0; transition: opacity .18s ease;
+  pointer-events: none;
+}
+.pm-lh.is-live .pm-lh-frame { opacity: 1; }
+.pm-lh-skeleton {
+  position: absolute; inset: 0; z-index: 0;
+  background: linear-gradient(100deg, #f2f2f7 20%, #e5e5ea 40%, #f2f2f7 60%) 0 0 / 300% 100%;
+  animation: pm-lh-shimmer 1.4s linear infinite;
+}
+.pm-lh.is-live .pm-lh-skeleton { display: none; }
+@keyframes pm-lh-shimmer { to { background-position: -300% 0; } }
+.pm-lh-toast {
+  position: absolute; left: 50%; bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  transform: translate(-50%, 8px); max-width: calc(100% - 32px);
+  padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.3; text-align: center;
+  color: #fff; background: rgba(28,28,30,.86);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  opacity: 0; transition: opacity .2s ease, transform .2s ease; pointer-events: none; z-index: 3;
+}
+.pm-lh-toast.is-on { opacity: 1; transform: translate(-50%, 0); }
+.pm-lh-toolbar {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 14px calc(6px + env(safe-area-inset-bottom, 0px));
+  background: rgba(249,249,249,.94); border-top: .5px solid rgba(60,60,67,.29);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8); backdrop-filter: blur(20px) saturate(1.8);
+}
+@media (prefers-color-scheme: dark) {
+  .pm-lh-toolbar { background: rgba(29,29,31,.94); border-top-color: rgba(84,84,88,.6); }
+}
+.pm-lh-tool {
+  appearance: none; border: 0; background: none; color: #007aff; cursor: pointer;
+  min-width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font: inherit; font-size: 15px; -webkit-tap-highlight-color: transparent;
+}
+@media (prefers-color-scheme: dark) { .pm-lh-tool { color: #0a84ff; } }
+.pm-lh-tool svg { width: 24px; height: 24px; }
+.pm-lh-tool:disabled { color: rgba(60,60,67,.3); }
+@media (prefers-color-scheme: dark) { .pm-lh-tool:disabled { color: rgba(235,235,245,.3); } }
+.pm-lh-chrome svg { width: 20px; height: 20px; }
+.pm-lh-chrome.is-unpaired { opacity: .5; }
+/* The real iOS keyboard target: focusable but invisible. 16px avoids iOS zoom. */
+.pm-lh-ime {
+  position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0;
+  border: 0; padding: 0; margin: 0; font-size: 16px; background: transparent; color: transparent;
+  caret-color: transparent; pointer-events: none;
 }
 
 /* Banked usage reset row (context-window popover, desktop + mobile) */

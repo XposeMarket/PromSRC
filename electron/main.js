@@ -3701,6 +3701,74 @@ async function inputNativeBrowserSurface(payload = {}) {
   return { ok: true };
 }
 
+// Login handoff: phone-sized layout while the user logs in from the phone
+// viewer. Only viewport metrics + touch change; the UA/Client Hints stay the
+// desktop Chrome ones so the fingerprint stays consistent for Google.
+async function loginViewNativeBrowserSurface({ sessionId = '', mode = 'phone', width = 390, height = 760 } = {}) {
+  const { wc } = requireNativeViewForSession(sessionId);
+  const dbg = wc.debugger;
+  if (!dbg.isAttached()) dbg.attach('1.3');
+  if (String(mode) === 'off') {
+    await dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {});
+    await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
+    return { mode: 'off' };
+  }
+  const w = Math.max(320, Math.min(520, Math.round(Number(width) || 390)));
+  const h = Math.max(480, Math.min(1100, Math.round(Number(height) || 760)));
+  await dbg.sendCommand('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 3, mobile: true });
+  await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }).catch(() => {});
+  return { mode: 'phone', width: w, height: h };
+}
+
+// Editable field rects (CSS px) so the phone viewer can open the real iOS
+// keyboard when a field is tapped, plus the focused field's type.
+async function loginStateNativeBrowserSurface({ sessionId = '' } = {}) {
+  const { wc } = requireNativeViewForSession(sessionId);
+  let page = { editables: [], focus: null };
+  try {
+    page = await wc.executeJavaScript(`(() => {
+      const ok = (el) => { const t = (el.getAttribute('type') || 'text').toLowerCase(); return el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['button','submit','checkbox','radio','hidden','image','reset','file','range','color'].includes(t)); };
+      const out = [];
+      for (const el of document.querySelectorAll('input,textarea,[contenteditable=""],[contenteditable="true"]')) {
+        if (!ok(el)) continue; const r = el.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4 || r.bottom < 0 || r.top > innerHeight) continue;
+        out.push({ x: r.left, y: r.top, w: r.width, h: r.height, type: (el.getAttribute('type') || el.tagName).toLowerCase(), mode: el.getAttribute('inputmode') || '', ac: el.getAttribute('autocomplete') || '' });
+        if (out.length >= 40) break;
+      }
+      const a = document.activeElement; const focus = a && ok(a) ? { type: (a.getAttribute('type') || a.tagName).toLowerCase(), ac: a.getAttribute('autocomplete') || '' } : null;
+      return { editables: out, focus };
+    })()`, true);
+  } catch {}
+  return { ...page, canGoBack: !!wc.canGoBack?.(), canGoForward: !!wc.canGoForward?.(), loading: !!wc.isLoading?.() };
+}
+
+// Import cookies (from the user's real Chrome via the paired extension) into
+// this chat's browser partition. Values never reach the model.
+async function importCookiesNativeBrowserSurface({ sessionId = '', cookies = [] } = {}) {
+  const { wc } = requireNativeViewForSession(sessionId);
+  const ses = wc.session;
+  let imported = 0; const failed = [];
+  for (const ck of Array.isArray(cookies) ? cookies.slice(0, 3000) : []) {
+    try {
+      const host = String(ck.domain || '').replace(/^\./, '');
+      if (!host || !ck.name) continue;
+      const details = {
+        url: `${ck.secure === false ? 'http' : 'https'}://${host}${ck.path || '/'}`,
+        name: String(ck.name), value: String(ck.value ?? ''), path: ck.path || '/',
+        secure: ck.secure !== false, httpOnly: !!ck.httpOnly,
+        sameSite: ck.sameSite === 'strict' ? 'strict' : ck.sameSite === 'lax' ? 'lax' : ck.sameSite === 'no_restriction' ? 'no_restriction' : 'unspecified',
+      };
+      if (!ck.hostOnly && String(ck.domain || '').startsWith('.')) details.domain = ck.domain;
+      if (!ck.session && Number(ck.expirationDate) > 0) details.expirationDate = Number(ck.expirationDate);
+      if (String(ck.name).startsWith('__Host-')) { delete details.domain; details.path = '/'; details.secure = true; }
+      await ses.cookies.set(details);
+      imported += 1;
+    } catch (err) { if (failed.length < 5) failed.push(`${ck?.name}@${ck?.domain}: ${err?.message || err}`); }
+  }
+  try { await ses.cookies.flushStore(); } catch {}
+  return { imported, failed };
+}
+
 async function screenshotNativeBrowserSurface(sessionId = '') {
   const { view, wc, partition } = requireNativeViewForSession(sessionId);
   let image = null;
@@ -3911,6 +3979,9 @@ async function startNativeBrowserRpcServer() {
         else if (pathName === '/console') result = nativeBrowserConsole(payload);
         else if (pathName === '/network') result = nativeBrowserNetwork(payload);
         else if (pathName === '/inspect') result = await inspectNativeBrowserPoint(payload);
+        else if (pathName === '/login-view') result = await loginViewNativeBrowserSurface(payload);
+        else if (pathName === '/login-state') result = await loginStateNativeBrowserSurface(payload);
+        else if (pathName === '/import-cookies') result = await importCookiesNativeBrowserSurface(payload);
         else if (pathName === '/run-js') result = await executeNativeBrowserJavaScript(String(payload.code || ''), payload.sessionId);
         else return respond(404, { error: 'Unknown native browser RPC route.' });
         return respond(200, { ok: true, result });
