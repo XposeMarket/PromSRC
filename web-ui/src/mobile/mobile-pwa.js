@@ -11,6 +11,27 @@ window.addEventListener('appinstalled', () => {
   window.__pmDeferredInstall = null;
 });
 
+// When an UPDATED worker takes control (there was already a controller at boot),
+// the page is still running the old module graph. Reload once so the new code
+// actually runs. First installs (no prior controller) are left alone so pairing
+// and first boot are never interrupted.
+function installMobileUpdateReload() {
+  if (!('serviceWorker' in navigator)) return;
+  if (!navigator.serviceWorker.controller) return;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloaded) return;
+    reloaded = true;
+    try {
+      const pendingUntil = Number(sessionStorage.getItem('pm_reload_pending_until') || 0);
+      if (pendingUntil > Date.now()) return;
+      sessionStorage.setItem('pm_reload_pending_until', String(Date.now() + 15000));
+    } catch {}
+    try { window.location.reload(); } catch {}
+  });
+}
+installMobileUpdateReload();
+
 async function registerMobileServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   const isSecure = window.isSecureContext
@@ -34,6 +55,20 @@ async function registerMobileServiceWorker() {
     });
     registration.update().catch(() => {});
     window.addEventListener('pageshow', () => registration.update().catch(() => {}));
+    // iOS home-screen apps are usually resumed, not reloaded, so pageshow alone
+    // misses most gateway updates. Re-check when the app comes back to the
+    // foreground and periodically while it stays open.
+    let lastCheck = Date.now();
+    const checkForUpdate = () => {
+      if (Date.now() - lastCheck < 10_000) return;
+      lastCheck = Date.now();
+      registration.update().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
+    window.addEventListener('online', checkForUpdate);
+    setInterval(() => { if (document.visibilityState === 'visible') checkForUpdate(); }, 120_000);
   } catch (error) {
     console.warn('[pm-pwa] service worker registration failed:', error);
   }
