@@ -83,6 +83,10 @@ const STOP_WORDS = new Set([
   'were', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with', 'would', 'you',
   'tell',
   'your', 'prometheus', 'raul',
+  // Generic request verbs/fillers carry no topic signal.
+  'make', 'open', 'use', 'fix', 'ahead', 'need', 'want', 'let', 'lets', 'try', 'look', 'check',
+  'see', 'new', 'add', 'run', 'next', 'more', 'only', 'thing', 'stuff', 'okay', 'yea', 'yeah',
+  'pls', 'plz', 'rn', 'basically', 'really', 'now', 'then', 'also', 'going', 'gonna', 'way',
 ]);
 
 const ENTITY_ALIASES: Array<[string, RegExp]> = [
@@ -371,8 +375,13 @@ export function retrieveMemoryAtoms(
     .filter((entry) => entry.matchedTerms.length > 0 && entry.score >= 0.13)
     .sort((a, b) => b.score - a.score || a.atom.sourceStartLine - b.atom.sourceStartLine);
 
+  // Relative cutoff: when a strong hit exists, weak tail hits are filler.
+  // Absolute floor 0.26: measured 2026-09-24, hits below it were off-topic
+  // ("open a pr for the thread ops bug" -> mobile white-screen rule at 0.25).
+  const topScore = scored[0]?.score || 0;
+  const directFloor = Math.max(0.26, topScore * 0.5);
   const direct = scored
-    .filter((entry) => entry.score >= 0.16)
+    .filter((entry) => entry.score >= directFloor)
     .map((entry) => ({ ...entry, relation: 'direct' as const }));
   const directIds = new Set(direct.map((entry) => entry.atom.id));
   // Use every direct hit as an expansion anchor. This is deliberately not a

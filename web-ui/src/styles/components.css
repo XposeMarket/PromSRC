@@ -9666,3 +9666,7 @@ button.source-panel-row:hover {
 .tool-activity-detail-fields strong { font-size: .85em; opacity: .65; }
 .tool-activity-readable-detail .markdown-body > :first-child { margin-top: 0; }
 .tool-activity-readable-detail .markdown-body > :last-child { margin-bottom: 0; }
+
+/* Stop soft-lock right after sending: dim and ignore taps briefly. */
+#send-btn.pm-stop-soft-locked { opacity: 0.45; cursor: wait; transition: opacity 0.2s ease; }
+

@@ -611,9 +611,12 @@ function buildMemoryAtomContext(
     // Main Prometheus uses the source-relative default in the atom compiler:
     // every qualifying durable fact is eligible. Voice keeps a small explicit
     // budget because its first-turn latency and spoken prompt size are tighter.
+    // Main chat matches the hybrid path's cap (6 atoms / 14k chars). This is
+    // the fallback when the hybrid pass times out; uncapped it injected up to
+    // 24 atoms (~12k chars) on generic prompts.
     ...(isVoice
       ? { maxChars: maxChars || 4_500, maxAtoms: 4 }
-      : (maxChars ? { maxChars } : {})),
+      : { maxChars: maxChars || 14_000, maxAtoms: 6 }),
     additionalContext: projectContextBlock,
   });
 }
