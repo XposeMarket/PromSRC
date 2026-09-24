@@ -770,7 +770,20 @@ export function createRenderer({ viewport, store, getScene }) {
   let _lastPlaybackTs = null;
   let _dirty = true;
 
-  function markDirty() { _dirty = true; }
+  // Both loops used to run requestAnimationFrame at display rate forever,
+  // even with nothing dirty and playback paused, keeping a core busy for as
+  // long as image/video mode was open. They now park when idle and wake on
+  // markDirty() / store changes.
+  let _disposed = false;
+  function wake() {
+    if (_disposed) return;
+    if (_raf === null) _raf = requestAnimationFrame(loop);
+    if (_playbackRaf === null && store.getState().playing) {
+      _lastPlaybackTs = null;
+      _playbackRaf = requestAnimationFrame(playbackLoop);
+    }
+  }
+  function markDirty() { _dirty = true; wake(); }
 
   function draw() {
     const { canvas, ctx, getTransform } = viewport;
@@ -801,8 +814,10 @@ export function createRenderer({ viewport, store, getScene }) {
   }
 
   function loop() {
+    _raf = null;
     if (_dirty) draw();
-    _raf = requestAnimationFrame(loop);
+    // Keep ticking only while something can still change on its own.
+    if (_dirty || store.getState().playing) _raf = requestAnimationFrame(loop);
   }
 
   function playbackLoop(ts) {
@@ -824,7 +839,9 @@ export function createRenderer({ viewport, store, getScene }) {
       }
     }
     _lastPlaybackTs = ts;
-    _playbackRaf = requestAnimationFrame(playbackLoop);
+    _playbackRaf = null;
+    if (store.getState().playing) _playbackRaf = requestAnimationFrame(playbackLoop);
+    else _lastPlaybackTs = null;
   }
 
   // Subscribe to store changes
@@ -832,12 +849,12 @@ export function createRenderer({ viewport, store, getScene }) {
     store.subscribe(markDirty),
   ];
 
-  // Start render loop
+  // Start render loop (parks itself once clean); playback loop wakes on play.
   loop();
-  // Also start playback tick loop
-  _playbackRaf = requestAnimationFrame(playbackLoop);
+  if (store.getState().playing) _playbackRaf = requestAnimationFrame(playbackLoop);
 
   function dispose() {
+    _disposed = true;
     if (_raf !== null) cancelAnimationFrame(_raf);
     if (_playbackRaf !== null) cancelAnimationFrame(_playbackRaf);
     _raf = null;

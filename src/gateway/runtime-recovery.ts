@@ -307,9 +307,18 @@ function buildCheckpointText(
   const processPacket = includeProcessPacket ? formatCheckpointProcessPacket(runtime) : [];
   if (plannedTool) {
     if (phase === 'recovered') {
+      // "Back online" used to be asserted as soon as the process booted, even
+      // with zero app windows reconnected. Report what is actually known.
+      let clients = -1;
+      try {
+        clients = (require('./comms/broadcaster') as typeof import('./comms/broadcaster')).getWebSocketClientCount();
+      } catch {}
+      const clientLine = clients > 0
+        ? `Gateway restart successful. Prometheus is back online (${clients} app client${clients === 1 ? '' : 's'} connected).`
+        : 'Gateway process restarted. App clients had not reconnected yet when this turn resumed; they receive a history replay when they reconnect. Verify the UI/health yourself before telling the user it is back.';
       return [
         '[Hot restart checkpoint: planned by this chat]',
-        'Gateway restart successful. Prometheus is back online.',
+        clientLine,
         'This is a continuation of the same in-flight turn, not a fresh user request.',
         'Use the preserved process/tool context below as authoritative progress. Do not repeat steps already recorded as completed or successful.',
         'The gateway restart that resumed this turn is already complete. Do not call gateway_restart or repeat the original restart step unless new post-recovery work genuinely requires another restart.',
@@ -1085,6 +1094,7 @@ export function recoverInterruptedRuntimes(opts: {
     }
   }
 
+  for (const sessionId of interruptedChats) rememberRecoveredSession(sessionId);
   if (resumedTasks.length || interruptedChats.length) {
     opts.notify?.(
       `Recovered interrupted work: ${resumedTasks.length} task(s) resumed, ${retriggeredChats.length} chat turn(s) retriggered, ${interruptedChats.length - retriggeredChats.length} chat checkpoint(s) preserved.`,
@@ -1099,4 +1109,32 @@ export function recoverInterruptedRuntimes(opts: {
     deferredMainChatRuntimes,
     crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
   };
+}
+
+// ── Recovery replay for late clients ─────────────────────────────────────
+// The "resumed after restart" history change is broadcast once, while phones
+// and the desktop window are usually still reconnecting. A client that missed
+// it kept showing the pre-restart state (or a lone "restart initiated" row)
+// until a manual reload. Keep a short-lived list of recovered sessions and
+// replay a session_history_changed to every socket that connects afterward.
+const RECOVERY_REPLAY_TTL_MS = 3 * 60_000;
+const recentlyRecoveredSessions = new Map<string, number>();
+
+export function rememberRecoveredSession(sessionId: string): void {
+  const sid = String(sessionId || '').trim();
+  if (sid) recentlyRecoveredSessions.set(sid, Date.now());
+}
+
+export function listRecoveryReplayEvents(now = Date.now()): Array<Record<string, any>> {
+  const events: Array<Record<string, any>> = [];
+  for (const [sessionId, at] of Array.from(recentlyRecoveredSessions.entries())) {
+    if (now - at > RECOVERY_REPLAY_TTL_MS) {
+      recentlyRecoveredSessions.delete(sessionId);
+      continue;
+    }
+    let historyCount: number | undefined;
+    try { historyCount = getHistory(sessionId, 100_000).length; } catch {}
+    events.push({ type: 'session_history_changed', sessionId, timestamp: now, historyCount, source: 'restart_recovery_replay' });
+  }
+  return events;
 }

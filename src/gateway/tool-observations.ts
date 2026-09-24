@@ -427,7 +427,9 @@ function inferToolCategory(toolName: string): string {
   return 'other';
 }
 
-const PATH_FIELD_RE = /^(?:path|paths|file|files|filename|filenames|filepath|filepaths|(?:source|target|output|dest|destination|cwd)(?:_?path)?|(?:affected|allowed|approved|changed|modified|deleted|created)_?files?)$/i;
+// `cwd` is deliberately excluded: a command's working directory is where it
+// ran, not a path it touched (it made every workspace_run report the repo root).
+const PATH_FIELD_RE = /^(?:path|paths|file|files|filename|filenames|filepath|filepaths|(?:source|target|output|dest|destination)(?:_?path)?|(?:affected|allowed|approved|changed|modified|deleted|created)_?files?)$/i;
 const COMMAND_FIELD_RE = /^(?:command|cmd|script|shell|stdout|stderr|result|content|message|text|prompt|query)$/i;
 const SHELL_BODY_RE = /(?:\r?\n|&&|\|\||[|<>]|(?:^|\s)(?:add-content|set-content|out-file|convertto-json|invoke-[a-z]+|powershell(?:\.exe)?|pwsh|cmd(?:\.exe)?|bash|zsh|sh|node|npm|npx|python(?:\.exe)?|git|cargo|go|dotnet|pytest|tsc)\b|-command\b|@\s*['"])/i;
 

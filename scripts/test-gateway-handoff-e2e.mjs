@@ -21,6 +21,11 @@ import { execSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
+// Watchdog: this e2e boots a real supervisor+gateway; if any step stalls it
+// previously hung forever and blocked every sequential test sweep.
+const __handoffWatchdog = setTimeout(() => { console.error('[handoff-e2e] watchdog: exceeded ' + (Number(process.env.PROMETHEUS_HANDOFF_E2E_TIMEOUT_MS) || 240000) + 'ms'); process.exit(124); }, Number(process.env.PROMETHEUS_HANDOFF_E2E_TIMEOUT_MS) || 240_000);
+__handoffWatchdog.unref?.();
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliEntry = path.join(root, 'dist', 'cli', 'index.js');
 assert.ok(fs.existsSync(cliEntry), 'dist/cli/index.js is missing; run npm run build:backend first');

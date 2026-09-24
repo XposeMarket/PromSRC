@@ -4389,7 +4389,7 @@ body:not(.pm-mobile-active) :is(#model-switcher-popover, [data-model-switcher-po
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  animation: t-think-shimmer 2000ms linear infinite;
+  /* steps(): background-clip:text repaints the whole label per frame; 12/s instead of 120/s. */ animation: t-think-shimmer 2000ms steps(24, end) infinite;
 }
 .live-turn-tool-group:not([data-live-trace-current="1"]) .t-think-text::before {
   display: none;

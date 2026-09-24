@@ -66,7 +66,11 @@ for (const [label, kind, relativePath] of cases) {
     env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS || '' },
     shell: process.platform === 'win32',
     stdio: 'inherit',
+    // One stuck case used to hang the whole suite forever.
+    timeout: Number(process.env.PROMETHEUS_TEST_CASE_TIMEOUT_MS || 180_000),
+    killSignal: 'SIGKILL',
   });
+  if (result.error?.code === 'ETIMEDOUT' || result.signal) console.error(`[deterministic] case timed out: ${relativePath}`);
   caseResults.push(result);
 }
 
