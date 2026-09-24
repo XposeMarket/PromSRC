@@ -11206,12 +11206,28 @@ async function runInteractiveTurn(
   if (resultFileChanges && !result.fileChanges) {
     (result as any).fileChanges = resultFileChanges;
   }
+  // Carry what each step actually produced, not just "tool: ok". A resumed or
+  // aborted turn used to see only tool names + "Completed N tool step(s)" and
+  // had to re-run commands to rediscover its own results.
   const packetToolActions = toolObservations.map((observation) => {
     const paths = Array.isArray(observation.pathsTouched) && observation.pathsTouched.length
       ? ` (${observation.pathsTouched.slice(0, 2).join(', ')})`
       : '';
-    return `${observation.toolName}: ${observation.status}${paths}`;
+    const exit = Number.isFinite(Number(observation.exitCode)) ? ` exit=${observation.exitCode}` : '';
+    const result = String(observation.resultPreview || '')
+      .replace(/\s+/g, ' ')
+      .replace(/^.*?\[exit \d+\] run=\S+ cwd=\S+\s*/, '')
+      .trim()
+      .slice(0, 220);
+    return `${observation.toolName}: ${observation.status}${exit}${paths}${result ? ` -> ${result}` : ''}`;
   });
+  // Visible commentary is the model's own running summary of findings; keep the
+  // last few lines so the next runtime knows what was concluded, not just run.
+  const packetCommentary = (Array.isArray(durableToolStreamTrace) ? durableToolStreamTrace : [])
+    .filter((entry: any) => /^(?:preamble|commentary|narration)$/i.test(String(entry?.type || '')) || (String(entry?.type || '') === 'info' && String(entry?.extra?.kind || entry?.extra?.source || '').match(/comment|narrat/i)))
+    .map((entry: any) => String(entry?.text || '').replace(/\s+/g, ' ').trim())
+    .filter((text: string) => text.length > 12)
+    .slice(-6);
   const packetFileCount = Array.isArray((resultFileChanges as any)?.files)
     ? (resultFileChanges as any).files.length
     : 0;
@@ -11244,7 +11260,10 @@ async function runInteractiveTurn(
         status: packetStatus,
         request: message,
         reasoningSummary: result.reasoningSummary,
-        findings: packetToolActions.length ? [`Completed ${packetToolActions.length} tool step(s).`] : [],
+        findings: [
+          ...packetCommentary,
+          ...(packetToolActions.length ? [`Completed ${packetToolActions.length} tool step(s); results below.`] : []),
+        ],
         decisions: result.reasoningSummary
           ? []
           : packetToolActions.length

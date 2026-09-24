@@ -79,12 +79,32 @@ function compactList(values: Array<unknown> | undefined, maxItems = 8, maxChars 
   return out;
 }
 
+// Redact only lines that actually look like a raw shell command. This used to
+// test the WHOLE multi-line block, and since every tool summary contains a
+// newline (and usually the word "git"), the entire tool state was replaced
+// with "[shell command omitted]" and resumed turns lost everything they did.
+const SHELL_LINE_RE = /^(?:\$\s|PS [A-Z]:|>\s)|(?:^|;\s*)(?:git|npm|npx|node|powershell|pwsh|cmd|bash|python)\s+-{0,2}[a-z]|\|\s*(?:Select|%|ForEach|Where|Out-)|\$[A-Za-z_]+\s*=|Get-(?:Content|ChildItem|Process)|Invoke-WebRequest|@'|'@/i;
+
 function compactActivityText(value: unknown, maxChars: number): string {
-  const text = compactText(value, maxChars);
-  if (!text || !CONTINUITY_COMMAND_RE.test(text)) return text;
-  const marker = text.search(CONTINUITY_COMMAND_RE);
-  const prefix = marker > 0 ? text.slice(0, marker).replace(/[\s:|=-]+$/, '').trim() : '';
-  return prefix ? `${prefix}: [shell command omitted; inspect tool observations for the exact command]` : '[shell command omitted; inspect tool observations for the exact command]';
+  const text = compactText(value, maxChars * 2);
+  if (!text) return text;
+  const out: string[] = [];
+  let inHereString = false;
+  for (const line of text.split('\n')) {
+    if (inHereString) {
+      if (/^\s*['"]@/.test(line)) inHereString = false;
+      continue;
+    }
+    if (!SHELL_LINE_RE.test(line) && !/(?:Add|Set)-Content|Out-File|-Command\b|@['"]\s*$/i.test(line)) {
+      out.push(line);
+      continue;
+    }
+    if (/@['"]\s*$/.test(line)) inHereString = true;
+    const marker = line.search(CONTINUITY_COMMAND_RE);
+    const prefix = marker > 0 ? line.slice(0, marker).replace(/[\s:|=(-]+$/, '').trim() : '';
+    out.push(prefix ? `${prefix}: [shell command omitted]` : '[shell command omitted]');
+  }
+  return compactText(out.join('\n'), maxChars);
 }
 
 function compactActivityList(values: Array<unknown> | undefined, maxItems = 8, maxChars = 360): string[] {
@@ -129,7 +149,8 @@ export function normalizeTurnContextPacket(input: any): TurnContextPacket | null
     reasoningSummary: normalizeReasoningSummary(input.reasoningSummary),
     findings: compactActivityList(input.findings),
     decisions: compactActivityList(input.decisions),
-    completedActions: compactActivityList(input.completedActions),
+    // Keep the NEWEST steps (the tail is what a resume needs), with room for results.
+    completedActions: compactActivityList(Array.isArray(input.completedActions) ? input.completedActions.slice(-24) : [], 24, 300),
     toolState: compactActivityText(input.toolState, 2_400),
     progressState: compactActivityText(input.progressState, 1_800),
     uncertainties: compactActivityList(input.uncertainties),
@@ -147,7 +168,7 @@ export function normalizeTurnContextPacket(input: any): TurnContextPacket | null
   packet.progressState = compactText(packet.progressState, 1_000);
   packet.findings = compactActivityList(packet.findings, 5, 240);
   packet.decisions = compactActivityList(packet.decisions, 5, 240);
-  packet.completedActions = compactActivityList(packet.completedActions, 6, 240);
+  packet.completedActions = compactActivityList(packet.completedActions.slice(-14), 14, 220);
   packet.uncertainties = compactActivityList(packet.uncertainties, 5, 240);
   packet.pendingTasks = compactActivityList(packet.pendingTasks, 5, 240);
   return packet;
@@ -179,7 +200,7 @@ export function mergeTurnContextPackets(existing: TurnContextPacket, incoming: T
     reasoningSummary: incoming.reasoningSummary || existing.reasoningSummary,
     findings: mergeList(existing.findings, incoming.findings),
     decisions: mergeList(existing.decisions, incoming.decisions),
-    completedActions: mergeList(existing.completedActions, incoming.completedActions),
+    completedActions: compactList([...existing.completedActions, ...incoming.completedActions].slice(-24), 24, 300),
     toolState: incoming.toolState || existing.toolState,
     progressState: incoming.progressState || existing.progressState,
     uncertainties: mergeList(existing.uncertainties, incoming.uncertainties),
@@ -224,10 +245,18 @@ export function formatTurnContextPacketsForPrompt(
   if (!normalized.length) return '';
   const header = '[WORKING_CONTEXT_PACKETS newest->oldest]';
   const footer = '[/WORKING_CONTEXT_PACKETS]';
-  let block = `${header}\n${normalized.map(formatTurnContextPacketForPrompt).join('\n\n')}\n${footer}`;
-  if (block.length <= maxChars) return block;
-  block = `${header}\n${normalized.slice(0, 3).map((packet) => formatTurnContextPacketForPrompt(packet)).join('\n\n')}\n${footer}`;
-  return block.length <= maxChars ? block : `${block.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n[...truncated]`;
+  // The newest packet is the one a resumed/aborted turn depends on, so it always
+  // goes in whole; older packets only fill the remaining budget. Previously a
+  // hard cut at maxChars could chop the newest packet's completed actions.
+  const parts = normalized.map(formatTurnContextPacketForPrompt);
+  const kept: string[] = [parts[0]];
+  let used = header.length + footer.length + parts[0].length + 4;
+  for (const part of parts.slice(1)) {
+    if (used + part.length + 2 > maxChars) break;
+    kept.push(part);
+    used += part.length + 2;
+  }
+  return `${header}\n${kept.join('\n\n')}\n${footer}`;
 }
 
 export function shouldPersistTurnContext(input: {

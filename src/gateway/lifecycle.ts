@@ -42,6 +42,71 @@ import {
   writeSupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request';
 
+function repoRootForElectron(): string {
+  // dist/gateway/lifecycle.js and src/gateway/lifecycle.ts both sit two levels down.
+  return path.resolve(__dirname, '..', '..');
+}
+
+function electronPidStartMs(pid: number): number {
+  if (process.platform !== 'win32' || !Number.isFinite(pid) || pid <= 0) return 0;
+  try {
+    const { execFileSync } = require('child_process');
+    const out = String(execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`,
+    ], { timeout: 5000, windowsHide: true }) || '').trim();
+    const ms = Date.parse(out);
+    return Number.isFinite(ms) ? ms : 0;
+  } catch { return 0; }
+}
+
+/** True when electron/main.js was modified after the running Electron app started. */
+export function electronMainChangedSinceAppStart(): boolean {
+  try {
+    const pid = Number(process.env.PROMETHEUS_ELECTRON_PID || 0);
+    const startedAt = electronPidStartMs(pid);
+    if (!startedAt) return false;
+    const mainJs = path.join(repoRootForElectron(), 'electron', 'main.js');
+    return fs.existsSync(mainJs) && fs.statSync(mainJs).mtimeMs > startedAt + 1000;
+  } catch { return false; }
+}
+
+/**
+ * Relaunch a dev-checkout Electron app that does not understand exit code 43.
+ * Spawns a detached helper that waits for the app to exit, then starts
+ * `electron.exe .` from the repo root; then terminates the app (which also
+ * ends this gateway child). Returns false when it cannot safely do this.
+ */
+export function relaunchElectronExternally(): boolean {
+  if (process.platform !== 'win32') return false;
+  const pid = Number(process.env.PROMETHEUS_ELECTRON_PID || 0);
+  const root = repoRootForElectron();
+  const exe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
+  if (!pid || !fs.existsSync(exe)) return false;
+  try {
+    const { spawn } = require('child_process');
+    const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+    const script = [
+      `$deadline=(Get-Date).AddSeconds(25)`,
+      `while ((Get-Process -Id ${pid} -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }`,
+      `Start-Sleep -Milliseconds 800`,
+      `Start-Process -FilePath ${q(exe)} -ArgumentList '.' -WorkingDirectory ${q(root)}`,
+    ].join('; ');
+    const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+    setTimeout(() => {
+      try { process.kill(pid); } catch {}
+      setTimeout(() => process.exit(0), 1500);
+    }, 400);
+    return true;
+  } catch (err: any) {
+    console.warn('[lifecycle] External Electron relaunch failed:', err?.message || err);
+    return false;
+  }
+}
+
+
 /** Files loaded by the Electron main process only reload when the app relaunches. */
 export function requiresElectronRelaunchForFiles(files: unknown): boolean {
   if (!Array.isArray(files)) return false;
@@ -1016,9 +1081,17 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     // never loaded. Exit 43 asks Electron to relaunch the whole app.
     // Older Electron mains treat unknown exit codes as a crash, so only ask
     // for a relaunch when this Electron advertises support for it.
-    const relaunchApp = process.env.PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH === '1'
-      && (restartCtx.restartScope === 'supervisor'
-        || requiresElectronRelaunchForFiles(restartCtx.affectedFiles));
+    const wantsRelaunch = restartCtx.restartScope === 'supervisor'
+      || requiresElectronRelaunchForFiles(restartCtx.affectedFiles)
+      || electronMainChangedSinceAppStart();
+    const relaunchApp = wantsRelaunch && process.env.PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH === '1';
+    // An Electron main that predates exit-43 support would treat 43 as a crash.
+    // Relaunch it from outside instead: a detached helper waits for the app to
+    // exit and starts it again, so nobody has to quit from the tray by hand.
+    if (wantsRelaunch && !relaunchApp && relaunchElectronExternally()) {
+      console.log('[lifecycle] Old Electron main without relaunch support: relaunching the app externally...');
+      return;
+    }
     console.log(relaunchApp
       ? '[lifecycle] Electron-managed gateway: electron/ changed or full restart requested. Asking Electron to relaunch the app...'
       : '[lifecycle] Electron-managed gateway detected. Handing restart to Electron...');
