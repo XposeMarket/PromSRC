@@ -73,7 +73,19 @@ const STOPWORDS = new Set([
   'just', 'like', 'pls', 'please', 'remember', 'spoke', 'talked', 'before', 'earlier',
 ]);
 
-const IDEA_PATTERN = /\b(we should|we need to|we could|can we (?:add|build|make|get|have|do|hook|create)|could we (?:add|build|make)|lets? (?:add|build|make|create|do)|i want (?:to add|to build|you to build|a |an |it to )|i(?:'d| would) like (?:to|a|an)|would be (?:cool|nice|sick) (?:if|to)|note (?:this|that|all this)|add (?:that|this|it) to the (?:list|backlog|notes)|new (?:idea|feature)|idea:)/i;
+// Bump when extraction or tokenisation rules change: the index is rebuilt so
+// stale rows (e.g. ideas captured by looser rules) are cleared.
+const RECALL_INDEX_VERSION = '2';
+
+// Trigger phrases must be followed by a concrete object (see extractIdeaText).
+const IDEA_PATTERN = /\b(we should (?:add|build|make|create|have|hook|wire|let|support|show|move|turn)|we could (?:add|build|make|create|have)|can we (?:add|build|make|create|hook|wire|get|have)|could we (?:add|build|make|create|have)|lets? (?:add|build|make|create|wire|hook up)|i want (?:to add|to build|you to build|to make|a |an )|i(?:'d| would) like (?:to add|to build|to make|a |an )|would be (?:cool|nice|sick|dope) (?:if|to)|new (?:idea|feature)[:,-]|idea:)/i;
+
+// Objects that make a trigger generic ("lets do all of these", "can we get it").
+const IDEA_GENERIC_WORDS = new Set([
+  'all', 'these', 'those', 'this', 'that', 'it', 'them', 'everything', 'something', 'anything', 'ahead', 'back', 'more',
+  'some', 'stuff', 'thing', 'things', 'one', 'ones', 'fixes', 'fix', 'same', 'too', 'also', 'now', 'here', 'work', 'going',
+  'started', 'done', 'sure', 'okay', 'ok', 'lol', 'lmao',
+]);
 
 let DatabaseCtor: any = null;
 let loadError = '';
@@ -137,6 +149,11 @@ function openDb(workspacePath: string): any | null {
       tokenize = 'porter unicode61'
     );
   `);
+  const version = (db.prepare("SELECT value FROM recall_meta WHERE key = 'index_version'").get() as any)?.value;
+  if (version !== RECALL_INDEX_VERSION) {
+    db.exec("DELETE FROM recall_fts; DELETE FROM recall_files; DELETE FROM recall_ideas; DELETE FROM recall_meta WHERE key = 'backfill_complete_at';");
+    db.prepare("INSERT OR REPLACE INTO recall_meta(key, value) VALUES ('index_version', ?)").run(RECALL_INDEX_VERSION);
+  }
   dbByWorkspace.set(key, db);
   return db;
 }
@@ -181,13 +198,36 @@ function clip(text: string): string {
   return t.length > MAX_DOC_CHARS ? `${t.slice(0, MAX_DOC_CHARS)}…` : t;
 }
 
+/**
+ * Extract a "we should build X" idea from a user message, or null.
+ * Pasted material (quoted text, upload manifests, code, restart packets) is
+ * ignored, and a trigger only counts when a concrete object follows it.
+ */
 export function extractIdeaText(content: string): string | null {
-  const text = String(content || '').trim();
-  if (text.length < 12) return null;
-  const match = IDEA_PATTERN.exec(text);
-  if (!match) return null;
-  const start = Math.max(0, text.lastIndexOf('\n', match.index) + 1);
-  return text.slice(start, start + 400).replace(/\s+/g, ' ').trim();
+  let text = String(content || '');
+  if (text.trim().length < 12) return null;
+  text = text
+    .replace(/\[UPLOADED FILES\][\s\S]*$/i, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/"[^"]{40,}"/g, ' ')
+    .replace(/[\u201c][^\u201d]{40,}[\u201d]/g, ' ')
+    .replace(/^\s*>.*$/gm, ' ');
+  // Heavily pasted messages (long, few of the user's own words) are skipped.
+  if (text.length > 4000) text = text.slice(0, 1500);
+  const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+  for (const raw of sentences) {
+    const sentence = raw.replace(/\s+/g, ' ').trim();
+    if (sentence.length < 12 || /^(\[|#|-{2,}|\|)/.test(sentence)) continue;
+    const match = IDEA_PATTERN.exec(sentence);
+    if (!match) continue;
+    const rest = sentence.slice(match.index + match[0].length).toLowerCase();
+    const words = rest.split(/[^a-z0-9']+/).filter(Boolean);
+    if (!words.length || IDEA_GENERIC_WORDS.has(words[0]) || (words[0] === 'the' && IDEA_GENERIC_WORDS.has(words[1] || ''))) continue;
+    const content = words.filter((w) => w.length >= 3 && !STOPWORDS.has(w) && !IDEA_GENERIC_WORDS.has(w));
+    if (content.length < 2) continue;
+    return sentence.slice(0, 300);
+  }
+  return null;
 }
 
 interface InsertCtx {
@@ -351,6 +391,38 @@ export function startRecallIndex(workspacePath: string, initialDelayMs = 15_000)
   (interval as any).unref?.();
 }
 
+/**
+ * Make sure a search isn't answered from an empty or half-built index. Runs
+ * pending indexing synchronously for up to budgetMs (the full backfill of ~4k
+ * files takes ~5s), then lets the background slices finish the rest.
+ */
+export function ensureRecallIndexWarm(workspacePath: string, budgetMs = 2_500): void {
+  if (!workspacePath || process.env.PROMETHEUS_DISABLE_RECALL_INDEX === '1') return;
+  const db = openDb(workspacePath);
+  if (!db) return;
+  const s = stateFor(workspacePath);
+  const persisted = db.prepare("SELECT value FROM recall_meta WHERE key = 'backfill_complete_at'").get() as any;
+  if (s.backfillComplete || persisted?.value) {
+    if (s.dirty.size && !s.running) {
+      s.running = true;
+      try { runRecallIndexSlice(workspacePath, 200); } finally { s.running = false; }
+    }
+    return;
+  }
+  if (s.running) return;
+  if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+  if (!s.queue.length) s.lastFullScanAt = 0;
+  const started = Date.now();
+  s.running = true;
+  let done = false;
+  try {
+    while (!done && Date.now() - started < budgetMs) done = runRecallIndexSlice(workspacePath, Math.min(400, budgetMs));
+  } catch (err: any) {
+    console.warn('[recall-index] warm-up failed:', String(err?.message || err).slice(0, 300));
+  } finally { s.running = false; }
+  if (!done) scheduleSlices(workspacePath, 0);
+}
+
 export function getRecallIndexStats(workspacePath: string): RecallIndexStats {
   const s = stateFor(workspacePath);
   try {
@@ -378,6 +450,55 @@ function termStem(term: string): string {
   return term.length > 5 ? term.slice(0, Math.max(5, term.length - 2)) : term;
 }
 
+/**
+ * Word-boundary term matching plus proximity. Returns how many query terms
+ * occur as words (prefix match on a light stem) and the smallest window of
+ * words containing one occurrence of each matched term.
+ */
+export function scoreRecallBody(body: string, terms: string[]): { matched: number; span: number } {
+  const words = String(body || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const stems = terms.map(termStem);
+  const hits: Array<{ pos: number; term: number }> = [];
+  for (let i = 0; i < words.length; i += 1) {
+    for (let t = 0; t < stems.length; t += 1) {
+      if (words[i].startsWith(stems[t])) { hits.push({ pos: i, term: t }); break; }
+    }
+  }
+  const present = new Set(hits.map((h) => h.term));
+  const matched = present.size;
+  if (matched <= 1) return { matched, span: matched };
+  // Sliding window over hit positions covering every present term.
+  const counts = new Map<number, number>();
+  let have = 0;
+  let best = Number.POSITIVE_INFINITY;
+  let left = 0;
+  for (let right = 0; right < hits.length; right += 1) {
+    const tr = hits[right].term;
+    counts.set(tr, (counts.get(tr) || 0) + 1);
+    if (counts.get(tr) === 1) have += 1;
+    while (have === matched) {
+      best = Math.min(best, hits[right].pos - hits[left].pos + 1);
+      const tl = hits[left].term;
+      counts.set(tl, (counts.get(tl) || 0) - 1);
+      if (counts.get(tl) === 0) have -= 1;
+      left += 1;
+    }
+  }
+  return { matched, span: best };
+}
+
+/** Confidence from coverage + proximity. Loose co-occurrence is never strong. */
+export function recallConfidence(terms: number, matched: number, span: number): { confidence: 'strong' | 'partial' | 'weak'; coverage: number; tight: boolean } {
+  const coverage = terms ? matched / terms : 0;
+  // Allow a few filler words between each query term ("needs *you* card").
+  const tight = matched >= 2 ? span <= matched * 3 + 1 : matched === 1 && terms === 1;
+  let confidence: 'strong' | 'partial' | 'weak' = 'weak';
+  if (coverage === 1 && tight) confidence = 'strong';
+  else if (coverage >= 0.75 && tight && terms >= 4) confidence = 'strong';
+  else if (coverage >= 0.5 && (tight || coverage === 1)) confidence = 'partial';
+  return { confidence, coverage, tight };
+}
+
 function parseDate(value: string | undefined, endOfDay = false): number | null {
   if (!value) return null;
   const v = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T${endOfDay ? '23:59:59' : '00:00:00'}` : value;
@@ -386,6 +507,7 @@ function parseDate(value: string | undefined, endOfDay = false): number | null {
 }
 
 export function searchRecall(workspacePath: string, params: RecallSearchParams): RecallSearchResult {
+  ensureRecallIndexWarm(workspacePath);
   const stats = getRecallIndexStats(workspacePath);
   const terms = recallQueryTerms(params.query);
   const empty: RecallSearchResult = { query: params.query, terms, best: 'none', hits: [], stats };
@@ -406,7 +528,9 @@ export function searchRecall(workspacePath: string, params: RecallSearchParams):
 
   const rows: any[] = [];
   const quoted = terms.map((t) => `"${t.replace(/"/g, '')}"`);
-  try { if (terms.length > 1) rows.push(...run(`"${terms.join(' ')}"`, true)); } catch { /* phrase syntax edge */ }
+  // Proximity candidates first so tight matches aren't crowded out by bm25 on
+  // long documents that merely mention every term somewhere.
+  try { if (terms.length > 1) rows.push(...run(`NEAR(${quoted.join(' ')}, ${terms.length * 3})`, true)); } catch { /* NEAR syntax edge */ }
   try { rows.push(...run(quoted.join(' OR '), false)); } catch (err: any) {
     return { ...empty, stats: { ...stats, error: String(err?.message || err) } };
   }
@@ -420,18 +544,18 @@ export function searchRecall(workspacePath: string, params: RecallSearchParams):
     .filter((r) => !sources.length || sources.includes(r.source))
     .filter((r) => (from === null || Number(r.ts) >= from) && (to === null || Number(r.ts) <= to))
     .map((r) => {
-      const body = String(r.body || '').toLowerCase();
-      const matched = terms.filter((t) => body.includes(termStem(t))).length;
-      const coverage = matched / terms.length;
+      const { matched, span } = scoreRecallBody(String(r.body || ''), terms);
+      const { confidence, coverage, tight } = recallConfidence(terms.length, matched, span);
       const ageDays = Math.max(0, (nowMs - Number(r.ts || 0)) / 86_400_000);
       const recency = Number(r.ts) ? Math.max(0, 0.05 - ageDays * 0.0005) : 0;
       const sourceBoost = r.source === 'idea' || r.source === 'memory' ? 0.04 : r.source === 'note' ? 0.02 : 0;
-      const score = coverage * 0.7 + (r.phrase ? 0.25 : 0) + recency + sourceBoost + Math.min(0.05, -Number(r.rank) / 400);
-      return { r, coverage, score };
+      const proximity = matched >= 2 && Number.isFinite(span) ? Math.min(1, (matched * 2) / span) : (tight ? 1 : 0);
+      const score = coverage * 0.55 + proximity * 0.3 + recency + sourceBoost + Math.min(0.05, -Number(r.rank) / 400);
+      return { r: { ...r, phrase: tight && matched >= 2 }, coverage, score, confidence };
     })
     .sort((a, b) => b.score - a.score);
 
-  for (const { r, coverage, score } of scored) {
+  for (const { r, coverage, score, confidence } of scored) {
     const key = `${r.path}:${r.ts}:${String(r.body).slice(0, 80)}`;
     if (seenDoc.has(key)) continue;
     seenDoc.add(key);
@@ -439,7 +563,6 @@ export function searchRecall(workspacePath: string, params: RecallSearchParams):
     const count = perSession.get(sess) || 0;
     if (count >= 2) continue;
     perSession.set(sess, count + 1);
-    const confidence: RecallHit['confidence'] = (r.phrase && coverage >= 0.6) || coverage >= 0.85 ? 'strong' : coverage >= 0.5 ? 'partial' : 'weak';
     hits.push({
       source: r.source,
       sessionId: String(r.session_id || ''),
@@ -471,7 +594,11 @@ export function formatRecallResult(result: RecallSearchResult): string {
   const s = result.stats;
   if (!s.available) return `recall unavailable: ${s.error || 'index not ready'}`;
   if (!result.terms.length) return 'recall: query has no searchable terms (only stopwords).';
-  const coverageNote = s.backfillComplete ? '' : ` (backfill in progress, ${s.pendingFiles} files pending: older history may be missing)`;
+  const coverageNote = s.backfillComplete ? '' : ` (index still building, ${s.pendingFiles} files pending: older history may be missing)`;
+  if (!s.backfillComplete && s.docs === 0) {
+    lines.push(`RECALL "${result.query}": the index is still being built after startup (0 docs yet, ${s.pendingFiles} files pending). This is NOT a "not found" result. Retry in a few seconds.`);
+    return lines.join('\n');
+  }
   lines.push(`RECALL "${result.query}" terms=[${result.terms.join(', ')}] best=${result.best === 'none' ? 'NO STRONG MATCH' : result.best} index=${s.docs} docs/${s.files} files${coverageNote}`);
   if (!result.hits.length) {
     lines.push('No matches outside the current chat. Treat this as "not found", not as evidence it never happened.');
