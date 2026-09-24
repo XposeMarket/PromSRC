@@ -2479,6 +2479,7 @@ export function getFileWebMemoryTools(): any[] {
           'Call during main chat, background tasks, plans, or any session — this is a general-purpose session memory tool. ' +
           'Good triggers: file edited, task completed, significant decision, data gathered from browser/desktop, user shared project context, plan step completed. ' +
           'Skip for casual chat, greetings, simple questions, or turns where nothing actionable occurred. ' +
+          'Mark bugs/backlog as status:"open" and, when fixing them, write a status:"done" note with resolves:[ids] so open lists never rot. ' +
           'When write_note is the only action in a turn, call switch_model("low") first to keep it fast.',
         parameters: {
           type: 'object', required: ['content'],
@@ -2488,6 +2489,8 @@ export function getFileWebMemoryTools(): any[] {
             task_id: { type: 'string', description: 'Optional task ID if related to a specific background task' },
             dev_edit_id: { type: 'string', description: 'Optional dev edit id. Use with tag "dev_edit_complete" after prom_apply_dev_changes restarts/reloads Prometheus.' },
             step: { type: 'string', description: 'Optional step label' },
+            status: { type: 'string', enum: ['open', 'done', 'info'], description: 'open = unfinished work/bug/backlog item (stays in view and carries into later days until resolved); done = completed work; info = context only (default).' },
+            resolves: { type: 'array', items: { type: 'string' }, description: 'Note ids (e.g. "n_abc123", shown as #n_... in TODAY_NOTES) this note completes. Those open items are marked done.' },
           },
         },
       },

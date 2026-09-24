@@ -118,6 +118,9 @@ export function recallIndexPath(workspacePath: string): string {
   return path.join(workspacePath, 'audit', '_index', 'recall', 'recall.sqlite');
 }
 
+/** Shared handle for sibling modules (recall-embeddings). */
+export function getRecallDb(workspacePath: string): any | null { return openDb(workspacePath); }
+
 function openDb(workspacePath: string): any | null {
   const key = path.resolve(workspacePath);
   const cached = dbByWorkspace.get(key);
@@ -267,7 +270,8 @@ function indexNotesFile(ctx: InsertCtx, rel: string, text: string): void {
     const ts = Date.parse(head[2]) || 0;
     const session = /session:\s*([A-Za-z0-9_.:-]+)/.exec(entry)?.[1] || '';
     const body = entry.replace(/^### .*\n/, '').replace(/^_Source:.*\n/m, '').trim();
-    if (body) ctx.insertDoc.run(clip(body), `note ${head[1].toLowerCase()}`, 'note', session, 'note', ts, rel);
+    const noteStatus = /\((open|done|info)\)\s*$/m.exec(entry.split('\n')[0] || '')?.[1] || '';
+    if (body) ctx.insertDoc.run(clip(body), `note ${head[1].toLowerCase()}${noteStatus ? ' ' + noteStatus : ''}`, 'note', session, 'note', ts, rel);
   }
 }
 
@@ -283,11 +287,17 @@ function indexMarkdownBullets(ctx: InsertCtx, rel: string, text: string, mtime: 
 }
 
 /** Index (or append-index) one file. Returns true if work was done. */
+function dropVectorsForPath(db: any, rel: string): void {
+  try { db.prepare('DELETE FROM recall_vec WHERE path = ?').run(rel); } catch { /* table created lazily by recall-embeddings */ }
+  try { require('./recall-embeddings').invalidateRecallVectorCache(); } catch { /* optional */ }
+}
+
 function indexFile(db: any, workspacePath: string, abs: string, ctx: InsertCtx): boolean {
   let st: fs.Stats;
   const rel = relKey(workspacePath, abs);
   try { st = fs.statSync(abs); } catch {
     db.prepare('DELETE FROM recall_fts WHERE path = ?').run(rel);
+    dropVectorsForPath(db, rel);
     db.prepare('DELETE FROM recall_files WHERE path = ?').run(rel);
     return true;
   }
@@ -296,7 +306,7 @@ function indexFile(db: any, workspacePath: string, abs: string, ctx: InsertCtx):
   const isJsonl = abs.endsWith('.jsonl');
   if (isJsonl) {
     let offset = prev && st.size >= prev.offset ? Number(prev.offset) : 0;
-    if (offset === 0 && prev) db.prepare('DELETE FROM recall_fts WHERE path = ?').run(rel);
+    if (offset === 0 && prev) { db.prepare('DELETE FROM recall_fts WHERE path = ?').run(rel); dropVectorsForPath(db, rel); }
     const length = st.size - offset;
     if (length > 0) {
       const fd = fs.openSync(abs, 'r');
@@ -315,6 +325,7 @@ function indexFile(db: any, workspacePath: string, abs: string, ctx: InsertCtx):
   }
   const text = fs.readFileSync(abs, 'utf8');
   db.prepare('DELETE FROM recall_fts WHERE path = ?').run(rel);
+  dropVectorsForPath(db, rel);
   if (/-intraday-notes\.md$/.test(abs)) indexNotesFile(ctx, rel, text);
   else indexMarkdownBullets(ctx, rel, text, st.mtimeMs);
   db.prepare('INSERT OR REPLACE INTO recall_files(path, size, mtime, offset) VALUES (?, ?, ?, ?)').run(rel, st.size, st.mtimeMs, st.size);
@@ -367,6 +378,7 @@ function scheduleSlices(workspacePath: string, delayMs: number): void {
       console.warn('[recall-index] slice failed:', String(err?.message || err).slice(0, 300));
     } finally { s.running = false; }
     if (!done) scheduleSlices(workspacePath, SLICE_GAP_MS);
+    else { try { require('./recall-embeddings').scheduleRecallEmbedding(workspacePath); } catch { /* optional */ } }
   }, Math.max(0, delayMs));
   (s.timer as any)?.unref?.();
 }
@@ -592,6 +604,82 @@ function searchRecallCore(db: any, params: RecallSearchParams & { terms: string[
   return hits;
 }
 
+export interface SemanticRecallSection { model: string; coverage: number; hits: RecallHit[] }
+
+/**
+ * Meaning-based matches that keyword search missed. Only rows above a
+ * similarity floor, deduped against the keyword hits, same exclusions/filters.
+ * Never throws; returns null when embeddings aren't available yet.
+ */
+export async function searchRecallSemantic(
+  workspacePath: string,
+  params: RecallSearchParams,
+  keywordHits: RecallHit[] = [],
+): Promise<SemanticRecallSection | null> {
+  let sem: { hits: Array<{ rowid: number; similarity: number }>; model: string; coverage: number };
+  try { sem = await require('./recall-embeddings').semanticRecallSearch(workspacePath, params.query, 40); } catch { return null; }
+  if (!sem.hits.length) return null;
+  const db = openDb(workspacePath);
+  if (!db) return null;
+  const limit = Math.max(1, Math.min(10, Number(params.limit || 5)));
+  const sources = (params.sources || []).filter(Boolean);
+  const from = parseDate(params.dateFrom);
+  const to = parseDate(params.dateTo, true);
+  const exclude = String(params.excludeSessionId || '');
+  const seen = new Set<string>(keywordHits.map((h) => `${h.path}:${h.ts}`));
+  const perSession = new Map<string, number>();
+  const get = db.prepare('SELECT source, session_id, role, ts, path, title, body FROM recall_fts WHERE rowid = ?');
+  const out: RecallHit[] = [];
+  // nomic-embed-text similarities: ~0.55+ is on-topic, ~0.65+ is a close match.
+  const FLOOR = 0.55;
+  for (const h of sem.hits) {
+    if (h.similarity < FLOOR) break;
+    const r = get.get(h.rowid) as any;
+    if (!r) continue;
+    if (exclude && r.session_id === exclude) continue;
+    if (sources.length && !sources.includes(r.source)) continue;
+    if ((from !== null && Number(r.ts) < from) || (to !== null && Number(r.ts) > to)) continue;
+    const key = `${r.path}:${r.ts}`;
+    // The same message is often stored twice (retries, restart re-appends);
+    // dedupe by content too so one hit doesn't fill two slots.
+    const bodyKey = String(r.body || '').replace(/\s+/g, ' ').trim().slice(0, 160).toLowerCase();
+    if (seen.has(key) || seen.has(bodyKey)) continue;
+    seen.add(key);
+    seen.add(bodyKey);
+    const sess = String(r.session_id || r.path);
+    const n = perSession.get(sess) || 0;
+    if (n >= 2) continue;
+    perSession.set(sess, n + 1);
+    out.push({
+      source: r.source,
+      sessionId: String(r.session_id || ''),
+      role: String(r.role || ''),
+      ts: Number(r.ts) || 0,
+      title: String(r.title || ''),
+      path: String(r.path || ''),
+      snippet: String(r.body || '').replace(/\s+/g, ' ').slice(0, 320),
+      coverage: 0,
+      phrase: false,
+      confidence: h.similarity >= 0.68 ? 'strong' : h.similarity >= 0.6 ? 'partial' : 'weak',
+      score: Math.round(h.similarity * 1000) / 1000,
+    });
+    if (out.length >= limit) break;
+  }
+  return out.length ? { model: sem.model, coverage: sem.coverage, hits: out } : null;
+}
+
+export function formatSemanticRecallSection(section: SemanticRecallSection | null): string {
+  if (!section) return '';
+  const pct = Math.round(section.coverage * 100);
+  const lines = [`SEMANTIC MATCHES (by meaning, not exact words; ${section.model}, ${pct}% of history embedded):`];
+  for (const h of section.hits) {
+    const when = h.ts ? new Date(h.ts).toISOString().slice(0, 16).replace('T', ' ') : '';
+    const who = h.source === 'transcript' ? `transcript/${h.role}` : h.source;
+    lines.push(`- [${h.confidence} sim ${h.score.toFixed(2)}] ${who} ${when} ${h.sessionId ? `[${h.sessionId}]` : h.path}`);
+    lines.push(`  ${h.snippet}`);
+  }
+  return lines.join('\n');
+}
 export function listRecallIdeas(workspacePath: string, limit = 20): Array<{ sessionId: string; ts: number; text: string }> {
   const db = openDb(workspacePath);
   if (!db) return [];

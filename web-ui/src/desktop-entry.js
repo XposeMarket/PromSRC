@@ -24,6 +24,7 @@ if (mobileSurface) {
   window.__PROM_DESKTOP_MODULES_READY = Promise.all([
     import('./state.js'),
     import('./api.js'),
+    import('./features/usage/banked-reset.js'),
     import('./utils.js'),
     import('./ws.js'),
     import('./app.js'),

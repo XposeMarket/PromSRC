@@ -2562,6 +2562,38 @@ async function followMainChatDefault(sessionIdOverride = '') {
 }
 
 window.refreshActiveChatModelRoute = refreshActiveChatModelRoute;
+// Turn-scoped helper model (switch_model): show it in the composer picker while
+// the helper runs, then restore the chat's stored route when the turn ends.
+// Labels only; the persisted route and the switcher cache are never touched.
+const _turnModelOverrideBySession = new Map();
+function pmPaintTurnModelOverride(sessionId, route) {
+  const id = getActiveChatModelRouteSessionId(sessionId);
+  if (!id || !route?.model) return;
+  _turnModelOverrideBySession.set(id, { ...route, at: Date.now() });
+  const isSecondary = id !== String(window.activeChatSessionId || '').trim();
+  const tier = String(route.tier || '').trim();
+  const effort = tier ? `${tier} tier` : '';
+  _renderActiveModelLabels(route.model, route.providerId, effort, isSecondary ? id : '');
+  const composer = isSecondary
+    ? Array.from(document.querySelectorAll('[data-composer-model-name="1"]')).find((node) => String(node.dataset.composerModelSessionId || '') === id)
+    : document.getElementById('chat-model-name');
+  if (composer) {
+    composer.dataset.turnOverride = '1';
+    composer.title = `Helper model for this turn${route.reason ? `: ${route.reason}` : ''}. Returns to the chat model when the turn ends.`;
+  }
+}
+function pmClearTurnModelOverride(sessionId) {
+  const id = getActiveChatModelRouteSessionId(sessionId);
+  if (!id || !_turnModelOverrideBySession.has(id)) return;
+  _turnModelOverrideBySession.delete(id);
+  const nodes = Array.from(document.querySelectorAll('[data-turn-override="1"]'));
+  for (const node of nodes) { delete node.dataset.turnOverride; node.removeAttribute('title'); }
+  const cached = _desktopSwitcherCachedRouteForSession(id);
+  if (cached?.effective?.model) _applyDesktopSwitcherRouteState(id, cached);
+  else refreshActiveChatModelRoute(id, { force: true });
+}
+window.pmPaintTurnModelOverride = pmPaintTurnModelOverride;
+window.pmClearTurnModelOverride = pmClearTurnModelOverride;
 window.followMainChatDefault = followMainChatDefault;
 
 const DESKTOP_SWITCHER_EXTRA_MODELS = {

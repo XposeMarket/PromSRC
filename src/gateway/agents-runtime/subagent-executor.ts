@@ -18175,19 +18175,17 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         }
         const noteTag = String(args.tag || args.step || 'general').trim();
         const noteTaskId = args.task_id ? String(args.task_id) : null;
+        let noteWriteResult: any = null;
 
         // Always write to intraday notes file (works in all sessions)
         try {
-          const noteDate = new Date().toISOString().split('T')[0];
-          const memDir = path.join(workspacePath, 'memory');
-          if (!fs.existsSync(memDir)) fs.mkdirSync(memDir, { recursive: true });
-          const intradayFile = path.join(memDir, `${noteDate}-intraday-notes.md`);
-          const timestamp = new Date().toISOString();
           const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
-          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
-          if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
-          fs.appendFileSync(intradayFile, entry + '\n');
-          try { require('../memory-index/recall-index').markRecallDirty(workspacePath, intradayFile, 500); } catch { /* best-effort */ }
+          const noteWrite = require('../memory/intraday-notes').appendIntradayNote(workspacePath, {
+            tag: noteTag, content: noteContent, sourceLine, taskId: noteTaskId,
+            status: args.status, resolves: args.resolves,
+          });
+          noteWriteResult = noteWrite;
+          try { require('../memory-index/recall-index').markRecallDirty(workspacePath, noteWrite.file, 500); } catch { /* best-effort */ }
         } catch (err: any) {
           return { name, args, result: `write_note: failed to write intraday note: ${err.message}`, error: true };
         }
@@ -18260,7 +18258,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         return {
           name,
           args,
-          result: `Note saved [${noteTag}] (${noteContent.length} chars) -> intraday-notes.${devEditSuffix}`,
+          result: `Note saved [${noteTag}] (${noteContent.length} chars) -> intraday-notes${noteWriteResult?.deduped ? ' (duplicate of #' + noteWriteResult.id + ' within 10 min, not re-written)' : noteWriteResult?.id ? ' #' + noteWriteResult.id + ' (' + noteWriteResult.status + ')' : ''}${noteWriteResult?.resolved?.length ? ' resolved: ' + noteWriteResult.resolved.join(', ') : ''}${noteWriteResult?.unresolved?.length ? ' not found: ' + noteWriteResult.unresolved.join(', ') : ''}.${devEditSuffix}`,
           data: completedDevEdit ? { dev_edit_complete: true, dev_edit_id: completedDevEdit.id, tag: noteTag } : undefined,
           extra: completedDevEdit ? { dev_edit_complete: true, dev_edit_id: completedDevEdit.id, tag: noteTag } : undefined,
           error: false,

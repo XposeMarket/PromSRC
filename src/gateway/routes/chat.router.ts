@@ -1996,6 +1996,7 @@ import {
   loadVoiceAgentMemory,
   readDailyMemoryContext,
   processIntradayNotes,
+  processIntradayNotesForPrompt,
   isLowInformationAutomaticMemoryQuery,
   detectToolCategories,
   readMemoryCategories,
@@ -18169,7 +18170,7 @@ function buildSystemPromptChildren(totalTokens: number, sessionId: string, profi
     const activeCategories = getActivatedToolCategories(sessionId);
     const today = new Date().toISOString().split('T')[0];
     const intradayRaw = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 32_000);
-    const intraday = processIntradayNotes(intradayRaw);
+    const intraday = processIntradayNotesForPrompt(workspacePath, intradayRaw);
     const business = isBusinessContextEnabled(sessionId) ? loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000) : '';
     const lastUserText = getLastUserContextText(sessionId);
     const cisContext = buildCisContextBlock(workspacePath, lastUserText, { force: isBusinessContextEnabled(sessionId) });

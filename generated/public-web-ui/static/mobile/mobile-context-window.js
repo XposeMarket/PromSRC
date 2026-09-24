@@ -7,6 +7,9 @@
 // for the mobile shell.
 
 import { mobileGatewayFetch } from './mobile-api.js';
+import { setBankedResetFetcher } from '../features/usage/banked-reset.js';
+
+setBankedResetFetcher(mobileGatewayFetch);
 import { escapeHtml } from './mobile-shell.js';
 import { readContextWindowCache, resolveActiveContextTokens, writeContextWindowCache } from '../context-window-value.js';
 

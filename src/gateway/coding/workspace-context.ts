@@ -1,3 +1,4 @@
+import { cachedGitRead, isCacheableGitRead } from './git-read-cache';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -185,6 +186,11 @@ function safeRoot(rawRoot?: string): string {
 }
 
 function runGit(root: string, args: string[], maxBuffer = MAX_DIFF_BYTES): string {
+  if (isCacheableGitRead(args)) return cachedGitRead(root, args, () => runGitUncached(root, args, maxBuffer), 'raw');
+  return runGitUncached(root, args, maxBuffer);
+}
+
+function runGitUncached(root: string, args: string[], maxBuffer = MAX_DIFF_BYTES): string {
   try {
     return String(execFileSync('git', args, {
       cwd: root,
@@ -275,7 +281,7 @@ function makeNoIndexDiff(display: string, before: Buffer | null, after: Buffer |
 
 function parseStatus(root: string): Array<{ path: string; status: CodingFileStatus; staged: boolean; unstaged: boolean; untracked: boolean; oldPath?: string }> {
   const rows: Array<{ path: string; status: CodingFileStatus; staged: boolean; unstaged: boolean; untracked: boolean; oldPath?: string }> = [];
-  const raw = runGit(root, ['status', '--porcelain=v1', '--untracked-files=all'], 2 * 1024 * 1024);
+  const raw = runGit(root, ['status', '--porcelain=v1', '--branch', '--untracked-files=all'], 8 * 1024 * 1024).split(/\r?\n/).filter((line) => !line.startsWith('## ')).join('\n');
   for (const line of raw.split(/\r?\n/).map((item) => item.trimEnd()).filter(Boolean)) {
     const indexStatus = line.slice(0, 1);
     const worktreeStatus = line.slice(1, 2);
@@ -636,6 +642,11 @@ export function getCodingWorkspaceContext(input: { sessionId?: string; scope?: C
     });
   }
   const sortedRoots = contextRoots.sort((a, b) => {
+    // The panel renders roots[0] as the primary repo. A git repo the thread
+    // actually edited must win over a non-git folder that only holds stale
+    // history rows (e.g. the Prometheus workspace's Brain files).
+    const gitDelta = Number(b.repository?.vcs?.kind === 'git') - Number(a.repository?.vcs?.kind === 'git');
+    if (gitDelta) return gitDelta;
     const fileDelta = b.files.length - a.files.length;
     if (fileDelta) return fileDelta;
     if (a.source === 'thread' && b.source !== 'thread') return -1;

@@ -9670,3 +9670,22 @@ button.source-panel-row:hover {
 /* Stop soft-lock right after sending: dim and ignore taps briefly. */
 #send-btn.pm-stop-soft-locked { opacity: 0.45; cursor: wait; transition: opacity 0.2s ease; }
 
+
+/* Banked usage reset row (context-window popover, desktop + mobile) */
+.pm-banked-reset { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); }
+.pm-banked-reset-row { display: flex; align-items: center; gap: 10px; }
+.pm-banked-reset-row + .pm-banked-reset-row { margin-top: 6px; }
+.pm-banked-reset-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pm-banked-reset-title { font-size: 12px; font-weight: 600; color: var(--text, #f4f4f5); }
+.pm-banked-reset-sub { font-size: 11px; opacity: 0.6; }
+.pm-banked-reset-btn { flex: none; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.08); color: inherit; cursor: pointer; }
+.pm-banked-reset-btn:hover { background: rgba(255,255,255,0.14); }
+.pm-banked-reset-confirm-backdrop { position: fixed; inset: 0; z-index: 10050; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.pm-banked-reset-confirm { width: min(360px, 100%); padding: 18px; border-radius: 18px; background: rgba(28,28,32,0.92); border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 20px 60px rgba(0,0,0,0.5); color: #f4f4f5; -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); }
+.pm-brc-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.pm-brc-body { font-size: 13px; line-height: 1.45; opacity: 0.85; }
+.pm-brc-status { font-size: 12px; min-height: 16px; margin-top: 10px; opacity: 0.9; }
+.pm-brc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.pm-brc-actions button { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06); color: inherit; cursor: pointer; }
+.pm-brc-actions .pm-brc-confirm { background: #f4f4f5; color: #111; border-color: transparent; }
+.pm-brc-actions button:disabled { opacity: 0.45; cursor: default; }
