@@ -142,7 +142,7 @@ async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boo
   const sections: string[] = [];
   let recallBest = 'none';
   try {
-    const { searchRecall, formatRecallResult } = require('../../memory-index/recall-index');
+    const { searchRecall, formatRecallResult, searchRecallSemantic, formatSemanticRecallSection } = require('../../memory-index/recall-index');
     const sources = Array.isArray(args?.sources) ? args.sources.map((s: any) => String(s || '').trim()).filter(Boolean) : undefined;
     const res = searchRecall(workspacePath, {
       query,
@@ -154,6 +154,21 @@ async function runUnifiedRecall(ctx: CapabilityExecutionContext, recallOnly: boo
     });
     recallBest = res.best;
     sections.push(formatRecallResult(res));
+    try {
+      const sem = await searchRecallSemantic(workspacePath, {
+        query,
+        limit: 5,
+        sources: Array.isArray(args?.sources) ? args.sources.map((s: any) => String(s || '').trim()).filter(Boolean) : undefined,
+        excludeSessionId: args?.include_current_chat === true ? '' : String(sessionId || ''),
+        dateFrom: args?.date_from ? String(args.date_from) : undefined,
+        dateTo: args?.date_to ? String(args.date_to) : undefined,
+      }, res.hits);
+      const semText = formatSemanticRecallSection(sem);
+      if (semText) {
+        sections.push(semText);
+        if (recallBest === 'none' && sem?.hits?.some((h: any) => h.confidence === 'strong')) recallBest = 'partial';
+      }
+    } catch { /* keyword result stands alone */ }
   } catch (err: any) {
     sections.push(`recall index unavailable: ${String(err?.message || err)}`);
   }
@@ -654,18 +669,16 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         if (!noteContent) return { name, args, result: 'write_note: empty content', error: true };
         const noteTag = String(args.tag || args.step || 'general').trim();
         const noteTaskId = args.task_id ? String(args.task_id) : null;
+        let noteWriteResult: any = null;
 
         try {
-          const noteDate = new Date().toISOString().split('T')[0];
-          const memDir = path.join(workspacePath, 'memory');
-          if (!fs.existsSync(memDir)) fs.mkdirSync(memDir, { recursive: true });
-          const intradayFile = path.join(memDir, `${noteDate}-intraday-notes.md`);
-          const timestamp = new Date().toISOString();
           const sourceLine = formatIntradayNoteSourceLine(inferIntradayNoteSource(sessionId, args));
-          let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
-          if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
-          fs.appendFileSync(intradayFile, entry + '\n');
-          try { require('../../memory-index/recall-index').markRecallDirty(workspacePath, intradayFile, 500); } catch { /* best-effort */ }
+          const noteWrite = require('../../memory/intraday-notes').appendIntradayNote(workspacePath, {
+            tag: noteTag, content: noteContent, sourceLine, taskId: noteTaskId,
+            status: args.status, resolves: args.resolves,
+          });
+          noteWriteResult = noteWrite;
+          try { require('../../memory-index/recall-index').markRecallDirty(workspacePath, noteWrite.file, 500); } catch { /* best-effort */ }
         } catch (err: any) {
           return { name, args, result: `write_note: failed to write intraday note: ${err.message}`, error: true };
         }
@@ -715,7 +728,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           });
         }
 
-        return { name, args, result: `Note saved [${noteTag}] (${noteContent.length} chars) -> intraday-notes`, error: false };
+        return { name, args, result: `Note saved [${noteTag}] (${noteContent.length} chars) -> intraday-notes${noteWriteResult?.deduped ? ' (duplicate of #' + noteWriteResult.id + ' within 10 min, not re-written)' : noteWriteResult?.id ? ' #' + noteWriteResult.id + ' (' + noteWriteResult.status + ')' : ''}${noteWriteResult?.resolved?.length ? ' resolved: ' + noteWriteResult.resolved.join(', ') : ''}${noteWriteResult?.unresolved?.length ? ' not found: ' + noteWriteResult.unresolved.join(', ') : ''}`, error: false };
       }
 
       default:

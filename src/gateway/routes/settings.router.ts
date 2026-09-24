@@ -422,6 +422,47 @@ router.get('/api/usage/limits', async (_req, res) => {
   }
 });
 
+// Banked usage resets. Codex is the only provider with a known API today
+// (Claude's "Reset for free" is claude.ai-only; xAI has none).
+function codexResetAccountId(): string | undefined {
+  try {
+    const cfg: any = getConfig().getConfig();
+    const pc = cfg?.llm?.providers?.openai_codex || {};
+    return String(pc.defaultAccountId || (cfg?.llm?.provider === 'openai_codex' ? cfg?.llm?.accountId : '') || '').trim() || undefined;
+  } catch { return undefined; }
+}
+
+// GET /api/usage/reset-credits - available banked resets per provider.
+router.get('/api/usage/reset-credits', async (req, res) => {
+  try {
+    const { getCodexResetCredits } = require('../../providers/codex-reset-credits');
+    const codex = await getCodexResetCredits(getConfig().getConfigDir(), codexResetAccountId(), req.query.force === '1');
+    res.json({ success: true, providers: [codex] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// POST /api/usage/reset-credits/consume { provider, credit_id, confirm: true }
+// Irreversible. The UI shows a confirmation first; confirm:true is required.
+router.post('/api/usage/reset-credits/consume', async (req, res) => {
+  try {
+    const provider = String(req.body?.provider || '').trim();
+    const creditId = String(req.body?.credit_id || req.body?.creditId || '').trim();
+    if (req.body?.confirm !== true) { res.status(400).json({ success: false, error: 'confirm:true is required' }); return; }
+    if (provider !== 'openai_codex') { res.status(400).json({ success: false, error: `No banked-reset API for ${provider || 'that provider'}` }); return; }
+    if (!creditId) { res.status(400).json({ success: false, error: 'credit_id is required' }); return; }
+    const { consumeCodexResetCredit } = require('../../providers/codex-reset-credits');
+    const out = await consumeCodexResetCredit(getConfig().getConfigDir(), creditId, codexResetAccountId());
+    try { require('../../providers/provider-usage-limits').invalidateProviderUsageLive('openai_codex'); } catch {}
+    if (out.outcome === 'reset') {
+      try { require('../../providers/usage-awareness').clearProviderUsageExhausted?.('openai_codex'); } catch {}
+    }
+    res.json({ success: true, provider, ...out });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
 // GET /api/settings/usage-budgets - manual monthly token budgets per provider.
 router.get('/api/settings/usage-budgets', (_req, res) => {
   try {

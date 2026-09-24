@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { getConfig } from '../../config/config';
+import { cachedGitRead, invalidateGitReadCache, isCacheableGitRead } from './git-read-cache';
 
 export type PackageManagerKind = 'npm' | 'pnpm' | 'yarn' | 'bun' | 'pip' | 'uv' | 'cargo' | 'go' | 'dotnet' | 'unknown';
 
@@ -57,6 +58,11 @@ export interface CodingRepositoryBranch {
 }
 
 function runGit(root: string, args: string[], timeout = 5000): string {
+  if (isCacheableGitRead(args)) return cachedGitRead(root, args, () => runGitUncached(root, args, timeout), 'trim');
+  return runGitUncached(root, args, timeout);
+}
+
+function runGitUncached(root: string, args: string[], timeout = 5000): string {
   try {
     return execFileSync('git', args, {
       cwd: root,
@@ -71,6 +77,7 @@ function runGit(root: string, args: string[], timeout = 5000): string {
 }
 
 function runGitCommand(root: string, args: string[], timeout = 30000): string {
+  invalidateGitReadCache();
   try {
     return execFileSync('git', args, {
       cwd: root,
@@ -128,11 +135,21 @@ function normalizeGitRemote(remote: string): { remoteUrl?: string; repoFullName?
   };
 }
 
+/** Single shared `git status` call (branch header + all untracked). Cached briefly via runGit. */
+function gitStatusRaw(root: string): string {
+  return runGit(root, ['status', '--porcelain=v1', '--branch', '--untracked-files=all'], 8000);
+}
+
+function gitStatusFileLines(root: string): string[] {
+  return gitStatusRaw(root).split(/\r?\n/).map((line) => line.replace(/\s+$/, '')).filter((line) => line && !line.startsWith('## '));
+}
+
+/** Matches the old `git status --short --branch` text shape. */
+function gitShortBranchText(root: string): string {
+  return gitStatusRaw(root).split(/\r?\n/).filter((line) => line.trim()).join('\n');
+}
 function parseGitStatusLines(root: string): { dirtyFiles: string[]; stagedFiles: number; unstagedFiles: number; untrackedFiles: number } {
-  const lines = runGit(root, ['status', '--porcelain=v1', '--untracked-files=all'])
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+$/, ''))
-    .filter(Boolean);
+  const lines = gitStatusFileLines(root);
   let stagedFiles = 0;
   let unstagedFiles = 0;
   let untrackedFiles = 0;
@@ -226,11 +243,7 @@ export function detectCommands(root: string, pm: PackageManagerKind): Pick<Codin
 }
 
 export function getDirtyFiles(root: string): string[] {
-  const status = runGit(root, ['status', '--porcelain=v1'], 5000);
-  if (!status) return [];
-  return status.split(/\r?\n/)
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
+  return gitStatusFileLines(root).map((line) => line.slice(3).trim()).filter(Boolean);
 }
 
 export function getCodingWorkspaceSession(rawRoot?: string): CodingWorkspaceSession {
@@ -355,7 +368,7 @@ export function gitCurrentStatus(root: string): { branch?: string; dirtyFiles: s
   return {
     branch: runGit(root, ['branch', '--show-current'], 5000) || undefined,
     dirtyFiles: getDirtyFiles(root),
-    statusText: runGit(root, ['status', '--short', '--branch'], 5000),
+    statusText: gitShortBranchText(root),
   };
 }
 
@@ -366,7 +379,7 @@ export function getCodingRepositorySnapshot(rawRoot?: string): CodingRepositoryS
   const root = path.resolve(gitRoot || gitStartPath);
   const name = path.basename(root) || 'Workspace';
   const status = parseGitStatusLines(root);
-  const statusText = runGit(root, ['status', '--short', '--branch'], 5000);
+  const statusText = gitShortBranchText(root);
   const branch = runGit(root, ['branch', '--show-current'], 5000) || undefined;
   const remoteName = runGit(root, ['remote'], 5000).split(/\r?\n/).map((item) => item.trim()).find(Boolean) || undefined;
   const remote = remoteName ? normalizeGitRemote(runGit(root, ['remote', 'get-url', remoteName], 5000)) : {};

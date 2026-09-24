@@ -768,6 +768,12 @@ async function fetchGrokLive(configDir: string, accountId?: string): Promise<Liv
 const LIVE_TTL_MS = 2 * 60 * 1000;
 const liveCache = new Map<string, { ts: number; value: LiveResult }>();
 
+/** Drop cached live usage (e.g. right after a banked reset changes it). */
+export function invalidateProviderUsageLive(providerId?: string): void {
+  if (!providerId) { liveCache.clear(); return; }
+  for (const key of liveCache.keys()) if (key.startsWith(`${providerId}:`)) liveCache.delete(key);
+}
+
 async function getLive(providerId: string, configDir: string, accountId?: string): Promise<LiveResult | null> {
   const cacheKey = `${providerId}:${String(accountId || 'default')}`;
   const cached = liveCache.get(cacheKey);

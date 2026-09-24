@@ -1680,8 +1680,19 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               const badgeText = `${modelLabel}${switchedReason ? ` — ${switchedReason}` : ''}`;
               pushProgressLine(badgeText);
               streamState.activeModelBadge = { label: modelLabel, reason: switchedReason, provider: switchedProvider };
+              // Show the helper model in the composer picker while it runs; restored at turn end.
+              try {
+                if (switchedModel && typeof window.pmPaintTurnModelOverride === 'function') {
+                  window.pmPaintTurnModelOverride(thisSessionId, { providerId: switchedProvider, model: switchedModel, tier: String(event.tier || ''), reason: switchedReason });
+                }
+              } catch {}
               showToast('Model switched', `${switchedProvider ? `${switchedProvider}/` : ''}${switchedModel}${switchedReason ? ` - ${switchedReason}` : ''}`, 'info', 4500);
               renderIfViewingThisSession();
+              break;
+            }
+
+            case 'model_reverted': {
+              try { window.pmClearTurnModelOverride?.(thisSessionId); } catch {}
               break;
             }
 
@@ -1692,6 +1703,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
               const label = formatModelDisplayName(model || 'main model', provider);
               pushProgressLine(`Main chat model set to ${provider ? `${provider}/` : ''}${model}`);
               streamState.activeModelBadge = { label, reason: 'main chat default', provider };
+              try { window.refreshActiveChatModelRoute?.(thisSessionId, { force: true }); } catch {}
               showToast('Main model changed', modelRef || `${provider ? `${provider}/` : ''}${model}`, 'success', 5000);
               renderIfViewingThisSession();
               break;
@@ -1705,6 +1717,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 
 	          case 'done':
 	            finalReply = event.reply || finalReply || '';
+                try { window.pmClearTurnModelOverride?.(thisSessionId); } catch {}
                 desktopChatRuntime(thisSessionId)?.completeStream(finalReply || streamState.streamingAIText, event);
 	            if (finalReply) partialContent = finalReply;
 	            syncStreamingVisualActivity(streamState, finalReply || streamState.streamingAIText, applyLiveToolActivity, { finalize: true });
@@ -1808,6 +1821,7 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
 
     } catch (err) {
       if (!chatRequestAccepted && !queuedTurn) restoreDesktopComposerAfterFailedSend(thisSessionId, message);
+      try { window.pmClearTurnModelOverride?.(thisSessionId); } catch {}
       persistTurnThinkingToProcess();
       const pageLifecycleDisconnected = window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId] === true;
       const wasAborted = !pageLifecycleDisconnected && (err?.name === 'AbortError'

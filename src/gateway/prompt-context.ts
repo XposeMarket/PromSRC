@@ -39,6 +39,7 @@ import {
 } from '../runtime/instruction-intent-detector';
 import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
 import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext } from './brain/brain-continuity.js';
+import { renderNotesForPrompt } from './memory/intraday-notes';
 import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
 import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
 import { buildRuntimeHostContext } from './runtime-host-context.js';
@@ -143,6 +144,27 @@ export function processIntradayNotes(
   return [carry, recent].filter(Boolean).join('\n\n');
 }
 
+/**
+ * Full-text notes projection for interactive turns: Brain carry-forward in
+ * full, then open items (today + carried from the last 7 days) in full, info
+ * notes newest-first in full, and done items as one-liners, under one budget.
+ * Replaces the old 250-char-per-entry preview for main chat.
+ */
+export function processIntradayNotesForPrompt(workspacePath: string, raw: string, budgetChars = 9_000): string {
+  let carry = '';
+  let rest = raw || '';
+  const start = rest.indexOf(BRAIN_CARRY_FORWARD_MARKERS.start);
+  const end = rest.indexOf(BRAIN_CARRY_FORWARD_MARKERS.end);
+  if (start >= 0 && end >= start) {
+    const finish = end + BRAIN_CARRY_FORWARD_MARKERS.end.length;
+    carry = rest.slice(start, finish).trim();
+    if (carry.length > 6_000) carry = `${carry.slice(0, 6_000)}\n...[carry-forward context truncated for prompt budget]`;
+    rest = `${rest.slice(0, start)}${rest.slice(finish)}`;
+  }
+  let notes = '';
+  try { notes = renderNotesForPrompt(workspacePath, rest, { budgetChars }); } catch { notes = processIntradayNotes(rest); }
+  return [carry, notes].filter(Boolean).join('\n\n');
+}
 // ─── Types ───────────────────────────────────────────────────────────────────────
 export interface SkillWindow {
   triggeredAtTurn: number;
@@ -2292,7 +2314,7 @@ export async function buildPersonalityContext(
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
-  const intradayNotes = !_skipIntradayInteractive ? processIntradayNotes(readPromptProfileText(intradayPath)) : '';
+  const intradayNotes = !_skipIntradayInteractive ? processIntradayNotesForPrompt(workspacePath, readPromptProfileText(intradayPath)) : '';
   const brainActiveContext = !_skipIntradayInteractive
     ? buildBrainCapsuleContext(workspacePath, messageText)
     : '';
