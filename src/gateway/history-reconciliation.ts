@@ -65,6 +65,15 @@ function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
     && Array.isArray(prior.processEntries) && prior.processEntries.length) next.processEntries = prior.processEntries;
   if ((!Array.isArray(next.liveTraceEntries) || next.liveTraceEntries.length === 0)
     && Array.isArray(prior.liveTraceEntries) && prior.liveTraceEntries.length) next.liveTraceEntries = prior.liveTraceEntries;
+  // Chat loads send older turns a compacted trace. When a client saves that
+  // copy back, it must never replace the durable full trace.
+  if (Array.isArray(prior.liveTraceEntries) && prior.liveTraceEntries.length
+    && Array.isArray(next.liveTraceEntries)
+    && (next.liveTraceCompacted === true || next.liveTraceEntries.length < prior.liveTraceEntries.length)) {
+    next.liveTraceEntries = prior.liveTraceEntries;
+  }
+  delete next.liveTraceCompacted;
+  delete next.liveTraceTotalCount;
   if (!next.toolLog && prior.toolLog) next.toolLog = prior.toolLog;
   if (!next.thinking && prior.thinking) next.thinking = prior.thinking;
   if (!next.fileChanges && prior.fileChanges) next.fileChanges = prior.fileChanges;

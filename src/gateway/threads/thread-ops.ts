@@ -20,7 +20,7 @@ import { unsettleSessionSafely } from '../session-settlement';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
 import { handleMainChatGoalCommand } from '../main-chat-goals';
-import { abortLiveRuntime, addPendingRuntimeSteerForSession, listLiveRuntimes } from '../live-runtime-registry';
+import { abortLiveRuntime, addPendingRuntimeSteerForSession, clearStartingSessionSteers, listLiveRuntimes } from '../live-runtime-registry';
 import {
   cancelThreadSupervision,
   assertThreadSupervisionFollowUpAllowed,
@@ -143,11 +143,16 @@ export function resolveManagedThreadModelRoute(
   return {
     providerId,
     model: modelName,
+    // Unspecified reasoning follows Main Chat's effort even when switching
+    // provider. The per-provider saved value is often a stale "low" left by
+    // helper/tier routing, which silently degraded managed threads.
     ...(reasoning.present
       ? (reasoning.value ? { reasoningEffort: reasoning.value } : {})
-      : (provider.present
-        ? (providerConfig.reasoning_effort ? { reasoningEffort: String(providerConfig.reasoning_effort).trim() } : {})
-        : (inherited.reasoningEffort ? { reasoningEffort: String(inherited.reasoningEffort).trim() } : {}))),
+      : (inherited.reasoningEffort
+        ? { reasoningEffort: String(inherited.reasoningEffort).trim() }
+        : (provider.present && providerConfig.reasoning_effort
+          ? { reasoningEffort: String(providerConfig.reasoning_effort).trim() }
+          : {}))),
     ...((account.present ? account.value : sourceAccount)
       ? { accountId: account.present ? account.value! : sourceAccount }
       : {}),
@@ -189,6 +194,29 @@ function sessionRouteState(sessionId: string): Record<string, any> {
 
 function sessionSummaryWithRuntime(session: any): Record<string, any> {
   return { ...session, runtime: activeRuntimeForSession(session.id), chatModelRoute: sessionRouteState(session.id) };
+}
+
+// list/find are inventory calls. Full summaries embedded each session's live
+// progress log and route internals (~5KB per chat), flooding model context.
+// Return the fields a caller needs to pick a thread; use status/read for depth.
+function compactSessionSummary(session: any): Record<string, any> {
+  const runtime = activeRuntimeForSession(session.id);
+  const route = sessionRouteState(session.id) as any;
+  const effective = route?.effective || {};
+  return {
+    id: session.id,
+    title: session.title,
+    channel: session.channel,
+    preview: String(session.preview || '').replace(/\s+/g, ' ').slice(0, 160),
+    messageCount: session.messageCount,
+    lastActiveAt: session.lastActiveAt,
+    pinned: !!session.pinnedAt,
+    settled: !!session.settled,
+    activeRun: !!(session.activeRun || runtime),
+    ...(runtime ? { runtime: { id: runtime.id, kind: runtime.kind, status: runtime.status, startedAt: runtime.startedAt } } : {}),
+    ...(getPendingDetachedRun(session.id) ? { queuedRun: true } : {}),
+    ...(effective.providerId ? { model: `${effective.providerId}/${effective.model || ''}`, reasoning: effective.reasoningEffort } : {}),
+  };
 }
 
 function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit = 40): Record<string, any> {
@@ -239,6 +267,44 @@ function followUpFingerprint(targetSessionId: string, message: string): string {
     .digest('hex');
 }
 
+// A detached run is "queued" from the moment thread ops accepts it until the
+// chat runtime registers a steerable live runtime. Steer/interrupt used to be
+// rejected (steer) or silently no-op (interrupt) in that window, which is the
+// moment a supervisor most often wants to redirect. Track the window here.
+type PendingDetachedRun = {
+  targetSessionId: string;
+  prompt: string;
+  queuedAt: number;
+  steers: string[];
+  cancelled: boolean;
+  cancelReason?: string;
+};
+const pendingDetachedRuns = new Map<string, PendingDetachedRun>();
+
+// Sessions whose detached run was handed to runInteractiveTurn and has not
+// settled yet. Covers the gap before the chat runtime registers.
+const startingDetachedSessions = new Map<string, number>();
+const STARTING_WINDOW_MS = 2 * 60_000;
+function isSessionRunStarting(sessionId: string): boolean {
+  const at = startingDetachedSessions.get(sessionId);
+  return !!at && Date.now() - at < STARTING_WINDOW_MS;
+}
+
+export function getPendingDetachedRun(targetSessionId: string): PendingDetachedRun | undefined {
+  return pendingDetachedRuns.get(String(targetSessionId || '').trim());
+}
+
+function composeQueuedPrompt(pending: PendingDetachedRun): string {
+  if (!pending.steers.length) return pending.prompt;
+  return [
+    pending.prompt,
+    '',
+    '[STEER RECEIVED BEFORE THIS RUN STARTED]',
+    ...pending.steers.map((steer, index) => `${index + 1}. ${steer}`),
+    'Apply these instructions; they take priority over conflicting parts of the original request.',
+  ].join('\n');
+}
+
 function runDetached(
   deps: PrometheusThreadOpsDeps,
   ownerSessionId: string,
@@ -262,8 +328,25 @@ function runDetached(
     chatId: ownerSessionId,
     label: 'Prometheus managed thread',
   };
-  void deps.runInteractiveTurn(
+  const pending: PendingDetachedRun = {
+    targetSessionId,
     prompt,
+    queuedAt: Date.now(),
+    steers: [],
+    cancelled: false,
+  };
+  pendingDetachedRuns.set(targetSessionId, pending);
+  // Defer one tick so a steer/interrupt issued in the same tool round (or just
+  // after create/send) lands before the turn is handed to the runtime.
+  const start = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (pendingDetachedRuns.get(targetSessionId) === pending) pendingDetachedRuns.delete(targetSessionId);
+    if (pending.cancelled) {
+      return { text: '', cancelledBeforeStart: true, reason: pending.cancelReason };
+    }
+    startingDetachedSessions.set(targetSessionId, Date.now());
+    return deps.runInteractiveTurn!(
+    composeQueuedPrompt(pending),
     targetSessionId,
     () => undefined,
     undefined,
@@ -275,7 +358,21 @@ function runDetached(
     undefined,
     undefined,
     origin,
-  ).then((result: any) => {
+    );
+  };
+  const settle = () => { startingDetachedSessions.delete(targetSessionId); };
+  void start().finally(settle).then((result: any) => {
+    if (result?.cancelledBeforeStart) {
+      deps.broadcastWS?.({
+        type: 'managed_thread_update',
+        ownerSessionId,
+        targetSessionId,
+        supervisionId,
+        status: 'cancelled_before_start',
+        reason: result.reason,
+      });
+      return;
+    }
     const summary = String(result?.text || '').slice(0, 2000);
     const targetTitle = getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread';
     if (notifyOnComplete) {
@@ -535,7 +632,7 @@ export async function executePrometheusThreadOps(
     return {
       state,
       ...page,
-      sessions: page.sessions.map(sessionSummaryWithRuntime),
+      sessions: page.sessions.map(args?.verbose === true ? sessionSummaryWithRuntime : compactSessionSummary),
     };
   }
 
@@ -552,7 +649,7 @@ export async function executePrometheusThreadOps(
     return {
       query,
       state,
-      sessions: search.results.map(sessionSummaryWithRuntime),
+      sessions: search.results.map(args?.verbose === true ? sessionSummaryWithRuntime : compactSessionSummary),
       search: search.diagnostics,
     };
   }
@@ -782,16 +879,25 @@ export async function executePrometheusThreadOps(
     if (supervision && isThreadSupervisionFollowUpDuplicate(supervision.id, fingerprint)) {
       return { ok: true, deduped: true, supervision: getThreadSupervision(supervision.id) };
     }
+    // Queued but not started yet: fold the steer into the prompt it will run.
+    const pendingRun = pendingDetachedRuns.get(targetSessionId);
+    if (pendingRun && !pendingRun.cancelled) {
+      pendingRun.steers.push(message);
+      if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
+      return { ok: true, queued: true, appliedTo: 'queued_run_prompt', sessionId: targetSessionId };
+    }
     const result = addPendingRuntimeSteerForSession(targetSessionId, {
       message,
       source: `peer_session:${actorSessionId}`,
       kind: args?.kind || 'correction',
       requiresWorkerResponse: args?.requires_response !== false,
       responseMode: args?.requires_response === false ? 'silent' : 'worker_reply',
-    });
+      // Handed to the runtime but not registered yet: hold for registration.
+      queueIfStarting: isSessionRunStarting(targetSessionId),
+    } as any);
     if (!result.ok) throw new Error(result.error || 'Could not steer target thread.');
     if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
-    return result as any;
+    return result.runtime ? result as any : { ...result, queued: true, appliedTo: 'next_runtime_start' };
   }
 
   if (action === 'send' || action === 'chat') {
@@ -799,6 +905,9 @@ export async function executePrometheusThreadOps(
     if (!message) throw new Error('message is required.');
     if (activeRuntimeForSession(targetSessionId)) {
       throw new Error('Target thread is currently running. Use action="steer" to message it live.');
+    }
+    if (getPendingDetachedRun(targetSessionId)) {
+      throw new Error('Target thread already has a queued run that has not started yet. Use action="steer" to add to it.');
     }
     if (!deps.runInteractiveTurn) throw new Error('Interactive turn runtime is unavailable.');
     const supervision = assertThreadSupervisionFollowUpAllowed({
@@ -887,13 +996,36 @@ export async function executePrometheusThreadOps(
   }
 
   if (action === 'interrupt' || action === 'stop') {
+    const reason = String(args?.reason || 'Paused by supervising Prometheus thread').trim();
     const runtimes = listLiveRuntimes().filter((runtime) => String(runtime.sessionId || '') === targetSessionId);
     const aborted = runtimes.map((runtime) => abortLiveRuntime(runtime.id));
-    const goalResult = handleMainChatGoalCommand(targetSessionId, `/goal pause ${String(args?.reason || 'Paused by supervising Prometheus thread').trim()}`);
+    // Runs that were accepted but had not registered a runtime yet. These were
+    // stopped by other paths before but reported as `aborted: []`.
+    const cancelledQueued: string[] = [];
+    const pendingRun = pendingDetachedRuns.get(targetSessionId);
+    if (pendingRun && !pendingRun.cancelled) {
+      pendingRun.cancelled = true;
+      pendingRun.cancelReason = reason;
+      cancelledQueued.push('queued_run');
+    }
+    const droppedSteers = clearStartingSessionSteers(targetSessionId);
+    const goalResult = handleMainChatGoalCommand(targetSessionId, `/goal pause ${reason}`);
     const supervisions = listThreadSupervisions({ ownerSessionId: actorSessionId, targetSessionId, status: 'active' })
       .map((record) => cancelThreadSupervision(record.id))
       .filter(Boolean);
-    return { aborted, goal: goalResult.goal, supervisions };
+    const stoppedRuntimes = aborted.filter((entry: any) => entry?.ok).length;
+    const stopped = stoppedRuntimes > 0 || cancelledQueued.length > 0;
+    return {
+      stopped,
+      summary: stopped
+        ? `Stopped ${stoppedRuntimes} running turn(s)${cancelledQueued.length ? ' and cancelled a queued run before it started' : ''}.`
+        : 'Nothing was running or queued for this thread.',
+      aborted,
+      cancelledQueued,
+      droppedPendingSteers: droppedSteers,
+      goal: goalResult.goal,
+      supervisions,
+    };
   }
 
   throw new Error(`Unsupported prometheus_thread_ops action: ${action}`);

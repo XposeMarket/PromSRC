@@ -16710,6 +16710,20 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
         }
         const providerId = configuredModel.slice(0, slashIdx);
         const model = configuredModel.slice(slashIdx + 1);
+        // Never route a helper tier to a provider that is known to be out of
+        // usage: it would 429 and cost a wasted round. Stay on the main model.
+        try {
+          const { providerUsageExhaustedReason } = require('../../providers/usage-awareness');
+          const exhausted = providerUsageExhaustedReason(providerId);
+          if (exhausted) {
+            return {
+              name,
+              args,
+              result: `switch_model: skipped ${tier} tier (${configuredModel}) because it ${exhausted}. Staying on the main model for this turn.`,
+              error: false,
+            };
+          }
+        } catch { /* usage awareness is advisory */ }
         const { setTurnModelOverride } = require('../chat/model-switch-state');
         setTurnModelOverride(sessionId, { providerId, model, reason, tier });
         return { name, args, result: `Switched to ${tier} tier: ${configuredModel}. Reverts automatically at end of turn.`, error: false };

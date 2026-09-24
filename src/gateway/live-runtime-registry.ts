@@ -938,6 +938,7 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
     startedAt: record.startedAt,
   });
   persistRuntime(toSnapshot(record), 'registered');
+  drainStartingSessionSteers(id, record.sessionId, record.kind);
   return id;
 }
 
@@ -1258,8 +1259,50 @@ export function addPendingRuntimeSteerForSession(
   const runtime = Array.from(activeRuntimes.values())
     .filter((record) => isSteerableChatRuntimeKind(record.kind) && String(record.sessionId || '') === sid)
     .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
-  if (!runtime) return { ok: false, error: 'No active steerable chat runtime for this session.' };
+  if (!runtime) {
+    // A run can be accepted (queued/starting) before its runtime registers.
+    // Hold the steer and hand it to the next steerable runtime for this session
+    // instead of rejecting it, if the caller says a run is on the way.
+    if (input && (input as any).queueIfStarting === true) {
+      const list = startingSessionSteers.get(sid) || [];
+      const queued = { ...input, sessionId: sid, queuedAt: Date.now() } as any;
+      delete queued.queueIfStarting;
+      list.push(queued);
+      startingSessionSteers.set(sid, list);
+      return { ok: true, event: queued, error: undefined } as any;
+    }
+    return { ok: false, error: 'No active steerable chat runtime for this session.' };
+  }
   return addPendingRuntimeSteer(runtime.id, { ...input, sessionId: sid });
+}
+
+const startingSessionSteers = new Map<string, any[]>();
+const STARTING_STEER_TTL_MS = 5 * 60_000;
+
+function drainStartingSessionSteers(runtimeId: string, sessionId: string | undefined, kind: any): void {
+  const sid = String(sessionId || '').trim();
+  if (!sid || !isSteerableChatRuntimeKind(kind)) return;
+  const list = startingSessionSteers.get(sid);
+  if (!list?.length) return;
+  startingSessionSteers.delete(sid);
+  const now = Date.now();
+  for (const steer of list) {
+    if (now - Number(steer.queuedAt || 0) > STARTING_STEER_TTL_MS) continue;
+    const { queuedAt: _q, ...event } = steer;
+    try { addPendingRuntimeSteer(runtimeId, event); } catch {}
+  }
+}
+
+/** True when steers are waiting for a not-yet-registered run in this session. */
+export function hasStartingSessionSteers(sessionId: string): number {
+  return startingSessionSteers.get(String(sessionId || '').trim())?.length || 0;
+}
+
+export function clearStartingSessionSteers(sessionId: string): number {
+  const sid = String(sessionId || '').trim();
+  const count = startingSessionSteers.get(sid)?.length || 0;
+  startingSessionSteers.delete(sid);
+  return count;
 }
 
 /** Queue a live steer for one active background_spawn run by its public ID. */
