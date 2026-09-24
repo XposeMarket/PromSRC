@@ -88,6 +88,7 @@ import { getAccount } from '../auth/account.js';
 import { renderMd, setInnerHTMLPreservingVisuals } from '../utils.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
+import './mobile-login-handoff.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import {
   appendCommandTerminalChunkToDom,

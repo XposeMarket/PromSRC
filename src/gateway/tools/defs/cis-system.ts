@@ -751,6 +751,26 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'request_browser_login',
+        description:
+          'Hand the in-app browser to the user so they can log in themselves (password, OAuth, 2FA) when you hit a login wall. ' +
+          'First navigate this chat\'s in-app browser to the login page, then call this. It shows the user an "Open & log in" card: on desktop it opens the browser panel, ' +
+          'on mobile it opens a live view they can tap and type into. You never see their credentials. ' +
+          'This call blocks until the user taps "I\'m logged in" or "Skip"; then re-check the page and continue with the logged-in session.',
+        parameters: {
+          type: 'object',
+          required: ['site'],
+          properties: {
+            site: { type: 'string', description: 'Human-readable site name, e.g. "claude.ai".' },
+            url: { type: 'string', description: 'Login page URL the browser is on (shown to the user).' },
+            reason: { type: 'string', description: 'One short line on why you need the login.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'await_prometheus_question_response',
         description:
           'Resume waiting for a pending Prometheus Question after handling a steer/interruption. ' +

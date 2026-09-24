@@ -20995,7 +20995,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           return { name, args, ...extensionResult };
         }
 
-        if (name === 'ask_prometheus_questions' || name === 'await_prometheus_question_response') {
+        if (name === 'ask_prometheus_questions' || name === 'await_prometheus_question_response' || name === 'request_browser_login') {
           const questionQueue = getPrometheusQuestionQueue();
           const activeTask = resolveTaskForSession(sessionId);
           const activeTaskId = String(activeTask?.id || '').trim() || undefined;
@@ -21080,14 +21080,28 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           let payload;
           try {
             const origin = inferApprovalOrigin(sessionId, activeTask, args);
+            const isLoginHandoff = name === 'request_browser_login';
+            const loginSite = String(args?.site || '').trim() || 'this site';
+            const loginReason = String(args?.reason || '').trim();
             payload = createPrometheusQuestionPayload({
               sessionId,
               taskId: activeTaskId,
               agentId: inferAgentIdFromSession(sessionId, args),
               originType: origin.originType === 'proposal' ? 'unknown' : origin.originType,
               originLabel: origin.originLabel,
-              questions: args?.questions,
+              questions: isLoginHandoff
+                ? [{
+                    id: 'login',
+                    label: `Log in to ${loginSite} in the browser so I can continue.${loginReason ? ` ${loginReason}` : ''}`,
+                    mode: 'single_select',
+                    options: ["I'm logged in", 'Skip'],
+                    allowOther: false,
+                  }]
+                : args?.questions,
               ttlMs: args?.ttl_ms || args?.ttlMs,
+              loginHandoff: isLoginHandoff
+                ? { site: loginSite, url: String(args?.url || '').trim(), reason: loginReason, browserSessionId: sessionId }
+                : undefined,
             });
           } catch (err: any) {
             return { name, args, result: `ask_prometheus_questions error: ${err.message || err}`, error: true };

@@ -101,7 +101,7 @@ export function normalizeQuestionRecord(record = {}, fallback = {}) {
   const metadata = {};
   for (const key of [
     'taskId', 'agentId', 'originType', 'originLabel', 'createdAt',
-    'resolvedAt', 'resolvedBy', 'expiresAt', 'sourceSessionId',
+    'resolvedAt', 'resolvedBy', 'expiresAt', 'sourceSessionId', 'loginHandoff',
   ]) {
     if (source[key] !== undefined) metadata[key] = source[key];
     else if (backup[key] !== undefined) metadata[key] = backup[key];

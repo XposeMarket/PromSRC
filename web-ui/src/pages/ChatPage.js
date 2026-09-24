@@ -44773,6 +44773,12 @@ function renderInlinePrometheusQuestion(item, options = {}) {
   return `<div class="chat-approval-card chat-approval-card-low chat-question-card chat-question-card-${escHtml(statusLabel)}" data-question-id="${idAttr}" data-question-current-index="${currentIndex}">
     ${pending && question.questions.length > 1 ? `<div class="pq-head"><span class="pq-progress" aria-label="Question ${currentIndex + 1} of ${question.questions.length}"><span class="pq-progress-current">${currentIndex + 1}</span><span class="pq-progress-total">/${question.questions.length}</span></span></div>` : ''}
     ${questionBlocks}
+    ${pending && question.loginHandoff
+      ? `<div class="pq-login-handoff">
+          <button class="pq-login-open" type="button" onclick="openDesktopLoginHandoff(${encodeInlineJsString(String(question.loginHandoff.url || ''))})">Open browser &amp; log in</button>
+          <span class="pq-login-note">You log in yourself. Prometheus never sees your password.</span>
+        </div>`
+      : ''}
     ${pending
       ? `<div class="pq-actions">
           <button class="pq-submit" type="button" data-question-submit="1" onclick="submitInlinePrometheusQuestion(${idArg})">${currentIndex === question.questions.length - 1 ? 'Submit answer' : 'Next question'}</button>
@@ -44781,6 +44787,17 @@ function renderInlinePrometheusQuestion(item, options = {}) {
       : ''}
   </div>`;
 }
+
+// Login handoff: the agent parked its in-app browser on a login page. On desktop
+// that browser is the native panel, so just bring it up for the user.
+async function openDesktopLoginHandoff() {
+  try {
+    await openBrowserCanvasSurface();
+  } catch (err) {
+    showToast(`Could not open the browser: ${err?.message || err}`, 'error');
+  }
+}
+window.openDesktopLoginHandoff = openDesktopLoginHandoff;
 
 function toggleQuestionOther(questionId, itemId) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
