@@ -150,3 +150,42 @@ export function resetUsageAwarenessForTests(): void {
   refreshInFlight.clear();
   refreshEnabled = false;
 }
+
+// ── Exhaustion tracking (for routing, e.g. switch_model) ────────────────────
+// A provider that just answered "usage limit reached" should not be picked as
+// a helper tier until its window resets. Recorded from provider errors; the
+// usage snapshot is a second source (any window at >= 100% used).
+const exhaustedUntil = new Map<string, number>();
+const DEFAULT_EXHAUSTED_BACKOFF_MS = 30 * 60_000;
+
+export function isUsageLimitError(err: unknown): boolean {
+  const text = String((err as any)?.message || err || '');
+  return /\b429\b/.test(text) && /usage limit|rate limit|quota|limit has been reached|exceed your account/i.test(text);
+}
+
+export function recordProviderUsageExhausted(provider: string, resetAt?: string | number | null): void {
+  const key = String(provider || '').trim();
+  if (!key) return;
+  const resetMs = typeof resetAt === 'number' ? resetAt : resetAt ? Date.parse(String(resetAt)) : NaN;
+  const until = Number.isFinite(resetMs) && resetMs > Date.now() ? resetMs : Date.now() + DEFAULT_EXHAUSTED_BACKOFF_MS;
+  exhaustedUntil.set(key, until);
+}
+
+/** Returns a human reason when the provider is known to be out of usage, else null. */
+export function providerUsageExhaustedReason(provider: string, now = Date.now()): string | null {
+  const key = String(provider || '').trim();
+  if (!key) return null;
+  const until = exhaustedUntil.get(key);
+  if (until && until > now) return `hit its usage limit recently (retry after ${new Date(until).toLocaleTimeString()})`;
+  if (until) exhaustedUntil.delete(key);
+  const snap = snapshots.get(key);
+  if (snap) {
+    const full = snap.windows.find((w) => clampPct(w.usedPercent) >= 100 && (!w.resetAt || Date.parse(w.resetAt) > now));
+    if (full) return `${full.label} usage is at 100%${full.resetAt ? ` until ${new Date(full.resetAt).toLocaleString()}` : ''}`;
+  }
+  return null;
+}
+
+export function clearProviderUsageExhausted(provider: string): void {
+  exhaustedUntil.delete(String(provider || '').trim());
+}

@@ -5,6 +5,13 @@ import { getConfig } from '../../config/config';
 import { addMessage, flushSession, getSession, getSessionDisplayTitle, type MainChatGoalStatus } from '../session';
 import type { LiveRuntimeSnapshot } from '../live-runtime-registry';
 
+// max_follow_ups: 0 is a legitimate "observe only, never send" budget. The
+// generic positiveInt helper treated 0 as missing and silently applied 6.
+function nonNegativeFollowUps(value: any): number {
+  if (value === undefined || value === null || value === '') return DEFAULT_THREAD_SUPERVISION_BUDGETS.maxFollowUps;
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, 50) : DEFAULT_THREAD_SUPERVISION_BUDGETS.maxFollowUps;
+}
 export type ThreadSupervisionStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'failed' | 'cancelled';
 
 export type ThreadSupervisionVerificationState =
@@ -299,7 +306,7 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     lastFollowUpAt: Number(input?.lastFollowUpAt) || undefined,
     consecutiveNoProgressCount: Math.max(0, Math.floor(Number(input?.consecutiveNoProgressCount) || 0)),
     maxReviews: positiveInt(input?.maxReviews, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxReviews, 100),
-    maxFollowUps: positiveInt(input?.maxFollowUps, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxFollowUps, 50),
+    maxFollowUps: nonNegativeFollowUps(input?.maxFollowUps),
     maxElapsedMs: positiveInt(input?.maxElapsedMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxElapsedMs, 7 * 24 * 60 * 60 * 1000),
     minReviewIntervalMs: positiveInt(input?.minReviewIntervalMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.minReviewIntervalMs, 60 * 60 * 1000),
     maxConsecutiveNoProgress: positiveInt(input?.maxConsecutiveNoProgress, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxConsecutiveNoProgress, 20),
@@ -456,7 +463,7 @@ export function createThreadSupervision(input: {
     followUpCount: 0,
     consecutiveNoProgressCount: 0,
     maxReviews: positiveInt(input.maxReviews, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxReviews, 100),
-    maxFollowUps: positiveInt(input.maxFollowUps, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxFollowUps, 50),
+    maxFollowUps: nonNegativeFollowUps(input.maxFollowUps),
     maxElapsedMs: positiveInt(input.maxElapsedMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxElapsedMs, 7 * 24 * 60 * 60 * 1000),
     minReviewIntervalMs: positiveInt(input.minReviewIntervalMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.minReviewIntervalMs, 60 * 60 * 1000),
     maxConsecutiveNoProgress: positiveInt(input.maxConsecutiveNoProgress, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxConsecutiveNoProgress, 20),
@@ -569,7 +576,16 @@ export function updateThreadSupervision(
 }
 
 export function cancelThreadSupervision(id: string): ThreadSupervision | null {
-  return updateThreadSupervision(id, { status: 'cancelled' });
+  // Clear every in-flight field too. Leaving pendingReview/verification at
+  // "pending" made unfollow return a record that still looked live.
+  return updateThreadSupervision(id, {
+    status: 'cancelled',
+    pendingReview: false,
+    reviewInFlight: false,
+    finalVerificationState: 'failed',
+    finalVerificationReason: 'Supervision cancelled (unfollowed).',
+    finalSummary: 'Supervision cancelled.',
+  } as any);
 }
 
 export function updateThreadSupervisionsBatch(

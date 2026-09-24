@@ -6619,7 +6619,19 @@ function _collapseChatSteerWorkflowPresentation(sessionId, workflowGroupId, opti
       continue;
     }
     if (isAssistantLikeMessage(message) && String(message.workflowPart || '') === 'before_interruption') {
-      changed = true;
+      // This row carries the tool stream that ran before the steer. Dropping it
+      // made the pre-steer work vanish once the turn settled. Only discard it
+      // when it is genuinely empty.
+      const hasTrace = (Array.isArray(message.processEntries) && message.processEntries.length > 0)
+        || (Array.isArray(message.liveTraceEntries) && message.liveTraceEntries.length > 0)
+        || String(message.content || '').trim().length > 0;
+      if (!hasTrace) {
+        changed = true;
+        continue;
+      }
+      // Keep it verbatim: renderCapturedChatSteerTrace keys off the steer
+      // workflowGroupId/workflowPart to draw the captured tool stream.
+      nextHistory.push(message);
       continue;
     }
     const nextMessage = { ...message };
@@ -7584,7 +7596,7 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
   if (!shouldAbort && st) {
     st.forceAppendAssistantAfterInterruption = true;
     st.pendingInterruptionWorkflowGroupId = groupId;
-    st.pendingInterruptionWorkflowLabel = asSteer ? 'Response after steer' : 'Interruption response';
+    st.pendingInterruptionWorkflowLabel = data?.steerApplied === true ? 'Response after steer' : 'Interruption response';
     st.pendingInterruptionWorkflowPresentationCleared = false;
   }
   persistSession(sid);
@@ -7726,6 +7738,7 @@ function isDesktopGatewayRestartCheckpointMessage(msg) {
 function foldDesktopGatewayRestartCheckpoints(history) {
   const list = Array.isArray(history) ? history : [];
   const out = [];
+  const prependedCheckpointTraces = new Map();
   for (let index = 0; index < list.length; index += 1) {
     const checkpoint = list[index];
     if (!isDesktopGatewayRestartCheckpointMessage(checkpoint)) {
@@ -7756,6 +7769,37 @@ function foldDesktopGatewayRestartCheckpoints(history) {
       }
     }
     if (target) {
+      // The checkpoint's trace happened BEFORE the target's when the target is
+      // the resumed answer that follows it. Merging it after the target's own
+      // entries put pre-restart work below post-restart work, and the newest-500
+      // cap then cut the earliest pre-restart rows off entirely. Prepend it and
+      // keep a wider window so the stream reads as one continuous run.
+      const targetIsLater = !out.includes(target);
+      if (targetIsLater) {
+        // Several checkpoints can precede one resumed answer (initiated,
+        // then succeeded). Accumulate them in order before the answer's own
+        // entries instead of prepending each one in turn (which reversed them).
+        let acc = prependedCheckpointTraces.get(target);
+        if (!acc) {
+          acc = {
+            own: {
+              processEntries: Array.isArray(target.processEntries) ? target.processEntries : [],
+              liveTraceEntries: Array.isArray(target.liveTraceEntries) ? target.liveTraceEntries : [],
+            },
+            before: { processEntries: [], liveTraceEntries: [] },
+          };
+          prependedCheckpointTraces.set(target, acc);
+        }
+        for (const key of ['processEntries', 'liveTraceEntries']) {
+          const before = Array.isArray(checkpoint[key]) ? checkpoint[key] : [];
+          if (!before.length) continue;
+          acc.before[key] = acc.before[key].concat(before);
+          target[key] = mergeRecoveredTraceLists(acc.before[key], acc.own[key]).slice(-1500);
+        }
+        const { processEntries: _pe, liveTraceEntries: _lt, ...rest } = checkpoint;
+        mergeChatMessageMetadata(target, rest);
+        continue;
+      }
       mergeChatMessageMetadata(target, checkpoint);
       continue;
     }
@@ -16451,6 +16495,37 @@ function reconcileChatHistoryAfterMerge(history) {
     const msg = { ...raw };
     if (hasGatewayRestartCheckpoint && isNoResponseReceivedAssistantMessage(msg)) continue;
     if (isRestartContextPacketMessage(msg) && !Array.isArray(msg.fileChanges?.files)) {
+      // The server stores a stopped turn's tool stream on this packet row. It
+      // used to be dropped outright, so after a reload (or a stop from another
+      // device) the stopped turn lost its whole stream. Hand the trace to the
+      // turn's own stopped bubble, or keep a stopped bubble carrying it.
+      const packetRequest = String(msg.clientRequestId || msg._clientRequestId || '').trim();
+      let owner = null;
+      for (let i = out.length - 1; i >= 0; i -= 1) {
+        const candidate = out[i];
+        if (String(candidate?.role || '').toLowerCase() === 'user') break;
+        if (!isAssistantLikeMessage(candidate)) continue;
+        const candidateRequest = String(candidate.clientRequestId || candidate._clientRequestId || '').trim();
+        if (packetRequest && candidateRequest && candidateRequest !== packetRequest) continue;
+        owner = candidate;
+        break;
+      }
+      const packetTrace = Array.isArray(msg.liveTraceEntries) ? msg.liveTraceEntries : [];
+      if (owner) {
+        if (packetTrace.length) owner.liveTraceEntries = mergeRecoveredTraceLists(owner.liveTraceEntries, packetTrace).slice(-1500);
+        continue;
+      }
+      if (!packetTrace.length) continue;
+      out.push({
+        role: 'assistant',
+        content: '[Stopped by user]\n\nProcess log preserved.',
+        timestamp: msg.timestamp,
+        workStartedAt: msg.workStartedAt,
+        workEndedAt: msg.workEndedAt,
+        workDurationMs: msg.workDurationMs,
+        clientRequestId: packetRequest || undefined,
+        liveTraceEntries: packetTrace,
+      });
       continue;
     }
     const userKey = userDuplicateKey(msg);

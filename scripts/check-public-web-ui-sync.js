@@ -72,6 +72,16 @@ function toPosix(value) {
   return value.split(path.sep).join('/');
 }
 
+// .gitattributes forces generated text files to LF on checkout while web-ui
+// sources may be CRLF under core.autocrlf=true on Windows. A line-ending-only
+// difference is not staleness, so it must not fail the build after a merge.
+const TEXT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.css', '.html', '.json', '.svg', '.webmanifest', '.md', '.txt']);
+function sameTextIgnoringEol(expectedPath, expectedBuffer, actualBuffer) {
+  if (!TEXT_EXTENSIONS.has(path.extname(expectedPath).toLowerCase())) return false;
+  const norm = (buf) => buf.toString('utf8').replace(/\r\n/g, '\n');
+  return norm(expectedBuffer) === norm(actualBuffer);
+}
+
 function compareBuffer(expectedPath, actualPath, expectedBuffer) {
   if (!fs.existsSync(actualPath)) {
     fail(`Missing generated file: ${toPosix(path.relative(ROOT, actualPath))}`);
@@ -79,7 +89,7 @@ function compareBuffer(expectedPath, actualPath, expectedBuffer) {
   }
 
   const actualBuffer = fs.readFileSync(actualPath);
-  if (!expectedBuffer.equals(actualBuffer)) {
+  if (!expectedBuffer.equals(actualBuffer) && !sameTextIgnoringEol(expectedPath, expectedBuffer, actualBuffer)) {
     fail(
       `Generated file is stale: ${toPosix(path.relative(ROOT, actualPath))} ` +
       `(source: ${toPosix(path.relative(ROOT, expectedPath))})`
