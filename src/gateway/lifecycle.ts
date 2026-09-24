@@ -42,6 +42,16 @@ import {
   writeSupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request';
 
+/** Files loaded by the Electron main process only reload when the app relaunches. */
+export function requiresElectronRelaunchForFiles(files: unknown): boolean {
+  if (!Array.isArray(files)) return false;
+  return files.some((raw) => {
+    const file = String(raw || '').trim().replace(/\\/g, '/').toLowerCase();
+    return file.startsWith('electron/') || file.includes('/electron/');
+  });
+}
+
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface RestartContext {
@@ -726,6 +736,10 @@ export function planGatewayHandoff(ctx: RestartContext): GatewayHandoffPlan {
   if (process.env.PROMETHEUS_GATEWAY_HANDOFF === '0') return none('disabled_by_env');
   if (ctx.handoffPolicy === 'never') return none('policy_never');
   if (ctx.restartScope === 'supervisor') return none('supervisor_replacement');
+  // A warm handoff keeps the same Electron main process; electron/ edits need a relaunch.
+  if ((ctx.electronManaged || ctx.restartLauncher === 'electron') && requiresElectronRelaunchForFiles(ctx.affectedFiles)) {
+    return none('electron_main_changed');
+  }
   let launcher: HandoffLauncher;
   if (ctx.electronManaged || ctx.restartLauncher === 'electron') {
     // Electron spawns the gateway with an IPC channel and starts the
@@ -998,9 +1012,18 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // If Electron spawned this gateway, let Electron own the replacement process.
   // That keeps packaged apps on the correct executable, env, data dir, and UI reload path.
   if (electronManaged) {
-    console.log('[lifecycle] Electron-managed gateway detected. Handing restart to Electron...');
+    // Exit 42 only respawns this gateway child, so electron/main.js changes
+    // never loaded. Exit 43 asks Electron to relaunch the whole app.
+    // Older Electron mains treat unknown exit codes as a crash, so only ask
+    // for a relaunch when this Electron advertises support for it.
+    const relaunchApp = process.env.PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH === '1'
+      && (restartCtx.restartScope === 'supervisor'
+        || requiresElectronRelaunchForFiles(restartCtx.affectedFiles));
+    console.log(relaunchApp
+      ? '[lifecycle] Electron-managed gateway: electron/ changed or full restart requested. Asking Electron to relaunch the app...'
+      : '[lifecycle] Electron-managed gateway detected. Handing restart to Electron...');
     setTimeout(() => {
-      process.exit(42);
+      process.exit(relaunchApp ? 43 : 42);
     }, 250);
     return;
   }
