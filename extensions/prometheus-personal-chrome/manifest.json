@@ -1,11 +1,27 @@
 {
   "manifest_version": 3,
   "name": "Prometheus Personal Chrome",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Locally paired automation bridge for Prometheus. It never opens a remote debugging port.",
-  "permissions": ["debugger", "tabs", "windows", "downloads", "storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1/*"],
-  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "windows",
+    "downloads",
+    "storage",
+    "alarms",
+    "cookies"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
   "options_page": "options.html",
-  "action": { "default_title": "Prometheus Personal Chrome" }
+  "action": {
+    "default_title": "Prometheus Personal Chrome"
+  }
 }

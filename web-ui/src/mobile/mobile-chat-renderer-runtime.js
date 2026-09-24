@@ -2642,13 +2642,23 @@ export function createMobileChatRendererRuntime(context = {}) {
     if (!root) return false;
     const msgEl = root.querySelector(`[data-msg-index="${msgIndex}"]`);
     if (!msgEl) return false;
-    const timerEl = msgEl.querySelector('.pm-work-timer:not(.pm-work-timer--expandable)');
+    // Once a turn has tool activity the timer is the expandable disclosure
+    // (label text + chevron svg). The ticker used to skip that variant, so
+    // "Working for" froze between events during tool work. Update only the
+    // leading text node so the chevron and its click handler stay intact.
+    const timerEl = msgEl.querySelector('.pm-work-timer');
     if (!timerEl) return false;
     const startedAt = _mobileAssistantWorkStartedAt(message);
     if (!startedAt) return false;
     const duration = Date.now() - startedAt;
     const label = `Working for ${_formatMobileWorkDuration(duration)}`;
-    if (timerEl.textContent !== label) timerEl.textContent = label;
+    let textNode = [...timerEl.childNodes].find((node) => node.nodeType === 3 && node.textContent.trim());
+    if (!textNode) {
+      textNode = document.createTextNode('');
+      timerEl.insertBefore(textNode, timerEl.firstChild);
+    }
+    const next = `\n      ${label}\n      `;
+    if (textNode.textContent.trim() !== label) textNode.textContent = next;
     return true;
   }
   

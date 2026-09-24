@@ -5622,6 +5622,68 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
  * Current in-app browser frame for the login handoff viewer (mobile). Returns
  * the PNG plus the CSS viewport so the client can map taps to page coordinates.
  */
+// Auth providers a site's login may bounce through; their cookies are what
+// make "already signed in with Google/Apple/Microsoft" work after import.
+const LOGIN_IMPORT_PROVIDER_DOMAINS = ['google.com', 'accounts.google.com', 'youtube.com', 'apple.com', 'appleid.apple.com', 'live.com', 'microsoftonline.com', 'github.com'];
+
+function registrableDomain(host: string): string {
+  const parts = String(host || '').toLowerCase().replace(/^\.+/, '').split('.').filter(Boolean);
+  if (parts.length <= 2) return parts.join('.');
+  const twoPartTld = /^(co|com|org|net|gov|ac|edu)\.[a-z]{2}$/.test(parts.slice(-2).join('.'));
+  return parts.slice(twoPartTld ? -3 : -2).join('.');
+}
+
+/** Login view mode for the phone viewer (phone-sized layout on/off). */
+export async function browserLoginHandoffView(sessionId: string, mode: 'phone' | 'off', width?: number, height?: number): Promise<any> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) throw new Error('No in-app browser is open for this chat yet.');
+  return callInHouseBrowser('login-view', { sessionId: resolved, mode, width, height });
+}
+
+/** Editable field rects + nav state so the phone can open its real keyboard. */
+export async function browserLoginHandoffState(sessionId: string): Promise<any> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) throw new Error('No in-app browser is open for this chat yet.');
+  return callInHouseBrowser('login-state', { sessionId: resolved });
+}
+
+export async function browserLoginHandoffNavigate(sessionId: string, action: 'back' | 'forward' | 'reload'): Promise<any> {
+  const resolved = resolveSessionId(sessionId);
+  if (!getInHouseSession(resolved)) throw new Error('No in-app browser is open for this chat yet.');
+  return callInHouseBrowser('navigate', { sessionId: resolved, action });
+}
+
+/**
+ * "Use my Chrome": copy the user's existing sign-in for the current site (and
+ * its auth providers) from their real Chrome via the paired Personal Chrome
+ * extension into this chat's in-app browser, then reload. Chrome's own
+ * cookies API returns decrypted values, which sidesteps app-bound encryption
+ * (the reason copying Chrome's cookie DB fails on Windows). Values never reach
+ * the model; only counts are returned.
+ */
+export async function browserLoginImportFromChrome(sessionId: string, extraDomains: string[] = []): Promise<{ imported: number; domains: string[]; failed: string[]; url: string }> {
+  const resolved = resolveSessionId(sessionId);
+  const inHouse: any = getInHouseSession(resolved);
+  if (!inHouse) throw new Error('No in-app browser is open for this chat yet.');
+  const relay = getUserChromeRelay();
+  if (!relay.getStatus().authenticated) {
+    throw new Error('Your Chrome is not paired yet. Install the Prometheus Personal Chrome extension (v1.1+) and paste the pairing code, then try again.');
+  }
+  let host = '';
+  try { host = new URL(String(inHouse.url || '')).hostname; } catch {}
+  const site = registrableDomain(host);
+  const domains = [...new Set([site, ...extraDomains.map(registrableDomain), ...LOGIN_IMPORT_PROVIDER_DOMAINS].filter(Boolean))].slice(0, 20);
+  const got = await relay.request('cookies.forDomains', { domains }, 20_000);
+  const cookies = Array.isArray(got?.cookies) ? got.cookies : [];
+  const res: any = await callInHouseBrowser('import-cookies', { sessionId: resolved, cookies });
+  try { await callInHouseBrowser('navigate', { sessionId: resolved, action: 'reload' }); } catch {}
+  return { imported: Number(res?.imported || 0), domains, failed: Array.isArray(res?.failed) ? res.failed : [], url: String(inHouse.url || '') };
+}
+
+export function browserLoginChromePaired(): boolean {
+  try { return !!getUserChromeRelay().getStatus().authenticated; } catch { return false; }
+}
+
 export async function browserLoginHandoffFrame(sessionId: string): Promise<{
   base64: string;
   width: number;

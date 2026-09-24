@@ -79,12 +79,22 @@ function _displayLimit(data, currentState = {}) {
   ));
 }
 
+// Trailing debounce with a max-wait. A plain debounce (clear + re-arm on every
+// event) never fired while tool events kept arriving faster than the delay, so
+// the context meter froze for the whole working phase of a turn.
+const MOBILE_CONTEXT_REFRESH_MAX_WAIT_MS = 1500;
+let _refreshFirstQueuedAt = 0;
 function _scheduleRefresh(sessionId, delayMs = 500) {
+  const now = Date.now();
+  if (!_refreshFirstQueuedAt) _refreshFirstQueuedAt = now;
+  const maxDue = _refreshFirstQueuedAt + MOBILE_CONTEXT_REFRESH_MAX_WAIT_MS;
+  const due = Math.min(now + Math.max(0, Number(delayMs) || 0), maxDue);
   if (_refreshTimer) clearTimeout(_refreshTimer);
   _refreshTimer = setTimeout(() => {
     _refreshTimer = 0;
+    _refreshFirstQueuedAt = 0;
     _refresh(String(sessionId || (typeof _getSessionId === 'function' ? _getSessionId() : '') || _lastSessionId || ''), {});
-  }, Math.max(0, Number(delayMs) || 0));
+  }, Math.max(0, due - now));
 }
 
 function _scheduleFreshnessRefresh(delayMs = MOBILE_CONTEXT_REFRESH_INTERVAL_MS) {

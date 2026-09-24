@@ -14,6 +14,11 @@ import {
   browserHandleUserInput,
   browserLoginHandoffFrame,
   getBrowserSessionInfo,
+  browserLoginHandoffView,
+  browserLoginHandoffState,
+  browserLoginHandoffNavigate,
+  browserLoginImportFromChrome,
+  browserLoginChromePaired,
 } from '../browser-tools';
 
 const sharp: any = (sharpModule as any)?.default || sharpModule;
@@ -295,6 +300,53 @@ router.get('/api/browser/login-frame', async (req, res) => {
   } catch (error: any) {
     if (isStorageBoundaryError(error)) { sendError(res, error); return; }
     res.status(409).json({ success: false, error: String(error?.message || error || 'No browser frame.') });
+  }
+});
+
+router.post('/api/browser/login-view', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.body?.sessionId || ''), 'session');
+    const mode = String(req.body?.mode || 'phone') === 'off' ? 'off' : 'phone';
+    const result = await browserLoginHandoffView(sessionId, mode, Number(req.body?.width), Number(req.body?.height));
+    res.json({ success: true, ...result, chromePaired: browserLoginChromePaired() });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+router.get('/api/browser/login-state', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.query.sessionId || ''), 'session');
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, ...(await browserLoginHandoffState(sessionId)) });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+router.post('/api/browser/login-nav', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.body?.sessionId || ''), 'session');
+    const action = String(req.body?.action || '');
+    if (!['back', 'forward', 'reload'].includes(action)) { res.status(400).json({ success: false, error: 'Unsupported action.' }); return; }
+    await browserLoginHandoffNavigate(sessionId, action as any);
+    res.json({ success: true });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+router.post('/api/browser/login-import-chrome', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.body?.sessionId || ''), 'session');
+    const extra = Array.isArray(req.body?.domains) ? req.body.domains.map(String).slice(0, 10) : [];
+    res.json({ success: true, ...(await browserLoginImportFromChrome(sessionId, extra)) });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error) });
   }
 });
 
