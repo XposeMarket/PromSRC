@@ -11,6 +11,7 @@ import {
   markRecallDirty,
   searchRecall,
   formatRecallResult,
+  buildAutoRecallContext,
 } from './recall-index';
 
 const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-recall-'));
@@ -96,6 +97,20 @@ try {
   if (loose && tight) assert.ok(scattered.hits.indexOf(tight) < scattered.hits.indexOf(loose), 'tight match ranks first');
 
   console.log('recall index regression passed');
+
+  // Auto recall: casual messages inject nothing; topical ones inject a capped,
+  // current-chat-excluded block.
+  for (const casual of ['Okay', 'lol', 'yup lets do those pls', 'go ahead and fix it']) {
+    assert.equal(buildAutoRecallContext(ws, casual, { excludeSessionId: 'current_chat' }).text, '', `no recall for "${casual}"`);
+  }
+  const auto = buildAutoRecallContext(ws, 'where did we land on that needs you card for blockers?', { excludeSessionId: 'current_chat' });
+  assert.ok(auto.text.startsWith('[AUTO_RECALL]'), 'topical message injects recall');
+  assert.ok(auto.text.includes('old_chat'), 'recall cites the source chat');
+  assert.ok(!auto.text.includes('current_chat'), 'current chat is excluded');
+  assert.ok(auto.text.length <= 1_400 + 200, 'recall block is capped');
+  const tiny = buildAutoRecallContext(ws, 'needs you card blockers', { excludeSessionId: 'current_chat', maxChars: 300 });
+  assert.ok(tiny.text.length < 600, 'maxChars caps the block');
+  console.log('recall auto-context regression passed');
 } finally {
   closeRecallIndex(ws);
   fs.rmSync(ws, { recursive: true, force: true });

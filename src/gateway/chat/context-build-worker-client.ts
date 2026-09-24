@@ -84,7 +84,10 @@ const maxMessageBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_MESSAGE_BYTES', 2 *
 const recycleAfterJobs = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_JOBS', 100, 1, 10_000);
 const recycleRssBytes = envInt('PROMETHEUS_CONTEXT_BUILD_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 2_147_483_647);
 const maxHeapUsedBytes = envInt('PROMETHEUS_CONTEXT_BUILD_MAX_HEAP_USED_BYTES', 0, 0, 8 * 1024 * 1024 * 1024);
-const hybridMemoryBudgetMs = envInt('PROMETHEUS_HYBRID_MEMORY_BUDGET_MS', 700, 50, 30_000);
+// Measured 2026-09-24: p50 233ms / p90 813ms, injected on 3 of 21 turns. The
+// deterministic atom result is already in the snapshot, so cap the additive
+// semantic pass tighter; FTS auto recall now carries cross-history context.
+const hybridMemoryBudgetMs = envInt('PROMETHEUS_HYBRID_MEMORY_BUDGET_MS', 300, 50, 30_000);
 
 const slots: WorkerSlot[] = Array.from({ length: workerCount }, (_, index) => ({
   broker: new RuntimeWorkerBroker({
