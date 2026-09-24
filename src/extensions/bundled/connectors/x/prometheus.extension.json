@@ -6,16 +6,33 @@
   "category": "Social",
   "enabledByDefault": true,
   "docsUrl": "https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code",
-  "tags": ["x", "twitter", "browser session", "oauth", "x api", "xurl"],
+  "tags": [
+    "x",
+    "twitter",
+    "browser session",
+    "oauth",
+    "x api",
+    "xurl"
+  ],
   "runtime": {
-    "binding": "gateway/connections/x-api-oauth"
+    "binding": "gateway/connections/x-api-oauth",
+    "entrypoint": "./runtime.js"
   },
   "ui": {
     "color": "#000000",
     "permissions": [
-      { "icon": "@", "label": "Read timeline and mentions" },
-      { "icon": "=", "label": "Likes, bookmarks, reposts, follows, lists, Spaces, trends, and DMs when scopes allow" },
-      { "icon": "->", "label": "Post, reply, like, repost, follow, list, and DM with explicit approval" }
+      {
+        "icon": "@",
+        "label": "Read timeline and mentions"
+      },
+      {
+        "icon": "=",
+        "label": "Likes, bookmarks, reposts, follows, lists, Spaces, trends, and DMs when scopes allow"
+      },
+      {
+        "icon": "->",
+        "label": "Post, reply, like, repost, follow, list, and DM with explicit approval"
+      }
     ]
   },
   "ownership": {
@@ -71,7 +88,14 @@
       "x_api_get_dm_events",
       "x_api_get_usage"
     ],
-    "capabilities": ["social", "publishing", "browser_session", "oauth", "official_api", "x_api_oauth"]
+    "capabilities": [
+      "social",
+      "publishing",
+      "browser_session",
+      "oauth",
+      "official_api",
+      "x_api_oauth"
+    ]
   },
   "setup": {
     "authType": "oauth",

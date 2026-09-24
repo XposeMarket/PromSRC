@@ -1,5 +1,4 @@
 import { isXAIConnected } from '../auth/xai-oauth.js';
-import { getXApiOAuthStatus } from '../auth/x-api-oauth.js';
 import { getXAIToolDefs } from '../gateway/tools/defs/xai-tools.js';
 import {
   getEffectiveXaiApiKey,
@@ -36,7 +35,6 @@ function refreshToolRegistrySnapshot(): void {
 export function refreshXAITools(): void {
   const registry = getExtensionRuntimeRegistry();
   const hasXaiCredentials = hasXAIConfiguredCredentials();
-  const hasXApiCredentials = getXApiOAuthStatus(configDir()).connected;
   let changed = false;
 
   // xai_live_search is intentionally absent: xAI retired the Live Search endpoint.
@@ -45,15 +43,15 @@ export function refreshXAITools(): void {
     const fn = definition?.function;
     const name = String(fn?.name || '').trim();
     if (!name) continue;
-    const isXApiTool = name.startsWith('x_api_');
-    const shouldRegister = isXApiTool ? hasXApiCredentials : hasXaiCredentials;
+    // x_api_* tools belong to the native X connector (connectors/x/runtime.ts).
+    const shouldRegister = hasXaiCredentials;
 
     if (shouldRegister && !registry.getTool(name)) {
       registry.registerTool('xai', {
         name,
         description: String(fn?.description || ''),
         parameters: fn?.parameters || { type: 'object', required: [], properties: {} },
-        connectorId: isXApiTool ? 'x' : 'xai',
+        connectorId: 'xai',
         capability: 'social',
         execute: async (args) => handleXAISearchTool(name, args),
       });
