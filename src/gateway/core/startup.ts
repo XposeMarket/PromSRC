@@ -914,6 +914,13 @@ export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
     console.warn('[recall-index] could not start:', err?.message || err);
   }
 
+  // Personal Chrome relay (ws://127.0.0.1:9234). It used to start lazily on the
+  // first browser tool call, so after every restart the paired extension had
+  // nothing to reconnect to and "Use my Chrome" failed as "not paired".
+  try { require('../user-chrome-relay').getUserChromeRelay(); } catch (err: any) {
+    console.warn('[user-chrome] relay could not start:', err?.message || err);
+  }
+
   void (async () => {
     // Re-establish Tailscale funnel if remote access was enabled before this
     // gateway session started, then keep a watchdog running so it auto-recovers
