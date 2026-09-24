@@ -3,6 +3,20 @@ import type { GitHubConnector } from '../../../../integrations/connectors/github
 import type { PrometheusExtensionApi, PrometheusExtensionDefinition } from '../../../runtime-api.js';
 import { connectorConnected, connectorHasCredentials, getLiveConnector, notConnected, toolError, toolOk } from '../_runtime/connector-helpers.js';
 
+/**
+ * Agents frequently send GitHub's REST name `pull_number` (or `number`) instead of
+ * the schema's `pr_number`. `Number(undefined)` is NaN, which GitHub answers with a
+ * misleading 404. Accept the common aliases and reject anything that is not a
+ * positive integer before making the API call.
+ */
+export function resolvePullRequestNumber(args: any): number | null {
+  const raw = args?.pr_number ?? args?.pull_number ?? args?.prNumber ?? args?.pullNumber ?? args?.number;
+  const text = String(raw ?? '').trim().replace(/^#/, '');
+  if (!/^\d+$/.test(text)) return null;
+  const value = Number(text);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 const ID = 'github';
 const NAME = 'GitHub';
 const tools = [
@@ -145,7 +159,9 @@ const ext: PrometheusExtensionDefinition = {
       connectorId: ID, capability: 'code-hosting',
       sideEffects: { readOnly: false, localWrite: false, externalWrite: true, destructive: false, credentialUse: true, known: true },
       execute: (args: any) => withConn(async (c) => {
-        const result = await c.mergePullRequest(args.owner, args.repo, Number(args.pr_number), {
+        const prNumber = resolvePullRequestNumber(args);
+        if (prNumber === null) return toolError('pr_number is required and must be a positive integer (pull request number).');
+        const result = await c.mergePullRequest(args.owner, args.repo, prNumber, {
           mergeMethod: args.merge_method || 'merge',
           commitTitle: args.commit_title,
           commitMessage: args.commit_message,
@@ -162,7 +178,9 @@ const ext: PrometheusExtensionDefinition = {
       parameters: { type: 'object', required: ['owner', 'repo', 'pr_number'], properties: { owner: { type: 'string', description: 'Repository owner' }, repo: { type: 'string', description: 'Repository name' }, pr_number: { type: 'number', description: 'Pull request number' } } },
       connectorId: ID, capability: 'code-hosting',
       execute: (args: any) => withConn(async (c) => {
-        const pr = await c.getPR(args.owner, args.repo, Number(args.pr_number));
+        const prNumber = resolvePullRequestNumber(args);
+        if (prNumber === null) return toolError('pr_number is required and must be a positive integer (pull request number).');
+        const pr = await c.getPR(args.owner, args.repo, prNumber);
         return toolOk(`#${pr.number} [${pr.state}] ${pr.title}\n  ${pr.html_url}\n  ${pr.head?.ref} -> ${pr.base?.ref}\n  ${pr.body || ''}`);
       }),
     });

@@ -880,11 +880,32 @@ export async function _dispatchToAgent(
   return { task_id: task.id, agent_id: agentId, status: 'dispatched' };
 }
 
+/**
+ * Format one tool_audit.log line. Successful calls keep the compact 200-char
+ * head. Failures also record the exit code and the tail of the result:
+ * workspace_run echoes the command first, so a head-only slice used to cut off
+ * the real error (stderr / exception) for most failed shell runs.
+ */
+export function formatToolAuditLine(ts: string, toolName: string, args: any, result: string, error: boolean): string {
+  let argText = '';
+  try { argText = JSON.stringify(args) ?? ''; } catch { argText = String(args); }
+  const text = String(result ?? '');
+  const flat = (value: string) => value.replace(/\r?\n/g, ' \u23ce ');
+  let body = flat(text.slice(0, 200));
+  if (error) {
+    const exitMatch = /\[exit (-?\d+)\]/.exec(text.slice(0, 4000)) || /\bexit(?:ed with)? code:? (-?\d+)/i.exec(text);
+    const exitPart = exitMatch ? ` [exit ${exitMatch[1]}]` : '';
+    const tailStart = Math.max(200, text.length - 600);
+    const tail = text.length > 200 ? ` \u2026 ${flat(text.slice(tailStart))}` : '';
+    body = `${exitPart ? `${exitPart.trim()} ` : ''}${body}${tail}`;
+  }
+  return `[${ts}] ${error ? 'FAIL' : 'OK'} ${toolName}(${argText.slice(0, 200)}) => ${body}\n`;
+}
+
 export function logToolCall(workspacePath: string, toolName: string, args: any, result: string, error: boolean) {
   try {
     const logPath = path.join(workspacePath, 'tool_audit.log');
-    const ts = new Date().toISOString();
-    fs.appendFileSync(logPath, `[${ts}] ${error ? 'FAIL' : 'OK'} ${toolName}(${JSON.stringify(args).slice(0, 200)}) => ${result.slice(0, 200)}\n`);
+    fs.appendFileSync(logPath, formatToolAuditLine(new Date().toISOString(), toolName, args, result, error));
   } catch {}
 }
 // Reply processor fns (separateThinkingFromContent etc.) extracted to reply-processor.ts

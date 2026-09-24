@@ -159,11 +159,33 @@ export async function readRawToolResult(rawRef: string): Promise<string> {
   return fs.promises.readFile(resolved, 'utf8');
 }
 
+/**
+ * Workspace spool files (`temp/tool-results/<ts>-<session>-<tool>.txt`) are the
+ * other overflow format agents are told about. Resolve them strictly inside that
+ * one directory so tool_result_read can page them instead of failing with
+ * "Unsupported tool-result raw reference".
+ */
+export function resolveWorkspaceToolResultSpool(rawRef: string, workspacePath?: string): string | null {
+  if (!workspacePath) return null;
+  const value = String(rawRef || '').trim().replace(/\\/g, '/');
+  const match = /(?:^|\/)temp\/tool-results\/([A-Za-z0-9._-]{1,200}\.txt)$/.exec(value);
+  if (!match) return null;
+  const root = path.resolve(workspacePath, 'temp', 'tool-results');
+  const resolved = path.resolve(root, match[1]);
+  if (!resolved.startsWith(`${root}${path.sep}`)) return null;
+  // An absolute path must point at this workspace's spool, not a lookalike elsewhere.
+  if (path.isAbsolute(value) || /^[A-Za-z]:\//.test(value)) {
+    if (path.resolve(value).toLowerCase() !== resolved.toLowerCase()) return null;
+  }
+  return resolved;
+}
+
 export async function readRawToolResultRange(input: {
   rawRef: string;
   sessionId: string;
   offsetBytes?: number;
   maxChars?: number;
+  workspacePath?: string;
 }): Promise<{
   rawRef: string;
   offsetBytes: number;
@@ -173,19 +195,28 @@ export async function readRawToolResultRange(input: {
   content: string;
 }> {
   const value = String(input.rawRef || '').trim();
-  if (!value.startsWith(RAW_REF_PREFIX)) throw new Error('Unsupported tool-result raw reference.');
-  const relative = value.slice(RAW_REF_PREFIX.length).replace(/\\/g, '/');
-  const match = /^([a-zA-Z0-9._-]{1,96})\/([a-f0-9]{64})\.txt$/.exec(relative);
-  if (!match) throw new Error('Invalid tool-result raw reference.');
-  if (match[1] !== sessionStorageKey(input.sessionId)) {
-    throw new Error('Tool-result raw reference does not belong to the current session.');
-  }
-
-  const target = rawResultPath(match[1], match[2]);
-  const root = path.resolve(rawResultRoot());
-  const resolved = path.resolve(target);
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    throw new Error('Tool-result raw reference escaped its storage root.');
+  let resolved: string;
+  const spool = value.startsWith(RAW_REF_PREFIX) ? null : resolveWorkspaceToolResultSpool(value, input.workspacePath);
+  if (spool) {
+    resolved = spool;
+  } else {
+    if (!value.startsWith(RAW_REF_PREFIX)) {
+      throw new Error('Unsupported tool-result raw reference. Pass the exact raw_ref=tool-result-raw:... value, or a temp/tool-results/<file>.txt spool path, from the bounded tool result.');
+    }
+    const relative = value.slice(RAW_REF_PREFIX.length).replace(/\\/g, '/');
+    const match = /^([a-zA-Z0-9._-]{1,96})\/([a-f0-9]{64})\.txt$/.exec(relative);
+    if (!match) {
+      throw new Error('Invalid tool-result raw reference. Copy raw_ref exactly as printed (tool-result-raw:<session-key>/<64-hex-sha256>.txt); do not construct or guess one.');
+    }
+    if (match[1] !== sessionStorageKey(input.sessionId)) {
+      throw new Error('Tool-result raw reference does not belong to the current session.');
+    }
+    const target = rawResultPath(match[1], match[2]);
+    const root = path.resolve(rawResultRoot());
+    resolved = path.resolve(target);
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+      throw new Error('Tool-result raw reference escaped its storage root.');
+    }
   }
 
   const stat = await fs.promises.stat(resolved);

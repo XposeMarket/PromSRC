@@ -20989,6 +20989,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
               sessionId,
               offsetBytes: args?.offset_bytes ?? args?.offsetBytes,
               maxChars: args?.max_chars ?? args?.maxChars,
+              workspacePath,
             });
             return { name, args, result: JSON.stringify(range, null, 2), error: false };
           } catch (error: any) {
