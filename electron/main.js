@@ -2127,7 +2127,11 @@ async function startGateway() {
       writeGatewayLog('[main] Gateway requested full app relaunch (code 43)\n');
       invalidateGatewayRecoverySchedule();
       isQuitting = true;
-      app.relaunch();
+      // Dev launches are `electron .`; a relative "." only works if the new
+      // process inherits the same cwd, so pass the absolute app path instead.
+      const relaunchArgs = process.argv.slice(1).map((arg) => (arg === '.' ? app.getAppPath() : arg));
+      writeGatewayLog(`[main] app.relaunch exec=${process.execPath} args=${JSON.stringify(relaunchArgs)}\n`);
+      app.relaunch({ execPath: process.execPath, args: relaunchArgs });
       app.quit();
       return;
     }

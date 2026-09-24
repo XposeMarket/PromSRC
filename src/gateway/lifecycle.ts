@@ -76,36 +76,10 @@ export function electronMainChangedSinceAppStart(): boolean {
  * `electron.exe .` from the repo root; then terminates the app (which also
  * ends this gateway child). Returns false when it cannot safely do this.
  */
-export function relaunchElectronExternally(): boolean {
-  if (process.platform !== 'win32') return false;
-  const pid = Number(process.env.PROMETHEUS_ELECTRON_PID || 0);
-  const root = repoRootForElectron();
-  const exe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe');
-  if (!pid || !fs.existsSync(exe)) return false;
-  try {
-    const { spawn } = require('child_process');
-    const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
-    const script = [
-      `$deadline=(Get-Date).AddSeconds(25)`,
-      `while ((Get-Process -Id ${pid} -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 300 }`,
-      `Start-Sleep -Milliseconds 800`,
-      `Start-Process -FilePath ${q(exe)} -ArgumentList '.' -WorkingDirectory ${q(root)}`,
-    ].join('; ');
-    const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script], {
-      detached: true, stdio: 'ignore', windowsHide: true,
-    });
-    child.unref();
-    setTimeout(() => {
-      try { process.kill(pid); } catch {}
-      setTimeout(() => process.exit(0), 1500);
-    }, 400);
-    return true;
-  } catch (err: any) {
-    console.warn('[lifecycle] External Electron relaunch failed:', err?.message || err);
-    return false;
-  }
-}
-
+// NOTE: an external relaunch helper used to live here. It was spawned by the
+// gateway, which Electron runs inside a kill-on-close Windows Job object, so
+// killing Electron also killed the helper: the app closed and never came back.
+// Relaunch now only happens through Electron itself (exit 43 -> app.relaunch()).
 
 /** Files loaded by the Electron main process only reload when the app relaunches. */
 export function requiresElectronRelaunchForFiles(files: unknown): boolean {
@@ -1085,12 +1059,10 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
       || requiresElectronRelaunchForFiles(restartCtx.affectedFiles)
       || electronMainChangedSinceAppStart();
     const relaunchApp = wantsRelaunch && process.env.PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH === '1';
-    // An Electron main that predates exit-43 support would treat 43 as a crash.
-    // Relaunch it from outside instead: a detached helper waits for the app to
-    // exit and starts it again, so nobody has to quit from the tray by hand.
-    if (wantsRelaunch && !relaunchApp && relaunchElectronExternally()) {
-      console.log('[lifecycle] Old Electron main without relaunch support: relaunching the app externally...');
-      return;
+    if (wantsRelaunch && !relaunchApp) {
+      // Never kill an Electron that cannot relaunch itself: fall back to a
+      // gateway-only restart and say plainly that the app window is stale.
+      console.warn('[lifecycle] electron/ changed but this Electron main cannot relaunch itself; restarting the gateway only. Quit and reopen the app once to load electron/main.js.');
     }
     console.log(relaunchApp
       ? '[lifecycle] Electron-managed gateway: electron/ changed or full restart requested. Asking Electron to relaunch the app...'
