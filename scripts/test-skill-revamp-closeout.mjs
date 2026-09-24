@@ -55,6 +55,8 @@ for (const [label, args] of commands) {
     cwd: repoRoot,
     env: { ...process.env, PYTHONUTF8: '1' },
     stdio: 'inherit',
+    timeout: Number(process.env.PROMETHEUS_TEST_CASE_TIMEOUT_MS || 180_000),
+    killSignal: 'SIGKILL',
   });
   if (result.status !== 0) failed.push({ label, status: result.status, signal: result.signal });
 }

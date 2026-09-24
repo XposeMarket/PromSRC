@@ -1622,7 +1622,29 @@ export async function autoAttachChatInputResources(options: ChatInputResourceOpt
     }
   }
 
-  const rawAttachments = [...(options.attachments || []), ...(options.attachmentPreviews || [])];
+  // `attachments` (saved path) and `attachmentPreviews` (inline base64) usually
+  // describe the SAME upload. Registering both listed every image twice in
+  // Sources. Collapse by file name, preferring the entry with a saved path.
+  const rawAttachments: any[] = [];
+  const byName = new Map<string, number>();
+  const attachmentKey = (a: any): string => {
+    const p = String(a?.path || a?.filePath || '').trim();
+    const n = String(a?.name || a?.filename || '').trim() || (p ? p.split(/[\\/]/).pop() || '' : '');
+    return n.toLowerCase();
+  };
+  for (const attachment of [...(options.attachments || []), ...(options.attachmentPreviews || [])]) {
+    const key = attachmentKey(attachment);
+    const hasPath = Boolean(String(attachment?.path || attachment?.filePath || '').trim());
+    if (key && byName.has(key)) {
+      const index = byName.get(key)!;
+      const existing = rawAttachments[index];
+      const existingHasPath = Boolean(String(existing?.path || existing?.filePath || '').trim());
+      if (hasPath && !existingHasPath) rawAttachments[index] = attachment;
+      continue;
+    }
+    if (key) byName.set(key, rawAttachments.length);
+    rawAttachments.push(attachment);
+  }
   for (const attachment of rawAttachments.slice(0, 12)) {
     try {
       const pathValue = String(attachment.path || attachment.filePath || '').trim();

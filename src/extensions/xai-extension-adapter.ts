@@ -16,6 +16,13 @@ export function hasXAIConfiguredCredentials(): boolean {
   try {
     if (isXAIConnected(configDir())) return true;
   } catch {}
+  // Named accounts (llm.providers.xai.accounts.<id>) store OAuth per account;
+  // the legacy single-account check above misses them, which left x_search
+  // unregistered ("Unknown tool") even while Grok chat worked.
+  try {
+    const pool = require('../auth/xai-account-pool.js') as typeof import('../auth/xai-account-pool.js');
+    if (pool.hasConfiguredXaiCredentials()) return true;
+  } catch {}
   return !!process.env.XAI_API_KEY || !!getEffectiveXaiApiKey();
 }
 

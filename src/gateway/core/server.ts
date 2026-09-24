@@ -719,6 +719,21 @@ export function createServer(
         console.warn(`[Prom] Failed to send startup notification ${item.id}: ${err?.message || err}`);
       }
     };
+    // Replay restart-recovery history changes to late-connecting clients (the
+    // one-shot broadcast usually fires before phones/desktop reconnect). Sent
+    // now and again after 3s, in case the client's handlers aren't ready yet.
+    try {
+      const { listRecoveryReplayEvents } = require('../runtime-recovery') as typeof import('../runtime-recovery');
+      const replay = () => {
+        if (ws.readyState !== 1) return;
+        for (const event of listRecoveryReplayEvents()) {
+          try { ws.send(JSON.stringify(event)); } catch {}
+        }
+      };
+      replay();
+      const replayTimer = setTimeout(replay, 3000);
+      if (typeof (replayTimer as any).unref === 'function') (replayTimer as any).unref();
+    } catch {}
     for (const item of pending) {
       sendStartupNotification(item);
       // Retry once in case frontend handlers are not ready yet.

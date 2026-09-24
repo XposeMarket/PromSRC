@@ -2336,6 +2336,61 @@ function buildNativeBrowserUserAgent() {
   return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
 }
 
+// Client Hints: Electron reports brands ["Not?A_Brand","Chromium"] with no
+// "Google Chrome" entry. Real Chrome always includes it and Google sign-in
+// checks for it ("This browser or app may not be secure"). Chromium's own
+// Emulation.setUserAgentOverride sets Sec-CH-UA headers AND
+// navigator.userAgentData natively (no page-visible JS patching).
+function buildNativeBrowserUserAgentMetadata() {
+  const full = String(process.versions.chrome || '').trim() || '130.0.0.0';
+  const major = full.split('.')[0] || '130';
+  const platform = process.platform === 'darwin' ? 'macOS' : (process.platform === 'linux' ? 'Linux' : 'Windows');
+  const platformVersion = process.platform === 'win32' ? '15.0.0' : (process.platform === 'darwin' ? '14.0.0' : '6.0.0');
+  const brands = [
+    { brand: 'Google Chrome', version: major },
+    { brand: 'Chromium', version: major },
+    { brand: 'Not?A_Brand', version: '99' },
+  ];
+  return {
+    brands,
+    fullVersionList: brands.map((b) => ({ brand: b.brand, version: b.brand === 'Not?A_Brand' ? '99.0.0.0' : full })),
+    fullVersion: full,
+    platform,
+    platformVersion,
+    architecture: process.arch === 'arm64' ? 'arm' : 'x86',
+    model: '',
+    mobile: false,
+    bitness: '64',
+    wow64: false,
+  };
+}
+
+function applyNativeBrowserClientHints(view) {
+  try {
+    const wc = view?.webContents;
+    if (!wc || wc.isDestroyed?.()) return;
+    const dbg = wc.debugger;
+    if (!dbg) return;
+    const send = () => {
+      try {
+        if (!dbg.isAttached()) dbg.attach('1.3');
+        return dbg.sendCommand('Emulation.setUserAgentOverride', {
+          userAgent: buildNativeBrowserUserAgent(),
+          acceptLanguage: 'en-US,en;q=0.9',
+          platform: process.platform === 'win32' ? 'Win32' : (process.platform === 'darwin' ? 'MacIntel' : 'Linux x86_64'),
+          userAgentMetadata: buildNativeBrowserUserAgentMetadata(),
+        }).catch((error) => writeGatewayLog(`[main] client hints override failed: ${error?.message || error}\n`));
+      } catch (error) {
+        writeGatewayLog(`[main] client hints attach failed: ${error?.message || error}\n`);
+      }
+      return undefined;
+    };
+    send();
+    // The override is per-target; re-apply if something detaches the session.
+    dbg.on('detach', () => { setTimeout(() => { try { if (!wc.isDestroyed()) send(); } catch {} }, 250); });
+  } catch {}
+}
+
 function applyNativeBrowserUserAgent(view) {
   try {
     const ua = buildNativeBrowserUserAgent();
@@ -2345,6 +2400,7 @@ function applyNativeBrowserUserAgent(view) {
       view.webContents.session.setUserAgent(ua);
     }
   } catch {}
+  applyNativeBrowserClientHints(view);
 }
 
 function slugifyNativeProfile(value) {

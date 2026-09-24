@@ -160,6 +160,22 @@ export async function resolveXAICredentials(): Promise<ResolvedCreds | null> {
     }
   }
 
+  // 1b. Named xAI accounts (OAuth or per-account API key) from the account pool.
+  try {
+    const pool = require('../../../auth/xai-account-pool.js') as typeof import('../../../auth/xai-account-pool.js');
+    const candidates = await pool.getXaiAuthCandidates();
+    const first = candidates[0];
+    if (first?.token) {
+      return {
+        api_key: first.token,
+        base_url: (readXaiBaseUrlFromConfig() || DEFAULT_BASE_URL).replace(/\/+$/, ''),
+        source: first.auth === 'xai_oauth' ? 'xai-oauth' : 'xai-config',
+      };
+    }
+  } catch {
+    // fall through to env/config keys
+  }
+
   // 2. XAI_API_KEY env
   const envKey = String(process.env.XAI_API_KEY || '').trim();
   if (envKey) {

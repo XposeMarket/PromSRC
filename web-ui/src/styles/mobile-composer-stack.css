@@ -710,7 +710,7 @@ body.pm-mobile-active.pm-keyboard-open .pm-scroll-latest {
   background-clip: text;
   color: transparent;
   -webkit-text-fill-color: transparent;
-  animation: t-think-shimmer 2000ms linear infinite;
+  /* steps(): background-clip:text repaints the whole label per frame; 12/s instead of 120/s. */ animation: t-think-shimmer 2000ms steps(24, end) infinite;
 }
 .pm-trace-tool-group:not([data-pm-trace-live-current="1"]) .t-think-text::before,
 .pm-trace-thought-group:not([data-pm-trace-live-current="1"]) .t-think-text::before {

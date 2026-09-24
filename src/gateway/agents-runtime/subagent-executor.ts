@@ -8523,6 +8523,18 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
             defaultExcludes.add(largeRoot);
           }
         }
+        // An explicitly requested directory must never be filtered out by a
+        // default exclude (searching "PromSRC/dist" used to return 0 matches
+        // silently because "dist" is a default exclude). Drop excludes that
+        // name any segment of the requested path, unless the caller passed it.
+        {
+          const explicitExcludes = new Set(String(args.exclude || '').split(',').map((item: string) => item.trim()).filter(Boolean));
+          const requestedSegments = String(resolvedDir.absPath || directoryArg || '').split(/[\\/]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+          for (const exclude of Array.from(defaultExcludes)) {
+            if (explicitExcludes.has(exclude)) continue;
+            if (requestedSegments.includes(String(exclude).toLowerCase())) defaultExcludes.delete(exclude);
+          }
+        }
         const gitignoreRules = args.gitignore === false || args.respect_gitignore === false ? [] : readSimpleGitignore(searchDir);
         const search = await runBoundedWorkspaceSearch({
           searchDir,

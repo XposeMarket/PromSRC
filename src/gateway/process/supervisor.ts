@@ -101,7 +101,14 @@ function getShellInvocation(command: string, requestedShell?: ProcessShell): { r
       requestedShell: normalizeShell(requestedShell),
       shellKind,
       shell: process.env.PROMETHEUS_POWERSHELL_PATH || 'powershell.exe',
-      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+      // Windows PowerShell 5.1 decodes native output with the OEM codepage, so
+      // UTF-8 from git/node (box-drawing, em dashes) came back as "�"?" mojibake.
+      // Exit code: PS 5.1 -Command exits 1 whenever the last statement set
+      // $? = $false, and `native 2>&1` turns ANY stderr line (git "Switched to
+      // branch", npm warnings) into a NativeCommandError. Successful runs came
+      // back "exit 1" and failures could hide. Treat a stderr-only
+      // NativeCommandError as success unless the native exit code was nonzero.
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`],
     };
   }
   if (shellKind === 'powershell') {
