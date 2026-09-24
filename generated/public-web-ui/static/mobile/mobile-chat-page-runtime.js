@@ -6068,6 +6068,17 @@ void main() {
   window.addEventListener('pagehide', _onPageHideKb);
   window.addEventListener('pageshow', _onPageShowKb);
   document.addEventListener('visibilitychange', _onVisibilityChangeKb);
+  // Overlays that own their own inputs (login sheet, other pages) can close
+  // the keyboard without a composer focusout. If no editable is focused any
+  // more, drop every keyboard-owned position so fixed UI returns to the bottom.
+  const _onViewportSettleKb = () => {
+    const ae = document.activeElement;
+    const editing = ae && (ae.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || ''));
+    if (editing && _isKeyboardComposerTarget(ae)) return;
+    _resetKeyboardControllerForLifecycle();
+    _scheduleKeyboardOffset();
+  };
+  window.addEventListener('pm:viewport-settle', _onViewportSettleKb);
   function _teardownKeyboardController() {
     if (_pmKbRaf) { cancelAnimationFrame(_pmKbRaf); _pmKbRaf = 0; }
     if (_pmKbPinRaf) { cancelAnimationFrame(_pmKbPinRaf); _pmKbPinRaf = 0; }
@@ -6079,6 +6090,7 @@ void main() {
     window.removeEventListener('resize', _onWindowKeyboardResize);
     window.removeEventListener('scroll', _onWindowKeyboardScroll);
     body?.removeEventListener('scroll', _onWindowKeyboardScroll);
+    window.removeEventListener('pm:viewport-settle', _onViewportSettleKb);
     if (_pmKbComposerRepairRaf) { cancelAnimationFrame(_pmKbComposerRepairRaf); _pmKbComposerRepairRaf = 0; }
     window.removeEventListener('pagehide', _onPageHideKb);
     window.removeEventListener('pageshow', _onPageShowKb);

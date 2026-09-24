@@ -234,7 +234,7 @@ function bindTyping(state) {
     if (event.key === 'Enter') { event.preventDefault(); sendInput(state, { action: 'key', key: 'Enter' }); }
     else if (event.key === 'Tab') { event.preventDefault(); sendInput(state, { action: 'key', key: 'Tab' }); }
   });
-  input.addEventListener('blur', () => state.root.classList.remove('is-typing'));
+  input.addEventListener('blur', () => { state.root.classList.remove('is-typing'); settleViewportAfterKeyboard(); });
 }
 
 async function useMyChrome(state) {
@@ -254,6 +254,20 @@ async function useMyChrome(state) {
   }
 }
 
+// iOS can keep the shrunken keyboard viewport after an input disappears.
+// A same-position scroll plus a resize ping makes WebKit recompute fixed
+// positions, and tells the chat keyboard controller to reset.
+function settleViewportAfterKeyboard() {
+  const run = () => {
+    try { window.scrollTo(window.scrollX, window.scrollY); } catch {}
+    try { window.dispatchEvent(new Event('resize')); } catch {}
+    try { window.dispatchEvent(new CustomEvent('pm:viewport-settle')); } catch {}
+  };
+  requestAnimationFrame(run);
+  setTimeout(run, 250);
+  setTimeout(run, 700);
+}
+
 function closeViewer() {
   if (!viewer) return;
   const state = viewer;
@@ -262,10 +276,19 @@ function closeViewer() {
   clearTimeout(state.frameTimer);
   clearTimeout(state.stateTimer);
   post('/api/browser/login-view', { sessionId: state.sessionId, mode: 'off' }).catch(() => {});
+  // Blur BEFORE removing the sheet. Removing a still-focused input makes iOS
+  // dismiss the keyboard without resizing the layout viewport back, which
+  // leaves every fixed element (tab bar, composer, launcher) floating mid-
+  // screen until the app is killed.
+  try { state.input?.blur(); } catch {}
+  try { if (document.activeElement && state.root.contains(document.activeElement)) document.activeElement.blur(); } catch {}
   state.root.classList.remove('is-open');
   state.root.classList.add('is-closing');
   document.body.classList.remove('pm-login-handoff-open');
-  setTimeout(() => state.root.remove(), 320);
+  setTimeout(() => {
+    state.root.remove();
+    settleViewportAfterKeyboard();
+  }, 320);
 }
 
 async function finishLogin(questionId) {
