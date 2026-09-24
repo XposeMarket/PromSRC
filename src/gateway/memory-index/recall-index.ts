@@ -188,7 +188,9 @@ function listCandidateFiles(workspacePath: string): string[] {
   try {
     for (const name of fs.readdirSync(memDir)) if (/-intraday-notes\.md$/.test(name)) push(path.join(memDir, name));
   } catch { /* no notes yet */ }
-  for (const name of ['MEMORY.md', 'USER.md', 'IDEAS.md']) {
+  // MEMORY-archive.md holds entries moved out of MEMORY.md (not injected every
+  // turn) so they stay searchable through recall.
+  for (const name of ['MEMORY.md', 'USER.md', 'IDEAS.md', 'MEMORY-archive.md']) {
     const abs = path.join(workspacePath, name);
     if (fs.existsSync(abs)) push(abs);
   }

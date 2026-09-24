@@ -1,20 +1,17 @@
-// Extension runtime bootstrap + narrow X/xAI bridge.
+﻿// Extension runtime bootstrap + narrow X/xAI bridge.
 //
 // Historically this file mirrored hardcoded connector maps/handlers into the
 // extension registry. That legacy is gone: every connector_* connector is now a
-// native runtime.ts module (see §23B). What remains is:
-//   1. loadManifestRuntimeExtensions() — load native bundled/user extension modules
-//   2. the X and xAI connector STATUS records, whose tools are registered by
-//      xai-extension-adapter.ts (x_api_* / x_search / xai_live_search) rather than
-//      by a native connector module — so their records live here for now
+// native runtime.ts module (see Â§23B). What remains is:
+//   1. loadManifestRuntimeExtensions() â€” load native bundled/user extension modules
+//   2. the xAI connector STATUS record, whose x_search tool is registered by
+//      xai-extension-adapter.ts. X (x_api_*) is a native connector module now
+//      (connectors/x/runtime.ts).
 //   3. refreshXAITools() + a warn-only consistency check
 import {
-  X_API_REQUEST_TOOL_NAME,
   X_SEARCH_TOOL_NAME,
   XAI_LIVE_SEARCH_TOOL_NAME,
-  XAI_TOOL_NAMES,
 } from '../gateway/tools/defs/xai-tools.js';
-import { getXApiOAuthStatus } from '../auth/x-api-oauth.js';
 import { getConfig } from '../config/config.js';
 import { logExtensionConsistencyOnce } from './consistency.js';
 import { getExtensionRuntimeRegistry } from './runtime-registry.js';
@@ -25,28 +22,8 @@ let loaded = false;
 let lastCredentialRefreshAt = 0;
 const CREDENTIAL_REFRESH_TTL_MS = 5_000;
 
-function registerXConnectorRecords(): void {
+function registerXaiConnectorRecord(): void {
   const registry = getExtensionRuntimeRegistry();
-
-  const xToolNames = XAI_TOOL_NAMES.filter((name) => name.startsWith('x_api_'));
-  const getXStatus = () => getXApiOAuthStatus(getConfig().getConfigDir());
-  registry.registerConnector('x', {
-    id: 'x',
-    name: 'X / Twitter',
-    authType: 'oauth',
-    capabilities: registry.getExtension('x')?.contracts?.capabilities || ['social', 'publishing', 'official_api'],
-    toolNames: xToolNames,
-    isConnected: () => getXStatus().connected,
-    hasCredentials: () => getXStatus().credentialsConfigured || getXStatus().connected,
-    describeStatus: () => {
-      const status = getXStatus();
-      return status.connected
-        ? `X API OAuth user context${status.username ? ` (@${status.username})` : ''}; ${xToolNames.length} X API tool(s), including ${X_API_REQUEST_TOOL_NAME}`
-        : status.credentialsConfigured
-          ? 'X Developer app credentials saved; authorize OAuth user context'
-          : 'not connected';
-    },
-  });
 
   registry.registerConnector('xai', {
     id: 'xai',
@@ -68,7 +45,7 @@ export function resetPrometheusExtensionRuntimeLoaded(): void {
 export function ensurePrometheusExtensionRuntimeLoaded(): void {
   if (!loaded) {
     loadManifestRuntimeExtensions();
-    registerXConnectorRecords();
+    registerXaiConnectorRecord();
     loaded = true;
   }
   // X/xAI records depend on auth state initialized at gateway startup; refresh on
