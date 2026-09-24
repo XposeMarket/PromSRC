@@ -1717,7 +1717,33 @@ export async function capturePersonalityContextSnapshot(
   // the first model request hostage.
   let memorySearchSettled = false;
   let memorySearchValue = '';
-  if (allowLongTermSearch && memorySearchRouting.mode !== 'no_search') {
+  // Per-turn auto recall over the full-history FTS index (transcripts, notes,
+  // ideas). ~30-150ms, capped to 3 hits / 1.4k chars, and injects nothing
+  // unless a match is tight. Replaces the legacy worker search, which measured
+  // 0 injections in practice (timed out at 250ms or missed on every turn).
+  const useLegacyAutoSearch = process.env.PROMETHEUS_LEGACY_AUTO_MEMORY_SEARCH === '1';
+  if (allowLongTermSearch && memorySearchRouting.mode !== 'no_search' && !useLegacyAutoSearch) {
+    try {
+      const { buildAutoRecallContext } = require('./memory-index/recall-index');
+      const recall = buildAutoRecallContext(workspacePath, messageText, { excludeSessionId: sessionId });
+      memorySearchSettled = true;
+      memorySearchValue = recall.text || '';
+      onMemorySearchTelemetry?.({
+        status: recall.text ? 'hit' : (recall.skipped || 'miss'),
+        automatic: true,
+        backend: 'recall_fts',
+        durationMs: recall.ms,
+        hits: recall.hits,
+        candidates: recall.candidates,
+        terms: recall.terms.join(','),
+        injected: Boolean(recall.text),
+        injectedChars: recall.text.length,
+      });
+    } catch (err: any) {
+      onMemorySearchTelemetry?.({ status: 'error', automatic: true, backend: 'recall_fts', injected: false, error: String(err?.message || err).slice(0, 160) });
+    }
+  }
+  if (allowLongTermSearch && memorySearchRouting.mode !== 'no_search' && useLegacyAutoSearch) {
     void buildRetrievedMemoryContext(
       workspacePath,
       messageText,
