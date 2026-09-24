@@ -5604,6 +5604,13 @@ void main() {
   let _pmKbViewportMode = '';
   let _pmKbVisualBottomAnchor = 0;
   let _pmKbVisualHeight = 0;
+  // Measured correction (px) added to the computed composer top. The mode
+  // classification above is a one-shot guess made mid keyboard animation, and
+  // iOS (esp. installed PWAs / iOS 26) sometimes renders fixed elements with a
+  // different anchor than predicted, leaving the composer behind the keyboard.
+  // _pmKbVerifyPlacement measures the real rect and self-corrects.
+  let _pmKbTopCorrection = 0;
+  let _pmKbVerifyRaf = 0;
   const _pmKbComposerShiftProperty = '--pm-keyboard-composer-shift';
   const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'top', 'bottom', 'z-index'];
   function _pmKbComposerNodes() {
@@ -5649,11 +5656,12 @@ void main() {
       composerHeight,
     });
     // (resolvedBottom floor is applied inside resolveMobileKeyboardComposerTop)
+    const correctedTop = Math.max(0, Math.round(top + _pmKbTopCorrection));
     const values = {
       position: 'fixed',
       left: '10px',
       right: '10px',
-      top: `${top}px`,
+      top: `${correctedTop}px`,
       bottom: 'auto',
       'z-index': '10020',
     };
@@ -5675,6 +5683,7 @@ void main() {
       if (!composer) return;
       const rect = composer.getBoundingClientRect?.();
       if (!rect || !rect.height) return;
+      _pmKbVerifyPlacement();
       const layoutHeight = Math.max(
         Number(window.innerHeight || 0),
         Number(document.documentElement?.clientHeight || 0),
@@ -5684,7 +5693,8 @@ void main() {
       const visualBottom = Math.round(Math.max(0, Number(vv?.offsetTop || 0)) + visualHeight);
       const keyboardHeightOffset = vv ? Math.max(0, Math.round(layoutHeight - visualHeight)) : 0;
       const bottom = _pmKbViewportMode === 'layout' ? keyboardHeightOffset + 4 : 4;
-      const desiredTop = resolveMobileKeyboardComposerTop({
+      // Include the measured correction so this repair pass never fights it.
+      const desiredTop = Math.round(_pmKbTopCorrection) + resolveMobileKeyboardComposerTop({
         layoutHeight,
         visualHeight,
         visualTop: Math.max(0, Number(vv?.offsetTop || 0)),
@@ -5729,6 +5739,48 @@ void main() {
           composer.style.setProperty('top', `${desiredTop}px`, 'important');
         }
       });
+    });
+  }
+  // Verify the composer actually rendered inside the visible area above the
+  // keyboard. getBoundingClientRect and visualViewport.offsetTop share the
+  // layout-viewport coordinate space, so the visible band is
+  // [offsetTop, offsetTop + height]. If the composer is outside it, first try
+  // the other viewport mode (the two differ by exactly offsetTop); otherwise
+  // store the measured error as a persistent correction.
+  function _pmKbVerifyPlacement() {
+    if (_pmKbVerifyRaf) return;
+    _pmKbVerifyRaf = requestAnimationFrame(() => {
+      _pmKbVerifyRaf = 0;
+      if (!_pmKbFocusActive || !_pmKbViewportMode) return;
+      if (sideSheet?.classList.contains('open')) return;
+      const composer = _pmKbActiveComposer();
+      const rect = composer?.getBoundingClientRect?.();
+      const vv = window.visualViewport;
+      if (!composer || !rect || !rect.height || !vv) return;
+      const vTop = Math.max(0, Number(vv.offsetTop || 0));
+      const vHeight = Math.max(0, Number(vv.height || 0));
+      if (vHeight < 120) return;
+      const vBottom = vTop + vHeight;
+      const tooLow = rect.bottom > vBottom + 6;
+      const tooHigh = rect.top < vTop - 6;
+      if (!tooLow && !tooHigh) return;
+      const delta = tooLow ? (vBottom - 4 - rect.bottom) : (vTop + 4 - rect.top);
+      const flipTarget = _pmKbViewportMode === 'visual' ? 'layout' : 'visual';
+      // visual-mode top = layout-mode top + offsetTop.
+      const flipDelta = flipTarget === 'visual' ? vTop : -vTop;
+      if (vTop > 8 && Math.abs(delta - flipDelta) <= 12) {
+        _pmKbViewportMode = flipTarget;
+        if (flipTarget === 'visual') {
+          _pmKbVisualBottomAnchor = Math.round(vBottom);
+          _pmKbVisualHeight = vHeight;
+        }
+      } else {
+        _pmKbTopCorrection = Math.max(-vHeight, Math.min(vHeight, _pmKbTopCorrection + delta));
+      }
+      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout'
+        ? Math.max(0, Math.round(Math.max(Number(window.innerHeight || 0), Number(document.documentElement?.clientHeight || 0)) - vHeight)) + 4
+        : 4);
+      try { console.info('[pm-kb] composer placement corrected', { mode: _pmKbViewportMode, delta: Math.round(delta), correction: Math.round(_pmKbTopCorrection) }); } catch {}
     });
   }
   function _pmKbActiveComposer() {
@@ -5803,6 +5855,7 @@ void main() {
       _pmKbViewportMode = '';
       _pmKbVisualBottomAnchor = 0;
       _pmKbVisualHeight = 0;
+      _pmKbTopCorrection = 0;
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbClearComposerShift();
       _pmKbClearComposerViewportStyles();
@@ -5822,6 +5875,7 @@ void main() {
         _pmKbVisualHeight = visualHeight;
       }
       _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? keyboardHeightOffset + 4 : 4);
+      if (keyboardViewportSettled) _pmKbVerifyPlacement();
     }
     const keyboardOffset = open && _pmKbViewportMode === 'layout' ? keyboardHeightOffset : 0;
     const keyboardOffsetValue = `${keyboardOffset}px`;
