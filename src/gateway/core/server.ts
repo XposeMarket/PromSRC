@@ -304,6 +304,10 @@ function tryRawWebStaticFastPath(req: http.IncomingMessage, res: http.ServerResp
   if (method !== 'GET' && method !== 'HEAD') return false;
   const rawUrl = String(req.url || '/');
   if (rawUrl.startsWith('/api/') || rawUrl === '/ws') return false;
+  // The service worker is stamped with a live web-ui source digest by the
+  // Express route in app.ts. Serving the raw file here would bypass that and
+  // phones would keep a stale module cache forever.
+  if (rawUrl.split('?')[0] === '/service-worker.js') return false;
 
   let pathname = '/';
   let mobileDocumentRequested = false;
