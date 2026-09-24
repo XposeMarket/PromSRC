@@ -12,6 +12,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import zlib from 'zlib';
+import fs from 'fs';
+import crypto from 'crypto';
 import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { buildGatewayCorsOptions } from '../gateway-auth';
 import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
@@ -38,6 +40,56 @@ function setStaticCacheHeaders(res: express.Response, filePath: string): void {
     return;
   }
   res.setHeader('Cache-Control', 'no-cache');
+}
+
+// Raw-module (dev) builds ship service-worker.js with the constant sentinel
+// ASSET_BUILD_ID = 'source-build', so the worker bytes never change and phones
+// keep serving cached /src modules across merges. Stamp a digest of the live
+// web-ui sources into the worker instead: any source change produces new worker
+// bytes, the browser installs it, old caches are dropped and the page reloads.
+const SW_BUILD_SENTINEL = "const ASSET_BUILD_ID = 'source-build';";
+const SW_DIGEST_TTL_MS = 5_000;
+let swDigestCache: { root: string; at: number; digest: string } | null = null;
+
+export function computeWebUiSourceDigest(webUiRoot: string): string {
+  const hash = crypto.createHash('sha1');
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.isFile()) continue;
+      try {
+        const st = fs.statSync(full);
+        hash.update(`${path.relative(webUiRoot, full)}|${st.size}|${Math.floor(st.mtimeMs)}\n`);
+      } catch {}
+    }
+  };
+  walk(path.join(webUiRoot, 'src'));
+  for (const name of ['index.html', 'mobile.html', 'service-worker.js']) {
+    try {
+      const st = fs.statSync(path.join(webUiRoot, name));
+      hash.update(`${name}|${st.size}|${Math.floor(st.mtimeMs)}\n`);
+    } catch {}
+  }
+  return `src-${hash.digest('hex').slice(0, 16)}`;
+}
+
+function webUiSourceDigest(webUiRoot: string): string {
+  const now = Date.now();
+  if (swDigestCache && swDigestCache.root === webUiRoot && now - swDigestCache.at < SW_DIGEST_TTL_MS) {
+    return swDigestCache.digest;
+  }
+  const digest = computeWebUiSourceDigest(webUiRoot);
+  swDigestCache = { root: webUiRoot, at: now, digest };
+  return digest;
+}
+
+export function stampServiceWorkerSource(source: string, digest: string): string {
+  if (!source.includes(SW_BUILD_SENTINEL)) return source;
+  return source.replace(SW_BUILD_SENTINEL, `const ASSET_BUILD_ID = '${digest}';`);
 }
 
 const JSON_COMPRESSION_MIN_BYTES = 16 * 1024;
@@ -182,6 +234,17 @@ export function createApp(): express.Application {
   const webUiPath = isPublicDistributionBuild() && hasPublicWebUiBuild()
     ? getPublicWebUiRoot()
     : path.join(root, 'web-ui');
+  app.get('/service-worker.js', (req, res, next) => {
+    const swPath = path.join(webUiPath, 'service-worker.js');
+    let source = '';
+    try { source = fs.readFileSync(swPath, 'utf8'); } catch { return next(); }
+    // Production builds already carry a content digest; only stamp raw sources.
+    if (!source.includes(SW_BUILD_SENTINEL)) return next();
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Service-Worker-Allowed', '/');
+    res.send(stampServiceWorkerSource(source, webUiSourceDigest(webUiPath)));
+  });
   app.use(express.static(webUiPath, { etag: true, lastModified: true, setHeaders: setStaticCacheHeaders }));
 
   const pretextDistPath = path.join(root, 'node_modules', '@chenglou', 'pretext', 'dist');
