@@ -41,6 +41,10 @@ async function handle(method, params) {
       return { cookies: out, domains };
     }
     case 'downloads.search': return chrome.downloads.search(params.query || {});
+    // Unpacked extensions keep running old code until reloaded; let the gateway
+    // ask for a reload after it ships a newer extension build.
+    case 'extension.info': return { version: chrome.runtime.getManifest().version };
+    case 'extension.reload': { setTimeout(() => chrome.runtime.reload(), 150); return true; }
     default: throw new Error(`Unsupported Personal Chrome relay method: ${method}`);
   }
 }

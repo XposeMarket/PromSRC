@@ -5673,7 +5673,17 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   try { host = new URL(String(inHouse.url || '')).hostname; } catch {}
   const site = registrableDomain(host);
   const domains = [...new Set([site, ...extraDomains.map(registrableDomain), ...LOGIN_IMPORT_PROVIDER_DOMAINS].filter(Boolean))].slice(0, 20);
-  const got = await relay.request('cookies.forDomains', { domains }, 20_000);
+  let got: any;
+  try {
+    got = await relay.request('cookies.forDomains', { domains }, 20_000);
+  } catch (err: any) {
+    // Chrome keeps running an unpacked extension's OLD service worker until the
+    // user presses Reload on it, so a paired v1.0 worker rejects this method.
+    if (/Unsupported Personal Chrome relay method/i.test(String(err?.message || err))) {
+      throw new Error('Your Chrome is still running the old Prometheus extension. In Chrome open chrome://extensions and press the reload icon on "Prometheus Personal Chrome", then tap Use my Chrome again.');
+    }
+    throw err;
+  }
   const cookies = Array.isArray(got?.cookies) ? got.cookies : [];
   const res: any = await callInHouseBrowser('import-cookies', { sessionId: resolved, cookies });
   try { await callInHouseBrowser('navigate', { sessionId: resolved, action: 'reload' }); } catch {}
