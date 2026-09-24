@@ -18187,6 +18187,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
           let entry = `\n### [${noteTag.toUpperCase()}] ${timestamp}\n${sourceLine}\n${noteContent}`;
           if (noteTaskId) entry += `\n_Related task: ${noteTaskId}_`;
           fs.appendFileSync(intradayFile, entry + '\n');
+          try { require('../memory-index/recall-index').markRecallDirty(workspacePath, intradayFile, 500); } catch { /* best-effort */ }
         } catch (err: any) {
           return { name, args, result: `write_note: failed to write intraday note: ${err.message}`, error: true };
         }
