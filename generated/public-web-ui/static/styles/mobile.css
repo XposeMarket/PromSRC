@@ -18573,12 +18573,34 @@ body.pm-login-handoff-open { overflow: hidden; }
 .pm-brc-actions button:disabled { opacity: 0.45; cursor: default; }
 /* Related Skills pill: same glass as the open composer, plus a dark base so
    chat text underneath can't bleed through and make it unreadable. */
+/* The pill lives INSIDE #pm-composer, which has its own backdrop-filter. That
+   makes the composer a backdrop root, so any blur on the pill only samples the
+   composer's own contents, never the chat behind it: it rendered see-through
+   no matter what blur we set. Use an opaque fill that matches how the OPEN
+   composer actually looks (frosted page + strong fill) instead of a blur. */
 body.pm-mobile-active .pm-composer .pm-skill-trigger-pill {
   background:
-    linear-gradient(to bottom, rgba(255,255,255,.05), transparent 34%, rgba(255,255,255,.012)),
-    var(--pm-lg-glass-fill-strong, rgba(170,174,184,.075)),
-    color-mix(in srgb, var(--pm-bg, #0b0b0d) 72%, transparent) !important;
-  backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) !important;
-  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) !important;
+    linear-gradient(to bottom, rgba(255,255,255,.06), transparent 34%, rgba(255,255,255,.015)),
+    color-mix(in srgb, var(--pm-surface-strong, #242427) 20%, var(--pm-bg, #0b0b0d)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
   border: 1px solid rgba(255,255,255,.10) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.14),
+    inset 0 -1px 1px rgba(255,255,255,.05),
+    0 8px 20px rgba(0,0,0,.28) !important;
+}
+/* Keep the dismiss X on the summary row: with flex-wrap the summary took the
+   full width and pushed the X onto its own line, doubling the pill height. */
+body.pm-mobile-active .pm-composer .pm-skill-trigger-pill:not(.expanded) {
+  flex-wrap: nowrap;
+}
+body.pm-mobile-active .pm-composer .pm-skill-trigger-pill:not(.expanded) .pm-skill-trigger-summary {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+body.pm-mobile-active .pm-composer .pm-skill-trigger-pill .pm-skill-trigger-preview span {
+  flex: 0 1 auto;
+  min-width: 0;
 }
