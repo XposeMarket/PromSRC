@@ -3943,6 +3943,8 @@ function handleSendStop() {
     return;
   }
   if (window.isDesktopComposerTurnActive?.() || window._sessionThinking?.[window.activeChatSessionId]) {
+    // Ignore Stop for a moment after sending (accidental double tap).
+    if (Date.now() < Number(window.__pmStopSoftLockUntil || 0)) return;
     stopGeneration();
     return;
   }

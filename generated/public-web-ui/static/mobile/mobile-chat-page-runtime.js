@@ -4156,6 +4156,10 @@ void main() {
     const wasBusy = !!__pmChat.activeRuns?.[sid]?.busy;
     _markMobileSessionRunning(sid, !!busy);
     if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
+    if (busy && !wasBusy) {
+      // Stop soft-lock: ignore composer Stop taps briefly after sending.
+      __pmChat.stopSoftLockUntil = Date.now() + 2500;
+    }
     if (busy) {
       __pmChat.activeRuns[sid] = {
         ...(__pmChat.activeRuns[sid] || {}),
@@ -8910,6 +8914,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     const hasAttachments = getPendingAttachments().length > 0;
     if ((__pmChat.activeRuns?.[activeSid]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy) && !text.trim() && !hasAttachments) {
+      if (Date.now() < Number(__pmChat.stopSoftLockUntil || 0)) return;
       requestMobileMainChatAbort(activeSid).catch((err) => {
         console.warn('[mobile chat] abort request failed:', err);
         pmToast(`Stop failed: ${err.message || err}`, 'error');

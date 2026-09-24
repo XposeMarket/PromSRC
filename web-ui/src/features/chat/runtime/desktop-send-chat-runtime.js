@@ -612,6 +612,15 @@ export function createDesktopSendChatRuntime(resolveContext = () => ({})) {
       thisSession.unread = false;
     }
     window._sessionThinking[thisSessionId] = true;
+    // Stop soft-lock: a frozen UI plus a double tap on Send used to hit Stop.
+    window.__pmStopSoftLockUntil = Date.now() + 2500;
+    try {
+      const sb = document.getElementById('send-btn');
+      if (sb) {
+        sb.classList.add('pm-stop-soft-locked');
+        setTimeout(() => sb.classList.remove('pm-stop-soft-locked'), 2500);
+      }
+    } catch {}
     persistSession(thisSessionId);
     desktopChatRuntime(thisSessionId)?.beginStreaming({
       clientRequestId,

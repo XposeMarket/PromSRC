@@ -24,6 +24,9 @@ const STOP = new Set([
   'advice','already','any','anything','approach','best','context','continue','decision','focus','help','important','know','learn',
   'matter','memory','previous','project','recall','relevant','remember','remind','safeguard','something','tell','thing','think',
   'through','today','useful','vaguely','work',
+  // Generic request verbs/fillers carry no topic signal.
+  'make','open','use','fix','ahead','need','want','let','lets','try','look','check','see','new','add','run','next',
+  'more','only','stuff','okay','ok','yea','yeah','pls','plz','rn','basically','really','now','also','going','gonna','way',
 ]);
 
 const CONCEPT_GROUPS: readonly (readonly string[])[] = [
@@ -268,6 +271,13 @@ function scoreDeterministic(snapshot: HybridSnapshot, atom: MemoryAtom, query: s
   if (matchedConcepts.length >= 2) score += Math.min(0.16, conceptCoverage * 0.16);
   else if (matchedConcepts.length === 1 && matchedTerms.length > 0) score += 0.04;
   if (singleLiteralAmbiguous) score *= 0.20;
+  // Multi-term query where the atom shares only one common word: weak evidence.
+  const loneCommonTerm = queryLiteral.length > 1
+    && matchedTerms.length === 1
+    && entityMatches.length === 0
+    && !exactPhrase
+    && (snapshot.documentFrequency.get(matchedTerms[0]) || 0) > 2;
+  if (loneCommonTerm) score *= 0.35;
 
   return {
     atom,
