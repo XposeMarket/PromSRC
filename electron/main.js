@@ -3701,6 +3701,9 @@ async function inputNativeBrowserSurface(payload = {}) {
   return { ok: true };
 }
 
+// webContents ids currently in login phone mode (sharp CDP frames).
+const loginPhoneViews = new Set();
+
 // Login handoff: phone-sized layout while the user logs in from the phone
 // viewer. Only viewport metrics + touch change; the UA/Client Hints stay the
 // desktop Chrome ones so the fingerprint stays consistent for Google.
@@ -3709,6 +3712,7 @@ async function loginViewNativeBrowserSurface({ sessionId = '', mode = 'phone', w
   const dbg = wc.debugger;
   if (!dbg.isAttached()) dbg.attach('1.3');
   if (String(mode) === 'off') {
+    loginPhoneViews.delete(wc.id);
     await dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {});
     await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
     return { mode: 'off' };
@@ -3716,6 +3720,7 @@ async function loginViewNativeBrowserSurface({ sessionId = '', mode = 'phone', w
   const w = Math.max(320, Math.min(520, Math.round(Number(width) || 390)));
   const h = Math.max(480, Math.min(1100, Math.round(Number(height) || 760)));
   await dbg.sendCommand('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 3, mobile: true });
+  loginPhoneViews.add(wc.id);
   await dbg.sendCommand('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }).catch(() => {});
   return { mode: 'phone', width: w, height: h };
 }
@@ -3771,6 +3776,25 @@ async function importCookiesNativeBrowserSurface({ sessionId = '', cookies = [] 
 
 async function screenshotNativeBrowserSurface(sessionId = '') {
   const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  // Login phone mode: capturePage ignores the emulated 3x device scale and
+  // returns CSS-pixel frames (371px wide), which look blurry on a 3x iPhone.
+  // CDP's captureScreenshot honours the emulated scale, so frames are sharp.
+  if (loginPhoneViews.has(wc.id) && wc.debugger.isAttached()) {
+    try {
+      const shot = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      const vp = await wc.executeJavaScript('({ width: window.innerWidth, height: window.innerHeight })', true).catch(() => null);
+      const meta = nativeViewMeta(view);
+      if (shot?.data && vp?.width) {
+        return {
+          base64: shot.data,
+          width: Math.round(vp.width * 3), height: Math.round(vp.height * 3),
+          viewportWidth: vp.width, viewportHeight: vp.height,
+          mimeType: 'image/png', url: meta.url, title: meta.title,
+          profile: nativeProfileFromPartition(partition),
+        };
+      }
+    } catch {}
+  }
   let image = null;
   let captureError = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {

@@ -132,9 +132,20 @@ function configureKeyboard(state, field) {
   input.setAttribute('autocomplete', ac || (secure ? 'current-password' : (type === 'email' ? 'username' : 'off')));
 }
 
+// The frame uses object-fit: contain (top-aligned), so the drawn page can be
+// narrower or shorter than the <img> box. Map taps against the drawn area.
+function contentRect(state) {
+  const box = state.img.getBoundingClientRect();
+  if (!box.width || !box.height || !state.viewportWidth || !state.viewportHeight) return null;
+  const scale = Math.min(box.width / state.viewportWidth, box.height / state.viewportHeight);
+  const width = state.viewportWidth * scale;
+  const height = state.viewportHeight * scale;
+  return { left: box.left + (box.width - width) / 2, top: box.top, width, height };
+}
+
 function pagePoint(state, clientX, clientY) {
-  const rect = state.img.getBoundingClientRect();
-  if (!rect.width || !rect.height || !state.viewportWidth) return null;
+  const rect = contentRect(state);
+  if (!rect) return null;
   const x = ((clientX - rect.left) / rect.width) * state.viewportWidth;
   const y = ((clientY - rect.top) / rect.height) * state.viewportHeight;
   if (x < 0 || y < 0 || x > state.viewportWidth || y > state.viewportHeight) return null;
@@ -143,7 +154,7 @@ function pagePoint(state, clientX, clientY) {
 
 function hitEditable(state, p) {
   if (!p) return null;
-  const pad = 6;
+  const pad = 12;
   return state.editables.find((r) => p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad) || null;
 }
 
@@ -161,8 +172,8 @@ function bindGestures(state) {
     if (Math.abs(t.clientY - start.y) > 10 || Math.abs(t.clientX - start.x) > 10) start.moved = true;
     if (!start.moved) return;
     event.preventDefault();
-    const rect = state.img.getBoundingClientRect();
-    const scale = rect.height ? state.viewportHeight / rect.height : 1;
+    const rect = contentRect(state);
+    const scale = rect?.height ? state.viewportHeight / rect.height : 1;
     const dy = Math.round((start.lastY - t.clientY) * scale);
     const dx = Math.round((start.lastX - t.clientX) * scale);
     start.lastY = t.clientY; start.lastX = t.clientX;
@@ -185,6 +196,10 @@ function bindGestures(state) {
     if (!p) return;
     const field = hitEditable(state, p);
     if (field) {
+      // iOS follows touchend with an emulated mousedown/click on the stage,
+      // which moves focus off the hidden input and closes the keyboard the
+      // instant it opens. Cancelling touchend suppresses those mouse events.
+      if (event.cancelable) event.preventDefault();
       // Must happen inside this user gesture or iOS will not show the keyboard.
       configureKeyboard(state, field);
       state.input.value = '';

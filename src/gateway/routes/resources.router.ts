@@ -286,7 +286,7 @@ router.get('/api/browser/login-frame', async (req, res) => {
     const maxWidth = Math.min(Math.max(Number(req.query.maxWidth || 1000) || 1000, 320), 1600);
     const jpeg: Buffer = await sharp(Buffer.from(frame.base64, 'base64'))
       .resize({ width: maxWidth, withoutEnlargement: true })
-      .jpeg({ quality: 62 })
+      .jpeg({ quality: 84, chromaSubsampling: '4:4:4' })
       .toBuffer();
     res.set('Cache-Control', 'no-store');
     res.json({
