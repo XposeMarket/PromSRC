@@ -18506,6 +18506,9 @@ body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-pane
 /* Matching-skills / slash suggestions float above the composer. Give them the
    same liquid-glass material as the open composer and question cards so the
    chat underneath doesn't show straight through. */
+/* #414 only styled the slash popover; the "Related Skills" pill is
+   .pm-skill-trigger-pill (rgba(255,255,255,.03), no blur) and stayed see-through. */
+body.pm-mobile-active .pm-composer .pm-skill-trigger-pill,
 body.pm-mobile-active .pm-chat-slash-popover {
   background:
     linear-gradient(to bottom, rgba(255,255,255,.022), transparent 34%, rgba(255,255,255,.006)),
@@ -18568,3 +18571,14 @@ body.pm-login-handoff-open { overflow: hidden; }
 .pm-brc-actions button { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06); color: inherit; cursor: pointer; }
 .pm-brc-actions .pm-brc-confirm { background: #f4f4f5; color: #111; border-color: transparent; }
 .pm-brc-actions button:disabled { opacity: 0.45; cursor: default; }
+/* Related Skills pill: same glass as the open composer, plus a dark base so
+   chat text underneath can't bleed through and make it unreadable. */
+body.pm-mobile-active .pm-composer .pm-skill-trigger-pill {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.05), transparent 34%, rgba(255,255,255,.012)),
+    var(--pm-lg-glass-fill-strong, rgba(170,174,184,.075)),
+    color-mix(in srgb, var(--pm-bg, #0b0b0d) 72%, transparent) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) !important;
+  border: 1px solid rgba(255,255,255,.10) !important;
+}

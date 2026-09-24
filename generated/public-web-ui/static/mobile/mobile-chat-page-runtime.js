@@ -7146,6 +7146,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'model_switched':
       case 'main_model_changed': {
+        if (evt.type === 'model_switched') window.__pmMobileTurnModelSwitched = String(evt.tier || '') !== 'main';
+        if (evt.type === 'model_switched' && String(evt.tier || '') === 'main') {
+          // Helper failed / handed back mid-turn: show the chat's own model again.
+          _pmRevertMobileTurnModel();
+          const back = evt.model || evt.modelRef || evt.providerId || 'main model';
+          _appendMobileProcess(aiTurn, 'info', `Model: ${back}`, evt);
+          renderThreadSoon();
+          return 'streaming';
+        }
         const detail = notifyMobileModelChanged(evt, { sessionId: __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
         const model = detail?.modelRef || detail?.model || evt.model || evt.modelRef || evt.providerId || 'model';
         _appendMobileProcess(aiTurn, 'info', `Model: ${model}`, evt);
@@ -7154,9 +7163,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'model_reverted': {
         // switch_model is turn-scoped; gateway emits this at turn end to revert badge.
-        import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
-          refreshMobileModelBadge(true, null).catch(() => {});
-        }).catch(() => {});
+        _pmRevertMobileTurnModel();
         return 'streaming';
       }
       case 'session_title':
@@ -8035,6 +8042,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const finishAiTurn = () => {
       if (turnFinished) return;
       turnFinished = true;
+      // Abort/error/disconnect paths never receive model_reverted; the helper
+      // label would stick until the next navigation. Always revert at turn end.
+      if (window.__pmMobileTurnModelSwitched) _pmRevertMobileTurnModel();
       const targetAiTurn = _mobileStreamTargetTurn(aiTurn);
       _finishMobileVisualStreamText(targetAiTurn);
       if (stoppedByUser) {
@@ -9589,4 +9599,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   if (form && input) markMobileLifecycle('composerInteractive');
 }
+}
+
+// Restore the composer model label to the chat's real route after a
+// turn-scoped switch_model. Force-reloads the route (not the cached helper
+// label) so it flips back even when several switches happened in one turn.
+function _pmRevertMobileTurnModel() {
+  window.__pmMobileTurnModelSwitched = false;
+  import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
+    refreshMobileModelBadge(true, { sourceEventType: 'model_reverted', fromSelector: true }).catch(() => {});
+  }).catch(() => {});
 }

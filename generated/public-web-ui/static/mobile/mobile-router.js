@@ -605,7 +605,16 @@ function recoverMobileBootSurface() {
     && chatSurfaceReady;
   let targetedChat = false;
   if (route.page === 'chat' && route.arg) {
-    try { targetedChat = Boolean(parseTargetNamespacedId(decodeURIComponent(route.arg))); } catch {}
+    try {
+      const parsedTarget = parseTargetNamespacedId(decodeURIComponent(route.arg));
+      // Only a targeted chat whose embedded gateway id is GONE (stale after an
+      // identity refresh) needs a rebuild. Rebuilding a healthy chat on every
+      // focus/pageshow/visibilitychange tore down the thread, reconnected, and
+      // reset the document scroll to the top (router _resetMobileDocumentScroll).
+      // iOS fires focus on return from the photo picker too, which also wiped
+      // the just-added attachment preview and closed the composer.
+      targetedChat = Boolean(parsedTarget) && !getGateway(parsedTarget.gatewayId);
+    } catch {}
   }
   // iOS can keep a fully rendered page alive while the gateway catalog changes
   // underneath it. Re-render targeted chats on resume/focus so route repair can
