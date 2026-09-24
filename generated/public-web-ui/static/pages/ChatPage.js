@@ -20657,6 +20657,9 @@ function scheduleSourcePanelWorkRefresh() {
 function scheduleSourcePanelProcessRefresh() {
   const sid = String(sourcePanelState.activeSessionId || window.activeChatSessionId || '').trim();
   if (!sid) return;
+  // Every command fires started/update/exited. Only refetch while the panel
+  // is actually visible; opening it loads fresh data anyway.
+  if (!document.getElementById('right-panel')?.classList.contains('open')) return;
   if (sourcePanelState.processRefreshTimer) clearTimeout(sourcePanelState.processRefreshTimer);
   sourcePanelState.processRefreshTimer = setTimeout(() => {
     sourcePanelState.processRefreshTimer = null;
@@ -46400,7 +46403,25 @@ function handleDesktopInlineCommandProcessEvent(eventType, message = {}, attempt
     appendCommandTerminalChunkToDom(runId, message.chunk, message.sequence || run.outputSeq);
     return;
   }
-  if (applied && window.activeChatSessionId === sessionId) renderChatMessages();
+  if (applied && window.activeChatSessionId === sessionId) scheduleDesktopCommandActivityRender(sessionId);
+}
+
+// Every command sends started/update/exited events, and each one used to call
+// renderChatMessages() directly: ~300ms on a long chat, several times per tool
+// call, which froze the whole app while Prometheus worked. Coalesce to one
+// update per frame and prefer the in-place streaming patch.
+let desktopCommandActivityRenderFrame = 0;
+let desktopCommandActivityRenderSession = '';
+function scheduleDesktopCommandActivityRender(sessionId) {
+  desktopCommandActivityRenderSession = String(sessionId || '');
+  if (desktopCommandActivityRenderFrame) return;
+  desktopCommandActivityRenderFrame = requestAnimationFrame(() => {
+    desktopCommandActivityRenderFrame = 0;
+    const sid = desktopCommandActivityRenderSession;
+    if (!sid || window.activeChatSessionId !== sid) return;
+    if (isSessionThinking(sid) && patchStreamingChatBubble(sid)) return;
+    renderChatMessages();
+  });
 }
 
 ['process_run_started', 'process_run_update', 'process_run_exited'].forEach((eventType) => {
