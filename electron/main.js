@@ -453,6 +453,8 @@ let gatewayProcessStartedAt = 0;
 const gatewayRecoveryAttempts = [];
 let gatewayRecoveryGeneration = 0;
 const GATEWAY_RESTART_EXIT_CODE = 42;
+// Gateway asks for a full app relaunch (electron/ changed or supervisor-scope restart).
+const GATEWAY_APP_RELAUNCH_EXIT_CODE = 43;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
 const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
@@ -2004,6 +2006,8 @@ async function startGateway() {
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
     PROMETHEUS_ELECTRON_PID:      String(process.pid),
+    // Lets the gateway know exit 43 (full app relaunch) is understood here.
+    PROMETHEUS_ELECTRON_SUPPORTS_RELAUNCH: '1',
     PROMETHEUS_GATEWAY_PROCESS_STARTED_AT: String(gatewayProcessStartedAt),
     // Keep the gateway's own stall recovery aligned with the Electron
     // watchdog. An unset value should use the production-safe default; an
@@ -2117,6 +2121,16 @@ async function startGateway() {
     const exitedRuntimePid = Number(readGatewayRuntimeStatus()?.pid || 0);
     forceCleanupOwnedGatewayPort(spawnedGatewayProcess.pid || 0, exitedRuntimePid);
     if (!isQuitting && isGatewayRestarting) return;
+    if (!isQuitting && code === GATEWAY_APP_RELAUNCH_EXIT_CODE) {
+      // The gateway already wrote its restart context and shut down; the
+      // relaunched app starts a fresh gateway that resumes from it.
+      writeGatewayLog('[main] Gateway requested full app relaunch (code 43)\n');
+      invalidateGatewayRecoverySchedule();
+      isQuitting = true;
+      app.relaunch();
+      app.quit();
+      return;
+    }
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
       // Code 42 is an intentional handoff from the Electron-managed gateway,
       // not a failed health probe. Start the replacement immediately and
