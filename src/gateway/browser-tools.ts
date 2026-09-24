@@ -5618,6 +5618,33 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
   return out;
 }
 
+/**
+ * Current in-app browser frame for the login handoff viewer (mobile). Returns
+ * the PNG plus the CSS viewport so the client can map taps to page coordinates.
+ */
+export async function browserLoginHandoffFrame(sessionId: string): Promise<{
+  base64: string;
+  width: number;
+  height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  url: string;
+  title: string;
+}> {
+  const shot = await browserVisionScreenshotInHouse(sessionId);
+  if (!shot) throw new Error('No in-app browser is open for this chat yet.');
+  const inHouse: any = getInHouseSession(resolveSessionId(sessionId));
+  return {
+    base64: shot.base64,
+    width: shot.width,
+    height: shot.height,
+    viewportWidth: Number(shot.viewportWidth || shot.width),
+    viewportHeight: Number(shot.viewportHeight || shot.height),
+    url: String(inHouse?.url || ''),
+    title: String(inHouse?.title || ''),
+  };
+}
+
 export async function browserOpen(
   sessionId: string,
   url: string,

@@ -18502,3 +18502,50 @@ body.pm-mobile-active #pm-composer #pm-attach-sheet.open > .pm-attach-sheet-pane
 .pm-trace-tool-body .tool-activity-detail-fields strong { font-size: .85em; opacity: .65; }
 .pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :first-child { margin-top: 0; }
 .pm-trace-tool-body .tool-activity-readable-detail .markdown-body > :last-child { margin-bottom: 0; }
+
+/* Matching-skills / slash suggestions float above the composer. Give them the
+   same liquid-glass material as the open composer and question cards so the
+   chat underneath doesn't show straight through. */
+body.pm-mobile-active .pm-chat-slash-popover {
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,.022), transparent 34%, rgba(255,255,255,.006)),
+    var(--pm-lg-glass-fill-strong, var(--pm-surface-strong)) !important;
+  backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) brightness(var(--pm-lg-glass-brightness, 1)) !important;
+  -webkit-backdrop-filter: blur(var(--pm-lg-glass-open-blur, 18px)) saturate(var(--pm-lg-glass-saturate, 1.6)) brightness(var(--pm-lg-glass-brightness, 1)) !important;
+  border-radius: 18px;
+}
+
+/* Login handoff: card button + full-screen live browser viewer. */
+.pm-q-login { display: flex; flex-direction: column; gap: 6px; }
+.pm-q-login-open {
+  appearance: none; border: 0; border-radius: 12px; padding: 11px 14px;
+  font: inherit; font-weight: 600; color: #111; background: #fff; cursor: pointer;
+}
+.pm-q-login-note { font-size: 12px; color: var(--pm-muted, rgba(255,255,255,.6)); }
+body.pm-login-handoff-open { overflow: hidden; }
+.pm-login-handoff {
+  position: fixed; inset: 0; z-index: 10050; display: flex; flex-direction: column;
+  background: var(--pm-bg, #0b0b0d); color: var(--pm-text, #fff);
+  padding: env(safe-area-inset-top, 0) 0 env(safe-area-inset-bottom, 0);
+}
+.pm-login-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.pm-login-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pm-login-title strong { font-size: 15px; }
+.pm-login-url { font-size: 12px; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-login-close, .pm-login-done, .pm-login-mask {
+  appearance: none; border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; cursor: pointer;
+  background: rgba(255,255,255,.08); color: inherit;
+}
+.pm-login-done { background: #fff; color: #111; font-weight: 600; }
+.pm-login-stage { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; background: #000; }
+.pm-login-frame { display: block; width: 100%; height: auto; touch-action: pan-x; user-select: none; -webkit-user-select: none; }
+.pm-login-status:empty { display: none; }
+.pm-login-status { padding: 6px 12px; font-size: 12px; opacity: .75; }
+.pm-login-keys { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid rgba(255,255,255,.08); }
+.pm-login-type {
+  flex: 1; min-width: 0; border-radius: 12px; border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05); color: inherit; padding: 10px 12px; font-size: 16px;
+}

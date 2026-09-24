@@ -43,6 +43,16 @@ export interface PrometheusQuestionRecord {
   resolvedAt?: string;
   resolvedBy?: string;
   expiresAt?: number;
+  /** Present when this card asks the user to log in inside the in-app browser. */
+  loginHandoff?: PrometheusLoginHandoff;
+}
+
+export interface PrometheusLoginHandoff {
+  site: string;
+  url?: string;
+  reason?: string;
+  /** In-app browser session the agent is using (the chat session id). */
+  browserSessionId: string;
 }
 
 export interface SubmitPrometheusQuestionInput {
@@ -121,6 +131,7 @@ export function createPrometheusQuestionPayload(input: {
   originLabel?: string;
   questions?: any[];
   ttlMs?: number;
+  loginHandoff?: PrometheusLoginHandoff;
 }): Omit<PrometheusQuestionRecord, 'id' | 'createdAt' | 'status'> {
   const sessionId = String(input.sessionId || '').trim();
   if (!sessionId) throw new Error('sessionId is required.');
@@ -145,6 +156,17 @@ export function createPrometheusQuestionPayload(input: {
     questions,
     allowGeneralOther: false,
     expiresAt: Date.now() + ttlMs,
+    ...(input.loginHandoff ? { loginHandoff: normalizeLoginHandoff(input.loginHandoff, sessionId) } : {}),
+  };
+}
+
+function normalizeLoginHandoff(raw: PrometheusLoginHandoff, sessionId: string): PrometheusLoginHandoff {
+  const url = String(raw?.url || '').trim().slice(0, 2000);
+  return {
+    site: String(raw?.site || '').trim().slice(0, 120) || 'this site',
+    ...(/^https?:\/\//i.test(url) ? { url } : {}),
+    ...(String(raw?.reason || '').trim() ? { reason: String(raw.reason).trim().slice(0, 300) } : {}),
+    browserSessionId: String(raw?.browserSessionId || sessionId).trim(),
   };
 }
 
@@ -165,6 +187,7 @@ export function serializePrometheusQuestionForClient(record: PrometheusQuestionR
     resolvedAt: record.resolvedAt,
     resolvedBy: record.resolvedBy,
     expiresAt: record.expiresAt,
+    ...(record.loginHandoff ? { loginHandoff: record.loginHandoff } : {}),
   });
 }
 

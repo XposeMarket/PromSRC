@@ -8,10 +8,15 @@ import {
   assertSafeStorageId,
   isStorageBoundaryError,
 } from '../storage/storage-paths';
+import sharpModule from 'sharp';
 import {
   browserGetPageText,
+  browserHandleUserInput,
+  browserLoginHandoffFrame,
   getBrowserSessionInfo,
 } from '../browser-tools';
+
+const sharp: any = (sharpModule as any)?.default || sharpModule;
 import {
   getResourceStore,
   redactResourceText,
@@ -264,6 +269,57 @@ router.get('/api/browser/history', (req, res) => {
     res.json({ success: true, resources });
   } catch (error) {
     sendError(res, error);
+  }
+});
+
+// Login handoff viewer: the phone polls frames and forwards taps/typing so the
+// user can log in themselves. Credentials never pass through the model.
+router.get('/api/browser/login-frame', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.query.sessionId || ''), 'session');
+    const frame = await browserLoginHandoffFrame(sessionId);
+    const maxWidth = Math.min(Math.max(Number(req.query.maxWidth || 1000) || 1000, 320), 1600);
+    const jpeg: Buffer = await sharp(Buffer.from(frame.base64, 'base64'))
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .jpeg({ quality: 62 })
+      .toBuffer();
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
+      viewportWidth: frame.viewportWidth,
+      viewportHeight: frame.viewportHeight,
+      url: frame.url,
+      title: frame.title,
+    });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error || 'No browser frame.') });
+  }
+});
+
+router.post('/api/browser/login-input', async (req, res) => {
+  try {
+    const sessionId = assertSafeStorageId(String(req.body?.sessionId || ''), 'session');
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    if (!['click', 'wheel', 'key', 'text'].includes(action)) {
+      res.status(400).json({ success: false, error: 'Unsupported input action.' });
+      return;
+    }
+    await browserHandleUserInput(sessionId, {
+      action,
+      x: Number(req.body?.x),
+      y: Number(req.body?.y),
+      deltaX: Number(req.body?.deltaX || 0),
+      deltaY: Number(req.body?.deltaY || 0),
+      key: req.body?.key ? String(req.body.key).slice(0, 40) : undefined,
+      text: req.body?.text != null ? String(req.body.text).slice(0, 2000) : undefined,
+      button: 'left',
+    });
+    res.json({ success: true });
+  } catch (error: any) {
+    if (isStorageBoundaryError(error)) { sendError(res, error); return; }
+    res.status(409).json({ success: false, error: String(error?.message || error || 'Browser input failed.') });
   }
 });
 

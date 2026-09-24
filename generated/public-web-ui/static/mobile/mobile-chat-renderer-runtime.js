@@ -1141,6 +1141,9 @@ export function createMobileChatRendererRuntime(context = {}) {
     return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}" data-pm-q-index="${currentIndex}" data-pm-q-total="${questionCount}">
       ${pending && questionCount > 1 ? `<div class="pm-q-head"><span class="pm-q-progress" aria-label="Question ${currentIndex + 1} of ${questionCount}"><span class="pm-q-progress-current">${currentIndex + 1}</span><span class="pm-q-progress-total">/${questionCount}</span></span></div>` : ''}
       ${blocks}
+      ${pending && q.loginHandoff
+        ? `<div class="pm-q-login"><button type="button" class="pm-q-login-open" onclick="_pmOpenLoginHandoff(${idJson}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.browserSessionId || q.sessionId || '')))}, ${escapeHtml(JSON.stringify(String(q.loginHandoff.site || '')))})">Open &amp; log in</button><span class="pm-q-login-note">You log in yourself. Prometheus never sees your password.</span></div>`
+        : ''}
       ${pending
         ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" data-pm-q-submit="1" onclick="_submitMobileQuestion(${idJson})">${isLastQuestion ? 'Submit answer' : 'Next question'}</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
         : ''}
