@@ -1624,6 +1624,33 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       extra: { source: 'reasoning_summary', event: eventType, visibility: 'user', reasoningKind: 'summary' },
     };
   }
+  if (eventType === 'vision_injected') {
+    // Media-analysis / screenshot previews carry no message text, so the
+    // generic fallback below would drop them and completed turns would lose
+    // their image cards. Persist them as first-class vision trace rows.
+    const preview = data?.preview && typeof data.preview === 'object' ? data.preview : null;
+    const dataUrl = String(preview?.dataUrl || '').trim();
+    if (!preview || !dataUrl || /^data:/i.test(dataUrl)) return null;
+    const visionSource = String(data?.source || '').trim();
+    const visionTool = String(data?.tool || action || '').trim();
+    return {
+      ts,
+      type: 'vision',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(data?.label || `Vision captured: ${visionTool || visionSource || 'preview'}`),
+      preview: {
+        dataUrl,
+        ...(preview.workspacePath ? { workspacePath: String(preview.workspacePath) } : {}),
+        ...(preview.mimeType ? { mimeType: String(preview.mimeType) } : {}),
+        ...(preview.title ? { title: String(preview.title) } : {}),
+        ...(preview.artifactKind ? { artifactKind: String(preview.artifactKind) } : {}),
+        ...(Number(preview.width) > 0 ? { width: Number(preview.width) } : {}),
+        ...(Number(preview.height) > 0 ? { height: Number(preview.height) } : {}),
+      },
+      previewTitle: String(data?.previewTitle || preview.title || '').trim() || undefined,
+      extra: { source: visionSource || 'runtime_checkpoint', event: eventType, toolName: visionTool },
+    };
+  }
   if (eventType === 'error' || eventType === 'warn') {
     return {
       ts,
