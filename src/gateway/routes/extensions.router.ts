@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { buildExtensionsCatalog } from '../../extensions/catalog-service.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/extension-bootstrap.js';
 import { buildMcpServerConfigFromPreset, listMcpPresets } from '../../extensions/mcp-preset-service.js';
 import { reloadExtensions } from '../../extensions/reload.js';
 import {

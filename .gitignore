@@ -266,3 +266,6 @@ workspace/memory/**
 workspace/audit/**
 workspace/workspace/memory/**
 workspace/workspace/videos/**
+
+# Skill safety-scan caches written next to connector skills at runtime
+src/extensions/bundled/connectors/*/.cache/

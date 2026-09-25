@@ -1,6 +1,6 @@
 import { getExtensionRuntimeRegistry } from './runtime-registry.js';
 import { loadManifestRuntimeExtensions } from './runtime-loader.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from './legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from './extension-bootstrap.js';
 import type { PrometheusExtensionRuntimeRecord } from './runtime-api.js';
 import {
   evaluatePromptSignals,

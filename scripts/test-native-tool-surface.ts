@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { getToolRegistry, type ToolProfile } from '../src/tools/registry.js';
 import { capabilityPolicyTier, resolveToolCapabilityMetadata } from '../src/gateway/tool-capabilities.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 
 const profiles: ToolProfile[] = ['minimal', 'coding', 'web', 'full', 'desktop'];

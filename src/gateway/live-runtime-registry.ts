@@ -887,6 +887,10 @@ export function markLocalRuntimesInterruptedForHandoff(
       _restartInterruptEpoch = restartEpoch;
       stamped = true;
     }
+    // A queued 200ms checkpoint flush holds a 'running' snapshot; if it fires
+    // after this persist it overwrites the interrupted record and the next
+    // gateway never resumes the turn (2026-09-25 19:35, turn 3b91963c).
+    cancelCheckpointFlush(record.id);
     record.status = 'interrupted';
     record.interruptedAt = restartEpoch;
     record.interruptReason = reason;
@@ -1327,6 +1331,9 @@ function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): voi
   if (existing) clearTimeout(existing);
   _pendingLedgerFlush.set(id, setTimeout(() => {
     _pendingLedgerFlush.delete(id);
+    // Never let a stale 'running' snapshot overwrite an interrupted/finished record.
+    const live = activeRuntimes.get(id);
+    if (!live || live.status !== 'running') return;
     try { persistRuntime(snapshot, 'checkpoint'); } catch {}
   }, 200));
 }
@@ -1431,6 +1438,7 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
       continue;
     }
 
+    cancelCheckpointFlush(record.id);
     record.status = 'interrupted';
     record.interruptedAt = restartEpoch;
     record.interruptReason = reason;

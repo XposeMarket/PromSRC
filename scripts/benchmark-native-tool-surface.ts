@@ -5,7 +5,7 @@ import { getToolRegistry, type Tool, type ToolProfile } from '../src/tools/regis
 import { estimateTextTokensForModel } from '../src/gateway/context/model-context.js';
 import { inferToolPerformanceFamily } from '../src/gateway/chat/tool-performance-telemetry.js';
 import { capabilityPolicyTier, resolveToolCapabilityMetadata } from '../src/gateway/tool-capabilities.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 
 const PROFILES: ToolProfile[] = ['minimal', 'coding', 'web', 'full', 'desktop'];

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { readAllToolObservations, type ToolObservation } from '../src/gateway/tool-observations.js';
 import { getToolRegistry } from '../src/tools/registry.js';
 import { inferToolPerformanceFamily } from '../src/gateway/chat/tool-performance-telemetry.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 
 type Accumulator = {

@@ -13,7 +13,7 @@
  * permission boundary: it cannot reach core/category tools or disconnected
  * connectors.
  */
-import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import { getMCPManager } from './mcp-manager';
 

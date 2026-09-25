@@ -1,13 +1,13 @@
-﻿// Extension runtime bootstrap + narrow X/xAI bridge.
+// Extension runtime bootstrap (formerly legacy-connector-adapter.ts).
 //
-// Historically this file mirrored hardcoded connector maps/handlers into the
-// extension registry. That legacy is gone: every connector_* connector is now a
-// native runtime.ts module (see Â§23B). What remains is:
-//   1. loadManifestRuntimeExtensions() â€” load native bundled/user extension modules
-//   2. the xAI connector STATUS record, whose x_search tool is registered by
-//      xai-extension-adapter.ts. X (x_api_*) is a native connector module now
-//      (connectors/x/runtime.ts).
-//   3. refreshXAITools() + a warn-only consistency check
+// Every connector is a native runtime.ts module under bundled/connectors/<id>/.
+// This file only:
+//   1. loads bundled/user extension modules into the runtime registry
+//      (loadManifestRuntimeExtensions), once per process or after reload;
+//   2. registers the xAI connector STATUS record (x_search itself is registered
+//      by xai-extension-adapter.ts from auth state);
+//   3. refreshes xAI tool registration on a short TTL + a warn-only
+//      manifest/registry consistency check.
 import { X_SEARCH_TOOL_NAME } from '../gateway/tools/defs/xai-tools.js';
 import { getConfig } from '../config/config.js';
 import { logExtensionConsistencyOnce } from './consistency.js';

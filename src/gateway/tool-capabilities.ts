@@ -158,7 +158,7 @@ function resolveRegisteredConnectorToolCapabilities(
     // Lazy imports avoid a module cycle: the runtime registry itself imports
     // this policy module for connection-tool risk classification.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { ensurePrometheusExtensionRuntimeLoaded } = require('../extensions/legacy-connector-adapter.js');
+    const { ensurePrometheusExtensionRuntimeLoaded } = require('../extensions/extension-bootstrap.js');
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getExtensionRuntimeRegistry } = require('../extensions/runtime-registry.js');
     ensurePrometheusExtensionRuntimeLoaded();
