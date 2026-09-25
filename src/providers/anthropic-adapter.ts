@@ -17,6 +17,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
 
 /**
  * Anthropic's rejection when a setup-token request is billed to extra usage
@@ -36,11 +37,27 @@ export function slimToolsForExtraUsageRetry(tools: any[] | undefined, messages: 
     'declare_plan', 'complete_plan_step', 'tool_result_read', 'show_ui_card', 'timer', 'read_file', 'search_files',
   ]);
   const used = new Set<string>();
+  // Categories the model explicitly unlocked with request_tool_category. Those
+  // tools have not been CALLED yet, so keeping only "used" tools dropped the
+  // whole category right after "Newly unlocked tool category: X" and the model
+  // concluded its tools "didn't load". Keep every tool in an unlocked category.
+  const unlockedCategories = new Set<string>();
   for (const m of messages || []) {
     if (!Array.isArray(m?.content)) continue;
-    for (const part of m.content) if (part?.type === 'tool_use' && part.name) used.add(String(part.name));
+    for (const part of m.content) {
+      if (part?.type !== 'tool_use' || !part.name) continue;
+      used.add(String(part.name));
+      if (part.name === 'request_tool_category') {
+        const category = String(part.input?.category || '').trim();
+        if (category) unlockedCategories.add(category);
+      }
+    }
   }
-  const kept = tools.filter((t) => CORE.has(t.name) || used.has(t.name)).map((t) => {
+  const keepsCategory = (name: string): boolean => {
+    if (!unlockedCategories.size) return false;
+    try { const category = classifyToolFromManifest(name); return !!category && unlockedCategories.has(category); } catch { return false; }
+  };
+  const kept = tools.filter((t) => CORE.has(t.name) || used.has(t.name) || keepsCategory(String(t.name || ''))).map((t) => {
     const { cache_control, ...rest } = t; return rest;
   });
   if (kept.length >= tools.length * 0.7) return null;
