@@ -26,9 +26,13 @@ function isStringArray(value: unknown): value is string[] {
 
 function isSafeIdentity(value: unknown): boolean {
   if (!isObject(value)) return false;
+  // Undefined optional fields are allowed: they vanish on JSON persist, but an
+  // in-memory identity like {provider, email: undefined} (Google Drive tokens
+  // carry no email) used to fail the record check with "Invalid canonical
+  // connection record" (2026-09-25).
   return Object.entries(value).every(([key, item]) =>
     ['provider', 'providerAccountId', 'displayName', 'username', 'email'].includes(key)
-      ? typeof item === 'string' && item.length <= 256
+      ? item === undefined || (typeof item === 'string' && item.length <= 256)
       : false,
   );
 }

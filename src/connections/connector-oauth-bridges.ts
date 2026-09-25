@@ -3,6 +3,8 @@ import {
   disconnectConnector,
   getConnector,
   getConnectorOAuthMetadata,
+  hasPendingOAuthFlow,
+  isConnectorConnected,
   pollOAuthResult,
   revokeConnectorAccess,
   startOAuthFlowForConnector,
@@ -203,6 +205,8 @@ export function buildConnectorOAuthBridges(): Readonly<Record<string, ConnectorO
     name,
     start: (expectedAccountId?: string, requestedScopes?: string[]) => startOAuthFlowForConnector(id, expectedAccountId, requestedScopes) as any,
     poll: (): Promise<OAuthCallbackResult | null> => pollOAuthResult(id),
+    // Only trusted when no fresh sign-in is waiting, so a re-auth is never skipped.
+    isConnected: () => !hasPendingOAuthFlow(id) && isConnectorConnected(id),
     metadata: async () => {
       const metadata = metadataFor(id);
       if (!metadata) throw new Error(`${name} connector runtime is unavailable.`);

@@ -16,8 +16,43 @@
  *   - anthropic-version: 2023-06-01
  */
 
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
+
+/**
+ * Anthropic capacity errors (HTTP 529 / overloaded_error). They say nothing
+ * about the request, so the adapter backs off and resends instead of failing
+ * the turn. Also covers the SSE `error` event form thrown by the stream parser.
+ */
+export const ANTHROPIC_OVERLOAD_MAX_RETRIES = 3;
+export function anthropicOverloadDelayMs(retry: number): number {
+  return Math.min(20_000, 2_000 * 2 ** Math.max(0, retry - 1));
+}
+export function isAnthropicOverloadResponse(status: number, raw: string): boolean {
+  return status === 529 || /"type"\s*:\s*"overloaded_error"/.test(String(raw || ''));
+}
+export function isAnthropicOverloadStreamError(message: string): boolean {
+  return /stream error: overloaded_error\b/i.test(String(message || ''));
+}
+
+/**
+ * Tool names shaped like `mcp_<name>` (single underscore) make Anthropic bill a
+ * setup-token request to extra usage, which is disabled, so the request fails
+ * with 400 "out of extra usage" (org_level_disabled) every time it is resent.
+ * Bisected 2026-09-25 against a captured rejection: `mcp_x`, `mcp_server_manage`
+ * and `mcp_server_tools` fail alone as a one-tool request; `mcp__srv__tool`,
+ * `mcpx`, `x_mcp_y`, `server_manage` and `prom_mcp_server_manage` pass. Alias
+ * such names on the wire and map them back on the way in.
+ */
+const WIRE_TOOL_NAME_PREFIX = 'prom_';
+export function toAnthropicWireToolName(name: string): string {
+  const n = String(name || '');
+  return /^mcp_(?!_)/i.test(n) ? `${WIRE_TOOL_NAME_PREFIX}${n}` : n;
+}
+export function fromAnthropicWireToolName(name: string): string {
+  const n = String(name || '');
+  return /^prom_mcp_(?!_)/i.test(n) ? n.slice(WIRE_TOOL_NAME_PREFIX.length) : n;
+}
 
 /** Context window used for the system-prompt budget (mirrors model-context known table). */
 export function anthropicContextWindowTokens(model: string): number {
@@ -103,6 +138,7 @@ export function slimToolsForExtraUsageRetryDetailed(
     for (const part of m.content) {
       if (part?.type !== 'tool_use' || !part.name) continue;
       used.add(String(part.name));
+      used.add(fromAnthropicWireToolName(String(part.name)));
       if (part.name === 'request_tool_category') {
         const category = String(part.input?.category || '').trim();
         if (category) keptCategories.add(category);
@@ -110,7 +146,7 @@ export function slimToolsForExtraUsageRetryDetailed(
     }
   }
   const categoryOf = (name: string): string | null => {
-    try { return classifyToolFromManifest(name) || null; } catch { return null; }
+    try { return classifyToolFromManifest(fromAnthropicWireToolName(name)) || null; } catch { return null; }
   };
   const present = new Set(tools.map((t) => String(t?.name || '')));
   const isWrapperDuplicate = (name: string): boolean =>
@@ -122,7 +158,7 @@ export function slimToolsForExtraUsageRetryDetailed(
   for (const t of tools) {
     const name = String(t?.name || '');
     const category = categoryOf(name);
-    const keep = CORE.has(name) || used.has(name)
+    const keep = CORE.has(name) || used.has(name) || used.has(fromAnthropicWireToolName(name))
       // Uncategorized tools are the always-on surface (e.g. request_browser_login).
       || (mode === 'active' && !category)
       || (!!category && keptCategories.has(category) && !isWrapperDuplicate(name));
@@ -478,7 +514,7 @@ export class AnthropicAdapter implements LLMProvider {
           content.push({
             type: 'tool_use',
             id: callId,
-            name: tc.function.name,
+            name: toAnthropicWireToolName(tc.function.name),
             input: parsedInput,
           });
         }
@@ -637,7 +673,7 @@ export class AnthropicAdapter implements LLMProvider {
   private buildTools(tools?: any[]): any[] | undefined {
     if (!tools?.length) return undefined;
     const mapped = tools.map((t: any) => ({
-      name:         t.function?.name || t.name,
+      name:         toAnthropicWireToolName(t.function?.name || t.name),
       description:  t.function?.description || t.description || '',
       input_schema: t.function?.parameters || t.parameters || { type: 'object', properties: {} },
     }));
@@ -984,6 +1020,35 @@ export class AnthropicAdapter implements LLMProvider {
           }) + '\n', 'utf8');
         }
       } catch { /* Diagnostics must never change provider handling. */ }
+      // Capture the exact rejected body for extra-usage rejections. Shape stats
+      // alone could not explain why identical-looking requests were billed to
+      // extra usage in bursts; the next bad window must show exactly what was
+      // sent (headers minus auth, full body). Local only, last 12 kept.
+      try {
+        if (this.configDir && isOutOfExtraUsageError(raw)) {
+          const dir = join(this.configDir, 'logs', 'anthropic-rejected-requests');
+          mkdirSync(dir, { recursive: true });
+          const safeHeaders: Record<string, string> = {};
+          for (const [key, value] of Object.entries(headers as Record<string, any>)) {
+            const k = key.toLowerCase();
+            safeHeaders[key] = (k === 'authorization' || k === 'x-api-key') ? '[redacted]' : String(value);
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          writeFileSync(join(dir, `${stamp}-attempt${attempt}.json`), JSON.stringify({
+            at: new Date().toISOString(),
+            attempt,
+            status: response.status,
+            response: raw.slice(0, 2000),
+            responseHeaders: collectRateLimitHeaders(response),
+            requestHeaders: safeHeaders,
+            body,
+          }), 'utf8');
+          const files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+          for (const old of files.slice(0, Math.max(0, files.length - 12))) {
+            try { unlinkSync(join(dir, old)); } catch { /* best effort */ }
+          }
+        }
+      } catch { /* Diagnostics must never change provider handling. */ }
       if (isClaudeCodeVersionTooOldError(raw)) {
         // The locally installed Claude Code CLI may have been updated since the
         // version was detected. Drop the cache so the next request re-detects
@@ -1006,6 +1071,7 @@ export class AnthropicAdapter implements LLMProvider {
     // both streaming and non-streaming calls.
     const EXTRA_USAGE_RETRY_DELAY_MS = 4_000;
     const send = async (): Promise<Response> => {
+      let overloadRetries = 0;
       for (let attempt = 1; ; attempt += 1) {
         const response = await fetch(this.getMessagesEndpoint(), {
           method: 'POST',
@@ -1020,6 +1086,19 @@ export class AnthropicAdapter implements LLMProvider {
           return response;
         }
         const raw = await response.text().catch(() => '');
+        // 529 / overloaded_error is Anthropic capacity, not this request. Back
+        // off and resend the same body instead of killing the whole turn.
+        if (isAnthropicOverloadResponse(response.status, raw)
+          && overloadRetries < ANTHROPIC_OVERLOAD_MAX_RETRIES
+          && !options?.abortSignal?.aborted) {
+          overloadRetries += 1;
+          try { await rejectRequest(response, raw, attempt); } catch { /* logged; retrying */ }
+          const delay = anthropicOverloadDelayMs(overloadRetries);
+          console.warn(`[anthropic] ${model}: overloaded (HTTP ${response.status}); retry ${overloadRetries}/${ANTHROPIC_OVERLOAD_MAX_RETRIES} in ${delay}ms`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          if (options?.abortSignal?.aborted) return rejectRequest(response, raw, attempt);
+          continue;
+        }
         // Attempt 1 rejected -> retry keeping every active category (minus
         // wrapper-covered duplicates). Attempt 2 rejected too -> last retry
         // with the minimal core surface. Either way the model is told which
@@ -1062,8 +1141,35 @@ export class AnthropicAdapter implements LLMProvider {
     // If onToken callback provided, use streaming mode
     if (options?.onToken) {
       body.stream = true;
-      const response = await send();
-      return this.parseStreamingResponse(response, model, options);
+      // An overloaded_error can also arrive as an SSE event after HTTP 200
+      // (2026-09-25 Vita thread: a 7m28s turn died on one such event). Retry
+      // the call when the caller has not yet seen answer text or a tool call;
+      // thinking deltas alone are safe to replay.
+      for (let streamRetry = 0; ; streamRetry += 1) {
+        const response = await send();
+        let committed = false;
+        const tracked: ChatOptions = {
+          ...options,
+          onToken: (text: string) => { if (text) committed = true; options.onToken?.(text); },
+          onModelEvent: options.onModelEvent
+            ? (event: any) => {
+              if (event?.type === 'assistant_delta' || String(event?.type || '').startsWith('tool_call')) committed = true;
+              options.onModelEvent?.(event);
+            }
+            : undefined,
+        };
+        try {
+          return await this.parseStreamingResponse(response, model, tracked);
+        } catch (err: any) {
+          const message = String(err?.message || err || '');
+          if (committed || streamRetry >= ANTHROPIC_OVERLOAD_MAX_RETRIES
+            || options?.abortSignal?.aborted || !isAnthropicOverloadStreamError(message)) throw err;
+          const delay = anthropicOverloadDelayMs(streamRetry + 1);
+          console.warn(`[anthropic] ${model}: stream overloaded before any output; retry ${streamRetry + 1}/${ANTHROPIC_OVERLOAD_MAX_RETRIES} in ${delay}ms`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          if (options?.abortSignal?.aborted) throw err;
+        }
+      }
     }
 
     const response = await send();
@@ -1138,7 +1244,7 @@ export class AnthropicAdapter implements LLMProvider {
               blocks[idx] = {
                 type: block.type,
                 id:   block.id,
-                name: block.name,
+                name: block.name ? fromAnthropicWireToolName(block.name) : block.name,
                 inputJson: '',
                 initialInput: block.input,
                 stopped: false,
@@ -1282,7 +1388,7 @@ export class AnthropicAdapter implements LLMProvider {
           id:   block.id,
           type: 'function',
           function: {
-            name:      block.name,
+            name:      fromAnthropicWireToolName(block.name),
             arguments: JSON.stringify(block.input || {}),
           },
         });

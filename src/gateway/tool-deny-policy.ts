@@ -296,7 +296,10 @@ export function evaluateHardToolDeny(input: HardToolDenyInput): HardToolDenyDeci
   }
 
   if (/^browser_/.test(toolName)) {
-    if (/(password|2fa|otp|one[-\s]?time code|cvv|credit card|card number)/.test(argsText)) {
+    // Word boundaries matter: URL-encoded paths lowercase to `%2fauth`, which
+    // contains "2fa", so every OAuth consent URL was denied as secret entry
+    // (2026-09-25, Google Drive connect).
+    if (/(password|\b2fa\b|\botp\b|one[-\s]?time code|\bcvv\b|credit card|card number)/.test(argsText)) {
       return deny(
         'browser_secret_or_payment_entry',
         'This browser action appears to enter credentials, 2FA, or payment data.',

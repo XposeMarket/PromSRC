@@ -30,6 +30,8 @@ export interface ConnectorOAuthBridge {
   name: string;
   start(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | Promise<OAuthStartResult>;
   poll(): Promise<OAuthCallbackResult | null>;
+  /** Tokens already stored (e.g. callback result was consumed or expired before continue ran). */
+  isConnected?(): boolean;
   metadata(): OAuthConnectorMetadata | Promise<OAuthConnectorMetadata>;
   verify(): Promise<ConnectorOAuthVerification>;
   clear(): void | Promise<void>;
@@ -147,14 +149,20 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
         scopes: strategy.authentication?.scopes,
         opensExternalBrowser: true,
         desktopRequired: true,
-        desktopReason: 'The authorization code returns to a loopback callback owned by the local desktop gateway. From a phone, ask Prom to open this sign-in in the in-app browser (it runs on the PC, so the callback works) and hand you the login card.',
+        desktopReason: /google|gmail|drive|ga4/i.test(bridge.id)
+          ? 'The authorization code returns to a loopback callback owned by the local desktop gateway. Google rejects sign-in from embedded/automated browsers ("Couldn\'t sign you in"), so open this URL in the system Chrome on the PC (Start-Process), where the user is already signed in, and complete consent there with desktop tools. Do not use the in-app browser for Google.'
+          : 'The authorization code returns to a loopback callback owned by the local desktop gateway. From a phone, ask Prom to open this sign-in in the in-app browser (it runs on the PC, so the callback works) and hand you the login card.',
+        preferSystemBrowser: /google|gmail|drive|ga4/i.test(bridge.id),
       },
     };
   }
 
   async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> {
     const bridge = this.bridgeFor(context);
-    const result = await bridge.poll();
+    let result = await bridge.poll();
+    // The one-shot callback result can be gone (consumed by another poller,
+    // expired, or lost to a gateway restart) while the tokens are stored.
+    if (!result && bridge.isConnected?.()) result = { success: true };
     if (!result) return { state: 'awaiting_oauth' };
     if (!result.success) {
       return {

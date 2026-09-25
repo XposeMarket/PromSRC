@@ -395,7 +395,7 @@ export abstract class OAuthConnector {
           finished = true;
           if (timeout) clearTimeout(timeout);
           activeFlows.delete(this.cfg.id);
-          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(html);
           server.close(() => undefined);
           resolve(result);
@@ -413,7 +413,7 @@ export abstract class OAuthConnector {
           } else if (/state mismatch/i.test(result.error || '')) {
             // Do not consume a valid pending flow on an invalid local request;
             // a legitimate provider callback may still arrive next.
-            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(this.errorHtml(result.error || 'State mismatch — possible CSRF.'));
             return;
           } else {
