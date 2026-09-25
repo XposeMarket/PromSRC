@@ -19,6 +19,13 @@
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { classifyToolFromManifest } from '../runtime/tool-category-manifest';
 
+/** Context window used for the system-prompt budget (mirrors model-context known table). */
+export function anthropicContextWindowTokens(model: string): number {
+  return /^(claude-fable-5|claude-opus-(?:5|4-(?:6|7|8))|claude-sonnet-(?:5|4-6))(?:\b|[-_])/i.test(String(model || ''))
+    ? 1_000_000
+    : 200_000;
+}
+
 /**
  * Anthropic's rejection when a setup-token request is billed to extra usage
  * and extra usage is disabled/exhausted. Matched on the message text because
@@ -560,8 +567,12 @@ export class AnthropicAdapter implements LLMProvider {
   // Use 3.5 chars/token (code-heavy content tokenizes denser than plain text).
   // Target 180k tokens to leave a 20k headroom for response + overhead.
   // Strips in order: TODAY_NOTES → tools policy blocks → USER section → SOUL truncation.
-  private trimSystemForBudget(system: string, bodyWithoutSystem: string): string {
-    const SAFE_TOKEN_BUDGET = 180_000;
+  private trimSystemForBudget(system: string, bodyWithoutSystem: string, model = ''): string {
+    // The budget used to be a flat 180k tokens for every model. Opus 5.x /
+    // Sonnet 4.6+ have a 1M window, so once a chat passed ~180k tokens the
+    // budget went negative and the ENTIRE system prompt was dropped (logged
+    // systemChars=57): no memory, notes, or restart-recovery context.
+    const SAFE_TOKEN_BUDGET = Math.floor(anthropicContextWindowTokens(model) * 0.9);
     const CHARS_PER_TOKEN   = 3.5;
     const SAFE_CHAR_BUDGET  = Math.floor(SAFE_TOKEN_BUDGET * CHARS_PER_TOKEN); // 630_000
 
@@ -595,8 +606,15 @@ export class AnthropicAdapter implements LLMProvider {
     // Pass 5: hard truncate whatever remains to fit.
     // If budget is negative (messages+tools alone fill the limit), strip system entirely
     // so the API at least gets a valid request.
+    // Never lose the restart/continuation context: it is the only thing that
+    // tells a resumed turn what it already did. Re-attach it after truncation.
+    const protectedBlocks = (s.match(/\[(GATEWAY RESTART RECOVERY|HOT RESTART CONTEXT)\][\s\S]*?\[\/\1\]/g) || []).join('\n\n');
     if (s.length > Math.max(0, budget())) {
-      const limit = budget();
+      const limit = budget() - protectedBlocks.length;
+      if (protectedBlocks) {
+        const rest = s.replace(/\[(GATEWAY RESTART RECOVERY|HOT RESTART CONTEXT)\][\s\S]*?\[\/\1\]/g, '').trim();
+        return (limit > 0 ? rest.slice(0, limit) + '\n[... system prompt truncated for context budget ...]\n\n' : '') + protectedBlocks;
+      }
       s = limit <= 0
         ? ''
         : s.slice(0, limit) + '\n[... system prompt truncated for Anthropic 200k context limit ...]';
@@ -733,7 +751,10 @@ export class AnthropicAdapter implements LLMProvider {
         if (key === 'data' && typeof value === 'string' && value.length > 1000) { imageCount += 1; return ''; }
         return value;
       }) + ' '.repeat(Math.min(imageCount * 5_600, 400_000));
-      const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem);
+      const trimmed = this.trimSystemForBudget(system, bodyWithoutSystem, model);
+      if (trimmed.length < system.length) {
+        console.warn(`[anthropic] system prompt trimmed ${system.length} -> ${trimmed.length} chars for ${model} (body ${bodyWithoutSystem.length} chars)`);
+      }
       const blocks = this.buildSystemBlocks(trimmed, !!isOAuth);
       if (blocks.length > 0) {
         body.system = blocks;
