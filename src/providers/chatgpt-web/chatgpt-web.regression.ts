@@ -11,7 +11,7 @@
 import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
-import { ChatGPTWebStreamParser, applyContentReferences, stripCitationMarkers, type ChatGPTWebStreamEvent } from './chatgpt-web-stream';
+import { ChatGPTWebStreamParser, applyContentReferences, stripCitationMarkers, parseConnectorCall, type ChatGPTWebStreamEvent } from './chatgpt-web-stream';
 import { resolveChatGPTWebMode, isChatGPTWebModel, CHATGPT_WEB_MODES } from './chatgpt-web-models';
 import { buildChatGPTWebMessages } from './chatgpt-web-adapter';
 import { buildConversationBody, solveProofOfWork } from './chatgpt-web-client';
@@ -101,7 +101,9 @@ async function main() {
     assert.strictEqual(built[0].author.role, 'system');
     assert.strictEqual(built[0].metadata.is_visually_hidden_from_conversation, true);
     assert.match(built[0].content.parts[0], /SYS/);
-    assert.match(built[0].content.parts[0], /"Prometheus" connector is attached/);
+    assert.match(built[0].content.parts[0], /"Prometheus" connector \(app\) is attached/);
+    const withPath = buildChatGPTWebMessages([{ role: 'user', content: 'hi' }], { id: 'asdk_app_x', name: 'Prometheus', linkId: 'link_y' });
+    assert.match(withPath[0].content.parts[0], /path "\/Prometheus\/link_y\/<tool_name>"/, 'system note tells ChatGPT the connector tool path');
     assert.strictEqual(built[built.length - 1].author.role, 'user', 'turn ends on a user message');
     const assistant = built.find((m) => m.author.role === 'assistant')!;
     assert.match(assistant.content.parts[0], /read_file/);
@@ -109,17 +111,69 @@ async function main() {
     for (let i = 2; i < built.length; i += 1) assert.notStrictEqual(built[i].author.role, built[i - 1].author.role, 'roles alternate');
   }
 
-  // 7. Request body: temporary chat default + MCP source attached to last message.
+  // 7. Request body: temporary by default; a connector turn is never temporary
+  //    (ChatGPT drops apps from Temporary Chats) and attaches the connector.
   {
-    const body: any = buildConversationBody({
+    const base = {
       messages: [{ id: 'u', author: { role: 'user' }, content: { content_type: 'text', parts: ['x'] } }],
       model: 'gpt-5-6-thinking',
       thinkingEffort: 'standard',
-      mcpSources: [{ id: 'connector_abc', name: 'Prometheus' }],
-    });
-    assert.strictEqual(body.history_and_training_disabled, true);
+    };
+    const plain: any = buildConversationBody(base);
+    assert.strictEqual(plain.history_and_training_disabled, true, 'text-only turns stay temporary');
+    const body: any = buildConversationBody({ ...base, temporary: true, mcpSources: [{ id: 'connector_abc', name: 'Prometheus' }] });
+    assert.strictEqual(body.history_and_training_disabled, false, 'connector turns cannot be temporary');
     assert.strictEqual(body.thinking_effort, 'standard');
     assert.deepStrictEqual(body.messages[0].metadata.search_connectors, ['connector_abc']);
+    assert.deepStrictEqual(body.system_hints, ['connector:connector_abc']);
+  }
+
+  // 7b. Real captured connector call (2026-09-25): ChatGPT calls the
+  //     Prometheus connector via api_tool.call_tool; the row carries the real
+  //     connector + tool name and the tool output closes it.
+  {
+    const connectorFixture = fs.readFileSync(path.join(__dirname, '__fixtures__', 'connector-call-stream.sse'), 'utf8');
+    assert.deepStrictEqual(parseConnectorCall('{"path":"/Prometheus/link_x/read_file","args":{"path":"a"}}'), { connector: 'Prometheus', tool: 'read_file', args: { path: 'a' } });
+    assert.strictEqual(parseConnectorCall('{"path":"/Prom'), null, 'partial payload is not parsed');
+    for (const size of [connectorFixture.length, 5, 97]) {
+      const chunks: string[] = [];
+      for (let i = 0; i < connectorFixture.length; i += size) chunks.push(connectorFixture.slice(i, i + size));
+      const { parser, events } = parseAll(chunks);
+      const starts = events.filter((e) => e.type === 'tool_start') as any[];
+      const results = events.filter((e) => e.type === 'tool_result') as any[];
+      assert.strictEqual(starts.length, 1, `one connector row (chunk ${size})`);
+      assert.strictEqual(starts[0].name, 'chatgpt_app_prometheus_ping');
+      assert.deepStrictEqual(starts[0].connector, { connector: 'Prometheus', tool: 'prometheus_ping', args: { note: 'Retrieve the Prometheus word as requested.' } });
+      assert.strictEqual(results.length, 1);
+      assert.match(results[0].result, /OBSIDIAN-FALCON-42/, 'connector output closes the row');
+      assert.match(parser.getFinalText(), /OBSIDIAN-FALCON-42/);
+    }
+  }
+
+  // 7c. Real capture where ChatGPT wrapped the connector call in functions.exec
+  //     (nested, inner result arrives first): one row, closed by its own output.
+  {
+    const nested = fs.readFileSync(path.join(__dirname, '__fixtures__', 'connector-call-nested-exec.sse'), 'utf8');
+    const { parser, events } = parseAll([nested]);
+    const starts = events.filter((e) => e.type === 'tool_start') as any[];
+    const results = events.filter((e) => e.type === 'tool_result') as any[];
+    assert.deepStrictEqual(starts.map((s) => s.name), ['chatgpt_app_prometheus_ping'], 'functions.exec wrapper gets no row');
+    assert.strictEqual(results.length, 1);
+    assert.match(results[0].result, /OBSIDIAN-FALCON-42/, 'nested call closed by its own output, not the wrapper');
+    assert.match(parser.getFinalText(), /OBSIDIAN-FALCON-42/);
+  }
+
+  // 7d. ChatGPT's own confirm_action prompt ends the turn with a clear error.
+  {
+    const lines = [
+      'data: {"p":"","o":"add","v":{"message":{"id":"a1","author":{"role":"assistant"},"recipient":"api_tool.call_tool","content":{"content_type":"code","text":"{\\"path\\":\\"/Prometheus/link_x/run_command\\",\\"args\\":{}}"},"status":"finished_successfully","metadata":{}}}}',
+      'data: {"p":"","o":"add","v":{"message":{"id":"t1","author":{"role":"tool","name":"api_tool.call_tool"},"recipient":"all","content":{"content_type":"text","parts":[""]},"status":"finished_successfully","metadata":{"jit_plugin_data":{"from_server":{"type":"confirm_action","body":{"params":{"path":"/asdk_app_x/link_x/run_command"}}}}}}}}',
+      'data: [DONE]',
+      '',
+    ].join('\n');
+    const { events } = parseAll([lines]);
+    const err = events.find((e) => e.type === 'error') as any;
+    assert.ok(err && /Full access/.test(err.message), 'confirm_action surfaces an actionable error');
   }
 
   // 8. Proof-of-work matches the web client's format and difficulty rule.

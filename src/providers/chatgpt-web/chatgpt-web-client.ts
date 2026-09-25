@@ -146,7 +146,14 @@ export interface ConversationRequest {
   messages: Array<{ id: string; author: { role: string }; content: any; metadata?: Record<string, unknown> }>;
   model: string;
   thinkingEffort?: string;
-  /** Keep the chat out of the user's ChatGPT history (Temporary Chat). */
+  /**
+   * Keep the chat out of the user's ChatGPT history (Temporary Chat).
+   * Ignored when mcpSources is set: ChatGPT drops connectors from Temporary
+   * Chats (verified 2026-09-25: the same request calls the Prometheus tool as a
+   * normal chat and gets "No functions matching" as a temporary one; the web
+   * client also strips connector hints when Temporary Chat is on). Callers
+   * hide the conversation afterwards instead (hideConversation).
+   */
   temporary?: boolean;
   /** Dev-mode connectors to enable for this message (selected_mcp_sources). */
   mcpSources?: Array<{ id: string; name: string; status?: string }>;
@@ -171,7 +178,7 @@ export function buildConversationBody(request: ConversationRequest): Record<stri
     messages,
     parent_message_id: 'client-created-root',
     model: request.model,
-    history_and_training_disabled: request.temporary !== false,
+    history_and_training_disabled: request.mcpSources?.length ? false : request.temporary !== false,
     // Same sign convention as the web client (Date#getTimezoneOffset: EDT = 240).
     timezone_offset_min: new Date().getTimezoneOffset(),
     conversation_mode: { kind: 'primary_assistant' },
@@ -212,4 +219,23 @@ export async function startConversation(
   }
   if (!response.body) throw new ChatGPTWebError('CHATGPT_WEB_STREAM', 'ChatGPT returned an empty stream.');
   return response;
+}
+
+/**
+ * Remove a finished conversation from the user's ChatGPT sidebar (same call as
+ * the web client's "Delete chat": PATCH is_visible=false). Best-effort.
+ */
+export async function hideConversation(creds: ChatGPTWebCredentials, conversationId: string): Promise<boolean> {
+  const id = String(conversationId || '').trim();
+  if (!/^[A-Za-z0-9-]{8,}$/.test(id)) return false;
+  try {
+    const response = await fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/conversation/${id}`, {
+      method: 'PATCH',
+      headers: buildChatGPTWebHeaders(creds),
+      body: JSON.stringify({ is_visible: false }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
