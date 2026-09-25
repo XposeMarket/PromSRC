@@ -3744,7 +3744,7 @@ async function loginStateNativeBrowserSurface({ sessionId = '' } = {}) {
       return { editables: out, focus };
     })()`, true);
   } catch {}
-  return { ...page, canGoBack: !!wc.canGoBack?.(), canGoForward: !!wc.canGoForward?.(), loading: !!wc.isLoading?.() };
+  return { ...page, url: String(wc.getURL?.() || ''), canGoBack: !!wc.canGoBack?.(), canGoForward: !!wc.canGoForward?.(), loading: !!wc.isLoading?.() };
 }
 
 // Import cookies (from the user's real Chrome via the paired extension) into
@@ -3752,7 +3752,7 @@ async function loginStateNativeBrowserSurface({ sessionId = '' } = {}) {
 async function importCookiesNativeBrowserSurface({ sessionId = '', cookies = [] } = {}) {
   const { wc } = requireNativeViewForSession(sessionId);
   const ses = wc.session;
-  let imported = 0; const failed = [];
+  let imported = 0; let failedCount = 0; const failed = []; const byDomain = {};
   for (const ck of Array.isArray(cookies) ? cookies.slice(0, 3000) : []) {
     try {
       const host = String(ck.domain || '').replace(/^\./, '');
@@ -3768,10 +3768,11 @@ async function importCookiesNativeBrowserSurface({ sessionId = '', cookies = [] 
       if (String(ck.name).startsWith('__Host-')) { delete details.domain; details.path = '/'; details.secure = true; }
       await ses.cookies.set(details);
       imported += 1;
-    } catch (err) { if (failed.length < 5) failed.push(`${ck?.name}@${ck?.domain}: ${err?.message || err}`); }
+      byDomain[host] = (byDomain[host] || 0) + 1;
+    } catch (err) { failedCount += 1; if (failed.length < 5) failed.push(`${ck?.name}@${ck?.domain}: ${err?.message || err}`); }
   }
   try { await ses.cookies.flushStore(); } catch {}
-  return { imported, failed };
+  return { imported, failedCount, failed, byDomain, url: String(wc.getURL?.() || '') };
 }
 
 async function screenshotNativeBrowserSurface(sessionId = '') {
