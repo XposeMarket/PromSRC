@@ -5626,6 +5626,17 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
 // make "already signed in with Google/Apple/Microsoft" work after import.
 const LOGIN_IMPORT_PROVIDER_DOMAINS = ['google.com', 'accounts.google.com', 'youtube.com', 'apple.com', 'appleid.apple.com', 'live.com', 'microsoftonline.com', 'github.com'];
 
+// Sites whose sign-in session lives on a sibling domain. Without these a
+// ChatGPT import only copied chatgpt.com + Google and missed auth.openai.com.
+const LOGIN_IMPORT_SIBLING_DOMAINS: Record<string, string[]> = {
+  'chatgpt.com': ['openai.com'],
+  'openai.com': ['chatgpt.com'],
+  'x.com': ['twitter.com'],
+  'twitter.com': ['x.com'],
+  'claude.ai': ['anthropic.com'],
+  'anthropic.com': ['claude.ai'],
+};
+
 function registrableDomain(host: string): string {
   const parts = String(host || '').toLowerCase().replace(/^\.+/, '').split('.').filter(Boolean);
   if (parts.length <= 2) return parts.join('.');
@@ -5661,7 +5672,7 @@ export async function browserLoginHandoffNavigate(sessionId: string, action: 'ba
  * (the reason copying Chrome's cookie DB fails on Windows). Values never reach
  * the model; only counts are returned.
  */
-export async function browserLoginImportFromChrome(sessionId: string, extraDomains: string[] = []): Promise<{ imported: number; domains: string[]; failed: string[]; url: string }> {
+export async function browserLoginImportFromChrome(sessionId: string, extraDomains: string[] = []): Promise<{ imported: number; received: number; failedCount: number; domains: string[]; byDomain: Record<string, number>; failed: string[]; url: string; openedUrl: string }> {
   const resolved = resolveSessionId(sessionId);
   const inHouse: any = getInHouseSession(resolved);
   if (!inHouse) throw new Error('No in-app browser is open for this chat yet.');
@@ -5671,11 +5682,18 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   if (!relay.getStatus().authenticated && !(await relay.waitForPeer(8_000))) {
     throw new Error(relay.disconnectedMessage());
   }
-  console.log(`[login-handoff] import-chrome session=${resolved}`);
-  let host = '';
-  try { host = new URL(String(inHouse.url || '')).hostname; } catch {}
-  const site = registrableDomain(host);
-  const domains = [...new Set([site, ...extraDomains.map(registrableDomain), ...LOGIN_IMPORT_PROVIDER_DOMAINS].filter(Boolean))].slice(0, 20);
+  // The gateway's cached URL goes stale once the user moves to a provider page
+  // (e.g. accounts.google.com mid-OAuth). Ask Electron for the live URL and keep
+  // the cached one as the originating site.
+  let liveUrl = '';
+  try { liveUrl = String((await callInHouseBrowser('login-state', { sessionId: resolved }))?.url || ''); } catch {}
+  const hostOf = (u: string) => { try { return new URL(u).hostname; } catch { return ''; } };
+  const providerSet = new Set(LOGIN_IMPORT_PROVIDER_DOMAINS.map(registrableDomain));
+  const candidates = [registrableDomain(hostOf(String(inHouse.url || ''))), registrableDomain(hostOf(liveUrl))].filter(Boolean);
+  const origin = candidates.find((d) => !providerSet.has(d)) || candidates[0] || '';
+  const siblings = candidates.flatMap((d) => LOGIN_IMPORT_SIBLING_DOMAINS[d] || []);
+  const domains = [...new Set([...candidates, ...siblings, ...extraDomains.map(registrableDomain), ...LOGIN_IMPORT_PROVIDER_DOMAINS].filter(Boolean))].slice(0, 20);
+  console.log(`[login-handoff] import-chrome session=${resolved} origin=${origin || '-'} live=${hostOf(liveUrl) || '-'} domains=${domains.join(',')}`);
   let got: any;
   try {
     got = await relay.request('cookies.forDomains', { domains }, 20_000);
@@ -5689,8 +5707,21 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   }
   const cookies = Array.isArray(got?.cookies) ? got.cookies : [];
   const res: any = await callInHouseBrowser('import-cookies', { sessionId: resolved, cookies });
-  try { await callInHouseBrowser('navigate', { sessionId: resolved, action: 'reload' }); } catch {}
-  return { imported: Number(res?.imported || 0), domains, failed: Array.isArray(res?.failed) ? res.failed : [], url: String(inHouse.url || '') };
+  const imported = Number(res?.imported || 0);
+  const failedCount = Number(res?.failedCount || 0);
+  const byDomain: Record<string, number> = res?.byDomain && typeof res.byDomain === 'object' ? res.byDomain : {};
+  const failed: string[] = Array.isArray(res?.failed) ? res.failed.map(String) : [];
+  // Counts and cookie NAMES@domain for failures only; never cookie values.
+  console.log(`[login-handoff] import-chrome result received=${cookies.length} imported=${imported} failed=${failedCount} byDomain=${JSON.stringify(byDomain)}${failed.length ? ` firstFailures=${JSON.stringify(failed.slice(0, 3))}` : ''}`);
+  // Reloading /auth/login (or a provider page mid-OAuth) just shows the login
+  // form again even when signed in, so open the originating site instead.
+  let openedUrl = '';
+  if (imported > 0 && origin) {
+    openedUrl = `https://${origin === 'openai.com' ? 'chatgpt.com' : origin}/`;
+    try { await callInHouseBrowser('navigate', { sessionId: resolved, action: 'open', url: openedUrl }); } catch { openedUrl = ''; }
+  }
+  if (!openedUrl) { try { await callInHouseBrowser('navigate', { sessionId: resolved, action: 'reload' }); } catch {} }
+  return { imported, received: cookies.length, failedCount, domains, byDomain, failed, url: liveUrl || String(inHouse.url || ''), openedUrl };
 }
 
 export function browserLoginChromePaired(): boolean {

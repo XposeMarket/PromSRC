@@ -258,9 +258,18 @@ async function useMyChrome(state) {
   toast(state, 'Copying your sign-in from Chrome…', 8000);
   try {
     const res = await post('/api/browser/login-import-chrome', { sessionId: state.sessionId }, 30000);
-    toast(state, res?.imported
-      ? `Signed in from Chrome (${res.imported} cookies). Reloading…`
-      : 'Chrome has no sign-in for this site yet. Log in once in Chrome, then try again.', 4200);
+    const sites = Object.entries(res?.byDomain || {})
+      .reduce((acc, [host, n]) => { const d = host.split('.').slice(-2).join('.'); acc[d] = (acc[d] || 0) + Number(n || 0); return acc; }, {});
+    const siteList = Object.entries(sites).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([d, n]) => `${d} ${n}`).join(', ');
+    let msg;
+    if (res?.imported) {
+      msg = `Copied ${res.imported} cookies from Chrome (${siteList}).${res.failedCount ? ` ${res.failedCount} rejected.` : ''} Opening ${res.openedUrl ? new URL(res.openedUrl).hostname : 'the site'}\u2026`;
+    } else if (res?.received) {
+      msg = `Chrome sent ${res.received} cookies but none could be set here. ${res.failed?.[0] || ''}`.trim();
+    } else {
+      msg = `Chrome has no sign-in for ${(res?.domains || []).slice(0, 2).join(' / ') || 'this site'}. Log in once in Chrome, then try again.`;
+    }
+    toast(state, msg, 6500);
     state.lastInputAt = Date.now();
     scheduleFrame(state, 600);
   } catch (err) {
