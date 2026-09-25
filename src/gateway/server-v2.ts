@@ -156,6 +156,7 @@ import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
 import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
+import { router as chatgptBridgeRouter, setChatGPTBridgeFallbackCatalog } from './routes/chatgpt-bridge.router';
 import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { router as onboardingRouter } from './routes/onboarding.router';
@@ -963,6 +964,17 @@ startupMark('routers initialized');
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
 app.use('/', mcpOAuthCallbackRouter);
+// ChatGPT-as-model tool bridge: called by ChatGPT's servers, which cannot
+// present a gateway token. Guarded by the per-install URL secret and by
+// "only while a ChatGPT turn is active"; see chatgpt-bridge.router.ts.
+app.use('/', chatgptBridgeRouter);
+// Before any ChatGPT turn has run, advertise the core main-chat tool surface
+// so ChatGPT's registration snapshot isn't empty. Listing never grants
+// execution: tools/call still requires an active ChatGPT turn.
+setChatGPTBridgeFallbackCatalog(() => buildTools()
+  .map((tool: any) => tool?.function || tool)
+  .filter((fn: any) => fn && typeof fn.name === 'string' && fn.name)
+  .map((fn: any) => ({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters })));
 // Mount routers. Account auth endpoints stay available after gateway auth so
 // users can log in, refresh status, or recover from an expired subscription.
 // Everything else requires an active account/subscription on the server side.

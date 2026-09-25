@@ -67,7 +67,7 @@ export function renderReasoningSelector({
     : 0;
   const selectedWheelRotation = wheelRotation(selectedProgress, options?.length || 1);
   const modelName = model ? formatModelDisplayName(model, provider) : 'Default model';
-  const effortName = options ? formatReasoningSelectorLabel(options[selectedIndex], provider) : 'Default';
+  const effortName = options ? formatReasoningSelectorLabel(options[selectedIndex], provider, model) : 'Default';
   const rootId = safeId(selectorId);
   const safeControlId = safeId(controlId, `${rootId}-control`);
   const safeLiveLabelId = safeId(liveLabelId, `${rootId}-live-label`);
@@ -96,7 +96,7 @@ export function renderReasoningSelector({
            <path class="pm-reasoning-wheel-arch" d="M 28 100 C 28 34 212 34 212 100" />
            <rect class="pm-reasoning-wheel-indicator" x="112" y="18" width="16" height="34" rx="8" />
          </svg>
-         ${options.map((value, index) => `<button type="button" class="pm-reasoning-segment ${index === selectedIndex ? 'is-active ' : ''}${index <= selectedIndex ? 'is-filled' : ''}" data-index="${index}" data-value="${esc(value)}" aria-label="${esc(formatReasoningSelectorLabel(value, provider))}"><span>${esc(formatReasoningSelectorLabel(value, provider))}</span></button>`).join('')}
+         ${options.map((value, index) => `<button type="button" class="pm-reasoning-segment ${index === selectedIndex ? 'is-active ' : ''}${index <= selectedIndex ? 'is-filled' : ''}" data-index="${index}" data-value="${esc(value)}" aria-label="${esc(formatReasoningSelectorLabel(value, provider, model))}"><span>${esc(formatReasoningSelectorLabel(value, provider, model))}</span></button>`).join('')}
        </div>
      </div>` : `<div class="pm-msheet-empty pm-reasoning-unavailable">No adjustable reasoning levels for ${esc(modelName)}.</div>`;
 

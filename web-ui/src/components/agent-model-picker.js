@@ -39,7 +39,7 @@ const BUILTIN_LABELS = {
 
 const BUILTIN_STATIC_MODELS = {
   openai:       ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai_codex: ['chatgpt', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -157,7 +157,7 @@ function _reasoningRowHtml(prefix, agentId, provider, model, currentEffort = '',
     <div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap">
       <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:110px;flex:0 0 110px">Reasoning</label>
       <select id="${prefix}-effort-${escHtml(agentId)}" style="flex:1 1 140px;min-width:0;max-width:100%;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:12px;background:var(--panel);color:var(--text)">
-        ${opts.map((o) => `<option value="${escHtml(o)}" ${o===selected?'selected':''}>${escHtml(o ? formatReasoningSelectorLabel(o, provider) : '— Use provider default —')}${!cur && o === inherited ? ' (inherited)' : ''}</option>`).join('')}
+        ${opts.map((o) => `<option value="${escHtml(o)}" ${o===selected?'selected':''}>${escHtml(o ? formatReasoningSelectorLabel(o, provider, model) : '— Use provider default —')}${!cur && o === inherited ? ' (inherited)' : ''}</option>`).join('')}
       </select>
       <button onclick="agentModelPickerSaveReasoning('${prefix}','${escHtml(agentId)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">Save</button>
     </div>

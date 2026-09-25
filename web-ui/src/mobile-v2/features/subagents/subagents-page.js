@@ -134,7 +134,7 @@ function fileAccordion(file, isOpen) {
 
 const FALLBACK_AGENT_MODELS = {
   openai: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-4.1', 'gpt-4o'],
-  openai_codex: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.3-codex'],
+  openai_codex: ['chatgpt', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.3-codex'],
   anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
@@ -186,7 +186,7 @@ function renderAgentModelFields(agent, catalog, settings, state = {}) {
   const currentEffort = String(agent?.reasoning_effort || agent?.reasoningEffort || '').trim();
   const efforts = providerForReasoning && modelForReasoning ? effortOptions(providerForReasoning, modelForReasoning, true) : [];
   const reasoning = efforts.some(Boolean)
-    ? `<label class="pm-v2-field"><span>Reasoning</span><select data-agent-model-reasoning>${efforts.map((value) => `<option value="${escapeHtml(value)}"${value === (state.effort ?? (currentEffort || inherited)) ? ' selected' : ''}>${escapeHtml(value ? formatReasoningSelectorLabel(value, providerForReasoning) : `Use ${currentEffort ? 'provider' : 'Settings'} default${!currentEffort && inherited ? ` (${formatReasoningSelectorLabel(inherited, providerForReasoning)})` : ''}`)}</option>`).join('')}</select></label><button type="button" class="pm-btn ghost" data-agent-model-save-reasoning>Save reasoning</button><small class="pm-subagent-muted">${currentEffort ? 'Explicit per-agent override.' : 'Inherited from Settings; choose provider default to clear the override.'}</small>`
+    ? `<label class="pm-v2-field"><span>Reasoning</span><select data-agent-model-reasoning>${efforts.map((value) => `<option value="${escapeHtml(value)}"${value === (state.effort ?? (currentEffort || inherited)) ? ' selected' : ''}>${escapeHtml(value ? formatReasoningSelectorLabel(value, providerForReasoning, modelForReasoning) : `Use ${currentEffort ? 'provider' : 'Settings'} default${!currentEffort && inherited ? ` (${formatReasoningSelectorLabel(inherited, providerForReasoning, modelForReasoning)})` : ''}`)}</option>`).join('')}</select></label><button type="button" class="pm-btn ghost" data-agent-model-save-reasoning>Save reasoning</button><small class="pm-subagent-muted">${currentEffort ? 'Explicit per-agent override.' : 'Inherited from Settings; choose provider default to clear the override.'}</small>`
     : '<small class="pm-subagent-muted">This provider/model has no adjustable reasoning levels.</small>';
   const inheritedModel = String(agent?.effectiveModel || settings?.llm?.model || 'global default').trim();
   return `<div class="pm-v2-agent-model-fields">
