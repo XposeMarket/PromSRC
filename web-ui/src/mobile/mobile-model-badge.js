@@ -42,7 +42,7 @@ const BUILTIN_LABELS = {
 
 const BUILTIN_STATIC_MODELS = {
   openai: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai_codex: ['chatgpt', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
@@ -852,8 +852,8 @@ function _normalizedReasoningEffort(provider, model, value) {
   return validEffort(provider, model, effort) ? effort : '';
 }
 
-function _effortLabel(value, provider) {
-  return formatReasoningSelectorLabel(value, provider);
+function _effortLabel(value, provider, model = '') {
+  return formatReasoningSelectorLabel(value, provider, model);
 }
 
 // The subagent route owns a per-agent model/reasoning route, while the main
@@ -947,7 +947,7 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
       const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
       const value = options[safeIndex] || '';
-      const label = _effortLabel(value, provider);
+      const label = _effortLabel(value, provider, cfg.model);
       control.style.setProperty('--pm-reasoning-index', String(safeIndex));
       if (snap) setProgress(safeIndex / indexMax);
       control.setAttribute('aria-valuenow', String(safeIndex));
@@ -1170,7 +1170,7 @@ function _renderAdvancedSheet() {
   const rows = [
     _advancedRow('Provider', _providerLabel(provider), 'provider'),
     _advancedRow('Model', prettifyModelName(model, provider), 'model'),
-    _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider) : 'Default', 'intelligence', { disabled: !options }),
+    _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider, model) : 'Default', 'intelligence', { disabled: !options }),
   ];
   if (supportsFastSpeed(provider, model)) rows.push(_advancedRow('Speed', cfg.speed === 'fast' || cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
   const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
@@ -1285,7 +1285,7 @@ function _renderEffortList(provider) {
   const rows = options.map((value) => {
     const isActive = value === current || (!value && !current);
     return `<button type="button" class="pm-msheet-row" data-effort="${_esc(value)}">
-      <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider))}</span>
+      <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider, cfg.model))}</span>
       ${isActive ? '<span class="pm-msheet-check">&#10003;</span>' : ''}
     </button>`;
   }).join('');

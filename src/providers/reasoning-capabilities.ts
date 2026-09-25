@@ -49,6 +49,9 @@ export function getReasoningCapability(provider: string, model: string): Reasoni
   const name = slug(model);
 
   if (id === 'openai_codex') {
+    // ChatGPT (web backend): efforts carry ChatGPT modes, see
+    // chatgpt-web/chatgpt-web-models.ts (low=Instant ... ultra=Pro).
+    if (name === 'chatgpt') return { efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultEffort: 'high' };
     if (/^gpt-6-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     // Codex exposes model-specific effort levels. Luna is the fast 5.6
     // variant and does not advertise Ultra; Sol/Terra do.

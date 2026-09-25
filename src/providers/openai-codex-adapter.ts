@@ -21,6 +21,10 @@ import { isRetryableAccountFailure } from '../auth/provider-account-pool';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
+import { ChatGPTWebAdapter } from './chatgpt-web/chatgpt-web-adapter';
+import { isChatGPTWebModel, CHATGPT_WEB_MODEL } from './chatgpt-web/chatgpt-web-models';
+import { getChatGPTBridgeSource } from './chatgpt-web/chatgpt-bridge-registry';
+import { currentChatGPTBridgeCatalogSignature } from './chatgpt-web/chatgpt-bridge-sessions';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 function envMs(name: string, fallback: number, minimum: number): number {
@@ -56,6 +60,7 @@ export class CodexIncompleteStreamError extends Error {
 // Models available via Codex OAuth (latest first; official OpenAI IDs only).
 // Model access depends on the connected account's provisioning.
 export const CODEX_MODELS = [
+  CHATGPT_WEB_MODEL,
   'gpt-6-astra',
   'gpt-6-sol',
   'gpt-6-luna',
@@ -202,6 +207,46 @@ export class OpenAICodexAdapter implements LLMProvider {
       : [];
   }
 
+  private async chatViaChatGPTWeb(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
+    const accountCandidates = this.getAccountCandidates();
+    let lastError: unknown;
+    for (const accountId of accountCandidates) {
+      const adapter = new ChatGPTWebAdapter({
+        providerId: this.id,
+        getCredentials: async () => {
+          const token = await getValidToken(this.configDir, accountId);
+          const tokens = loadTokens(this.configDir, accountId);
+          const chatgptAccountId = String(tokens?.account_id || buildCodexCloudflareHeaders(token)['ChatGPT-Account-ID'] || '').trim();
+          if (!chatgptAccountId) throw new Error('OpenAI Codex session has no ChatGPT account id. Reconnect OpenAI Codex in Settings -> Models.');
+          return { accessToken: token, accountId: chatgptAccountId };
+        },
+        getBridgeSource: () => getChatGPTBridgeSource(accountId, currentChatGPTBridgeCatalogSignature()),
+        temporaryChats: () => {
+          const cfg = (getConfig().getConfig() as any)?.llm?.providers?.openai_codex?.chatgpt || {};
+          return cfg.temporary_chats !== false;
+        },
+      });
+      try {
+        return await adapter.chat(messages, model, options);
+      } catch (error: any) {
+        lastError = error;
+        if (options?.abortSignal?.aborted) throw error;
+        // Only rotate accounts for auth/usage failures before any output streamed.
+        const code = String(error?.code || '');
+        if (code !== 'CHATGPT_WEB_AUTH' && code !== 'CHATGPT_WEB_RATE_LIMIT') throw error;
+        if (code === 'CHATGPT_WEB_AUTH') {
+          try {
+            await refreshTokens(this.configDir, accountId);
+            return await adapter.chat(messages, model, options);
+          } catch (retryError) {
+            lastError = retryError;
+          }
+        }
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'ChatGPT request failed'));
+  }
+
   private getAccountCandidates(): Array<string | undefined> {
     const candidates = [this.accountId, ...this.accountIds]
       .map(id => String(id || '').trim())
@@ -340,6 +385,10 @@ export class OpenAICodexAdapter implements LLMProvider {
   }
 
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
+    // "chatgpt" is ChatGPT itself (chatgpt.com web backend), reached with this
+    // same Codex login. It has no function-calling surface; Prometheus tools
+    // reach it through the MCP bridge connector instead.
+    if (isChatGPTWebModel(model)) return this.chatViaChatGPTWeb(messages, model, options);
     const accountCandidates = this.getAccountCandidates();
 
     // Extract system message as instructions

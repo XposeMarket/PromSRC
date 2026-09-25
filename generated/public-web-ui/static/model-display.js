@@ -1,4 +1,4 @@
-import { hasReasoningCapabilityPolicy, validEffort } from './reasoning-capabilities.js';
+import { hasReasoningCapabilityPolicy, validEffort, isChatGPTWebModel, CHATGPT_MODE_LABELS } from './reasoning-capabilities.js';
 
 const OPENAI_PROVIDER_IDS = new Set(['openai', 'openai_codex']);
 
@@ -23,6 +23,7 @@ export function formatModelDisplayName(model, provider = '') {
   if (!raw) return 'Model';
 
   const lower = raw.toLowerCase();
+  if (lower === 'chatgpt' && (!providerId || OPENAI_PROVIDER_IDS.has(providerId))) return 'ChatGPT';
   const gpt6 = lower.match(/^gpt-6-(astra|sol|luna)(?:-|$)/);
   if (gpt6 && OPENAI_PROVIDER_IDS.has(providerId)) return `${titleWord(gpt6[1])} 6`;
   const gpt56 = lower.match(/^gpt-5\.6-(sol|terra|luna)(?:-|$)/);
@@ -67,6 +68,10 @@ export function formatModelWithReasoning(model, provider = '', effort = '') {
     : hasReasoningCapabilityPolicy(providerId) && !validEffort(providerId, model, normalizedEffort)
       ? ''
       : normalizedEffort;
+  if (providerId === 'openai_codex' && isChatGPTWebModel(model)) {
+    const mode = CHATGPT_MODE_LABELS[safeEffort] || '';
+    return mode ? `${modelLabel} ${mode}` : modelLabel;
+  }
   const reasoningLabel = formatReasoningDisplayName(safeEffort);
   return reasoningLabel ? `${modelLabel} ${reasoningLabel}` : modelLabel;
 }
