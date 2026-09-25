@@ -90,7 +90,7 @@ import { promisify } from 'util';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from './workspace-context.js';
 import type { ToolResult } from '../types.js';
-import { resolveRuntimeBinary } from '../runtime/dependencies.js';
+import { resolveMuxingFfmpeg, resolveRuntimeBinary } from '../runtime/dependencies.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -520,7 +520,7 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
     const { absDir } = ensureOutputDir(workspaceRoot, args.output_dir || 'downloads/media');
     await fsp.mkdir(absDir, { recursive: true });
 
-    const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+    const ffmpegPath = resolveMuxingFfmpeg();
     const ffprobePath = resolveRuntimeBinary('ffprobe', { allowPathFallback: true });
     const mediaBinDirs = [...new Set([ffmpegPath, ffprobePath]
       .filter((value) => path.isAbsolute(value))

@@ -394,6 +394,17 @@ function normalizedProcessEntry(entry: Record<string, any>, index: number): Reco
       },
     };
   }
+  if (type === 'vision' || eventType === 'vision_injected') {
+    // Checkpointed media-analysis/screenshot previews keep their image card
+    // across restart recovery instead of vanishing from the tool stream.
+    return visionEntry({
+      ...extra,
+      source: extra.source || entry.source,
+      label: content || entry.label,
+      preview: entry.preview || extra.preview,
+      previewTitle: entry.previewTitle || extra.previewTitle,
+    }, time, id);
+  }
   // Runtime checkpoint status/preflight rows are not workflow trace cards.
   // Keep legacy tool/result rows so the mobile adapter can infer their action
   // and feed them through the normal activity renderer.
