@@ -161,5 +161,5 @@ export const mobileDrawerItems = [
   { id: 'teams',     label: 'Teams',     icon: 'users',    route: '#mobile/teams' },
   { id: 'subagents', label: 'Subagents', icon: 'robot',    route: '#mobile/subagents' },
   { id: 'proposals', label: 'Proposals', icon: 'doc',      route: '#mobile/proposals' },
-  { id: 'more',      label: 'More',      icon: 'dots',     route: '#mobile/more' },
+  { id: 'more',      label: 'Plugins',   icon: 'plug',     route: '#mobile/more' },
 ];

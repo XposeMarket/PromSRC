@@ -158,6 +158,8 @@ function normalizeMobileRouteParts(parts) {
     proposal: 'proposals',
     prop: 'proposals',
     approvals: 'proposals',
+    plugins: 'more',
+    plugin: 'more',
   };
   page = aliases[page] || page;
   if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'creative', 'more', 'pair', 'gateways'].includes(page)) {

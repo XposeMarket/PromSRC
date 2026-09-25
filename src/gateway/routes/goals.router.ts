@@ -4,6 +4,8 @@ import { Router } from 'express';
 import { addMessage } from '../session';
 import { broadcastWS } from '../comms/broadcaster';
 import { getMCPManager } from '../mcp-manager';
+import { listHostedMcpCatalog } from '../hosted-mcp-catalog.js';
+import { getMcpOAuthRedirectUris, startMcpOAuthFlow } from '../mcp-oauth.js';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
 import { getAllShortcuts, saveSiteShortcut, deleteSiteShortcut } from '../site-shortcuts';
 import {
@@ -113,6 +115,45 @@ router.get('/api/prompt-mutations/:jobId', (req, res) => {
 });
 
 // ─── MCP API ──────────────────────────────────────────────────────────────────
+
+router.get('/api/mcp/hosted-catalog', (_req, res) => {
+  try {
+    const mgr = getMCPManager();
+    const configs = new Set(mgr.getConfigs().map(cfg => cfg.id));
+    const statuses = new Map(mgr.getStatus().map(status => [status.id, status]));
+    const items = listHostedMcpCatalog().map(entry => {
+      const status = statuses.get(`hosted-${entry.id}`);
+      return { ...entry, installed: configs.has(`hosted-${entry.id}`), connected: status?.status === 'connected', oauthConnected: status?.oauthConnected === true };
+    });
+    res.json({ success: true, items });
+  } catch {
+    res.status(500).json({ success: false, error: 'Unable to list hosted MCP servers.' });
+  }
+});
+
+router.post('/api/mcp/hosted/:id/connect', async (req, res) => {
+  const entry = listHostedMcpCatalog().find(item => item.id === req.params.id && item.dcr);
+  if (!entry) { res.status(404).json({ success: false, error: 'Hosted MCP server not found.' }); return; }
+  if (req.body?.callback != null && req.body.callback !== 'public' && req.body.callback !== 'loopback') {
+    res.status(400).json({ success: false, error: 'callback must be public or loopback.' }); return;
+  }
+  try {
+    const available = getMcpOAuthRedirectUris();
+    // Providers that reject the public callback always finish on the PC.
+    const publicOk = available.length > 1 && entry.publicCallback !== false;
+    const callback: 'public' | 'loopback' = publicOk ? (req.body?.callback || 'public') : 'loopback';
+    if (callback === 'public' && available.length < 2) {
+      res.status(400).json({ success: false, error: 'Public OAuth callback is not configured.' }); return;
+    }
+    const serverId = `hosted-${entry.id}`;
+    const mgr = getMCPManager();
+    mgr.upsertConfig({ id: serverId, name: entry.name, enabled: true, transport: entry.transport, url: entry.url, description: entry.description });
+    const result = await startMcpOAuthFlow(serverId, entry.url, undefined, undefined, { openBrowser: callback !== 'public', callback });
+    res.status(result.status === 'error' ? 400 : 200).json({ success: result.status !== 'error', serverId, authorizeUrl: result.authorizeUrl, callback, error: result.error });
+  } catch {
+    res.status(500).json({ success: false, error: 'Unable to start hosted MCP authorization.' });
+  }
+});
 
 router.get('/api/mcp/servers', (_req, res) => {
   try {

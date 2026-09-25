@@ -28,6 +28,7 @@ const ownerStyles = [
   ['styles/mobile-composer-stack.css', 'components'],
   ['styles/mobile-settings.css', 'route'],
   ['styles/mobile-voice.css', 'route'],
+  ['styles/mobile-plugins.css', 'route'],
 ];
 
 for (const relative of ownerModules) {
@@ -58,6 +59,7 @@ for (const [owner, file, layer] of [
   ['chat', 'mobile-composer-stack.css', 'components'],
   ['voice', 'mobile-voice.css', 'route'],
   ['settings', 'mobile-settings.css', 'route'],
+  ['plugins', 'mobile-plugins.css', 'route'],
 ]) {
   assert.match(owners, new RegExp(`${owner}:\\s*Object\\.freeze\\(\\[[\\s\\S]*?${file}`), `${owner} must name its owned stylesheet`);
   assert.match(owners, new RegExp(`layer: '${layer}'`), `${owner} must be assigned to the ${layer} layer`);

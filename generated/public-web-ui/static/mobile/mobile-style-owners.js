@@ -31,6 +31,15 @@ const STYLE_DEFINITIONS = Object.freeze({
       attribute: 'data-prom-mobile-voice-route-style',
     }),
   ]),
+  plugins: Object.freeze([
+    Object.freeze({
+      id: 'pm-mobile-plugins-route-style',
+      file: 'mobile-plugins.css',
+      layer: 'route',
+      version: 'pm-v1-2026-09-25-plugins-page',
+      attribute: 'data-prom-mobile-plugins-route-style',
+    }),
+  ]),
   settings: Object.freeze([
     Object.freeze({
       id: 'pm-mobile-settings-route-style',

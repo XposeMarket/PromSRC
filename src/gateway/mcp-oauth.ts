@@ -42,6 +42,7 @@ interface StoredClient {
   metadata: AuthServerMetadata;
   resource: string;
   scope?: string;
+  redirect_uris?: string[];
 }
 
 interface StoredTokens {
@@ -59,14 +60,36 @@ interface ActiveFlow {
   state: string;
   codeVerifier: string;
   client: StoredClient;
-  server: http.Server;
+  server?: http.Server;
+  redirectUri: string;
   status: FlowStatus;
+  processing?: boolean;
   error?: string;
   startedAt: number;
   authorizeUrl: string;
 }
 
 const activeFlows = new Map<string, ActiveFlow>();
+
+// In-memory overrides are only available to isolated regression processes, never the gateway.
+let testOverrides: { publicUrl?: string; storage?: Map<string, string> } | null = null;
+export function setMcpOAuthTestOverrides(overrides: { publicUrl?: string; storage?: Map<string, string> } | null): void {
+  if (process.env.MCP_OAUTH_TEST_MODE !== '1') throw new Error('OAuth test overrides require MCP_OAUTH_TEST_MODE=1');
+  testOverrides = overrides;
+}
+
+export function getMcpOAuthRedirectUris(): string[] {
+  const publicUrl = testOverrides?.publicUrl ?? (() => {
+    const remote = getConfig().getConfig().gateway.remoteAccess;
+    return remote?.enabled ? remote.publicUrl : undefined;
+  })();
+  if (!publicUrl) return [REDIRECT_URI];
+  const parsed = new URL(publicUrl);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(parsed.hostname))) {
+    throw new Error('Public OAuth callback requires an HTTPS gateway URL.');
+  }
+  return [REDIRECT_URI, `${publicUrl.replace(/\/+$/, '')}${REDIRECT_PATH}`];
+}
 
 // ─── storage ────────────────────────────────────────────────────────────────
 function vault() {
@@ -77,21 +100,25 @@ function clientKey(id: string) { return `mcp.oauth.${id}.client`; }
 
 function loadClient(id: string): StoredClient | null {
   try {
-    const s = vault().get(clientKey(id), `mcp-oauth:client:${id}`);
-    return s ? (JSON.parse(s.expose()) as StoredClient) : null;
+    const key = clientKey(id);
+    const raw = testOverrides?.storage ? testOverrides.storage.get(key) : vault().get(key, `mcp-oauth:client:${id}`)?.expose();
+    return raw ? (JSON.parse(raw) as StoredClient) : null;
   } catch { return null; }
 }
 function saveClient(id: string, client: StoredClient): void {
-  vault().set(clientKey(id), JSON.stringify(client), `mcp-oauth:client:${id}`);
+  if (testOverrides?.storage) testOverrides.storage.set(clientKey(id), JSON.stringify(client));
+  else vault().set(clientKey(id), JSON.stringify(client), `mcp-oauth:client:${id}`);
 }
 function loadTokens(id: string): StoredTokens | null {
   try {
-    const s = vault().get(tokenKey(id), `mcp-oauth:tokens:${id}`);
-    return s ? (JSON.parse(s.expose()) as StoredTokens) : null;
+    const key = tokenKey(id);
+    const raw = testOverrides?.storage ? testOverrides.storage.get(key) : vault().get(key, `mcp-oauth:tokens:${id}`)?.expose();
+    return raw ? (JSON.parse(raw) as StoredTokens) : null;
   } catch { return null; }
 }
 function saveTokens(id: string, tokens: StoredTokens): void {
-  vault().set(tokenKey(id), JSON.stringify(tokens), `mcp-oauth:tokens:${id}`);
+  if (testOverrides?.storage) testOverrides.storage.set(tokenKey(id), JSON.stringify(tokens));
+  else vault().set(tokenKey(id), JSON.stringify(tokens), `mcp-oauth:tokens:${id}`);
 }
 
 function safeOAuthError(value: unknown): string {
@@ -115,7 +142,12 @@ function escapeHtml(value: unknown): string {
 
 export function clearMcpOAuth(id: string): void {
   const flow = activeFlows.get(id);
-  if (flow) { try { flow.server.close(); } catch {} activeFlows.delete(id); }
+  if (flow) { try { flow.server?.close(); } catch {} activeFlows.delete(id); }
+  if (testOverrides?.storage) {
+    testOverrides.storage.delete(tokenKey(id));
+    testOverrides.storage.delete(clientKey(id));
+    return;
+  }
   try { vault().delete(tokenKey(id), `mcp-oauth:clear:${id}`); } catch {}
   try { vault().delete(clientKey(id), `mcp-oauth:clear:${id}`); } catch {}
 }
@@ -242,11 +274,24 @@ export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?:
 }
 
 // ─── dynamic client registration (RFC 7591) ───────────────────────────────────
-async function ensureClient(serverId: string, serverUrl: string, metadata: AuthServerMetadata, scope?: string): Promise<StoredClient> {
+async function ensureClient(serverId: string, serverUrl: string, metadata: AuthServerMetadata, redirectUri: string, scope?: string): Promise<StoredClient> {
+  // Register only loopback for loopback flows: several providers (Asana,
+  // Square, Intercom, Monday) reject the whole registration if any redirect
+  // URI is non-loopback, which would break the PC flow that used to work.
+  const all = getMcpOAuthRedirectUris();
+  const redirectUris = redirectUri === REDIRECT_URI ? [REDIRECT_URI] : all;
   const existing = loadClient(serverId);
   const metadataMatches = existing?.metadata?.authorization_endpoint === metadata.authorization_endpoint
     && existing?.metadata?.token_endpoint === metadata.token_endpoint;
-  if (existing?.client_id && metadataMatches && existing.client_id !== 'prometheus') return { ...existing, metadata, resource: serverUrl, scope: scope || existing.scope };
+  // Reuse only a client registered with exactly this redirect set: a client
+  // that also carries the public URI is rejected by some authorize pages
+  // (Vercel) even for the loopback flow.
+  const sameUris = Array.isArray(existing?.redirect_uris)
+    && existing!.redirect_uris.length === redirectUris.length
+    && redirectUris.every((uri) => existing!.redirect_uris!.includes(uri));
+  if (existing?.client_id && metadataMatches && existing.client_id !== 'prometheus' && sameUris) {
+    return { ...existing, metadata, resource: serverUrl, scope: scope || existing.scope };
+  }
 
   let clientId: string | undefined;
   let clientSecret: string | undefined;
@@ -256,7 +301,7 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         client_name: 'Prometheus',
-        redirect_uris: [REDIRECT_URI],
+        redirect_uris: redirectUris,
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
         token_endpoint_auth_method: 'none',
@@ -276,6 +321,7 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
     client_id: clientId,
     client_secret: clientSecret,
     dynamically_registered: true,
+    redirect_uris: redirectUris,
     metadata,
     resource: serverUrl,
     scope,
@@ -354,101 +400,117 @@ export function getMcpOAuthFlowStatus(serverId: string): { status: FlowStatus; e
   return { status: flow.status, error: flow.error, authorizeUrl: flow.authorizeUrl };
 }
 
-/**
- * Begin the browser OAuth flow for an MCP server. Discovers the auth server,
- * registers a client, starts a loopback callback server, opens the browser, and
- * returns the authorize URL. Poll getMcpOAuthFlowStatus() for completion.
- */
-export async function startMcpOAuthFlow(serverId: string, serverUrl: string, wwwAuthenticate?: string | null, scope?: string, options?: { openBrowser?: boolean }): Promise<StartFlowResult> {
-  // Tear down any prior in-flight attempt.
+/** Complete either a loopback or public gateway callback, matched solely by unpredictable state. */
+export async function handleMcpOAuthCallback(query: URLSearchParams): Promise<{ ok: boolean; html: string; serverId?: string }> {
+  const state = query.get('state');
+  const flow = state ? [...activeFlows.values()].find(candidate => candidate.state === state) : undefined;
+  const page = (ok: boolean, message: string, serverId?: string) => ({
+    ok, serverId,
+    html: `<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '&#10003; Connected' : '&#10007; Authorization failed'}</h2><p style="color:#9a9">${escapeHtml(message)}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`,
+  });
+  // Never mutate another flow on missing/incorrect state; don't expose provider details.
+  if (!flow || flow.status !== 'pending' || flow.processing || Date.now() - flow.startedAt >= FLOW_TIMEOUT_MS) {
+    return page(false, 'Invalid or expired callback.');
+  }
+  flow.processing = true;
+  const error = query.get('error');
+  const code = query.get('code');
+  if (error || !code) {
+    flow.status = 'error';
+    flow.error = error ? `Provider authorization error (${safeOAuthError(error)})` : 'authorization code missing';
+    try { flow.server?.close(); } catch {}
+    return page(false, error ? 'Provider authorization was not completed.' : 'Invalid callback.');
+  }
+  try {
+    const tokens = await postToken(flow.client.metadata, {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: flow.redirectUri,
+      client_id: flow.client.client_id,
+      code_verifier: flow.codeVerifier,
+      ...(flow.client.client_secret ? { client_secret: flow.client.client_secret } : {}),
+    });
+    saveTokens(flow.serverId, tokens);
+    flow.status = 'connected';
+    return page(true, 'Authorization complete.', flow.serverId);
+  } catch (error: any) {
+    flow.status = 'error';
+    flow.error = safeOAuthError(error?.message || error);
+    return page(false, 'Token exchange failed.');
+  } finally {
+    try { flow.server?.close(); } catch {}
+  }
+}
+
+/** Start OAuth via loopback (desktop, default) or the public gateway (phone). */
+export async function startMcpOAuthFlow(serverId: string, serverUrl: string, wwwAuthenticate?: string | null, scope?: string, options?: { openBrowser?: boolean; callback?: 'loopback' | 'public' }): Promise<StartFlowResult> {
   const prev = activeFlows.get(serverId);
-  if (prev) { try { prev.server.close(); } catch {} activeFlows.delete(serverId); }
+  if (prev) { try { prev.server?.close(); } catch {} activeFlows.delete(serverId); }
 
   let metadata: AuthServerMetadata;
   let client: StoredClient;
+  let redirectUri: string;
   try {
+    const redirectUris = getMcpOAuthRedirectUris();
+    redirectUri = options?.callback === 'public' ? redirectUris[1] : redirectUris[0];
+    if (!redirectUri) throw new Error('Public OAuth callback requires enabled remote access with a public URL.');
     metadata = await discoverMcpAuthServer(serverUrl, wwwAuthenticate);
-    client = await ensureClient(serverId, serverUrl, metadata, scope);
-  } catch (e: any) {
-    return { status: 'error', error: `OAuth discovery failed: ${safeOAuthError(e?.message || e)}` };
+    client = await ensureClient(serverId, serverUrl, metadata, redirectUri, scope);
+  } catch (error: any) {
+    return { status: 'error', error: `OAuth discovery failed: ${safeOAuthError(error?.message || error)}` };
   }
 
   const { verifier, challenge } = makePkce();
   const state = base64url(crypto.randomBytes(16));
-
   const authorizeUrl = new URL(metadata.authorization_endpoint);
   authorizeUrl.searchParams.set('response_type', 'code');
   authorizeUrl.searchParams.set('client_id', client.client_id);
-  authorizeUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+  authorizeUrl.searchParams.set('redirect_uri', redirectUri);
   authorizeUrl.searchParams.set('state', state);
   authorizeUrl.searchParams.set('code_challenge', challenge);
   authorizeUrl.searchParams.set('code_challenge_method', 'S256');
-  // RFC 8707 resource indicator — bind the token to this MCP server.
   authorizeUrl.searchParams.set('resource', serverUrl);
   const useScope = scope || client.scope || (metadata.scopes_supported ? metadata.scopes_supported.join(' ') : '');
   if (useScope) authorizeUrl.searchParams.set('scope', useScope);
 
-  const server = http.createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url || '', `http://127.0.0.1:${REDIRECT_PORT}`);
-      if (url.pathname !== REDIRECT_PATH) { res.writeHead(404); res.end(); return; }
-      const flow = activeFlows.get(serverId);
-      const code = url.searchParams.get('code');
-      const gotState = url.searchParams.get('state');
-      const err = url.searchParams.get('error');
-
-      const finish = (ok: boolean, message: string) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '&#10003; Connected' : '&#10007; Authorization failed'}</h2><p style="color:#9a9">${escapeHtml(message)}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`);
-      };
-
-      if (err) { if (flow) { flow.status = 'error'; flow.error = `Provider authorization error (${safeOAuthError(err)})`; } finish(false, 'Provider authorization was not completed.'); server.close(); return; }
-      if (!code || !flow || gotState !== flow.state) { if (flow) { flow.status = 'error'; flow.error = 'invalid callback (state mismatch)'; } finish(false, 'Invalid callback.'); server.close(); return; }
-
+  let server: http.Server | undefined;
+  if (options?.callback !== 'public') {
+    server = http.createServer(async (req, res) => {
       try {
-        const tokens = await postToken(client.metadata, {
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: REDIRECT_URI,
-          client_id: client.client_id,
-          code_verifier: flow.codeVerifier,
-          ...(client.client_secret ? { client_secret: client.client_secret } : {}),
-        });
-        saveTokens(serverId, tokens);
-        flow.status = 'connected';
-        finish(true, 'Authorization complete.');
-      } catch (e: any) {
-        flow.status = 'error';
-        flow.error = safeOAuthError(e?.message || e);
-        finish(false, 'Token exchange failed.');
-      } finally {
-        server.close();
+        const url = new URL(req.url || '', `http://127.0.0.1:${REDIRECT_PORT}`);
+        if (url.pathname !== REDIRECT_PATH) { res.writeHead(404); res.end(); return; }
+        const result = await handleMcpOAuthCallback(url.searchParams);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+        res.end(result.html);
+        if (result.ok && result.serverId) {
+          void import('./mcp-manager.js').then(({ getMCPManager }) => getMCPManager().connect(result.serverId!)).catch(() => {});
+        }
+      } catch {
+        try { res.writeHead(500); res.end(); } catch {}
       }
-    } catch {
-      try { res.writeHead(500); res.end(); } catch {}
+    });
+    try { await new Promise<void>((resolve, reject) => {
+      server!.once('error', reject);
+      server!.listen(REDIRECT_PORT, '127.0.0.1', resolve);
+    }); } catch (error: any) {
+      try { server.close(); } catch {}
+      return { status: 'error', error: `OAuth callback listener failed: ${safeOAuthError(error?.message || error)}` };
     }
-  });
-
-  try { await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(REDIRECT_PORT, '127.0.0.1', () => resolve());
-  }); } catch (error: any) {
-    try { server.close(); } catch {}
-    return { status: 'error', error: `OAuth callback listener failed: ${safeOAuthError(error?.message || error)}` };
   }
 
   const flow: ActiveFlow = {
-    serverId, state, codeVerifier: verifier, client, server,
+    serverId, state, codeVerifier: verifier, client, server, redirectUri,
     status: 'pending', startedAt: Date.now(), authorizeUrl: authorizeUrl.toString(),
   };
   activeFlows.set(serverId, flow);
-
-  // Auto-expire.
   setTimeout(() => {
-    const f = activeFlows.get(serverId);
-    if (f && f.status === 'pending') { f.status = 'error'; f.error = 'authorization timed out'; try { f.server.close(); } catch {} }
+    const current = activeFlows.get(serverId);
+    if (current === flow && flow.status === 'pending' && !flow.processing) {
+      flow.status = 'error'; flow.error = 'authorization timed out';
+      try { flow.server?.close(); } catch {}
+    }
   }, FLOW_TIMEOUT_MS).unref?.();
 
-  if (options?.openBrowser !== false) openBrowser(flow.authorizeUrl);
+  if (options?.openBrowser !== false && options?.callback !== 'public') openBrowser(flow.authorizeUrl);
   return { status: 'pending', authorizeUrl: flow.authorizeUrl };
 }

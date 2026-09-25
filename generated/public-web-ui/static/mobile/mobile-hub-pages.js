@@ -966,7 +966,11 @@ export async function renderMorePage(page, { section = '', navigate }) {
   }
   if (section === 'audit') return _renderMoreAudit(page, { navigate });
   if (section === 'memory') return _renderMoreMemory(page, { navigate });
-  return _renderMoreLanding(page, { navigate });
+  if (section === 'overview') return _renderMoreLanding(page, { navigate });
+  // Mobile-only: the More landing is now the Plugins page (Audit, Memory and
+  // asset reload live in its footer; #mobile/more/overview keeps the old view).
+  const { renderMobilePluginsPage } = await import('./mobile-plugins-page.js');
+  return renderMobilePluginsPage(page, { navigate });
 }
 
 export {

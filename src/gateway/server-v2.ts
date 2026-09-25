@@ -155,6 +155,7 @@ import { router as resourcesRouter } from './routes/resources.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
+import { router as mcpOAuthCallbackRouter } from './routes/mcp-oauth-callback.router';
 import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { router as onboardingRouter } from './routes/onboarding.router';
@@ -961,6 +962,7 @@ startupMark('routers initialized');
 // reached by an unpaired phone. Desktop administration is independently gated
 // inside pairingRouter and never accepts a paired-device credential.
 app.use('/', pairingRouter);
+app.use('/', mcpOAuthCallbackRouter);
 // Mount routers. Account auth endpoints stay available after gateway auth so
 // users can log in, refresh status, or recover from an expired subscription.
 // Everything else requires an active account/subscription on the server side.
