@@ -2,7 +2,7 @@
 // Extension registry guardrail check. Loads the runtime and runs the consistency
 // rules from src/extensions/consistency.ts. Exits non-zero on any error-level
 // issue. Run with: npx tsx scripts/verify-extensions.ts
-import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../src/extensions/extension-bootstrap.js';
 import { checkExtensionConsistency } from '../src/extensions/consistency.js';
 import { getExtensionRuntimeRegistry } from '../src/extensions/runtime-registry.js';
 

@@ -22,7 +22,7 @@ import { deployAnalysisTeamTool, injectAnalysisTeamDeps } from './deploy-analysi
 import { viewConnectionsTool } from './view-connections.js';
 import { allProcessTools } from './process-tools.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter.js';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap.js';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry.js';
 
 // ── Phase 5: Policy engine + audit log ──────────────────────────────────────

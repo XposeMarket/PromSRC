@@ -1,7 +1,7 @@
 import { getMCPManager } from '../../mcp-manager';
 import { buildConnectorStatus } from '../../tool-builder';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/legacy-connector-adapter';
-import { getExtensionRuntimeRegistry } from '../../../extensions/runtime-registry';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../../extensions/extension-bootstrap';
+import { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } from '../../../extensions/runtime-registry';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 import { resolveHookConfig } from '../../comms/webhook-handler';
@@ -469,11 +469,31 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
       // Route through the extension registry (native connectors own execution).
       ensurePrometheusExtensionRuntimeLoaded();
       const registry = getExtensionRuntimeRegistry();
-      if (!registry.isToolAvailable(name)) {
-        return { name, args, result: `Connector tool "${name}" is not enabled for this connection. Enable it in Plugins → connection details before use.`, error: true };
+      let toolName = name;
+      let toolArgs = args;
+      // A generated wrapper (connector_github) should already be resolved in
+      // executeToolRaw; if it reaches here unresolved, resolve it now instead
+      // of reporting the wrapper itself as "not enabled" (2026-09-25).
+      if (!registry.getTool(name)) {
+        const spec = registry.getConnectorWrapperSpec(name);
+        if (spec) {
+          const resolved = resolveConnectorWrapperCall(spec, args);
+          if (resolved.error) return { name, args, result: resolved.error, error: true };
+          toolName = resolved.name;
+          toolArgs = resolved.args;
+        } else if (/^connector_[a-z0-9]+$/.test(name)) {
+          return {
+            name, args, error: true,
+            result: `Connector wrapper "${name}" has no registered actions (registry: ${registry.listConnectors().length} connectors, ${registry.listTools().length} tools). Call connector_list or tool_search to find the direct tool.`,
+          };
+        }
       }
-      const connResult = await registry.executeTool(name, args);
-      return { name, args, ...connResult };
+      if (!registry.isToolAvailable(toolName)) {
+        const connectorId = registry.getConnectorIdForTool(toolName) || 'unknown';
+        return { name, args, result: `Connector tool "${toolName}" is unavailable: connector "${connectorId}" is not connected or this tool is disabled for its connection. Check connector_list.`, error: true };
+      }
+      const connResult = await registry.executeTool(toolName, toolArgs);
+      return { name: toolName, args: toolArgs, ...connResult };
     }
 
     const { handleCompositeTool } = await import('../../tools/composite-tools');

@@ -57,6 +57,23 @@ async function main(): Promise<void> {
     ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
     assert.equal(ledger.runtimes[deferredRuntimeId], undefined, 'the request finalizer must still remove the settled deferred owner');
 
+    // 2026-09-25 19:35: a queued 200ms checkpoint flush fired after the restart
+    // marked the turn interrupted and rewrote it as 'running', so the next
+    // gateway never resumed the turn. The interrupted record must survive.
+    const flushRaceRuntimeId = runtimeApi.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'interrupt vs queued checkpoint flush regression',
+      sessionId: 'runtime_flush_race_regression',
+      recoveryPolicy: 'mark_interrupted',
+    });
+    runtimeApi.updateLiveRuntimeCheckpoint(flushRaceRuntimeId, { event: 'working', message: 'queued before restart' });
+    runtimeApi.markActiveRuntimesInterrupted('gateway_restart');
+    await new Promise<void>((resolve) => setTimeout(resolve, 350));
+    await runtimeApi.flushLiveRuntimePersistence();
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    assert.equal(ledger.runtimes[flushRaceRuntimeId]?.status, 'interrupted', 'a queued checkpoint flush must not overwrite the interrupted restart record');
+
+
     const watchdogRuntimeId = runtimeApi.registerLiveRuntime({
       kind: 'main_chat',
       label: 'semantic watchdog recovery regression',

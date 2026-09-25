@@ -15,7 +15,7 @@ import { getBrainThoughtToolDefinitions } from './brain/brain-thought-runtime';
 import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { getToolSearchDefinitions } from './tool-search';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import {
   arePrometheusDevToolsVisible,

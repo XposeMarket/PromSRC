@@ -18,7 +18,7 @@ import { ConnectorOAuthConnectionAdapter } from './adapters/connector-oauth';
 import { buildConnectorOAuthBridges } from './connector-oauth-bridges';
 import type { ConnectionAdapterContext } from './types';
 import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/extension-bootstrap';
 import { migrateLegacyConnections } from './legacy-migration';
 export {
   isManagedConnectorToolAvailable,

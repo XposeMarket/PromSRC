@@ -7,7 +7,7 @@ import {
 import {
   ensurePrometheusExtensionRuntimeLoaded,
   resetPrometheusExtensionRuntimeLoaded,
-} from './legacy-connector-adapter.js';
+} from './extension-bootstrap.js';
 import { resolveUserPluginsDir } from './loader.js';
 
 /**

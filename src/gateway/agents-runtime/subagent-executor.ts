@@ -373,9 +373,9 @@ import { buildConnectorStatus } from '../tool-builder';
 import { readRawToolResultRange } from '../tool-result-envelope';
 import { attachCodeEvidenceToToolResult, type CodeEvidenceFile } from '../code-evidence';
 import { finalizeDevEditMutation, prepareDevEditMutation, type PreparedDevEditMutation } from '../dev-edit-ledger';
-import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
+import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/extension-bootstrap';
 import { classifyCommandTermination } from '../process/command-outcome';
-import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
+import { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } from '../../extensions/runtime-registry';
 import { appendJournal, createTask, findTaskBySessionId, getEvidenceBusSnapshot, getTaskSessionLookupRevision, listTaskSummaries, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus, type TaskSummary } from '../tasks/task-store';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
@@ -3608,7 +3608,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
   // to the real tool name.
   if (/^connector_[a-z0-9_]+$/.test(name)) {
     try {
-      const { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } = await import('../../extensions/runtime-registry');
+      // The registry is populated lazily by ensure-loaded. When a wrapper was
+      // the first connector call since startup, the registry was still empty
+      // (0 connectors), no spec matched, and the raw wrapper name fell through
+      // to the platform executor: "not enabled for this connection"
+      // (2026-09-25, connector_github / connector_gmail).
+      ensurePrometheusExtensionRuntimeLoaded();
       const spec = getExtensionRuntimeRegistry().getConnectorWrapperSpec(name);
       if (spec) {
         const resolved = resolveConnectorWrapperCall(spec, args);
@@ -3616,7 +3621,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         name = resolved.name;
         args = resolved.args;
       }
-    } catch { /* registry unavailable: fall through to direct dispatch */ }
+    } catch (err: any) {
+      // Never silent: a swallowed error here surfaced as the misleading
+      // "not enabled for this connection" from the platform executor.
+      console.warn(`[connector-wrapper] resolve failed for ${name}: ${err?.stack || err}`);
+    }
   }
   // Tool Search bridge: tool_search/tool_describe are read-only catalog
   // lookups; tool_call re-enters executeTool with the real tool name, so the
