@@ -6930,6 +6930,11 @@ void main() {
           applyToolActivityEvent(entries, 'progress', evt);
           break;
         }
+        case 'vision_injected':
+          // Replayed turns must keep analyze_image/analyze_video previews and
+          // screenshots as visible cards, matching the live stream.
+          _appendMobileVisionTrace(replayState, evt);
+          break;
         case 'canvas_present': {
           const path = String(evt.path || '').trim();
           if (path) entries.push({ type: 'file', text: `Presented file: ${path}`, extra: evt });

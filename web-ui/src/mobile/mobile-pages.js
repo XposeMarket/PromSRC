@@ -4084,6 +4084,10 @@ function _normalizeMobileProcessEntry(entry) {
     summary: String(recovered.summary || recovered.extra?.summary || '').trim() || undefined,
     extra: recovered.extra || null,
     time: recovered.time || (recovered.ts ? _formatChatTime(recovered.ts) : ''),
+    // Vision rows (analyze_image/analyze_video, screenshots) render from
+    // preview; dropping it here left reloaded turns with an empty card.
+    ...(recovered.preview && typeof recovered.preview === 'object' ? { preview: recovered.preview } : {}),
+    ...(recovered.previewTitle ? { previewTitle: String(recovered.previewTitle) } : {}),
   };
 }
 

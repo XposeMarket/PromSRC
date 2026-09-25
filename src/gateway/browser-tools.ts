@@ -881,6 +881,10 @@ function inferBrowserOwnerType(sessionId: string): BrowserSessionMetadata['owner
   if (/^(subagent_|subagent_chat_|subagent-chat_)/i.test(sid)) return 'background';
   if (sid.startsWith('task_')) return 'task';
   if (sid.includes('::')) return 'detached';
+  // Internal X scrapers (web_fetch include_thread/include_media) run their
+  // own Playwright page. Treating them as 'main' made them inherit the main
+  // chat's in-house browser target, which getOrCreateSession rejects.
+  if (sid.startsWith('x_scrape_')) return 'detached';
   if (sid.startsWith('team_') || sid.startsWith('team_dispatch_')) return 'team-agent';
   return 'main';
 }
