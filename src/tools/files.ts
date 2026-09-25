@@ -1465,6 +1465,13 @@ export function inferWorkspacePatchOp(edit: any): string | undefined {
 }
 
 export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs): Promise<ToolResult> {
+  // Tolerate `edits` sent as a JSON string or a single edit object.
+  const rawEdits: unknown = (args as any)?.edits;
+  if (typeof rawEdits === 'string') {
+    try { args = { ...args, edits: JSON.parse(rawEdits) }; } catch { /* fall through to the error below */ }
+  } else if (rawEdits && typeof rawEdits === 'object' && !Array.isArray(rawEdits)) {
+    args = { ...args, edits: [rawEdits as any] };
+  }
   if (!Array.isArray(args.edits) || !args.edits.length) {
     return { success: false, error: 'edits array is required and must not be empty' };
   }

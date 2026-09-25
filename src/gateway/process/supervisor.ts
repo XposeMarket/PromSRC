@@ -146,7 +146,11 @@ function getShellInvocation(command: string, requestedShell?: ProcessShell): { r
       // branch", npm warnings) into a NativeCommandError. Successful runs came
       // back "exit 1" and failures could hide. Treat a stderr-only
       // NativeCommandError as success unless the native exit code was nonzero.
-      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; $PSDefaultParameterValues['Select-String:Encoding'] = 'UTF8' } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`],
+      // Early pipeline stop: `rg ... | Select -First 5` / `git log | Select -First 1`
+      // makes Select-Object stop upstream, PowerShell kills the native process and
+      // sets $LASTEXITCODE = -1 (reported as 4294967295) with an empty $Error even
+      // though the output is complete. Treat -1 with no recorded error as success.
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', buildWindowsPowerShellWrapper(command)],
     };
   }
   if (shellKind === 'powershell') {
@@ -156,6 +160,14 @@ function getShellInvocation(command: string, requestedShell?: ProcessShell): { r
     return { requestedShell: normalizeShell(requestedShell), shellKind: 'bash', shell: process.env.SHELL || '/bin/bash', args: ['-lc', command] };
   }
   return { requestedShell: normalizeShell(requestedShell), shellKind: 'bash', shell: process.env.SHELL || '/bin/bash', args: ['-lc', command] };
+}
+
+/**
+ * Windows PowerShell 5.1 -Command wrapper: UTF-8 output plus truthful exit codes.
+ * Exported for regression tests.
+ */
+export function buildWindowsPowerShellWrapper(command: string): string {
+  return `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; $PSDefaultParameterValues['Select-String:Encoding'] = 'UTF8' } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -eq -1 -and $Error.Count -eq 0) { exit 0 }; if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`;
 }
 
 function killProcessTree(child: ChildProcessWithoutNullStreams): void {
