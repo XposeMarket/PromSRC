@@ -64,6 +64,10 @@ export class UserChromeRelay {
   private readonly pairingSecret: string;
   private readonly port: number;
   private peerAuth: AuthState | null = null;
+  /** Set once any extension has authenticated; lets errors tell "asleep" apart from "never paired". */
+  private lastDisconnectedAt = 0;
+  private everAuthenticated = false;
+  private readonly peerWaiters = new Set<() => void>();
 
   /** Port/secret overrides are test-only; production is always the fixed 9234 loopback relay. */
   constructor(options?: { port?: number; pairingSecret?: string }) {
@@ -94,7 +98,8 @@ export class UserChromeRelay {
   }
   private clearPeer(ws: WebSocket, reason: string): void {
     if (this.peer !== ws) return;
-    this.peer = null; this.peerMeta = null; this.peerAuth = null; this.rejectPending(reason);
+    this.peer = null; this.peerMeta = null; this.peerAuth = null; this.lastDisconnectedAt = Date.now(); this.rejectPending(reason);
+    console.log(`[User Chrome relay] extension disconnected: ${reason}`);
   }
   private handleConnection(ws: WebSocket): void {
     let state: 'hello' | 'proof' | 'authenticated' = 'hello';
@@ -115,11 +120,16 @@ export class UserChromeRelay {
         state = 'authenticated'; clearTimeout(timer); this.peer = ws; this.peerAuth = auth;
         this.peerMeta = { extensionVersion: auth.extensionVersion, connectedAt: Date.now(), lastSeenAt: Date.now() };
         ws.send(JSON.stringify({ kind: 'authenticated', proof: hmac(this.pairingSecret, 'server-final', auth.clientNonce, auth.serverNonce) }));
+        this.everAuthenticated = true;
+        console.log(`[User Chrome relay] extension connected v${auth.extensionVersion || '?'}`);
+        for (const wake of this.peerWaiters) { try { wake(); } catch {} }
+        this.peerWaiters.clear();
         return;
       }
       if (this.peer !== ws || !this.peerAuth) return;
       if (this.peerMeta) this.peerMeta.lastSeenAt = Date.now();
       const commandProof = (domain: string, id: string, value: any) => hmac(this.pairingSecret, domain, this.peerAuth!.clientNonce, this.peerAuth!.serverNonce, id, stableJson(value));
+      if (message?.kind === 'ping') return; // keep-alive traffic; lastSeenAt already updated
       if (message?.kind === 'event') {
         if (!safeEqual(message.mac, commandProof('event', String(message.id || ''), message.eventPayload))) { ws.close(4006, 'event MAC failed'); return; }
         for (const handler of this.eventHandlers) { try { handler(message.eventPayload); } catch {} }
@@ -135,9 +145,26 @@ export class UserChromeRelay {
   }
   onEvent(handler: (event: any) => void) { this.eventHandlers.add(handler); return () => this.eventHandlers.delete(handler); }
   getStatus(): UserChromeRelayStatus { return { running: !!this.server?.listening, connected: !!this.peer && this.peer.readyState === WebSocket.OPEN, authenticated: !!this.peerAuth && !!this.peer && this.peer.readyState === WebSocket.OPEN, extensionVersion: this.peerMeta?.extensionVersion, connectedAt: this.peerMeta?.connectedAt, lastSeenAt: this.peerMeta?.lastSeenAt, port: this.port, pairingFile: pairingFile(), extensionPath: getUserChromeExtensionPath() }; }
+  private isPeerReady(): boolean { return !!this.peer && this.peer.readyState === WebSocket.OPEN && !!this.peerAuth; }
+  /** Wait briefly for a suspended extension worker to wake (its alarm fires every 30s). */
+  async waitForPeer(ms: number): Promise<boolean> {
+    if (this.isPeerReady()) return true;
+    return await new Promise<boolean>((resolve) => {
+      const done = () => { clearTimeout(timer); this.peerWaiters.delete(done); resolve(this.isPeerReady()); };
+      const timer = setTimeout(done, Math.max(0, ms));
+      this.peerWaiters.add(done);
+    });
+  }
+  disconnectedMessage(): string {
+    if (this.everAuthenticated || this.lastDisconnectedAt) {
+      return 'Your Chrome extension is paired but asleep or disconnected right now (Chrome suspended it). Make sure Chrome is open, then in chrome://extensions press reload on "Prometheus Personal Chrome" and try again.';
+    }
+    return `Prometheus Personal Chrome extension has not connected since Prometheus started. If it is already installed and paired, open Chrome (or reload the extension in chrome://extensions). Otherwise: ${getUserChromeExtensionOnboarding().replace(/\n/g, ' ')}`;
+  }
   async request(method: string, params: Record<string, any> = {}, timeoutMs = 15_000): Promise<any> {
     this.ensureStarted();
-    if (!this.peer || this.peer.readyState !== WebSocket.OPEN || !this.peerAuth) throw new Error(`Prometheus Personal Chrome extension is not connected. ${getUserChromeExtensionOnboarding().replace(/\n/g, ' ')}`);
+    if (!this.isPeerReady()) await this.waitForPeer(Math.min(8_000, Math.max(0, timeoutMs - 2_000)));
+    if (!this.isPeerReady()) throw new Error(this.disconnectedMessage());
     const id = crypto.randomUUID();
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Personal Chrome extension timed out handling ${method}. It may have been suspended or detached; retry safely.`)); }, Math.max(500, timeoutMs));

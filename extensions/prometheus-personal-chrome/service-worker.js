@@ -4,6 +4,12 @@ const RELAY = 'ws://127.0.0.1:9234/prometheus-user-chrome';
 const PROTOCOL = 'prometheus-personal-chrome/v1';
 const attached = new Set();
 let ws = null, reconnectTimer = null, auth = null;
+let pingTimer = null;
+// MV3 suspends an idle service worker after ~30s, which silently dropped the
+// relay socket until the next 1-minute alarm. WebSocket traffic every 20s keeps
+// the worker alive (Chrome 116+), and a 30s alarm reconnects if it is killed anyway.
+function startPing() { stopPing(); pingTimer = setInterval(() => { if (ws?.readyState === WebSocket.OPEN) send({ kind: 'ping', at: Date.now() }); else connect(); }, 20000); }
+function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
 const b64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 const utf8 = value => new TextEncoder().encode(value);
 async function hmac(secret, domain, ...parts) { const key = await crypto.subtle.importKey('raw', utf8(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return b64url(await crypto.subtle.sign('HMAC', key, utf8([PROTOCOL, domain, ...parts].join('\0')))); }
@@ -61,17 +67,18 @@ async function connect() {
         if (!msg.serverNonce || !same(msg.proof, await hmac(pairingSecret, 'server-proof', auth.clientNonce, msg.serverNonce))) { ws.close(4003, 'server proof failed'); return; }
         auth.serverNonce = msg.serverNonce; send({ kind: 'client_proof', proof: await hmac(pairingSecret, 'client-proof', auth.clientNonce, auth.serverNonce) }); return;
       }
-      if (msg.kind === 'authenticated') { if (!auth.serverNonce || !same(msg.proof, await hmac(pairingSecret, 'server-final', auth.clientNonce, auth.serverNonce))) { ws.close(4004, 'server final proof failed'); return; } auth.authenticated = true; return; }
+      if (msg.kind === 'authenticated') { if (!auth.serverNonce || !same(msg.proof, await hmac(pairingSecret, 'server-final', auth.clientNonce, auth.serverNonce))) { ws.close(4004, 'server final proof failed'); return; } auth.authenticated = true; reconnectDelay = 1000; startPing(); return; }
       if (!auth.authenticated || msg.kind !== 'command' || !msg.id || !msg.method) return;
       if (!same(msg.mac, await hmac(pairingSecret, 'command', auth.clientNonce, auth.serverNonce, msg.id, stableJson({ method: msg.method, params: msg.params || {} })))) { ws.close(4005, 'command MAC failed'); return; }
       try { await result(msg.id, true, await handle(msg.method, msg.params || {})); } catch (err) { await result(msg.id, false, null, err); }
     };
-    ws.onclose = () => { auth = null; scheduleReconnect(); };
+    ws.onclose = () => { auth = null; stopPing(); scheduleReconnect(); };
     ws.onerror = () => { try { ws.close(); } catch {} };
   } catch { scheduleReconnect(); }
 }
-function scheduleReconnect() { if (reconnectTimer) return; reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000); }
-chrome.alarms.create('prometheus-relay-keepalive', { periodInMinutes: 1 });
+let reconnectDelay = 1000;
+function scheduleReconnect() { if (reconnectTimer) return; const delay = reconnectDelay; reconnectDelay = Math.min(reconnectDelay * 2, 15000); reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay); }
+chrome.alarms.create('prometheus-relay-keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(() => connect()); chrome.runtime.onStartup.addListener(() => connect()); chrome.runtime.onInstalled.addListener(() => connect());
 chrome.runtime.onMessage.addListener(message => { if (message?.kind === 'reconnect') { try { ws?.close(); } catch {} connect(); } });
 chrome.debugger.onDetach.addListener((source, reason) => { if (source.tabId) attached.delete(source.tabId); emit({ event: 'debugger_detach', tabId: source.tabId, reason }); });

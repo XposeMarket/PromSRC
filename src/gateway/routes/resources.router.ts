@@ -331,6 +331,7 @@ router.post('/api/browser/login-nav', async (req, res) => {
     const sessionId = assertSafeStorageId(String(req.body?.sessionId || ''), 'session');
     const action = String(req.body?.action || '');
     if (!['back', 'forward', 'reload'].includes(action)) { res.status(400).json({ success: false, error: 'Unsupported action.' }); return; }
+    console.log(`[login-handoff] nav=${action} session=${sessionId}`);
     await browserLoginHandoffNavigate(sessionId, action as any);
     res.json({ success: true });
   } catch (error: any) {
@@ -357,6 +358,11 @@ router.post('/api/browser/login-input', async (req, res) => {
     if (!['click', 'wheel', 'key', 'text'].includes(action)) {
       res.status(400).json({ success: false, error: 'Unsupported input action.' });
       return;
+    }
+    // Log the action shape only, never typed text (it can be a password).
+    if (action !== 'wheel') {
+      const detail = action === 'key' ? ` key=${String(req.body?.key || '').slice(0, 20)}` : action === 'text' ? ` chars=${String(req.body?.text || '').length}` : '';
+      console.log(`[login-handoff] ${action}${detail} session=${sessionId}`);
     }
     await browserHandleUserInput(sessionId, {
       action,

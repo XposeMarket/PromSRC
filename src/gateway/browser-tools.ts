@@ -5666,9 +5666,12 @@ export async function browserLoginImportFromChrome(sessionId: string, extraDomai
   const inHouse: any = getInHouseSession(resolved);
   if (!inHouse) throw new Error('No in-app browser is open for this chat yet.');
   const relay = getUserChromeRelay();
-  if (!relay.getStatus().authenticated) {
-    throw new Error('Your Chrome is not paired yet. Install the Prometheus Personal Chrome extension (v1.1+) and paste the pairing code, then try again.');
+  // A suspended MV3 worker reconnects on its next wake; give it a moment
+  // instead of failing with a misleading "not paired".
+  if (!relay.getStatus().authenticated && !(await relay.waitForPeer(8_000))) {
+    throw new Error(relay.disconnectedMessage());
   }
+  console.log(`[login-handoff] import-chrome session=${resolved}`);
   let host = '';
   try { host = new URL(String(inHouse.url || '')).hostname; } catch {}
   const site = registrableDomain(host);
