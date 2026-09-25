@@ -2226,6 +2226,12 @@ export function buildInlineMediaUrl(relPath) {
   return appendPairingQuery(`${base}/api/canvas/inline?${qs.toString()}`);
 }
 
+// Markdown images in chat replies (renderMd in utils.js) resolve workspace
+// paths through this hook so they carry the gateway origin + pairing token.
+if (typeof window !== 'undefined') {
+  window.__promResolveWorkspaceMediaUrl = (relPath) => buildInlineMediaUrl(relPath);
+}
+
 export function buildDownloadMediaUrl(relPath) {
   if (!relPath) return '';
   const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '');

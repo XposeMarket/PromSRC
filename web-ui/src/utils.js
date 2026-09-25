@@ -965,6 +965,115 @@ export function sanitizeHtml(html) {
   });
 }
 
+// Markdown images that point at workspace files (`![shot](games/x/shot.png)`,
+// `C:\...\shot.png`, `file:///...`) must go through the authenticated inline
+// media route. Left as-is, the browser resolved them against the page origin,
+// got a 404 and showed a broken-image box (2026-09-25 Last Ward reply).
+// Surfaces with a different gateway origin or auth (mobile pairing token)
+// install window.__promResolveWorkspaceMediaUrl; the default is same-origin.
+export function workspaceMediaUrl(rawPath) {
+  let p = String(rawPath || '').trim();
+  if (!p) return '';
+  if (/^file:\/\//i.test(p)) {
+    try { p = decodeURIComponent(p.replace(/^file:\/\/\/?/i, '')); } catch { p = p.replace(/^file:\/\/\/?/i, ''); }
+  }
+  p = p.replace(/^\.\//, '');
+  const resolver = typeof window !== 'undefined' ? window.__promResolveWorkspaceMediaUrl : null;
+  if (typeof resolver === 'function') {
+    try {
+      const resolved = resolver(p);
+      if (resolved) return String(resolved);
+    } catch { /* fall back to same-origin route */ }
+  }
+  return `/api/canvas/inline?path=${encodeURIComponent(p)}`;
+}
+
+function isWorkspaceImageSrc(src) {
+  const s = String(src || '').trim();
+  if (!s || s.startsWith('#')) return false;
+  if (/^file:\/\//i.test(s)) return true;
+  if (/^[a-z]:[\\/]/i.test(s)) return true; // Windows absolute path
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return false; // http:, https:, data:, blob:, ...
+  if (s.startsWith('/') || s.startsWith('\\')) return false; // already a server route
+  return true;
+}
+
+const INLINE_VIDEO_RE = /\.(mp4|webm|mov|m4v)(?:$|[?#])/i;
+
+// Workspace media in a final reply renders as a figure: the image (or video,
+// for `![clip](renders/demo.mp4)`) plus its alt text as a caption. Images in
+// the same paragraph form a gallery grid (CSS :has on the paragraph). A tap
+// opens the host viewer (mobile media sheet / desktop lightbox).
+function resolveWorkspaceImageSources(html) {
+  const source = String(html || '');
+  if (!source.includes('<img')) return source;
+  return source.replace(/<img\b([^>]*?)\ssrc="([^"]*)"([^>]*)>/gi, (match, before, src, after) => {
+    const decoded = src.replace(/&amp;/g, '&');
+    if (!isWorkspaceImageSrc(decoded)) return match;
+    const url = workspaceMediaUrl(decoded);
+    const attrs = `${before}${after}`;
+    const altMatch = attrs.match(/\salt="([^"]*)"/i);
+    const alt = altMatch ? altMatch[1] : '';
+    const pathAttr = escapeAttr(decoded);
+    const caption = alt ? `<span class="prom-inline-caption">${alt}</span>` : '';
+    if (INLINE_VIDEO_RE.test(decoded)) {
+      return `<span class="prom-inline-figure is-video"><video class="prom-inline-media" src="${escapeAttr(url)}" controls playsinline preload="metadata" data-workspace-path="${pathAttr}"></video>${caption}</span>`;
+    }
+    const rest = attrs.replace(/\s(?:loading|class)="[^"]*"/gi, '');
+    return `<span class="prom-inline-figure"><img${rest} src="${escapeAttr(url)}" class="prom-inline-media" loading="lazy" decoding="async" data-workspace-path="${pathAttr}" role="button" tabindex="0">${caption}</span>`;
+  });
+}
+
+// One delegated handler for every rendered message. Hosts can install
+// window.__promOpenInlineMedia({ src, path, name, kind }) (mobile uses its media
+// sheet); otherwise a minimal built-in lightbox is used.
+function openInlineMediaLightbox({ src, name }) {
+  document.getElementById('prom-inline-lightbox')?.remove();
+  const box = document.createElement('div');
+  box.id = 'prom-inline-lightbox';
+  box.className = 'prom-inline-lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = name || '';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'prom-inline-lightbox-close';
+  close.setAttribute('aria-label', 'Close');
+  close.textContent = '\u00d7';
+  box.append(img, close);
+  const dismiss = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') dismiss(); };
+  box.addEventListener('click', (e) => { if (e.target !== img) dismiss(); });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(box);
+}
+
+if (typeof document !== 'undefined' && !window.__promInlineMediaWired) {
+  window.__promInlineMediaWired = true;
+  const activate = (event) => {
+    const img = event.target?.closest?.('img.prom-inline-media');
+    if (!img) return;
+    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    const path = img.getAttribute('data-workspace-path') || '';
+    const detail = {
+      kind: 'image',
+      src: img.currentSrc || img.src,
+      path,
+      name: img.getAttribute('alt') || path.split(/[\\/]/).pop() || 'Image',
+    };
+    const opener = window.__promOpenInlineMedia;
+    if (typeof opener === 'function') {
+      try { opener(detail); return; } catch { /* fall through to lightbox */ }
+    }
+    openInlineMediaLightbox(detail);
+  };
+  document.addEventListener('click', activate);
+  document.addEventListener('keydown', activate);
+}
+
 // Rendering the same finished message repeatedly (every chat re-render, chat
 // switch, sidebar refresh) re-ran marked + DOMPurify from scratch each time.
 // Cache plain-markdown output; anything with visual fences is not cached since
@@ -1022,7 +1131,9 @@ function renderMdUncached(text, options = {}) {
       withPlaceholders = withPlaceholders.slice(0, openMatch.index) + `${placeholderPrefix}${idx}END`;
     }
 
-    let html = sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false }));
+    let html = resolveWorkspaceImageSources(
+      sanitizeHtml(marked.parse(withPlaceholders, { breaks: true, gfm: true, mangle: false, headerIds: false })),
+    );
 
     if (visuals.length) {
       const placeholderRe = new RegExp(`${placeholderPrefix}(\\d+)END`, 'g');

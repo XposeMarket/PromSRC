@@ -8,10 +8,7 @@
 //      xai-extension-adapter.ts. X (x_api_*) is a native connector module now
 //      (connectors/x/runtime.ts).
 //   3. refreshXAITools() + a warn-only consistency check
-import {
-  X_SEARCH_TOOL_NAME,
-  XAI_LIVE_SEARCH_TOOL_NAME,
-} from '../gateway/tools/defs/xai-tools.js';
+import { X_SEARCH_TOOL_NAME } from '../gateway/tools/defs/xai-tools.js';
 import { getConfig } from '../config/config.js';
 import { logExtensionConsistencyOnce } from './consistency.js';
 import { getExtensionRuntimeRegistry } from './runtime-registry.js';
@@ -30,7 +27,9 @@ function registerXaiConnectorRecord(): void {
     name: 'xAI / Grok',
     authType: 'oauth',
     capabilities: registry.getExtension('xai')?.contracts?.capabilities || ['search', 'social'],
-    toolNames: [X_SEARCH_TOOL_NAME, XAI_LIVE_SEARCH_TOOL_NAME],
+    // xai_live_search is retired and intentionally unregistered; listing it
+    // here made connector_list report a false "1/2 registered, 1 missing".
+    toolNames: [X_SEARCH_TOOL_NAME],
     isConnected: () => hasXAIConfiguredCredentials(),
     hasCredentials: () => hasXAIConfiguredCredentials(),
     describeStatus: () => (hasXAIConfiguredCredentials() ? 'xAI/Grok credentials configured' : 'not connected'),

@@ -27,7 +27,7 @@ import { prepareActiveRuntimesForGatewayShutdown, prepareInitiatingRuntimesForGa
 import { recordActiveMainChatGoalsInterruptedForRestart, recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
 import { desktopBackgroundShutdown } from './desktop-background';
-import { listLocalRunningRuntimes, type LiveRuntimeSnapshot } from './live-runtime-registry';
+import { flushLiveRuntimePersistence, listLocalRunningRuntimes, type LiveRuntimeSnapshot } from './live-runtime-registry';
 import { flushSession } from './session';
 import {
   beginGatewayHandoffHost,
@@ -866,6 +866,21 @@ async function beginGatewayHandoff(restartCtx: RestartContext, plan: GatewayHand
     try { flushSession(sessionId); } catch {}
   }
   if (initiating.length) console.log(`[lifecycle] Checkpointed ${initiating.length} restart-initiating runtime(s) for the replacement.`);
+
+  // 1b. The interrupted checkpoints above are written by an async drain. Step 2
+  //     freezes local ledger writes, and a frozen drain discards whatever is
+  //     still queued, so without this flush the replacement never saw the
+  //     restart-owning turn as interrupted and nothing resumed it (2026-09-25:
+  //     mobile turn 6e13c0e3 called gateway_restart during a warm handoff, no
+  //     'interrupted' event reached runtime-events.ndjson, the chat went silent).
+  try {
+    await Promise.race([
+      flushLiveRuntimePersistence(),
+      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+    ]);
+  } catch (e: any) {
+    console.warn('[lifecycle] Handoff initiating-runtime flush error:', e.message);
+  }
 
   // 2. Open the handoff channel; from here on the replacement owns the
   //    ledger, the status/lease files, and the WebSocket clients.

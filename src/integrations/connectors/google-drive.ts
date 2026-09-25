@@ -33,6 +33,8 @@ export class GoogleDriveConnector extends OAuthConnector {
     super(cfg, configDir);
   }
 
+  protected credentialFallbackIds(): string[] { return ['gmail']; }
+
   protected async buildTokens(data: Record<string, any>): Promise<ConnectorTokens> {
     const tokens: ConnectorTokens = {
       access_token: data.access_token,

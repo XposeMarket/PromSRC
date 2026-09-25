@@ -147,7 +147,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
         scopes: strategy.authentication?.scopes,
         opensExternalBrowser: true,
         desktopRequired: true,
-        desktopReason: 'The authorization code returns to a loopback callback owned by the local desktop gateway.',
+        desktopReason: 'The authorization code returns to a loopback callback owned by the local desktop gateway. From a phone, ask Prom to open this sign-in in the in-app browser (it runs on the PC, so the callback works) and hand you the login card.',
       },
     };
   }

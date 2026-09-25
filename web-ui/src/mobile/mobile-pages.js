@@ -9887,6 +9887,18 @@ function _openMobileMediaTarget({ kind, src, download, name, path, openMode }) {
   }
 }
 
+// Images embedded in assistant markdown (utils.js renderMd) open in the same
+// media sheet/viewer as generated media.
+if (typeof window !== 'undefined') {
+  window.__promOpenInlineMedia = (detail) => _openMobileMediaTarget({
+    kind: detail?.kind || 'image',
+    src: detail?.src,
+    path: detail?.path,
+    name: detail?.name,
+  });
+}
+
+
 function _wireMobileMediaCards(root = document) {
   root?.querySelectorAll?.('[data-pm-generated-thumb]')?.forEach((thumb) => {
     if (thumb.dataset.pmGeneratedThumbWired === '1') return;
@@ -10901,8 +10913,39 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       return String(args[0] || __pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice || "carina").trim() || "carina";
     case '_isProgressiveMobileRealtimeTranscript':
       return !!(String(args[0] || "").trim() && String(args[1] || "").trim() && (String(args[1]).startsWith(String(args[0])) || String(args[0]).startsWith(String(args[1]))));
-    case '_mobileStreamTargetTurn':
-      return args[0]?._steerContinuationTurn || args[0];
+    case '_mobileStreamTargetTurn': {
+      const turn = args[0];
+      if (!turn) return turn;
+      if (turn._steerContinuationTurn) return turn._steerContinuationTurn;
+      if (String(turn.workflowPart || '') === 'interruption_response') return turn;
+      // The steer links the continuation onto whichever object is in the
+      // thread at that moment. A reconcile/recovery can swap the thread rows
+      // for fresh objects while the live SSE closure still holds the original
+      // turn, so the link lands on a row the stream never writes to and the
+      // "Response after steer" bubble sits on "..." forever. Re-find the live
+      // continuation for this request and relink it.
+      const cid = String(turn._clientRequestId || '').trim();
+      if (!cid) return turn;
+      const threads = __pmChat?.threads && typeof __pmChat.threads === 'object' ? __pmChat.threads : {};
+      const preferred = String(__pmChat?.activeSessionId || '');
+      const ordered = [preferred, ...Object.keys(threads).filter((sid) => sid !== preferred)];
+      for (const sid of ordered) {
+        const thread = threads[sid];
+        if (!Array.isArray(thread) || !thread.length) continue;
+        for (let i = thread.length - 1; i >= 0; i -= 1) {
+          const row = thread[i];
+          if (!row || row === turn || row.role !== 'ai') continue;
+          if (String(row._clientRequestId || '').trim() !== cid) continue;
+          if (String(row.workflowPart || '') !== 'interruption_response') continue;
+          if (row.streaming !== true || row._pmFinalReceived === true) break;
+          try {
+            Object.defineProperty(turn, '_steerContinuationTurn', { value: row, configurable: true, writable: true });
+          } catch { turn._steerContinuationTurn = row; }
+          return row;
+        }
+      }
+      return turn;
+    }
     case '_findMobileRecoverableAssistantTurn': {
       const thread = args[0];
       const cid = String(args[1] || "").trim();

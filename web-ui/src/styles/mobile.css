@@ -18691,3 +18691,61 @@ body.pm-mobile-active .pm-composer .pm-skill-trigger-pill .pm-skill-trigger-prev
   animation: pm-lh-tap .42s ease-out forwards;
 }
 @keyframes pm-lh-tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+
+/* Workspace media embedded in assistant markdown (utils.js resolveWorkspaceImageSources).
+   Kept in sync with the matching block in components.css (desktop). */
+.prom-inline-figure {
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
+  margin: 8px 0 4px;
+  vertical-align: top;
+}
+.prom-inline-figure .prom-inline-media {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: min(460px, 56vh);
+  object-fit: contain;
+  border-radius: 14px;
+  border: 1px solid var(--prom-border, rgba(127,127,127,.22));
+  background: var(--prom-surface-secondary, rgba(127,127,127,.08));
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+}
+.prom-inline-figure.is-video .prom-inline-media { cursor: auto; width: 100%; }
+.prom-inline-caption {
+  margin-top: 6px;
+  font-size: .82em;
+  line-height: 1.35;
+  color: var(--prom-muted, rgba(127,127,127,.9));
+}
+/* Several images in one paragraph -> 2-column gallery. */
+p:has(> .prom-inline-figure + .prom-inline-figure),
+p:has(> .prom-inline-figure + br + .prom-inline-figure) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+p:has(> .prom-inline-figure + .prom-inline-figure) > br,
+p:has(> .prom-inline-figure + br + .prom-inline-figure) > br { display: none; }
+p:has(> .prom-inline-figure + .prom-inline-figure) .prom-inline-figure,
+p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-figure { margin: 0; }
+p:has(> .prom-inline-figure + .prom-inline-figure) .prom-inline-media,
+p:has(> .prom-inline-figure + br + .prom-inline-figure) .prom-inline-media {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  max-height: none;
+}
+.prom-inline-lightbox {
+  position: fixed; inset: 0; z-index: 100000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.86); padding: 24px; cursor: zoom-out;
+}
+.prom-inline-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 10px; cursor: auto; }
+.prom-inline-lightbox-close {
+  position: absolute; top: 14px; right: 18px; width: 40px; height: 40px;
+  border: 0; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff;
+  font-size: 26px; line-height: 40px; cursor: pointer;
+}
