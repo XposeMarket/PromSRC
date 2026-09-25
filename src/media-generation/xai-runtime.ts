@@ -54,32 +54,59 @@ function getExplicitAuthMode(): 'oauth' | 'api_key' | '' {
  */
 export async function resolveXAIMediaRuntime(fallbackBaseUrl: string): Promise<XAIRuntime> {
   const providerCfg = getProviderConfig();
+  // auth_mode is a preference, not a filter. It used to hard-exclude the other
+  // auth type, so a stale `auth_mode: "api_key"` with an empty key blocked a
+  // connected OAuth account and media_generate reported "provider xai is not
+  // available" while Grok chat and x_search (which use the full pool) worked.
   const explicitMode = getExplicitAuthMode();
   const preferredAccountId = String(providerCfg.accountId || '').trim() || undefined;
 
-  if (explicitMode !== 'api_key') {
-    const candidates = await getXaiAuthCandidates(preferredAccountId);
-    const oauthCandidate = candidates.find((candidate) => candidate.auth === 'xai_oauth');
-    if (oauthCandidate) {
-      const credentials = await getValidXAIRuntimeCredentials(
-        getConfig().getConfigDir(),
-        oauthCandidate.accountId,
-      );
-      return {
-        bearerToken: credentials.api_key,
-        baseUrl: credentials.base_url.replace(/\/+$/, ''),
-        auth: 'oauth',
-        accountId: oauthCandidate.accountId,
-      };
-    }
+  let candidates: Awaited<ReturnType<typeof getXaiAuthCandidates>> = [];
+  try {
+    candidates = await getXaiAuthCandidates(preferredAccountId);
+  } catch {
+    candidates = [];
   }
+  const oauthCandidates = candidates.filter((candidate) => candidate.auth === 'xai_oauth');
+  const keyCandidates = candidates.filter((candidate) => candidate.auth === 'api_key');
 
+  const tryOAuth = async (): Promise<XAIRuntime | null> => {
+    for (const candidate of oauthCandidates) {
+      try {
+        const credentials = await getValidXAIRuntimeCredentials(getConfig().getConfigDir(), candidate.accountId);
+        const bearerToken = String(credentials.api_key || '').trim();
+        if (!bearerToken) continue;
+        return {
+          bearerToken,
+          baseUrl: String(credentials.base_url || getApiBase(fallbackBaseUrl)).replace(/\/+$/, ''),
+          auth: 'oauth',
+          accountId: candidate.accountId,
+        };
+      } catch {
+        // A stale account must not block the remaining candidates.
+      }
+    }
+    return null;
+  };
+
+  const tryApiKey = (): XAIRuntime | null => {
+    const apiKey = getApiKey() || keyCandidates[0]?.token;
+    if (!apiKey) return null;
+    return {
+      bearerToken: apiKey,
+      baseUrl: getApiBase(fallbackBaseUrl),
+      auth: 'api_key',
+      accountId: getApiKey() ? undefined : keyCandidates[0]?.accountId,
+    };
+  };
+
+  // OAuth (the connected xAI login) always wins; an API key is only a fallback.
+  // `auth_mode: "oauth"` additionally disables the key fallback.
+  const oauth = await tryOAuth();
+  if (oauth) return oauth;
   if (explicitMode !== 'oauth') {
-    const apiKey = getApiKey();
-    if (apiKey) {
-      return { bearerToken: apiKey, baseUrl: getApiBase(fallbackBaseUrl), auth: 'api_key' };
-    }
+    const keyed = tryApiKey();
+    if (keyed) return keyed;
   }
-
   return { baseUrl: getApiBase(fallbackBaseUrl), auth: 'none' };
 }
