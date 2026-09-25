@@ -121,6 +121,11 @@ export async function pollOAuthResult(id: string): Promise<OAuthCallbackResult |
 /**
  * Check if a connector is currently connected (has valid tokens).
  */
+/** True while a loopback OAuth listener for this connector is still waiting. */
+export function hasPendingOAuthFlow(id: string): boolean {
+  return pendingCallbacks.has(id);
+}
+
 export function isConnectorConnected(id: string): boolean {
   return connectors.get(id)?.isConnected() ?? false;
 }

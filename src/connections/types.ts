@@ -162,6 +162,8 @@ export interface OAuthConsentAction {
   opensExternalBrowser?: boolean;
   desktopRequired?: boolean;
   desktopReason?: string;
+  /** Open in the system browser (Google rejects embedded/automated browsers). */
+  preferSystemBrowser?: boolean;
 }
 
 export interface SecureSecretField {

@@ -266,6 +266,64 @@ try {
   assert.match(mcpOAuthSource, /revocation_endpoint/);
   assert.match(mcpOAuthSource, /function safeOAuthError/);
   assert.match(mcpOAuthSource, /code_challenge_method/);
+  assert.match(oauthSource, /'Content-Type': 'text\/html; charset=utf-8'/, 'callback page must declare UTF-8 so the checkmark renders');
+
+  // 2026-09-25 Google Drive: tokens were stored by the loopback callback but the
+  // attempt stayed awaiting_oauth, so verify failed with NO_CONNECTION. Verify
+  // must finish the pending OAuth step itself, and a consumed/expired callback
+  // result must fall back to the stored-token state.
+  {
+    const lostDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-connector-oauth-lost-'));
+    try {
+      const lostAdapters = new ConnectionAdapterRegistry();
+      const lostBridge = {
+        ...bridge,
+        poll: async () => null,
+        isConnected: () => true,
+      };
+      lostAdapters.register(new ConnectorOAuthConnectionAdapter({ github: lostBridge }));
+      const lostOrch = new ConnectionOrchestrator({
+        attempts: new ConnectionAttemptStore(lostDir), connections: new ConnectionStore(lostDir),
+        activity: new ConnectionActivityStore(lostDir), adapters: lostAdapters, plans,
+      });
+      const a = lostOrch.create({ serviceId: 'github', requestedCapabilities: ['repositories.read'], readOnly: true, metadata: { expectedAccountId: 'account-1' } });
+      await lostOrch.plan(a.id);
+      const waiting = await lostOrch.connect(a.id, { approved: true });
+      assert.equal(waiting.state, 'awaiting_oauth');
+      const verifiedLost = await lostOrch.verify(a.id);
+      assert.notEqual(verifiedLost.error?.code, 'NO_CONNECTION', 'verify must not fail NO_CONNECTION once tokens are stored');
+      assert.ok(verifiedLost.connectionId, 'verify must register the connection from stored tokens');
+      assert.equal(verifiedLost.state, 'connected');
+
+      // An attempt already failed by the old verify must recover too
+      // (failed -> registering is illegal; verify reopens via planning).
+      const b = lostOrch.create({ serviceId: 'github', requestedCapabilities: ['repositories.read'], readOnly: true, metadata: { expectedAccountId: 'account-1' } });
+      await lostOrch.plan(b.id);
+      await lostOrch.connect(b.id, { approved: true });
+      const lostAttempts = new ConnectionAttemptStore(lostDir);
+      lostAttempts.update(b.id, { state: 'failed', error: { code: 'CONNECTION_CONTINUE_FAILED', message: 'x', retryable: true, phase: 'failed' } });
+      const recovered = await lostOrch.verify(b.id);
+      assert.equal(recovered.state, 'connected', `stale failed attempt must recover, got ${recovered.state} ${recovered.error?.message || ''}`);
+    } finally {
+      fs.rmSync(lostDir, { recursive: true, force: true });
+    }
+  }
+
+  // 2026-09-25 Google Drive: tokens carry no email, so the account identity was
+  // {provider, email: undefined} and the record failed "Invalid canonical connection record".
+  {
+    const { isConnectionRecord } = await import('../dist/connections/schema.js');
+    const base = {
+      schemaVersion: 1, id: 'c', serviceId: 'google_drive', pluginId: 'google_drive', strategyId: 's',
+      installed: true, enabled: true, configured: true, authenticated: true, registered: true, exposed: true, verified: false,
+      grantedCapabilities: [], registeredTools: [], exposedTools: [], authState: 'healthy', health: 'unknown',
+      createdAt: 'a', updatedAt: 'a',
+    };
+    assert.equal(isConnectionRecord({ ...base, account: { provider: 'google_drive', email: undefined } }), true, 'undefined optional identity fields must not invalidate a connection record');
+    assert.equal(isConnectionRecord({ ...base, account: { provider: 'google_drive', token: 'x' } }), false, 'unknown identity keys stay rejected');
+  }
+
+
   console.log('PASS: connector OAuth contract, PKCE/state/callback safeguards, account continuity, grants, safe exposure, and revoke lifecycle');
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

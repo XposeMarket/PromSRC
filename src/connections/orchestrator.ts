@@ -133,6 +133,22 @@ export class ConnectionOrchestrator {
 
   async verify(id: string): Promise<ConnectionAttempt> {
     let attempt = this.requireAttempt(id);
+    // The OAuth callback completes out-of-band (loopback listener), so the
+    // attempt is still awaiting_oauth until something calls continue(). Verify
+    // used to fail with NO_CONNECTION even though tokens were already stored
+    // (2026-09-25, Google Drive). Finish the pending step first.
+    // Attempts already failed by the old verify (NO_CONNECTION) are recovered the same way.
+    const staleNoConnection = attempt.state === 'failed' && ['NO_CONNECTION', 'CONNECTION_CONTINUE_FAILED'].includes(String(attempt.error?.code || ''));
+    if (!attempt.connectionId && attempt.plan && (attempt.state === 'awaiting_oauth' || attempt.state === 'registering' || staleNoConnection)) {
+      if (staleNoConnection) {
+        // failed -> registering is not a legal edge; reopen via planning ->
+        // awaiting_oauth (both allowed) so continue() can register the tokens.
+        attempt = this.options.attempts.update(id, { state: 'planning', error: undefined });
+        attempt = this.options.attempts.update(id, { state: 'awaiting_oauth' });
+      }
+      attempt = await this.continue(id);
+      if (!attempt.connectionId) return attempt;
+    }
     if (!attempt.connectionId || !attempt.plan) return this.fail(attempt, 'NO_CONNECTION', 'No registered connection is available to verify.', false);
     const connection = this.options.connections.get(attempt.connectionId);
     if (!connection) return this.fail(attempt, 'NO_CONNECTION', 'The connection record no longer exists.', false);
