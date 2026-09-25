@@ -193,7 +193,7 @@ export function attachMobileV2ModelBadge({ badge, gateways, sessionRef, onModelL
     const rows = [
       ['Provider', 'provider', esc(state.catalog.find((entry) => entry.id === state.provider)?.name || state.provider)],
       ['Model', 'model', esc(formatModelDisplayName(state.model, state.provider) || 'Choose a model')],
-      ['Intelligence', 'intelligence', esc(options ? formatReasoningSelectorLabel(state.effort, state.provider) : 'Default')],
+      ['Intelligence', 'intelligence', esc(options ? formatReasoningSelectorLabel(state.effort, state.provider, state.model) : 'Default')],
     ];
     if (supportsFastSpeed(state.provider, state.model)) rows.push(['Speed', 'speed', state.speed === 'fast' ? 'Fast' : 'Standard']);
     const body = sheet.querySelector('.pm-msheet-body');
@@ -240,7 +240,7 @@ export function attachMobileV2ModelBadge({ badge, gateways, sessionRef, onModelL
     const body = sheet?.querySelector('.pm-msheet-body');
     if (!body) return;
     sheet.querySelector('.pm-msheet-title').innerHTML = '<button type="button" class="pm-msheet-back" data-v2-model-back>&lsaquo;</button> Intelligence';
-    body.innerHTML = options.length ? `<div class="pm-msheet-rows">${options.map((effort) => `<button type="button" class="pm-msheet-row" data-effort="${esc(effort)}"><span class="pm-msheet-row-label">${esc(formatReasoningSelectorLabel(effort, state.provider))}</span>${effort === state.effort ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('')}</div>` : '<div class="pm-msheet-empty">No adjustable reasoning levels for this model.</div>';
+    body.innerHTML = options.length ? `<div class="pm-msheet-rows">${options.map((effort) => `<button type="button" class="pm-msheet-row" data-effort="${esc(effort)}"><span class="pm-msheet-row-label">${esc(formatReasoningSelectorLabel(effort, state.provider, state.model))}</span>${effort === state.effort ? '<span class="pm-msheet-check">&#10003;</span>' : ''}</button>`).join('')}</div>` : '<div class="pm-msheet-empty">No adjustable reasoning levels for this model.</div>';
     sheet.querySelector('[data-v2-model-back]')?.addEventListener('click', renderAdvanced);
     body.querySelectorAll('[data-effort]').forEach((button) => button.addEventListener('click', async () => {
       state.effort = button.dataset.effort;

@@ -2062,6 +2062,8 @@ import {
 } from '../context/turn-context-packet';
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../providers/usage-awareness';
+import { isChatGPTWebModel } from '../../providers/chatgpt-web/chatgpt-web-models';
+import { beginChatGPTBridgeTurn } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 // â”€â”€â”€ Injected singletons (set by initChatRouter in server-v2.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _cronScheduler: CronScheduler;
@@ -7375,14 +7377,41 @@ RULES:
 	          sendSSE('thinking_delta', { thinking: text, source, visibility: 'private' });
 	        }
 	      };
+	      let chatgptToolStepNum = 0;
+	      const chatgptToolSteps = new Map<string, number>();
 	      const emitModelStreamEvent = (event: any) => {
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
         const type = String(event.type || '').trim().toLowerCase();
+        // ChatGPT (web backend) runs its own tools server-side: web search,
+        // python, connectors, and the Prometheus MCP bridge. Render each one
+        // as a normal tool row, tagged origin=chatgpt so the UI can style it,
+        // without Prometheus executing anything.
+        if (type === 'provider_event') {
+          const nativeType = String(event.nativeType || '');
+          if (nativeType !== 'chatgpt.tool_start' && nativeType !== 'chatgpt.tool_result') return;
+          const data = event.data && typeof event.data === 'object' ? event.data : {};
+          const action = String((data as any).name || 'chatgpt_tool').slice(0, 120);
+          const toolCallId = String((data as any).id || '').slice(0, 240);
+          if (nativeType === 'chatgpt.tool_start') {
+            chatgptToolStepNum += 1;
+            chatgptToolSteps.set(toolCallId, chatgptToolStepNum);
+            let args: unknown = String((data as any).args || '');
+            try { args = JSON.parse(String(args)); } catch { args = args ? { request: args } : {}; }
+            sendSSE('tool_call', { action, args, stepNum: allToolResults.length + chatgptToolStepNum, synthetic: true, origin: 'chatgpt', toolCallId });
+          } else {
+            const stepNum = allToolResults.length + (chatgptToolSteps.get(toolCallId) || chatgptToolStepNum);
+            sendSSE('tool_result', { action, result: String((data as any).result || '').slice(0, 2_000), error: !!(data as any).error, stepNum, synthetic: true, origin: 'chatgpt', toolCallId });
+          }
+          return;
+        }
         // The provider emits assistant/reasoning/argument deltas in addition
         // to the dedicated token and thinking streams. Forwarding that whole
         // firehose to every web client duplicates work in the gateway and UI.
         // Tool boundaries are the only model events the chat surface needs.
         if (type !== 'tool_call_start' && type !== 'tool_call_done') return;
+        // ChatGPT's own tools are rendered above; don't also mark them as
+        // Prometheus-executable tool boundaries.
+        if (String(event.nativeType || '').startsWith('chatgpt.')) return;
         noteProviderPassEvent(type);
         const structuralEvent: Record<string, any> = {
           type,
@@ -7523,6 +7552,32 @@ RULES:
       // error. Drop the turn override and finish this round, and the rest of the
       // turn, on the admitted main-chat route.
       const helperRoundActive = generationOverride.source === 'turn_override' && !!admittedRouteSnapshot;
+      // ChatGPT (openai_codex/chatgpt) calls Prometheus tools itself through
+      // the MCP bridge while this provider call is in flight. Open the bridge
+      // for exactly this call and run each tool through the normal executor
+      // (approvals, blocked-command rules, telemetry, audit log). Tools run
+      // this way are recorded as real tool results for the turn.
+      const chatgptBridgeActive = String(generationOverride.providerId || '') === 'openai_codex' && isChatGPTWebModel(generationOverride.model);
+      const endChatGPTBridgeTurn = chatgptBridgeActive
+        ? beginChatGPTBridgeTurn({
+            sessionId,
+            turnId: `${turnTiming.turnId}:${round}`,
+            startedAt: Date.now(),
+            allowedTools: () => (Array.isArray(tools) ? tools : [])
+              .map((tool: any) => tool?.function || tool)
+              .filter((fn: any) => fn && typeof fn.name === 'string' && fn.name)
+              .map((fn: any) => ({ name: String(fn.name), description: String(fn.description || ''), parameters: fn.parameters })),
+            executeTool: async (toolName: string, toolArgs: Record<string, unknown>) => {
+              const toolCallId = `chatgpt_bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+              sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, toolCallId, origin: 'chatgpt_bridge' });
+              const toolResult = await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
+              allToolResults.push(toolResult);
+              logToolCall(workspacePath, toolName, toolArgs, toolResult.result, toolResult.error);
+              sendSSE('tool_result', { action: toolName, result: String(toolResult.result || '').slice(0, 2_000), error: !!toolResult.error, stepNum: allToolResults.length, toolCallId, origin: 'chatgpt_bridge' });
+              return { result: String(toolResult.result ?? ''), error: !!toolResult.error };
+            },
+          })
+        : null;
       const generationPromise = (async () => {
         try {
           return await ollama.chatWithThinking(messages, 'executor', generationOptions);
@@ -7547,6 +7602,8 @@ RULES:
             num_ctx: admittedRouteSnapshot.contextProfile?.contextWindowTokens || generationOptions.num_ctx,
             think: admittedRouteSnapshot.reasoningEffort || generationOptions.think,
           });
+        } finally {
+          endChatGPTBridgeTurn?.();
         }
       })();
 

@@ -3,6 +3,26 @@ const MODEL_CAPABILITY_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic
 const OPENAI_56 = ['low','medium','high','xhigh','max'];
 const CODEX_ULTRA = [...OPENAI_56, 'ultra'];
 
+// ChatGPT (openai_codex/chatgpt) has modes, not reasoning levels. The modes
+// ride on the existing effort values so every selector and persisted setting
+// keeps working; only the labels change. Mirrors
+// src/providers/chatgpt-web/chatgpt-web-models.ts.
+export const CHATGPT_MODE_LABELS = Object.freeze({
+  low: 'Instant',
+  medium: 'Thinking Light',
+  high: 'Thinking',
+  xhigh: 'Thinking Extended',
+  max: 'Thinking Heavy',
+  ultra: 'Pro',
+});
+const CHATGPT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+
+export function isChatGPTWebModel(model) {
+  const raw = String(model || '').trim().toLowerCase();
+  const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
+  return name === 'chatgpt';
+}
+
 export function hasReasoningCapabilityPolicy(provider) {
   return MODEL_CAPABILITY_PROVIDERS.has(String(provider || '').trim().toLowerCase());
 }
@@ -12,6 +32,7 @@ export function reasoningCapability(provider, model) {
   const raw = String(model || '').trim().toLowerCase();
   const name = raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
   if (id === 'openai_codex') {
+    if (name === 'chatgpt') return { efforts: [...CHATGPT_EFFORTS], defaultEffort: 'high', modes: true };
     if (/^gpt-6-(?:astra|sol|luna)(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: /^gpt-6-astra/.test(name) ? 'low' : 'medium' };
     if (/^gpt-5\.6-(?:sol|terra)(?:-|$)/.test(name)) return { efforts: [...CODEX_ULTRA], defaultEffort: 'medium' };
     if (/^gpt-5\.6(?:-luna)?(?:-|$)/.test(name)) return { efforts: [...OPENAI_56], defaultEffort: 'medium' };
@@ -61,10 +82,11 @@ export function reasoningSelectorOptions(provider, model) {
   return options.length ? options : null;
 }
 
-export function formatReasoningSelectorLabel(value, provider) {
+export function formatReasoningSelectorLabel(value, provider, model = '') {
   const effort = String(value || '').trim().toLowerCase();
   const id = String(provider || '').trim().toLowerCase();
   if (!effort) return 'Provider default';
+  if (id === 'openai_codex' && isChatGPTWebModel(model) && CHATGPT_MODE_LABELS[effort]) return CHATGPT_MODE_LABELS[effort];
   if (effort === 'xhigh') return 'X high';
   if (effort === 'max') return 'Max';
   if (effort === 'ultra') return 'Ultra';
