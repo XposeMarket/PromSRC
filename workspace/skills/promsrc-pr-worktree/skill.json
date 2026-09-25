@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "name": "PromSRC PR Worktree Workflow",
+  "description": "Raul's mandatory workflow for changing Prometheus source via an isolated Git linked worktree under C:\\Users\\rafel\\promsrc-pr, opening a PR through the GitHub connector, and only pulling/restarting the live PromSRC checkout after he approves the merge.",
+  "version": "1.0.0",
+  "lifecycle": "active",
+  "implicitInvocation": true,
+  "categories": [
+    "prometheus",
+    "coding",
+    "git",
+    "workflow"
+  ],
+  "requiredTools": [
+    "terminal",
+    "workspace_write",
+    "external_apps"
+  ],
+  "promptSignals": {
+    "phrases": [
+      "promsrc pr",
+      "prometheus pr",
+      "pr worktree",
+      "promsrc worktree",
+      "open a pr for prometheus",
+      "create a pr for prometheus",
+      "pr for prometheus",
+      "fix prometheus source",
+      "edit prometheus source",
+      "change prometheus source",
+      "prometheus fix pr",
+      "promsrc-pr",
+      "git worktree",
+      "linked worktree",
+      "promsrc"
+    ],
+    "anyOf": [
+      "live checkout",
+      "gateway restart",
+      "open a pr",
+      "create a pr",
+      "fix pr"
+    ],
+    "noneOf": [
+      "github actions"
+    ],
+    "minScore": 4
+  }
+}
