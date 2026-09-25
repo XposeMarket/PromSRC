@@ -678,7 +678,39 @@ export class SkillsManager {
       }
     }
 
+    this.scanConnectorSkills();
     console.log(`[Skills] ${this.skills.size} skills in ${this.skillsDir}`);
+  }
+
+  /**
+   * Connector plugin packaging (Codex/Claude-plugin style): a connector can
+   * ship `skill/SKILL.md` next to its manifest. It is registered as skill
+   * `connector-<id>` unless the workspace already has a skill with that id
+   * (user copies always win).
+   */
+  private scanConnectorSkills(): void {
+    let connectorsRoot = '';
+    try {
+      const { resolveBundledExtensionsDir } = require('../../extensions/loader');
+      connectorsRoot = path.join(resolveBundledExtensionsDir(), 'connectors');
+    } catch { return; }
+    if (!connectorsRoot || !fs.existsSync(connectorsRoot)) return;
+    for (const entry of fs.readdirSync(connectorsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('_')) continue;
+      const skillDir = path.join(connectorsRoot, entry.name, 'skill');
+      if (!fs.existsSync(path.join(skillDir, 'SKILL.md'))) continue;
+      const id = `connector-${entry.name.replace(/_/g, '-')}`;
+      if (this.skillsStore.has(id)) continue;
+      try {
+        const pkg = loadSkillPackage(skillDir, id);
+        if (!pkg) continue;
+        const safety = scanSkillDirectoryCached(pkg.rootDir);
+        const eligibility = resolveSkillEligibility({ status: pkg.status, safety, requires: pkg.requires, permissions: pkg.permissions });
+        this.skillsStore.set(pkg.id, { ...pkg, safety, eligibility });
+      } catch (e) {
+        console.error(`[Skills] Failed to load connector skill ${entry.name}:`, e);
+      }
+    }
   }
 
   scanSkillsIfStale(maxAgeMs = 30_000): void {

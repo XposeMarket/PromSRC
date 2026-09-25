@@ -88,6 +88,44 @@ function resolveShell(input: ProcessShell | undefined, command: string): Exclude
   return 'bash';
 }
 
+/**
+ * Environment for agent commands. On Windows the gateway's PATH is frozen at
+ * boot, so a tool installed afterwards (winget install ripgrep) stayed "not
+ * recognized" until a full app restart. Re-read the persisted Machine + User
+ * PATH (cached briefly) and append any entries the process PATH is missing.
+ */
+let cachedCommandPath: { at: number; value: string } | null = null;
+function readPersistedWindowsPath(): string {
+  const now = Date.now();
+  if (cachedCommandPath && now - cachedCommandPath.at < 60_000) return cachedCommandPath.value;
+  let value = '';
+  try {
+    const query = (hive: string) => {
+      try {
+        const out = execSync(`reg query "${hive}" /v Path`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000, windowsHide: true });
+        const match = out.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.*)/i);
+        return match ? match[1].trim().replace(/%([^%]+)%/g, (_m, key) => process.env[key] || `%${key}%`) : '';
+      } catch { return ''; }
+    };
+    value = [query('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'), query('HKCU\\Environment')]
+      .filter(Boolean).join(';');
+  } catch { value = ''; }
+  cachedCommandPath = { at: now, value };
+  return value;
+}
+
+export function resolveCommandEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return process.env;
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') || 'Path';
+  const current = String(process.env[pathKey] || '');
+  const seen = new Set(current.split(';').map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  const extra = readPersistedWindowsPath().split(';')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && !seen.has(entry.toLowerCase()) && (seen.add(entry.toLowerCase()), true));
+  if (!extra.length) return process.env;
+  return { ...process.env, [pathKey]: [current, ...extra].filter(Boolean).join(';') };
+}
+
 function getShellInvocation(command: string, requestedShell?: ProcessShell): { requestedShell: ProcessShell; shellKind: Exclude<ProcessShell, 'auto'>; shell: string; args: string[] } {
   const shellKind = resolveShell(requestedShell, command);
   if (process.platform === 'win32') {
@@ -108,7 +146,7 @@ function getShellInvocation(command: string, requestedShell?: ProcessShell): { r
       // branch", npm warnings) into a NativeCommandError. Successful runs came
       // back "exit 1" and failures could hide. Treat a stderr-only
       // NativeCommandError as success unless the native exit code was nonzero.
-      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`],
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; $PSDefaultParameterValues['Select-String:Encoding'] = 'UTF8' } catch {}\n$Error.Clear()\n${command}\n$__pmOk = $?; $__pmNative = ($Error.Count -gt 0 -and "$($Error[0].FullyQualifiedErrorId)" -like 'NativeCommandError*'); if (-not $__pmOk) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; if ($__pmNative) { exit 0 }; exit 1 }; exit 0`],
     };
   }
   if (shellKind === 'powershell') {
@@ -264,7 +302,7 @@ export class ProcessSupervisor {
 
     const child = spawn(invocation.shell, invocation.args, {
       cwd,
-      env: process.env,
+      env: resolveCommandEnv(),
       windowsHide: true,
       stdio: [input.stdinMode === 'pipe' || input.input ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     }) as ChildProcessWithoutNullStreams;
@@ -511,7 +549,7 @@ export class ProcessSupervisor {
       cols: 120,
       rows: 30,
       cwd,
-      env: process.env as any,
+      env: resolveCommandEnv() as any,
     });
 
     const onChunk = (chunk: string) => {

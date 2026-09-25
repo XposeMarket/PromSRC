@@ -90,6 +90,7 @@ export function slimToolsForExtraUsageRetryDetailed(
     'web_search', 'web_fetch', 'memory', 'write_note', 'delivery_send', 'switch_model', 'set_current_model',
     'ask_prometheus_questions', 'request_tool_category', 'skill_list', 'skill_read', 'background_ops',
     'declare_plan', 'complete_plan_step', 'tool_result_read', 'show_ui_card', 'timer', 'read_file', 'search_files',
+    'tool_search', 'tool_describe', 'tool_call', 'connector_list',
   ]);
   const used = new Set<string>();
   // Categories the model explicitly unlocked with request_tool_category, plus
