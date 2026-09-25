@@ -84,6 +84,35 @@ function initialiseProjectSidebar() {
   });
 }
 
+// Project rows rendered inside the Chats list. Delegated so project ids are
+// never compiled into inline handler source (an id with a quote could inject).
+function handleProjectRowAction(event) {
+  const target = event.target?.closest?.('[data-project-row-action]');
+  if (!target) return;
+  if (event.type === 'keydown') {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (target.tagName === 'BUTTON') return;
+  }
+  const action = String(target.dataset.projectRowAction || '');
+  const projectId = String(target.dataset.projectId || '');
+  if (target.tagName === 'BUTTON' || event.type === 'keydown' || action === 'toggle-priority') {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (action === 'toggle-chat-row' && projectId) window.toggleProjectChatRow?.(projectId);
+  else if (action === 'new-session' && projectId) void window.newProjectSession?.(projectId);
+  else if (action === 'pin-project' && projectId) void window.toggleProjectPin?.(projectId, event);
+  else if (action === 'toggle-priority') {
+    const toggle = window.togglePriorityProject || globalThis.togglePriorityProject;
+    toggle?.({ currentTarget: target, preventDefault() {}, stopPropagation() {} });
+  }
+}
+if (!window.__pmProjectRowActionsBound) {
+  window.__pmProjectRowActionsBound = true;
+  document.addEventListener('click', handleProjectRowAction);
+  document.addEventListener('keydown', handleProjectRowAction);
+}
+
 if (document.readyState === 'loading') {
   window.addEventListener('DOMContentLoaded', initialiseProjectSidebar, { once: true });
 } else {
@@ -157,10 +186,10 @@ function renderProjectChatRow(project) {
   }).join('');
   const folder = '<span class="project-chat-folder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>';
   return `<div class="project-chat-group${isOpen ? ' open' : ''}${pinned ? ' pinned-project' : ''}" data-project-chat-group="${id}">
-    <div class="job-item chat-session-item project-chat-row${importedClass}" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" onclick="window.toggleProjectChatRow && window.toggleProjectChatRow('${id}')">
+    <div class="job-item chat-session-item project-chat-row${importedClass}" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" data-project-row-action="toggle-chat-row">
       <span class="project-chat-top-time" title="Last activity">${timeAgo(projectTimestamp)}</span>
-      <button class="project-chat-new-btn" type="button" onclick="event.preventDefault();event.stopPropagation();window.newProjectSession && window.newProjectSession('${id}')" title="New chat in project" aria-label="New chat in project">+</button>
-      <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" onclick="window.toggleProjectPin && window.toggleProjectPin('${id}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
+      <button class="project-chat-new-btn" type="button" data-project-row-action="new-session" data-project-id="${id}" title="New chat in project" aria-label="New chat in project">+</button>
+      <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" data-project-row-action="pin-project" data-project-id="${id}" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
       <div class="job-item-head job-item-head--pinned"><div class="job-item-title-wrap"><div class="job-item-title project-chat-project-title"><span class="project-chat-icon-line">${folder}${importedLogo}</span><span class="project-chat-project-name">${escHtmlLocal(project.name)}</span></div></div></div>
     </div>
     <div class="project-chat-children"${isOpen ? '' : ' hidden'}>${children || '<div class="project-empty-session">No chats yet.</div>'}</div>
@@ -211,11 +240,11 @@ window.renderPriorityProjectGroups = function() {
             : '';
         }).join('');
       return `<section class="priority-project-group${collapsed ? ' is-collapsed' : ''}" data-priority-project-id="${projectId}">
-        <div class="priority-project-title project-chat-row${importedLogo ? ' imported-project' : ''}" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}" onclick="togglePriorityProject(event)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); togglePriorityProject(event); }" title="${escHtmlLocal(project.workspacePath || project.externalImport?.sourcePath || project.name)}">
+        <div class="priority-project-title project-chat-row${importedLogo ? ' imported-project' : ''}" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}" data-project-row-action="toggle-priority" title="${escHtmlLocal(project.workspacePath || project.externalImport?.sourcePath || project.name)}">
           <div class="priority-project-title-name"><span class="project-chat-icon-line">${folder}${importedLogo}</span><span>${projectName}</span></div>
           <span class="priority-project-time">${timeAgo(projectLastActivity(project))}</span>
-          <button class="project-chat-new-btn priority-project-action" type="button" onclick="event.preventDefault();event.stopPropagation();window.newProjectSession && window.newProjectSession('${projectId}')" title="New chat in project" aria-label="New chat in project">+</button>
-          <button class="project-chat-pin-btn priority-project-action${pinned ? ' active' : ''}" type="button" onclick="event.preventDefault();event.stopPropagation();window.toggleProjectPin && window.toggleProjectPin('${projectId}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
+          <button class="project-chat-new-btn priority-project-action" type="button" data-project-row-action="new-session" data-project-id="${projectId}" title="New chat in project" aria-label="New chat in project">+</button>
+          <button class="project-chat-pin-btn priority-project-action${pinned ? ' active' : ''}" type="button" data-project-row-action="pin-project" data-project-id="${projectId}" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${renderProjectStarIcon(pinned)}</button>
         </div>
         <div class="priority-project-children"${collapsed ? ' hidden' : ''}>${children}</div>
       </section>`;

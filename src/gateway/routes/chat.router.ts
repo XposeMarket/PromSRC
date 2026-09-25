@@ -22522,6 +22522,15 @@ router.post('/api/chat', async (req, res) => {
         turnTiming.mark('client_final_sent', { durationMs: Date.now() - finalSendStartedAt });
         enqueuePostTurnJob({
           sessionId: resolvedSessionId,
+          label: 'plugin_stop_hooks',
+          run: async () => {
+            const hooks = await import('../../extensions/plugin-import/plugin-hooks.js').catch(() => null);
+            if (!hooks?.hasActivePluginHooks('Stop')) return;
+            await hooks.dispatchPluginHooks({ event: 'Stop', sessionId: resolvedSessionId });
+          },
+        });
+        enqueuePostTurnJob({
+          sessionId: resolvedSessionId,
           label: 'attach_runtime_process_entries',
           run: () => {
             const attachStartedAt = Date.now();

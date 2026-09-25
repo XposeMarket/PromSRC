@@ -948,7 +948,7 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
 ]);
 
 const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
-  'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
+  'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup', 'plugin_ops',
 ]);
 
 const SOCIAL_INTELLIGENCE_TOOL_NAMES = new Set(['social_intel']);

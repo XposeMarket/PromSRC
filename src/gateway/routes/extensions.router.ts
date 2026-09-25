@@ -106,6 +106,66 @@ router.post('/api/extensions/install', (req, res) => {
   }
 });
 
+// ── Foreign plugin import (Claude Code / Codex / Hermes / OpenClaw) ──────────
+async function pluginOpsDeps() {
+  const { getMCPManager } = await import('../mcp-manager');
+  const { SecretVault } = await import('../../security/vault');
+  const { getConfig } = await import('../../config/config');
+  const vault = new SecretVault(getConfig().getConfigDir());
+  const sm = (globalThis as any).__prometheusSkillsManager;
+  if (!sm) throw new Error('Skills manager is not ready yet.');
+  return { skills: sm, mcp: getMCPManager(), vault: { has: (k: string) => { try { return vault.has(k); } catch { return false; } } } };
+}
+
+router.get('/api/plugins/import/scan', async (req, res) => {
+  try {
+    const { scanPlugins, defaultPluginSourceRoots, defaultMarketplaceRoots, listImportedPlugins } = await import('../../extensions/plugin-import/import-service');
+    const includeMarketplaces = String(req.query.marketplaces || '') === '1';
+    const roots = [...defaultPluginSourceRoots(), ...(includeMarketplaces ? defaultMarketplaceRoots() : [])];
+    res.json({ success: true, roots, plugins: scanPlugins({ roots, filter: String(req.query.q || '') }), imported: listImportedPlugins() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'scan failed' });
+  }
+});
+
+router.post('/api/plugins/import/:action', async (req, res, next) => {
+  try {
+    const action = String(req.params.action || '');
+    if (action === 'secret') { next(); return; }
+    if (!['install', 'uninstall', 'approve_hooks', 'revoke_hooks', 'enable_mcp', 'inspect', 'marketplace'].includes(action)) {
+      res.status(400).json({ success: false, error: `Unknown action ${action}` });
+      return;
+    }
+    const { runPluginOps } = await import('../../extensions/plugin-import/plugin-ops');
+    const out = await runPluginOps({ ...(req.body || {}), action }, await pluginOpsDeps());
+    res.status(out.error ? 400 : 200).json({ success: !out.error, result: out.result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'plugin import failed' });
+  }
+});
+
+// Store a secret an imported plugin's MCP server needs. Secrets only travel
+// through this authenticated route, never through model tool arguments.
+// Body: { id: pluginId, name: ENV_VAR_NAME, value: secret }
+router.post('/api/plugins/import/secret', async (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const value = String(req.body?.value || '');
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !value) {
+      res.status(400).json({ success: false, error: 'id, name and value are required' });
+      return;
+    }
+    const { SecretVault } = await import('../../security/vault');
+    const { getConfig } = await import('../../config/config');
+    new SecretVault(getConfig().getConfigDir()).set(`plugins.${id}.${name}`, value, 'plugins:import-secret');
+    const { enableReadyMcpServers } = await import('../../extensions/plugin-import/import-service');
+    res.json({ success: true, mcp: enableReadyMcpServers(id, await pluginOpsDeps()) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'failed to store secret' });
+  }
+});
+
 // Remove a user plugin by id. Body: { id: string }
 router.post('/api/extensions/remove', (req, res) => {
   try {

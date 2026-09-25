@@ -9,6 +9,7 @@ import { getConfig } from '../../../config/config';
 import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
 
 const PLATFORM_TOOL_NAMES = new Set([
+  'plugin_ops',
   'mcp_server_manage',
   'connection_ops',
   'connector_list',
@@ -65,6 +66,18 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: `MCP error (${serverId}/${toolName}): ${mcpErr.message}`, error: true };
         }
       }
+    }
+
+    if (name === 'plugin_ops') {
+      const { runPluginOps } = await import('../../../extensions/plugin-import/plugin-ops.js');
+      const { SecretVault } = await import('../../../security/vault.js');
+      const vault = new SecretVault(getConfig().getConfigDir());
+      const out = await runPluginOps(args, {
+        skills: deps.skillsManager,
+        mcp: getMCPManager(),
+        vault: { has: (key: string) => { try { return vault.has(key); } catch { return false; } } },
+      });
+      return { name, args, result: out.result, error: !!out.error };
     }
 
     if (name === 'mcp_server_manage') {

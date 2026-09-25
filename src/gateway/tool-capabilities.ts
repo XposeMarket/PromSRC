@@ -187,10 +187,23 @@ export function resolveToolCapabilityMetadata(
   if (name === 'memory') {
     return String(args?.action || '').trim().toLowerCase() === 'write' ? LOCAL_WRITE : READ_ONLY;
   }
-  if (name === 'x_api_request') {
+  // Raw provider API escape hatches: read-only only for an explicit safe
+  // method; a missing or mutating method fails toward the write gate.
+  if (name === 'x_api_request' || name === 'connector_vercel_api_request') {
     const method = String(args?.method || '').trim().toUpperCase();
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
     return EXTERNAL_WRITE;
+  }
+  // Authenticated-user lookup: reads the credential's own profile only.
+  if (name === 'x_api_me') return CREDENTIAL_READ_ONLY;
+  // Plugin import: reads are local scans; install/uninstall write skills, MCP
+  // config and plugin files; approving hooks enables shell execution.
+  if (name === 'plugin_ops') {
+    const action = String(args?.action || '').trim().toLowerCase();
+    if (['scan', 'inspect', 'list', 'marketplace'].includes(action)) return READ_ONLY;
+    if (action === 'approve_hooks') return COMMAND;
+    if (action === 'uninstall') return DESTRUCTIVE;
+    return LOCAL_WRITE;
   }
   if (READ_ONLY_TOOLS.has(name)) return READ_ONLY;
   if (LOCAL_WRITE_TOOLS.has(name)) return LOCAL_WRITE;
