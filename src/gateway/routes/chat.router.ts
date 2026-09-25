@@ -11565,6 +11565,20 @@ export function describeRestartProvenance(runtime: any): string {
 // Compact digest of the work this turn already did before the restart. The
 // resumed turn otherwise only sees a truncated commentary row, which is why it
 // kept losing track of completed merges/edits and re-verified them from scratch.
+export function extractPreRestartArtifacts(entries: any[]): string[] {
+  const out = new Set<string>();
+  for (const entry of entries) {
+    const text = String(entry?.content || entry?.text || '');
+    for (const m of text.matchAll(/Pull request created: #(\d+)/g)) out.add(`opened PR #${m[1]}`);
+    for (const m of text.matchAll(/Pull request merged: ([0-9a-f]{7,40})/g)) out.add(`merged a PR (merge commit ${m[1].slice(0, 9)})`);
+    for (const m of text.matchAll(/\b([0-9a-f]{9}) [^\n]{0,80}\(#(\d+)\)/g)) out.add(`pulled main to ${m[1]} (#${m[2]})`);
+    for (const m of text.matchAll(/Note saved[^#]*#(n_[a-z0-9]+)/g)) out.add(`saved note ${m[1]}`);
+    if (/BUILD=0\b/.test(text)) out.add('ran a successful build');
+    for (const m of text.matchAll(/git checkout -q -b ([\w./-]+)/g)) out.add(`created branch ${m[1]}`);
+  }
+  return Array.from(out).slice(0, 12);
+}
+
 export function buildPreRestartWorkDigest(runtime: any, maxChars = 6000): string {
   const entries: any[] = Array.isArray(runtime?.checkpoint?.processEntries) ? runtime.checkpoint.processEntries : [];
   const lines: string[] = [];
@@ -11581,7 +11595,14 @@ export function buildPreRestartWorkDigest(runtime: any, maxChars = 6000): string
   }
   const narration = String(runtime?.checkpoint?.narrationTail || '').replace(/\s+/g, ' ').trim();
   if (!lines.length && !narration) return '';
-  const header = `Work this turn already completed before the restart (${lines.length} tool step(s), oldest first; trust these results, do not redo them):`;
+  // Pull the durable artifacts out of the step results so the resumed turn
+  // recognizes them as its OWN work. Without this, a resumed turn that saw its
+  // own PR in `git log` concluded it "was probably shipped from another chat".
+  const artifacts = extractPreRestartArtifacts(entries);
+  const artifactLine = artifacts.length
+    ? `YOU already did these in THIS turn before the restart: ${artifacts.join('; ')}. If git, GitHub, or the build shows them, that is your own work from minutes ago, not another chat. Do not re-investigate or redo them; continue from the next step.\n`
+    : '';
+  const header = `${artifactLine}Work YOU completed in this same turn before the restart (${lines.length} tool step(s), oldest first; trust these results, do not redo them):`;
   const kept: string[] = [];
   let used = header.length;
   // Keep the most recent steps when over budget; they matter most for the next action.
@@ -11731,7 +11752,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
   };
   const checkpointSummary = [
     '[GATEWAY RESTART RECOVERY]',
-    `The previous gateway process exited while executing this already-persisted user turn (runtime ${runtime.id}).`,
+    `You are resuming YOUR OWN in-flight turn. The gateway restarted in the middle of it (usually because you called the restart yourself); everything listed below was done by you, in this conversation, minutes ago (runtime ${runtime.id}).`,
     describeRestartProvenance(runtime),
     'Continue the same turn automatically. Do not ask the user to send "continue" and do not repeat completed or destructive work.',
     buildPreRestartWorkDigest(runtime),
