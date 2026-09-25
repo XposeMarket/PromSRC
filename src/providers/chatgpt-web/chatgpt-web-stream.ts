@@ -26,12 +26,30 @@
 export type ChatGPTWebStreamEvent =
   | { type: 'text_delta'; text: string; messageId: string }
   | { type: 'reasoning'; text: string; messageId: string }
-  | { type: 'tool_start'; id: string; name: string; args: string }
-  | { type: 'tool_result'; id: string; name: string; result: string; error?: boolean }
+  | { type: 'tool_start'; id: string; name: string; args: string; connector?: ConnectorCall }
+  | { type: 'tool_result'; id: string; name: string; result: string; error?: boolean; connector?: ConnectorCall }
   | { type: 'conversation'; conversationId: string }
   | { type: 'model'; model: string }
   | { type: 'error'; message: string }
   | { type: 'done' };
+
+/** A call ChatGPT made to an app/connector (api_tool.call_tool). */
+export interface ConnectorCall {
+  /** Connector display name from the call path, e.g. "Prometheus". */
+  connector: string;
+  /** Tool name on that connector, e.g. "read_file". */
+  tool: string;
+  args: unknown;
+}
+
+/** api_tool.call_tool payload: {"path":"/<Connector>/<link_id>/<tool>","args":{...}}. */
+export function parseConnectorCall(text: string): ConnectorCall | null {
+  let parsed: any;
+  try { parsed = JSON.parse(String(text || '')); } catch { return null; }
+  const segments = String(parsed?.path || '').split('/').filter(Boolean);
+  if (segments.length < 2) return null;
+  return { connector: segments[0], tool: segments[segments.length - 1], args: parsed?.args ?? {} };
+}
 
 interface TrackedMessage {
   id: string;
@@ -51,6 +69,7 @@ interface TrackedMessage {
   emittedReasoning: Set<string>;
   toolStarted: boolean;
   toolFinished: boolean;
+  connectorCall?: ConnectorCall;
 }
 
 const CITE_OPEN = '\ue200';
@@ -85,6 +104,8 @@ function friendlyToolName(raw: string): string {
   if (/^canmore/.test(name)) return 'chatgpt_canvas';
   if (/^file_search|^myfiles/.test(name)) return 'chatgpt_file_search';
   if (/^bio$/.test(name)) return 'chatgpt_memory';
+  // api_tool.list_resources / search_tools: ChatGPT looking up which app tools exist.
+  if (/^api_tool\.(list|search)/.test(name)) return 'chatgpt_app_tool_search';
   if (/^api_tool|^mcp|connector/.test(name)) return 'chatgpt_connector';
   return `chatgpt_${name.replace(/[^a-z0-9_]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'tool'}`;
 }
@@ -144,7 +165,7 @@ export class ChatGPTWebStreamParser {
       const msg = this.messages.get(id);
       if (msg && !msg.toolFinished) {
         msg.toolFinished = true;
-        events.push({ type: 'tool_result', id, name: friendlyToolName(msg.recipient), result: 'Done.' });
+        events.push({ type: 'tool_result', id, name: friendlyToolName(msg.recipient), result: 'Done.', ...(msg.connectorCall ? { connector: msg.connectorCall } : {}) });
       }
     }
     if (!this.done) {
@@ -243,7 +264,10 @@ export class ChatGPTWebStreamParser {
       recipient: String(raw?.recipient || 'all'),
       contentType: String(content?.content_type || ''),
       channel: String(raw?.channel || ''),
-      parts: Array.isArray(content?.parts) ? content.parts.map((p: any) => (typeof p === 'string' ? p : '')) : [],
+      // content_type "code" (tool calls / tool JSON output) carries text in content.text.
+      parts: Array.isArray(content?.parts)
+        ? content.parts.map((p: any) => (typeof p === 'string' ? p : ''))
+        : (typeof content?.text === 'string' ? [content.text] : []),
       thoughts: Array.isArray(content?.thoughts) ? content.thoughts : [],
       recap: typeof content?.content === 'string' ? content.content : '',
       metadata: raw?.metadata && typeof raw.metadata === 'object' ? { ...raw.metadata } : {},
@@ -264,7 +288,7 @@ export class ChatGPTWebStreamParser {
   }
 
   private applyToMessage(msg: TrackedMessage, path: string, kind: string, value: any, events: ChatGPTWebStreamEvent[]): void {
-    const partMatch = /^\/message\/content\/parts\/(\d+)$/.exec(path);
+    const partMatch = /^\/message\/content\/parts\/(\d+)$/.exec(path) || (path === '/message/content/text' ? [path, '0'] : null);
     if (partMatch) {
       const index = Number(partMatch[1]);
       while (msg.parts.length <= index) msg.parts.push('');
@@ -308,10 +332,30 @@ export class ChatGPTWebStreamParser {
 
     // ChatGPT invoking one of its own tools (web.run, python, an MCP connector...).
     if (msg.role === 'assistant' && msg.recipient && msg.recipient !== 'all') {
+      // functions.exec is ChatGPT's code-mode wrapper around nested tool calls
+      // (seen wrapping api_tool.call_tool); the nested call gets its own row.
+      if (msg.recipient === 'functions.exec') {
+        if (!msg.toolStarted) { msg.toolStarted = true; msg.toolFinished = true; }
+        this.emitReasoning(msg, String(msg.metadata?.reasoning_title || ''), events);
+        return;
+      }
       if (!msg.toolStarted) {
+        // App/connector calls stream their {path,args} payload; wait until it
+        // parses so the row carries the real connector tool name.
+        const isConnector = /^api_tool/.test(msg.recipient);
+        const call = isConnector ? parseConnectorCall(msg.parts.join('')) : null;
+        const settled = msg.status === 'finished_successfully' || msg.metadata?.is_complete === true;
+        if (isConnector && !call && !settled) return;
         msg.toolStarted = true;
+        if (call) msg.connectorCall = call;
         this.pendingToolIds.push(msg.id);
-        events.push({ type: 'tool_start', id: msg.id, name: friendlyToolName(msg.recipient), args: this.toolArgs(msg) });
+        events.push({
+          type: 'tool_start',
+          id: msg.id,
+          name: call ? `chatgpt_app_${call.tool}` : friendlyToolName(msg.recipient),
+          args: call ? JSON.stringify(call.args ?? {}) : this.toolArgs(msg),
+          ...(call ? { connector: call } : {}),
+        });
       }
       this.emitReasoning(msg, String(msg.metadata?.reasoning_title || ''), events);
       return;
@@ -319,12 +363,23 @@ export class ChatGPTWebStreamParser {
 
     // Tool output: close the oldest open tool row with a readable summary.
     if (msg.role === 'tool') {
+      // ChatGPT paused for its own "Allow ChatGPT to use <app>?" prompt; the
+      // turn ends here and there is no answer text to wait for.
+      const serverAction = msg.metadata?.jit_plugin_data?.from_server;
+      if (serverAction?.type === 'confirm_action' && !msg.toolFinished) {
+        msg.toolFinished = true;
+        events.push({ type: 'error', message: 'ChatGPT paused to ask for confirmation before running an app tool. Set the Prometheus app to "Full access" in ChatGPT Settings -> Apps (Prometheus applies this automatically on the next turn).' });
+        return;
+      }
       this.emitReasoning(msg, String(msg.metadata?.reasoning_title || ''), events);
       const settled = msg.status === 'finished_successfully' || msg.status === 'finished_partial_completion' || msg.status === 'failed';
       if (!settled) return;
       const hasPayload = msg.parts.some((p) => p && p.trim()) || msg.metadata?.search_result_groups || msg.metadata?.search_model_queries;
       if (!hasPayload && !msg.metadata?.reasoning_title) return;
-      const toolId = this.pendingToolIds[0];
+      // Close the open call this output answers: same recipient/author name
+      // (nested calls, e.g. functions.exec wrapping api_tool.call_tool, finish
+      // inner-first), falling back to the oldest open call.
+      const toolId = this.pendingToolIds.find((id) => this.messages.get(id)?.recipient === msg.authorName) || this.pendingToolIds[0];
       if (!toolId) return;
       const owner = this.messages.get(toolId);
       if (!owner || owner.toolFinished) return;
@@ -333,8 +388,15 @@ export class ChatGPTWebStreamParser {
         return;
       }
       owner.toolFinished = true;
-      this.pendingToolIds.shift();
-      events.push({ type: 'tool_result', id: toolId, name: friendlyToolName(owner.recipient || msg.authorName), result: summarizeToolResult(msg), error: msg.status === 'failed' });
+      this.pendingToolIds = this.pendingToolIds.filter((id) => id !== toolId);
+      events.push({
+        type: 'tool_result',
+        id: toolId,
+        name: owner.connectorCall ? `chatgpt_app_${owner.connectorCall.tool}` : friendlyToolName(owner.recipient || msg.authorName),
+        result: summarizeToolResult(msg),
+        error: msg.status === 'failed',
+        ...(owner.connectorCall ? { connector: owner.connectorCall } : {}),
+      });
       return;
     }
 

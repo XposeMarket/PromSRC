@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import type { ChatMessage, ChatOptions, ChatResult, ModelStreamEvent } from '../LLMProvider';
 import { contentToString, stripCacheMarker } from '../content-utils';
-import { startConversation, ChatGPTWebError, type ChatGPTWebCredentials } from './chatgpt-web-client';
+import { startConversation, hideConversation, ChatGPTWebError, type ChatGPTWebCredentials } from './chatgpt-web-client';
 import { ChatGPTWebStreamParser, type ChatGPTWebStreamEvent } from './chatgpt-web-stream';
 import { resolveChatGPTWebMode, CHATGPT_WEB_MODEL } from './chatgpt-web-models';
 
@@ -30,6 +30,8 @@ const MAX_MESSAGE_CHARS = 40_000;
 export interface ChatGPTWebBridgeSource {
   id: string;
   name: string;
+  /** Link id; ChatGPT addresses connector tools as /<name>/<linkId>/<tool>. */
+  linkId?: string;
 }
 
 export interface ChatGPTWebAdapterDeps {
@@ -55,7 +57,9 @@ function clip(text: string, max: number): string {
  * turns from earlier providers are folded into readable assistant notes, since
  * ChatGPT has no function-call message type on this endpoint.
  */
-export function buildChatGPTWebMessages(messages: ChatMessage[], bridgeAvailable: boolean) {
+export function buildChatGPTWebMessages(messages: ChatMessage[], bridge: boolean | ChatGPTWebBridgeSource | null) {
+  const bridgeAvailable = !!bridge;
+  const toolPath = bridge && typeof bridge === 'object' && bridge.linkId ? `/${bridge.name}/${bridge.linkId}/<tool_name>` : '';
   const out: Array<{ id: string; author: { role: string }; content: any; metadata: Record<string, unknown> }> = [];
   const push = (role: 'system' | 'user' | 'assistant', text: string, metadata: Record<string, unknown> = {}) => {
     const value = String(text || '').trim();
@@ -71,7 +75,11 @@ export function buildChatGPTWebMessages(messages: ChatMessage[], bridgeAvailable
 
   const systemText = messages.filter((m) => m.role === 'system').map((m) => textOf(m.content)).filter(Boolean).join('\n\n');
   const bridgeNote = bridgeAvailable
-    ? '[PROMETHEUS BRIDGE]\nYou are running inside Prometheus through the ChatGPT backend. The "Prometheus" connector is attached to this chat: call its tools to act on the user\'s computer (files, shell, browser, memory, notes). Prefer those tools over guessing.'
+    ? [
+      '[PROMETHEUS BRIDGE]',
+      'You are running inside Prometheus through the ChatGPT backend. The "Prometheus" connector (app) is attached and connected in this chat: it exposes the Prometheus tools named in the instructions above and runs them on the user\'s own computer (files, shell, browser, memory, notes).',
+      `Call them with api_tool.call_tool${toolPath ? ` using path "${toolPath}"` : ''} and the tool\'s JSON arguments. They are available right now: never say the connector or a tool is unavailable without calling it first. Prefer calling a tool over guessing.`,
+    ].join('\n')
     : '[PROMETHEUS BRIDGE]\nYou are running inside Prometheus through the ChatGPT backend. The Prometheus tool bridge is not connected for this chat, so you cannot act on the user\'s computer; say so plainly if a request needs local tools.';
   const system = [clip(systemText, MAX_SYSTEM_CHARS), bridgeNote].filter(Boolean).join('\n\n');
   push('system', system, { is_visually_hidden_from_conversation: true });
@@ -112,7 +120,7 @@ export class ChatGPTWebAdapter {
 
     const creds = await this.deps.getCredentials();
     const bridge = this.deps.getBridgeSource ? await this.deps.getBridgeSource().catch(() => null) : null;
-    const chatMessages = buildChatGPTWebMessages(messages, !!bridge);
+    const chatMessages = buildChatGPTWebMessages(messages, bridge);
 
     const controller = new AbortController();
     let abortReason = '';
@@ -156,14 +164,23 @@ export class ChatGPTWebAdapter {
             emit({ type: 'reasoning_delta', text: line, summary: true, nativeType: 'chatgpt.thoughts' });
             break;
           }
-          case 'tool_start':
-            emit({ type: 'tool_call_start', id: `chatgpt_${ev.id}`, name: ev.name, nativeType: 'chatgpt.tool_call' });
-            emit({ type: 'tool_call_done', id: `chatgpt_${ev.id}`, name: ev.name, arguments: ev.args, nativeType: 'chatgpt.tool_call' });
-            emit({ type: 'provider_event', nativeType: 'chatgpt.tool_start', data: { id: `chatgpt_${ev.id}`, name: ev.name, args: ev.args } });
+          case 'tool_start': {
+            // Calls into the Prometheus connector already run (and render) as real
+            // Prometheus tool rows through the bridge executor; only ChatGPT's own
+            // tools and other apps get a ChatGPT-origin row here.
+            const viaBridge = !!bridge && ev.connector?.connector === bridge.name;
+            if (!viaBridge) {
+              emit({ type: 'tool_call_start', id: `chatgpt_${ev.id}`, name: ev.name, nativeType: 'chatgpt.tool_call' });
+              emit({ type: 'tool_call_done', id: `chatgpt_${ev.id}`, name: ev.name, arguments: ev.args, nativeType: 'chatgpt.tool_call' });
+            }
+            emit({ type: 'provider_event', nativeType: 'chatgpt.tool_start', data: { id: `chatgpt_${ev.id}`, name: ev.name, args: ev.args, viaBridge, ...(ev.connector ? { connector: ev.connector.connector, tool: ev.connector.tool } : {}) } });
             break;
-          case 'tool_result':
-            emit({ type: 'provider_event', nativeType: 'chatgpt.tool_result', data: { id: `chatgpt_${ev.id}`, name: ev.name, result: ev.result, error: !!ev.error } });
+          }
+          case 'tool_result': {
+            const viaBridge = !!bridge && ev.connector?.connector === bridge.name;
+            emit({ type: 'provider_event', nativeType: 'chatgpt.tool_result', data: { id: `chatgpt_${ev.id}`, name: ev.name, result: ev.result, error: !!ev.error, viaBridge } });
             break;
+          }
           case 'model':
             actualModel = ev.model;
             break;
@@ -176,13 +193,14 @@ export class ChatGPTWebAdapter {
       }
     };
 
+    const wantTemporary = this.deps.temporaryChats ? this.deps.temporaryChats() : true;
     try {
       resetIdle();
       const response = await startConversation(creds, {
         messages: chatMessages,
         model: mode.slug,
         thinkingEffort: mode.thinkingEffort,
-        temporary: this.deps.temporaryChats ? this.deps.temporaryChats() : true,
+        temporary: wantTemporary,
         mcpSources: bridge ? [{ id: bridge.id, name: bridge.name, status: 'ONLY_ME' }] : undefined,
       }, controller.signal);
       resetIdle();
@@ -212,6 +230,11 @@ export class ChatGPTWebAdapter {
       clearTimeout(requestTimer);
       if (idleTimer) clearTimeout(idleTimer);
       options?.abortSignal?.removeEventListener?.('abort', onExternalAbort);
+      // Connector turns cannot be Temporary Chats (ChatGPT drops apps there),
+      // so hide the saved conversation instead to keep the sidebar clean.
+      if (bridge && wantTemporary && parser.getConversationId()) {
+        void hideConversation(creds, parser.getConversationId());
+      }
     }
 
     const finalText = parser.getFinalText() || streamedText.trim();

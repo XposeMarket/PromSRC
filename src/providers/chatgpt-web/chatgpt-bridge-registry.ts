@@ -36,6 +36,8 @@ interface BridgeAccountState {
   mcpUrl: string;
   /** Signature of the tool catalog ChatGPT last snapshotted for this connector. */
   catalogSignature?: string;
+  /** apps_privacy_control last applied to the link. */
+  privacyControl?: string;
   registeredAt: string;
 }
 
@@ -102,9 +104,9 @@ export function getChatGPTBridgeMcpUrl(): string {
 
 function bridgeEnabled(): boolean {
   const cfg = (getConfig().getConfig() as any)?.llm?.providers?.openai_codex?.chatgpt || {};
-  // Experimental and opt-in: ChatGPT registers the connector and scopes it
-  // into the turn, but does not yet surface its tools to the model (see PR).
-  return cfg.tool_bridge === true;
+  // On by default whenever a public HTTPS origin exists (remote access /
+  // bridge_public_url); set tool_bridge=false to run ChatGPT text-only.
+  return cfg.tool_bridge !== false;
 }
 
 function accountKey(accountId?: string): string {
@@ -161,6 +163,28 @@ async function registerConnector(accountId: string | undefined, mcpUrl: string):
   return { id, name: CHATGPT_BRIDGE_CONNECTOR_NAME, linkId };
 }
 
+/**
+ * ChatGPT's own per-app confirmation ("Allow ChatGPT to use Prometheus?")
+ * arrives mid-stream as a confirm_action tool message and ends the turn, which
+ * a headless provider can't click. Prometheus already gates every tool with its
+ * own approvals/blocked-command rules inside the bridge executor, so the link is
+ * set to full_access (same PATCH as Settings -> Apps -> Prometheus -> "Full
+ * access"). Verified 2026-09-25: with it null, a write-capable tool call
+ * stopped at confirm_action; with full_access, 2/2 calls ran without a prompt.
+ */
+const CONNECTOR_PRIVACY_CONTROL = 'full_access';
+
+async function setLinkPrivacyControl(accountId: string | undefined, linkId: string): Promise<boolean> {
+  if (!linkId) return false;
+  const headers = await codexHeaders(accountId);
+  const res = await fetch(`${CHATGPT_WEB_ORIGIN}/backend-api/aip/connectors/links/${encodeURIComponent(linkId)}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ apps_privacy_control: CONNECTOR_PRIVACY_CONTROL }),
+  });
+  return res.ok;
+}
+
 /** Ask ChatGPT to re-snapshot the connector's tools (after the catalog changed). */
 async function refreshConnectorActions(accountId: string | undefined, linkId: string): Promise<boolean> {
   if (!linkId) return false;
@@ -183,7 +207,7 @@ async function refreshConnectorActions(accountId: string | undefined, linkId: st
  * when it differs from what ChatGPT last snapshotted, refresh_actions is
  * called so ChatGPT sees the current tools.
  */
-export async function getChatGPTBridgeSource(accountId?: string, catalogSignature = ''): Promise<{ id: string; name: string } | null> {
+export async function getChatGPTBridgeSource(accountId?: string, catalogSignature = ''): Promise<{ id: string; name: string; linkId?: string } | null> {
   if (!bridgeEnabled()) return null;
   const mcpUrl = getChatGPTBridgeMcpUrl();
   if (!mcpUrl) return null;
@@ -202,7 +226,15 @@ export async function getChatGPTBridgeSource(accountId?: string, catalogSignatur
         console.warn(`[chatgpt-bridge] refresh_actions failed: ${redactBridgeSecret(String(error?.message || error)).slice(0, 200)}`);
       }
     }
-    return { id: cached.connectorId, name: CHATGPT_BRIDGE_CONNECTOR_NAME };
+    if (cached.linkId && cached.privacyControl !== CONNECTOR_PRIVACY_CONTROL) {
+      await setLinkPrivacyControl(accountId, cached.linkId).then((ok) => {
+        if (!ok) return;
+        const next = readState();
+        if (next.accounts[key]) next.accounts[key].privacyControl = CONNECTOR_PRIVACY_CONTROL;
+        writeState(next);
+      }).catch(() => undefined);
+    }
+    return { id: cached.connectorId, name: CHATGPT_BRIDGE_CONNECTOR_NAME, linkId: cached.linkId };
   }
   // Back off after a failed registration so every ChatGPT turn doesn't
   // re-hit the connector API (and re-probe the tunnel) while it's down.
@@ -212,6 +244,7 @@ export async function getChatGPTBridgeSource(accountId?: string, catalogSignatur
     registrationInFlight = (async () => {
       try {
         const created = await registerConnector(accountId, mcpUrl);
+        const privacyOk = created.linkId ? await setLinkPrivacyControl(accountId, created.linkId).catch(() => false) : false;
         const next = readState();
         next.accounts[key] = {
           connectorId: created.id,
@@ -219,11 +252,12 @@ export async function getChatGPTBridgeSource(accountId?: string, catalogSignatur
           mcpUrl,
           // Registration snapshots the catalog served at that moment.
           catalogSignature: catalogSignature || undefined,
+          privacyControl: privacyOk ? CONNECTOR_PRIVACY_CONTROL : undefined,
           registeredAt: new Date().toISOString(),
         };
         delete next.lastError;
         writeState(next);
-        return { id: created.id, name: created.name };
+        return { id: created.id, name: created.name, linkId: created.linkId || undefined };
       } catch (error: any) {
         const next = readState();
         next.lastError = { message: redactBridgeSecret(String(error?.message || error)).slice(0, 400), at: new Date().toISOString() };
