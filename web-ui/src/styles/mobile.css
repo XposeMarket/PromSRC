@@ -18682,3 +18682,12 @@ body.pm-mobile-active .pm-composer .pm-skill-trigger-pill .pm-skill-trigger-prev
   flex: 0 1 auto;
   min-width: 0;
 }
+
+/* Login viewer: instant local feedback while the next frame is in flight. */
+.pm-lh-frame { will-change: transform; transition: opacity .18s ease; }
+.pm-lh-tap {
+  position: absolute; z-index: 3; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border-radius: 50%; background: rgba(0,122,255,.22); pointer-events: none;
+  animation: pm-lh-tap .42s ease-out forwards;
+}
+@keyframes pm-lh-tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }

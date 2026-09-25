@@ -3782,7 +3782,7 @@ async function screenshotNativeBrowserSurface(sessionId = '') {
   // CDP's captureScreenshot honours the emulated scale, so frames are sharp.
   if (loginPhoneViews.has(wc.id) && wc.debugger.isAttached()) {
     try {
-      const shot = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      const shot = await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'jpeg', quality: 88, captureBeyondViewport: false, optimizeForSpeed: true });
       const vp = await wc.executeJavaScript('({ width: window.innerWidth, height: window.innerHeight })', true).catch(() => null);
       const meta = nativeViewMeta(view);
       if (shot?.data && vp?.width) {
@@ -3790,7 +3790,7 @@ async function screenshotNativeBrowserSurface(sessionId = '') {
           base64: shot.data,
           width: Math.round(vp.width * 3), height: Math.round(vp.height * 3),
           viewportWidth: vp.width, viewportHeight: vp.height,
-          mimeType: 'image/png', url: meta.url, title: meta.title,
+          mimeType: 'image/jpeg', url: meta.url, title: meta.title,
           profile: nativeProfileFromPartition(partition),
         };
       }
