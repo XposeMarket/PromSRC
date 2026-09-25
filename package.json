@@ -30,6 +30,7 @@
     "test:hyperframes-catalog": "npm run build:backend && node scripts/test-hyperframes-catalog-pipeline.mjs",
     "test:runtime-prompt-manifest": "tsx src/runtime/prompt-manifest.regression.ts",
     "test:parallel-tool-calls": "tsx src/tools/parallel-tool-calls.regression.ts",
+    "test:terminal-exit-and-tool-args": "tsx src/gateway/terminal-exit-and-tool-args.regression.ts",
     "test:workspace-tool-mode": "tsx src/runtime/workspace-tool-mode.regression.ts",
     "test:path-permissions": "tsx src/gateway/path-permissions.regression.ts",
     "test:prompt-cache": "tsx src/gateway/prompt-cache.regression.ts",

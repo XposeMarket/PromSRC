@@ -17,6 +17,43 @@ import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-con
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import { getMCPManager } from './mcp-manager';
 
+/** Common agent spellings for required args (GitHub REST names, camelCase). */
+const REQUIRED_ARG_ALIASES: Record<string, string[]> = {
+  pr_number: ['pull_number', 'prNumber', 'pullNumber', 'number'],
+  issue_number: ['issueNumber', 'number'],
+  file_id: ['fileId', 'id'],
+  message_id: ['messageId', 'id'],
+  thread_id: ['threadId'],
+};
+
+function toCamel(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+}
+
+function isBlankArg(value: unknown): boolean {
+  return value === undefined || value === null || value === '';
+}
+
+/**
+ * Fill a missing required key from a known alias or its camelCase spelling so the
+ * tool_call bridge matches the direct tool path (which already accepts aliases).
+ * The alias key is kept as well; connector runtimes ignore unknown keys.
+ */
+export function applyRequiredArgAliases(required: string[], callArgs: any): any {
+  if (!callArgs || typeof callArgs !== 'object' || Array.isArray(callArgs)) return callArgs;
+  let out = callArgs;
+  for (const key of required) {
+    if (!isBlankArg(out[key])) continue;
+    const candidates = [...(REQUIRED_ARG_ALIASES[key] || []), toCamel(key)];
+    const hit = candidates.find((alias) => alias !== key && !isBlankArg(out[alias]));
+    if (hit) {
+      if (out === callArgs) out = { ...callArgs };
+      out[key] = out[hit];
+    }
+  }
+  return out;
+}
+
 export const TOOL_SEARCH_TOOL_NAMES = new Set(['tool_search', 'tool_describe', 'tool_call']);
 
 export interface ToolCatalogEntry {
@@ -252,6 +289,7 @@ export async function handleToolSearchTool(
     try { callArgs = JSON.parse(callArgs); } catch { return { name, args, result: 'tool_call arguments must be an object (or a JSON object string).', error: true }; }
   }
   const required: string[] = Array.isArray(entry.parameters?.required) ? entry.parameters.required : [];
+  callArgs = applyRequiredArgAliases(required, callArgs);
   const missing = required.filter((key) => callArgs?.[key] === undefined || callArgs?.[key] === null || callArgs?.[key] === '');
   if (missing.length) {
     return { name, args, result: `${entry.name} is missing required argument(s): ${missing.join(', ')}. Arguments: ${argSummary(entry.parameters)}`, error: true };

@@ -2236,8 +2236,27 @@ function inferWorkspacePatchOp(edit: any): string | undefined {
   return undefined;
 }
 
-function normalizeWorkspacePatchsetArgs(rawArgs: any): any {
+/**
+ * Batch read/stat accept `files`, but models also send `paths`, `filenames`, or a
+ * JSON-string list (seen 2026-09-25: workspace_read batch_read with paths:[...]).
+ */
+export function coerceBatchFileList(args: any): any[] {
+  let raw = args?.files ?? args?.paths ?? args?.filenames ?? args?.file_paths;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (text.startsWith('[')) { try { raw = JSON.parse(text); } catch { /* ignore */ } }
+    else if (text) raw = [text];
+  }
+  return Array.isArray(raw) ? raw.filter((entry) => entry !== undefined && entry !== null && entry !== '') : [];
+}
+
+export function normalizeWorkspacePatchsetArgs(rawArgs: any): any {
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  // Models sometimes send `edits` as a JSON string ("[{...}]") or a single object.
+  if (typeof args.edits === 'string') {
+    try { args.edits = JSON.parse(args.edits); } catch { /* leave as-is; empty-edits error explains */ }
+  }
+  if (args.edits && typeof args.edits === 'object' && !Array.isArray(args.edits)) args.edits = [args.edits];
   const rawEdits = Array.isArray(args.edits) ? args.edits : [];
   // A single-file patchset may carry the target once at the top level
   // (`path`/`filename`/`file`) instead of repeating it per edit.
@@ -7714,8 +7733,9 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       }
 
       case 'read_files_batch': {
-        const batchFiles = Array.isArray(args.files) ? args.files : [];
+        const batchFiles = coerceBatchFileList(args);
         if (!batchFiles.length) return { name, args, result: 'files array is required and must not be empty', error: true };
+        args = { ...args, files: batchFiles };
         const maxFiles = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_FILES, Math.floor(Number(args.max_files) || FILE_TOOL_DEFAULT_BATCH_FILES)));
         const batchCap = Math.max(1, Math.min(FILE_TOOL_MAX_BATCH_LINES, Math.floor(Number(args.max_lines_per_file) || Number(args.num_lines) || FILE_TOOL_DEFAULT_BATCH_LINES)));
         const resultChunks: string[] = [];
@@ -8324,7 +8344,7 @@ function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: bool
       }
 
       case 'source_stats_batch': {
-        const batchPaths = Array.isArray(args.files) ? args.files : [];
+        const batchPaths = coerceBatchFileList(args);
         if (!batchPaths.length) return { name, args, result: 'files array is required', error: true };
         const projectRoot = resolveProjectRootForSourceAccess();
         const batchStatResults: Array<any> = [];
