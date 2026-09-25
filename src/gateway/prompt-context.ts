@@ -1567,7 +1567,17 @@ ${BG_AGENT_RUNTIME_HINT}`;
   const activeCategoryHint = activeCategoryList.length > 0
     ? `\n\n[ACTIVE_TOOL_CATEGORIES] Already active for this session: ${activeCategoryList.join(', ')}. Do not request these categories again; use their tools directly when relevant.`
     : '';
-  const baseMenu = `${menu}${activeCategoryHint}\n\n${TOOL_BLOCKS.parallelism}\n\n${TOOL_BLOCKS.skills}`;
+  let toolSearchHint = '';
+  try {
+    // Cheap (5s-cached) catalog summary so the model knows which connected
+    // apps are reachable through tool_search/tool_call without loading them.
+    const { buildToolCatalog, summarizeToolCatalog } = require('./tool-search');
+    const summary = summarizeToolCatalog(buildToolCatalog());
+    if (summary) {
+      toolSearchHint = `\n\n[TOOL_SEARCH] Connected apps/MCP/composites reachable without activating a category: ${summary}. Use tool_search({query}) then tool_call({name, arguments}). Loaded connector wrappers (connector_<app>, x_*, vercel_ops) can be called directly.`;
+    }
+  } catch { /* optional */ }
+  const baseMenu = `${menu}${activeCategoryHint}${toolSearchHint}\n\n${TOOL_BLOCKS.parallelism}\n\n${TOOL_BLOCKS.skills}`;
 
   if (activatedCategories.size === 0) return baseMenu;
 

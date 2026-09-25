@@ -14,6 +14,7 @@ import { getCisSystemTools } from './tools/defs/cis-system';
 import { getBrainThoughtToolDefinitions } from './brain/brain-thought-runtime';
 import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
+import { getToolSearchDefinitions } from './tool-search';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import {
@@ -1395,6 +1396,9 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       parameters: { type: 'object', required: [], properties: {} },
     },
   });
+  // Tool Search bridge: always-on, 3 small tools that reach every connected
+  // connector / MCP / composite tool without loading their schemas.
+  toolDefs.push(...getToolSearchDefinitions());
   toolDefs.push({
     type: 'function',
     function: {
@@ -1627,9 +1631,23 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       // name (normalizeExternalAppWrapperTool). Sending both roughly doubled
       // the external_apps surface and pushed turns into Anthropic
       // extra-usage rejections (2026-09-25 connector review).
+      // Every other connector is exposed as ONE generated wrapper
+      // (connector_github, connector_gmail, ...) instead of its 5-12 direct
+      // tools. Direct tools stay registered and executable; the wrapper
+      // resolves to them before policy/approval checks.
+      const wrapperDefs = extensionRegistry.listConnectorWrapperDefinitions();
+      const wrappedConnectors = new Set(
+        extensionRegistry.listConnectorWrapperSpecs().map((spec) => spec.connectorId),
+      );
       dynamicToolDefs.push(
+        ...wrapperDefs,
         ...extensionRegistry.listConnectedConnectorToolDefinitions()
-          .filter((def: any) => !isWrapperCoveredConnectorTool(String(def?.function?.name || def?.name || ''))),
+          .filter((def: any) => {
+            const toolName = String(def?.function?.name || def?.name || '');
+            if (isWrapperCoveredConnectorTool(toolName)) return false;
+            const connectorId = extensionRegistry.getConnectorIdForTool(toolName);
+            return !(connectorId && wrappedConnectors.has(connectorId));
+          }),
       );
     } catch { /* connector defs may not load in all build targets */ }
   }

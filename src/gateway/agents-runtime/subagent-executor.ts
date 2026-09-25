@@ -3583,6 +3583,32 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     name = externalAppWrapper.name;
     args = externalAppWrapper.args;
   }
+  // Generated per-connector wrappers (connector_github, connector_gmail, ...)
+  // resolve to the direct connector tool BEFORE policy evaluation, so the
+  // existing approval rules for writes (connector_github_create*, sends) apply
+  // to the real tool name.
+  if (/^connector_[a-z0-9_]+$/.test(name)) {
+    try {
+      const { getExtensionRuntimeRegistry, resolveConnectorWrapperCall } = await import('../../extensions/runtime-registry');
+      const spec = getExtensionRuntimeRegistry().getConnectorWrapperSpec(name);
+      if (spec) {
+        const resolved = resolveConnectorWrapperCall(spec, args);
+        if (resolved.error) return { name, args, result: resolved.error, error: true };
+        name = resolved.name;
+        args = resolved.args;
+      }
+    } catch { /* registry unavailable: fall through to direct dispatch */ }
+  }
+  // Tool Search bridge: tool_search/tool_describe are read-only catalog
+  // lookups; tool_call re-enters executeTool with the real tool name, so the
+  // policy/approval gates below run for the actual connector/MCP tool.
+  if (name === 'tool_search' || name === 'tool_describe' || name === 'tool_call') {
+    const { handleToolSearchTool } = await import('../tool-search');
+    const bridged = await handleToolSearchTool(name, args, (innerName, innerArgs) => (
+      executeTool(innerName, innerArgs, workspacePath, deps, sessionId)
+    ));
+    if (bridged) return bridged;
+  }
   const agentTeamWrapper = normalizeAgentTeamWrapperTool(name, args);
   if (agentTeamWrapper) {
     if (agentTeamWrapper.error) return { name, args, result: agentTeamWrapper.error, error: true };

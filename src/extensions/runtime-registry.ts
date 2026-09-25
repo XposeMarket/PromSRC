@@ -26,6 +26,92 @@ type RegisteredTool = PrometheusExtensionTool & {
 
 const CONNECTOR_CONNECTION_CACHE_TTL_MS = 5_000;
 
+/** Connectors that already have hand-written wrappers (x_* and vercel_ops). */
+const HANDWRITTEN_WRAPPER_CONNECTORS = new Set(['x', 'xai', 'vercel']);
+
+export interface ConnectorWrapperSpec {
+  /** Provider-facing tool name, e.g. connector_github. */
+  wrapper: string;
+  connectorId: string;
+  connectorName: string;
+  actions: Record<string, { tool: string; description: string; parameters: any }>;
+}
+
+export function connectorWrapperName(connectorId: string): string {
+  return `connector_${String(connectorId || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+}
+
+function describeActionArgs(parameters: any): string {
+  const props = Object.keys(parameters?.properties || {});
+  const required = new Set<string>(Array.isArray(parameters?.required) ? parameters.required : []);
+  return props.map((key) => (required.has(key) ? key : `${key}?`)).join(', ');
+}
+
+function firstSentence(text: string, max = 90): string {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const cut = clean.split(/(?<=\.)\s/)[0] || clean;
+  return cut.length > max ? `${cut.slice(0, max - 3)}...` : cut;
+}
+
+/**
+ * Compact provider-facing definition for a generated connector wrapper. The
+ * union of every action's properties keeps typed arguments; the description
+ * lists each action with its arguments (required ones unmarked, optional ?).
+ */
+export function buildConnectorWrapperDefinition(spec: ConnectorWrapperSpec): any {
+  const properties: Record<string, any> = {
+    action: { type: 'string', enum: Object.keys(spec.actions), description: 'Which operation to run. Pass that operation\'s arguments alongside.' },
+  };
+  for (const action of Object.values(spec.actions)) {
+    for (const [key, schema] of Object.entries<any>(action.parameters?.properties || {})) {
+      if (key === 'action' || properties[key]) continue;
+      const { description, ...rest } = schema || {};
+      properties[key] = { ...rest, ...(description ? { description: String(description).slice(0, 120) } : {}) };
+    }
+  }
+  const actionLines = Object.entries(spec.actions)
+    .map(([action, def]) => `${action}(${describeActionArgs(def.parameters)}): ${firstSentence(def.description)}`)
+    .join('\n');
+  return {
+    type: 'function',
+    function: {
+      name: spec.wrapper,
+      description: `${spec.connectorName} connector. Call with action plus that action's arguments (? = optional).\n${actionLines}`,
+      parameters: { type: 'object', required: ['action'], properties },
+    },
+  };
+}
+
+/**
+ * Resolve a generated wrapper call to the direct connector tool. Returns an
+ * error (with the correct argument list) for an unknown action or missing
+ * required argument instead of letting the connector fail obscurely.
+ */
+export function resolveConnectorWrapperCall(
+  spec: ConnectorWrapperSpec,
+  rawArgs: any,
+): { name: string; args: any; error?: string } {
+  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
+  const action = String(args.action || '').trim().toLowerCase();
+  delete args.action;
+  const available = Object.entries(spec.actions)
+    .map(([key, def]) => `${key}(${describeActionArgs(def.parameters)})`)
+    .join('; ');
+  if (!action) return { name: spec.wrapper, args: rawArgs, error: `${spec.wrapper} requires action. Available: ${available}` };
+  const target = spec.actions[action];
+  if (!target) return { name: spec.wrapper, args: rawArgs, error: `Unsupported ${spec.wrapper} action "${action}". Available: ${available}` };
+  const required: string[] = Array.isArray(target.parameters?.required) ? target.parameters.required : [];
+  const missing = required.filter((key) => args[key] === undefined || args[key] === null || args[key] === '');
+  if (missing.length) {
+    return {
+      name: spec.wrapper,
+      args: rawArgs,
+      error: `${spec.wrapper} action "${action}" is missing required argument(s): ${missing.join(', ')}. Arguments: ${describeActionArgs(target.parameters)}`,
+    };
+  }
+  return { name: target.tool, args };
+}
+
 function descriptorContracts(manifest: LoadedExtensionDescriptor) {
   if (manifest.contracts) {
     return {
@@ -260,6 +346,58 @@ export class PrometheusExtensionRuntimeRegistry {
         return connectedById.get(connectorId) === true;
       })
       .map(toFunctionTool);
+  }
+
+  /**
+   * One generated `connector_<id>` wrapper per connected connector that has no
+   * hand-written wrapper (X uses x_*, Vercel uses vercel_ops). The wrapper takes
+   * `action` plus that action's arguments and dispatches to the direct
+   * connector tool, so a connector costs one tool definition instead of 5-12.
+   */
+  listConnectorWrapperSpecs(options: { connectedOnly?: boolean } = {}): ConnectorWrapperSpec[] {
+    const connectedOnly = options.connectedOnly !== false;
+    const byConnector = new Map<string, RegisteredTool[]>();
+    for (const tool of this.listTools()) {
+      if (!/^connector_/.test(tool.name)) continue;
+      const connectorId = this.connectorIdForTool(tool);
+      if (!connectorId || HANDWRITTEN_WRAPPER_CONNECTORS.has(connectorId)) continue;
+      if (connectedOnly && !this.isToolAvailable(tool.name)) continue;
+      const list = byConnector.get(connectorId) || [];
+      list.push(tool);
+      byConnector.set(connectorId, list);
+    }
+    const specs: ConnectorWrapperSpec[] = [];
+    for (const [connectorId, tools] of [...byConnector.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const wrapper = connectorWrapperName(connectorId);
+      if (this.tools.has(wrapper)) continue; // never shadow a real tool
+      const actions: ConnectorWrapperSpec['actions'] = {};
+      for (const tool of tools) {
+        const action = tool.name.replace(/^connector_[a-z0-9]+_/, '') || tool.name;
+        if (actions[action]) continue;
+        actions[action] = {
+          tool: tool.name,
+          description: String(tool.description || ''),
+          parameters: tool.parameters || { type: 'object', required: [], properties: {} },
+        };
+      }
+      specs.push({
+        wrapper,
+        connectorId,
+        connectorName: this.connectors.get(connectorId)?.name || connectorId,
+        actions,
+      });
+    }
+    return specs;
+  }
+
+  getConnectorWrapperSpec(wrapper: string): ConnectorWrapperSpec | undefined {
+    const name = String(wrapper || '').trim();
+    if (!/^connector_[a-z0-9_]+$/.test(name) || this.tools.has(name)) return undefined;
+    return this.listConnectorWrapperSpecs({ connectedOnly: false }).find((spec) => spec.wrapper === name);
+  }
+
+  listConnectorWrapperDefinitions(): any[] {
+    return this.listConnectorWrapperSpecs().map(buildConnectorWrapperDefinition);
   }
 
   listConnectors(): Array<PrometheusConnectorRuntime & { extensionId: string }> {

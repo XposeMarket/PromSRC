@@ -243,7 +243,10 @@ export class MCPManager {
   load(): void {
     try {
       if (fs.existsSync(this.configPath)) {
-        const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf-8'));
+        // PowerShell's Set-Content/Out-File -Encoding UTF8 writes a BOM, which
+        // made JSON.parse throw "Unexpected token" and silently dropped every
+        // configured MCP server.
+        const raw = JSON.parse(fs.readFileSync(this.configPath, 'utf-8').replace(/^\uFEFF/, ''));
         if (Array.isArray(raw)) {
           this.configs = raw
             .map((c, i) => MCPManager.normalizeConfig(c, `server_${i + 1}`))
