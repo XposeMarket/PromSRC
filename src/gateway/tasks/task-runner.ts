@@ -12,7 +12,7 @@
 
 import crypto from 'crypto';
 import { getOllamaClient } from '../../agents/ollama-client';
-import { normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
+import { inferProviderForBareModel, normalizeProviderModel, parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
@@ -750,7 +750,7 @@ export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgr
     const rawProvider = String(record.providerId || '').trim();
     const rawModel = String(record.model || '').trim();
     const parsed = parseProviderModelRef(rawModel);
-    const providerId = parsed?.providerId || rawProvider || undefined;
+    const providerId = parsed?.providerId || rawProvider || inferProviderForBareModel(rawModel) || undefined;
     const model = parsed?.model || (rawModel && providerId ? normalizeProviderModel(providerId, rawModel) : rawModel) || undefined;
     const reasoningEffort = normalizeReasoningEffort(String(providerId || ''), String(model || ''), record.reasoningEffort);
     if (record.reasoningEffort && !reasoningEffort) {

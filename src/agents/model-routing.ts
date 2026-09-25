@@ -73,6 +73,23 @@ export function normalizeProviderModel(providerId: string, model: string): strin
   return rawModel;
 }
 
+/**
+ * Infer the provider for a bare model id (no "provider/" prefix) only when the
+ * id is unambiguous. Agents often pass `gpt-5.6-sol` or `opus-4.8` to spawn tools;
+ * without a provider the reasoning-effort gate had nothing to check against and
+ * failed with a misleading "Reasoning effort X is not supported". Ambiguous ids
+ * (e.g. `gpt-5.5`, which both openai and openai_codex serve) return null.
+ */
+export function inferProviderForBareModel(model?: string): string | null {
+  const raw = String(model || '').trim().toLowerCase();
+  if (!raw || raw.includes('/')) return null;
+  if (OPENAI_CODEX_MODEL_ALIASES[raw]) return 'openai_codex';
+  if (/^gpt-(?:5\.6|6)-(?:sol|luna|terra|astra)(?:$|[-.])/.test(raw)) return 'openai_codex';
+  if (ANTHROPIC_MODEL_ALIASES[raw]) return 'anthropic';
+  if (/^claude-/.test(raw)) return 'anthropic';
+  return null;
+}
+
 export function parseProviderModelRef(ref?: string): ProviderModelRef | null {
   const raw = String(ref || '').trim();
   if (!raw || !raw.includes('/')) return null;
