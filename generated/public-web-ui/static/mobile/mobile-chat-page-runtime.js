@@ -7026,6 +7026,27 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (eventClientRequestId && (aiTurn._pmAdmissionPending === true || !String(aiTurn._clientRequestId || '').trim())) {
       aiTurn._clientRequestId = eventClientRequestId;
     }
+    // A planned gateway restart ends the old stream with a terminal checkpoint
+    // frame, then the resumed turn (same clientRequestId) opens a NEW stream
+    // that writes into this same row. Without reviving it, the row stayed
+    // "finished": tokens still painted, but the live tool trace only renders
+    // for streaming rows, so tools were invisible until the app was reopened.
+    {
+      const incomingStreamId = String(evt.streamId || '').trim();
+      const priorStreamId = String(aiTurn._streamId || '').trim();
+      const eventAt = Number(evt.at || 0) || Date.now();
+      const endedAt = Number(aiTurn.workEndedAt || 0) || 0;
+      if (!isTerminalStreamEvent && incomingStreamId && priorStreamId && incomingStreamId !== priorStreamId
+        && (aiTurn._pmFinalReceived === true || aiTurn._pmFinalized === true || aiTurn._done === true || aiTurn.streaming !== true)
+        && (!endedAt || eventAt >= endedAt - 1000)) {
+        aiTurn._pmFinalReceived = false;
+        aiTurn._pmFinalized = false;
+        aiTurn._pmLiveActivityCompleted = false;
+        delete aiTurn._done;
+        aiTurn.streaming = true;
+        delete aiTurn.workEndedAt;
+      }
+    }
     if (evt.streamId) aiTurn._streamId = String(evt.streamId).trim();
     if (evt.runtimeId || evt.run?.id || evt.activeRun?.id) {
       aiTurn.runtimeId = String(evt.runtimeId || evt.run?.id || evt.activeRun?.id || '').trim();

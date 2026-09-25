@@ -4678,6 +4678,12 @@ export function createMobileVoiceRuntime(context = {}) {
   }
 
   function _mobileStreamTargetTurn(aiTurn) {
+    // Delegate to the host resolver, which also relinks a steer continuation
+    // after thread rows were swapped by a reconcile.
+    try {
+      const host = typeof window !== 'undefined' ? window.__pmMobileStreamTargetTurn : null;
+      if (typeof host === 'function') return host(aiTurn);
+    } catch {}
     return aiTurn?._steerContinuationTurn || aiTurn;
   }
 

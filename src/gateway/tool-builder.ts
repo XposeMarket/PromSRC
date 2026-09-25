@@ -421,6 +421,11 @@ const BUSINESS_TOOL_NAMES = new Set([
   'append_entity_event',
 ]);
 
+/** Direct connector tools the model reaches through a wrapper instead. */
+export function isWrapperCoveredConnectorTool(name: string): boolean {
+  return /^x_api_/.test(name) || /^connector_vercel_/.test(name);
+}
+
 const EXTERNAL_APP_WRAPPER_TOOL_NAMES = new Set([
   'x_search_ops',
   'x_posts',
@@ -1126,7 +1131,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       function: {
         name: 'delivery_send',
         description:
-          'Unified delivery/presentation wrapper. action="send" sends a message, file, or image through an origin-aware delivery channel; action="screenshot" captures/reuses a screenshot and delivers it; action="present_file" presents a local file as an inline assistant artifact and optionally delivers it. Prefer target="origin" unless the user explicitly names a destination.',
+          'Unified delivery/presentation wrapper. action="send" sends a message, file, or image through an origin-aware delivery channel; action="screenshot" captures/reuses a screenshot and delivers it; action="present_file" presents a local file as an inline assistant artifact and optionally delivers it. Prefer target="origin" unless the user explicitly names a destination. WHEN TO USE: mid-turn updates while work continues, or delivery to another channel (Telegram, Discord, etc.). NOT for proof/previews in your final answer: there, embed workspace images directly in the reply markdown with ![caption](relative/path.png) (videos .mp4/.webm work too); they render inline with a caption and tap-to-expand on desktop and mobile, and consecutive images form a gallery.',
         parameters: {
           type: 'object', required: [],
           properties: {
@@ -1617,7 +1622,15 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // current tool surface.
   if (categoryIsActive('external_apps') && !deps.skipDynamicExtensionTools) {
     try {
-      dynamicToolDefs.push(...extensionRegistry.listConnectedConnectorToolDefinitions());
+      // x_api_* (~50) and connector_vercel_* (~21) are fully covered by the
+      // x_* wrappers and vercel_ops, which dispatch to the same handlers by
+      // name (normalizeExternalAppWrapperTool). Sending both roughly doubled
+      // the external_apps surface and pushed turns into Anthropic
+      // extra-usage rejections (2026-09-25 connector review).
+      dynamicToolDefs.push(
+        ...extensionRegistry.listConnectedConnectorToolDefinitions()
+          .filter((def: any) => !isWrapperCoveredConnectorTool(String(def?.function?.name || def?.name || ''))),
+      );
     } catch { /* connector defs may not load in all build targets */ }
   }
 

@@ -32,11 +32,59 @@ export function anthropicContextWindowTokens(model: string): number {
  * it arrives as a generic 400 invalid_request_error.
  */
 /**
- * Tools to keep on an extra-usage retry: every tool already called in this
- * conversation, plus a core set. Returns null when slimming would not shrink
- * the list meaningfully (then the retry is pointless and we just fail).
+ * Categories the gateway already exposed this turn, read from the
+ * [ACTIVE_TOOL_CATEGORIES] line of the system prompt. Session- and
+ * planner-activated categories never go through request_tool_category, so the
+ * retry must read them from here or it drops them while the prompt still says
+ * they are active (2026-09-25 turn dd89c525: 130 tools built, retry sent core only).
  */
-export function slimToolsForExtraUsageRetry(tools: any[] | undefined, messages: any[] | undefined): any[] | null {
+export function activeCategoriesFromSystem(system: unknown): Set<string> {
+  const out = new Set<string>();
+  const text = Array.isArray(system)
+    ? system.map((block: any) => String(block?.text || '')).join('\n')
+    : String(system || '');
+  const re = /\[ACTIVE_TOOL_CATEGORIES\][^:\n]*:\s*([^\n.]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    for (const raw of match[1].split(',')) {
+      const category = raw.trim();
+      if (/^[a-z_]+$/.test(category)) out.add(category);
+    }
+  }
+  return out;
+}
+
+/**
+ * Direct tools that a wrapper already covers. On a slim retry the wrapper
+ * stays and the direct duplicates go (x_api_* -> x_* wrappers, ~50 tools;
+ * connector_vercel_* -> vercel_ops, ~21 tools).
+ */
+const WRAPPER_COVERED_DIRECT_TOOLS: Array<{ wrapper: string; direct: RegExp }> = [
+  { wrapper: 'x_posts', direct: /^x_api_/ },
+  { wrapper: 'vercel_ops', direct: /^connector_vercel_/ },
+];
+
+export const SLIM_RETRY_NOTICE_MARKER = '[TOOL_SURFACE_NOTICE]';
+
+export interface SlimRetryResult {
+  tools: any[];
+  /** Categories whose tools were dropped even though they were not wrapper duplicates. */
+  droppedCategories: string[];
+  droppedDirectDuplicates: number;
+}
+
+/**
+ * Tools to keep on an extra-usage retry: core, every tool already called,
+ * every tool in a category the model unlocked or the gateway reports active,
+ * minus direct tools that a wrapper covers. Returns null when slimming would
+ * not shrink the list (then the retry reuses the same body).
+ */
+export function slimToolsForExtraUsageRetryDetailed(
+  tools: any[] | undefined,
+  messages: any[] | undefined,
+  system?: unknown,
+  mode: 'active' | 'minimal' = 'active',
+): SlimRetryResult | null {
   if (!Array.isArray(tools) || tools.length < 60) return null;
   const CORE = new Set([
     'web_search', 'web_fetch', 'memory', 'write_note', 'delivery_send', 'switch_model', 'set_current_model',
@@ -44,11 +92,11 @@ export function slimToolsForExtraUsageRetry(tools: any[] | undefined, messages: 
     'declare_plan', 'complete_plan_step', 'tool_result_read', 'show_ui_card', 'timer', 'read_file', 'search_files',
   ]);
   const used = new Set<string>();
-  // Categories the model explicitly unlocked with request_tool_category. Those
-  // tools have not been CALLED yet, so keeping only "used" tools dropped the
-  // whole category right after "Newly unlocked tool category: X" and the model
-  // concluded its tools "didn't load". Keep every tool in an unlocked category.
-  const unlockedCategories = new Set<string>();
+  // Categories the model explicitly unlocked with request_tool_category, plus
+  // those the gateway reports as already active in the system prompt.
+  // 'minimal' is the second-retry fallback: gateway-active categories are not
+  // kept, only explicit unlocks (the pre-2026-09-25 behavior).
+  const keptCategories = mode === 'active' ? activeCategoriesFromSystem(system) : new Set<string>();
   for (const m of messages || []) {
     if (!Array.isArray(m?.content)) continue;
     for (const part of m.content) {
@@ -56,21 +104,63 @@ export function slimToolsForExtraUsageRetry(tools: any[] | undefined, messages: 
       used.add(String(part.name));
       if (part.name === 'request_tool_category') {
         const category = String(part.input?.category || '').trim();
-        if (category) unlockedCategories.add(category);
+        if (category) keptCategories.add(category);
       }
     }
   }
-  const keepsCategory = (name: string): boolean => {
-    if (!unlockedCategories.size) return false;
-    try { const category = classifyToolFromManifest(name); return !!category && unlockedCategories.has(category); } catch { return false; }
+  const categoryOf = (name: string): string | null => {
+    try { return classifyToolFromManifest(name) || null; } catch { return null; }
   };
-  const kept = tools.filter((t) => CORE.has(t.name) || used.has(t.name) || keepsCategory(String(t.name || ''))).map((t) => {
-    const { cache_control, ...rest } = t; return rest;
-  });
-  if (kept.length >= tools.length * 0.7) return null;
+  const present = new Set(tools.map((t) => String(t?.name || '')));
+  const isWrapperDuplicate = (name: string): boolean =>
+    WRAPPER_COVERED_DIRECT_TOOLS.some((rule) => present.has(rule.wrapper) && rule.direct.test(name));
+
+  const kept: any[] = [];
+  const dropped = new Set<string>();
+  let droppedDirectDuplicates = 0;
+  for (const t of tools) {
+    const name = String(t?.name || '');
+    const category = categoryOf(name);
+    const keep = CORE.has(name) || used.has(name)
+      // Uncategorized tools are the always-on surface (e.g. request_browser_login).
+      || (mode === 'active' && !category)
+      || (!!category && keptCategories.has(category) && !isWrapperDuplicate(name));
+    if (keep) {
+      const { cache_control, ...rest } = t;
+      kept.push(rest);
+    } else if (isWrapperDuplicate(name)) {
+      droppedDirectDuplicates += 1;
+    } else if (category) {
+      dropped.add(category);
+    }
+  }
+  if (kept.length >= tools.length - 5) return null;
   if (kept.length) (kept[kept.length - 1] as any).cache_control = { type: 'ephemeral' };
-  return kept;
+  return { tools: kept, droppedCategories: Array.from(dropped).sort(), droppedDirectDuplicates };
 }
+
+export function slimToolsForExtraUsageRetry(
+  tools: any[] | undefined,
+  messages: any[] | undefined,
+  system?: unknown,
+  mode: 'active' | 'minimal' = 'active',
+): any[] | null {
+  return slimToolsForExtraUsageRetryDetailed(tools, messages, system, mode)?.tools || null;
+}
+
+/** One-line notice so the model knows the retry changed its tool surface. */
+export function buildSlimRetryNotice(result: SlimRetryResult): string {
+  const parts: string[] = [];
+  if (result.droppedDirectDuplicates > 0) {
+    parts.push('direct x_api_*/connector_vercel_* tools were omitted; use the x_posts/x_users/x_lists/x_dm/x_admin/x_search_ops and vercel_ops wrappers');
+  }
+  if (result.droppedCategories.length > 0) {
+    parts.push(`tools from these categories were omitted: ${result.droppedCategories.join(', ')}. They are NOT callable this request even if listed as active; call request_tool_category to reload one`);
+  }
+  if (!parts.length) return '';
+  return `${SLIM_RETRY_NOTICE_MARKER} The provider rejected the full tool list, so this request was retried with a smaller one: ${parts.join('; ')}.`;
+}
+
 
 export function isOutOfExtraUsageError(raw: unknown): boolean {
   return /out of extra usage/i.test(String(raw || ''));
@@ -837,7 +927,10 @@ export class AnthropicAdapter implements LLMProvider {
       systemBlocks: Array.isArray(body.system) ? body.system.length : 0,
       systemChars: Array.isArray(body.system) ? body.system.reduce((sum: number, block: any) => sum + String(block?.text || '').length, 0) : 0,
       messageCount: body.messages.length,
-      toolCount: tools?.length || 0,
+      // Count what is actually sent: an extra-usage retry replaces body.tools,
+      // and logging the pre-slim list hid that (2026-09-25 logged 130, sent ~20).
+      toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+      builtToolCount: tools?.length || 0,
       requestBytes: Buffer.byteLength(JSON.stringify(body)),
     });
 
@@ -926,21 +1019,37 @@ export class AnthropicAdapter implements LLMProvider {
           return response;
         }
         const raw = await response.text().catch(() => '');
-        if (attempt === 1 && isOAuth && isOutOfExtraUsageError(raw) && !options?.abortSignal?.aborted) {
+        // Attempt 1 rejected -> retry keeping every active category (minus
+        // wrapper-covered duplicates). Attempt 2 rejected too -> last retry
+        // with the minimal core surface. Either way the model is told which
+        // tools were omitted, so "active" in the prompt never lies silently.
+        if (attempt <= 2 && isOAuth && isOutOfExtraUsageError(raw) && !options?.abortSignal?.aborted) {
           try {
             await rejectRequest(response, raw, attempt);
-          } catch { /* logged; retrying once */ }
-          // Every logged rejection (6/6 first attempts, 2026-09-23..24) carried
-          // 120-145 tool schemas after a 4.6-12 min idle gap (cold cache), and
-          // the identical 4s retry failed every time. The request that
-          // succeeded next always carried ~21-36 tools. Retry with a slimmer
-          // tool list instead of the same body.
-          const slim = slimToolsForExtraUsageRetry(body.tools, body.messages);
-          if (slim) {
-            console.warn(`[anthropic] ${model}: retrying extra-usage rejection with ${slim.length}/${body.tools.length} tools`);
-            body.tools = slim;
+          } catch { /* logged; retrying */ }
+          // Every logged rejection (70/70, 2026-09-23..25) carried 123-150
+          // tool schemas; requests that succeeded right after carried far
+          // fewer. Retry with a slimmer tool list instead of the same body.
+          const originalTools = Array.isArray(tools) ? tools : body.tools;
+          const result = slimToolsForExtraUsageRetryDetailed(
+            originalTools,
+            body.messages,
+            body.system,
+            attempt === 1 ? 'active' : 'minimal',
+          );
+          if (result) {
+            console.warn(`[anthropic] ${model}: retry ${attempt + 1} after extra-usage rejection with ${result.tools.length}/${originalTools.length} tools (dropped categories: ${result.droppedCategories.join(', ') || 'none'}; wrapper duplicates: ${result.droppedDirectDuplicates})`);
+            body.tools = result.tools;
+            const notice = buildSlimRetryNotice(result);
+            if (Array.isArray(body.system)) {
+              body.system = body.system.filter((block: any) => !String(block?.text || '').startsWith(SLIM_RETRY_NOTICE_MARKER));
+              if (notice) body.system.push({ type: 'text', text: notice });
+            }
+          } else if (attempt === 2) {
+            // Nothing left to slim; a third identical request would fail the same way.
+            return rejectRequest(response, raw, attempt);
           }
-          console.warn(`[anthropic] ${model}: request billed to extra usage (rejected); retrying once in ${EXTRA_USAGE_RETRY_DELAY_MS}ms`);
+          console.warn(`[anthropic] ${model}: request billed to extra usage (rejected); retrying in ${EXTRA_USAGE_RETRY_DELAY_MS}ms`);
           await new Promise((resolve) => setTimeout(resolve, EXTRA_USAGE_RETRY_DELAY_MS));
           if (options?.abortSignal?.aborted) return rejectRequest(response, raw, attempt);
           continue;

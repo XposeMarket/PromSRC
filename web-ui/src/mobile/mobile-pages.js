@@ -9887,6 +9887,20 @@ function _openMobileMediaTarget({ kind, src, download, name, path, openMode }) {
   }
 }
 
+// Images embedded in assistant markdown (utils.js renderMd) open in the same
+// media sheet/viewer as generated media.
+if (typeof window !== 'undefined') {
+  // The lazily loaded voice runtime resolves stream targets through this.
+  window.__pmMobileStreamTargetTurn = (turn) => _mobileVoiceRuntimeFallback('_mobileStreamTargetTurn', [turn]);
+  window.__promOpenInlineMedia = (detail) => _openMobileMediaTarget({
+    kind: detail?.kind || 'image',
+    src: detail?.src,
+    path: detail?.path,
+    name: detail?.name,
+  });
+}
+
+
 function _wireMobileMediaCards(root = document) {
   root?.querySelectorAll?.('[data-pm-generated-thumb]')?.forEach((thumb) => {
     if (thumb.dataset.pmGeneratedThumbWired === '1') return;
@@ -10901,8 +10915,78 @@ function _mobileVoiceRuntimeFallback(name, args = []) {
       return String(args[0] || __pmVoice?.settings?.serverVoice || __pmVoice?.settings?.realtimeVoice || "carina").trim() || "carina";
     case '_isProgressiveMobileRealtimeTranscript':
       return !!(String(args[0] || "").trim() && String(args[1] || "").trim() && (String(args[1]).startsWith(String(args[0])) || String(args[0]).startsWith(String(args[1]))));
-    case '_mobileStreamTargetTurn':
-      return args[0]?._steerContinuationTurn || args[0];
+    case '_mobileStreamTargetTurn': {
+      const turn = args[0];
+      if (!turn) return turn;
+      // The live SSE closure holds the row object it started with. A steer
+      // links a continuation onto whichever object is in the thread at that
+      // moment, and reconcile/recovery/snapshot reloads swap thread rows for
+      // fresh copies (which also lose underscore fields like _clientRequestId).
+      // Writing to a detached object means the visible "Response after steer"
+      // bubble sits on "..." until the app is reopened. So: always resolve to
+      // the row that is actually in the thread right now.
+      const threads = __pmChat?.threads && typeof __pmChat.threads === 'object' ? __pmChat.threads : {};
+      const preferred = String(__pmChat?.activeSessionId || '');
+      const ordered = [preferred, ...Object.keys(threads).filter((sid) => sid && sid !== preferred)];
+      // Each steer links a new continuation onto the row that was live at that
+      // moment, so a second steer hangs off the FIRST continuation, not off the
+      // row the SSE closure holds. Follow the whole chain to the newest one;
+      // stopping after one hop wrote every event after the second steer into
+      // the frozen first continuation and the tool stream appeared to stop.
+      let linked = turn._steerContinuationTurn
+        || (String(turn.workflowPart || '') === 'interruption_response' ? turn : null);
+      for (let hops = 0; linked && linked._steerContinuationTurn && linked._steerContinuationTurn !== linked && hops < 32; hops += 1) {
+        linked = linked._steerContinuationTurn;
+      }
+      const linkedId = String(linked?.messageId || '').trim();
+      const groupId = String(linked?.workflowGroupId || turn.workflowGroupId || '').trim();
+      const cid = String(turn._clientRequestId || linked?._clientRequestId || '').trim();
+      const relink = (row) => {
+        if (row !== turn && String(turn.workflowPart || '') !== 'interruption_response') {
+          try {
+            Object.defineProperty(turn, '_steerContinuationTurn', { value: row, configurable: true, writable: true });
+          } catch { turn._steerContinuationTurn = row; }
+        }
+        if (!row._clientRequestId && cid) row._clientRequestId = cid;
+        return row;
+      };
+      for (const sid of ordered) {
+        const thread = threads[sid];
+        if (!Array.isArray(thread) || !thread.length) continue;
+        if (linked && thread.includes(linked)) return linked;
+        for (let i = thread.length - 1; i >= 0; i -= 1) {
+          const row = thread[i];
+          if (!row) continue;
+          // A regular user message is the start of this request; anything
+          // above it belongs to an older turn.
+          if (row.role === 'user') {
+            if (String(row.workflowPart || '') === 'interruption') continue;
+            break;
+          }
+          if (row.role !== 'ai') continue;
+          if (String(row.workflowPart || '') !== 'interruption_response') {
+            if (row === turn) break;
+            continue;
+          }
+          const rowId = String(row.messageId || '').trim();
+          const rowCid = String(row._clientRequestId || '').trim();
+          const sameRow = linkedId && rowId === linkedId;
+          const sameGroup = groupId && String(row.workflowGroupId || '').trim() === groupId;
+          const sameRequest = cid && rowCid === cid;
+          // Snapshot copies can lose every identifier; the newest live
+          // continuation inside the current request is then the target.
+          const liveAnonymous = row.streaming === true && row._pmFinalReceived !== true
+            && !(rowCid && cid && rowCid !== cid);
+          if (!sameRow && !sameGroup && !sameRequest && !liveAnonymous) {
+            if (rowCid && cid && rowCid !== cid) break;
+            continue;
+          }
+          if (row._pmFinalReceived === true && !sameRow) break;
+          return relink(row);
+        }
+      }
+      return linked || turn;
+    }
     case '_findMobileRecoverableAssistantTurn': {
       const thread = args[0];
       const cid = String(args[1] || "").trim();
@@ -11009,7 +11093,12 @@ function _consumeVoicePlaybackInterruptContext(...args) { return _mobileVoiceRun
 function _finalizeVoiceInterruptionForTranscript(...args) { return _mobileVoiceRuntimeInvoke('_finalizeVoiceInterruptionForTranscript', args); }
 function _persistMobileThreadSnapshot(...args) { return _mobileVoiceRuntimeInvoke('_persistMobileThreadSnapshot', args); }
 function _setMobileSteerContinuationTurn(...args) { return _mobileVoiceRuntimeInvoke('_setMobileSteerContinuationTurn', args); }
-function _mobileStreamTargetTurn(...args) { return _mobileVoiceRuntimeInvoke('_mobileStreamTargetTurn', args); }
+// Always use the relinking resolver here. The lazily loaded voice runtime has a
+// one-line version (`turn._steerContinuationTurn || turn`) that wins once it is
+// loaded, so after a reconcile swapped thread rows the stream kept writing into
+// the frozen pre-steer trace and the "Response after steer" bubble sat on "..."
+// until the app was reopened.
+function _mobileStreamTargetTurn(...args) { return _mobileVoiceRuntimeFallback('_mobileStreamTargetTurn', args); }
 function _findMobileRecoverableAssistantTurn(...args) { return _mobileVoiceRuntimeInvoke('_findMobileRecoverableAssistantTurn', args); }
 function _applyVoiceInterruptionToMobileChat(...args) { return _mobileVoiceRuntimeInvoke('_applyVoiceInterruptionToMobileChat', args); }
 function _trySubmitVoiceAsLiveSteer(...args) { return _mobileVoiceRuntimeInvoke('_trySubmitVoiceAsLiveSteer', args); }

@@ -210,15 +210,31 @@ export abstract class OAuthConnector {
   // Mutates cfg so subsequent calls (handleCallback, refreshTokens) use them too.
   protected loadCredentialsFromVault(): void {
     if (this.cfg.clientId && this.cfg.clientSecret) return; // already have credentials
-    try {
-      const vaultKey = `integration.${this.cfg.id}.credentials`;
-      const secret = getVault(this.configDir).get(vaultKey, `creds:load:${this.cfg.id}`);
-      if (!secret) return;
-      const creds = JSON.parse(secret.expose()) as { clientId?: string; clientSecret?: string; apiKey?: string };
-      if (!this.cfg.clientId && creds.clientId) this.cfg.clientId = creds.clientId;
-      if (!this.cfg.clientSecret && creds.clientSecret) this.cfg.clientSecret = creds.clientSecret;
-    } catch { /* vault not ready or no creds stored */ }
+    for (const id of [this.cfg.id, ...this.credentialFallbackIds()]) {
+      try {
+        const vaultKey = `integration.${id}.credentials`;
+        const secret = getVault(this.configDir).get(vaultKey, `creds:load:${this.cfg.id}`);
+        if (!secret) continue;
+        const creds = JSON.parse(secret.expose()) as { clientId?: string; clientSecret?: string; apiKey?: string };
+        // Take the pair from one source only; mixing a client id from one app
+        // with a secret from another fails at token exchange.
+        if (!this.cfg.clientId && creds.clientId) {
+          this.cfg.clientId = creds.clientId;
+          if (!this.cfg.clientSecret && creds.clientSecret) this.cfg.clientSecret = creds.clientSecret;
+        } else if (this.cfg.clientId && !this.cfg.clientSecret && id === this.cfg.id && creds.clientSecret) {
+          this.cfg.clientSecret = creds.clientSecret;
+        }
+        if (this.cfg.clientId && this.cfg.clientSecret) return;
+      } catch { /* vault not ready or no creds stored */ }
+    }
   }
+
+  /**
+   * Other connectors whose stored OAuth client this one may reuse (same
+   * provider project). Google Drive reuses Gmail's client so connecting Drive
+   * needs only the Drive API enabled, not a second credential entry.
+   */
+  protected credentialFallbackIds(): string[] { return []; }
 
   saveCredentials(clientId: string, clientSecret?: string): void {
     const vaultKey = `integration.${this.cfg.id}.credentials`;

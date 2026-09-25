@@ -351,7 +351,7 @@ export class PrometheusExtensionRuntimeRegistry {
     if (disconnected.length > 0) {
       lines.push(`\nNot connected (${disconnected.length}): ${disconnected.map((row) => row.connector.id).join(', ')}`);
     }
-    lines.push('\nUse request_tool_category({"category":"external_apps"}) to unlock connected connector tools for this session.');
+    lines.push('\nConnected connector tools are exposed while the external_apps category is active (X via x_* wrappers, Vercel via vercel_ops). If they are missing from your tool list, call request_tool_category({"category":"external_apps"}).');
     const text = lines.join('\n');
     this.connectorStatusCache = { at: now, text };
     return text;
