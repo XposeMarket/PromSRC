@@ -934,6 +934,7 @@ app.post('/api/internal/update-drain', async (req, res) => {
 
 // Wire deps into routers
 setSkillsRouterManager(skillsManager);
+(globalThis as any).__prometheusSkillsManager = skillsManager;
 setHubRouterDeps({ skillsManager });
 initTasksRouter({ cronScheduler, telegramChannel, handleChat, heartbeatRunner, configDirPath: CONFIG_DIR_PATH });
 initChannelsRouter({

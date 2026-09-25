@@ -125,7 +125,8 @@ export const TOOL_CATEGORY_PROMPT_SIGNALS: Readonly<Record<PromptSignalToolCateg
       'integration setup', 'integration admin', 'connect a service', 'connect an app',
       'connect a connector', 'configure a connector', 'install a connector',
       'install a plugin', 'configure a webhook', 'webhook setup', 'oauth setup',
-      'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
+      'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup', 'plugin_ops',
+      'import plugin', 'import plugins', 'import my plugins', 'claude plugin', 'codex plugin', 'hermes plugin', 'openclaw plugin', 'plugin marketplace',
     ],
     allOf: [
       ['connect', 'oauth'], ['configure', 'oauth'], ['authorize', 'oauth'],

@@ -368,6 +368,8 @@ export function getCisSystemTools(): any[] {
         },
       },
     },
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('../../../extensions/plugin-import/plugin-ops').PLUGIN_OPS_TOOL_DEF,
     {
       type: 'function',
       function: {

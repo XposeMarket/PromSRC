@@ -3455,12 +3455,32 @@ export async function executeTool(name: string, args: any, workspacePath: string
       return { name, args, result: `Blocked source mutation: durable dev-edit ledger preparation failed: ${err?.message || err}`, error: true };
     }
   }
+  // Imported plugin hooks (Claude/Codex hooks.json protocol). Only hooks the
+  // user explicitly approved run; with none approved this is one cached check.
+  const pluginHooks = await import('../../extensions/plugin-import/plugin-hooks.js').catch(() => null);
+  const hooksActive = !!pluginHooks?.hasActivePluginHooks();
+  if (hooksActive && pluginHooks) {
+    const pre = await pluginHooks.dispatchPluginHooks({ event: 'PreToolUse', sessionId, cwd: workspacePath, toolName: name, toolInput: args });
+    if (pre.blocked) {
+      for (const item of prepared) finalizeDevEditMutation(item, new Error('blocked by plugin hook'));
+      return { name, args, result: `Blocked by plugin hook: ${pre.blocked}`, error: true };
+    }
+  }
   let result: ToolResult;
   try {
     result = await executeToolRaw(name, args, workspacePath, deps, sessionId);
   } catch (err: any) {
     for (const item of prepared) finalizeDevEditMutation(item, err);
     throw err;
+  }
+  if (hooksActive && pluginHooks) {
+    const post = await pluginHooks.dispatchPluginHooks({
+      event: result.error ? 'PostToolUseFailure' : 'PostToolUse',
+      sessionId, cwd: workspacePath, toolName: name, toolInput: args,
+      toolResponse: String(result.result ?? '').slice(0, 8000),
+    });
+    const context = post.results.map((r) => r.additionalContext).filter(Boolean).join('\n');
+    if (context) result = { ...result, result: `${result.result}\n[plugin hook context]\n${context}` };
   }
   const completedToolName = String(result.name || name || '').trim().toLowerCase();
   if (!result.error && RESOURCE_REFRESH_TOOLS.has(completedToolName)) {
