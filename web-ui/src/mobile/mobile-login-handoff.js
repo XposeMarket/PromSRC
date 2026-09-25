@@ -202,7 +202,7 @@ function bindGestures(state) {
       if (event.cancelable) event.preventDefault();
       // Must happen inside this user gesture or iOS will not show the keyboard.
       configureKeyboard(state, field);
-      state.input.value = '';
+      resetTypingInput(state.input);
       try { state.input.focus({ preventScroll: true }); } catch {}
       state.root.classList.add('is-typing');
     } else {
@@ -212,13 +212,26 @@ function bindGestures(state) {
   });
 }
 
+// iOS never fires a delete (beforeinput or input) on an EMPTY field, so a
+// hidden input cleared after every character swallowed Backspace. Keep one
+// invisible sentinel in it so there is always something to delete.
+const TYPING_SENTINEL = '\u200B';
+
+function resetTypingInput(input) {
+  if (!input) return;
+  input.value = TYPING_SENTINEL;
+  try { input.setSelectionRange(1, 1); } catch {}
+}
+
 function bindTyping(state) {
   const input = state.input;
+  resetTypingInput(input);
   input.addEventListener('beforeinput', (event) => {
     const type = String(event.inputType || '');
-    if (type === 'deleteContentBackward') {
+    if (type.startsWith('deleteContent') || type.startsWith('deleteWord')) {
       event.preventDefault();
       sendInput(state, { action: 'key', key: 'Backspace' });
+      resetTypingInput(input);
     } else if (type === 'insertLineBreak' || type === 'insertParagraph') {
       event.preventDefault();
       sendInput(state, { action: 'key', key: 'Enter' });
@@ -226,9 +239,12 @@ function bindTyping(state) {
   });
   input.addEventListener('input', () => {
     const value = input.value;
-    input.value = '';
+    // Fallback if beforeinput was not cancelable and the sentinel got deleted.
+    if (!value.includes(TYPING_SENTINEL)) sendInput(state, { action: 'key', key: 'Backspace' });
+    const text = value.split(TYPING_SENTINEL).join('');
+    resetTypingInput(input);
     // iOS password AutoFill inserts the whole value at once; send it as one chunk.
-    if (value) sendInput(state, { action: 'text', text: value });
+    if (text) sendInput(state, { action: 'text', text });
   });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); sendInput(state, { action: 'key', key: 'Enter' }); }
