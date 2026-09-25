@@ -50,6 +50,32 @@ export function resolveRuntimeBinary(binary: RuntimeBinary, options: { allowPath
   throw new Error(`Prometheus runtime dependency missing: bundled ${binary} executable was not found.`);
 }
 
+/**
+ * ffmpeg for stream muxing. @ffmpeg-installer ships a 2018 build that cannot
+ * copy AV1 (the default YouTube format) into mp4, so yt-dlp merges fail with
+ * "Postprocessing: Stream #1:0 -> #0:1 (copy)". Prefer the modern ffmpeg that
+ * ships with the Remotion compositor when it is installed.
+ */
+export function resolveMuxingFfmpeg(): string {
+  const envPath = String(process.env.PROMETHEUS_FFMPEG_PATH || '').trim();
+  if (envPath && firstExisting([envPath])) return envPath;
+  const platformPackage = process.platform === 'win32'
+    ? `@remotion/compositor-win32-${process.arch}-msvc`
+    : process.platform === 'darwin'
+      ? `@remotion/compositor-darwin-${process.arch}`
+      : `@remotion/compositor-linux-${process.arch}-gnu`;
+  let remotionFfmpeg: string | null = null;
+  try {
+    const dir = path.dirname(require.resolve(`${platformPackage}/package.json`));
+    remotionFfmpeg = firstExisting([
+      toAsarUnpackedPath(path.join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')),
+    ]);
+  } catch {
+    // Remotion compositor is optional.
+  }
+  return remotionFfmpeg || resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+}
+
 export async function canRunRuntimeBinary(binary: RuntimeBinary): Promise<boolean> {
   try {
     await execFileAsync(resolveRuntimeBinary(binary, { allowPathFallback: true }), ['-version'], {

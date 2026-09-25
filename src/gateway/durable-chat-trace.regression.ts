@@ -192,4 +192,36 @@ assert.equal(checkpointCompactionTrace?.[0]?.status, 'compacted');
 assert.equal(checkpointCompactionTrace?.[0]?.summary, 'Recovered compaction summary.');
 assert.equal(checkpointCompactionTrace?.[0]?.id, 'checkpoint-compact-start');
 
+// analyze_image/analyze_video previews must survive both the live frame
+// buffer and checkpoint recovery as visible vision cards.
+const mediaPreview = {
+  dataUrl: '/api/canvas/inline?path=C%3A%2Fws%2Fdownloads%2Fmedia-analysis-previews%2Fsheet.jpg',
+  workspacePath: 'C:/ws/downloads/media-analysis-previews/sheet.jpg',
+  mimeType: 'image/jpeg',
+  title: 'Contact sheet 1: quick_contact_sheet.jpg',
+  artifactKind: 'contact_sheet',
+};
+const frameMediaTrace = buildDurableChatTraceFromFrames([
+  { seq: 1, type: 'vision_injected', at: 1, data: { source: 'media_analysis', tool: 'analyze_video', preview: mediaPreview, label: 'Video sample 1', previewTitle: mediaPreview.title } },
+]);
+assert.equal(frameMediaTrace?.[0]?.type, 'vision');
+assert.equal(frameMediaTrace?.[0]?.preview?.dataUrl, mediaPreview.dataUrl);
+
+const checkpointMediaTrace = buildDurableChatTraceFromProcessEntries([
+  {
+    ts: '11:00 PM',
+    type: 'vision',
+    actor: 'Prom',
+    content: 'Image preview',
+    preview: { ...mediaPreview, artifactKind: 'analyzed_image', title: 'photo.png' },
+    previewTitle: 'photo.png',
+    extra: { source: 'media_analysis', event: 'vision_injected', toolName: 'analyze_image' },
+  },
+]);
+assert.ok(checkpointMediaTrace, 'analyze_image preview must survive checkpoint recovery');
+assert.equal(checkpointMediaTrace?.[0]?.type, 'vision');
+assert.equal(checkpointMediaTrace?.[0]?.text, 'Image preview');
+assert.equal(checkpointMediaTrace?.[0]?.previewTitle, 'photo.png');
+assert.equal(checkpointMediaTrace?.[0]?.preview?.dataUrl, mediaPreview.dataUrl);
+
 console.log('durable chat trace recovery regression passed');
