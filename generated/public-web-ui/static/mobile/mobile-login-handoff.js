@@ -10,8 +10,10 @@
 // Chrome extension so Google/Apple accounts are already signed in.
 import { mobileGatewayFetch } from './mobile-api.js';
 
-const FRAME_IDLE_MS = 900;
-const FRAME_ACTIVE_MS = 220;
+// While you interact, frames are fetched back to back (one in flight at a
+// time), so the rate is bounded by the round trip, not a fixed timer.
+const FRAME_IDLE_MS = 700;
+const FRAME_ACTIVE_MS = 0;
 const ACTIVE_WINDOW_MS = 3000;
 const STATE_MS = 1200;
 
@@ -55,8 +57,8 @@ async function sendInput(state, body) {
   } catch (err) {
     toast(state, String(err?.message || 'Input failed'));
   }
-  scheduleFrame(state, 90);
-  scheduleState(state, 350);
+  scheduleFrame(state, 0);
+  scheduleState(state, 300);
 }
 
 function scheduleFrame(state, delay) {
@@ -92,7 +94,14 @@ async function loadFrame(state) {
     );
     if (state.closed) return;
     if (data?.image) {
+      // Decode off-screen first so the swap never flashes a half-painted frame.
+      const next = new Image();
+      next.src = data.image;
+      try { await next.decode(); } catch {}
+      if (state.closed) return;
       state.img.src = data.image;
+      state.img.style.transform = '';
+      state.scrollPreview = 0;
       state.viewportWidth = Number(data.viewportWidth || 0);
       state.viewportHeight = Number(data.viewportHeight || 0);
       setHost(state, String(data.url || ''));
@@ -158,6 +167,15 @@ function hitEditable(state, p) {
   return state.editables.find((r) => p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad) || null;
 }
 
+function showTap(state, x, y) {
+  const box = state.stage.getBoundingClientRect();
+  const dot = el('span', { class: 'pm-lh-tap' });
+  dot.style.left = `${x - box.left}px`;
+  dot.style.top = `${y - box.top}px`;
+  state.stage.appendChild(dot);
+  setTimeout(() => dot.remove(), 420);
+}
+
 function bindGestures(state) {
   let start = null;
   const stage = state.stage;
@@ -176,6 +194,8 @@ function bindGestures(state) {
     const scale = rect?.height ? state.viewportHeight / rect.height : 1;
     const dy = Math.round((start.lastY - t.clientY) * scale);
     const dx = Math.round((start.lastX - t.clientX) * scale);
+    state.scrollPreview = (state.scrollPreview || 0) + (start.lastY - t.clientY);
+    state.img.style.transform = `translateY(${-Math.max(-240, Math.min(240, state.scrollPreview))}px)`;
     start.lastY = t.clientY; start.lastX = t.clientX;
     if (Math.abs(dy) + Math.abs(dx) < 4) return;
     const p = pagePoint(state, t.clientX, t.clientY) || { x: Math.round(state.viewportWidth / 2), y: Math.round(state.viewportHeight / 2) };
@@ -194,6 +214,7 @@ function bindGestures(state) {
     const t = event.changedTouches[0];
     const p = pagePoint(state, t.clientX, t.clientY);
     if (!p) return;
+    showTap(state, t.clientX, t.clientY);
     const field = hitEditable(state, p);
     if (field) {
       // iOS follows touchend with an emulated mousedown/click on the stage,
