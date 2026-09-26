@@ -4634,7 +4634,13 @@ void main() {
   }
 
   function _mobileBackgroundAgentDetailPrompt(record) {
-    return backgroundAgentText(record?.task, record?.prompt);
+    // Prefer the longest known text: some record sources only hold the
+    // 160-char poll preview in one of these fields.
+    const candidates = [record?.task, record?.prompt, record?.taskPrompt]
+      .map((value) => backgroundAgentText(value))
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    return candidates[0] || '';
   }
 
   function _appendMobileBackgroundSnapshotTrace(message, entry) {

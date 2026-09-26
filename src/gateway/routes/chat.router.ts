@@ -1430,6 +1430,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
     || visibility === 'user';
   if (!eventType
     || eventType === 'heartbeat'
+    || eventType === 'background_wait'
     || eventType === 'token'
     || (eventType === 'thinking_delta' && !isUserVisibleReasoning)) return null;
   const ts = new Date().toLocaleTimeString();
@@ -2063,7 +2064,7 @@ import {
 import { recordEditLogEntry, recordShellEditLogEntry, formatEditLogForPrompt } from '../context/edit-log';
 import { formatUsageAwarenessForPrompt, isUsageLimitError, recordProviderUsageExhausted } from '../../providers/usage-awareness';
 import { isChatGPTWebModel } from '../../providers/chatgpt-web/chatgpt-web-models';
-import { beginChatGPTBridgeTurn } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
+import { beginChatGPTBridgeTurn, bindChatGPTBridgeConversation, chatGPTBridgeTurnKey } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 // â”€â”€â”€ Injected singletons (set by initChatRouter in server-v2.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let _cronScheduler: CronScheduler;
@@ -7378,6 +7379,8 @@ RULES:
 	        }
 	      };
 	      let chatgptToolStepNum = 0;
+      // Bridge turn key of the ChatGPT call in flight (bound to its conversation id).
+      let currentChatGPTBridgeTurnKey = '';
 	      const chatgptToolSteps = new Map<string, number>();
 	      const emitModelStreamEvent = (event: any) => {
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
@@ -7388,6 +7391,11 @@ RULES:
         // without Prometheus executing anything.
         if (type === 'provider_event') {
           const nativeType = String(event.nativeType || '');
+          if (nativeType === 'chatgpt.conversation') {
+            const conversationId = String((event.data as any)?.conversationId || '');
+            if (conversationId && currentChatGPTBridgeTurnKey) bindChatGPTBridgeConversation(currentChatGPTBridgeTurnKey, conversationId);
+            return;
+          }
           if (nativeType !== 'chatgpt.tool_start' && nativeType !== 'chatgpt.tool_result') return;
           const data = event.data && typeof event.data === 'object' ? event.data : {};
           const action = String((data as any).name || 'chatgpt_tool').slice(0, 120);
@@ -7558,10 +7566,12 @@ RULES:
       // (approvals, blocked-command rules, telemetry, audit log). Tools run
       // this way are recorded as real tool results for the turn.
       const chatgptBridgeActive = String(generationOverride.providerId || '') === 'openai_codex' && isChatGPTWebModel(generationOverride.model);
+      const chatgptBridgeTurnId = `${turnTiming.turnId}:${round}`;
+      currentChatGPTBridgeTurnKey = chatgptBridgeActive ? chatGPTBridgeTurnKey({ sessionId, turnId: chatgptBridgeTurnId }) : '';
       const endChatGPTBridgeTurn = chatgptBridgeActive
         ? beginChatGPTBridgeTurn({
             sessionId,
-            turnId: `${turnTiming.turnId}:${round}`,
+            turnId: chatgptBridgeTurnId,
             startedAt: Date.now(),
             allowedTools: () => (Array.isArray(tools) ? tools : [])
               .map((tool: any) => tool?.function || tool)
@@ -8387,8 +8397,12 @@ RULES:
         sendSSE('info', {
           message: `Waiting for ${pendingSpawnedBgRuns.length} background agent${pendingSpawnedBgRuns.length > 1 ? 's' : ''} before final response...`,
         });
-        const joinedResults = await Promise.all(
-          pendingSpawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
+        const joinedResults = await withBackgroundJoinKeepalive(
+          sendSSE,
+          pendingBgIds,
+          Promise.all(
+            pendingSpawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
+          ),
         );
         const resultBlocks = joinedResults
           .map((r, i) => {
@@ -8492,8 +8506,12 @@ RULES:
 
       if (spawnedBgRuns.length > 0) {
         sendSSE('info', { message: `Waiting for ${spawnedBgRuns.length} background agent${spawnedBgRuns.length > 1 ? 's' : ''} to complete...` });
-        const joinedResults = await Promise.all(
-          spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs }))
+        const joinedResults = await withBackgroundJoinKeepalive(
+          sendSSE,
+          spawnedBgIds,
+          Promise.all(
+            spawnedBgRuns.map((run) => backgroundJoin({ backgroundId: run.id, joinPolicy: 'wait_all', timeoutMs: run.timeoutMs })),
+          ),
         );
         const resultBlocks = joinedResults
           .map((r, i) => {
@@ -17782,6 +17800,32 @@ function sanitizeHistoryForUiResponse(
     sanitizeMessageMediaForUi(msg);
     return msg;
   });
+}
+
+/**
+ * Waiting on spawned background agents is real work, but no foreground tool
+ * call is open during the finalization join, so the owner watchdog saw ten
+ * quiet minutes and killed the turn (2026-09-26, ChatGPT turn 2da60e76 with
+ * two GPT-6 agents still running). Emit a semantic `background_wait` frame
+ * every 30s while joining; backgroundJoin's own timeoutMs still bounds it.
+ */
+export async function withBackgroundJoinKeepalive<T>(
+  send: (event: string, data: any) => void,
+  backgroundIds: string[],
+  join: Promise<T>,
+  intervalMs = 30_000,
+): Promise<T> {
+  const startedAt = Date.now();
+  const tick = () => {
+    try { send('background_wait', { backgroundIds, pending: backgroundIds.length, waitedMs: Date.now() - startedAt }); } catch { /* keepalive is best effort */ }
+  };
+  tick();
+  const timer = setInterval(tick, intervalMs);
+  try {
+    return await join;
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 function estimateJsonTokensForModel(value: unknown, profile: { tokenizer: any }): number {

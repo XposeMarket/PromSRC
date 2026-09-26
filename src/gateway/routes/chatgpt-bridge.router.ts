@@ -21,8 +21,8 @@
  */
 
 import express from 'express';
-import { isValidChatGPTBridgeSecret } from '../../providers/chatgpt-web/chatgpt-bridge-registry';
-import { getActiveChatGPTBridgeTurn, getChatGPTBridgeCatalog, type BridgeToolSpec } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
+import { isValidChatGPTBridgeSecret, logBridgeEvent } from '../../providers/chatgpt-web/chatgpt-bridge-registry';
+import { activeChatGPTBridgeTurnCount, getActiveChatGPTBridgeTurn, getChatGPTBridgeCatalog, routeChatGPTBridgeCall, type BridgeToolSpec } from '../../providers/chatgpt-web/chatgpt-bridge-sessions';
 
 /**
  * Catalog for tools/list before any ChatGPT turn has run in this process
@@ -59,7 +59,24 @@ function toInputSchema(parameters: any): Record<string, unknown> {
 
 const READ_ONLY_HINT = /^(read_|list_|get_|search|grep|stat|file_tree|web_search|web_fetch|memory_search|skill_list|skill_read|connector_list|tool_search|tool_describe)/;
 
-export async function handleBridgeRpc(message: JsonRpcRequest): Promise<Record<string, unknown> | null> {
+/** Every short string value in ChatGPT's _meta / request headers (conversation ids live here). */
+function collectRouteCandidates(message: any, headers?: Record<string, unknown>): string[] {
+  const out = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (depth > 4 || value == null) return;
+    if (typeof value === 'string') { if (value.length >= 8 && value.length <= 200) out.add(value); return; }
+    if (Array.isArray(value)) { value.slice(0, 20).forEach((v) => visit(v, depth + 1)); return; }
+    if (typeof value === 'object') Object.values(value as Record<string, unknown>).slice(0, 40).forEach((v) => visit(v, depth + 1));
+  };
+  visit(message?.params?._meta, 0);
+  visit(message?.params?.arguments?._meta, 0);
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (/conversation|openai|chatgpt|session|request/i.test(key)) visit(value, 0);
+  }
+  return [...out];
+}
+
+export async function handleBridgeRpc(message: JsonRpcRequest, headers?: Record<string, unknown>): Promise<Record<string, unknown> | null> {
   const id = message?.id;
   const method = String(message?.method || '');
   const isNotification = id === undefined;
@@ -75,6 +92,9 @@ export async function handleBridgeRpc(message: JsonRpcRequest): Promise<Record<s
   if (method.startsWith('notifications/')) return null;
   if (method === 'ping') return rpcResult(id, {});
 
+  try {
+    logBridgeEvent({ event: 'rpc', method, tool: method === 'tools/call' ? String(message?.params?.name || '') : undefined, activeTurn: !!getActiveChatGPTBridgeTurn() });
+  } catch { /* diagnostics only */ }
   if (method === 'tools/list') {
     const tools = getChatGPTBridgeCatalog(fallbackCatalog).map((tool) => ({
       name: tool.name,
@@ -86,15 +106,22 @@ export async function handleBridgeRpc(message: JsonRpcRequest): Promise<Record<s
   }
 
   if (method === 'tools/call') {
-    const turn = getActiveChatGPTBridgeTurn();
     const name = String(message?.params?.name || '');
-    const args = message?.params?.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};
-    if (!turn) {
-      return rpcResult(id, { isError: true, content: [{ type: 'text', text: 'Prometheus bridge is idle: tools only run while ChatGPT is answering inside Prometheus.' }] });
+    const rawArgs = message?.params?.arguments && typeof message.params.arguments === 'object' ? message.params.arguments : {};
+    const { _meta: _ignoredMeta, ...args } = rawArgs as Record<string, unknown>;
+    const routed = routeChatGPTBridgeCall({ candidateIds: collectRouteCandidates(message, headers), toolName: name });
+    try {
+      logBridgeEvent({ event: 'route', tool: name, via: routed.turn ? routed.via : undefined, reason: routed.turn ? undefined : routed.reason, liveTurns: activeChatGPTBridgeTurnCount(), session: routed.turn?.sessionId });
+    } catch { /* diagnostics only */ }
+    if (!routed.turn) {
+      const text = routed.reason === 'idle'
+        ? 'Prometheus bridge is idle: tools only run while ChatGPT is answering inside Prometheus.'
+        : routed.reason === 'ambiguous'
+          ? 'Several Prometheus chats are using ChatGPT at once and this call could not be matched to its chat, so it was not run. Retry the call.'
+          : `Tool "${name}" is not available in this Prometheus turn.`;
+      return rpcResult(id, { isError: true, content: [{ type: 'text', text }] });
     }
-    if (!turn.allowedTools().some((tool) => tool.name === name)) {
-      return rpcResult(id, { isError: true, content: [{ type: 'text', text: `Tool "${name}" is not available in this Prometheus turn.` }] });
-    }
+    const turn = routed.turn;
     try {
       const out = await turn.executeTool(name, args);
       const text = String(out.result ?? '').slice(0, MAX_RESULT_CHARS) || (out.error ? 'Tool failed.' : 'Done.');
@@ -129,7 +156,7 @@ router.all('/mcp/chatgpt/:secret', express.json({ limit: '2mb' }), async (req, r
   const batch = Array.isArray(body) ? body : [body];
   const responses: Array<Record<string, unknown>> = [];
   for (const message of batch) {
-    const reply = await handleBridgeRpc(message || {});
+    const reply = await handleBridgeRpc(message || {}, req.headers as Record<string, unknown>);
     if (reply) responses.push(reply);
   }
   if (!responses.length) {

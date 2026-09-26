@@ -30,6 +30,9 @@ type KnownModelProfile = Partial<Omit<ModelContextProfile, 'providerId' | 'model
 
 const KNOWN_MODEL_PROFILES: Array<{ provider: RegExp; model: RegExp; profile: KnownModelProfile }> = [
   // Codex's catalog uses a smaller working context than the direct API.
+  // ChatGPT web backend (openai_codex/chatgpt). Without this it fell through to
+  // the small default and compacted at ~30k (2026-09-25).
+  { provider: /^openai_codex$/i, model: /^chatgpt$/i, profile: { contextWindowTokens: 196000, maxOutputTokens: 32000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai_codex$/i, model: /^gpt-6-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 272000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^openai$/i, model: /^gpt-6-(?:astra|sol|luna)(?:-|$)/i, profile: { contextWindowTokens: 1050000, maxOutputTokens: 128000, tokenizer: 'openai', supportsReasoningTokens: true } },
   { provider: /^(openai|openai_codex)$/i, model: /^gpt-5(?:\.\d+)?-chat/i, profile: { contextWindowTokens: 128000, maxOutputTokens: 16384, tokenizer: 'openai', supportsReasoningTokens: false } },

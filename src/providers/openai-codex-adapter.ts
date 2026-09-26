@@ -22,9 +22,9 @@ import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
 import { ChatGPTWebAdapter } from './chatgpt-web/chatgpt-web-adapter';
-import { isChatGPTWebModel, CHATGPT_WEB_MODEL } from './chatgpt-web/chatgpt-web-models';
-import { getChatGPTBridgeSource } from './chatgpt-web/chatgpt-bridge-registry';
-import { currentChatGPTBridgeCatalogSignature } from './chatgpt-web/chatgpt-bridge-sessions';
+import { isChatGPTWebModel, CHATGPT_WEB_MODEL, resolveChatGPTWebMode } from './chatgpt-web/chatgpt-web-models';
+import { getChatGPTBridgeSource, logBridgeEvent } from './chatgpt-web/chatgpt-bridge-registry';
+import { chatGPTBridgeCatalogSignature, currentChatGPTBridgeCatalogSignature, hasActiveChatGPTBridgeTurn } from './chatgpt-web/chatgpt-bridge-sessions';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 function envMs(name: string, fallback: number, minimum: number): number {
@@ -207,6 +207,27 @@ export class OpenAICodexAdapter implements LLMProvider {
       : [];
   }
 
+  /**
+   * One line per ChatGPT turn: the selected mode, what we asked ChatGPT for,
+   * and the model it actually answered with. Proves reasoning modes are
+   * honoured end to end (logs/chatgpt-web-modes.ndjson).
+   */
+  private logChatGPTWebMode(think: unknown, actualModel: unknown): void {
+    try {
+      const mode = resolveChatGPTWebMode(typeof think === 'string' ? think : undefined);
+      const dir = path.join(this.configDir, 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, 'chatgpt-web-modes.ndjson'), JSON.stringify({
+        at: new Date().toISOString(),
+        requestedEffort: typeof think === 'string' ? think : (think === undefined ? null : String(think)),
+        mode: mode.label,
+        sentModel: mode.slug,
+        sentThinkingEffort: mode.thinkingEffort || null,
+        actualModel: String(actualModel || '') || null,
+      }) + '\n', 'utf8');
+    } catch { /* diagnostics only */ }
+  }
+
   private async chatViaChatGPTWeb(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
     const accountCandidates = this.getAccountCandidates();
     let lastError: unknown;
@@ -220,14 +241,31 @@ export class OpenAICodexAdapter implements LLMProvider {
           if (!chatgptAccountId) throw new Error('OpenAI Codex session has no ChatGPT account id. Reconnect OpenAI Codex in Settings -> Models.');
           return { accessToken: token, accountId: chatgptAccountId };
         },
-        getBridgeSource: () => getChatGPTBridgeSource(accountId, currentChatGPTBridgeCatalogSignature()),
+        getBridgeSource: async () => {
+          // Fingerprint the tools this call actually carries. The bridge-session
+          // lookup can come back empty ("0:0"), which matched the empty
+          // registration snapshot, so refresh_actions never ran and ChatGPT
+          // saw no Prometheus tools (2026-09-26 probe).
+          const turnTools = (Array.isArray(options?.tools) ? options!.tools! : [])
+            .map((tool: any) => tool?.function || tool)
+            .filter((fn: any) => fn && typeof fn.name === 'string' && fn.name)
+            .map((fn: any) => ({ name: String(fn.name), description: '', parameters: undefined }));
+          const signature = turnTools.length
+            ? chatGPTBridgeCatalogSignature(turnTools as any)
+            : currentChatGPTBridgeCatalogSignature();
+          const source = await getChatGPTBridgeSource(accountId, signature);
+          logBridgeEvent({ event: 'attach', accountId, signature, turnTools: turnTools.length, activeTurn: hasActiveChatGPTBridgeTurn(), attached: !!source, linkId: source?.linkId ? 'set' : 'none' });
+          return source;
+        },
         temporaryChats: () => {
           const cfg = (getConfig().getConfig() as any)?.llm?.providers?.openai_codex?.chatgpt || {};
           return cfg.temporary_chats !== false;
         },
       });
       try {
-        return await adapter.chat(messages, model, options);
+        const result = await adapter.chat(messages, model, options);
+        this.logChatGPTWebMode(options?.think, (result as any)?.actualModel);
+        return result;
       } catch (error: any) {
         lastError = error;
         if (options?.abortSignal?.aborted) throw error;

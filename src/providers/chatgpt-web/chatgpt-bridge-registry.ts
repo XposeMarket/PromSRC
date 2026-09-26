@@ -194,7 +194,23 @@ async function refreshConnectorActions(accountId: string | undefined, linkId: st
     headers,
     body: JSON.stringify({ link_id: linkId }),
   });
+  if (!res.ok) {
+    // Silent false here left the connector frozen on its registration-time
+    // (empty) catalog, so ChatGPT saw no Prometheus tools (2026-09-26).
+    const body = await res.text().catch(() => '');
+    logBridgeEvent({ event: 'refresh_actions_failed', status: res.status, body: redactBridgeSecret(body).slice(0, 500) });
+  } else {
+    logBridgeEvent({ event: 'refresh_actions_ok' });
+  }
   return res.ok;
+}
+
+export function logBridgeEvent(entry: Record<string, unknown>): void {
+  try {
+    const dir = path.join(getConfig().getConfigDir(), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, 'chatgpt-bridge.ndjson'), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n', 'utf8');
+  } catch { /* diagnostics only */ }
 }
 
 /**
